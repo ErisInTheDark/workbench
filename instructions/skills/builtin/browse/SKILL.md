@@ -35,7 +35,9 @@ Keep one cohesive sequence in each Browse call. Use `help` or `help <command>` f
 | performance | `throttle cpu <rate\|clear>`, `throttle network <preset\|clear>`, `trace <start\|stop>` |
 | lifecycle | `status`, `doctor`, `stop` |
 
-Evaluate page JavaScript only with a fenced `js` block:
+Quote arguments containing spaces, `|` or `>`: `click 'text=Save draft'`, `fill '[aria-label="Message"]' ""`, `snapshot --filter "/A|B/"`. Targets are CSS, `text=`, `xpath=` or `@ref`; `>>` inside a quoted selector enters an iframe.
+
+Evaluate page JavaScript only with a fenced `js` block; it returns the last expression or an explicit `return`:
 
 ````
 ```js

@@ -75,6 +75,21 @@ test("rejects unsupported remote and malformed session requests", () => {
   });
 });
 
+test("keeps exact fill text, including an empty clear", () => {
+  for (const value of ["", "  padded "]) {
+    const normalized = normalizeWorkbenchBrowseAgentRequest({
+      action: "fill",
+      ref: "0-5",
+      session: "research",
+      threadId: "thread-1",
+      value,
+    });
+    assert.equal(normalized.ok, true);
+    if (!normalized.ok || normalized.command.action !== "fill") return;
+    assert.equal(normalized.command.runtimeRequest.kind === "command" ? normalized.command.runtimeRequest.params.value : null, value);
+  }
+});
+
 test("preserves scoped snapshots and batched pointer input", () => {
   const snapshot = normalizeWorkbenchBrowseAgentRequest({
     action: "snapshot",

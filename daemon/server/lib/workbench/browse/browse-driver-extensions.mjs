@@ -3,7 +3,8 @@
  * - extractSnapshotSubtree: retain one referenced accessibility subtree.
  * - formatRuntimeException: surface useful bounded JavaScript exception detail.
  * - patchBrowseDriverCommandSchema: admit Workbench commands through Browse's closed daemon protocol.
- * - patchBrowseDriverExtensions: add Workbench browser commands behind the upstream driver boundary.
+ * - patchBrowseDriverExtensions: add Workbench browser commands behind the upstream driver boundary;
+ *   eval returns script completion values, click/fill fail when the selector action fails.
  */
 const MAX_ERROR_LENGTH = 8_000;
 const MAX_TRACE_EVENT_NAMES = 100;
@@ -221,15 +222,40 @@ async function dispatchTouchScroll(page, params) {
   return { fling, frames: frames + (hasFlingFrame ? 1 : 0), repeat };
 }
 
-async function evaluate(page, expression) {
-  const response = await page.sendCDP("Runtime.evaluate", {
+function isIllegalReturnException(exceptionDetails) {
+  return /^SyntaxError: Illegal return statement/u.test(String(exceptionDetails?.exception?.description ?? ""));
+}
+
+async function evaluate(page, source) {
+  const run = async (expression, replMode) => await page.sendCDP("Runtime.evaluate", {
     awaitPromise: true,
     expression,
+    replMode,
     returnByValue: true,
     userGesture: true,
   });
+  // REPL scripts yield the last expression value and allow top-level await; a compile-time
+  // illegal return means the source is a function body, and nothing has executed yet.
+  let response = await run(source, true);
+  if (isIllegalReturnException(response.exceptionDetails)) {
+    response = await run(`(async () => {\n${source}\n})()`, false);
+  }
   if (response.exceptionDetails) throw new Error(formatRuntimeException(response.exceptionDetails));
   return { result: response.result?.value };
+}
+
+async function actOnSelector(manager, method, selector, args) {
+  const stagehand = await manager.stagehandInstance();
+  const result = await stagehand.act({
+    arguments: args,
+    description: `${method} element`,
+    method,
+    selector: manager.resolveSelector(selector),
+  });
+  // Upstream Browse discards act results, reporting success for selectors that matched nothing.
+  if (result?.success === false) {
+    throw new Error(`${method} ${selector} failed: ${String(result.message ?? "action was not performed.").slice(0, MAX_ERROR_LENGTH)}`);
+  }
 }
 
 async function emulateDevice(page, preset) {
@@ -339,6 +365,15 @@ export function patchBrowseDriverExtensions(sessionManagerModule) {
   const patchedExecute = async function execute(command, params = {}) {
     const page = async () => await this.activePage();
     if (command === "eval") return await evaluate(await page(), String(params.expression ?? ""));
+    if (command === "click") {
+      await actOnSelector(this, "click", String(params.selector ?? ""), []);
+      return { clicked: true };
+    }
+    if (command === "fill") {
+      await actOnSelector(this, "fill", String(params.selector ?? ""), [String(params.value ?? "")]);
+      if (params.pressEnter) await (await page()).keyPress("Enter");
+      return { filled: true, pressedEnter: params.pressEnter === true };
+    }
     if (command === "snapshot" && params.target) {
       const result = await originalExecute.call(this, command, {});
       const activePage = await page();

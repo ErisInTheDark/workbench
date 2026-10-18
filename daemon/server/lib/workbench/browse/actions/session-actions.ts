@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - BrowseActionBuild/BrowseActionBuilder/BrowseRuntimeRequest: typed action-registry contracts for direct Browse runtime dispatch.
- * - BROWSE_ACTION_* constants and normalization helpers: shared validation primitives for Browse action groups.
+ * - BROWSE_ACTION_* constants and normalization helpers: shared validation primitives for Browse action groups;
+ *   normalizeActionText keeps exact, possibly empty text where trimming would change input.
  * - sessionActionBuilders: build doctor, status, open, refs, cursor, stop, and viewport runtime actions.
  */
 import type {
@@ -70,6 +71,12 @@ export function normalizeRequiredActionString(
 ) {
   const normalized = normalizeActionString(value, maxLength);
   return normalized ? { ok: true as const, value: normalized } : { error, ok: false as const };
+}
+
+export function normalizeActionText(value: string | null | undefined, maxLength: number, error: string) {
+  return typeof value === "string" && !value.includes("\0") && value.length <= maxLength
+    ? { ok: true as const, value }
+    : { error, ok: false as const };
 }
 
 export function normalizeActionSession(value: string | null | undefined) {

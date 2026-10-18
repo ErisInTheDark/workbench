@@ -164,31 +164,23 @@ function compileFence(fence: ParsedFence, options: WorkbenchBrowseMarkdownCompil
     );
   }
 
-  const expression = createJavaScriptFenceExpression(fence.lines.join("\n").trim());
-  if (!expression) {
+  const source = fence.lines.join("\n").trim();
+  if (!source) {
     throw new WorkbenchBrowseMarkdownParseError("JavaScript block cannot be empty.", fence.lineNumber);
   }
+  // Eval sources stay raw: the driver lets V8 choose script completion value or function-body return.
   return {
     ...createBrowserActionBase(options, []),
     action: isInit ? "initScript" : "eval",
-    expression,
+    expression: isInit ? createInitScriptExpression(source) : source,
   };
 }
 
-function createJavaScriptFenceExpression(source: string) {
-  if (!source) {
-    return "";
-  }
-  if (!isJavaScriptFenceBody(source)) {
-    return source;
-  }
-  return `(async () => {\n${source}\n})()`;
-}
-
-function isJavaScriptFenceBody(source: string) {
-  return source.includes("\n")
+function createInitScriptExpression(source: string) {
+  const isFunctionBody = source.includes("\n")
     || /;\s*(?:$|\n)/u.test(source)
     || /\breturn\b/u.test(source);
+  return isFunctionBody ? `(async () => {\n${source}\n})()` : source;
 }
 
 function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
@@ -205,6 +197,7 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
     throw new WorkbenchBrowseMarkdownParseError(`Unsupported BrowseMD command "${rawCommand}".`, context.lineNumber);
   }
   validateCommandFlags(tokens, spec.flags, spec.key, context.lineNumber);
+  validateCommandArgumentCount(tokens, spec.maxArgs, spec.key, context.lineNumber);
   const args = getCommandArguments(tokens.slice(1));
 
   switch (command) {
@@ -247,7 +240,7 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
         ...createTargetField(requireArgument(args, 0, "fill requires a selector or ref.", context.lineNumber)),
         action: "fill",
         pressEnter: hasFlag(tokens, ["press-enter"]),
-        value: requireRest(args, 1, "fill requires a value.", context.lineNumber),
+        value: requireToken(args, 1, "fill requires a value; use \"\" to clear the field.", context.lineNumber),
       };
     case "forget":
       return compileForgetCommand(commandContext);
@@ -688,6 +681,24 @@ function validateCommandFlags(
   }
 }
 
+function validateCommandArgumentCount(
+  tokens: readonly string[],
+  maxArgs: number | null,
+  command: string,
+  lineNumber: number,
+) {
+  if (maxArgs === null) {
+    return;
+  }
+  const count = getCommandArguments(tokens.slice(command.split(" ").length)).length;
+  if (count > maxArgs) {
+    throw new WorkbenchBrowseMarkdownParseError(
+      `${command} takes at most ${maxArgs} argument${maxArgs === 1 ? "" : "s"} but got ${count}; quote values containing spaces, | or >.`,
+      lineNumber,
+    );
+  }
+}
+
 function hasFlag(tokens: readonly string[], names: readonly string[]) {
   return tokens.some((token) => {
     const flag = readFlagName(token);
@@ -745,6 +756,14 @@ function readPositiveNumberFlag(tokens: readonly string[], names: readonly strin
 function requireArgument(args: readonly string[], index: number, error: string, lineNumber: number) {
   const value = args[index]?.trim();
   if (!value) {
+    throw new WorkbenchBrowseMarkdownParseError(error, lineNumber);
+  }
+  return value;
+}
+
+function requireToken(args: readonly string[], index: number, error: string, lineNumber: number) {
+  const value = args[index];
+  if (value === undefined) {
     throw new WorkbenchBrowseMarkdownParseError(error, lineNumber);
   }
   return value;

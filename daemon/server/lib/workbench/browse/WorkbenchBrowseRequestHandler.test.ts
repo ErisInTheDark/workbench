@@ -1,8 +1,10 @@
 /*
  * Exports:
- * - No production exports; Node tests cover BrowseMD command identity, help, and partial failures.
+ * - No production exports; Node tests cover BrowseMD command identity, help, partial failures, redirects, and pipe errors.
  */
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { test } from "node:test";
 
 import type { WorkbenchBrowseResultSink } from "./browse-result-events.ts";
@@ -33,6 +35,30 @@ function createHandler() {
     { profileStore: {}, registry: {} } as never,
   );
 }
+
+async function runCommands(commands: string[]) {
+  const response = await createHandler().handle(Buffer.from(JSON.stringify({
+    commands,
+    cwd: process.cwd(),
+    threadId: "thread-1",
+  })), new AbortController().signal, async (task) => await task());
+  return await response.json() as { error: string; ok: boolean; stdout: string };
+}
+
+test("rejects selector-like redirect targets before running or writing anything", async () => {
+  const target = path.join(process.cwd(), "nth=1");
+  const payload = await runCommands(["help click >> nth=1"]);
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /redirect >> target "nth=1" is not a file path/u);
+  assert.equal(payload.stdout, "");
+  assert.equal(existsSync(target), false);
+});
+
+test("explains unquoted pipes inside arguments", async () => {
+  const payload = await runCommands(["help snapshot /A|B/"]);
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /Unsupported BrowseMD command "B\/"\..*quote arguments containing \|/u);
+});
 
 test("keeps command-array identity and prior help output when a later command fails", async () => {
   const handler = createHandler();

@@ -97,6 +97,84 @@ test("prefers actionable page exception detail over generic uncaught text", () =
   }), "ReferenceError: navigation is not defined\n  at <anonymous>:1:1");
 });
 
+function createEvalManager(respond: (expression: string, replMode: boolean) => object) {
+  const evaluations: Array<{ expression: string; replMode: boolean }> = [];
+  class FakeManager {
+    async activePage() {
+      return {
+        sendCDP: async (_method: string, params: { expression: string; replMode: boolean }) => {
+          evaluations.push({ expression: params.expression, replMode: params.replMode });
+          return respond(params.expression, params.replMode);
+        },
+      };
+    }
+    async close() {}
+    async execute(command: string, _params?: object) {
+      return { command };
+    }
+  }
+  patchBrowseDriverExtensions({ DriverSessionManager: FakeManager });
+  return { evaluations, manager: new FakeManager() };
+}
+
+test("returns the script completion value from one REPL evaluation", async () => {
+  const { evaluations, manager } = createEvalManager(() => ({ result: { value: "a,b" } }));
+  assert.deepEqual(await manager.execute("eval", { expression: "const r = ['a', 'b'];\nr.join(',')" }), { result: "a,b" });
+  assert.deepEqual(evaluations.map(({ replMode }) => replMode), [true]);
+});
+
+test("evaluates sources with a top-level return as an async function body", async () => {
+  const { evaluations, manager } = createEvalManager((_expression, replMode) => replMode
+    ? { exceptionDetails: { exception: { description: "SyntaxError: Illegal return statement" } } }
+    : { result: { value: 2 } });
+  assert.deepEqual(await manager.execute("eval", { expression: "const n = 1;\nreturn n + 1;" }), { result: 2 });
+  assert.equal(evaluations.length, 2);
+  assert.match(evaluations[1]?.expression ?? "", /^\(async \(\) => \{\nconst n = 1;\nreturn n \+ 1;\n\}\)\(\)$/u);
+});
+
+test("surfaces page exceptions without re-evaluating", async () => {
+  const { evaluations, manager } = createEvalManager(() => ({
+    exceptionDetails: { exception: { description: "ReferenceError: missing is not defined" } },
+  }));
+  await assert.rejects(manager.execute("eval", { expression: "missing.value" }), /ReferenceError: missing is not defined/u);
+  assert.equal(evaluations.length, 1);
+});
+
+function createActManager(result: { message?: string; success: boolean }) {
+  const keys: string[] = [];
+  class FakeManager {
+    async activePage() {
+      return { keyPress: async (key: string) => { keys.push(key); } };
+    }
+    async close() {}
+    async execute(command: string, _params?: object) {
+      return { command };
+    }
+    resolveSelector(selector: string) {
+      return selector;
+    }
+    async stagehandInstance() {
+      return { act: async () => result };
+    }
+  }
+  patchBrowseDriverExtensions({ DriverSessionManager: FakeManager });
+  return { keys, manager: new FakeManager() };
+}
+
+test("fails click and fill when the selector action was not performed", async () => {
+  const { keys, manager } = createActManager({ message: "Failed to perform act: no element", success: false });
+  await assert.rejects(manager.execute("click", { selector: "Remove example.com" }), /click Remove example\.com failed: Failed to perform act: no element/u);
+  await assert.rejects(manager.execute("fill", { pressEnter: true, selector: "#missing", value: "" }), /fill #missing failed/u);
+  assert.deepEqual(keys, []);
+});
+
+test("reports performed click and fill actions", async () => {
+  const { keys, manager } = createActManager({ success: true });
+  assert.deepEqual(await manager.execute("click", { selector: "@0-4" }), { clicked: true });
+  assert.deepEqual(await manager.execute("fill", { pressEnter: true, selector: "@0-5", value: "" }), { filled: true, pressedEnter: true });
+  assert.deepEqual(keys, ["Enter"]);
+});
+
 test("batches wheel input and parks the pointer in one driver command", async () => {
   const cdpCalls: Array<{ method: string; params: object }> = [];
   class FakeManager {

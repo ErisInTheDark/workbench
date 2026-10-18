@@ -30,7 +30,11 @@ import {
   normalizeWorkbenchBrowseAgentRequest,
   type WorkbenchBrowseAgentCommand,
 } from "./actions/browse-action-registry";
-import { compileWorkbenchBrowseMarkdown, tokenizeWorkbenchBrowseMarkdownLine } from "./browse-markdown";
+import {
+  compileWorkbenchBrowseMarkdown,
+  tokenizeWorkbenchBrowseMarkdownLine,
+  WorkbenchBrowseMarkdownParseError,
+} from "./browse-markdown";
 import { renderWorkbenchBrowseHelp } from "./browse-command-specs";
 import WorkbenchBrowseDownloadMonitor from "./WorkbenchBrowseDownloadMonitor";
 import WorkbenchBrowseRawCli from "./WorkbenchBrowseRawCli";
@@ -48,6 +52,7 @@ import {
   getBrowseMarkdownHelperDisplay,
   getBrowseMarkdownWriteDisplay,
   isBrowseMarkdownFileCommand,
+  parseBrowseMarkdownRedirections,
   resolveBrowseMarkdownWorkspacePath as resolveBrowseMarkdownWorkspaceRuntimePath,
   runBrowseMarkdownDownloadCommand as executeBrowseMarkdownDownloadCommand,
   runBrowseMarkdownFileCommand as executeBrowseMarkdownFileCommand,
@@ -563,32 +568,6 @@ function stringifyBrowseMarkdownVariableField(value: unknown) {
   return null;
 }
 
-function removeBrowseMarkdownRedirections(tokens: string[]) {
-  let outputPath: string | null = null;
-  let append = false;
-  let inputPath: string | null = null;
-  const commandTokens: string[] = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index] ?? "";
-    if (token === ">" || token === ">>" || token === "<") {
-      const target = tokens[index + 1]?.trim();
-      if (!target) {
-        throw new Error(`BrowseMD redirection ${token} requires a file path.`);
-      }
-      if (token === "<") {
-        inputPath = target;
-      } else {
-        outputPath = target;
-        append = token === ">>";
-      }
-      index += 1;
-      continue;
-    }
-    commandTokens.push(token);
-  }
-  return { append, commandTokens, inputPath, outputPath };
-}
-
 async function runBrowseMarkdownBrowseCommand(
   context: BrowseMarkdownRuntimeContext,
   line: string,
@@ -629,12 +608,11 @@ async function runBrowseMarkdownPipeline(
   lineNumber: number,
 ) {
   const expandedLine = expandBrowseMarkdownVariables(line, context.variables);
-  const segments = splitBrowseMarkdownPipeline(expandedLine);
+  const segments = splitBrowseMarkdownPipeline(expandedLine)
+    .map((segment) => parseBrowseMarkdownRedirections(tokenizeWorkbenchBrowseMarkdownLine(segment, lineNumber)));
   let stdin = "";
   let finalResult: BrowseMarkdownCommandResult = { durationMs: 0, exitCode: 0, ok: true, stderr: "", stdout: "" };
-  for (const [segmentIndex, segment] of segments.entries()) {
-    const tokens = tokenizeWorkbenchBrowseMarkdownLine(segment, lineNumber);
-    const { append, commandTokens, inputPath, outputPath } = removeBrowseMarkdownRedirections(tokens);
+  for (const [segmentIndex, { append, commandTokens, inputPath, outputPath }] of segments.entries()) {
     if (inputPath) {
       stdin = await fs.readFile(resolveBrowseMarkdownWorkspaceRuntimePath(context, inputPath), "utf8");
     }
@@ -663,7 +641,14 @@ async function runBrowseMarkdownPipeline(
         },
       };
     } else {
-      finalResult = await runBrowseMarkdownBrowseCommand(context, serializeBrowseMarkdownTokens(executableTokens), actionIndex, lineNumber);
+      try {
+        finalResult = await runBrowseMarkdownBrowseCommand(context, serializeBrowseMarkdownTokens(executableTokens), actionIndex, lineNumber);
+      } catch (error) {
+        if (segmentIndex > 0 && error instanceof WorkbenchBrowseMarkdownParseError && /Unsupported BrowseMD command/u.test(error.message)) {
+          throw new Error(`${error.message} BrowseMD pipes split on unquoted |; quote arguments containing |.`);
+        }
+        throw error;
+      }
     }
     if (!finalResult.ok) {
       return finalResult;

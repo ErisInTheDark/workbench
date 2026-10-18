@@ -3,6 +3,7 @@
  * - formatBrowseMarkdownPrintf: render the allowlisted BrowseMD printf subset.
  * - getBrowseMarkdownAssignmentShapeError: diagnose quoted command-substitution assignments.
  * - getBrowseMarkdownHelperDisplay: describe allowlisted BrowseMD file-helper execution.
+ * - parseBrowseMarkdownRedirections: split redirections from pipeline tokens, rejecting selector-like targets.
  * - getBrowseMarkdownWriteDisplay: describe BrowseMD output redirection.
  * - serializeBrowseMarkdownTokens: serialize parsed pipeline tokens back into safe BrowseMD command text.
  * - isBrowseMarkdownFileCommand: identify allowlisted workspace file helpers.
@@ -67,6 +68,39 @@ export function getBrowseMarkdownHelperDisplay(command: string, args: readonly s
     case "rm": return { action: "Remove file", detailText: target };
     default: return { action: command, detailText: target };
   }
+}
+
+function assertBrowseMarkdownRedirectTarget(operator: string, target: string) {
+  if (!/^[\w ./\\@+-]+$/u.test(target) || !path.extname(target)) {
+    throw new Error(`BrowseMD redirect ${operator} target "${target}" is not a file path with an extension; quote selectors containing > or >>.`);
+  }
+}
+
+export function parseBrowseMarkdownRedirections(tokens: readonly string[]) {
+  let outputPath: string | null = null;
+  let append = false;
+  let inputPath: string | null = null;
+  const commandTokens: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    if (token !== ">" && token !== ">>" && token !== "<") {
+      commandTokens.push(token);
+      continue;
+    }
+    const target = tokens[index + 1]?.trim();
+    if (!target) {
+      throw new Error(`BrowseMD redirection ${token} requires a file path.`);
+    }
+    assertBrowseMarkdownRedirectTarget(token, target);
+    if (token === "<") {
+      inputPath = target;
+    } else {
+      outputPath = target;
+      append = token === ">>";
+    }
+    index += 1;
+  }
+  return { append, commandTokens, inputPath, outputPath };
 }
 
 export function getBrowseMarkdownWriteDisplay(outputPath: string, append: boolean) {

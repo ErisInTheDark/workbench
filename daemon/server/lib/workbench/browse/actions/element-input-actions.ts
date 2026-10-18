@@ -10,6 +10,7 @@ import {
   buildBrowserAction,
   normalizeActionSelector,
   normalizeActionString,
+  normalizeActionText,
   normalizePositiveActionInteger,
   normalizeRequiredActionSelector,
   normalizeRequiredActionString,
@@ -30,7 +31,7 @@ export const elementInputActionBuilders: readonly BrowseActionBuilder[] = [
   (action) => {
     if (action.action !== "fill") return null;
     const selector = normalizeRequiredActionSelector(action, "Browse fill requires a selector or snapshot ref.");
-    const value = normalizeRequiredActionString(action.value, BROWSE_ACTION_TEXT_MAX_LENGTH, "Browse fill requires a value.");
+    const value = normalizeActionText(action.value, BROWSE_ACTION_TEXT_MAX_LENGTH, "Browse fill requires a string value.");
     if (!selector.ok) return { error: selector.error };
     if (!value.ok) return { error: value.error };
     return buildBrowserAction("fill", action, "fill", {

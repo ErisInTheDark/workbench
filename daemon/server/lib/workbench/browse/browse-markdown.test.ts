@@ -51,6 +51,28 @@ test("rejects unsupported flags instead of silently widening the command", () =>
   );
 });
 
+test("rejects unquoted multi-word selectors instead of dropping the remainder", () => {
+  assert.throws(
+    () => compileWorkbenchBrowseMarkdown("click text=Save draft", { cwd: ".", threadId: "thread" }),
+    /click takes at most 1 argument but got 2/u,
+  );
+  assert.throws(
+    () => compileWorkbenchBrowseMarkdown("fill text=Message box hello", { cwd: ".", threadId: "thread" }),
+    /fill takes at most 2 arguments but got 3/u,
+  );
+  const { actions } = compileWorkbenchBrowseMarkdown("click '[aria-label=\"Remove attached image 2\"]'", { cwd: ".", threadId: "thread" });
+  assert.equal(actions[0]?.action === "click" ? actions[0].selector : null, "[aria-label=\"Remove attached image 2\"]");
+});
+
+test("fills explicit empty and whitespace-preserving values", () => {
+  const { actions } = compileWorkbenchBrowseMarkdown("fill @e1 \"\"\nfill @e2 \"  padded \"", { cwd: ".", threadId: "thread" });
+  assert.deepEqual(actions.map((action) => action.action === "fill" ? action.value : null), ["", "  padded "]);
+  assert.throws(
+    () => compileWorkbenchBrowseMarkdown("fill @e1", { cwd: ".", threadId: "thread" }),
+    /fill requires a value/u,
+  );
+});
+
 test("compiles init scripts and performance controls", () => {
   const { actions } = compileWorkbenchBrowseMarkdown(
     [
