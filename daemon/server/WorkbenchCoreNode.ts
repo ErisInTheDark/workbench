@@ -269,7 +269,7 @@ function createWorkbenchCoreFeature(
   });
   const launches = new WorkbenchThreadLaunchController({
     readProjectSkills: projectId => skillCatalog.readActivatableSkills(projectId),
-    database, projects: projectCatalog, actions: threadActions,
+    database, projects: projectCatalog, actions: threadActions, threadState: threadStateFeature,
     addressedFeedback: facts.addressedFeedback,
     warn: message => logThreadStateWarning(message),
   });

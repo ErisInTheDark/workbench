@@ -951,7 +951,7 @@ export default memo(function ThreadViewContent ({
   const composerStatus = activeThread ? (
     <ThreadRateLimits
       harness={resolvedActiveThread?.harness ?? activeThread.harness}
-      leadingContent={!activeThread.isDraft ? threadOwnerContent : null}
+      leadingContent={threadOwnerContent}
       rateLimits={rateLimits}
       trailingContent={(
         <ThreadContextStatus
@@ -997,7 +997,7 @@ export default memo(function ThreadViewContent ({
       targetControl={approvalModeControl ?? (showDraftComposer ? draftTargetControl : null)}
       controlNotice={approvalNotice}
       header={fileIndexError}
-      key={activeThread.isDraft ? viewInstanceKey : activeThread.id}
+      key={activeTarget.kind === "subagent" ? activeThread.id : viewInstanceKey}
       composerSpellCheck={composerSpellCheck}
       onListModels={threads.listModels}
       subscribeModelUpdates={threads.subscribeModelUpdates}

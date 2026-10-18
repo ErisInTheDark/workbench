@@ -2,23 +2,26 @@
  * Exports:
  * - WorkbenchTabKindProps: the destination of one tab and the strip's frame facts.
  * - workbenchTabKinds: per-view tab renderers naming the destination with its icon, live state, project row and extra
- *   actions.
+ *   actions; draft tabs name their prompt and folder like their sidebar row, reading as working while they launch.
  */
 "use client";
 
-import { useContext, useEffect, useState, useSyncExternalStore, type ComponentProps, type ComponentType } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ComponentProps, type ComponentType } from "react";
 import type { IconProps } from "../OutlinedIcon";
 
+import type { DraftId } from "workbench-shared/workbench/identity";
 import type { WorkbenchRoute, WorkbenchRouteView } from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import { createDraftTitle } from "workbench-shared/workbench/thread/thread-state";
 import { describeThreadEntry } from "../thread-entry-presentation";
+import { getWorkbenchThreadStatusClassName } from "../workbench-thread-status-colors";
 import ThreadTitleInput from "../ThreadTitleInput";
 import { useProject } from "../use-projects";
 import { useThread } from "../use-thread";
 import WorkbenchProjectLabel from "../WorkbenchProjectLabel";
 import WorkbenchClientContext from "../workbench-client-context";
 import {
-  BookBookmarkIcon, DraftThreadIcon, FolderClosedIcon, GearIcon, GitGraphIcon, StatsIcon,
+  BookBookmarkIcon, DraftThreadIcon, FolderClosedIcon, GearIcon, GitGraphIcon, StatsIcon, WorkingThreadIcon,
 } from "../workbench-icons";
 import FileKindIcon from "../file-kind-icon";
 import { folderOf } from "../../../workbench/file/use-folder-entries";
@@ -87,31 +90,53 @@ function FileTab({ frame, route }: WorkbenchTabKindProps) {
   );
 }
 
+/** A draft tab names its saved prompt like its sidebar row, and reads as working while its launch connects. */
+function useDraftTab(draftId: DraftId | null) {
+  const mounted = useContext(WorkbenchClientContext)?.mounted;
+  const presentation = mounted?.presentationClient ?? null;
+  const read = useCallback(() => draftId ? presentation?.draft(draftId) ?? null : null, [draftId, presentation]);
+  const current = useSyncExternalStore(presentation?.subscribe ?? noSubscription, read, read);
+  // An accepted launch leaves the presentation a moment before its route moves on to the thread.
+  const retained = useRef(current);
+  if (current) retained.current = current;
+  const draft = current ?? (retained.current?.id === draftId ? retained.current : null);
+  const location = draft?.target ?? (draftId ? mounted?.draftLocationFor(draftId) : null) ?? null;
+  // Read without a lease: the tab must not start the draft's feed, and its document stays current regardless.
+  const store = draftId && location ? mounted?.getThreadStore(location.projectId, { kind: "draft", draftId }) ?? null : null;
+  const subscribe = useCallback((listener: () => void) => store?.subscribe("summary", listener) ?? (() => {}), [store]);
+  const readLaunching = useCallback(() => store?.getSlice("summary").head?.status === "active", [store]);
+  const launching = useSyncExternalStore(subscribe, readLaunching, readLaunching);
+  return draftId ? { title: draft ? createDraftTitle(draft.prompt) : "Draft", location, launching } : null;
+}
+
 function ThreadTab({ frame, route }: WorkbenchTabKindProps) {
   const target = route.threadTarget;
   const threadId = target?.kind === "provider" || target?.kind === "subagent" ? target.threadId : null;
   const thread = useThread.summary(threadId);
+  const draft = useDraftTab(target?.kind === "draft" ? target.draftId : null);
   const controls = useContext(WorkbenchClientContext)?.controls ?? null;
   const [renaming, setRenaming] = useState(false);
   const entry = thread?.summary.row ?? null;
   const shown = entry ? describeThreadEntry(entry, { facts: thread?.summary.facts }) : null;
-  const title = entry?.title || (target?.kind === "draft" ? "Draft" : target?.kind === "new" ? "New thread" : "Thread");
+  const title = entry?.title || draft?.title || (target?.kind === "new" ? "New thread" : "Thread");
   const identity = entry?.identity ?? null;
   const rename = identity && controls ? async (nextTitle: string) => await controls.setThreadTitle({
     harness: identity.harness, threadId: identity.threadId, title: nextTitle,
   }) : null;
-  const Icon = shown?.Icon ?? DraftThreadIcon;
+  const Icon = shown?.Icon ?? (draft?.launching ? WorkingThreadIcon : DraftThreadIcon);
+  const iconClassName = shown?.statusClassName ?? (draft?.launching ? getWorkbenchThreadStatusClassName("working") : undefined);
   const projectId = thread?.location.projectId ?? null;
+  const location = thread?.location ?? draft?.location ?? null;
   return (
     <WorkbenchShellTab
       {...frame}
       actions={rename ? [{ id: "rename", label: "Rename", onSelect: () => setRenaming(true) }] : []}
-      icon={<Icon className={shown?.statusClassName} size={ICON_SIZE} />}
+      icon={<Icon className={iconClassName} size={ICON_SIZE} />}
       label={renaming && rename
         ? <ThreadTitleInput className="w-[12rem]" onDone={() => setRenaming(false)} onSave={rename} title={title} />
         : title}
       onSelectedActivate={rename ? () => setRenaming(true) : undefined}
-      project={thread ? <TabProjectRow location={thread.location} /> : null}
+      project={location ? <TabProjectRow location={location} /> : null}
       wrap={identity && projectId && !renaming ? (element: TooltipTrigger) => (
         <WorkbenchThreadHoverTooltip thread={{ harness: identity.harness, projectId, threadId: identity.threadId }} title={title}>
           {element}

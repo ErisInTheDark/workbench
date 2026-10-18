@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - areExplorerSnapshotsEquivalent: compare explorer snapshots structurally.
+ * - WorkbenchLocationOwner: a thread or draft's daemon folder plus its host and path labels.
  * - MountedWorkbenchClient: rendering, editor and interaction owners for the mounted workspace.
  * - WorkbenchClient: bind app facts to views and warm source-scoped provider models on observed demand.
  */
@@ -12,7 +13,7 @@ import type {
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema,
-  WorkbenchThreadIdSchema, type DaemonId, type DraftId, type LogicalProjectId, type ProjectId,
+  WorkbenchThreadIdSchema, type DaemonId, type DraftId, type LogicalProjectId,
 } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
@@ -76,6 +77,8 @@ type ViewContext = {
   project: WorkbenchThreadProject;
   assetSource: { kind: "source"; daemonId: DaemonId };
 };
+/** Where a thread or draft runs: its daemon folder with the host and path labels views show for it. */
+export type WorkbenchLocationOwner = ProjectLocationReference & { hostname: string; rootPath: string; displayPath: string };
 type MountedControls = WorkbenchControls & {
   createTextFileDocumentPort(path: string, location?: ProjectLocationReference | null): TextFileDocumentPort;
   /** Create a new file holding `content`; rejects when the path already exists. */
@@ -92,9 +95,8 @@ export interface MountedWorkbenchClient {
   routeIntents: WorkbenchRouteIntentController;
   voice: WorkbenchVoiceClient;
   getThreadStore: ThreadClient["getThreadStore"];
-  threadOwnerFor(threadId: string): {
-    daemonId: DaemonId; projectId: ProjectId; hostname: string; rootPath: string; displayPath: string;
-  } | null;
+  threadOwnerFor(threadId: string): WorkbenchLocationOwner | null;
+  locationOwnerFor(location: ProjectLocationReference): WorkbenchLocationOwner;
   threadDraftIdentityFor(threadId: string): ClientDraftIdentity | null;
   threadContextFor(threadId: string): (ViewContext & { registrationId: string | null }) | null;
   launchContextFor(location: ProjectLocationReference): ViewContext | null;
@@ -1023,15 +1025,17 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       project, threads: renderer,
       assetSource: { kind: "source", daemonId: location.daemonId } } : null;
   };
-  const threadOwnerFor: MountedWorkbenchClient["threadOwnerFor"] = id => {
-    const location = locationForThread(id);
-    if (!location) return null;
+  const locationOwnerFor: MountedWorkbenchClient["locationOwnerFor"] = location => {
     const project = folder(location);
     const hostname = projectFacts()?.sources.find(item => item.daemonId === location.daemonId)?.hostname ?? location.daemonId;
     const displayPath = projectFacts()?.projects.flatMap(item => item.locations)
       .find(item => sameLocation(item.target, location))?.displayPath ?? project?.name ?? location.projectId;
     return { ...location, hostname, rootPath: project?.rootPath ?? "",
       displayPath };
+  };
+  const threadOwnerFor: MountedWorkbenchClient["threadOwnerFor"] = id => {
+    const location = locationForThread(id);
+    return location ? locationOwnerFor(location) : null;
   };
   lifetime.addUnsubscribe(projectClient.subscribe(() => {
     refreshProjectNavigator();
@@ -1065,7 +1069,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const location = locationForThread(id);
       return rendererForThread(id).getThreadStore(location?.projectId ?? projectId, target);
     },
-    threadOwnerFor,
+    threadOwnerFor, locationOwnerFor,
     threadDraftIdentityFor: id => {
       const owner = threadOwnerFor(id);
       const registration = owner && registrationFor(owner.daemonId);

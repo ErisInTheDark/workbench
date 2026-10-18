@@ -25,15 +25,13 @@ import { getThreadTitle } from "../thread-view/thread-view-formatters";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import IconButton from "../../ui/IconButton";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
-import WorkbenchProjectIcon from "../WorkbenchProjectIcon";
-import WorkbenchProjectLocationLabel from "../WorkbenchProjectLocationLabel";
+import WorkbenchThreadOwnerLabel from "../WorkbenchThreadOwnerLabel";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
 import { useSettings } from "../use-settings";
 import {
   PanelCloseIcon,
   PanelExpandIcon,
   PanelMinimizeIcon,
-  ProjectIcon,
 } from "../workbench-icons";
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
@@ -80,9 +78,9 @@ export default function WorkbenchThreadPanel ({
     ? { kind: "draft", draftId: thread.id } : threadViewProps.threadTarget ?? null, location);
   const baseFontSize = fontSizePreview ?? settings.get("editorFontSize");
   const outerDaemon = useWorkbenchDaemonClient();
-  const threadContext = threadViewProps.threadTarget?.kind === "provider"
-    || threadViewProps.threadTarget?.kind === "subagent"
-    ? client.mounted?.threadContextFor(threadId) : null;
+  const isExistingThread = threadViewProps.threadTarget?.kind === "provider"
+    || threadViewProps.threadTarget?.kind === "subagent";
+  const threadContext = isExistingThread ? client.mounted?.threadContextFor(threadId) : null;
   const launchContext = location ? client.mounted?.launchContextFor(location) : null;
   const panelContext = threadContext ?? launchContext;
   const fileScope = useMemo(() => ({
@@ -91,9 +89,8 @@ export default function WorkbenchThreadPanel ({
     projectId: panelContext?.project.id ?? threadViewProps.projectId,
   }), [outerDaemon, panelContext?.daemon, panelContext?.daemonId, panelContext?.project.id,
     threadViewProps.projectId]);
-  const ownerMetadata = threadViewProps.threadTarget?.kind === "provider"
-    || threadViewProps.threadTarget?.kind === "subagent"
-    ? client.mounted?.threadOwnerFor(threadId) : null;
+  const ownerMetadata = isExistingThread ? client.mounted?.threadOwnerFor(threadId)
+    : location ? client.mounted?.locationOwnerFor(location) : null;
   const panelThread = useThread(threadViewProps.projectId, threadViewProps.threadTarget, threadViewProps.routeOwned ? "route" : "summary");
   const runtimeThreads = useThreads().threads;
   const [zoomPreview, setZoomPreview] = useState<number | null>(null);
@@ -206,9 +203,7 @@ export default function WorkbenchThreadPanel ({
           contentClassName="flex flex-col"
           resetKey={`${rootViewKey}:${selectedViewKey}`}
         >
-          {(threadViewProps.threadTarget?.kind === "provider"
-            || threadViewProps.threadTarget?.kind === "subagent"
-            || location) && !panelContext
+          {(isExistingThread || location) && !panelContext
             ? <p className="py-6 text-sm text-fg/muted">
               Thread owner unavailable.
               {ownerMetadata ? ` ${ownerMetadata.displayPath}` : null}
@@ -228,17 +223,8 @@ export default function WorkbenchThreadPanel ({
                 projectRootPath={panelContext?.project.rootPath ?? threadViewProps.projectRootPath}
                 projectRoots={panelContext?.project.roots ?? threadViewProps.projectRoots}
                 threadOwnerContent={ownerMetadata
-                  ? <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${ownerMetadata.hostname}: ${ownerMetadata.rootPath}`}>
-                    {panelContext?.project && "kind" in panelContext.project
-                      ? <WorkbenchProjectIcon project={panelContext.project} variant="thread" />
-                      : <ProjectIcon className="shrink-0" size={16} />}
-                    <span className="min-w-0 truncate">
-                      <WorkbenchProjectLocationLabel
-                        displayPath={ownerMetadata.displayPath}
-                        hostname={ownerMetadata.hostname}
-                      />
-                    </span>
-                  </span> : threadViewProps.threadOwnerContent}
+                  ? <WorkbenchThreadOwnerLabel owner={ownerMetadata} project={panelContext?.project} />
+                  : threadViewProps.threadOwnerContent}
                 contained
                 fontSizeRem={effectiveFontSizeRem}
                 settingsLocation={location}

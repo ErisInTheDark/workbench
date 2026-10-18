@@ -79,6 +79,7 @@ const client = {
       feed: "observed", actions: {} as ThreadStoreActions, acquire: () => () => {}, recover: async () => {}, dispose: () => {},
     })),
     threadOwnerFor: () => null,
+    locationOwnerFor: location => ({ ...location, hostname: "local", rootPath: "/repo", displayPath: "repo" }),
     threadDraftIdentityFor: () => null,
     threadContextFor: () => null,
     launchContextFor: () => null,

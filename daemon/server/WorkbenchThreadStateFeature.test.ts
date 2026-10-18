@@ -521,6 +521,31 @@ test("provider sidebar normalization keeps provider names as display labels only
   }
 });
 
+test("a launched thread keeps its first-message name through untitled provider snapshots", async () => {
+  const projectId = fixtureIdentityValues.ProjectId.project;
+  const database = createThreadStateDatabase("C:/project", [["thread", "codex"]]);
+  await database.identities.threads.start();
+  const feature = createFeature({
+    database,
+    getProjectCatalog: () => discoveredProject("C:/project"),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    listSubagents: async () => ({ subagents: [] }),
+    harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
+    resolveProjectById: async () => ({ id: projectId, rootPath: "C:/project" }),
+    resolveProjectFromCwd: async cwd => ({ cwd, project: { id: projectId, rootPath: "C:/project" } }),
+    transitions: { run: async (_key, operation) => operation() },
+  });
+  try {
+    const created = { id: "thread", harness: "codex", name: null, preview: "", status: { type: "idle" }, updatedAt: 1 };
+    await feature.nameLaunchedThread(projectId, created as never, "Fix the login redirect\nthen add a test");
+    const untitled = normalizeProviderSidebarEntry("codex", created);
+    assert.ok(untitled?.entryKind === "thread");
+    await feature.controller.ensureProviderEntry(projectId, untitled);
+    const entry = await feature.controller.getCanonicalThreadEntry(projectId, untitled.identity.threadId);
+    assert.equal(entry?.title, "Fix the login redirect");
+  } finally { await feature.dispose(); }
+});
+
 test("inactive subagents remain completed but unsettled until an explicit settlement overlay exists", () => {
   assert.deepEqual(normalizeSubagentProviderLifecycle({ kind: "completed", reason: "providerInactive", settled: true }), {
     kind: "completed",

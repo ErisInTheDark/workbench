@@ -183,6 +183,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
       threadOwnerFor: () => ({
         ...source, hostname: "local", rootPath: "/project", displayPath: "project",
       }),
+      locationOwnerFor: location => ({ ...location, hostname: "local", rootPath: "/project", displayPath: "project" }),
       threadDraftIdentityFor: () => null,
       threadContextFor: () => null,
       launchContextFor: () => null,

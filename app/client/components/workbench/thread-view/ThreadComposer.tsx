@@ -367,7 +367,8 @@ export default function ThreadComposer ({
   }, [editing.session, onDraftSessionChange]);
   const stopControlState = getThreadComposerStopControlState({
     hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping,
-    canSnooze: sidebarEntry?.entryKind === "thread" && isWorkbenchThreadSnoozeAvailable(sidebarEntry),
+    // A launching draft previews the working thread it becomes, so its control does not swap on handoff.
+    canSnooze: isLaunchingDraft || sidebarEntry?.entryKind === "thread" && isWorkbenchThreadSnoozeAvailable(sidebarEntry),
     canSettle: Boolean(client.controls && summary && sidebarEntry?.entryKind === "thread"
       && isWorkbenchThreadSettlementAvailable(sidebarEntry, summary.summary.facts)),
     isApprovalBlocked,
@@ -497,7 +498,8 @@ export default function ThreadComposer ({
     if (!hasSendableInput || isSendDisabled) {
       return;
     }
-    focusAfterSendRef.current = thread.isDraft && shiftKey;
+    // A launch disables input until the thread (or, staying in create, the next draft) can take it.
+    focusAfterSendRef.current = thread.isDraft;
 
     // Drafts launch from saved references; existing threads carry every attached reference in their next message.
     const input = createThreadComposerMessageInput(

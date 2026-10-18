@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadLaunchController: own one durable create-and-first-input attempt per immutable launch ID, rejecting mismatched skill activations before reserving and recording addressed feedback once accepted.
+ * - default WorkbenchThreadLaunchController: own one durable create-and-first-input attempt per immutable launch ID, rejecting mismatched skill activations before reserving, naming the created thread from its first message, and recording addressed feedback once accepted.
  */
 import {
   WorkbenchThreadLaunchRequestSchema,
@@ -9,11 +9,12 @@ import {
   type WorkbenchThreadLaunchState,
 } from "workbench-shared/workbench/thread/thread-launch";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchSkillSummary } from "workbench-shared/types";
 import { assertWorkbenchSkillActivations } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
+import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchThreadActionController, {
   WorkbenchThreadCreationNotDispatchedError,
 } from "./WorkbenchThreadActionController";
@@ -28,6 +29,7 @@ export default class WorkbenchThreadLaunchController {
     database: Pick<WorkbenchDatabaseController, "reserveThreadLaunch" | "readThreadLaunch" | "advanceThreadLaunch">;
     projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
     actions: Pick<WorkbenchThreadActionController, "handle" | "createForLaunch">;
+    threadState: Pick<WorkbenchThreadStateFeature, "nameLaunchedThread">;
     addressedFeedback: Pick<WorkbenchThreadAddressedFeedbackController, "record">;
     warn(message: string): void;
   }) {}
@@ -89,6 +91,18 @@ export default class WorkbenchThreadLaunchController {
     }
   }
 
+  /** Naming is presentation: the thread exists either way, so a failure warns instead of failing the launch. */
+  private async nameCreatedThread(thread: ThreadPayload, request: WorkbenchThreadLaunchRequest) {
+    const preview = request.firstInput.find(part => part.type === "text" && part.text.trim());
+    if (preview?.type !== "text") return;
+    try {
+      await this.owners.threadState.nameLaunchedThread(request.projectId, thread, preview.text);
+    } catch (error) {
+      this.owners.warn(`The launched thread was not named from its first message: ${
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
+    }
+  }
+
   private async run(request: WorkbenchThreadLaunchRequest,
     location: WorkbenchThreadLaunchLocation, initial: WorkbenchThreadLaunchState) {
     let state = initial;
@@ -112,6 +126,7 @@ export default class WorkbenchThreadLaunchController {
           throw new Error("Created thread was not bound to its launch during identity admission.");
         }
         state = recorded.state;
+        await this.nameCreatedThread(thread, request);
       }
       if (state.phase !== "created") return state;
       const sending = await this.owners.database.advanceThreadLaunch(request.launchId, "created", {

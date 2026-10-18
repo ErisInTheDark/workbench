@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchRouteContext: the route thread's owning view contexts, owner metadata, daemon, asset source and composer profile scope.
+ * - WorkbenchRouteContext: the route thread's (or draft's) owning view contexts, owner metadata, daemon, asset source and composer profile scope.
  * - useWorkbenchRouteContext: resolve the route context from the mounted client, re-rendering only when what it resolves to changes.
  */
 import { useCallback, useMemo, useSyncExternalStore } from "react";
@@ -30,7 +30,8 @@ function resolve(client: WorkbenchClientController, route: WorkbenchRoute, curre
     : route.view === "thread" && route.logical && route.threadTarget?.kind === "new"
       ? currentThread?.isDraft ? mounted?.draftLocationFor(currentThread.id) ?? null : null
       : null;
-  const ownerMetadata = existingThreadId ? mounted?.threadOwnerFor(existingThreadId) ?? null : null;
+  const ownerMetadata = existingThreadId ? mounted?.threadOwnerFor(existingThreadId) ?? null
+    : launchLocation ? mounted?.locationOwnerFor(launchLocation) ?? null : null;
   const attachedDaemonId = mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId ?? null;
   return { existingThreadId, threadContext, draftId, draftContext, launchLocation, ownerMetadata, attachedDaemonId };
 }

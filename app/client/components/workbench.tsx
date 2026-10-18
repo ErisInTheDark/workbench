@@ -161,7 +161,6 @@ import {
     BinIcon,
     ExternalLinkIcon,
     FolderOpenIcon,
-    ProjectIcon,
     SidebarCollapseIcon,
     SidebarExpandIcon,
     SparkleIcon,
@@ -173,8 +172,7 @@ import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContex
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import IconButton from "./ui/IconButton";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
-import WorkbenchProjectIcon from "./workbench/WorkbenchProjectIcon";
-import WorkbenchProjectLocationLabel from "./workbench/WorkbenchProjectLocationLabel";
+import WorkbenchThreadOwnerLabel from "./workbench/WorkbenchThreadOwnerLabel";
 import WorkbenchProjectLocationMenu from "./workbench/WorkbenchProjectLocationMenu";
 import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
 import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
@@ -1342,14 +1340,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const isThreadViewReady = showThreadView && (Boolean(threadForThreadView)
     || effectiveThreadTarget?.kind === "provider" || effectiveThreadTarget?.kind === "subagent");
   const isSelectionPending = !selectionError && showThreadView && !isThreadViewReady;
-  const threadViewInstanceKey = getThreadViewInstanceKey(threadForThreadView?.id ?? effectiveThreadId);
+  const viewedThreadId = threadForThreadView?.id ?? effectiveThreadId;
+  const threadViewInstanceKey = getThreadViewInstanceKey(viewedThreadId);
   const selectedThreadIdForView = effectiveThreadTarget?.kind === "new" && threadForThreadView
     ? threadForThreadView.id
     : effectiveSelectedThreadId;
   const activeThreadId = showThreadView ? threadViewInstanceKey : "";
   const activeFilePath = showFileView ? effectiveFilePath : "";
+  // A thread launched from a draft keeps that draft's surface, even before its own document loads, so the view
+  // instance (and its launch handoff) survives the route change.
   const retainsDraftSurface = effectiveThreadTarget?.kind === "new" || effectiveThreadTarget?.kind === "draft"
-    || Boolean(threadForThreadView && threadViewInstanceKeysByThreadIdRef.current.has(threadForThreadView.id));
+    || threadViewInstanceKey !== viewedThreadId;
   const threadSurfaceKey = retainsDraftSurface
     ? `draft:${threadViewInstanceKey}`
     : `${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`;
@@ -2192,17 +2193,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       key={threadSurfaceKey}
                       thread={threadForThreadView}
                       threadOwnerContent={showThreadOwnerLabel && routeOwnerMetadata ? (
-                        <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${routeOwnerMetadata.hostname}: ${routeOwnerMetadata.rootPath}`}>
-                          {routeThreadContext?.project && "kind" in routeThreadContext.project
-                            ? <WorkbenchProjectIcon project={routeThreadContext.project} variant="thread" />
-                            : <ProjectIcon className="shrink-0" size={16} />}
-                          <span className="min-w-0 truncate">
-                            <WorkbenchProjectLocationLabel
-                              displayPath={routeOwnerMetadata.displayPath}
-                              hostname={routeOwnerMetadata.hostname}
-                            />
-                          </span>
-                        </span>
+                        <WorkbenchThreadOwnerLabel owner={routeOwnerMetadata}
+                          project={routeThreadContext?.project ?? routeDraftContext?.project} />
                       ) : null}
                       draftLeadingContent={projectRotator}
                       approvalModeSettings={approvalModeSettings}

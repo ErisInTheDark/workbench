@@ -4,7 +4,7 @@
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result.
  * - normalizeProviderSidebarEntry: normalize provider sidebar rows.
  * - normalizeSubagentProviderLifecycle: resolve subagent lifecycle defaults.
- * - default WorkbenchThreadStateFeature: own reconciliation, SQLite state, workbench-owned titles, thread-owned status commands, item-owned activity time, and provider notifications.
+ * - default WorkbenchThreadStateFeature: own reconciliation, SQLite state, workbench-owned titles, launched-thread first-message names, thread-owned status commands, item-owned activity time, and provider notifications.
  */
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
 import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchGitArcLifecycleState, type WorkbenchThreadLifecycle, type WorkbenchThreadSettlementHold } from "workbench-shared/workbench/thread/thread-state";
@@ -445,6 +445,14 @@ export default class WorkbenchThreadStateFeature {
       cwd: thread.cwd, projectId: canonical.projectId,
       slot: { kind: "thread" as const, harness, projectId: canonical.projectId, threadId: canonical.threadId },
     };
+  }
+
+  /** Until the provider reports its own preview, a launched thread is named by the message that launched it. */
+  async nameLaunchedThread(projectId: ProjectId, thread: ThreadPayload, firstMessagePreview: string) {
+    const entry = normalizeProviderSidebarEntry(thread.harness, { ...thread, preview: thread.preview || firstMessagePreview },
+      this.context.identities.threads);
+    if (!entry || entry.entryKind === "draft") throw new Error("The launched provider thread could not be normalized.");
+    await this.controller.ensureProviderEntry(projectId, entry);
   }
 
   async prepareProviderProfile(thread: ThreadPayload) {
