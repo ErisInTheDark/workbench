@@ -1,4 +1,8 @@
-/* No exports. Translate fixture-owned IPC into the entrypoint's real shutdown intent. */
+/*
+ * No exports. Translate fixture-owned IPC into the entrypoint's real shutdown intent. The fixture's close message is consumed
+ * here, so real entrypoints never see a message that is not part of their own IPC protocol.
+ */
+const CLOSE = "workbench-scenario-close";
 let requested = false;
 let delivered = false;
 function deliver() {
@@ -10,9 +14,16 @@ function requestClose() {
   requested = true;
   deliver();
 }
-process.on("message", message => {
-  if (message?.type === "workbench-scenario-close") requestClose();
-});
+const emit = process.emit;
+process.emit = function (event, ...args) {
+  if (event === "message" && args[0]?.type === CLOSE) {
+    requestClose();
+    return true;
+  }
+  return emit.call(this, event, ...args);
+};
+// Listening keeps the channel reading even before the entrypoint attaches its own listener.
+process.on("message", () => undefined);
 process.on("disconnect", requestClose);
 process.on("newListener", event => {
   if (event === "SIGTERM" && requested && !delivered) queueMicrotask(deliver);

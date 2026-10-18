@@ -75,7 +75,9 @@ async function runtime(
   }
   await fs.writeFile(path.join(source, "package.json"), "{}");
   await fs.writeFile(path.join(source, ".gitignore"), ".workbench\nnode_modules\n");
-  await fs.writeFile(path.join(source, "test/scenarios/isolated-shutdown.mjs"), "");
+  await fs.writeFile(path.join(source, "wb"), "");
+  // The real shim, so fixture programs shut down through the same SIGTERM translation as real entrypoints.
+  await fs.copyFile(path.join(import.meta.dirname, "isolated-shutdown.mjs"), path.join(source, "test/scenarios/isolated-shutdown.mjs"));
   await fs.writeFile(path.join(source, "powershell/pwsh.exe"), "private shell fixture");
   await fs.writeFile(path.join(source, "powershell/runtime.dll"), "private runtime fixture");
   if (programs) {
@@ -123,9 +125,7 @@ test("missing scenario PowerShell fails during setup rather than a provider turn
 const hostProgram = `
   console.log("host-pid " + process.pid);
   console.log("workbench-host-ready");
-  process.on("message", message => {
-    if (message.type === "workbench-scenario-close") process.exit(0);
-  });
+  process.on("SIGTERM", () => process.exit(0));
 `;
 
 test("isolated host and app do not inherit the caller's supervisor ownership", async context => {
@@ -169,9 +169,7 @@ test("isolated host and app do not inherit the caller's supervisor ownership", a
       }
       if (process.env.WORKBENCH_SERVICE_SESSION) throw new Error("App inherited a host session");
       console.log("listening at http://127.0.0.1:12345");
-      process.on("message", message => {
-        if (message.type === "workbench-scenario-close") process.exit(0);
-      });
+      process.on("SIGTERM", () => process.exit(0));
     `,
   });
   try {
@@ -188,9 +186,7 @@ test("owned host and app can stop and reopen without retaining old processes", a
     host: hostProgram,
     app: `
       console.log("listening at http://127.0.0.1:12345");
-      process.on("message", message => {
-        if (message.type === "workbench-scenario-close") process.exit(0);
-      });
+      process.on("SIGTERM", () => process.exit(0));
     `,
   });
   try {
@@ -230,9 +226,7 @@ test("opt-in process output remains live and retained in diagnostics", async con
     app: `
       console.log("fixture-live-output");
       console.log("listening at http://127.0.0.1:12345");
-      process.on("message", message => {
-        if (message.type === "workbench-scenario-close") process.exit(0);
-      });
+      process.on("SIGTERM", () => process.exit(0));
     `,
   }, undefined, event => events.push(event));
   try {
