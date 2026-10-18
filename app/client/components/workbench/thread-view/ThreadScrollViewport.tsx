@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change, gesture-safe correction, and clipping content above unrevealed history.
+ * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change (activated controls stay put), gesture-safe correction, and clipping content above unrevealed history.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -27,7 +27,7 @@ import {
   type ThreadScrollProximity,
 } from "./thread-scroll-snap";
 import ThreadInitialEndPlacementController from "./ThreadInitialEndPlacementController";
-import ThreadReadingAnchorController, { pickThreadReadingAnchor } from "./ThreadReadingAnchorController";
+import ThreadReadingAnchorController, { pickThreadActivationAnchor, pickThreadReadingAnchor } from "./ThreadReadingAnchorController";
 import ThreadScrollSettleController from "./ThreadScrollSettleController";
 import {
   ThreadScrollViewportContext,
@@ -286,7 +286,8 @@ function ActiveThreadScrollViewport ({
 
   useEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport) return;
+    const content = contentRef.current;
+    if (!viewport || !content) return;
 
     const setScrollDirection = (direction: ThreadScrollDirection) => {
       if (direction === directionRef.current) return;
@@ -315,6 +316,12 @@ function ActiveThreadScrollViewport ({
       readerMovedListeners.current.forEach(listener => listener());
     };
     const handleScrollEnd = () => settle.scrollEnded();
+    // Capture runs before the control's own handlers and default action (a disclosure toggling), whatever they stop.
+    // Only expanding controls: one that removes itself would drop the hold and skip correcting its own removal.
+    const handleControlActivated = (event: MouseEvent) => {
+      const control = event.target instanceof Element ? event.target.closest("summary, [aria-expanded]") : null;
+      if (control && content.contains(control)) anchor.hold(pickThreadActivationAnchor(control, content));
+    };
     const handleWheel = (event: WheelEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       const direction = event.deltaY > 0 ? "down" : event.deltaY < 0 ? "up" : null;
@@ -387,6 +394,7 @@ function ActiveThreadScrollViewport ({
       onTouchActivityChange?.(false);
     };
 
+    content.addEventListener("click", handleControlActivated, { capture: true, passive: true });
     viewport.addEventListener("keydown", handleKeyDown);
     viewport.addEventListener("pointerdown", handlePointerDown, { passive: true });
     viewport.addEventListener("pointermove", handlePointerMove, { passive: true });
@@ -403,6 +411,7 @@ function ActiveThreadScrollViewport ({
       pointerScrollActiveRef.current = false;
       pointerScrollMovedRef.current = false;
       touchClientYRef.current = null;
+      content.removeEventListener("click", handleControlActivated, { capture: true });
       viewport.removeEventListener("keydown", handleKeyDown);
       viewport.removeEventListener("pointerdown", handlePointerDown);
       viewport.removeEventListener("pointermove", handlePointerMove);

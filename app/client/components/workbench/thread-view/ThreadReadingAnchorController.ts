@@ -3,6 +3,7 @@
  * - ReadingAnchorOptions: anchor picking, content-relative measurement, and correction boundary.
  * - default ThreadReadingAnchorController: keep what the reader sees still across any layout change above them.
  * - pickThreadReadingAnchor: the leaf at a scroller's reading line, the element whose content position the reader holds.
+ * - pickThreadActivationAnchor: the element a reader holds after activating a control, never content a nested scroller moves.
  */
 
 export interface ReadingAnchorOptions<Anchor> {
@@ -35,6 +36,16 @@ export default class ThreadReadingAnchorController<Anchor> {
   record() {
     this.#correct();
     this.#pick();
+  }
+
+  /**
+   * The reader activated `anchor`: what it reveals or removes lands below it instead of shoving it off screen, which a
+   * reading-line anchor below it would do. Held until the reader next moves.
+   */
+  hold(anchor: Anchor) {
+    this.#correct();
+    this.#anchor = anchor;
+    this.#offset = this.#options.offset(anchor);
   }
 
   /** Layout changed: put back whatever the anchor drifted by. */
@@ -88,6 +99,17 @@ function firstChildReaching(parent: Element, line: number) {
 }
 
 /**
+ * Content inside a nested scroller moves with that scroller's own scroll position, which the outer reader never
+ * caused, so the scroller box is what they hold. Auto/scroll boxes count before they overflow: streaming output
+ * starts short and scrolls later.
+ */
+function isNestedScroller(element: Element) {
+  const { overflowY } = getComputedStyle(element);
+  return overflowY === "auto" || overflowY === "scroll"
+    || (overflowY === "hidden" && element.scrollHeight > element.clientHeight);
+}
+
+/**
  * The leaf crossing the viewport's middle, the line the reader is reading. Prepends land near the top edge (reveals
  * start a screen ahead), so an edge anchor at the loaded top sits above them and corrects nothing.
  * Descends from the content root instead of hit-testing, so overlays never become the anchor.
@@ -99,8 +121,18 @@ export function pickThreadReadingAnchor(viewport: HTMLElement, content: Element)
   while (next) {
     anchor = next;
     // A placeholder's skipped children have no reliable geometry; the placeholder itself holds the measured space.
-    if (anchor instanceof HTMLElement && anchor.dataset.threadMeasuredContent === "placeholder") break;
+    if ((anchor instanceof HTMLElement && anchor.dataset.threadMeasuredContent === "placeholder")
+      || isNestedScroller(anchor)) break;
     next = firstChildReaching(anchor, line);
+  }
+  return anchor;
+}
+
+/** What the reader holds after activating `control`: the control itself, or the outermost nested scroller carrying it. */
+export function pickThreadActivationAnchor(control: Element, content: Element) {
+  let anchor = control;
+  for (let element = control.parentElement; element && element !== content; element = element.parentElement) {
+    if (isNestedScroller(element)) anchor = element;
   }
   return anchor;
 }
