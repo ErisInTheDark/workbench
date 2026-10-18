@@ -287,6 +287,8 @@ const WorkbenchGitArcProposalSummarySchema = z.object({
   committedSha: z.string().regex(/^[a-f0-9]{40,64}$/u).nullable(),
   description: z.string(),
   mode: z.enum(["amend", "commit"]),
+  /** Pre-amend commit an accepted amend replaced; permanent history drops its row. Never cached in SQLite. */
+  replacedSha: z.string().regex(/^[a-f0-9]{40,64}$/u).optional(),
   title: z.string(),
 }).strict();
 export type WorkbenchGitArcProposalSummary = z.infer<typeof WorkbenchGitArcProposalSummarySchema>;

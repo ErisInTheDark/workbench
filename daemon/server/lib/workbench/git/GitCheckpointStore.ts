@@ -50,6 +50,8 @@ export interface GitArcProposalSummary {
   mode: "amend" | "commit";
   paths: string[];
   proposalId: string;
+  /** Pre-amend commit an accepted amend replaced; absent otherwise. */
+  replacedSha?: string;
   status: GitArcProposalStatus;
   title: string;
 }
@@ -117,6 +119,7 @@ function proposalSummary(metadata: ProposalMetadata, stateCommitterDate: string)
     mode: normalized.mode,
     paths: normalized.paths,
     proposalId: normalized.proposalId,
+    ...(normalized.replacedSha ? { replacedSha: normalized.replacedSha } : {}),
     status: normalized.status,
     title: normalized.title,
   };

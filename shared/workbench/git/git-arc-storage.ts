@@ -82,6 +82,8 @@ export interface ProposalMetadata {
   proposalId: string;
   /** Git raw date (`<unix seconds> <+hhmm>`) the proposal was made; accepted commits reuse it. Absent on older proposals. */
   proposedAt?: string;
+  /** Pre-amend commit this accepted amend replaced, owned by the proposal it superseded; never remapped. */
+  replacedSha?: string;
   sourceCheckpoint: string;
   /** Stack tip this proposal was built on; absent for proposals based on real history. */
   stackBase?: string;

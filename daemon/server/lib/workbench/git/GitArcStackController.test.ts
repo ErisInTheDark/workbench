@@ -257,11 +257,17 @@ test("outside commits on unsealed paths never strand work beneath a pending stac
 
 test("accepting a sealed amend rewrites the stack onto the amended history", async () => {
   const { commit, cwd, git, state } = branch("amended");
+  const repository = await WorkbenchGitRepository.open(cwd);
+  const store = new GitCheckpointStore(repository);
+  const { amendTargetSha } = (await store.readProposal("codex", "owner", state.amendment)).metadata;
+  assert.ok(amendTargetSha);
   await controller.commitProposal({
     cwd, threadId: "owner", proposalId: state.amendment, title: "first amended", description: "", includeNewer: false, mode: "amend",
   });
-  const repository = await WorkbenchGitRepository.open(cwd);
-  const { stackBase } = (await new GitCheckpointStore(repository).readProposal("codex", "owner", state.upper)).metadata;
+  const accepted = (await store.readProposal("codex", "owner", state.amendment)).metadata;
+  assert.equal(accepted.replacedSha, amendTargetSha, "the accepted amend remembers the commit its permanent row replaces");
+  assert.notEqual(accepted.committedSha, amendTargetSha);
+  const { stackBase } = (await store.readProposal("codex", "owner", state.upper)).metadata;
   assert.equal((await repository.readCommitAt(stackBase!))?.identity.parents[0], await repository.currentHead(),
     "the stacked base follows the rewritten HEAD");
   await commit("owner", state.upper, "stacked");

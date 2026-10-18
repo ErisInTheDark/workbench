@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchThreadStateGitRepository: own permanent accepted commits (promoted from live arcs, read per thread on
- *   demand, timed, looked up by sha) and the replaceable Git observation cache.
+ * - default WorkbenchThreadStateGitRepository: own permanent accepted commits (promoted from live arcs, replaced by their
+ *   accepted amends, read per thread on demand, timed, looked up by sha) and the replaceable Git observation cache.
  * - WorkbenchThreadGitObservations: independently absent, null or populated arc and plan cache.
  * - WorkbenchThreadGitCommitTime: one Git-learned time for a permanent commit stored without one.
  */
@@ -77,6 +77,8 @@ type GitCommitRow = {
   description: string;
   committed_at: string | null;
 };
+/** A live committed proposal on its way into permanent history, with the amend target it replaces. */
+type PromotedCommit = WorkbenchThreadGitCommit & Pick<WorkbenchGitArcProposalSummary, "replacedSha">;
 interface GitReadBatch {
   entries: Map<string, GitEntry[]>;
   paths: Map<string, GitPathRow[]>;
@@ -233,10 +235,10 @@ export default class WorkbenchThreadStateGitRepository {
       { checkpointCommit, intentName, intentDescription, updatedAt }
     );
     const member = ({ harness, repoRoot, rootId, rootIds, threadId }: ArcMember | PlanMember) => ({ harness, threadId, repoRoot, rootId, rootIds });
-    // Acceptance time lives on the permanent commit row, never in the replaceable proposal cache.
+    // Acceptance time and amend lineage live on the permanent commit row, never in the replaceable proposal cache.
     const proposals = (values: WorkbenchGitArcLifecycleState["proposals"]) => values.map(({ proposalId, rootId, status, summary }) => {
       if (!summary) return { proposalId, status, ...(rootId === undefined ? {} : { rootId }) };
-      const { committedAt: _committedAt, ...cached } = summary;
+      const { committedAt: _committedAt, replacedSha: _replacedSha, ...cached } = summary;
       return { proposalId, status, ...(rootId === undefined ? {} : { rootId }), summary: cached };
     });
     const result: WorkbenchThreadGitObservations = {};
@@ -282,7 +284,7 @@ export default class WorkbenchThreadStateGitRepository {
 
   private committedProposals(arc: WorkbenchGitArcLifecycleState | null | undefined, start: number) {
     if (!arc) return [];
-    return arc.proposals.flatMap((proposal, index): WorkbenchThreadGitCommit[] => {
+    return arc.proposals.flatMap((proposal, index): PromotedCommit[] => {
       const summary = proposal.summary;
       return proposal.status === "committed" && proposal.rootId && summary?.committedSha
         ? [{
@@ -290,6 +292,7 @@ export default class WorkbenchThreadStateGitRepository {
           commitSha: summary.committedSha,
           description: summary.description,
           historyIndex: start + index,
+          ...(summary.replacedSha ? { replacedSha: summary.replacedSha } : {}),
           rootId: proposal.rootId,
           sourceProposalId: proposal.proposalId,
           title: summary.title,
@@ -298,7 +301,27 @@ export default class WorkbenchThreadStateGitRepository {
     });
   }
 
-  private writeCommits(threadId: string, commits: readonly WorkbenchThreadGitCommit[]) {
+  /** An accepted amend takes over its target's row: the replaced commit leaves history and its position passes on. */
+  private replaceAmendedCommit(threadId: string, commit: PromotedCommit) {
+    if (!commit.replacedSha) return commit;
+    const replaced = this.database.prepare(`
+      SELECT source_proposal_id, history_index FROM workbench_thread_git_commits
+      WHERE thread_id = ? AND root_id = ? AND commit_sha = ? AND source_proposal_id != ?
+    `).get(threadId, commit.rootId, commit.replacedSha, commit.sourceProposalId) as
+      Pick<GitCommitRow, "history_index" | "source_proposal_id"> | undefined;
+    if (!replaced) return commit;
+    this.database.prepare(`
+      DELETE FROM workbench_thread_git_commits WHERE thread_id = ? AND root_id = ? AND source_proposal_id = ?
+    `).run(threadId, commit.rootId, replaced.source_proposal_id);
+    this.database.prepare(`
+      UPDATE workbench_thread_git_commits SET history_index = ?
+      WHERE thread_id = ? AND root_id = ? AND source_proposal_id = ?
+    `).run(replaced.history_index, threadId, commit.rootId, commit.sourceProposalId);
+    return { ...commit, historyIndex: replaced.history_index };
+  }
+
+  private writeCommits(threadId: string, promoted: readonly PromotedCommit[]) {
+    const commits = promoted.map(commit => this.replaceAmendedCommit(threadId, commit));
     const upsert = this.database.prepare(`
       INSERT INTO workbench_thread_git_commits(
         thread_id, root_id, source_proposal_id, history_index, commit_sha, title, description, committed_at

@@ -131,11 +131,14 @@ function projectLifecycleState(
     harness: entry.harness,
     intentDescription: lifecycle.intentDescription,
     intentName: lifecycle.intentName,
-    proposals: summaries.flatMap(({ changes, committedAt, committedSha, description, mode, paths, proposalId, status, title }) => (
+    proposals: summaries.flatMap(({ changes, committedAt, committedSha, description, mode, paths, proposalId, replacedSha, status, title }) => (
       status === "proposed" || status === "committed"
         ? [{
           paths, proposalId, status,
-          summary: { changes, ...(committedAt ? { committedAt } : {}), committedSha, description, mode, title },
+          summary: {
+            changes, ...(committedAt ? { committedAt } : {}), committedSha, description, mode,
+            ...(replacedSha ? { replacedSha } : {}), title,
+          },
         }]
         : []
     )),
@@ -1453,6 +1456,8 @@ export default class GitArcProposalController {
             committedSha: nextCommit,
             description: description.trim(),
             liveBaseCommit: newHead,
+            // In-place amends of a committed proposal keep the pointer to the row it superseded.
+            ...(proposal.metadata.status === "proposed" ? { replacedSha: target } : {}),
             sourceCheckpoint,
             status: "committed",
             title: title.trim(),
@@ -1688,6 +1693,7 @@ export default class GitArcProposalController {
             committedSha: amendedCommit,
             description: description.trim(),
             liveBaseCommit: newHead,
+            ...(proposal.metadata.amendTargetSha ? { replacedSha: proposal.metadata.amendTargetSha } : {}),
             sourceCheckpoint: remappedSource,
             status: "committed",
             title: title.trim(),

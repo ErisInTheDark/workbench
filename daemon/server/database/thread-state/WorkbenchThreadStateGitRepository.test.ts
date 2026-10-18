@@ -128,7 +128,7 @@ test("stashed Git observations preserve retained paths without restoring live cl
 
 /** Observes one committed proposal in the live arc, which is how permanent history grows. */
 function promote(repository: WorkbenchThreadStateGitRepository, threadId: string, commit: {
-  committedAt?: string; commitSha: string; description?: string; proposalId: string; title: string;
+  committedAt?: string; commitSha: string; description?: string; proposalId: string; replacedSha?: string; title: string;
 }) {
   const arc = observations().gitArc!;
   repository.replace(threadId, {
@@ -138,12 +138,39 @@ function promote(repository: WorkbenchThreadStateGitRepository, threadId: string
         proposalId: commit.proposalId, rootId: "root-a", status: "committed",
         summary: {
           changes: null, ...(commit.committedAt ? { committedAt: commit.committedAt } : {}), committedSha: commit.commitSha,
-          description: commit.description ?? "", mode: "commit", title: commit.title,
+          description: commit.description ?? "", mode: commit.replacedSha ? "amend" : "commit",
+          ...(commit.replacedSha ? { replacedSha: commit.replacedSha } : {}), title: commit.title,
         },
       }],
     },
   });
 }
+
+test("accepted amends replace their target's permanent row in its history position", () => {
+  const { database, repository, threadId } = fixture();
+  try {
+    const history = () => repository.readCommits([threadId]).get(threadId)?.map(
+      ({ commitSha, historyIndex, sourceProposalId }) => [sourceProposalId, commitSha[0], historyIndex],
+    );
+    promote(repository, threadId, { commitSha: "a".repeat(40), proposalId: "original", title: "fix" });
+    promote(repository, threadId, { commitSha: "b".repeat(40), proposalId: "later", title: "later" });
+    promote(repository, threadId, { commitSha: "c".repeat(40), proposalId: "amendment", replacedSha: "a".repeat(40), title: "fix" });
+    assert.deepEqual(history(), [["amendment", "c", 0], ["later", "b", 1]]);
+
+    // Re-observing the amendment, and an in-place message amend of it, keep its row and slot.
+    promote(repository, threadId, { commitSha: "c".repeat(40), proposalId: "amendment", replacedSha: "a".repeat(40), title: "fix" });
+    promote(repository, threadId, { commitSha: "d".repeat(40), proposalId: "amendment", replacedSha: "a".repeat(40), title: "fix again" });
+    assert.deepEqual(history(), [["amendment", "d", 0], ["later", "b", 1]]);
+
+    // Amending the amendment chains; a target missing from history just appends.
+    promote(repository, threadId, { commitSha: "e".repeat(40), proposalId: "second-amendment", replacedSha: "d".repeat(40), title: "fix" });
+    promote(repository, threadId, { commitSha: "f".repeat(40), proposalId: "unknown-target", replacedSha: "9".repeat(40), title: "other" });
+    assert.deepEqual(history(), [["second-amendment", "e", 0], ["later", "b", 1], ["unknown-target", "f", 2]]);
+    assert.equal(repository.read(threadId).gitArc?.proposals[0]?.summary?.replacedSha, undefined);
+  } finally {
+    database.close();
+  }
+});
 
 test("accepted commit history survives arc replacement, amends in place, and never rides the cache read", () => {
   const { database, repository, threadId } = fixture();
