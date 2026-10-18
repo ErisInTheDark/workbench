@@ -88,8 +88,6 @@ import {
     runWorkbenchAction,
     type WorkbenchActionContext,
 } from "../workbench/search/workbench-action-registry";
-import type { WorkbenchSearchHit } from "../workbench/search/WorkbenchSearchController";
-import WorkbenchSearchController from "../workbench/search/WorkbenchSearchController";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../workbench/state/composer-profile-api";
 import {
     attachComposerDraftReference, clearComposerDraft, presentationDraftToInput, projectComposerDrafts, saveComposerDraft,
@@ -174,10 +172,12 @@ import IconButton from "./ui/IconButton";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchThreadOwnerLabel from "./workbench/WorkbenchThreadOwnerLabel";
 import WorkbenchProjectLocationMenu from "./workbench/WorkbenchProjectLocationMenu";
-import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
+import WorkbenchSearchDialog from "./workbench/search/WorkbenchSearchDialog";
+import { useWorkbenchSearch } from "./workbench/search/workbench-search-context";
 import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
 import { workbenchRouteViews } from "./workbench/route-views/workbench-route-views";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
+import { useWorkbenchSidebarPreferences } from "./workbench/workbench-sidebar-preferences-context";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchTabIcon from "./workbench/WorkbenchTabIcon";
 import WorkbenchSidebarPane from "./workbench/WorkbenchSidebarPane";
@@ -445,24 +445,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const directThreadScrollViewportRef = useRef<HTMLDivElement>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
-  const searchActivationRef = useRef<(result: WorkbenchSearchHit) => void>(() => undefined);
-  const searchController = useMemo(() => new WorkbenchSearchController({
-    activate: (result) => searchActivationRef.current(result),
-    observe: (request, publish) => {
-      if (!workbenchClient.mounted) {
-        publish({ phase: "pending", failure: null, value: null });
-        return () => {};
-      }
-      const query = workbenchClient.mounted.workspace.observe({ kind: "search", request });
-      const stop = query.subscribe(() => publish(query.getSnapshot()));
-      publish(query.getSnapshot());
-      return () => { stop(); query.release(); };
-    },
-  }), [controls, workbenchClient.mounted]);
+  const search = useWorkbenchSearch();
+  const sidebarPreferences = useWorkbenchSidebarPreferences.global();
+  const isEffectiveDesktopSidebarCollapsed = !isMobile && sidebarPreferences.preferences.sidebarCollapsed;
   const drag = useWorkbenchDrag();
   const activeDragPayload = useWorkbenchDrag.activePayload();
   const beginMainPanelDrag = useWorkbenchDrag.mainPanel();
-  useEffect(() => () => { searchController.dispose(); }, [searchController]);
   useEffect(() => () => { workspaceController.dispose(); }, [workspaceController]);
 
   const selectedThreadProjectId = route.view === "thread"
@@ -788,16 +776,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     hasDesktopSidebar: !isMobile,
     hasProject: Boolean(viewedProjectId),
     home: () => navigateToRoute(createHomeRoute()),
-    openSearch: () => searchController.open(),
+    openSearch: () => search.open(),
     openSettings: () => navigateToRoute(createSettingsRoute("")),
     toggleSidebar: () => {
-      if (!isMobile) document.querySelector<HTMLElement>("[aria-label='Hide sidebar'], [aria-label='Show sidebar']")?.click();
+      if (!isMobile) sidebarPreferences.set("sidebarCollapsed", !isEffectiveDesktopSidebarCollapsed);
     },
     zoomIn: () => updateEditorFontSize(activeSettings.get("editorFontSize") + 0.08),
     zoomOut: () => updateEditorFontSize(activeSettings.get("editorFontSize") - 0.08),
-  }), [attachedProjectId, isMobile, navigateToRoute, newThreadRoute, activeSettings, searchController,
-    updateEditorFontSize, viewedProjectId]);
-  searchActivationRef.current = (result) => {
+  }), [isEffectiveDesktopSidebarCollapsed, isMobile, navigateToRoute, newThreadRoute, activeSettings, search,
+    sidebarPreferences, updateEditorFontSize, viewedProjectId]);
+  useWorkbenchSearch.onActivate((result) => {
     switch (result.kind) {
       case "action":
         runWorkbenchAction(result.actionId, searchActionContext);
@@ -836,10 +824,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         void openFileByPolicy({ path: result.path, projectId: result.projectId });
         break;
     }
-  };
-  useEffect(() => {
-    searchController.setProjectId(viewedProjectId || null);
-  }, [searchController, viewedProjectId]);
+  });
+  useWorkbenchSearch.scope(viewedProjectId || null);
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       handleWorkbenchActionShortcut(event, searchActionContext);
@@ -1241,7 +1227,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
     createThreadFromSidebar(ownerProjectId);
   }, [createThreadFromSidebar]);
-  const usesDesktopSidebarCollapse = !isMobile;
   const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
   const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
@@ -1566,6 +1551,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const routeMosaicProjection = workspaceSnapshot.routeProjection;
   const mosaicDraftThreadsById = workspaceSnapshot.draftThreadsById;
   const mainLayoutForRender = workspaceSnapshot.renderLayout;
+  const topLeftMosaicPanelId = showMosaicView && mainLayoutForRender
+    ? WorkbenchMainLayout.panels(mainLayoutForRender)[0]?.id
+    : null;
   const shouldRenderMainLayout = Boolean(mainLayoutForRender);
   const isDirectThreadSurface = showThreadView && !shouldRenderMainLayout;
   const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
@@ -1862,15 +1850,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     <WorkbenchWorkingTreeProvider projectId={browseProjectId} sourceDaemon={browseDaemon}
       sourceDaemonId={browseLocation?.daemonId}>
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
-      <WorkbenchSidebarPreferencesProvider
-        projectId={viewedProjectId}
-      >
-        {({ preferences: sidebarPreferences, setSidebarCollapsed }) => {
-          const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && sidebarPreferences.sidebarCollapsed;
-          const topLeftMosaicPanelId = showMosaicView && mainLayoutForRender
-            ? WorkbenchMainLayout.panels(mainLayoutForRender)[0]?.id
-            : null;
-          return (
+      <WorkbenchSidebarPreferencesProvider projectId={viewedProjectId}>
         <WorkbenchContextMenuProvider>
         <div
           className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
@@ -1880,19 +1860,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         >
           {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
           <WorkbenchTabIcon />
-          <WorkbenchSearchDialog
-            controller={searchController}
-            projects={explorer.projects}
-            logicalProjects={logicalProjects}
-          />
-          {usesDesktopSidebarCollapse ? (
+          <WorkbenchSearchDialog projects={explorer.projects} />
+          {!isMobile ? (
             <IconButton
               type="button"
               label={isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
               display="hover-border"
               title={isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
               className={`fixed top-3 z-40 hidden md:inline-flex ${isEffectiveDesktopSidebarCollapsed ? "left-3" : "left-[calc(21rem_-_1.5rem)]"}`}
-              onClick={() => setSidebarCollapsed(!isEffectiveDesktopSidebarCollapsed)}
+              onClick={() => sidebarPreferences.set("sidebarCollapsed", !isEffectiveDesktopSidebarCollapsed)}
             >
               {isEffectiveDesktopSidebarCollapsed ? <SidebarExpandIcon size={20} /> : <SidebarCollapseIcon size={20} />}
               <span className="sr-only">{isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</span>
@@ -1945,7 +1921,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               projectSourceError={workbenchMount.projectSourceError}
               renderThreadTooltipDetails={renderThreadTooltipDetails}
               route={route}
-              searchController={searchController}
               showGitView={showGitView}
               showMosaicView={showMosaicView}
               viewedProjectId={viewedProjectId}
@@ -2609,8 +2584,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
         </div>
         </WorkbenchContextMenuProvider>
-          );
-        }}
       </WorkbenchSidebarPreferencesProvider>
     </WorkbenchComposerProfileProvider>
     </WorkbenchWorkingTreeProvider>

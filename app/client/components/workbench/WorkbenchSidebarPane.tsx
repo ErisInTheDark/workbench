@@ -12,13 +12,13 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type WorkbenchBrowseSessionController from "../../workbench/browse/WorkbenchBrowseSessionController";
-import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
 import { useWorkbenchNavigate, useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import IconButton from "../ui/IconButton";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
 import WorkbenchGitSidebar from "./git/WorkbenchGitSidebar";
 import ProjectSidebar from "./ProjectSidebar";
 import ReloadNecessary from "./ReloadNecessary";
+import { useWorkbenchSearch } from "./search/workbench-search-context";
 import { useProjects } from "./use-projects";
 import WorkbenchBrowseSessionsSection from "./WorkbenchBrowseSessionsSection";
 import { useWorkbenchClientController } from "./workbench-client-context";
@@ -36,7 +36,7 @@ export default function WorkbenchSidebarPane({
   browseSessionController, collapsed, createThread, explorerSection, harness,
   onAttachFeedback, onOpenQualifiedThread, onOpenThread,
   onPresentationDraftDeleted, onThreadSettled, physicalProjects, projectSourceError,
-  renderThreadTooltipDetails, route, searchController, showGitView, showMosaicView,
+  renderThreadTooltipDetails, route, showGitView, showMosaicView,
   viewedProjectId,
 }: {
   activeProjectId: ActionsProps["projectId"];
@@ -60,12 +60,12 @@ export default function WorkbenchSidebarPane({
   projectSourceError: string;
   renderThreadTooltipDetails: ThreadSidebarProps["renderThreadTooltipDetails"];
   route: WorkbenchRoute;
-  searchController: WorkbenchSearchController;
   showGitView: boolean;
   showMosaicView: boolean;
   viewedProjectId: string;
 }) {
   const client = useWorkbenchClientController();
+  const search = useWorkbenchSearch();
   const projectHref = useWorkbenchProjectNavigation();
   const navigate = useWorkbenchNavigate();
   const selection = useProjects.selection(route, physicalProjects, browseLocation);
@@ -94,7 +94,7 @@ export default function WorkbenchSidebarPane({
             <IconButton
               label="Open workspace search"
               display="hover-border"
-              onClick={() => searchController.open()}
+              onClick={() => search.open()}
               title="Open workspace search"
               type="button"
             >

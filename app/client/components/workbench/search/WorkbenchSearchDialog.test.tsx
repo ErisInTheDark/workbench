@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import type { WorkbenchSearchHit } from "../../workbench/search/WorkbenchSearchController";
+import type { WorkbenchSearchHit } from "../../../workbench/search/WorkbenchSearchController";
 import type { WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
 import { findSearchThreadEntry } from "./WorkbenchSearchDialog";
 

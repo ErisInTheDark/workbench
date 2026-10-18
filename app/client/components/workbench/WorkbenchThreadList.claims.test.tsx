@@ -153,7 +153,7 @@ function renderThreads(
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
-      children: () => createElement(
+      children: createElement(
         WorkbenchClientProvider,
         {
           client: { controls: null, mounted: options.logicalThreads ? { threadSidebar, threadOwnerFor: () => null } as never : null },
@@ -232,7 +232,7 @@ function renderHomeThreads({
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
-      children: () => createElement(WorkbenchClientProvider, {
+      children: createElement(WorkbenchClientProvider, {
         client: { controls: null, mounted: null },
         children: createElement(
         WorkbenchContextMenuContext.Provider,
@@ -312,7 +312,7 @@ test("logical thread eyebrows use each thread's daemon-qualified location", () =
   const html = renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
-      children: () => createElement(WorkbenchClientProvider, {
+      children: createElement(WorkbenchClientProvider, {
         client: { controls: null, mounted: { threadSidebar, threadOwnerFor: () => null } as never },
         children: createElement(
           WorkbenchContextMenuContext.Provider,

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchSidebarPreferencesProvider: compose persisted preferences and memory-only Git/settled disclosure state.
+ * - default WorkbenchSidebarPreferencesProvider: compose global and project-scoped persisted preferences with memory-only
+ *   Git/settled disclosure state.
  */
 "use client";
 
@@ -13,15 +14,14 @@ import {
 } from "react";
 
 import {
-  readWorkbenchGlobalSidebarPreferences,
   readWorkbenchProjectSidebarPreferences,
   setWorkbenchProjectSidebarFolderOpen,
   writeWorkbenchGlobalSidebarPreference,
   writeWorkbenchProjectSidebarPreference,
-  type WorkbenchGlobalSidebarPreferences,
   type WorkbenchProjectSidebarPreferences,
 } from "../../workbench/state/workbench-settings";
 import {
+  useWorkbenchSidebarPreferences,
   WorkbenchSidebarPreferencesContext,
   type WorkbenchSidebarDisclosurePreferenceKey,
   type WorkbenchSidebarDisplayState,
@@ -36,11 +36,12 @@ export default function WorkbenchSidebarPreferencesProvider({
   children,
   projectId,
 }: {
-  children: (value: WorkbenchSidebarPreferencesValue) => ReactNode;
+  children: ReactNode;
   projectId: string;
 }) {
   const controller = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
+  const globalPreferences = useWorkbenchSidebarPreferences.global();
   const [displayState, setDisplayState] = useState<WorkbenchSidebarDisplayState>({
     gitOpen: true,
     settledThreadItemLimit: 50,
@@ -49,28 +50,14 @@ export default function WorkbenchSidebarPreferencesProvider({
   });
   const [pendingDisclosure, setPendingDisclosure] = useState<Partial<Record<WorkbenchSidebarDisclosurePreferenceKey, boolean>>>({});
   const disclosureGeneration = useRef(new Map<WorkbenchSidebarDisclosurePreferenceKey, number>());
-  const persistedPreferences = useMemo(() => {
-    const projectPreferences = readWorkbenchProjectSidebarPreferences(
-      clientState.daemonRegistrationId, projectId, clientState.records,
-    );
-    return {
-      ...projectPreferences,
-      ...readWorkbenchGlobalSidebarPreferences(clientState.daemonRegistrationId, clientState.records),
-    };
-  }, [clientState.daemonRegistrationId, clientState.records, projectId]);
+  const persistedPreferences = useMemo(() => ({
+    ...readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records),
+    ...globalPreferences.preferences,
+  }), [clientState.daemonRegistrationId, clientState.records, globalPreferences.preferences, projectId]);
   const preferences = useMemo(() => ({
     ...persistedPreferences, ...displayState, ...pendingDisclosure,
   }), [displayState, pendingDisclosure, persistedPreferences]);
 
-  const persistGlobalPreference = useCallback((
-    key: keyof WorkbenchGlobalSidebarPreferences,
-    value: boolean | number,
-  ) => {
-    if (persistedPreferences[key] === value) return;
-    void writeWorkbenchGlobalSidebarPreference(controller, clientState.schemaVersion, key, value).catch((error) => {
-      console.error("Workbench global sidebar preference persistence failed.", error);
-    });
-  }, [clientState.schemaVersion, controller, persistedPreferences]);
   const persistProjectPreference = useCallback((
     key: Exclude<keyof WorkbenchProjectSidebarPreferences, "pinnedFolderIds" | "threadFolderIds">,
     value: boolean,
@@ -154,22 +141,21 @@ export default function WorkbenchSidebarPreferencesProvider({
     setFolderOpen,
     setProjectTimeGroupCount: (count) => {
       const boundedCount = Math.max(1, Math.min(100, Math.floor(count)));
-      persistGlobalPreference("projectTimeGroupCount", boundedCount);
+      globalPreferences.set("projectTimeGroupCount", boundedCount);
     },
-    setReloadNecessaryOpen: (open) => persistGlobalPreference("reloadNecessaryOpen", open),
+    setReloadNecessaryOpen: (open) => globalPreferences.set("reloadNecessaryOpen", open),
     setSettledThreadItemLimit: (limit) => {
       const boundedLimit = Math.max(50, Math.min(5_000, Math.floor(limit)));
       setDisplayState(previous => previous.settledThreadItemLimit === boundedLimit ? previous : {
         ...previous, settledThreadItemLimit: boundedLimit,
       });
     },
-    setSidebarCollapsed: (collapsed) => persistGlobalPreference("sidebarCollapsed", collapsed),
     setStatusCountsExpanded: (scope, expanded) => {
       if (scope === "pinned") persistProjectPreference("pinnedStatusCountsExpanded", expanded);
-      else persistGlobalPreference("projectStatusCountsExpanded", expanded);
+      else globalPreferences.set("projectStatusCountsExpanded", expanded);
     },
   }), [
-    persistGlobalPreference,
+    globalPreferences,
     persistProjectPreference,
     preferences,
     setDisclosureOpen,
@@ -178,7 +164,7 @@ export default function WorkbenchSidebarPreferencesProvider({
 
   return (
     <WorkbenchSidebarPreferencesContext.Provider value={value}>
-      {children(value)}
+      {children}
     </WorkbenchSidebarPreferencesContext.Provider>
   );
 }

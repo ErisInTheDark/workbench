@@ -6,7 +6,7 @@
 
 import type { ComponentType } from "react";
 import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
-import { FolderOpenIcon, GearIcon, ProjectIcon, SparkleIcon, type IconProps } from "./workbench-icons";
+import { FolderOpenIcon, GearIcon, ProjectIcon, SparkleIcon, type IconProps } from "../workbench-icons";
 
 const RESULT_PRESENTATION: Record<WorkbenchSearchResult["kind"], {
   Icon: ComponentType<IconProps> | null;

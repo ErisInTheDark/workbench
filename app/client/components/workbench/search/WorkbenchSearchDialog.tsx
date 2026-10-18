@@ -5,19 +5,19 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
+import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
-import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
-import type { WorkbenchSearchHit } from "../../workbench/search/WorkbenchSearchController";
-import { useWorkbenchClientController } from "./workbench-client-context";
-import { useProjects } from "./use-projects";
-import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
-import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import type { WorkbenchSearchHit } from "../../../workbench/search/WorkbenchSearchController";
+import { useWorkbenchClientController } from "../workbench-client-context";
+import { useProjects } from "../use-projects";
+import WorkbenchProjectListItem from "../WorkbenchProjectListItem";
+import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
+import { useWorkbenchSearch } from "./workbench-search-context";
 import WorkbenchSearchResultItem from "./WorkbenchSearchResultItem";
 
 /** A thread hit's row, from its summary, only when the summary lives at the hit's own source. */
@@ -28,12 +28,10 @@ export function findSearchThreadEntry(readSummary: (threadId: string) => Workspa
   return located.summary.row.identity.harness === result.harnessId ? located.summary.row : undefined;
 }
 
-export default function WorkbenchSearchDialog({ controller, projects, logicalProjects }: {
-  controller: WorkbenchSearchController;
-  projects: readonly WorkbenchProjectOption[];
-  logicalProjects?: readonly WorkbenchLogicalProject[];
-}) {
-  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+export default function WorkbenchSearchDialog({ projects }: { projects: readonly WorkbenchProjectOption[] }) {
+  const controller = useWorkbenchSearch();
+  const snapshot = useWorkbenchSearch.snapshot();
+  const logicalProjects = useProjects();
   const logicalSummaries = useProjects.summaries();
   const projectSummaries = useProjects.threads();
   const client = useWorkbenchClientController();

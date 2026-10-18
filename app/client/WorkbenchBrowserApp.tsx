@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchBrowserApp: own the app-wide stats store and select the ordinary Workbench SPA (inside its drag owner) or chrome-free
+ * - WorkbenchBrowserApp: own the app-wide stats store and select the ordinary Workbench SPA (inside its drag and search owners) or chrome-free
  *   thread rendering surface from browser location.
  */
 import { useEffect, useLayoutEffect, useState } from "react";
@@ -10,6 +10,7 @@ import ThreadRenderLab from "./components/workbench/thread-view/ThreadRenderLab.
 import Workbench from "./components/workbench.tsx";
 import WorkbenchClientStateProvider from "./components/workbench/WorkbenchClientStateProvider.tsx";
 import WorkbenchDragProvider from "./components/workbench/drag/WorkbenchDragProvider.tsx";
+import WorkbenchSearchProvider from "./components/workbench/search/WorkbenchSearchProvider.tsx";
 import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController.ts";
 import WorkbenchAppRuntimeClient from "./workbench/app/WorkbenchAppRuntimeClient.ts";
 import WorkbenchAppRpcContext from "./workbench/app/WorkbenchAppRpcContext";
@@ -110,7 +111,13 @@ export default function WorkbenchBrowserApp({
   } else if (pathname === "/agent/thread" || pathname.startsWith("/agent/thread/")) {
     content = <AgentThreadViewer initialThreadId={threadIdFromPath(pathname)} />;
   } else {
-    content = <WorkbenchDragProvider><Workbench appRuntime={runtime} /></WorkbenchDragProvider>;
+    content = (
+      <WorkbenchDragProvider>
+      <WorkbenchSearchProvider>
+        <Workbench appRuntime={runtime} />
+      </WorkbenchSearchProvider>
+      </WorkbenchDragProvider>
+    );
   }
   return (
     <WorkbenchWorkspaceContext.Provider value={workspace}>

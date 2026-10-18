@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchSearchHit: source-qualified selectable search result.
  * - WorkbenchSearchSnapshot: dialog intent, partial results and selection.
- * - default WorkbenchSearchController: own coalesced query interests, stale-result fencing and selection.
+ * - default WorkbenchSearchController: own coalesced query interests, stale-result fencing, selection and activation dispatch.
  */
 import type {
   WorkbenchSearchResult,
@@ -29,6 +29,7 @@ export interface WorkbenchSearchSnapshot {
 type SearchTimer = number | ReturnType<typeof setTimeout>;
 
 export default class WorkbenchSearchController {
+  private activationHandler: ((result: WorkbenchSearchHit) => void) | null = null;
   private disposed = false;
   private generation = 0;
   private release: (() => void) | null = null;
@@ -46,7 +47,6 @@ export default class WorkbenchSearchController {
   };
 
   constructor(private readonly options: {
-    activate?(result: WorkbenchSearchHit): void;
     clearTimeout?(timer: SearchTimer): void;
     observe(request: { projectId: string | null; query: string },
       publish: (snapshot: WorkspaceQuerySnapshot<"search">) => void): () => void;
@@ -105,11 +105,20 @@ export default class WorkbenchSearchController {
   activate(result: WorkbenchSearchHit) {
     if (this.disposed || !this.snapshot.isOpen || !this.snapshot.results.includes(result)) return;
     this.close();
-    this.options.activate?.(result);
+    this.activationHandler?.(result);
+  }
+
+  /** Route activated results to one handler; the latest registration wins until it unregisters. */
+  onActivate(handler: (result: WorkbenchSearchHit) => void) {
+    this.activationHandler = handler;
+    return () => {
+      if (this.activationHandler === handler) this.activationHandler = null;
+    };
   }
 
   dispose() {
     this.disposed = true;
+    this.activationHandler = null;
     this.generation += 1;
     this.cancelTimer();
     this.releaseQuery();

@@ -24,7 +24,6 @@ function setup() {
   }> = [];
   const activated: string[] = [];
   const controller = new WorkbenchSearchController({
-    activate: result => activated.push(`${controller.getSnapshot().isOpen}:${result.id}`),
     clearTimeout: id => { scheduled.delete(Number(id)); },
     observe: (request, publish) => {
       const read = { request, publish, released: false };
@@ -33,6 +32,7 @@ function setup() {
     },
     setTimeout: callback => { scheduled.set(++timerId, callback); return timerId; },
   });
+  controller.onActivate(result => activated.push(`${controller.getSnapshot().isOpen}:${result.id}`));
   const runScheduled = () => {
     for (const [id, callback] of [...scheduled]) { scheduled.delete(id); callback(); }
   };

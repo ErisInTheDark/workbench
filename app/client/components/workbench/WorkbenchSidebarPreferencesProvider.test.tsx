@@ -8,18 +8,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import { WorkbenchClientStateContext } from "./workbench-client-state-context";
-import type { WorkbenchSidebarPreferencesValue } from "./workbench-sidebar-preferences-context";
+import { useWorkbenchSidebarPreferences, type WorkbenchSidebarPreferencesValue } from "./workbench-sidebar-preferences-context";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
 
 function renderPreferences(controller: WorkbenchClientStateController) {
   const captured: { value?: WorkbenchSidebarPreferencesValue } = {};
+  function Capture() {
+    captured.value = useWorkbenchSidebarPreferences();
+    return null;
+  }
   renderToStaticMarkup(
     <WorkbenchClientStateContext.Provider value={controller}>
       <WorkbenchSidebarPreferencesProvider projectId="">
-        {(preferences) => {
-          captured.value = preferences;
-          return null;
-        }}
+        <Capture />
       </WorkbenchSidebarPreferencesProvider>
     </WorkbenchClientStateContext.Provider>,
   );
