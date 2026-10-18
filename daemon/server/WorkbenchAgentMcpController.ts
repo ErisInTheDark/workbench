@@ -27,6 +27,7 @@ import { listWorkbenchInstructionTools, type WorkbenchInstructionTool } from "./
 import {
   isWorkbenchCommandVisibleTo,
   isWorkbenchToolVisibleTo,
+  WORKBENCH_CODE_MODE_TOOL_META as CODE_MODE_META,
 } from "workbench-shared/workbench/commands/workbench-tool-audience";
 import type { WorkbenchProviderCaller } from "./provider-execution";
 import {
@@ -267,6 +268,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       inputSchema: toolJsonSchema(shellInputSchema, "input") as Tool["inputSchema"],
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: false, readOnlyHint: false },
       outputSchema: toolJsonSchema(WorkbenchShellResultSchema, "output") as Tool["outputSchema"],
+      _meta: CODE_MODE_META,
     }];
     for (const [name, definition] of this.visibleCommands(scope)) {
       tools.push({
@@ -279,6 +281,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
           openWorldHint: definition.effects.openWorld ?? false,
           readOnlyHint: definition.effects.readOnly ?? false,
         },
+        ...(definition.mcpCodeModeEligible ? { _meta: CODE_MODE_META } : {}),
       });
     }
     return { experimental: description.experimental, tools };

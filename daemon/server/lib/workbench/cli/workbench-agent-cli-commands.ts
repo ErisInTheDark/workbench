@@ -94,6 +94,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop",
   "task set", "task get", "task completed", "task blocked",
   "todo", "todo remove",
+  "mcp tools", "mcp call",
   "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git thread", "git repo", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
   "git arc status", "git arc edit start", "git arc edit view", "git arc edit apply", "git arc edit revert", "git arc edit end", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
@@ -174,6 +175,11 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     commandOrder: ["todo", "todo remove"],
     footer: "Todos belong to the current managed thread. Neither flag records an optional todo.",
     key: "todo", usage: "wb todo [remove] [options]", words: ["todo"],
+  },
+  {
+    commandOrder: ["mcp tools", "mcp call"],
+    footer: "Only tools the user allowed in Settings > Agents > MCP servers are listed or callable.",
+    key: "mcp", usage: "wb mcp <tools|call> [options]", words: ["mcp"],
   },
   {
     commandOrder: ["task set", "task get", "task completed", "task blocked"],

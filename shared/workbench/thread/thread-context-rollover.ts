@@ -10,10 +10,11 @@ import { contextCompactionThreshold } from "./thread-profile.ts";
 import { defineTagWrapper } from "./tag-wrapper.ts";
 
 export const WORKBENCH_THREAD_COMPACT_TOOL_NAME = "thread_compact";
-export const WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME = `wb_${WORKBENCH_THREAD_COMPACT_TOOL_NAME}`;
+// OpenCode exposes non-code-mode wb tools directly under the `wbex` namespace.
+export const WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME = `wbex_${WORKBENCH_THREAD_COMPACT_TOOL_NAME}`;
 export const WORKBENCH_CONTEXT_ROLLOVER_INSTRUCTION_KEY = "workbench-context-rollover";
 export const WORKBENCH_CONTEXT_ROLLOVER_INSTRUCTION = [
-  "Call `thread_compact` as your next action.",
+  `Call \`${WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME}\` as your next action.`,
   "Include a summary of everything you were doing, every relevant user message verbatim,",
   "the entire approved plan and every approved addendum when a plan exists, all remaining work,",
   "and intended next steps. Do not continue ordinary work before calling it.",

@@ -23,6 +23,7 @@ import { ThreadAutoCompactSettingsPatchSchema } from "workbench-shared/workbench
 import type WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
 import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import { ApprovalReviewSettingsUpdateSchema } from "workbench-shared/workbench/approval-review/approval-review-settings";
+import { McpServerSettingsUpdateSchema } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import { ProjectCreateRequestSchema, ProjectFolderListRequestSchema } from "workbench-shared/workbench/project/project-creation";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
@@ -104,6 +105,7 @@ const REQUEST_METHODS = {
   "sandbox-network/read": true, "sandbox-network/update": true,
   "command-approvals/read": true, "command-approvals/remove": true, "command-approvals/patch": true,
   "approval-review/read": true, "approval-review/update": true,
+  "mcp-servers/read": true, "mcp-servers/update": true,
   "project/store/read": true, "project/store/update": true,
   "project/discovery-settings/read": true, "project/discovery-settings/update": true,
   "project/folders/list": true, "project/create": true,
@@ -256,6 +258,7 @@ export default class WorkbenchDaemonRequestController {
     autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
     commandApprovals?: Pick<import("./WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
     approvalReview?: Pick<import("./approval-review/WorkbenchApprovalReviewController").default, "read" | "update">;
+    mcpServers?: Pick<import("./mcp-servers/WorkbenchMcpServerController").default, "read" | "update">;
     projectStore?: Pick<import("./store/WorkbenchProjectStore").default, "read" | "update">;
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
     threadActions?: Pick<WorkbenchThreadActionController, "handle">;
@@ -445,6 +448,18 @@ export default class WorkbenchDaemonRequestController {
             result = await this.owners.approvalReview.update(parsed.data);
           } else {
             result = await this.owners.approvalReview.read();
+          }
+          break;
+        }
+        case "mcp-servers/read":
+        case "mcp-servers/update": {
+          if (!this.owners.mcpServers) throw new Error("MCP server settings are unavailable.");
+          if (method === "mcp-servers/update") {
+            const parsed = McpServerSettingsUpdateSchema.safeParse(params);
+            if (!parsed.success) throw new InvalidParamsError(parsed.error.issues[0]?.message ?? "Invalid MCP server settings update.");
+            result = await this.owners.mcpServers.update(parsed.data);
+          } else {
+            result = await this.owners.mcpServers.read();
           }
           break;
         }

@@ -79,7 +79,8 @@ test("registered tool references follow each provider's real MCP route", () => {
   ];
   assert.equal(resolveWorkbenchInstructionToolReference("rg", "codex", catalogue), "tools.mcp__wb__rg");
   assert.equal(resolveWorkbenchInstructionToolReference("git_arc_release", "codex", catalogue), "tools.mcp__wbex__git_arc_release");
-  assert.equal(resolveWorkbenchInstructionToolReference("git_arc_release", "opencode", catalogue), "tools.wb.git_arc_release");
+  assert.equal(resolveWorkbenchInstructionToolReference("rg", "opencode", catalogue), "tools.wb.rg");
+  assert.equal(resolveWorkbenchInstructionToolReference("git_arc_release", "opencode", catalogue), "wbex_git_arc_release");
   assert.equal(resolveWorkbenchInstructionToolReference("not_a_tool", "codex", catalogue), null);
 });
 

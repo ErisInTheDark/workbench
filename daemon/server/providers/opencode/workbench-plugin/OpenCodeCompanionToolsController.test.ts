@@ -1,4 +1,4 @@
-/* No production exports. Tests protect exact child capture and MCP connection ownership. */
+/* No production exports. Tests protect exact child capture, code-mode vs direct registration, and MCP connection ownership. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
@@ -10,6 +10,8 @@ import { WorkbenchAgentMcpRequestRegistry } from "../../../workbench-agent-mcp-r
 import OpenCodeToolsController from "../OpenCodeToolsController";
 import { WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { ProviderToolResult, WorkbenchToolTranscriptReference } from "../../../provider-execution";
+import { listWorkbenchAgentCodeModeToolNames } from "../../../lib/workbench/commands/workbench-agent-command-registry";
+import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
 
 const catalogue = [{ name: "rg", inputSchema: { type: "object" as const, properties: { args: { type: "array", items: { type: "string" } } } } }];
 const context = (sessionID = "managed", id = "parent") => ({ sessionID, id, messageID: "assistant" }) as ToolContext;
@@ -230,11 +232,20 @@ test("companion catalogue and decoded calls cross real MCP transport with full c
       connection.register({ add: tool => { catalogue.push(tool); } } as ToolEditor);
       const tool = catalogue.find(tool => tool.name === "task_get");
       assert.ok(tool);
-      return tool;
+      return { catalogue, tool };
     }));
-    const first = registered[0]!.execute({}, context());
+    // Code-mode-eligible tools stay nested and always listed; every other wb tool is direct under `wbex`.
+    const codeMode = new Set([WORKBENCH_SHELL_MCP_TOOL_NAME, ...listWorkbenchAgentCodeModeToolNames()]);
+    const { catalogue: served } = registered[0]!;
+    assert.ok(served.some(tool => codeMode.has(tool.name)) && served.some(tool => !codeMode.has(tool.name)));
+    for (const tool of served) {
+      assert.deepEqual(tool.options, codeMode.has(tool.name)
+        ? { namespace: "wb", pinned: true }
+        : { namespace: "wbex", codemode: false }, tool.name);
+    }
+    const first = registered[0]!.tool.execute({}, context());
     await entered.promise;
-    const second = registered[1]!.execute({}, context("managed", "other")).finally(() => release.resolve());
+    const second = registered[1]!.tool.execute({}, context("managed", "other")).finally(() => release.resolve());
     const outputs = await Promise.all([first, second]);
     assert.deepEqual(starts.map(start => start.parentId).sort(), ["other", "parent"]);
     assert.equal(new Set(starts.map(start => start.sourceId)).size, 2);

@@ -12,6 +12,7 @@ import type { ProjectFolderOption } from "workbench-shared/workbench/project/pro
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import ApprovalReviewSettings from "./ApprovalReviewSettings";
 import CommandApprovalSettings from "./CommandApprovalSettings";
+import McpServerSettings from "./McpServerSettings";
 import WorkbenchEnvironmentSettings from "./environment/WorkbenchEnvironmentSettings";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings, { VoiceInputSetting } from "./voice/VoiceSettings";
@@ -54,6 +55,7 @@ const machinePages: { id: MachinePage; label: string; sections: Section[] }[] = 
     { id: "settings-providers", label: "Providers" },
     { id: "settings-auto-compact", label: "Auto-compact" },
     { id: "settings-auto-approve", label: "Auto-approve" },
+    { id: "settings-mcp-servers", label: "MCP servers" },
     { id: "settings-agent-network", label: "Network access" },
     { id: "settings-machine-voice", label: "Voice" },
     { id: "settings-capabilities", label: "Capabilities" },
@@ -252,6 +254,9 @@ export default function WorkbenchSettingsView({
           {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>
             <ApprovalReviewSettings />
           </WorkbenchOperationsContext.Provider>)}
+        </FormSection>
+        <FormSection id="settings-mcp-servers" title="MCP servers">
+          {withDaemon((client, id) => <McpServerSettings key={id} daemon={client} />)}
         </FormSection>
         <FormSection id="settings-agent-network" title="Network access">
           {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>

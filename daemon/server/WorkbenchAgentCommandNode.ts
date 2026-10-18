@@ -7,6 +7,7 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands/questionnaire-command-definition";
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
 import { WorkbenchTodoRequestSchema } from "./lib/workbench/commands/todo-command-definitions";
+import { WorkbenchMcpRequestSchema } from "./lib/workbench/commands/mcp-command-definitions";
 import { WorkbenchVisRequestSchema } from "./lib/workbench/commands/vis-command-definitions";
 import { formatVisAnswers, formatVisSessionResult, parseVisProject } from "workbench-shared/workbench/vis/vis-contract";
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/commands/workbench-agent-command-definition";
@@ -248,6 +249,21 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             : await todos.renderRemove(identity.threadId, request.ids);
         return new Response(text, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
       },
+      executeMcpRequest: async (body, signal) => {
+        const headers = { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" };
+        const parsed = WorkbenchMcpRequestSchema.safeParse(body);
+        if (!parsed.success) return new Response("Invalid mcp arguments.\n", { headers, status: 400 });
+        const request = parsed.data;
+        const mcpServers = build.get("mcpServers");
+        try {
+          if (request.action === "tools") return new Response(await mcpServers.listTools(request, signal), { headers });
+          const outcome = await mcpServers.call(request, signal);
+          return new Response(outcome.text, { headers, status: outcome.isError ? 422 : 200 });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          return new Response(`${error instanceof Error ? error.message : "MCP request failed."}\n`, { headers, status: 400 });
+        }
+      },
       executeVisRequest: async (body, signal) => {
         const parsed = WorkbenchVisRequestSchema.safeParse(body);
         if (!parsed.success) return new Response("Invalid vis arguments.\n", { headers: { "Content-Type": "text/plain; charset=utf-8" }, status: 400 });
@@ -345,7 +361,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "transcriptIdentity", "vis"],
+  requires: ["database", "gitArc", "harnesses", "mcpServers", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "transcriptIdentity", "vis"],
   safeAll: true,
   scope: "server:commands",
 });

@@ -23,7 +23,7 @@ import ProviderThreadJourney, { SharedRuntimeCheckpoints } from "./ProviderThrea
 import { parseThreadTestArguments, type ThreadTestMode } from "../thread-test-arguments";
 import {
   createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
-  fakeCodexTool, fakeOpenCodeTool, type ProviderBoundaryToolNames,
+  fakeCodexTool, fakeOpenCodeDirectTool, type ProviderBoundaryToolNames,
 } from "./provider-boundary-journey";
 
 const modelId = "opencode-go/muse-spark-1.3-contributor";
@@ -113,7 +113,7 @@ async function verifyOpenCodeSteerCuts(input: {
     fakeModel?.enqueue([
       { reasoning: `Weighing ${answerProof}`, hold: true },
       { text: steerProof },
-      fakeOpenCodeTool("task_completed", {}),
+      fakeOpenCodeDirectTool("task_completed", {}),
       { text: "" },
     ]);
     const held = fakeModel?.nextHeld(signal);
@@ -543,7 +543,7 @@ test("selected providers complete the shared thread boundary journey in one clon
         search: "tools.wb.rg through execute",
         shell: "tools.wb.shell through execute",
         taskGet: "tools.wb.task_get through execute",
-        taskComplete: "tools.wb.task_completed through execute",
+        taskComplete: "the direct wbex_task_completed tool (not through execute)",
         questionnaire: "tools.wb.request_user_input through execute",
       },
       verifySearch: (items: ProjectedItems) => {

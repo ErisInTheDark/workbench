@@ -6,9 +6,20 @@
  * - OpenCodePatchObservationSchema/OpenCodePatchObservation: transient request-fenced file previews.
  * - OpenCodeToolContextSchema/OpenCodeToolContext: exact companion child and parent identities.
  * - OpenCodeFileClaimRequestSchema/OpenCodeFileClaimResultSchema: native mutation admission messages.
+ * - OPENCODE_WORKBENCH_NAMESPACE/OPENCODE_WORKBENCH_DIRECT_NAMESPACE: companion tool namespaces for nested code-mode and direct wb tools.
+ * - isOpenCodeWorkbenchToolName: whether a native OpenCode tool name belongs to a companion-registered wb tool.
  */
 import { z } from "zod";
 import { ToolPatchPreviewFileSchema } from "workbench-shared/workbench/thread/tool-patch-preview";
+
+export const OPENCODE_WORKBENCH_NAMESPACE = "wb";
+export const OPENCODE_WORKBENCH_DIRECT_NAMESPACE = "wbex";
+
+/** Direct tools surface as `<namespace>_<name>`; Workbench records every wb call itself. */
+export function isOpenCodeWorkbenchToolName(name: string) {
+  return [OPENCODE_WORKBENCH_NAMESPACE, OPENCODE_WORKBENCH_DIRECT_NAMESPACE]
+    .some(namespace => name === namespace || name.startsWith(`${namespace}_`));
+}
 
 export const OpenCodeFileClaimRequestSchema = z.object({
   sessionID: z.string().min(1),

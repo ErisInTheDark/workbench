@@ -46,6 +46,11 @@ export function fakeOpenCodeTool(name: string, args: Record<string, unknown>, te
   };
 }
 
+/** Non-code-mode wb tools are direct OpenCode tools under the `wbex` namespace, outside `execute`. */
+export function fakeOpenCodeDirectTool(name: string, args: Record<string, unknown>, textValue?: string): FakeThreadAction {
+  return { ...(textValue === undefined ? {} : { text: textValue }), tool: { nameSuffix: `wbex_${name}`, arguments: args } };
+}
+
 export function createProviderBoundaryJourney(
   provider: "codex" | "opencode" | "claude",
   tools: ProviderBoundaryToolNames,
@@ -68,7 +73,8 @@ export function createProviderBoundaryJourney(
       ? nameSuffix === "task_completed"
         ? { ...(text === undefined ? {} : { text }), tool: { nameSuffix, arguments: args } }
         : fakeCodexTool(nameSuffix, args, text)
-      : provider === "opencode" ? fakeOpenCodeTool(nameSuffix, args, text)
+      : provider === "opencode"
+        ? nameSuffix === "task_completed" ? fakeOpenCodeDirectTool(nameSuffix, args, text) : fakeOpenCodeTool(nameSuffix, args, text)
         : { ...(text === undefined ? {} : { text }), tool: { nameSuffix, arguments: args } };
   return {
     ask,

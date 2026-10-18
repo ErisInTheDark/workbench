@@ -2,7 +2,7 @@
  * Exports:
  * - CompanionToolClient/CompanionToolTransport: injected MCP connection boundaries.
  * - connectLifecycleOwnedCompanionTools: connect without a manufactured request deadline.
- * - default OpenCodeCompanionToolsController: own catalogue, correlated calls, claim checks and connection disposal.
+ * - default OpenCodeCompanionToolsController: own catalogue, pinned code-mode vs direct registration, correlated calls, claim checks and connection disposal.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -14,7 +14,10 @@ import {
 import type { ToolContext, ToolEditor } from "@opencode/plugin/promise/tool";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import { readDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
-import { OpenCodeFileClaimResultSchema } from "../opencode-workbench-rpc";
+import { isWorkbenchCodeModeTool } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import {
+  OPENCODE_WORKBENCH_DIRECT_NAMESPACE, OPENCODE_WORKBENCH_NAMESPACE, OpenCodeFileClaimResultSchema,
+} from "../opencode-workbench-rpc";
 
 export interface CompanionToolClient {
   listTools(cursor?: string): Promise<{ tools: Tool[]; nextCursor?: string }>;
@@ -191,12 +194,15 @@ export default class OpenCodeCompanionToolsController {
     this.catalogue = catalogue;
   }
 
+  /** Code-mode tools are pinned so the catalogue always lists them; the rest are direct `wbex_*` tools. */
   register(editor: ToolEditor) {
     for (const tool of this.catalogue) {
       editor.add({
         name: tool.name,
         description: tool.description ?? "",
-        options: { namespace: "wb" },
+        options: isWorkbenchCodeModeTool(tool._meta)
+          ? { namespace: OPENCODE_WORKBENCH_NAMESPACE, pinned: true }
+          : { namespace: OPENCODE_WORKBENCH_DIRECT_NAMESPACE, codemode: false },
         input: tool.inputSchema,
         output: tool.outputSchema ?? {},
         execute: (input, context) => this.execute(tool.name, input, context),

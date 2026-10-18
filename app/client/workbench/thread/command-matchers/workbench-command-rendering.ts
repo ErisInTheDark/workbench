@@ -51,6 +51,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "feedback",
   "todo",
   "todo_remove",
+  "mcp_tools",
+  "mcp_call",
   // Vis is CLI-only; its CLI matcher renders through these names, which also keep earlier MCP calls rendering.
   "vis_start",
   "vis_end",
@@ -791,6 +793,18 @@ export function getWorkbenchCommandRoute(
       // Browser checks are routine enough to group; the stat names them in the block summary.
       const stats = action === "snapshot" || action === "screenshot" ? { visChecks: 1 } : undefined;
       return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action, path } }, stats) : null;
+    }
+    case "mcp_tools": {
+      const query = readString(args.query);
+      return query
+        ? simple("workbench-cli.mcp", actionTarget("Searching MCP tools for ", query), actionTarget("Searched MCP tools for ", query))
+        : simple("workbench-cli.mcp", actionTarget("Listing ", "MCP tools"), actionTarget("Listed ", "MCP tools"));
+    }
+    case "mcp_call": {
+      const server = readString(args.server);
+      const tool = readString(args.tool);
+      const target = server && tool ? `${server}/${tool}` : "MCP tool";
+      return simple("workbench-cli.mcp", actionTarget("Running ", target), actionTarget("Ran ", target));
     }
     case "task_get":
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));

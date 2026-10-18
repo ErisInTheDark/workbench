@@ -185,7 +185,13 @@ test("invalidates cached model catalogues on provider catalogue events", async (
   assert.deepEqual(notifications, ["models/updated", "models/updated"]);
 });
 
-test("native context rollover tool events stay hidden and do not own replacement settlement", async () => {
+test("direct wb tool events, including context rollover, stay hidden and do not own replacement settlement", async () => {
+  for (const name of [WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME, "wbex_git_arc_status", "wb_thread_compact"]) {
+    await assertDirectWorkbenchToolHidden(name);
+  }
+});
+
+async function assertDirectWorkbenchToolHidden(name: string) {
   const lifecycle: string[] = [];
   const owner = new OpenCodeEventController({
     observe: async () => undefined,
@@ -201,13 +207,13 @@ test("native context rollover tool events stay hidden and do not own replacement
       appendText: () => undefined,
       recordCompaction: async () => undefined,
       recordTurnState: async () => undefined,
-      recordItem: async () => assert.fail("rollover tool must not record a dynamic tool item"),
+      recordItem: async () => assert.fail(`${name} must not record a dynamic tool item`),
     },
   });
   await owner.accept(event({
     type: "session.tool.input.started",
     created: 1,
-    data: { sessionID: "session", id: "compact", name: WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME },
+    data: { sessionID: "session", id: "compact", name },
   }));
   await owner.accept(event({
     type: "session.tool.input.ended",
@@ -220,7 +226,7 @@ test("native context rollover tool events stay hidden and do not own replacement
     data: { sessionID: "session", id: "compact", metadata: {}, content: [] },
   }));
   assert.deepEqual(lifecycle, []);
-});
+}
 
 test("persists and publishes live cumulative usage for the active OpenCode turn", async () => {
   const tokenUsage = {

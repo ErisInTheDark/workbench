@@ -16,15 +16,15 @@ import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
 import OpenCodeSteerCutController from "./OpenCodeSteerCutController";
 import providerAccountFingerprint from "../../provider-account-fingerprint";
 import {
+  isOpenCodeWorkbenchToolName,
   openCodeWorkbenchRpc,
   OpenCodeGoQuotaSchema,
   type OpenCodeGoQuotaResult,
 } from "../opencode-workbench-rpc";
 
 const WORKBENCH_PLUGIN_ID = "workbench";
-const WORKBENCH_MCP_NAME = "wb";
 const MANAGED_CODE_MODE_SCOPE =
-  "Search and call nested Workbench tools only. Native OpenCode tools such as edit, write, and apply_patch remain direct OpenCode tools outside this catalogue.";
+  "Call the nested Workbench tools listed here only. Native OpenCode tools such as edit, write, and apply_patch and direct `wbex_*` tools remain direct OpenCode tools outside this catalogue.";
 /** Managed sessions replace these with wb equivalents: shell, rg, skill, request_user_input. Read hangs on missing paths and directories, so it is denied too; agents read through the wb shell. */
 export const MANAGED_DISABLED_NATIVE_TOOLS = new Set(["bash", "glob", "grep", "question", "read", "shell", "skill"]);
 const OPENCODE_HOSTED_PROVIDERS = new Set(["opencode", "opencode-go"]);
@@ -146,10 +146,6 @@ export async function readOpenCodeGoQuota(options: {
       };
 }
 
-function isWorkbenchTool(tool: string) {
-  return tool === WORKBENCH_MCP_NAME || tool.startsWith(`${WORKBENCH_MCP_NAME}_`);
-}
-
 function isManagedMetadata(metadata: Record<string, unknown> | undefined) {
   const workbench = metadata?.workbench;
   return Boolean(workbench && typeof workbench === "object"
@@ -260,7 +256,7 @@ export function createOpenCodeWorkbenchPlugin(
             execute.description = `${execute.description}\n\n${MANAGED_CODE_MODE_SCOPE}`;
           }
           for (const tool of Object.keys(input.tools)) {
-            if (managed ? MANAGED_DISABLED_NATIVE_TOOLS.has(tool) : isWorkbenchTool(tool)) {
+            if (managed ? MANAGED_DISABLED_NATIVE_TOOLS.has(tool) : isOpenCodeWorkbenchToolName(tool)) {
               delete input.tools[tool];
             }
           }

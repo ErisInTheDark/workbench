@@ -77,6 +77,7 @@ import { resolveGitDirectory } from "./lib/git";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import WorkbenchApprovalController, { type WorkbenchApprovalHandoff } from "./WorkbenchApprovalController";
 import WorkbenchApprovalReviewController from "./approval-review/WorkbenchApprovalReviewController";
+import WorkbenchMcpServerController from "./mcp-servers/WorkbenchMcpServerController";
 import { readOpenCodeApiKey } from "./approval-review/opencode-auth-credential";
 import { DEFAULT_APPROVAL_MODE, resolveApprovalMode } from "workbench-shared/workbench/approval-review/approval-mode";
 import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
@@ -669,6 +670,7 @@ function createWorkbenchCoreFeature(
     readOpenCodeApiKey: () => readOpenCodeApiKey(),
     codexReviewer: () => installedProviderKeys.includes("codex") ? provider("codex").approvalReview : null,
   });
+  const mcpServers = new WorkbenchMcpServerController({ database, readDeviceIdentity });
   const approvals = new WorkbenchApprovalController({
     broadcast: (harness, notification) => context.broadcastProviderNotification(harness, notification),
     collectAnswerContext: async (harness, threadId, signal) => {
@@ -945,6 +947,7 @@ function createWorkbenchCoreFeature(
     autoCompact,
     commandApprovals,
     approvalReview,
+    mcpServers,
     projectStore,
     workingTree,
     providers,
@@ -997,7 +1000,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, threadTodos, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, threadTodos, transcriptReader, transcriptReconciliation,
     vis,
     threadContextRollover,
     workingTree,
@@ -1085,6 +1088,8 @@ function createWorkbenchCoreFeature(
       await launches.dispose();
       reportPhase("Git arc disposal");
       gitArc.dispose();
+      reportPhase("MCP server disposal");
+      await mcpServers.dispose();
       reportPhase("stats disposal");
       await stats.dispose();
       reportPhase("questionnaire disposal");

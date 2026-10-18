@@ -1,0 +1,72 @@
+/*
+ * Exports:
+ * - McpServerNameSchema: agent-facing server name used by `mcp_tools` and `mcp_call`.
+ * - McpServerUrlSchema: http(s) endpoint of one streamable-HTTP MCP server.
+ * - McpServerAuthHeaderSchema: custom request header name carrying a server's sealed credential.
+ * - McpServerToolNameSchema: one tool name a server offers.
+ * - McpServerSettingsSnapshotSchema/McpServerSettingsSnapshot/McpServerSnapshot: configured servers, allow rules and live catalogues; credential values are never included.
+ * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add, removal, credential, allow-rule or refresh change.
+ */
+import { z } from "zod";
+
+export const McpServerNameSchema = z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/u,
+  "Use 1-64 lowercase letters, digits, - or _, starting with a letter or digit.");
+
+export const McpServerUrlSchema = z.string().trim().max(2048).refine(value => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}, "Use an http:// or https:// URL.");
+
+// The MCP transport owns these headers; a credential must never replace them.
+const RESERVED_HEADERS = new Set(["accept", "content-length", "content-type", "host", "mcp-protocol-version", "mcp-session-id"]);
+
+export const McpServerAuthHeaderSchema = z.string().trim().max(64)
+  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u, "Use a valid HTTP header name.")
+  .refine(value => !RESERVED_HEADERS.has(value.toLowerCase()), "That header is reserved by the MCP transport.");
+
+export const McpServerToolNameSchema = z.string().min(1).max(256);
+
+const credential = z.object({
+  header: McpServerAuthHeaderSchema,
+  value: z.string().trim().min(1).max(8192),
+}).strict();
+
+const catalog = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ready"),
+    tools: z.array(z.object({ name: McpServerToolNameSchema, description: z.string() }).strict()),
+  }).strict(),
+  z.object({ status: z.literal("error"), detail: z.string().max(300) }).strict(),
+]);
+
+const server = z.object({
+  id: z.uuid(),
+  name: McpServerNameSchema,
+  url: McpServerUrlSchema,
+  /** Standing allow: every current and future tool the server offers. */
+  allowAll: z.boolean(),
+  /** Individually allowed tools; kept while `allowAll` is on so turning it off restores them. */
+  allowedTools: z.array(McpServerToolNameSchema),
+  /** Header the sealed credential is sent in; null when the server has none. */
+  auth: z.object({ header: McpServerAuthHeaderSchema }).strict().nullable(),
+  catalog,
+}).strict();
+export type McpServerSnapshot = z.infer<typeof server>;
+
+export const McpServerSettingsSnapshotSchema = z.object({ servers: z.array(server) }).strict();
+export type McpServerSettingsSnapshot = z.infer<typeof McpServerSettingsSnapshotSchema>;
+
+const id = z.uuid();
+export const McpServerSettingsUpdateSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("add"), name: McpServerNameSchema, url: McpServerUrlSchema, auth: credential.optional() }).strict(),
+  z.object({ action: z.literal("remove"), id }).strict(),
+  z.object({ action: z.literal("setAuth"), id, auth: credential.nullable() }).strict(),
+  z.object({ action: z.literal("setAllowAll"), id, allowAll: z.boolean() }).strict(),
+  z.object({ action: z.literal("setTools"), id, tools: z.array(McpServerToolNameSchema).max(1000) }).strict(),
+  z.object({ action: z.literal("refresh"), id }).strict(),
+]);
+export type McpServerSettingsUpdate = z.input<typeof McpServerSettingsUpdateSchema>;

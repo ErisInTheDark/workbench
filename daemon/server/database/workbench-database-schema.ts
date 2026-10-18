@@ -75,6 +75,7 @@ import { threadTodoSchemaHistory } from "../lib/workbench/database/schema/thread
 import { threadAddressedFeedbackSchemaHistory } from "../lib/workbench/database/schema/thread-addressed-feedback-schema.ts";
 import { threadVisSchemaHistory } from "../lib/workbench/database/schema/thread-vis-schema.ts";
 import { execRootSchemaHistory } from "../lib/workbench/database/schema/exec-roots-schema.ts";
+import { mcpServerSchemaHistory } from "../lib/workbench/database/schema/mcp-server-schema.ts";
 import {
   threadPayloadRetentionSchemaHistory,
   threadPayloadRetentionTables,
@@ -154,6 +155,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       threadVisSchemaHistory,
       threadPayloadRetentionSchemaHistory,
       execRootSchemaHistory,
+      mcpServerSchemaHistory,
     ],
   });
 }

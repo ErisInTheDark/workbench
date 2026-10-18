@@ -94,6 +94,7 @@ const databaseReleases = Object.freeze({
   reusableSubagentNames: release(84, "1c3af4eebdcb2a6f409b774c7649b0fe2ef8f3d5c1f2d096c9960a8bda4bc329"),
   threadGitCommitTimes: release(85, "f2bed1b77075a66efb37e55d1658beb4a8f82fab8bdff7f6ae18eef9ebc8a387"),
   threadInstructionSelections: release(86, "2d4797f687df0831ece04385c90c0f9e2a5f2d2acd1faabe99b60f292dbe3d4b"),
+  mcpServers: release(87, "6a6593b1865337cf380495966f101f11d785d0c9648396f50ce2d0d0d0148b7e"),
 });
 
 export default databaseReleases;

@@ -9,15 +9,19 @@ import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/
 import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
 import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
+import { OPENCODE_WORKBENCH_DIRECT_NAMESPACE, OPENCODE_WORKBENCH_NAMESPACE } from "./opencode-workbench-rpc";
 import {
   buildWorkbenchManagedThreadActivatedSkills,
   buildWorkbenchManagedThreadInstructions,
 } from "../../lib/workbench/instructions/WorkbenchPromptFiles";
 
 const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
+// A tool's permission action is its effective name, which carries its code-mode or direct namespace.
+const PARENT_ONLY_ACTIONS = WORKBENCH_PARENT_ONLY_TOOLS.flatMap(id =>
+  [OPENCODE_WORKBENCH_NAMESPACE, OPENCODE_WORKBENCH_DIRECT_NAMESPACE].map(namespace => `${namespace}_${id}`));
 
 function managedPermissions(subagent = false) {
-  return [...NATIVE_COMMAND_ACTIONS, ...(subagent ? WORKBENCH_PARENT_ONLY_TOOLS.map(id => `wb_${id}`) : [])].map(action => ({
+  return [...NATIVE_COMMAND_ACTIONS, ...(subagent ? PARENT_ONLY_ACTIONS : [])].map(action => ({
     action,
     resource: "*",
     effect: "deny" as const,

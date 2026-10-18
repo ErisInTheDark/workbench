@@ -65,7 +65,7 @@ test("remote repository guidance follows one current audience tool catalogue", a
         assert.equal(reads - before, 1);
         if (enabled) {
           const reference = harness === "codex" ? "tools.mcp__wbex__git_repo"
-            : harness === "opencode" ? "tools.wb.git_repo" : "mcp__wb__git_repo";
+            : harness === "opencode" ? "wbex_git_repo" : "mcp__wb__git_repo";
           assert.equal(output, `read with \`${reference}\``);
         } else {
           assert.equal(output, "");
@@ -96,7 +96,7 @@ test("proposal instructions resolve for parents but become handoff instructions 
   const child = await managed.createManagedThreadFilter({
     ...base, readInstructionTools: tools, subagentName: "mira",
   }, readNoLocalCapabilities);
-  assert.match(parent(input, "policy") ?? "", /tools\.wb\.git_arc_propose/u);
+  assert.match(parent(input, "policy") ?? "", /wbex_git_arc_propose/u);
   assert.doesNotMatch(parent(input, "policy") ?? "", /handoff/u);
   assert.equal(child(input, "policy"), "handoff");
 });
@@ -179,7 +179,7 @@ test("managed instructions and activated skills render provider tool references"
   await fs.writeFile(skillPath, "---\nname: tools\ndescription: Use when asked for /tools.\n---\n\ncall <tool id=\"git_arc_release\" />.\n", "utf8");
   try {
     const opencode = await managed.buildWorkbenchManagedThreadInstructions(createContext(), readNoLocalCapabilities);
-    assert.match(opencode.baseInstructions ?? "", /`tools\.wb\.rg` and `tools\.wb\.git_arc_release`/u);
+    assert.match(opencode.baseInstructions ?? "", /`tools\.wb\.rg` and `wbex_git_arc_release`/u);
     assert.doesNotMatch(opencode.baseInstructions ?? "", /<tool id=/u);
     const codex = await managed.buildWorkbenchManagedThreadInstructions({
       ...createContext(), harness: "codex",
@@ -188,7 +188,7 @@ test("managed instructions and activated skills render provider tool references"
     const activated = await managed.buildWorkbenchManagedThreadActivatedSkills(
       createContext([skillPath]), readNoLocalCapabilities,
     );
-    assert.match(activated ?? "", /`tools\.wb\.git_arc_release`/u);
+    assert.match(activated ?? "", /`wbex_git_arc_release`/u);
   } finally {
     await Promise.all([override, skillPath].map(file => fs.rm(file, { force: true })));
   }

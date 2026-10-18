@@ -13,10 +13,9 @@ import {
 import { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { openCodeContentSource, openCodeItemSource } from "./open-code-source-id";
-import type { OpenCodePatchObservation } from "./opencode-workbench-rpc";
+import { isOpenCodeWorkbenchToolName, type OpenCodePatchObservation } from "./opencode-workbench-rpc";
 import type OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
-import { WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME } from "workbench-shared/workbench/thread/thread-context-rollover";
 import type WorkbenchThreadContextRolloverController from "../../WorkbenchThreadContextRolloverController";
 
 type ActiveTurn = { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
@@ -55,6 +54,11 @@ interface ToolState {
   metadata?: JsonValue;
 }
 type DynamicToolItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
+
+/** Direct wb tools reach Workbench through MCP, which records them; their native part would duplicate that item. */
+function isWorkbenchRecorded(tool: ToolState | undefined) {
+  return tool !== undefined && isOpenCodeWorkbenchToolName(tool.name);
+}
 
 function parseToolInput(text: string): JsonValue {
   try {
@@ -271,9 +275,7 @@ export default class OpenCodeEventController {
       case "session.tool.input.started": {
         const active = await this.active(sessionID);
         this.setTool(sessionID, event.data.id, { active, input: "", name: event.data.name, startedAt: event.created });
-        if (event.data.name === WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
-          return;
-        }
+        if (isOpenCodeWorkbenchToolName(event.data.name)) return;
         await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
         return;
       }
@@ -285,9 +287,7 @@ export default class OpenCodeEventController {
           name: previous?.name ?? "unknown",
           startedAt: previous?.startedAt ?? event.created,
         });
-        if (previous?.name !== WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
-          await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
-        }
+        if (!isWorkbenchRecorded(previous)) await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
         return;
       }
       case "session.tool.called": {
@@ -298,18 +298,14 @@ export default class OpenCodeEventController {
           name: previous?.name ?? "unknown",
           startedAt: previous?.startedAt ?? event.created,
         });
-        if (previous?.name !== WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
-          await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
-        }
+        if (!isWorkbenchRecorded(previous)) await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
         return;
       }
       case "session.tool.progress": {
         const previous = this.getTool(sessionID, event.data.id);
         if (previous) {
           previous.metadata = event.data.metadata;
-          if (previous.name !== WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
-            await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
-          }
+          if (!isWorkbenchRecorded(previous)) await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
         }
         return;
       }
@@ -320,7 +316,7 @@ export default class OpenCodeEventController {
         const metadata = event.data.metadata ?? previous?.metadata;
         const succeeded = event.type === "session.tool.success"
           && !(metadata && typeof metadata === "object" && !Array.isArray(metadata) && metadata.error === true);
-        if (previous?.name === WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
+        if (isWorkbenchRecorded(previous)) {
           this.deleteTool(sessionID, event.data.id);
           return;
         }

@@ -508,6 +508,13 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
           },
           time: { created: 2, ran: 2, completed: 3 },
         } as never,
+        {
+          type: "tool",
+          id: "tool-2",
+          name: "wbex_git_arc_status",
+          state: { status: "completed", input: {}, output: "", content: [{ type: "text", text: "recorded by Workbench" }] },
+          time: { created: 2, ran: 2, completed: 3 },
+        } as never,
       ],
       time: { created: 2, completed: 3 },
     },
@@ -548,7 +555,9 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
 
   assert.equal(result.latestOperation, "compaction");
   assert.equal(recorded.filter(entry => entry.kind === "turn").length, 2);
+  // Direct wb tool parts are recorded by Workbench through MCP, never imported a second time from history.
   assert.equal(recorded.filter(entry => entry.kind === "item").length, 7);
+  assert.equal(recorded.some(entry => entry.kind === "item" && entry.item.type === "dynamicToolCall" && entry.item.tool === "wbex_git_arc_status"), false);
   assert.equal(recorded.some(entry => entry.kind === "item" && entry.item.type === "contextCompaction"), true);
   assert.equal(recorded.find(entry => entry.kind === "threadContextUsage")?.snapshot.tokenUsage, null);
   const toolObservation = recorded.find(entry => entry.kind === "item"

@@ -1,6 +1,12 @@
 ## Workbench Tools
 Prefer workbench tools over shell fallbacks. The wb mcp commands are also available through the wb cli. Use `wb --help` if wb mcp commands are failing repeatedly.
 
+<docs tools="mcp_tools mcp_call">
+<!-- User-added MCP servers reach every provider through these two wb tools, so agents need to know the tools exist
+before they will look; provider-native tool search does not cover them. -->
+User-added MCP server tools are not loaded directly. Find them with <tool id="mcp_tools" />, then run them with <tool id="mcp_call" />.
+</docs>
+
 <docs tools="feedback">
 When Workbench or project tooling or instructions cause bugs, confusion, avoidable complexity or wasted tokens, report once per issue with <tool id="feedback" />: what you did, why, suggested fix.
 </docs>

@@ -47,6 +47,7 @@ interface WorkbenchAgentDirectPort {
   executeToolStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFeedbackSubmit?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeTodoRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeMcpRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeVisRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Hands piped project-command output to the vis run waiting on `runId`; false when no run waits. */
   acceptVisRender?: (runId: string, content: string) => boolean;
@@ -443,6 +444,10 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/internal/todo" && request.body) {
       if (!this.direct.executeTodoRequest) throw new Error("Thread todos are not configured.");
       return await this.direct.executeTodoRequest(request.body, signal);
+    }
+    if (request.path === "/internal/mcp" && request.body) {
+      if (!this.direct.executeMcpRequest) throw new Error("MCP servers are not configured.");
+      return await this.direct.executeMcpRequest(request.body, signal);
     }
     if (request.path === "/internal/vis" && request.body) {
       if (!this.direct.executeVisRequest) throw new Error("Vis sessions are not configured.");

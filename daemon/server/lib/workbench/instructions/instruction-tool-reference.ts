@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchInstructionTool: a Workbench tool an agent can use, with its MCP exposure and Codex code-mode eligibility.
+ * - WorkbenchInstructionTool: a Workbench tool an agent can use, with its MCP exposure and code-mode eligibility.
  * - listWorkbenchInstructionTools: the instruction catalogue for command definitions, including CLI-only and capability-gated commands.
  * - isWorkbenchInstructionToolEnabled: whether a tool's required local capability, if any, is enabled.
  * - resolveWorkbenchInstructionToolReference: format an MCP-served catalogued tool for one provider's instruction payload.
@@ -51,7 +51,7 @@ export function resolveWorkbenchInstructionToolReference(
     const namespace = tool.codeModeEligible ? "wb" : "wbex";
     return `tools.mcp__${namespace}__${id}`;
   }
-  if (harness === "opencode") return `tools.wb.${id}`;
+  if (harness === "opencode") return tool.codeModeEligible ? `tools.wb.${id}` : `wbex_${id}`;
   if (harness === "claude") return `mcp__wb__${id}`;
   return null;
 }

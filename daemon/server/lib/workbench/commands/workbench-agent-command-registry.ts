@@ -10,6 +10,7 @@ import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
 import { WORKBENCH_GIT_REPO_COMMANDS } from "./git-repo-command-definition";
 import { WORKBENCH_LIVE_SCENARIO_COMMANDS } from "./live-scenario-command-definition";
+import { WORKBENCH_MCP_COMMANDS } from "./mcp-command-definitions";
 import { WORKBENCH_MESSAGE_COMMANDS } from "./message-command-definitions";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_QUESTIONNAIRE_COMMANDS } from "./questionnaire-command-definition";
@@ -37,6 +38,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_STATS_COMMANDS,
   ...WORKBENCH_FEEDBACK_COMMANDS,
   ...WORKBENCH_TODO_COMMANDS,
+  ...WORKBENCH_MCP_COMMANDS,
   ...WORKBENCH_VIS_COMMANDS,
   ...WORKBENCH_RIPGREP_COMMANDS,
   ...WORKBENCH_FILE_REMOVAL_COMMANDS,
