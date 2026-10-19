@@ -10,6 +10,7 @@
  * - readGitProjectMetadata: read local origin identity and worktree classification without network access or a subprocess.
  * - readGitConfigValue: read one value from Git config text the way `git config --no-includes --get` does.
  * - initGitRepository: create an empty Git repository in an existing folder.
+ * - syncGitInfoExclude: replace one owner's block of exact root-anchored paths in the repository's `info/exclude`, keeping other lines.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -67,6 +68,42 @@ async function runGit(rootDir: string, args: string[], signal?: AbortSignal) {
 
 export async function initGitRepository(rootDir: string) {
   await runGit(rootDir, ["init"]);
+}
+
+function exactExcludePattern(relativePath: string) {
+  if (/[\r\n]/u.test(relativePath)) throw new Error(`Git exclude paths cannot contain line breaks: ${JSON.stringify(relativePath)}`);
+  const escaped = relativePath.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/[\\*?[\]!#]/gu, "\\$&");
+  return `/${escaped.replace(/ +$/u, spaces => "\\ ".repeat(spaces.length))}`;
+}
+
+/** Repositories without their own Git directory are left alone; the file is rewritten only when its content changes. */
+export async function syncGitInfoExclude(rootDir: string, owner: string, relativePaths: readonly string[]) {
+  const gitDirectory = await resolveGitDirectory(rootDir);
+  if (!gitDirectory) return;
+  const excludePath = path.join(await commonGitDirectory(gitDirectory), "info", "exclude");
+  const current = await readOptionalFile(excludePath) ?? "";
+  const begin = `# >>> ${owner} (managed by Workbench)`;
+  const end = `# <<< ${owner}`;
+  const kept: string[] = [];
+  const lines = current.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index] !== begin) {
+      kept.push(lines[index]!);
+      continue;
+    }
+    const close = lines.indexOf(end, index + 1);
+    // An unterminated marker drops only itself, so no user line is ever discarded.
+    if (close !== -1) index = close;
+  }
+  while (kept.length && !kept.at(-1)!.trim()) kept.pop();
+  const block = relativePaths.length
+    ? [begin, ...[...new Set(relativePaths.map(exactExcludePattern))].sort(), end]
+    : [];
+  const next = [...kept, ...kept.length && block.length ? [""] : [], ...block].join("\n");
+  const content = next ? `${next}\n` : "";
+  if (content === current) return;
+  await fs.mkdir(path.dirname(excludePath), { recursive: true });
+  await fs.writeFile(excludePath, content, "utf8");
 }
 
 export async function resolveGitDirectory(rootDir: string): Promise<string | null> {

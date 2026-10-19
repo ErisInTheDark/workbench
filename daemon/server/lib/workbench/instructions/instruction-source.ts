@@ -4,12 +4,13 @@
  * - WorkbenchInstructionTombstone: one empty repository marker targeting a retired Workbench Library file. Keywords: instructions, tombstone, retirement.
  * - readWorkbenchInstructionSources: discover and read the complete repository Markdown mirror once. Keywords: instructions, markdown, discovery.
  * - readWorkbenchInstructionTombstones: discover and validate retired instruction markers. Keywords: instructions, tombstone, discovery.
- * - ensureWorkbenchInstructionSourceFiles: refresh generated library files on every call (overlapping calls share one pass) while preserving user overrides. Keywords: instructions, emission, freshness.
+ * - ensureWorkbenchInstructionSourceFiles: refresh generated library files and their exact Git exclude list on every call (overlapping calls share one pass) while preserving user overrides. Keywords: instructions, emission, freshness.
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { syncGitInfoExclude } from "../../git";
 import { observeReloadInstructionSource } from "../reload-source-observer";
 import {
   safeResolveWorkbenchLibraryPath,
@@ -107,6 +108,7 @@ async function refreshWorkbenchInstructionSourceFiles() {
   await fs.mkdir(workbenchLibraryRoot, { recursive: true });
   const sources = await readWorkbenchInstructionSources();
   await Promise.all(sources.map((source) => writeGeneratedFile(source.relativePath, source.content)));
+  await syncGitInfoExclude(workbenchLibraryRoot, "workbench instructions", sources.map(source => source.relativePath));
 }
 
 /** Every call mirrors current sources (edits apply on the next prompt build); only overlapping calls share one pass. */

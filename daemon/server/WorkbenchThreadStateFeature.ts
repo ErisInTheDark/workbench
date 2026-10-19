@@ -497,7 +497,7 @@ export default class WorkbenchThreadStateFeature {
 
   private projectWorktreeAvailable(projectId: ProjectId) {
     return this.context.getProjectCatalog().data.some(project =>
-      project.id === projectId && (project.kind === "git" || project.kind === "workspace"));
+      project.id === projectId && project.kind !== "daemon");
   }
 
   async installCreatedProfile(harness: WorkbenchHarness, thread: ThreadPayload, selection: WorkbenchComposerProfileTargetSelection) {

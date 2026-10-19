@@ -1149,7 +1149,7 @@ async function buildWorkspaceTree(project: ResolvedProject) {
 }
 
 async function getProjectChanges(project: ResolvedProject) {
-  if (project.kind === "workbench-library" || project.kind === "daemon") {
+  if (project.kind === "daemon") {
     return {};
   }
 

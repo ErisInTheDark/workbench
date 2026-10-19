@@ -211,6 +211,42 @@ test("project reads reject unknown owners before loading or writing state", asyn
   } finally { await feature.dispose(); }
 });
 
+test("Workbench Library threads project their Git arc proposals", async () => {
+  const projectId = fixtureIdentityValues.ProjectId.project;
+  const threadId = fixtureIdentityValues.WorkbenchThreadId.thread;
+  const lifecycle = {
+    checkpointCommit: "a".repeat(40), claimedPaths: ["skills/note.md"], harness: "codex" as const,
+    intentDescription: "", intentName: "library edit", phase: "active" as const,
+    proposals: [{ proposalId: "library-proposal", status: "proposed" as const }],
+    threadId, updatedAt: "2026-10-19T00:00:00.000Z",
+  };
+  const feature = createFeature({
+    database: createThreadStateDatabase("C:/library", [["thread", "codex"]]),
+    getProjectCatalog: () => ({
+      ...discoveredProject("C:/library"),
+      data: [{ ...discoveredProject("C:/library").data[0]!, kind: "workbench-library" }],
+    }),
+    gitArcs: {
+      findActiveClaim: async () => null,
+      findLifecycleState: async () => lifecycle,
+      listActiveClaims: async () => [],
+    },
+    listSubagents: async () => ({ subagents: [] }),
+    harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
+    resolveProjectById: async () => ({ id: projectId, rootPath: "C:/library" }),
+    resolveProjectFromCwd: async cwd => ({ cwd, project: { id: projectId, rootPath: "C:/library" } }),
+    transitions: { run: async (_key, operation) => operation() },
+  });
+  try {
+    const sidebar = normalizeProviderSidebarEntry("codex", { id: "thread", status: { type: "idle" }, name: "Idle", updatedAt: 1 });
+    assert.ok(sidebar?.entryKind === "thread");
+    await feature.controller.ensureProviderEntry(projectId, sidebar);
+    const refreshed = await feature.controller.refreshGitArcState(projectId, "codex", threadId);
+    assert.ok(refreshed?.entryKind === "thread");
+    assert.deepEqual(refreshed.gitArc?.proposals, lifecycle.proposals);
+  } finally { await feature.dispose(); }
+});
+
 async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
   const requests: JsonRpcRequest[] = [];
   const contexts: Array<{ harness: string; threadId: string; text: string }> = [];

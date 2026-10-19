@@ -4,7 +4,7 @@
  * - workbenchLibraryRoot: absolute root for personal Workbench skills, agents, workflows, mechanics, and instructions. Keywords: workbench library, root.
  * - parseFrontmatterBlock: parse simple markdown frontmatter fields. Keywords: frontmatter, markdown, metadata.
  * - stripWorkbenchInstructionFrontmatter: return body text without YAML metadata.
- * - ensureWorkbenchLibrary: create the library root and standard folders. Keywords: workbench library, mkdir, scaffold.
+ * - ensureWorkbenchLibrary: create the library root as a Git repository with standard folders. Keywords: workbench library, mkdir, scaffold, git init.
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
  * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions/listActiveWorkbenchSkillDefinitions: discover active Workbench Skill metadata and full file content with source precedence. Keywords: skills, manifest, discovery, builtin.
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
+import { initGitRepository, resolveGitDirectory } from "./git";
 import {
   normalizeWorkbenchLibraryPath,
   safeResolveWorkbenchLibraryPath,
@@ -224,8 +225,20 @@ async function isUserSkillDirectoryEmpty() {
   }
 }
 
+let repositoryInit: Promise<void> | null = null;
+
+/** Overlapping callers share one pass so concurrent `git init` runs never contend for the new repository's locks. */
+async function ensureLibraryRepository() {
+  repositoryInit ??= (async () => {
+    if (!await resolveGitDirectory(workbenchLibraryRoot)) await initGitRepository(workbenchLibraryRoot);
+  })().finally(() => { repositoryInit = null; });
+  await repositoryInit;
+}
+
 export async function ensureWorkbenchLibrary() {
   await fs.mkdir(workbenchLibraryRoot, { recursive: true });
+  // The instruction mirror writes its Git exclude list, so the repository must exist first.
+  await ensureLibraryRepository();
   await Promise.all(standardDirectories.map((directoryName) => (
     fs.mkdir(path.join(workbenchLibraryRoot, directoryName), { recursive: true })
   )));

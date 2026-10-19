@@ -1,6 +1,6 @@
 /*
  * No production exports. Protect read-only origin parsing without checkout trust, Git-directory classification,
- * and lock-free explorer change reads.
+ * lock-free explorer change reads, and owned exact-path `info/exclude` blocks.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -9,10 +9,52 @@ import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDire
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { getGitChanges, readGitConfigValue, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory } from "./git";
+import {
+  getGitChanges, readGitConfigValue, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory, syncGitInfoExclude,
+} from "./git";
 
 const execute = promisify(execFile);
 const readerPath = path.join(__dirname, "git.ts");
+
+async function isGitIgnored(root: string, relativePath: string) {
+  try {
+    await execute("git", ["-C", root, "check-ignore", "-q", "--no-index", "--", relativePath], { windowsHide: true });
+    return true;
+  } catch (error) {
+    if ((error as { code?: number }).code === 1) return false;
+    throw error;
+  }
+}
+
+test("owned info/exclude blocks ignore exactly their listed paths and keep user lines", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-git-exclude-");
+  context.after(async () => await temporary.dispose());
+  const root = path.join(temporary.path, "repo");
+  await execute("git", ["init", "-q", root], { windowsHide: true });
+  const excludePath = path.join(root, ".git", "info", "exclude");
+  await fs.writeFile(excludePath, "*.log\n", "utf8");
+
+  await syncGitInfoExclude(root, "generated", ["wb/notes [draft].md", "wb/kept.md"]);
+  assert.equal(await isGitIgnored(root, "wb/notes [draft].md"), true);
+  assert.equal(await isGitIgnored(root, "wb/kept.md"), true);
+  assert.equal(await isGitIgnored(root, "wb/notes d.md"), false);
+  assert.equal(await isGitIgnored(root, "nested/wb/kept.md"), false);
+  assert.equal(await isGitIgnored(root, "wb/user.md"), false);
+  assert.equal(await isGitIgnored(root, "debug.log"), true);
+
+  await syncGitInfoExclude(root, "generated", ["wb/kept.md"]);
+  assert.equal(await isGitIgnored(root, "wb/notes [draft].md"), false);
+  assert.equal(await isGitIgnored(root, "wb/kept.md"), true);
+  assert.equal(await isGitIgnored(root, "debug.log"), true);
+  const settled = await fs.readFile(excludePath, "utf8");
+  await syncGitInfoExclude(root, "generated", ["wb/kept.md"]);
+  assert.equal(await fs.readFile(excludePath, "utf8"), settled);
+
+  const plain = path.join(temporary.path, "plain");
+  await fs.mkdir(plain);
+  await syncGitInfoExclude(plain, "generated", ["wb/kept.md"]);
+  assert.deepEqual(await fs.readdir(plain), []);
+});
 
 test("missing Git HEAD markers are not repositories, while an unborn checkout is", async (context) => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-git-marker-");
