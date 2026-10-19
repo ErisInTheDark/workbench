@@ -32,6 +32,12 @@ export type WorkbenchCoreTranscript = Pick<DaemonTranscriptRegistration,
 
 type RuntimeListener = (threadId: string, change: Partial<ThreadRuntime> | null) => void;
 
+function installedProvider(harness: string) {
+  const key = installedProviderKeys.find(candidate => candidate === harness);
+  if (!key) throw new Error(`Provider ${harness} is not installed.`);
+  return key;
+}
+
 export default class WorkbenchTurnRuntimeFeature {
   readonly admission = new WorkbenchThreadAdmissionController();
   readonly turnLiveness: WorkbenchThreadTurnLiveness;
@@ -66,11 +72,7 @@ export default class WorkbenchTurnRuntimeFeature {
     const { context, database, transcript, identities, lookup, providers, warn } = ports;
     const admission = this.admission;
     const turnLiveness = this.turnLiveness = new WorkbenchThreadTurnLiveness({
-      threads: harness => {
-        const key = installedProviderKeys.find(candidate => candidate === harness);
-        if (!key) throw new Error(`Provider ${harness} is not installed.`);
-        return providers().get(key).threads;
-      },
+      threads: harness => providers().get(installedProvider(harness)).threads,
       resolveHarness: async threadId => (await lookup.identity(threadId))?.bindings[0]?.harness ?? null,
       publish: (threadId, turnLive) => this.publish(threadId, { turnLive }),
       warn,
@@ -95,8 +97,7 @@ export default class WorkbenchTurnRuntimeFeature {
       },
       // Status comes from the saved Workbench lifecycle; only the latest turn and its liveness are provider facts.
       readRuntime: async target => {
-        const key = installedProviderKeys.find(candidate => candidate === target.harness);
-        if (!key) throw new Error(`Provider ${target.harness} is not installed.`);
+        const key = installedProvider(target.harness);
         const entry = await lookup.entry(target.threadId);
         const latestTurn = await ports.run(providerRegistrations[key], provider => provider.threads.latestTurn(target.threadId),
           `${key}: auto-compact latest turn`);
@@ -149,10 +150,12 @@ export default class WorkbenchTurnRuntimeFeature {
       readMaterializedTurnIds: (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
       readRecoveryGaps: threadId => transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId)),
       subscribeSettled: listener => transcript.subscribeSettled(listener),
+      lease: async (harness, work) => {
+        const key = installedProvider(harness);
+        await ports.run(providerRegistrations[key], () => work(), `${key}: transcript reconciliation`);
+      },
       recover: async (input, signal) => {
-        const key = installedProviderKeys.find(key => key === input.harness);
-        if (!key) throw new Error("Transcript provider is not installed.");
-        const provider = providers().get(key);
+        const provider = providers().get(installedProvider(input.harness));
         if (!provider.threads.reconcile) throw new Error("Transcript provider does not support reconciliation.");
         return provider.threads.reconcile(input, signal);
       },
@@ -168,11 +171,7 @@ export default class WorkbenchTurnRuntimeFeature {
       },
       canonicalTurnId: reference => identities.knownTurn(TurnReferenceSchema.parse(reference)).turnId,
       interrupt: async (harness, threadId) => { await lookup.provider(harness).threads.interrupt(threadId); },
-      admitHiddenTurn: async (harness, turn) => {
-        const key = installedProviderKeys.find(key => key === harness);
-        if (!key) throw new Error(`Provider ${harness} is unavailable.`);
-        return await providers().admitHiddenTurn(key, turn);
-      },
+      admitHiddenTurn: async (harness, turn) => await providers().admitHiddenTurn(installedProvider(harness), turn),
       reportFailed: async (projectId, harness, threadId) => await lookup.requireThreadState().controller.reportRecoveryFailed(projectId, harness, threadId),
       log: context.logTurnRecovery,
     });

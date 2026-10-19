@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - WorkbenchTranscriptReconciliationOptions: canonical resolution, storage and native recovery ports.
- * - default WorkbenchTranscriptReconciliationController: own demanded recovery, coalesced observed-thread restoration, change reporting, and capture-gap healing.
+ * - WorkbenchTranscriptReconciliationOptions: canonical resolution, storage, reload-lease and native recovery ports.
+ * - default WorkbenchTranscriptReconciliationController: own serial demanded recovery entered under each waiter's reload lease, coalesced
+ *   observed-thread restoration, change reporting, and capture-gap healing.
  */
 import type { WorkbenchThreadReconcile, WorkbenchThreadReconcileResult } from "workbench-shared/workbench/thread/thread-actions";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -18,6 +19,8 @@ export interface WorkbenchTranscriptReconciliationOptions {
   readRecoveryGaps(threadId: string): Promise<ReadonlyArray<{ id: string; turnIds: readonly string[] }>>;
   /** Threads each transcript commit changed; lets a window report whether it changed anything. */
   subscribeSettled?(listener: (threadIds: readonly string[]) => void): () => void;
+  /** Run work under a reload lease on the harness's provider, entered from the calling async context. */
+  lease(harness: string, work: () => Promise<void>): Promise<void>;
   recover(input: WorkbenchThreadReconcile & { harness: string; gapIds: string[] }, signal: AbortSignal): Promise<WorkbenchThreadReconcileResult>;
   warn(message: string): void;
 }
@@ -28,6 +31,8 @@ type Job = {
   onlyWhileObserved: boolean;
   controller: AbortController;
   result: ReturnType<typeof Promise.withResolvers<WorkbenchThreadReconcileResult>>;
+  /** queued: no lease entered yet; entered: one waiter's lease runs it; settled: its result is final. */
+  state: "queued" | "entered" | "settled";
   /** A commit for this thread landed while the window ran. */
   changed?: boolean;
 };
@@ -50,9 +55,13 @@ function sameWindow(left: Target, right: Target) {
 
 export default class WorkbenchTranscriptReconciliationController {
   private readonly controller = new AbortController();
+  /** Jobs not running yet, in demand order; later demands coalesce onto them. */
   private readonly queue: Job[] = [];
   private active: Job | null = null;
-  private draining: Promise<void> | null = null;
+  /** Settles once the last entered job has left the one-at-a-time lane. */
+  private lane: Promise<void> = Promise.resolve();
+  /** Lease attempts not settled yet, including ones still waiting at a reload gate. */
+  private readonly entries = new Set<Promise<void>>();
   private readonly stopSettled: () => void;
   /** `${gapId}:${turnId}` anchors already queued for healing; an unrecoverable turn warns once, not on every visit. */
   private readonly healedAnchors = new Set<string>();
@@ -191,14 +200,48 @@ export default class WorkbenchTranscriptReconciliationController {
     this.controller.signal.throwIfAborted();
     const existing = this.queue.find(job => sameWindow(job.target, target))
       ?? (!target.refresh && this.active && sameWindow(this.active.target, target) ? this.active : null);
-    if (existing) {
-      existing.onlyWhileObserved &&= onlyWhileObserved;
-      return this.wait(existing, signal);
+    if (existing) existing.onlyWhileObserved &&= onlyWhileObserved;
+    const job: Job = existing ?? {
+      target, onlyWhileObserved, controller: new AbortController(),
+      result: Promise.withResolvers<WorkbenchThreadReconcileResult>(), state: "queued",
+    };
+    if (!existing) this.queue.push(job);
+    const result = this.wait(job, signal);
+    this.enter(job);
+    return result;
+  }
+
+  /**
+   * Runs in the waiter's async context, so an admitted waiter's reload lease also admits the work it waits on. Every
+   * waiter tries; the first lease to enter runs the job, so an attempt held at a reload gate never strands a later one.
+   */
+  private enter(job: Job) {
+    if (job.state !== "queued") return;
+    const entry: Promise<void> = this.options.lease(job.target.harness, () => this.run(job))
+      .catch((error: unknown) => {
+        if (job.state !== "queued") return;
+        this.queue.splice(this.queue.indexOf(job), 1);
+        job.state = "settled";
+        this.warnFailure(job.target, error);
+        job.result.reject(error);
+      })
+      .finally(() => { this.entries.delete(entry); });
+    this.entries.add(entry);
+  }
+
+  /** Lanes are taken only after entering a lease, so nothing waiting at a reload gate can hold the lane. */
+  private async run(job: Job) {
+    if (job.state !== "queued") return;
+    job.state = "entered";
+    const previous = this.lane;
+    const done = Promise.withResolvers<void>();
+    this.lane = done.promise;
+    try {
+      await previous;
+      await this.execute(job);
+    } finally {
+      done.resolve();
     }
-    const job: Job = { target, onlyWhileObserved, controller: new AbortController(), result: Promise.withResolvers<WorkbenchThreadReconcileResult>() };
-    this.queue.push(job);
-    this.draining ??= Promise.resolve().then(() => this.drain());
-    return this.wait(job, signal);
   }
 
   private async resolveTarget(input: WorkbenchThreadReconcile): Promise<Target | null> {
@@ -234,6 +277,7 @@ export default class WorkbenchTranscriptReconciliationController {
         const index = this.queue.indexOf(job);
         if (index >= 0) {
           this.queue.splice(index, 1);
+          job.state = "settled";
           job.result.reject(signal.reason);
         }
       };
@@ -245,47 +289,51 @@ export default class WorkbenchTranscriptReconciliationController {
     return job.result.promise;
   }
 
-  private async drain() {
+  private async execute(job: Job) {
+    if (job.state === "settled") return;
+    this.queue.splice(this.queue.indexOf(job), 1);
+    this.active = job;
+    const signal = AbortSignal.any([this.controller.signal, job.controller.signal]);
     try {
-      while (this.queue.length) {
-        const job = this.queue.shift()!;
-        this.active = job;
-        const signal = AbortSignal.any([this.controller.signal, job.controller.signal]);
-        try {
-          signal.throwIfAborted();
-          const gapIds = (await this.options.readRecoveryGaps(job.target.threadId)).map(gap => gap.id);
-          signal.throwIfAborted();
-          if (job.onlyWhileObserved && !this.options.isThreadObserved(job.target.threadId)) {
-            job.result.resolve({ turnIds: [], exhausted: false, changed: false });
-            continue;
-          }
-          job.changed = false;
-          const result = await this.options.recover({ ...job.target, gapIds }, signal);
-          signal.throwIfAborted();
-          // Without commit observation the outcome is unknown, so callers keep rereading.
-          job.result.resolve(this.options.subscribeSettled ? { ...result, changed: job.changed } : result);
-        } catch (error) {
-          if (!signal.aborted) {
-            const safe = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 160);
-            this.options.warn(`[transcript-reconciliation] ${safe(job.target.harness)} ${safe(job.target.threadId)} ${job.target.target.mode} failed: ${boundedMessage(error)}`);
-          }
-          job.result.reject(error);
-        } finally {
-          this.active = null;
-        }
+      signal.throwIfAborted();
+      const gapIds = (await this.options.readRecoveryGaps(job.target.threadId)).map(gap => gap.id);
+      signal.throwIfAborted();
+      if (job.onlyWhileObserved && !this.options.isThreadObserved(job.target.threadId)) {
+        job.result.resolve({ turnIds: [], exhausted: false, changed: false });
+        return;
       }
+      job.changed = false;
+      const result = await this.options.recover({ ...job.target, gapIds }, signal);
+      signal.throwIfAborted();
+      // Without commit observation the outcome is unknown, so callers keep rereading.
+      job.result.resolve(this.options.subscribeSettled ? { ...result, changed: job.changed } : result);
+    } catch (error) {
+      if (!signal.aborted) this.warnFailure(job.target, error);
+      job.result.reject(error);
     } finally {
-      this.draining = null;
+      this.active = null;
+      job.state = "settled";
     }
+  }
+
+  private warnFailure(target: Target, error: unknown) {
+    if (this.controller.signal.aborted) return;
+    const safe = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 160);
+    this.options.warn(`[transcript-reconciliation] ${safe(target.harness)} ${safe(target.threadId)} ${target.target.mode} failed: ${boundedMessage(error)}`);
   }
 
   async dispose() {
     this.stopSettled();
     this.controller.abort(new Error("Transcript reconciliation retired."));
-    for (const job of this.queue.splice(0)) job.result.reject(this.controller.signal.reason);
-    await this.draining;
-    await Promise.allSettled(this.observedRecoveries.values());
+    for (const job of this.queue.splice(0)) {
+      job.state = "settled";
+      job.result.reject(this.controller.signal.reason);
+    }
+    await this.lane;
+    await Promise.allSettled([...this.entries, ...this.observedRecoveries.values()]);
   }
 
-  hasPendingWork() { return this.draining !== null || this.queue.length > 0 || this.observedRecoveries.size > 0; }
+  hasPendingWork() {
+    return this.active !== null || this.queue.length > 0 || this.entries.size > 0 || this.observedRecoveries.size > 0;
+  }
 }

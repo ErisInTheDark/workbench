@@ -2424,6 +2424,7 @@ test("opening a metadata-only Codex thread recovers latest and older content int
     readPreviousCursor: sql.ports.readSqliteProviderCursor,
     readMaterializedTurnIds: sql.ports.readSqliteTranscriptMaterializedTurnIds,
     readRecoveryGaps: async () => [],
+    lease: (_harness, work) => work(),
     recover: (input, signal) => bridge.reconcileSqliteTranscriptWindow(input, signal),
     warn: assert.fail,
   });

@@ -1,12 +1,14 @@
 /* No production exports. Protect bounded demand, freshness, change reporting and recovery retirement. */
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { test } from "node:test";
 import WorkbenchTranscriptReconciliationController, { type WorkbenchTranscriptReconciliationOptions } from "./WorkbenchTranscriptReconciliationController";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 
-function identityPorts(turns: WorkbenchTranscriptSnapshot["turns"] = []): Pick<WorkbenchTranscriptReconciliationOptions, "identities" | "transcripts" | "isThreadObserved" | "readPreviousCursor" | "readMaterializedTurnIds"> {
+function identityPorts(turns: WorkbenchTranscriptSnapshot["turns"] = []): Pick<WorkbenchTranscriptReconciliationOptions, "identities" | "transcripts" | "isThreadObserved" | "readPreviousCursor" | "readMaterializedTurnIds" | "lease"> {
   return {
+    lease: (_harness, work) => work(),
     isThreadObserved: () => true,
     readPreviousCursor: async () => null,
     readMaterializedTurnIds: async (_threadId, turnIds) => turns.filter(turn => turnIds.includes(turn.id)).map(turn => turn.id),
@@ -406,6 +408,37 @@ test("an explicit demand never rides along with a routine window for the same tu
     assert.deepEqual(explicit, [undefined, true]);
   } finally { await owner.dispose(); }
 });
+
+for (const window of ["independent", "shared"] as const) {
+test(`an admitted caller's ${window} window finishes while earlier unadmitted work waits at a closed reload gate`, async () => {
+  // Mirrors the reload host: an admitted context passes a draining gate; any other context waits for it to reopen.
+  const admission = new AsyncLocalStorage<true>();
+  const gate = Promise.withResolvers<void>();
+  const enter = async <T>(work: () => Promise<T>) => {
+    if (!admission.getStore()) await gate.promise;
+    return await admission.run(true, work);
+  };
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...identityPorts(), readRecoveryGaps: async () => [],
+    lease: (_harness, work) => enter(work),
+    recover: input => enter(async () => ({ turnIds: [input.threadId], exhausted: false })),
+    warn: assert.fail,
+  });
+  const latest = { threadId: "caller", target: { mode: "latest" as const }, refresh: false };
+  try {
+    const unadmitted = owner.reconcile(window === "shared" ? latest : { ...latest, threadId: "background" });
+    await new Promise(resolve => setImmediate(resolve));
+    let finished = false;
+    const admitted = admission.run(true, () => owner.reconcile(latest)).then(result => { finished = true; return result; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(finished, true, "the admitted caller's lease must cover the work it waits on");
+    gate.resolve();
+    assert.deepEqual((await admitted).turnIds, ["caller"]);
+    await unadmitted;
+  } finally { gate.resolve(); await owner.dispose(); }
+  assert.equal(owner.hasPendingWork(), false);
+});
+}
 
 test("previous recovery follows the preceding turn's native provenance across provider boundaries", async () => {
   const turns = ["codex", "opencode", "opencode"].map((harness, index) => ({
