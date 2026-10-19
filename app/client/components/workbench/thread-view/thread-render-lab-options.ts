@@ -4,27 +4,20 @@
  * - threadRenderFlags/ThreadRenderFlags: named switches exposed by the lab.
  * - ThreadRenderTurnStatus/withThreadRenderStatus: non-mutating latest-turn override.
  * - parseThreadRenderContext: admit local JSON context, rejecting unsupported keys.
- * - parseThreadRenderProjection: admit a canonical projection fixture for the SQL renderer.
+ * - parseThreadRenderProjection: admit a canonical projection fixture for the thread renderer.
  */
 import type { ComponentProps } from "react";
 import type { ThreadPayload } from "workbench-shared/types";
-import type { ThreadTurnDetails } from "./thread-view-items";
+import type ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
-type TurnProps = ComponentProps<typeof ThreadTurnDetails>;
-export type ThreadRenderContext = Pick<TurnProps,
+type RendererProps = ComponentProps<typeof ThreadTranscriptProjection>;
+export type ThreadRenderContext = Partial<Pick<RendererProps,
   "knownSkills" | "projectFilePaths" | "projectId" | "projectRootPath" | "workspaceRoots"
-  | "relatedThreadsById" | "subagents" | "inlineMentionSources"
-  | "hiddenDynamicToolCallItemIds" | "hiddenWebSearchItemIds" | "hiddenReasoningStep">;
+  | "relatedThreadsById" | "subagents" | "inlineMentionSources" | "hiddenReasoningStep">>;
 
 export const threadRenderFlags = {
   showLiveActivity: "Show live activity",
-  flattenCompletedWork: "Flatten completed turns",
-  hideFinalAgentMessage: "Hide final agent message",
-  hideTerminalReasoning: "Hide terminal reasoning",
-  hideWorkbenchControlAgentMessages: "Hide control agent messages",
-  hideWorkbenchControlUserMessages: "Hide control user messages",
-  hideTopBorder: "Hide turn borders",
 } as const;
 export type ThreadRenderFlags = Partial<Record<keyof typeof threadRenderFlags, boolean>>;
 export type ThreadRenderTurnStatus = "preserve" | ThreadPayload["turns"][number]["status"];
@@ -43,8 +36,7 @@ export function withThreadRenderStatus(thread: ThreadPayload | null, status: Thr
 const contextKinds = {
   knownSkills: "array", projectFilePaths: "array", projectId: "string", projectRootPath: "string",
   workspaceRoots: "array", relatedThreadsById: "object", subagents: "array",
-  inlineMentionSources: "object", hiddenDynamicToolCallItemIds: "array",
-  hiddenWebSearchItemIds: "array", hiddenReasoningStep: "object",
+  inlineMentionSources: "object", hiddenReasoningStep: "object",
 } as const satisfies Record<keyof ThreadRenderContext, "array" | "object" | "string">;
 
 export function parseThreadRenderContext(text: string): ThreadRenderContext {

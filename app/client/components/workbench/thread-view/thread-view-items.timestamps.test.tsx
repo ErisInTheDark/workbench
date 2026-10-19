@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect event-time selection across transcript render paths.
+ * No production exports. Tests protect event-time selection in the thread renderer.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -10,7 +10,8 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchProjectedInteractionItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { ThreadTranscriptItemsDetails, ThreadTurnDetails } from "./thread-view-items";
+import { ThreadTranscriptItemsDetails } from "./thread-view-items";
+import ThreadTestTurn from "./thread-view-test-render";
 
 const user = (id: string): Extract<ThreadItem, { type: "userMessage" }> => ({
   clientId: null, content: [{ text: id, text_elements: [], type: "text" }], id, type: "userMessage",
@@ -30,8 +31,8 @@ for (const status of ["inProgress", "completed"] as const) {
       completedAt: status === "completed" ? 90 : null, durationMs: null, error: null,
       id: "turn", items: [user("initial"), steerA, steerB], itemsView: "full", startedAt: 1, status,
     };
-    const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
-      flattenCompletedWork: true, threadId: "thread", turn,
+    const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
+      threadId: "thread", turn,
       itemTimeline: [timing("initial", 2_000), timing("steer-a", 8_000, 9_000), timing("steer-b", 12_000, 13_000)],
     }));
     assert.deepEqual(timestamps(html), [iso(2_000), iso(12_000)]);
@@ -39,7 +40,7 @@ for (const status of ["inProgress", "completed"] as const) {
 }
 
 test("only the initial message falls back to turn start when item timing is missing", () => {
-  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
     threadId: "thread",
     turn: {
       completedAt: null, durationMs: null, error: null, id: "turn",

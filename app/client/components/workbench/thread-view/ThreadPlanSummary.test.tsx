@@ -6,11 +6,9 @@ import { test } from "node:test";
 import { createElement, Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ThreadPayload } from "workbench-shared/types";
 import { renderThreadMarkdown } from "./thread-markdown-render";
-import { ThreadThreadContent } from "./thread-view-items";
+import ThreadTestTurn from "./thread-view-test-render";
 import ThreadPlanSummary from "./ThreadPlanSummary";
-import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function countMatches(value: string, pattern: RegExp) {
   return Array.from(value.matchAll(pattern)).length;
@@ -42,26 +40,9 @@ test("embedded plan markdown uses the shared copy-enabled summary", () => {
 });
 
 test("native plan items do not render", () => {
-  const thread = {
-    agentNickname: null,
-    agentPath: null,
-    agentRole: null,
-    createdAt: 1,
-    cwd: "C:/workspace",
-    harness: "codex",
-    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-plan-summary"),
-    isDraft: false,
-    model: null,
-    name: null,
-    path: null,
-    preview: "",
-    reasoningEffort: null,
-    serviceTier: null,
-    source: "app-server",
-    status: "completed",
-    tokenUsage: null,
-    turnHistory: [],
-    turns: [{
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
+    threadId: "thread-plan-summary",
+    turn: {
       completedAt: 2,
       durationMs: 1000,
       error: null,
@@ -70,12 +51,7 @@ test("native plan items do not render", () => {
       itemsView: "full",
       startedAt: 1,
       status: "completed",
-    }],
-    updatedAt: 2,
-  } satisfies ThreadPayload;
-  const html = renderToStaticMarkup(createElement(ThreadThreadContent, {
-    defaultOpenCompletedWork: true,
-    thread,
+    },
   }));
 
   assert.doesNotMatch(html, /first-class plan marker/u);

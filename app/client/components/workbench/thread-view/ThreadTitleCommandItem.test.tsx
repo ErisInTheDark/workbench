@@ -7,12 +7,11 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ThreadTurnDetails } from "./thread-view-items";
+import ThreadTestTurn from "./thread-view-test-render";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
 
 function renderCommand(command: string, aggregatedOutput: string) {
-  return renderToStaticMarkup(createElement(ThreadTurnDetails, {
-    defaultOpenCompletedWork: true,
+  return renderToStaticMarkup(createElement(ThreadTestTurn, {
     projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {

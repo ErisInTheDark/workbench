@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect transcript proposal cards, observed proposal resolution and summaries, claim-release choice, and terminal thread-tail cleanup.
+ * No production exports. Tests protect transcript proposal cards, observed proposal resolution and summaries, and claim-release choice.
  */
 import assert from "node:assert/strict";
 import { createElement } from "react";
@@ -11,9 +11,8 @@ import type { GitCheckpointProposal } from "workbench-shared/workbench/git/check
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
-import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
-import { ThreadTurnDetails } from "./thread-view-items";
+import ThreadTestTurn from "./thread-view-test-render";
 import WorkbenchClientProvider from "../WorkbenchClientProvider";
 import type { WorkbenchClientController } from "../workbench-client-context";
 import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
@@ -57,27 +56,6 @@ function proposalMcpItem(): Extract<ThreadItem, { type: "mcpToolCall" }> {
   };
 }
 
-function reasoningItem(): Extract<ThreadItem, { type: "reasoning" }> {
-  return {
-    content: [],
-    id: "terminal-reasoning",
-    summary: ["Sending empty final message"],
-    type: "reasoning",
-  };
-}
-
-function messageItem(id: string): Extract<ThreadItem, { type: "agentMessage" }> {
-  return {
-    id,
-    memoryCitation: null,
-    delivery: null,
-    questions: null,
-    phase: "commentary",
-    text: "Visible message.",
-    type: "agentMessage",
-  };
-}
-
 function renderUnavailableProposal(unavailableReasonCode?: "committed-outside-proposal") {
   const proposal: GitCheckpointProposal = {
     amendTargetMessage: null,
@@ -118,10 +96,6 @@ function renderUnavailableProposal(unavailableReasonCode?: "committed-outside-pr
   }));
 }
 
-function hiddenTailIds(itemGroups: readonly (readonly ThreadItem[])[], hideReasoning = true) {
-  return getFinishedThreadTailHiddenItemIds({ hideReasoning, itemGroups });
-}
-
 test("transcript proposals are collapsed git arc cards named by their proposal; failures keep agent detail out", () => {
   const client: WorkbenchClientController = {
     controls: null,
@@ -145,8 +119,7 @@ test("transcript proposals are collapsed git arc cards named by their proposal; 
       }
       const html = renderToStaticMarkup(createElement(WorkbenchClientProvider, {
         client,
-        children: createElement(WorkbenchContextMenuProvider, null, createElement(ThreadTurnDetails, {
-          defaultOpenCompletedWork: true,
+        children: createElement(WorkbenchContextMenuProvider, null, createElement(ThreadTestTurn, {
           projectRootPath: "C:/workspace",
           threadId: "thread-one",
           turn: {
@@ -405,14 +378,4 @@ test("content amend proposals expose an amend-default fresh commit choice", () =
   assert.match(freshHtml, />-1</u);
   assert.doesNotMatch(freshHtml, />\+5</u);
   assert.doesNotMatch(freshHtml, /differs from current commit/u);
-});
-
-test("finished tails hide only terminal reasoning; transcript proposals never vanish", () => {
-  assert.deepEqual(
-    hiddenTailIds([[messageItem("visible"), proposalCommandItem(), reasoningItem()]]),
-    new Set(["terminal-reasoning"]),
-  );
-  assert.deepEqual(hiddenTailIds([[messageItem("visible")], [reasoningItem(), proposalMcpItem()]]), new Set());
-  assert.deepEqual(hiddenTailIds([[proposalCommandItem(), reasoningItem(), messageItem("later")]]), new Set());
-  assert.deepEqual(hiddenTailIds([[proposalCommandItem(), reasoningItem()]], false), new Set());
 });

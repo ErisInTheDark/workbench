@@ -94,7 +94,7 @@ export default function ThreadRenderLab() {
         </label>
         <details>
           <summary className="cursor-pointer text-sm">Rendering context</summary>
-          <p className="text-xs text-fg/muted">Optional renderer props: knownSkills, projectFilePaths, projectId, projectRootPath, workspaceRoots, relatedThreadsById, subagents, inlineMentionSources, hiddenDynamicToolCallItemIds, hiddenWebSearchItemIds, hiddenReasoningStep.</p>
+          <p className="text-xs text-fg/muted">Optional renderer props: knownSkills, projectFilePaths, projectId, projectRootPath, workspaceRoots, relatedThreadsById, subagents, inlineMentionSources, hiddenReasoningStep.</p>
           <textarea aria-label="Rendering context JSON" spellCheck={false} value={contextText} onChange={event => setContextText(event.target.value)}
             className={`${inputClass} h-40 w-full resize-y`} />
         </details>
@@ -114,7 +114,6 @@ export default function ThreadRenderLab() {
           <legend className="mb-1 text-sm font-medium">Rendering</legend>
           {Object.entries(threadRenderFlags).map(([key, label]) => <label key={key} className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={Boolean(flags[key as keyof ThreadRenderFlags])}
-              disabled={Boolean(fixture.projection) && key !== "showLiveActivity"}
               onChange={event => setFlags(current => ({ ...current, [key]: event.target.checked }))} />{label}
           </label>)}
         </fieldset>

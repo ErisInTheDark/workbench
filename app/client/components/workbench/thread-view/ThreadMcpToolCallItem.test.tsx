@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-command-matchers";
-import { ThreadTurnDetails } from "./thread-view-items";
+import ThreadTestTurn from "./thread-view-test-render";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import { getThreadTerminalEntries } from "./thread-live-activity";
 
@@ -120,8 +120,7 @@ test("Workbench questionnaire MCP calls stay out of thread command history", () 
     status: "inProgress",
     tool: "request_user_input",
   });
-  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
-    defaultOpenCompletedWork: true,
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
     projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
@@ -151,8 +150,7 @@ test("expired MCP results keep invocation disclosure without pretending the body
 });
 
 test("claim transfers use Git arc cards outside coordination and file paragraphs inside it", () => {
-  const render = (items: McpItem[]) => renderToStaticMarkup(createElement(ThreadTurnDetails, {
-    defaultOpenCompletedWork: true,
+  const render = (items: McpItem[]) => renderToStaticMarkup(createElement(ThreadTestTurn, {
     projectFilePaths: ["src/one.ts", "src/two.ts", "src/three.ts"],
     projectId: "project-one",
     projectRootPath: "C:/workspace",
@@ -280,8 +278,7 @@ test("wb shell calls render through the ordinary command execution surface", () 
     },
     tool: "shell",
   });
-  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
-    defaultOpenCompletedWork: true,
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
     projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
@@ -331,8 +328,7 @@ test("adjacent wb rg and shell calls share a command summary while retaining sep
     },
     tool: "shell",
   });
-  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
-    defaultOpenCompletedWork: true,
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
     projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
@@ -364,8 +360,7 @@ test("adjacent provider-native reads share one command summary", () => {
     tool: "Read",
     type: "dynamicToolCall",
   });
-  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
-    defaultOpenCompletedWork: true,
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
     projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {

@@ -20,7 +20,7 @@ import {
   type BubbleCopyFeedbackNode,
 } from "./bubble-copy";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
-import { ThreadTurnDetails } from "./thread-view-items";
+import ThreadTestTurn from "./thread-view-test-render";
 
 type DynamicItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
@@ -56,7 +56,7 @@ function renderUserItems(items: UserMessageItem[]) {
     startedAt: null,
     status: "inProgress",
   };
-  return renderToStaticMarkup(createElement(ThreadTurnDetails, {
+  return renderToStaticMarkup(createElement(ThreadTestTurn, {
     threadId: "copy-thread",
     turn,
   }));
