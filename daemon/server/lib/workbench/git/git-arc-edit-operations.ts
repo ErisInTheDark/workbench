@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - GitArcEditWorkFile/GitArcEditWorkInput/GitArcEditWorkChange/GitArcEditWorkResult: worker-safe snapshot in, renames and new text out.
- * - runGitArcEditOperations: apply ordered moves (with agent-defined reference rewrites) and regex replacements to an in-memory file set.
+ * - runGitArcEditOperations: apply ordered moves (with agent-defined reference rewrites) and regex replacements to an in-memory file set; pure CRLF files are matched as LF and written back as CRLF.
  * - underGitArcEditRoots/createGitArcEditPathFilter: shared root and glob selection used by planning and operations.
  */
 import path from "node:path";
@@ -35,8 +35,12 @@ export interface GitArcEditWorkResult {
   warnings: string[];
 }
 
+type LineEndings = "crlf" | "lf" | "mixed";
+
 interface VirtualFile {
   ignored: boolean;
+  /** Text and original are LF-normalised for crlf files; mixed files stay raw. */
+  lineEndings: LineEndings;
   origin: string;
   original: string | null;
   text: string | null;
@@ -249,29 +253,46 @@ function applyMove(files: Files, operation: Extract<GitArcEditOperation, { kind:
   for (const [to, file] of relocated) files.set(to, file);
 }
 
-function applyReplace(files: Files, operation: Extract<GitArcEditOperation, { kind: "replace" }>) {
+function applyReplace(files: Files, operation: Extract<GitArcEditOperation, { kind: "replace" }>, warnings: string[]) {
   const expression = compile(operation.pattern, `gu${operation.flags}`, "replace");
   const filter = pathFilter(operation.globs);
   for (const [filePath, file] of files) {
     if (file.text === null || (file.ignored && !operation.includeIgnored)) continue;
     if (!underRoots(filePath, operation.roots) || !filter(filePath)) continue;
-    file.text = file.text.replace(expression, operation.replacement);
+    const next = file.text.replace(expression, operation.replacement);
+    if (next !== file.text && file.lineEndings === "mixed") {
+      warnings.push(`${filePath} has mixed line endings; replace matched raw text, so \\n patterns may leave stray \\r`);
+    }
+    file.text = next;
   }
 }
 
+function lineEndingsOf(text: string | null): LineEndings {
+  if (text === null || !text.includes("\r\n")) return "lf";
+  return /(?<!\r)\n/u.test(text) ? "mixed" : "crlf";
+}
+
+function loadFile(file: GitArcEditWorkFile): VirtualFile {
+  const lineEndings = lineEndingsOf(file.text);
+  const text = lineEndings === "crlf" ? file.text!.replaceAll("\r\n", "\n") : file.text;
+  return { ignored: file.ignored, lineEndings, origin: file.path, original: text, text };
+}
+
+function savedText(file: VirtualFile) {
+  return file.lineEndings === "crlf" ? file.text!.replace(/\r?\n/gu, "\r\n") : file.text!;
+}
+
 export function runGitArcEditOperations(input: GitArcEditWorkInput): GitArcEditWorkResult {
-  const files: Files = new Map(input.files.map(file => [file.path, {
-    ignored: file.ignored, origin: file.path, original: file.text, text: file.text,
-  }]));
+  const files: Files = new Map(input.files.map(file => [file.path, loadFile(file)]));
   const warnings: string[] = [];
   for (const operation of input.operations) {
     if (operation.kind === "move") applyMove(files, operation, input.caseInsensitive, warnings);
-    else applyReplace(files, operation);
+    else applyReplace(files, operation, warnings);
   }
   const changes = [...files.entries()].flatMap(([filePath, file]): GitArcEditWorkChange[] => {
     const textChanged = file.text !== file.original;
     if (filePath === file.origin && !textChanged) return [];
-    return [{ origin: file.origin, path: filePath, ...(textChanged && file.text !== null ? { text: file.text } : {}) }];
+    return [{ origin: file.origin, path: filePath, ...(textChanged && file.text !== null ? { text: savedText(file) } : {}) }];
   });
   return { changes: changes.sort((left, right) => left.path.localeCompare(right.path)), warnings };
 }

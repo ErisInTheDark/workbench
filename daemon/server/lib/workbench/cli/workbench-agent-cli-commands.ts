@@ -228,7 +228,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       '  {"kind":"move","from":"src/a.ts","to":"lib/a.ts","references":[...]}  file or folder',
       '  {"kind":"move","pathPattern":"^src/(.+)\\\\.test\\\\.ts$","pathReplacement":"test/$1.test.ts","roots":["src"]}',
       '  {"kind":"replace","pattern":"\\\\bOldName\\\\b","replacement":"NewName","flags":"","globs":["*.ts"],"roots":["src"]}',
-      "Replace: JavaScript regex, always gu; flags may add i, m, s; $1 and $<name> work. Use \\b for identifiers. globs use rg syntax.",
+      "Replace: JavaScript regex, always gu; flags may add i, m, s; $1 and $<name> work. Use \\b for identifiers. globs use rg syntax. CRLF files match as LF and keep CRLF.",
       "Move validation rejects missing sources, existing destinations (case-only renames allowed) and destinations inside their source.",
       "references describe the language's path syntax so moves rewrite specifiers that resolve to moved files:",
       '  {"pattern":"(?:from|import)\\\\s*\\\\(?\\\\s*[\'\\"](?<path>[^\'\\"]+)[\'\\"]","globs":["*.ts","*.tsx"],"roots":["src"],',

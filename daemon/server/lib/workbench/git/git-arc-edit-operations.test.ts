@@ -153,6 +153,28 @@ test("regex patterns keep their edge whitespace so indented block deletions keep
   assert.equal(textAt(result, "src/a.rs"), "impl A {\n    fn two() {}\n}\n");
 });
 
+test("CRLF files match newline patterns as LF and keep CRLF endings, including inserted lines", () => {
+  const result = run(files({
+    "src/a.ts": "f({\r\n  keep: 1,\r\n  drop: true,\r\n});\r\n",
+    "src/b.ts": "one\r\ntwo\r\n",
+    "src/untouched.ts": "x\r\n",
+  }), [
+    { kind: "replace", pattern: String.raw`\n[ \t]*drop: true,`, replacement: "", roots: ["src"] },
+    { kind: "replace", pattern: "^two$", replacement: "two\nthree", flags: "m", roots: ["src"] },
+  ]);
+  assert.equal(textAt(result, "src/a.ts"), "f({\r\n  keep: 1,\r\n});\r\n");
+  assert.equal(textAt(result, "src/b.ts"), "one\r\ntwo\r\nthree\r\n");
+  assert.deepEqual(result.changes.map(change => change.path), ["src/a.ts", "src/b.ts"]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test("mixed line ending files are replaced raw with a warning", () => {
+  const result = run(files({ "src/a.ts": "a\r\nb\nc" }), [{ kind: "replace", pattern: "b", replacement: "B" }]);
+  assert.equal(textAt(result, "src/a.ts"), "a\r\nB\nc");
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0]!, /^src\/a\.ts has mixed line endings/u);
+});
+
 test("invalid patterns and reference specs without a path group reject before changing anything", () => {
   const input = files({ "src/a.ts": "" });
   assert.throws(() => run(input, [{ kind: "replace", pattern: "(", replacement: "" }]), /Invalid replace regex/u);
