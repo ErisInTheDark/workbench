@@ -4,7 +4,7 @@
  * - WorkbenchFilePanelListener: subscriber for mounted file panel changes.
  * - WorkbenchFilePanelClientOptions: panel-controller collaborators.
  * - WorkbenchFilePanelClient: imperative mounted file panel API, including the toolbar, review mode, mark tags, comment
- *   margin, code block headers and the markdown source toggle.
+ *   margin, code block headers, the markdown source toggle and save-as hand-off.
  * - default WorkbenchFilePanelClient: own panel DOM, history, drafts, conflicts, editor commands and cleanup.
  */
 
@@ -56,6 +56,8 @@ export interface WorkbenchFilePanelSnapshot {
   fontSize: number;
   hasPendingWriteConflict: boolean;
   hasSaveIssue: boolean;
+  /** An unsaved new file: it exists only as its draft and can be saved only under a name. */
+  isNewFile: boolean;
   /** The file on disk is not its git HEAD version, so it can be restored from git. */
   savedDiffersFromHead: boolean;
 }
@@ -66,6 +68,8 @@ export interface WorkbenchFilePanelClientOptions {
   autoSave?: boolean;
   autoSaveDelayMs?: number;
   document: WorkbenchFileDocument;
+  /** Save as was asked for, by its shortcut or by saving a new file; the panel asks for the name. */
+  onSaveAsRequest?: () => void;
   surfaces: WorkbenchEditorDomSurfaces;
 }
 
@@ -80,9 +84,15 @@ export interface WorkbenchFilePanelClient {
   tables: WorkbenchTableController;
   /** Discard the unsaved draft and reload the file from disk. */
   deleteDraft: () => Promise<void>;
+  /** Drop an unsaved new file's draft. */
+  discardNewFile: () => Promise<void>;
   dispose: () => void;
   getSnapshot: () => WorkbenchFilePanelSnapshot;
   getToolbarState: () => EditorToolbarState;
+  /** The content now lives in a copy saved elsewhere: a new file's draft is dropped, an existing file reverts to saved. */
+  handOffToCopy: () => Promise<void>;
+  /** The editor's current markdown. */
+  readContent: () => string;
   /** Write the file's git HEAD version to disk and reload it. */
   restoreFromGit: () => Promise<void>;
   runCommand: (command: EditorCommand) => void;
@@ -146,6 +156,10 @@ function WorkbenchFilePanelClient(
 
   /** Rich mode edits the rendered document; source mode runs the same commands as markdown text edits. */
   function runCommand(command: EditorCommand) {
+    if (command === "save-as" || (command === "save" && fileClient.isNewFile())) {
+      if (sessionState.currentPath) options.onSaveAsRequest?.();
+      return;
+    }
     if (command === "save") {
       if (sessionState.currentPath) void saveCurrentFile();
       return;
@@ -411,6 +425,7 @@ function WorkbenchFilePanelClient(
       fontSize: editorUiSnapshot.fontSize,
       hasPendingWriteConflict: Boolean(fileSessionState.pendingWriteConflict),
       hasSaveIssue: Boolean(fileSessionState.saveIssue),
+      isNewFile: fileClient.isNewFile(),
       savedDiffersFromHead: fileSessionState.headContent !== null
         && fileSessionState.baselineContent !== fileSessionState.headContent,
     };
@@ -488,8 +503,19 @@ function WorkbenchFilePanelClient(
 
   function acceptObservation(snapshot: FileDocumentSnapshot) {
     fileClient.acceptObservation(snapshot);
-    editorClient.refreshStatusMessage(snapshot.failure ?? undefined);
+    // A new file is missing on disk by design, so the read failure says nothing about it.
+    editorClient.refreshStatusMessage(fileClient.isNewFile() ? undefined : snapshot.failure ?? undefined);
     emit();
+  }
+
+  async function discardNewFile() {
+    await fileClient.discardNewFile();
+    if (!lifecycle.isDisposed) emit();
+  }
+
+  async function handOffToCopy() {
+    await fileClient.handOffToCopy();
+    if (!lifecycle.isDisposed) emit();
   }
 
   async function resetCurrentDraftToSaved() {
@@ -524,6 +550,9 @@ function WorkbenchFilePanelClient(
     beginToolbarInteraction: editorClient.beginToolbarInteraction,
     comments: editorClient.comments,
     deleteDraft: resetCurrentDraftToSaved,
+    discardNewFile,
+    handOffToCopy,
+    readContent: () => fileClient.inspectCurrentDraft().content,
     restoreFromGit: resetCurrentFileToHead,
     save: () => saveCurrentFile(),
     dispose: () => {

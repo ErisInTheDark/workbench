@@ -18,7 +18,6 @@ import {
 
 const PROJECT_STATE_METHODS = {
   "project/tree/refresh": "workbench/thread-state/project/refresh",
-  "project/entry/create": "workbench/thread-state/project/entry/create",
   "project/file/delete": "workbench/thread-state/project/file/delete",
 } as const;
 
@@ -72,7 +71,6 @@ function linkRootsRequest(params: Record<string, unknown>): ResolveExternalFileL
 
 export const projectRequestHandlers = defineDaemonRequestHandlers({
   "project/tree/refresh": (params, context) => projectState("project/tree/refresh", params, context),
-  "project/entry/create": (params, context) => projectState("project/entry/create", params, context),
   "project/file/delete": (params, context) => projectState("project/file/delete", params, context),
   "project/catalog/read": async (_params, { owners }) => await owners.projects.readCatalog(),
   "project/locations/read": async (_params, { owners }) => await owners.projects.readLocations(),

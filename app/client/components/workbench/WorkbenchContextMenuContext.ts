@@ -20,6 +20,8 @@ import type { WorkbenchThreadStatusControlTone } from "./workbench-thread-status
 
 export interface WorkbenchContextMenuAction {
   disabled?: boolean;
+  /** Selecting needs a press held this long, for actions that cannot be undone. */
+  holdToConfirmMs?: number;
   icon?: ReactNode;
   id: string;
   kind?: "action";

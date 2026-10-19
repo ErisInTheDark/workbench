@@ -79,7 +79,7 @@ test("routes every reloadable HTTP controller and preserves method gates", async
     ["/daemon/git-peer/bundle", "POST", "git-peer"],
     ["/daemon/projects", "GET", "projects"],
     ["/daemon/project-icons/team%2Falpha", "GET", "project-icon"],
-    ["/daemon/tree", "POST", "tree"],
+    ["/daemon/tree", "GET", "tree"],
     [`/daemon/transcript-assets/codex/dGhyZWFk/${"a".repeat(64)}.png`, "GET", "transcript-assets"],
   ] as const) {
     const output = response();

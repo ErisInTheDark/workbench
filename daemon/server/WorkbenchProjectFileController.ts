@@ -208,7 +208,7 @@ export default class WorkbenchProjectFileController {
     const project = await this.catalog.resolveProjectById(request.projectId);
     const file = resolveProjectFilePath(project, request.path);
     if (!isEditableFile(file.rootRelativePath)) throw new Error("Only markdown, SVG and .env files can be edited in the workbench.");
-    // A forced save writes regardless of disk state, so it also creates a file that does not exist yet.
+    // A forced save writes regardless of disk state, so it also creates a file, and its folders, that do not exist yet.
     const before = await fs.stat(file.absolutePath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT" && request.force && !request.resetToHead) return null;
       throw error;
@@ -230,6 +230,7 @@ export default class WorkbenchProjectFileController {
       : request.content;
     if (content === null) throw new Error("This file does not have a HEAD version to reset to.");
     if (typeof content !== "string") throw new Error("UTF-8 file content is required.");
+    if (!before) await fs.mkdir(path.dirname(file.absolutePath), { recursive: true });
     await fs.writeFile(file.absolutePath, content, "utf8");
     const [snapshot, after] = await Promise.all([
       this.snapshots.refreshAfterFileMutation(project.id),

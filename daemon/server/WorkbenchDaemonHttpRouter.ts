@@ -89,7 +89,7 @@ export default class WorkbenchDaemonHttpRouter {
       {
         errorMessage: "Project tree request failed.",
         handle: (request, response) => options.projectSnapshot.handleTreeHttpRequest(request, response),
-        methods: ["GET", "POST"],
+        methods: ["GET"],
         path: "/daemon/tree",
       },
     ];

@@ -16,7 +16,7 @@ import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbe
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import { ProjectIdSchema, type FolderId, type ProjectId } from "workbench-shared/workbench/identity";
-import { SidebarLoadingSkeleton } from "./workbench-explorer";
+import SidebarLoadingSkeleton from "./SidebarLoadingSkeleton";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import { useThreads } from "./use-threads";

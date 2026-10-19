@@ -3,7 +3,8 @@
  * - DraftBuffer/FileSessionState: file draft and editing state contracts.
  * - WorkbenchFileClientOptions: one observed document and its editor collaborators.
  * - WorkbenchFileClient: observed updates, draft persistence, guarded mutations and rich/source mode switches.
- * - default WorkbenchFileClient: reconcile one file's disk facts with its local editable draft.
+ * - default WorkbenchFileClient: reconcile one file's disk facts with its local editable draft, or edit an unsaved new
+ *   file that exists only as a draft.
  */
 
 import type { FilePayload } from "workbench-shared/types";
@@ -52,7 +53,13 @@ export interface WorkbenchFileClientOptions {
 
 interface WorkbenchFileClient {
   dispose: () => void;
+  /** Drop an unsaved new file's draft; existing files are untouched. */
+  discardNewFile: () => Promise<void>;
+  /** The draft now lives in a copy written elsewhere: a new file's draft is dropped, an existing file reverts to saved. */
+  handOffToCopy: () => Promise<void>;
   inspectCurrentDraft: () => { content: string; issue: SaveGuardIssue | null };
+  /** The file exists only as this draft; it can be saved only under a name. */
+  isNewFile: () => boolean;
   acceptObservation: (snapshot: FileDocumentSnapshot) => void;
   resetCurrentDraftToSaved: () => Promise<void>;
   resetCurrentFileToHead: () => Promise<void>;
@@ -87,6 +94,15 @@ function WorkbenchFileClient(
   const draftStore = document.drafts;
   let mutating = false;
   let deferredObservation: FileDocumentSnapshot | null = null;
+  /** Opened from a draft with no disk version: it ignores disk observations and is never autosaved. */
+  let isNewFile = false;
+
+  /** A new file's draft is its only copy; once something else clears it (saved under a name, discarded), let it go. */
+  function releaseNewFileClearedElsewhere() {
+    if (!isNewFile || draftStore.getBuffer(document.path)) return;
+    isNewFile = false;
+    state.expectedMtimeMs = null;
+  }
 
   async function clearDraftBuffer(filePath: string) {
     await draftStore.clearBuffer(filePath);
@@ -122,7 +138,7 @@ function WorkbenchFileClient(
 
     const inspection = editorDocument.inspectDraft();
     state.currentContent = inspection.content;
-    state.dirty = inspection.content !== state.baselineContent;
+    state.dirty = isNewFile || inspection.content !== state.baselineContent;
     state.saveIssue = inspection.issue;
     return inspection;
   }
@@ -132,6 +148,7 @@ function WorkbenchFileClient(
     sessionState.currentThread = null;
     sessionState.currentPath = filePath;
     sessionState.currentThreadId = "";
+    isNewFile = buffer.expectedMtimeMs === null;
     state.expectedMtimeMs = buffer.expectedMtimeMs;
     state.mode = buffer.mode;
     editorDocument.setEditable(isTextLikeFile(filePath));
@@ -176,6 +193,7 @@ function WorkbenchFileClient(
     sessionState.currentThread = null;
     sessionState.currentPath = payload.path;
     sessionState.currentThreadId = "";
+    isNewFile = false;
     state.expectedMtimeMs = payload.mtimeMs;
     state.headContent = payload.headContent;
     state.mode = mode;
@@ -208,7 +226,8 @@ function WorkbenchFileClient(
   }
 
   function syncCurrentDraftBuffer() {
-    if (!sessionState.currentPath || state.expectedMtimeMs === null) {
+    releaseNewFileClearedElsewhere();
+    if (!sessionState.currentPath || (state.expectedMtimeMs === null && !isNewFile)) {
       return;
     }
 
@@ -317,7 +336,8 @@ function WorkbenchFileClient(
   }
 
   function scheduleAutoSave() {
-    if (lifecycle.isDisposed || mutating || !options.autoSave || !sessionState.currentPath || !state.dirty || state.saveIssue || state.pendingWriteConflict) {
+    if (lifecycle.isDisposed || mutating || isNewFile || !options.autoSave || !sessionState.currentPath || !state.dirty
+      || state.saveIssue || state.pendingWriteConflict) {
       return;
     }
 
@@ -389,6 +409,10 @@ function WorkbenchFileClient(
 
     const expectedMtimeMs = state.expectedMtimeMs;
     const content = inspection.content;
+    if (isNewFile) {
+      editorDocument.refreshStatusMessage("Name this new file with Save as to save it.");
+      return;
+    }
     if (expectedMtimeMs === null) {
       editorDocument.refreshStatusMessage("The file must be reloaded before it can be saved.");
       return;
@@ -422,6 +446,9 @@ function WorkbenchFileClient(
 
   function acceptObservation(snapshot: FileDocumentSnapshot) {
     if (lifecycle.isDisposed) return;
+    releaseNewFileClearedElsewhere();
+    adoptNewFileDraft();
+    if (isNewFile) return;
     if (mutating) {
       deferredObservation = snapshot;
       return;
@@ -467,7 +494,7 @@ function WorkbenchFileClient(
    */
   function switchMode(next: EditorMode) {
     if (lifecycle.isDisposed || mutating || state.mode === next || !isMarkdownFile(sessionState.currentPath)
-      || state.expectedMtimeMs === null) return;
+      || (state.expectedMtimeMs === null && !isNewFile)) return;
     const inspection = inspectCurrentDraft();
     if (inspection.issue) {
       editorDocument.logBlockedSaveIssue(inspection.issue);
@@ -486,10 +513,33 @@ function WorkbenchFileClient(
     editorDocument.refreshStatusMessage();
   }
 
+  async function discardNewFile() {
+    if (lifecycle.isDisposed || !isNewFile) return;
+    lifecycle.cancel(FILE_SELECTION_PERSISTENCE_TASK_ID);
+    isNewFile = false;
+    state.expectedMtimeMs = null;
+    await clearDraftBuffer(document.path);
+  }
+
+  async function handOffToCopy() {
+    if (isNewFile) await discardNewFile();
+    else await resetCurrentDraftToSaved();
+  }
+
   function dispose() {
     if (lifecycle.isDisposed) return;
     syncCurrentDraftBuffer();
     lifecycle.dispose();
+  }
+
+  /**
+   * A new file never arrives from disk, so its draft is its only way in, and persisted drafts can land after the
+   * editor opens (a reload). Adopt it whenever it appears while nothing else is loaded.
+   */
+  function adoptNewFileDraft() {
+    if (lifecycle.isDisposed || isNewFile || state.expectedMtimeMs !== null) return;
+    const draft = draftStore.getBuffer(document.path);
+    if (draft?.expectedMtimeMs === null) applyDraftBuffer(document.path, draft);
   }
 
   sessionState.currentPath = document.path;
@@ -499,11 +549,15 @@ function WorkbenchFileClient(
     editorDocument.renderDocument("", isMarkdownFile(document.path) ? "rich" : "plain");
     editorDocument.setEditable(false);
   }
+  lifecycle.addUnsubscribe(draftStore.subscribe(adoptNewFileDraft));
 
   return {
     acceptObservation,
+    discardNewFile,
     dispose,
+    handOffToCopy,
     inspectCurrentDraft,
+    isNewFile: () => isNewFile,
     resetCurrentDraftToSaved,
     resetCurrentFileToHead,
     saveCurrentFile,

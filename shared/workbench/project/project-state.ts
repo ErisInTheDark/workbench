@@ -6,8 +6,8 @@
  * - WorkbenchProjectTreeNodeSchema/WorkbenchProjectTreeNodeFieldsSchema: one tree node, and either variant's fields for per-node deltas.
  * - WorkbenchProjectSnapshotSchema: project tree and change-summary wire contract.
  * - WorkbenchProjectStateUpdateSchema/WorkbenchProjectStateUpdate: pushed project snapshot update.
- * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh, create and delete requests.
- * - WorkbenchCreateEntryResultSchema/WorkbenchDeleteFileResultSchema: mutation metadata without duplicate snapshots.
+ * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh and delete requests.
+ * - WorkbenchDeleteFileResultSchema: deletion metadata without a duplicate snapshot.
  */
 import { z } from "zod";
 
@@ -54,13 +54,16 @@ export const WorkbenchProjectsPayloadSchema = z.object({
 }).strict().transform((payload): WorkbenchProjectsPayload => payload);
 
 export const WorkbenchProjectTreeNodeSchema: z.ZodType<TreeNode> = z.lazy(() => z.discriminatedUnion("type", [
-  z.object({ isIgnored: z.boolean().optional(), name: z.string(), path: z.string(), type: z.literal("file") }).strict(),
+  z.object({
+    isIgnored: z.boolean().optional(), isUntracked: z.boolean().optional(), name: z.string(), path: z.string(), type: z.literal("file"),
+  }).strict(),
   z.object({ children: z.array(WorkbenchProjectTreeNodeSchema), name: z.string(), path: z.string(), type: z.literal("directory") }).strict(),
 ]));
 /** Either node variant's fields, for validating fields a delta patches onto one node. */
 export const WorkbenchProjectTreeNodeFieldsSchema = z.object({
   children: z.array(WorkbenchProjectTreeNodeSchema).optional(),
   isIgnored: z.boolean().optional(),
+  isUntracked: z.boolean().optional(),
   name: z.string(),
   path: z.string(),
   type: z.enum(["file", "directory"]),
@@ -88,23 +91,12 @@ const ProjectRequestBase = z.object({ projectId: z.string().trim().min(1) }).str
 export const WorkbenchProjectStateRequestSchema = z.discriminatedUnion("method", [
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/project/refresh") }),
   ProjectRequestBase.extend({
-    method: z.literal("workbench/thread-state/project/entry/create"),
-    name: z.string(),
-    parentPath: z.string(),
-    type: z.enum(["directory", "file"]),
-  }),
-  ProjectRequestBase.extend({
     confirmUntracked: z.boolean().optional(),
     method: z.literal("workbench/thread-state/project/file/delete"),
     path: z.string().min(1),
   }),
 ]);
 export type WorkbenchProjectStateRequest = z.infer<typeof WorkbenchProjectStateRequestSchema>;
-
-export const WorkbenchCreateEntryResultSchema = z.object({
-  path: z.string().min(1),
-  type: z.enum(["directory", "file"]),
-}).strict();
 
 const DeleteConfirmationSchema = z.object({
   confirmationRequired: z.literal(true),

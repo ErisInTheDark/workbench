@@ -1,5 +1,6 @@
 /*
- * No production exports. Protect draft recovery, conflict-guarded saves, history coalescing and clean-only refreshes.
+ * No production exports. Protect draft recovery, conflict-guarded saves, history coalescing, clean-only refreshes and
+ * unsaved new files.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -14,6 +15,7 @@ function harness({ disk = "<svg/>", mtimeMs = 1, draft = null as { content: stri
     stored: draft, history: null, writes: 0,
   };
   let clock = 0;
+  const draftListeners = new Set<() => void>();
   const port: TextFileDocumentPort = {
     read: async () => ({ ...file }),
     save: async (content, expectedMtimeMs, force) => {
@@ -27,11 +29,17 @@ function harness({ disk = "<svg/>", mtimeMs = 1, draft = null as { content: stri
       read: () => drafts.stored && { ...drafts.stored, history: drafts.history },
       write: ({ content, history, mtimeMs }) => { drafts.stored = { content, mtimeMs }; drafts.history = history; drafts.writes += 1; },
       clear: async () => { drafts.stored = null; drafts.history = null; },
+      subscribe: (listener) => { draftListeners.add(listener); return () => { draftListeners.delete(listener); }; },
     },
   };
   const controller = new TextFileDocumentController(port, () => clock);
   return {
     controller, drafts, file, port, saves, tick: (ms: number) => { clock += ms; },
+    /** A draft landing in the store from elsewhere (app state restored after a reload). */
+    arrive: (draft: { content: string; mtimeMs: number | null }) => {
+      drafts.stored = draft;
+      for (const listener of draftListeners) listener();
+    },
     reopen: () => new TextFileDocumentController(port, () => clock),
   };
 }
@@ -77,6 +85,54 @@ test("a stored draft reopens dirty and keeps saves guarded by the disk version i
   assert.equal(h.file.content, "<svg>mine</svg>");
   assert.equal(h.controller.getSnapshot().dirty, false);
   assert.equal(h.controller.getSnapshot().conflict, null);
+  assert.equal(h.drafts.stored, null);
+});
+
+test("a new file opens from its draft without disk, saves only under a name, then follows the written file", async () => {
+  const h = harness({ draft: { content: "<svg/>", mtimeMs: null } });
+  h.port.read = async () => { throw new Error("A new file has nothing on disk."); };
+  await h.controller.load();
+  assert.equal(h.controller.getSnapshot().status, "ready");
+  assert.equal(h.controller.getSnapshot().isNew, true);
+  assert.equal(h.controller.getSnapshot().dirty, true);
+  h.controller.edit("<svg>a</svg>");
+  assert.deepEqual(h.drafts.stored, { content: "<svg>a</svg>", mtimeMs: null }, "the draft stays a new file");
+  await h.controller.save();
+  assert.deepEqual(h.saves, []);
+
+  h.port.read = async () => ({ content: "<svg>a</svg>", mtimeMs: 7 });
+  await h.controller.handOffToCopy({ samePath: true });
+  assert.equal(h.drafts.stored, null);
+  assert.equal(h.controller.getSnapshot().isNew, false);
+  assert.equal(h.controller.getSnapshot().dirty, false);
+});
+
+test("a new file's draft that lands after loading started opens it, even when the disk read then fails", async () => {
+  const failed = harness();
+  failed.port.read = async () => { throw new Error("missing"); };
+  await failed.controller.load();
+  assert.equal(failed.controller.getSnapshot().status, "failed");
+  failed.arrive({ content: "<svg>restored</svg>", mtimeMs: null });
+  assert.equal(failed.controller.getSnapshot().status, "ready");
+  assert.equal(failed.controller.getSnapshot().isNew, true);
+  assert.equal(failed.controller.getSnapshot().content, "<svg>restored</svg>");
+
+  const racing = harness();
+  const reading = Promise.withResolvers<{ content: string; mtimeMs: number }>();
+  racing.port.read = () => reading.promise;
+  const loading = racing.controller.load();
+  racing.arrive({ content: "<svg>restored</svg>", mtimeMs: null });
+  reading.reject(new Error("missing"));
+  await loading;
+  assert.equal(racing.controller.getSnapshot().status, "ready");
+  assert.equal(racing.controller.getSnapshot().content, "<svg>restored</svg>");
+});
+
+test("a new file's draft cleared elsewhere is never written back", async () => {
+  const h = harness({ draft: { content: "<svg/>", mtimeMs: null } });
+  await h.controller.load();
+  await h.port.drafts.clear();
+  h.controller.edit("<svg>late</svg>");
   assert.equal(h.drafts.stored, null);
 });
 

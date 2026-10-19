@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default DraftResetButton: a reset icon button that opens into a hold-to-confirm danger button, deleting the draft
- *   first and then restoring the file from git, and folds back once the pointer and focus have been away for a second.
+ *   (discarding an unsaved new file outright) first and then restoring the file from git, and folds back once the
+ *   pointer and focus have been away for a second.
  */
 "use client";
 
@@ -14,25 +15,31 @@ import { BinIcon } from "../workbench-icons";
 const HOLD_MS = 1000;
 const FOLD_DELAY_MS = 1000;
 
-type ResetAction = "delete-draft" | "restore-from-git";
+type ResetAction = "discard-new-file" | "delete-draft" | "restore-from-git";
 
 const ACTION_LABELS: Record<ResetAction, string> = {
+  "discard-new-file": "Discard draft",
   "delete-draft": "Delete draft",
   "restore-from-git": "Restore from git",
 };
 
 export default function DraftResetButton({
   hasDraft,
+  isNewFile = false,
   onDeleteDraft,
   onRestoreFromGit,
   savedDiffersFromHead,
 }: {
   hasDraft: boolean;
+  /** An unsaved new file has no saved version, so deleting its draft discards the file. */
+  isNewFile?: boolean;
   onDeleteDraft: () => Promise<void>;
-  onRestoreFromGit: () => Promise<void>;
+  /** Absent where the file cannot be restored from git. */
+  onRestoreFromGit?: () => Promise<void>;
   savedDiffersFromHead: boolean;
 }) {
-  const action: ResetAction | null = hasDraft ? "delete-draft" : savedDiffersFromHead ? "restore-from-git" : null;
+  const action: ResetAction | null = isNewFile ? "discard-new-file" : hasDraft ? "delete-draft"
+    : savedDiffersFromHead && onRestoreFromGit ? "restore-from-git" : null;
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const engaged = useRef({ focus: false, hover: false });
@@ -53,7 +60,7 @@ export default function DraftResetButton({
     if (!action || busy) return;
     setBusy(true);
     try {
-      await (action === "delete-draft" ? onDeleteDraft() : onRestoreFromGit());
+      await (action === "restore-from-git" ? onRestoreFromGit?.() : onDeleteDraft());
     } finally {
       setBusy(false);
     }

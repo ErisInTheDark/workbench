@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default WorkbenchBrowseSessionsSection: subscribed Browse-session sidebar presentation and intents.
+ * - default WorkbenchBrowseSessionsSection: the sidebar's live Browse sessions, each with its stop and forget menu.
  */
 
 import { useCallback, useSyncExternalStore } from "react";
@@ -10,7 +10,8 @@ import { useCallback, useSyncExternalStore } from "react";
 import type { WorkbenchBrowseSessionSummary } from "workbench-shared/types";
 import type WorkbenchBrowseSessionController from "../../workbench/browse/WorkbenchBrowseSessionController";
 import { writeTextToClipboard } from "../../workbench/dom/clipboard";
-import { BrowseSessionsList } from "./workbench-explorer";
+import ContextMenuCapability from "./ContextMenuCapability";
+import { workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import {
   ArchiveIcon,
   BrowserSessionIcon,
@@ -19,6 +20,12 @@ import {
 } from "./workbench-icons";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
+
+function formatBrowseSessionDetail(session: WorkbenchBrowseSessionSummary) {
+  return [session.mode, session.threadId ? `thread ${session.threadId.slice(0, 8)}` : null, session.state]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+}
 
 export default function WorkbenchBrowseSessionsSection ({
   controller,
@@ -82,11 +89,32 @@ export default function WorkbenchBrowseSessionsSection ({
         preferenceKey="browseSessionsOpen"
         title="Browse sessions"
       >
-        <BrowseSessionsList
-          getSessionContextMenu={getSessionContextMenu}
-          isLoading={snapshot.isLoading}
-          sessions={[...snapshot.sessions]}
-        />
+        <ul className="m-0 space-y-1 p-0">
+          {snapshot.sessions.map((session) => {
+            const detail = formatBrowseSessionDetail(session);
+            const isProblemState = session.state === "orphan" || session.state === "stale" || session.state === "unknown";
+            return (
+              <li key={session.name} className="m-0 list-none">
+                <ContextMenuCapability menu={getSessionContextMenu(session)}>
+                  <div
+                    title={`${session.name}${detail ? ` — ${detail}` : ""}`}
+                    className={`${workbenchThreadListButtonClassName} ${isProblemState ? "text-accent" : "text-fg/muted"}`}
+                  >
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <BrowserSessionIcon className="shrink-0" size={16} />
+                      <span className="min-w-0">
+                        <span className={`${workbenchThreadListLabelClassName} ${isProblemState ? "font-semibold" : ""}`}>
+                          {session.name}
+                        </span>
+                        {detail ? <span className="block truncate text-[0.75rem] leading-4 text-fg/muted">{detail}</span> : null}
+                      </span>
+                    </span>
+                  </div>
+                </ContextMenuCapability>
+              </li>
+            );
+          })}
+        </ul>
         {snapshot.error ? (
           <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">
             {snapshot.error}

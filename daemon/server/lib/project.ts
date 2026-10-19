@@ -8,8 +8,8 @@
  * - resolveDiscoveredProject/resolveProjectRootFromProjects: resolve durably admitted catalogue projects.
  * - discoverProjectIdentities: prepare structural projects, including the daemon project and pinned checkouts outside discovery folders, and canonical identity evidence without icon scans.
  * - ResolvedProject/ResolvedProjectRoot: validated project and root locations.
- * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create entries and validate deletion.
- * - buildTree/buildProjectTree: build visible explorer trees.
+ * - assertProjectFileCanBeDeleted/deleteProjectFile: validate and perform file deletion.
+ * - buildProjectTree: build one root's visible explorer tree, marking ignored and untracked files.
  * - getProjectSnapshotFromResolvedProject: assemble tree, roots and Git changes.
  * - resolveExternalFileLinkRoot: locate a file link's Git root.
  * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified paths.
@@ -23,7 +23,7 @@ import type { ProjectId } from "workbench-shared/workbench/identity";
 import { DAEMON_PROJECT_ID, daemonWorkspaceRoot, ensureDaemonWorkspace } from "./daemon-workspace-paths";
 import type { WorkbenchProjectDiscovery } from "../database/project/workbench-project-persistence";
 
-import { getGitChanges, isLinkedGitWorktree, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory } from "./git";
+import { getGitChanges, isLinkedGitWorktree, listGitTrackedFiles, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory } from "./git";
 import { appRoot, projectRoot } from "./project-root";
 import { localProjectKey, remoteProjectKey, workspaceProjectKey } from "./workbench/project/project-identity";
 import { projectLocationKey } from "./workbench/project/project-location-discovery";
@@ -950,57 +950,6 @@ export function resolveProjectFilePath(project: ResolvedProject, requestPath: st
   };
 }
 
-function normalizeEntryName(name: string, type: "directory" | "file") {
-  const trimmedName = String(name ?? "").trim();
-  if (!trimmedName) {
-    throw new Error(`A ${type === "file" ? "file" : "folder"} name is required.`);
-  }
-
-  if (trimmedName === "." || trimmedName === ".." || /[\\/]/.test(trimmedName)) {
-    throw new Error("Names cannot contain path separators.");
-  }
-
-  if (type === "directory") {
-    return trimmedName;
-  }
-
-  const withoutExtension = trimmedName.replace(/\.md$/i, "").trim();
-  if (!withoutExtension) {
-    throw new Error("A file name is required.");
-  }
-
-  return `${withoutExtension}.md`;
-}
-
-export async function createProjectEntry(parentPath: string, name: string, type: "directory" | "file", rootDir = projectRoot) {
-  const absoluteParentPath = safeResolveProjectPath(rootDir, parentPath);
-  const parentStats = await fs.stat(absoluteParentPath);
-  if (!parentStats.isDirectory()) {
-    throw new Error("New entries can only be created inside folders.");
-  }
-
-  const normalizedName = normalizeEntryName(name, type);
-  const absoluteEntryPath = path.join(absoluteParentPath, normalizedName);
-  const relativeEntryPath = normalizeRelativePath(path.relative(rootDir, absoluteEntryPath));
-
-  try {
-    await fs.access(absoluteEntryPath);
-    throw new Error(`A ${type === "file" ? "file" : "folder"} with that name already exists.`);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  if (type === "directory") {
-    await fs.mkdir(absoluteEntryPath);
-  } else {
-    await fs.writeFile(absoluteEntryPath, "", "utf8");
-  }
-
-  return relativeEntryPath;
-}
-
 export async function assertProjectFileCanBeDeleted(filePath: string, rootDir = projectRoot) {
   const absoluteFilePath = safeResolveProjectPath(rootDir, filePath);
   const stats = await fs.stat(absoluteFilePath);
@@ -1015,62 +964,21 @@ export async function deleteProjectFile(filePath: string, rootDir = projectRoot)
   await fs.unlink(absoluteFilePath);
 }
 
-export async function buildTree(
-  currentDir = projectRoot,
-  gitignoreMatcher?: (relativePath: string) => boolean,
-): Promise<TreeNode[]> {
-  const shouldIgnorePath = gitignoreMatcher ?? (await createProjectGitignoreMatcher(projectRoot));
-  const entries = await fs.readdir(currentDir, { withFileTypes: true });
-  const visibleEntries = entries
-    .filter((entry) => !ignoredNames.has(entry.name))
-    .sort((left, right) => {
-      const leftRank = left.isDirectory() ? 0 : 1;
-      const rightRank = right.isDirectory() ? 0 : 1;
-
-      if (leftRank !== rightRank) {
-        return leftRank - rightRank;
-      }
-
-      return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
-    });
-
-  const children: TreeNode[] = [];
-
-  for (const entry of visibleEntries) {
-    const absolutePath = path.join(currentDir, entry.name);
-    const relativePath = normalizeRelativePath(path.relative(projectRoot, absolutePath));
-
-    if (entry.isDirectory()) {
-      if (shouldIgnorePath(relativePath)) {
-        continue;
-      }
-
-      children.push({
-        type: "directory",
-        name: entry.name,
-        path: relativePath,
-        children: await buildTree(absolutePath, shouldIgnorePath),
-      });
-      continue;
-    }
-
-    children.push({
-      ...(shouldIgnorePath(relativePath) ? { isIgnored: true } : {}),
-      type: "file",
-      name: entry.name,
-      path: relativePath,
-    });
-  }
-
-  return children;
+/** Files Git does not track are marked `isUntracked`, the same rule file deletion uses to ask for confirmation. */
+export async function buildProjectTree(rootDir: string): Promise<TreeNode[]> {
+  const [shouldIgnorePath, trackedPaths] = await Promise.all([
+    createProjectGitignoreMatcher(rootDir),
+    listGitTrackedFiles(rootDir),
+  ]);
+  return await readProjectTreeLevel(rootDir, rootDir, shouldIgnorePath, trackedPaths);
 }
 
-export async function buildProjectTree(
+async function readProjectTreeLevel(
   rootDir: string,
-  currentDir = rootDir,
-  gitignoreMatcher?: (relativePath: string) => boolean,
+  currentDir: string,
+  shouldIgnorePath: (relativePath: string) => boolean,
+  trackedPaths: ReadonlySet<string>,
 ): Promise<TreeNode[]> {
-  const shouldIgnorePath = gitignoreMatcher ?? (await createProjectGitignoreMatcher(rootDir));
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const visibleEntries = entries
     .filter((entry) => !ignoredNames.has(entry.name))
@@ -1100,13 +1008,14 @@ export async function buildProjectTree(
         type: "directory",
         name: entry.name,
         path: relativePath,
-        children: await buildProjectTree(rootDir, absolutePath, shouldIgnorePath),
+        children: await readProjectTreeLevel(rootDir, absolutePath, shouldIgnorePath, trackedPaths),
       });
       continue;
     }
 
     children.push({
       ...(shouldIgnorePath(relativePath) ? { isIgnored: true } : {}),
+      ...(trackedPaths.has(relativePath) ? {} : { isUntracked: true }),
       type: "file",
       name: entry.name,
       path: relativePath,

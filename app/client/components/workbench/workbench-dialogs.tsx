@@ -1,9 +1,13 @@
 /*
  * Exports:
- * - WorkbenchDialogProps: type the reusable workbench dialog shell props. Keywords: workbench, dialog, props.
- * - WorkbenchDialog: render the shared modal shell for workbench confirmation and create-entry flows. Keywords: workbench, dialog, modal.
+ * - WorkbenchDialogProps: the shared workbench dialog shell's props.
+ * - WorkbenchDialog: the shared modal shell, portaled to the document body so transformed ancestors (the mobile pane
+ *   track) cannot move it off screen.
  */
+"use client";
+
 import type { ReactNode, Ref } from "react";
+import { createPortal } from "react-dom";
 
 export interface WorkbenchDialogProps {
   actions: ReactNode;
@@ -30,7 +34,7 @@ export function WorkbenchDialog ({
   title,
   titleId,
 }: WorkbenchDialogProps) {
-  return (
+  return createPortal(
     <div
       ref={dialogRef}
       id={id}
@@ -57,6 +61,7 @@ export function WorkbenchDialog ({
           {actions}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

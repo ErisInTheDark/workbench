@@ -1,21 +1,19 @@
 /*
  * Exports:
  * - WorkbenchProjectSnapshotControllerOptions: injected project resolution, tree operations, clock, polling, logging, and cache bound for deterministic lifecycle tests.
- * - default WorkbenchProjectSnapshotController: own one reloadable snapshot loop per observed project, mutations, change-only publication, HTTP compatibility, and disposal.
+ * - default WorkbenchProjectSnapshotController: own one reloadable snapshot loop per observed project, file deletion, change-only publication, the HTTP tree read, and disposal.
  */
 import type http from "node:http";
 
 import {
   assertProjectFileCanBeDeleted,
-  createProjectEntry,
   deleteProjectFile,
-  formatWorkspaceQualifiedPath,
   getProjectSnapshotFromResolvedProject,
   resolveProjectFilePath,
   type ResolvedProject,
 } from "./lib/project";
 import { isGitTrackedFile } from "./lib/git";
-import type { CreateEntryPayload, DeleteFileResponse, ProjectSnapshot } from "workbench-shared/types";
+import type { DeleteFileResponse, ProjectSnapshot } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 
@@ -49,7 +47,6 @@ interface SnapshotResponse {
 
 type ProjectOperations = {
   assertProjectFileCanBeDeleted: typeof assertProjectFileCanBeDeleted;
-  createProjectEntry: typeof createProjectEntry;
   deleteProjectFile: typeof deleteProjectFile;
   getProjectSnapshot: typeof getProjectSnapshotFromResolvedProject;
   isGitTrackedFile: typeof isGitTrackedFile;
@@ -65,15 +62,6 @@ export interface WorkbenchProjectSnapshotControllerOptions {
   operations?: ProjectOperations;
   pollIntervalMs?: number;
   resolveProjectById: (projectId?: string | null) => Promise<ResolvedProject>;
-}
-
-function readRequestBody(request: http.IncomingMessage) {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer | string) => { chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); });
-    request.once("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    request.once("error", reject);
-  });
 }
 
 function sendSerializedJson(response: http.ServerResponse, statusCode: number, serialized: string, cacheState?: SnapshotCacheState) {
@@ -107,7 +95,7 @@ export default class WorkbenchProjectSnapshotController {
     logError = (message) => console.error(message),
     maxProjectSnapshots = DEFAULT_MAX_PROJECT_SNAPSHOTS,
     now = Date.now,
-    operations = { assertProjectFileCanBeDeleted, createProjectEntry, deleteProjectFile, getProjectSnapshot: getProjectSnapshotFromResolvedProject, isGitTrackedFile, resolveProjectFilePath },
+    operations = { assertProjectFileCanBeDeleted, deleteProjectFile, getProjectSnapshot: getProjectSnapshotFromResolvedProject, isGitTrackedFile, resolveProjectFilePath },
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     resolveProjectById,
     observeProject = () => undefined,
@@ -165,7 +153,6 @@ export default class WorkbenchProjectSnapshotController {
       this.scheduleRefresh(this.projectKey(projectId), projectId, 0);
       return { accepted: true };
     }
-    if (request.method === "workbench/thread-state/project/entry/create") return await this.createEntry(request);
     return await this.deleteFile(request);
   }
 
@@ -175,35 +162,6 @@ export default class WorkbenchProjectSnapshotController {
       if (request.method === "GET") {
         const result = await this.readSnapshot(requestUrl.searchParams.get("projectId"));
         sendSerializedJson(response, 200, result.serialized, result.cacheState);
-        return;
-      }
-      const value = JSON.parse(await readRequestBody(request)) as Record<string, unknown>;
-      const projectId = typeof value.projectId === "string" ? value.projectId : "";
-      if (request.method === "POST") {
-        const result = await this.createEntry({
-          method: "workbench/thread-state/project/entry/create",
-          name: typeof value.name === "string" ? value.name : "",
-          parentPath: typeof value.parentPath === "string" ? value.parentPath : "",
-          projectId,
-          type: value.type === "directory" ? "directory" : "file",
-        });
-        const snapshot = await this.readSnapshot(projectId);
-        sendSerializedJson(response, 200, JSON.stringify({ ...snapshot.snapshot, ...result }), snapshot.cacheState);
-        return;
-      }
-      if (request.method === "DELETE") {
-        const result = await this.deleteFile({
-          confirmUntracked: value.confirmUntracked === true,
-          method: "workbench/thread-state/project/file/delete",
-          path: typeof value.path === "string" ? value.path : "",
-          projectId,
-        });
-        if (result.confirmationRequired) {
-          sendSerializedJson(response, 409, JSON.stringify(result));
-          return;
-        }
-        const snapshot = await this.readSnapshot(projectId);
-        sendSerializedJson(response, 200, JSON.stringify({ ...snapshot.snapshot, ...result }), snapshot.cacheState);
         return;
       }
       sendSerializedJson(response, 405, JSON.stringify({ error: "Method not allowed" }));
@@ -228,19 +186,6 @@ export default class WorkbenchProjectSnapshotController {
 
   async readProjectSnapshot(projectId: string) {
     return (await this.readSnapshot(projectId)).snapshot;
-  }
-
-  private async createEntry(request: Extract<WorkbenchProjectStateRequest, { method: "workbench/thread-state/project/entry/create" }>): Promise<CreateEntryPayload> {
-    const resolvedProject = await this.resolveProjectById(request.projectId);
-    const resolvedParent = this.operations.resolveProjectFilePath(resolvedProject, request.parentPath);
-    const createdRootPath = await this.operations.createProjectEntry(resolvedParent.rootRelativePath, request.name, request.type, resolvedParent.gitRoot);
-    const createdPath = resolvedProject.kind === "workspace"
-      ? formatWorkspaceQualifiedPath(resolvedParent.root.id, createdRootPath)
-      : createdRootPath;
-    this.invalidateSnapshot(resolvedProject.id);
-    this.invalidateSnapshot("__default__");
-    await this.refreshNow(this.projectKey(resolvedProject.id), resolvedProject.id);
-    return { path: createdPath, type: request.type };
   }
 
   private async deleteFile(request: Extract<WorkbenchProjectStateRequest, { method: "workbench/thread-state/project/file/delete" }>): Promise<DeleteFileResponse> {

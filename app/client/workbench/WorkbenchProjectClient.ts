@@ -7,10 +7,10 @@
  * - WorkbenchProjectClientOptions: injected project transport and error boundary.
  * - cloneTreeNodes: deep-clone recursive tree node arrays for safe project snapshots.
  * - WorkbenchProjectClient: public surface for the workbench project sub-client.
- * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, explicit projectless state, tree refresh, entry creation/deletion, and directory expansion state.
+ * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, explicit projectless state, tree refresh, file deletion, and directory expansion state.
  */
 
-import type { ChangeSummary, CreateEntryPayload, DeleteFileResponse, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "workbench-shared/types";
+import type { ChangeSummary, DeleteFileResponse, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "workbench-shared/types";
 import { WorkbenchProjectsPayloadSchema, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "workbench-shared/workbench/project/ProjectTreeFileIndex";
@@ -72,7 +72,6 @@ interface WorkbenchProjectClient {
   accept: (update: WorkbenchProjectStateUpdate) => void;
   beginProjectSelection: (projectId: string) => (() => void) | null;
   bindDaemonRegistration: (registrationId: string) => void;
-  createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   dispose: () => void;
   enterNoProject: () => void;
@@ -90,7 +89,6 @@ interface WorkbenchProjectClient {
 
 export interface WorkbenchProjectTransport {
   readCatalog(): Promise<WorkbenchProjectsPayload>;
-  createEntry(projectId: string, parentPath: string, name: string, type: "directory" | "file"): Promise<CreateEntryPayload>;
   deleteFile(projectId: string, filePath: string, options: { confirmUntracked?: boolean }): Promise<DeleteFileResponse>;
   refresh(projectId: string): Promise<void>;
 }
@@ -458,25 +456,6 @@ function WorkbenchProjectClient({
     }
   }
 
-  async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
-    if (!state.currentProjectId) {
-      throw new Error("Select a project before creating files.");
-    }
-
-    const payload = await transport.createEntry(state.currentProjectId, parentPath, name, type);
-
-    if (parentPath) {
-      state.expandedDirectories.add(parentPath);
-    }
-    if (type === "directory") {
-      state.expandedDirectories.add(payload.path);
-    }
-
-    persistCurrentExpandedDirectories();
-    emit();
-    return payload.path;
-  }
-
   async function deleteFile(filePath: string, options: { confirmUntracked?: boolean } = {}) {
     if (!state.currentProjectId) {
       throw new Error("Select a project before deleting files.");
@@ -572,7 +551,6 @@ function WorkbenchProjectClient({
     accept,
     beginProjectSelection,
     bindDaemonRegistration,
-    createEntry,
     deleteFile,
     dispose,
     enterNoProject,

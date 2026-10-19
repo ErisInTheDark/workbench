@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default Workbench: shell composition, providers, explorer actions, routed views and responsive chrome.
+ * - default Workbench: shell composition, providers (including the explorer snapshot), routed views and responsive chrome.
  * Local helpers: route, title, drag, editor, file, and thread UI transformations.
  */
 "use client";
@@ -10,11 +10,10 @@ import { defaultProviderKey } from "workbench-shared/workbench/provider/provider
 
 import type {
     ExplorerSnapshot,
-    RevealProjectEntryRequest, ThreadPayload, TreeNode,
+    ThreadPayload,
     WorkbenchAppRuntimeStore,
     WorkbenchComposerInputDraft,
     WorkbenchComposerSettings,
-    WorkbenchControls,
     WorkbenchHarness,
     WorkbenchLogicalThreadRow,
     WorkbenchProjectOption,
@@ -58,7 +57,7 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { projectFolderOptions } from "workbench-shared/workbench/project/project-folder-address";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
-import { isSvgFile, isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
+import { isSvgFile } from "workbench-shared/workbench/project/tree-utils";
 import {
     preferredSelectedLaunchTarget,
     projectLogicalThreadDisplayOrder,
@@ -72,7 +71,7 @@ import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetwork
 import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
 import {
-  FileActionContext, FileScopeContext, resolveFileOpenDestination, resolveWorkbenchFileRoute, useFileActions,
+  FileActionContext, FileScopeContext, useFileActions,
 } from "../workbench/file/use-file";
 import type { WorkbenchDragPayload, WorkbenchMainPanelDragPayload } from "../workbench/layout/workbench-drag";
 import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosaic-layout";
@@ -80,6 +79,7 @@ import useMediaQuery from "../workbench/dom/layout/use-media-query";
 import WorkbenchWorkspaceController from "../workbench/layout/WorkbenchWorkspaceController";
 import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
 import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
+import { useWorkbenchTabs } from "../workbench/navigation/use-workbench-tabs";
 import { useWorkbenchRoute, useWorkbenchRouteIntent } from "../workbench/navigation/use-workbench-route";
 import { useWorkbenchRouteContext } from "../workbench/navigation/use-workbench-route-context";
 import WorkbenchProjectNavigation from "../workbench/navigation/workbench-project-navigation";
@@ -114,7 +114,7 @@ import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreePr
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFileView from "./workbench/layout/WorkbenchFileView";
 import WorkbenchSvgEditorView from "./workbench/svg/WorkbenchSvgEditorView";
-import WorkbenchSvgFileView, { canCreateTextFiles, NEW_SVG_SOURCE } from "./workbench/svg/WorkbenchSvgFileView";
+import WorkbenchSvgFileView from "./workbench/svg/WorkbenchSvgFileView";
 import WorkbenchShellTabs from "./workbench/shell-tabs/WorkbenchShellTabs";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import MobilePaneTrack from "./workbench/MobilePaneTrack";
@@ -136,29 +136,12 @@ import { useWorkbenchClientMount } from "./workbench/use-workbench-client";
 import { useProjects } from "./workbench/use-projects";
 import { useThreads } from "./workbench/use-threads";
 import {
-    workbenchNewEntryButtonClassName,
-    workbenchOptionHoverClassName,
-    workbenchOptionRowClassName,
-} from "./workbench/workbench-class-names";
-import {
     useWorkbenchClientStateController,
     useWorkbenchClientStateSnapshot,
 } from "./workbench/workbench-client-state-context";
-import { dialogButtonClassName } from "./workbench/workbench-dialog-styles";
-import {
-    WorkbenchDialog,
-} from "./workbench/workbench-dialogs";
-import {
-    ExplorerTree,
-    FileVisibilityIcon,
-    NewEntryIcon,
-    SidebarLoadingSkeleton,
-} from "./workbench/workbench-explorer";
+import { WorkbenchExplorerContext } from "./workbench/explorer/workbench-explorer-context";
 import {
     BackArrowIcon,
-    BinIcon,
-    ExternalLinkIcon,
-    FolderOpenIcon,
     SidebarCollapseIcon,
     SidebarExpandIcon,
     SparkleIcon,
@@ -166,7 +149,6 @@ import {
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
-import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import IconButton from "./ui/IconButton";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
@@ -178,7 +160,6 @@ import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
 import { workbenchRouteViews } from "./workbench/route-views/workbench-route-views";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import { useWorkbenchSidebarPreferences } from "./workbench/workbench-sidebar-preferences-context";
-import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchTabIcon from "./workbench/WorkbenchTabIcon";
 import WorkbenchSidebarPane from "./workbench/WorkbenchSidebarPane";
 import { isThreadStatusActive } from "./workbench/thread-attention";
@@ -297,29 +278,6 @@ function mosaicContainsThreadTarget (node: WorkbenchMosaicNode | null, threadId:
 
 const noSubscription = (_listener: () => void) => () => {};
 
-function filterVisibleTreeNodes (nodes: TreeNode[]): TreeNode[] {
-  const visibleNodes: TreeNode[] = [];
-
-  for (const node of nodes) {
-    if (node.type === "file") {
-      if (isWorkbenchOpenableFile(node.path)) {
-        visibleNodes.push(node);
-      }
-      continue;
-    }
-
-    const children = filterVisibleTreeNodes(node.children);
-    if (children.length) {
-      visibleNodes.push({
-        ...node,
-        children,
-      });
-    }
-  }
-
-  return visibleNodes;
-}
-
 function getProjectTabLabel (projectName: string | null | undefined) {
   return projectName?.trim() || "Project";
 }
@@ -423,16 +381,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const mobilePaneSlideRef = useRef<((destination: MobilePaneDestination) => void) | null>(null);
   // A composer shortcut asks settings to open on one section; ordinary settings visits start fresh.
   const [settingsTarget, setSettingsTarget] = useState<{ section: string; daemonId: DaemonId } | null>(null);
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  const [pendingDeleteFilePath, setPendingDeleteFilePath] = useState("");
-  const [isDeletingFile, setIsDeletingFile] = useState(false);
-  const [deleteDialogError, setDeleteDialogError] = useState("");
-  const [projectActionError, setProjectActionError] = useState("");
   const globalSettings = useSettings();
-  const [createDialogParentPath, setCreateDialogParentPath] = useState("");
-  const [createEntryName, setCreateEntryName] = useState("");
-  const [isCreatingEntry, setIsCreatingEntry] = useState(false);
-  const [createDialogError, setCreateDialogError] = useState("");
   const [workspaceController] = useState(() => new WorkbenchWorkspaceController({
     createDraft: () => {
       throw new Error("Workspace draft creation is not connected.");
@@ -530,8 +479,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   useWorkbenchRouteIntent(workbenchClient, routeToApplyToControls, navigateToRoute);
   useEffect(() => { setSelectionError(""); }, [routeToApplyToControls]);
 
-  const expandedDirectories = new Set(explorer.expandedDirectories);
-  const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
   const viewedProjectId = route.logical ? route.logical.projectId ?? "" : activeProjectId;
@@ -596,8 +543,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         ? createThreadRoute(route.projectId, target)
         : createPinnedThreadRoute(route.projectId, ownerProjectId, target), { replace: true });
   }, [routeSubagent, navigateToRoute, route]);
-  const isProjectIdentityLoading = Boolean(route.projectId) && route.projectId !== explorer.currentProjectId;
-  const isProjectTreeLoading = isProjectIdentityLoading || (explorer.isProjectLoading && explorer.tree.length === 0);
   const currentProjectDisplayName = currentProject
     ? `${currentProject.name || currentProject.id}${currentProject.kind === "workspace" ? " workspace" : ""}`
     : null;
@@ -610,7 +555,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0])?.id ?? null
       : null);
   const shellSettings = useSettings(settingsLogicalProjectId);
-  const browseSettings = useSettings.forLocation(browseLocation, workbenchClient);
   const settingsFallbackTarget = route.view === "mosaic"
     ? getRouteMosaicFallbackTarget(routeMosaicNodeForControls, isMobileMosaicRoute) : null;
   const settingsFileLocation = settingsFallbackTarget?.kind === "file" ? settingsFallbackTarget.source?.location ?? null
@@ -630,17 +574,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [fontSizeScopeKey]);
   const displayedFontSizePreview = editorFontSizePreview?.scope === fontSizeScopeKey
     ? editorFontSizePreview?.value : undefined;
-  const showUnopenableFiles = browseSettings.get("showUnopenableFiles");
-  const visibleTree = useMemo(
-    () => {
-      if (isProjectTreeLoading) {
-        return [];
-      }
-
-      return showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree);
-    },
-    [explorer.tree, isProjectTreeLoading, showUnopenableFiles],
-  );
   const projectTabLabel = getProjectTabLabel(viewedProjectDisplayName);
 
   useEffect(() => {
@@ -655,24 +588,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       setHarness(storedHarness.preference.value as WorkbenchHarness);
     }
   }, [clientState.records]);
-
-  const closeCreateDialog = () => {
-    if (isCreatingEntry) {
-      return;
-    }
-
-    setIsCreateDialogOpen(false);
-    setCreateDialogParentPath("");
-    setCreateEntryName("");
-    setCreateDialogError("");
-  };
-
-  const openCreateDialog = (parentPath: string) => {
-    setIsCreateDialogOpen(true);
-    setCreateDialogParentPath(parentPath);
-    setCreateEntryName("");
-    setCreateDialogError("");
-  };
 
   const theme = shellSettings.get("theme");
   useEffect(() => {
@@ -720,10 +635,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     route,
     selectedDaemon: selectedDaemon ?? null,
   });
-
-  const openFileFromExplorer = useCallback(async (path: string) => (
-    await openFileByPolicy({ path, projectId: explorer.currentProjectId || route.projectId })
-  ), [explorer.currentProjectId, openFileByPolicy, route.projectId]);
 
   const openThreadFromExplorer = useCallback(async (target: WorkbenchThreadTarget, ownerProjectId?: string) => {
     const viewedProjectId = explorer.currentProjectId || route.projectId;
@@ -1114,22 +1025,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     controls?.setCurrentThreadComposerSettings(threadId, settings);
   }, [clientStateController, controls, currentThread]);
 
-  const workbenchControls = useMemo<WorkbenchControls | null>(() => {
-    if (!controls) {
-      return null;
-    }
-
-    return {
-      ...controls,
-      openFile: openFileFromExplorer,
-      openThread: openThreadFromExplorer,
-    };
-  }, [controls, openFileFromExplorer, openThreadFromExplorer]);
-
-  const createDialogParentLabel = createDialogParentPath || "project";
-  const canOpenFileFromExplorer = useCallback((path: string) => (
-    resolveFileOpenDestination({ path }, fileOpenPolicyFor(browseLocation)) !== null
-  ), [browseLocation, fileOpenPolicyFor]);
   const mobileMosaicFallbackTarget = route.view === "mosaic"
     ? getRouteMosaicFallbackTarget(route.mosaicNode, isMobile)
     : null;
@@ -1221,7 +1116,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
   const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
   const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
-  const showSvgFileView = showFileView && isSvgFile(effectiveFilePath);
+  // A folder index named by an svg (one discarded from its editor) is the folder's index, not the svg editor.
+  const showSvgFileView = showFileView && isSvgFile(effectiveFilePath) && !route.fileIndex;
   const svgFileLocation = showSvgFileView
     ? (mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.source?.location : undefined)
       ?? workbenchClient.mounted?.projectNavigator.fileLocationFor(route) ?? null
@@ -1576,89 +1472,19 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     workspaceController.closePanel(target);
   }, [workspaceController]);
 
-  const revealProjectEntry = useCallback(async (path: string) => {
-    const projectId = explorer.currentProjectId || route.projectId;
-    if (!projectId) {
-      return;
-    }
-
-    setProjectActionError("");
-    try {
-      const request: RevealProjectEntryRequest = { path, projectId };
-      if (!controls) throw new Error("The daemon is not ready.");
-      await controls.daemon.nativeFiles.reveal(request);
-    } catch (error) {
-      setProjectActionError(error instanceof Error ? error.message : "Unable to show that entry in the file explorer.");
-    }
-  }, [controls, explorer.currentProjectId, route.projectId]);
-
+  const tabs = useWorkbenchTabs(newThreadRoute);
+  /** Paths are per folder, so only the browsed folder's tabs of that path close; the rest of the strip stays. */
   const closeDeletedFileViews = useCallback((filePath: string) => {
     workspaceController.closeFile(filePath);
-    if (route.view === "file" && route.filePath === filePath) {
-      navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
-    }
-  }, [explorer.currentProjectId, navigateToRoute, route, workspaceController]);
-
-  const deleteProjectFile = useCallback(async (filePath: string, confirmUntracked = false) => {
-    if (!controls || isDeletingFile) {
-      return;
-    }
-
-    setIsDeletingFile(true);
-    setDeleteDialogError("");
-    setProjectActionError("");
-    try {
-      const result = await controls.deleteFile(filePath, { confirmUntracked });
-      if (result.confirmationRequired) {
-        setPendingDeleteFilePath(result.path);
-        return;
-      }
-
-      setPendingDeleteFilePath("");
-      closeDeletedFileViews(result.path);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to delete that file.";
-      if (pendingDeleteFilePath) {
-        setDeleteDialogError(message);
-      } else {
-        setProjectActionError(message);
-      }
-    } finally {
-      setIsDeletingFile(false);
-    }
-  }, [closeDeletedFileViews, controls, isDeletingFile, pendingDeleteFilePath]);
-
-  const closeDeleteFileDialog = useCallback(() => {
-    if (isDeletingFile) {
-      return;
-    }
-    setPendingDeleteFilePath("");
-    setDeleteDialogError("");
-  }, [isDeletingFile]);
-
-  const getProjectNodeContextMenu = useCallback((node: TreeNode): WorkbenchContextMenuDefinition => ({
-    id: `project-entry:${node.type}:${node.path}`,
-    items: [
-      {
-        icon: <ExternalLinkIcon size={16} />,
-        id: "reveal",
-        label: "Show in File Explorer",
-        onSelect: () => {
-          void revealProjectEntry(node.path);
-        },
-      },
-      ...(node.type === "file" ? [{
-        icon: <BinIcon size={20} />,
-        id: "delete",
-        label: "Delete file",
-        onSelect: () => {
-          void deleteProjectFile(node.path);
-        },
-        tone: "danger" as const,
-      }] : []),
-    ],
-    label: `${node.type === "file" ? "File" : "Folder"} actions for ${node.name}`,
-  }), [deleteProjectFile, revealProjectEntry]);
+    const folder = explorer.browseLocation;
+    const navigator = workbenchClient.mounted?.projectNavigator;
+    if (!folder || !navigator) return;
+    tabs.closeWhere(tab => {
+      if (tab.view !== "file" || tab.filePath !== filePath) return false;
+      const location = navigator.fileLocationFor(tab);
+      return location?.daemonId === folder.daemonId && location.projectId === folder.projectId;
+    });
+  }, [explorer.browseLocation, tabs, workbenchClient, workspaceController]);
 
   useEffect(() => {
     if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey || isDirectThreadSurface) {
@@ -1803,35 +1629,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     else controls?.setDraftThreadHarness(nextHarness);
   };
 
-  const handleCreateEntry = async (type: "directory" | "file") => {
-    if (!controls || isCreatingEntry) {
-      return;
-    }
-
-    setIsCreatingEntry(true);
-    setCreateDialogError("");
-    try {
-      // Explorer entries follow markdown naming; an svg starts as an empty drawing written directly.
-      const svgPath = type === "file" && isSvgFile(createEntryName.trim())
-        ? [createDialogParentPath, createEntryName.trim()].filter(Boolean).join("/") : null;
-      const createdPath = svgPath && canCreateTextFiles(controls)
-        ? await controls.createTextFile(svgPath, NEW_SVG_SOURCE, browseLocation).then(() => svgPath)
-        : await controls.createEntry(createDialogParentPath, createEntryName, type);
-      setIsCreatingEntry(false);
-
-      closeCreateDialog();
-      if (type === "file") {
-        navigateToRoute(route.logical?.projectId && browseLocation
-          ? createLogicalFileRoute(route.logical.projectId, browseLocation, createdPath)
-          : createFileRoute(explorer.currentProjectId || route.projectId, createdPath), { tab: "durable" });
-      }
-    } catch (error) {
-      setIsCreatingEntry(false);
-      setCreateDialogError(error instanceof Error ? error.message : `Couldn't create the ${type === "file" ? "file" : "folder"}.`);
-    }
-  };
-
   return (
+    <WorkbenchExplorerContext.Provider value={explorer}>
     <FileActionContext.Provider value={openFileByPolicy}>
     <FileScopeContext.Provider value={browseFileScope}>
     <WorkbenchNetworkClientContext.Provider value={workbenchClient.mounted?.networkClient ?? null}>
@@ -1850,7 +1649,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         >
           {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
           <WorkbenchTabIcon />
-          <WorkbenchSearchDialog projects={explorer.projects} />
+          <WorkbenchSearchDialog />
           {!isMobile ? (
             <IconButton
               type="button"
@@ -1894,101 +1693,25 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               activeProjectId={activeProjectId}
               appRuntime={appRuntime}
               askAgentWithReferences={askAgentWithReferences}
-              browseLocation={browseLocation}
-              browseProjectId={browseProjectId}
               browseSessionController={browseSessionController}
               collapsed={isEffectiveDesktopSidebarCollapsed}
               createThread={createThreadFromSidebar}
+              currentFilePath={activeFilePath}
               harness={harness}
               onAttachFeedback={clientState.schemaVersion >= appStateReleases.composerDraftReferences.version
                 ? handleAttachFeedbackToThread
                 : undefined}
+              onFileDeleted={closeDeletedFileViews}
               onOpenQualifiedThread={openQualifiedThread}
               onOpenThread={openThreadFromExplorer}
               onPresentationDraftDeleted={handlePresentationDraftDeleted}
               onThreadSettled={handleThreadSettled}
-              physicalProjects={explorer.projects}
               projectSourceError={workbenchMount.projectSourceError}
               renderThreadTooltipDetails={renderThreadTooltipDetails}
               route={route}
               showGitView={showGitView}
               showMosaicView={showMosaicView}
               viewedProjectId={viewedProjectId}
-              explorerSection={<section className="shrink-0 pb-3">
-                    <WorkbenchSidebarSectionDisclosure
-                      actions={(
-                        <div className="flex items-center gap-1">
-                          <IconButton
-                            type="button"
-                            label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                            display="hover-border"
-                            size="small"
-                            aria-pressed={showUnopenableFiles}
-                            disabled={!explorer.currentProjectId || isProjectTreeLoading}
-                            title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                            className={workbenchNewEntryButtonClassName}
-                            onClick={() => {
-                              void browseSettings.set("showUnopenableFiles", !showUnopenableFiles)
-                                .catch((error: Error) => setSelectionError(error.message));
-                            }}
-                          >
-                            <FileVisibilityIcon visible={showUnopenableFiles} />
-                            <span className="sr-only">
-                              {showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                            </span>
-                          </IconButton>
-                          <IconButton
-                            type="button"
-                            label="Create in project"
-                            display="hover-border"
-                            size="small"
-                            title="Create in project"
-                            className={workbenchNewEntryButtonClassName}
-                            disabled={!explorer.currentProjectId || isProjectTreeLoading}
-                            onClick={() => {
-                              openCreateDialog("");
-                            }}
-                          >
-                            <NewEntryIcon size={16} />
-                            <span className="sr-only">Create in project</span>
-                          </IconButton>
-                        </div>
-                      )}
-                      contentClassName="space-y-2"
-                      icon={FolderOpenIcon}
-                      preferenceKey="explorerOpen"
-                      title="Explorer"
-                    >
-                      {!explorer.projects.length && !isProjectIdentityLoading ? (
-                        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-fg/muted md:pr-4.5">
-                          No projects were found.
-                        </p>
-                      ) : null}
-                      {isProjectTreeLoading ? (
-                        <SidebarLoadingSkeleton ariaLabel="Loading project files" rows={8} />
-                      ) : (
-                        <nav id="file-tree" aria-label="Project files">
-                          <ExplorerTree
-                            changes={explorer.changes}
-                            controls={workbenchControls}
-                            currentPath={activeFilePath}
-                            expandedDirectories={expandedDirectories}
-                            getNodeContextMenu={getProjectNodeContextMenu}
-                            isFileOpenable={canOpenFileFromExplorer}
-                            modifiedPaths={modifiedPaths}
-                            nodes={visibleTree}
-                            onCreateInDirectory={openCreateDialog}
-                            onOpenFile={(path) => {
-                              void openFileFromExplorer(path);
-                            }}
-                          />
-                        </nav>
-                      )}
-                      {projectActionError ? (
-                        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger md:pr-4.5">{projectActionError}</p>
-                      ) : null}
-                    </WorkbenchSidebarSectionDisclosure>
-                  </section>}
             />
 
             <main
@@ -2439,11 +2162,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   <WorkbenchSvgFileView
                     controls={controls}
                     location={svgFileLocation}
-                    onOpenCopy={path => navigateToRoute(resolveWorkbenchFileRoute({
-                      currentProjectId: explorer.currentProjectId, logicalProjects, location: svgFileLocation, path,
-                      projectId: svgFileLocation?.projectId ?? explorer.currentProjectId ?? route.projectId, route,
-                    }), { replace: true })}
                     path={effectiveFilePath}
+                    route={route}
                   />
                 ) : showFileView && !shouldRenderMainLayout ? (
                   <WorkbenchFileView
@@ -2458,117 +2178,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
               </section>
               </ThreadScrollViewport>
-
-              <WorkbenchDialog
-                id="delete-file-dialog"
-                titleId="delete-file-title"
-                summaryId="delete-file-summary"
-                eyebrow="Permanent deletion"
-                title="Permanently delete this untracked file?"
-                isOpen={Boolean(pendingDeleteFilePath)}
-                onBackdropClick={closeDeleteFileDialog}
-                actions={
-                  <>
-                    <button
-                      type="button"
-                      className={dialogButtonClassName}
-                      onClick={closeDeleteFileDialog}
-                      disabled={isDeletingFile}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className={`${dialogButtonClassName} text-danger`}
-                      onClick={() => {
-                        void deleteProjectFile(pendingDeleteFilePath, true);
-                      }}
-                      disabled={isDeletingFile}
-                    >
-                      Delete permanently
-                    </button>
-                  </>
-                }
-              >
-                <>
-                  <p id="delete-file-summary" className="mt-3 text-sm leading-6 text-fg/muted">
-                    Git cannot restore this file. This also discards its saved Workbench draft.
-                  </p>
-                  <p className="mt-3 break-all text-[0.84rem] leading-6 text-text">{pendingDeleteFilePath}</p>
-                  {deleteDialogError ? <p className="mt-3 text-sm leading-6 text-danger">{deleteDialogError}</p> : null}
-                </>
-              </WorkbenchDialog>
-
-              <WorkbenchDialog
-                id="create-entry-dialog"
-                titleId="create-entry-title"
-                summaryId="create-entry-summary"
-                eyebrow="Create entry"
-                title={`New item in ${createDialogParentLabel}`}
-                isOpen={isCreateDialogOpen}
-                onBackdropClick={closeCreateDialog}
-                actions={
-                  <>
-                    <button
-                      id="create-entry-cancel"
-                      type="button"
-                      className={dialogButtonClassName}
-                      onClick={closeCreateDialog}
-                      disabled={isCreatingEntry}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      id="create-entry-folder"
-                      type="button"
-                      className={dialogButtonClassName}
-                      onClick={() => {
-                        void handleCreateEntry("directory");
-                      }}
-                      disabled={isCreatingEntry}
-                    >
-                      Make folder
-                    </button>
-                    <button
-                      id="create-entry-file"
-                      type="button"
-                      className={dialogButtonClassName}
-                      onClick={() => {
-                        void handleCreateEntry("file");
-                      }}
-                      disabled={isCreatingEntry}
-                    >
-                      Make file
-                    </button>
-                  </>
-                }
-              >
-                <>
-                  <p id="create-entry-summary" className="mt-3 text-sm leading-6 text-fg/muted">
-                    Enter a name for the new file or folder. New files are created as markdown files.
-                  </p>
-                  <label className="mt-4 block text-sm text-fg/muted" htmlFor="create-entry-name">
-                    Name
-                  </label>
-                  <input
-                    id="create-entry-name"
-                    type="text"
-                    value={createEntryName}
-                    autoFocus
-                    onChange={(event) => {
-                      setCreateEntryName(event.target.value);
-                      if (createDialogError) {
-                        setCreateDialogError("");
-                      }
-                    }}
-                    className="mt-2 w-full rounded-xl bg-[color-mix(in srgb, var(--bg) 86%, transparent)] px-3 py-2 text-base outline-none ring-0 transition focus:bg-[color-mix(in srgb, var(--bg) 94%, transparent)]"
-                    placeholder="chapter-notes"
-                  />
-                  {createDialogError ? (
-                    <p className="mt-3 text-sm leading-6 text-danger">{createDialogError}</p>
-                  ) : null}
-                </>
-              </WorkbenchDialog>
             </main>
           </MobilePaneTrack>
 
@@ -2582,5 +2191,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     </WorkbenchNetworkClientContext.Provider>
     </FileScopeContext.Provider>
     </FileActionContext.Provider>
+    </WorkbenchExplorerContext.Provider>
   );
 }

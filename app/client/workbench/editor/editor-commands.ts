@@ -36,7 +36,8 @@ export type EditorCommand =
   | "source"
   | "undo"
   | "redo"
-  | "save";
+  | "save"
+  | "save-as";
 
 export interface EditorKeybind {
   alt?: boolean;
@@ -84,6 +85,7 @@ export const EDITOR_COMMANDS: Record<EditorCommand, EditorCommandInfo> = {
     keybinds: [{ mod: true, shift: true, key: "z", shownOn: "apple" }, { mod: true, key: "y", shownOn: "other" }],
   },
   save: { label: "Save", keybinds: [{ mod: true, key: "s" }] },
+  "save-as": { label: "Save as", keybinds: [{ mod: true, shift: true, key: "s" }] },
 };
 
 /** The chord a command's keybind chip shows on this platform: the one marked for it, else the first. */

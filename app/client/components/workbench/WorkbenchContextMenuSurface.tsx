@@ -2,14 +2,18 @@
  * Exports:
  * - WorkbenchContextMenuSurfaceProps: active menu placement and dismissal inputs.
  * - selectWorkbenchContextMenuControl: dispatch an enabled grouped control with its dismissal policy.
- * - default WorkbenchContextMenuSurface: render action rows, separators, accessible grouped icon controls and checklist trees.
+ * - default WorkbenchContextMenuSurface: render action rows (optionally hold-to-confirm), separators, accessible grouped icon
+ *   controls and checklist trees.
  */
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import { getWorkbenchThreadStatusControlClassName } from "./workbench-thread-status-colors";
-import type { WorkbenchContextMenuControl, WorkbenchContextMenuControlGroup, WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import useHoldToConfirm from "../ui/use-hold-to-confirm";
+import type {
+  WorkbenchContextMenuAction, WorkbenchContextMenuControl, WorkbenchContextMenuControlGroup, WorkbenchContextMenuDefinition,
+} from "./WorkbenchContextMenuContext";
 import WorkbenchMenuSurface from "./WorkbenchMenuSurface";
 import WorkbenchMenuAction from "./WorkbenchMenuAction";
 import { WorkbenchCheckboxMarker } from "./WorkbenchCheckbox";
@@ -47,6 +51,44 @@ export function selectWorkbenchContextMenuControl(
   if (control.disabled) return;
   if (group.closeOnSelect !== false) onClose();
   control.onSelect();
+}
+
+/** Hold-to-confirm actions fill a rail along their bottom edge while held, and select only once it fills. */
+function ContextMenuActionRow({ action, onClose }: { action: WorkbenchContextMenuAction; onClose: () => void }) {
+  const hold = useHoldToConfirm(action.holdToConfirmMs, Boolean(action.disabled));
+  const danger = action.tone === "danger";
+  return (
+    <WorkbenchMenuAction
+      {...hold.buttonProps({
+        onClick: () => {
+          if (action.disabled) return;
+          onClose();
+          action.onSelect();
+        },
+      })}
+      disabled={action.disabled}
+      data-tone={action.tone ?? "default"}
+      className={hold.enabled ? "relative touch-none select-none overflow-hidden [-webkit-touch-callout:none]" : ""}
+    >
+      {action.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center">{action.icon}</span> : null}
+      <span className="min-w-0 truncate">{action.label}</span>
+      {hold.enabled ? (
+        <span
+          aria-hidden="true"
+          className={`
+            pointer-events-none absolute inset-x-0 bottom-0 h-1 transition-opacity duration-100
+            ${danger ? "bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]" : "bg-fg/10"}
+            ${hold.holding ? "opacity-100" : "opacity-0"}
+          `}
+        >
+          <span
+            className={`block h-full origin-left transition-transform ease-linear ${danger ? "bg-danger" : "bg-accent"}`}
+            {...hold.progressProps}
+          />
+        </span>
+      ) : null}
+    </WorkbenchMenuAction>
+  );
 }
 
 export default function WorkbenchContextMenuSurface({
@@ -102,12 +144,6 @@ export default function WorkbenchContextMenuSurface({
       window.removeEventListener("wheel", handleScrollIntent, true);
     };
   }, [onClose]);
-
-  const selectAction = (disabled: boolean | undefined, onSelect: () => void) => {
-    if (disabled) return;
-    onClose();
-    onSelect();
-  };
 
   return (
     <>
@@ -221,17 +257,7 @@ export default function WorkbenchContextMenuSurface({
           );
         }
 
-        return (
-          <WorkbenchMenuAction
-            key={item.id}
-            disabled={item.disabled}
-            data-tone={item.tone ?? "default"}
-            onClick={() => selectAction(item.disabled, item.onSelect)}
-          >
-            {item.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center">{item.icon}</span> : null}
-            <span className="min-w-0 truncate">{item.label}</span>
-          </WorkbenchMenuAction>
-        );
+        return <ContextMenuActionRow key={item.id} action={item} onClose={onClose} />;
       })}
       </WorkbenchMenuSurface>
     </>

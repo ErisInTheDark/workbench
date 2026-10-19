@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces: a persistent
- *   markdown toolbar ending in the folder index, save and hold-to-confirm reset, and the editor (or its markdown source)
+ *   markdown toolbar ending in the folder index, save (Save as with Shift, or for a new file, opening the path row
+ *   above it) and hold-to-confirm reset, and the editor (or its markdown source)
  *   with its comment margin, suggestion originals and code block and table controls, followed by a row stepping between
  *   the folder's documents; mosaic panels add a titled
  *   header instead of the index and steps.
@@ -31,7 +32,9 @@ import DraftResetButton from "../markdown-editor/DraftResetButton";
 import MarkdownCodeBlockChrome from "../markdown-editor/MarkdownCodeBlockChrome";
 import MarkdownCommentMargin from "../markdown-editor/MarkdownCommentMargin";
 import MarkdownTableChrome from "../markdown-editor/MarkdownTableChrome";
-import MarkdownEditorToolbar, { CommandTooltip } from "../markdown-editor/MarkdownEditorToolbar";
+import MarkdownEditorToolbar from "../markdown-editor/MarkdownEditorToolbar";
+import WorkbenchSaveAsRow from "../file-actions/WorkbenchSaveAsRow";
+import WorkbenchSaveButton from "../file-actions/WorkbenchSaveButton";
 import useEditorMarginLayout from "../markdown-editor/use-editor-margin-layout";
 import {
   workbenchDiffGutterClassName,
@@ -47,7 +50,6 @@ import {
   PanelCloseIcon,
   PanelExpandIcon,
   PanelMinimizeIcon,
-  SaveIcon,
 } from "../workbench-icons";
 
 const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
@@ -213,8 +215,12 @@ export default function WorkbenchFilePanel ({
   const revisionHoverRejectButtonRef = useRef<HTMLButtonElement>(null);
   const [client, setClient] = useState<WorkbenchFilePanelClient | null>(null);
   const [snapshot, setSnapshot] = useState<WorkbenchFilePanelSnapshot | null>(null);
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
   const file = useFileDocument(location, path);
-  const loading = !file.snapshot.data && !file.snapshot.failure;
+  const isNewFile = snapshot?.isNewFile ?? false;
+  const loading = !file.snapshot.data && !file.snapshot.failure && !isNewFile;
+  /** Save as opens its copy in this tab, so only the main pane's file tab offers it. */
+  const canSaveAs = Boolean(route);
   const stickyToolbar = useStickyTopBelowChrome(!contained && !loading);
 
   const panelIdSuffix = useMemo(() => path.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 48) || "file", [path]);
@@ -273,7 +279,11 @@ export default function WorkbenchFilePanel ({
       },
     };
 
-    const nextClient = createFilePanelClient({ document: file.document, surfaces });
+    const nextClient = createFilePanelClient({
+      document: file.document,
+      onSaveAsRequest: canSaveAs ? () => setSaveAsOpen(true) : undefined,
+      surfaces,
+    });
     setClient(nextClient);
     nextClient.setFontSize(fontSizeRem, { persist: false });
     const unsubscribe = nextClient.subscribe((nextSnapshot) => {
@@ -326,6 +336,26 @@ export default function WorkbenchFilePanel ({
   }, [client, usesPanelZoom, panelBaseFontSize]);
 
   const swapTab = useWorkbenchSwapTab();
+  useEffect(() => { setSaveAsOpen(false); }, [path]);
+  /** A discarded new file leaves its tab on the folder it was started in. */
+  const discardNewFile = useCallback(async () => {
+    if (!client) return;
+    await client.discardNewFile();
+    if (route) swapTab(withFileDestination(route, route.filePath, true));
+  }, [client, route, swapTab]);
+  const saveAsRow = saveAsOpen && client && route ? (
+    <WorkbenchSaveAsRow
+      initialPath={path}
+      location={file.document?.location ?? location}
+      onCancel={() => setSaveAsOpen(false)}
+      onWritten={async (target) => {
+        await client.handOffToCopy();
+        setSaveAsOpen(false);
+        swapTab(withFileDestination(route, target));
+      }}
+      readContent={client.readContent}
+    />
+  ) : null;
   /** The folder index, save and reset sit at the toolbar's end, beside undo and redo. */
   const fileActions = client && snapshot ? (
     <>
@@ -343,24 +373,19 @@ export default function WorkbenchFilePanel ({
           </IconButton>
         </Tooltip>
       ) : null}
-      <CommandTooltip command="save">
-        <IconButton
-          type="button"
-          title=""
-          label="Save current file"
-          size="small"
-          display="hover-border"
-          data-invalid={snapshot.hasSaveIssue ? "true" : "false"}
-          disabled={!snapshot.currentPath}
-          onClick={() => { void client.save(); }}
-        >
-          <SaveIcon size={16} />
-        </IconButton>
-      </CommandTooltip>
+      <WorkbenchSaveButton
+        invalid={snapshot.hasSaveIssue}
+        onSave={() => { void client.save(); }}
+        onSaveAs={canSaveAs ? () => setSaveAsOpen(true) : undefined}
+        saveAsDisabled={!snapshot.currentPath}
+        saveAsOnly={snapshot.isNewFile}
+        saveDisabled={!snapshot.currentPath}
+      />
       <DraftResetButton
         hasDraft={snapshot.dirty}
+        isNewFile={snapshot.isNewFile}
         savedDiffersFromHead={snapshot.savedDiffersFromHead}
-        onDeleteDraft={client.deleteDraft}
+        onDeleteDraft={snapshot.isNewFile ? discardNewFile : client.deleteDraft}
         onRestoreFromGit={client.restoreFromGit}
       />
     </>
@@ -393,7 +418,7 @@ export default function WorkbenchFilePanel ({
       onFocusCapture={onFocus}
       onPointerDownCapture={onFocus}
     >
-      {file.snapshot.failure ? <p role="alert">{file.snapshot.failure}</p> : null}
+      {file.snapshot.failure && !isNewFile ? <p role="alert">{file.snapshot.failure}</p> : null}
       {file.snapshot.data && file.snapshot.phase !== "current" && !file.snapshot.failure
         ? <p role="status">Waiting for current disk data...</p> : null}
       {contained ? (
@@ -491,6 +516,7 @@ export default function WorkbenchFilePanel ({
               className="mx-auto md:max-w-[calc(var(--container-content)+5.5rem)]"
               style={marginLayout.shellOffset === null ? undefined : { marginLeft: marginLayout.shellOffset, marginRight: 0 }}
             >
+              {saveAsRow ? <div className="px-5 md:pr-6 md:pl-[3.5rem]">{saveAsRow}</div> : null}
               <MarkdownEditorToolbar
                 client={client}
                 className="px-5 md:pr-6 md:pl-[3.5rem]"
@@ -527,6 +553,7 @@ export default function WorkbenchFilePanel ({
               pb-16 ${editorFontClassName} ${markdownProseClassName} outline-none
               data-[custom-caret-visible=true]:caret-transparent
               empty:before:(text-fg/muted content-[attr(data-placeholder)])
+              [& > p:only-child:has(> br:only-child)]:before:(absolute pointer-events-none text-fg/muted content-['Start_writing...'])
               [& [data-comment-thread]]:(select-none)
               [& [data-cell-selected]]:bg-[color-mix(in srgb, var(--accent) 16%, transparent)]
               [& table[data-cell-box]]:selection:bg-transparent

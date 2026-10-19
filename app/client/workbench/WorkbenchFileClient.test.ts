@@ -1,4 +1,4 @@
-/* No exports. Protect observed file updates, draft recovery and in-flight edit preservation. */
+/* No exports. Protect observed file updates, draft recovery, in-flight edit preservation and unsaved new files. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
@@ -173,6 +173,60 @@ test("conflicts and failed resets retain editable state", async context => {
   await f.client.resetCurrentDraftToSaved();
   assert.equal(f.read(), "mine");
   assert.ok(f.state.pendingWriteConflict);
+});
+
+test("an unsaved new file edits its draft, never saves in place, and follows disk once saved under its name", async context => {
+  const drafts = FileDraftStore(() => location.projectId);
+  drafts.createNewFileBuffer("note.md", "", "plain");
+  const f = fixture({ drafts, getSnapshot: () => ({ phase: "failed", failure: "missing", data: null }) });
+  context.after(f.client.dispose);
+  assert.equal(f.client.isNewFile(), true);
+  f.receive(disk("someone else's", 5));
+  assert.equal(f.read(), "", "disk observations never replace a new file's draft");
+
+  f.edit("hello");
+  f.edit("");
+  assert.equal(f.drafts.getBuffer("note.md")?.expectedMtimeMs, null, "emptied again, the new file is still kept");
+  await f.client.saveCurrentFile();
+  assert.deepEqual(f.calls, [], "a new file is saved only under a chosen name");
+
+  await f.client.handOffToCopy();
+  assert.equal(f.drafts.getBuffer("note.md"), null);
+  f.receive(disk("written", 30));
+  assert.equal(f.read(), "written");
+  assert.equal(f.client.isNewFile(), false);
+});
+
+test("a new file's draft that arrives after its editor opens (restored after a reload) is adopted", context => {
+  const drafts = FileDraftStore(() => location.projectId);
+  const f = fixture({ drafts, getSnapshot: () => ({ phase: "failed", failure: "missing", data: null }) });
+  context.after(f.client.dispose);
+  assert.equal(f.client.isNewFile(), false);
+  drafts.createNewFileBuffer("note.md", "restored", "plain");
+  assert.equal(f.client.isNewFile(), true);
+  assert.equal(f.read(), "restored");
+});
+
+test("a new file's persisted draft adopted silently by the store opens on the next observation", context => {
+  const store = FileDraftStore(() => location.projectId);
+  store.createNewFileBuffer("note.md", "restored", "plain");
+  let arrived = false;
+  const drafts = { ...store, getBuffer: (path: string) => arrived ? store.getBuffer(path) : null, subscribe: () => () => {} };
+  const f = fixture({ drafts });
+  context.after(f.client.dispose);
+  arrived = true;
+  f.client.acceptObservation({ phase: "failed", failure: "missing", data: null });
+  assert.equal(f.client.isNewFile(), true);
+  assert.equal(f.read(), "restored");
+});
+
+test("a new file discarded elsewhere is not written back when its editor closes", () => {
+  const drafts = FileDraftStore(() => location.projectId);
+  drafts.createNewFileBuffer("note.md", "draft", "plain");
+  const f = fixture({ drafts });
+  void drafts.clearBuffer("note.md");
+  f.client.dispose();
+  assert.equal(drafts.getBuffer("note.md"), null);
 });
 
 test("a reload finishing after more typing does not replace that edit", async context => {

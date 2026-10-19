@@ -150,7 +150,6 @@ class WorkbenchDaemonClient {
 
   readonly projects = {
     refresh: (params: WorkbenchDaemonParams<"project/tree/refresh">) => this.request("project/tree/refresh", params),
-    createEntry: (params: WorkbenchDaemonParams<"project/entry/create">) => this.request("project/entry/create", params),
     deleteFile: (params: WorkbenchDaemonParams<"project/file/delete">) => this.request("project/file/delete", params),
     catalog: () => this.request("project/catalog/read", {}),
     fileIndex: (params: WorkbenchDaemonParams<"project/file-index/read">) =>

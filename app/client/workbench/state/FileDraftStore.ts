@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - FileDraftStoreSnapshot: readonly projection of shared draft buffers keyed by file path. Keywords: workbench, file, draft, store, snapshot.
- * - FileDraftStoreListener: subscriber signature for shared draft-store updates. Keywords: workbench, file, draft, subscribe.
- * - default FileDraftStore: create the shared project-scoped draft buffer persistence owner. Keywords: workbench, file, draft, app state, persistence, default export.
+ * - FileDraftStoreSnapshot: readonly projection of shared draft buffers keyed by file path.
+ * - FileDraftStoreListener: subscriber signature for shared draft-store updates.
+ * - default FileDraftStore: create the shared project-scoped draft buffer persistence owner, including unsaved new files.
  */
 
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
@@ -32,10 +32,16 @@ export interface FileDraftStoreSnapshot {
 
 export type FileDraftStoreListener = (snapshot: FileDraftStoreSnapshot) => void;
 
+/**
+ * A buffer whose `expectedMtimeMs` is null is an unsaved new file: nothing exists on disk yet, so it always counts as
+ * dirty and stays until it is saved under a name or discarded.
+ */
 export interface FileDraftStore {
   clearBuffer: (filePath: string) => Promise<void>;
+  createNewFileBuffer: (filePath: string, content: string, mode: EditorMode) => void;
   getBuffer: (filePath: string) => DraftBuffer | null;
   getLocallyModifiedPaths: () => string[];
+  getNewFilePaths: () => string[];
   getSnapshot: () => FileDraftStoreSnapshot;
   hasSaveIssue: () => boolean;
   hydratePersistedDrafts: () => Promise<void>;
@@ -117,7 +123,7 @@ function FileDraftStore(
     return {
       baselineContent: record.value.baselineContent,
       content: record.value.content,
-      dirty: record.value.content !== record.value.baselineContent,
+      dirty: record.value.content !== record.value.baselineContent || record.value.expectedMtimeMs === null,
       editorState: createEditorStateFromContent(record.value.content, record.value.mode),
       expectedMtimeMs: record.value.expectedMtimeMs,
       headContent: record.value.headContent,
@@ -138,6 +144,11 @@ function FileDraftStore(
       adopted = true;
     }
     return adopted;
+  }
+
+  /** Reads adopt late records too; they announce them after returning, so open editors still learn of them. */
+  function adoptWhileReading() {
+    if (adoptPersistedDrafts()) queueMicrotask(emit);
   }
 
   function getSnapshot(): FileDraftStoreSnapshot {
@@ -207,17 +218,34 @@ function FileDraftStore(
   }
 
   function getBuffer(filePath: string) {
-    adoptPersistedDrafts();
+    adoptWhileReading();
     const buffer = draftBuffers.get(filePath);
     return buffer ? cloneDraftBuffer(buffer) : null;
   }
 
   function setBuffer(filePath: string, buffer: DraftBuffer) {
     ownedPaths.add(filePath);
+    const stored = cloneDraftBuffer(buffer);
+    if (stored.expectedMtimeMs === null) stored.dirty = true;
     draftBuffers = new Map(draftBuffers);
-    draftBuffers.set(filePath, cloneDraftBuffer(buffer));
-    void persistDraftBuffer(filePath, buffer);
+    draftBuffers.set(filePath, stored);
+    void persistDraftBuffer(filePath, stored);
     emit();
+  }
+
+  function createNewFileBuffer(filePath: string, content: string, mode: EditorMode) {
+    setBuffer(filePath, {
+      baselineContent: "",
+      content,
+      dirty: true,
+      editorState: createEditorStateFromContent(content, mode),
+      expectedMtimeMs: null,
+      headContent: null,
+      history: fromStoredHistory(undefined, content),
+      mode,
+      pendingWriteConflict: null,
+      saveIssue: null,
+    });
   }
 
   async function clearBuffer(filePath: string) {
@@ -234,15 +262,23 @@ function FileDraftStore(
     emit();
   }
 
+  /** Announces only drafts it adopted, so callers may run it on every app-state change. */
   async function hydratePersistedDrafts() {
-    adoptPersistedDrafts();
-    emit();
+    if (adoptPersistedDrafts()) emit();
   }
 
   function getLocallyModifiedPaths() {
-    adoptPersistedDrafts();
+    adoptWhileReading();
     return Array.from(draftBuffers.entries())
       .filter(([, buffer]) => buffer.dirty)
+      .map(([filePath]) => filePath)
+      .sort((left, right) => left.localeCompare(right));
+  }
+
+  function getNewFilePaths() {
+    adoptWhileReading();
+    return Array.from(draftBuffers.entries())
+      .filter(([, buffer]) => buffer.expectedMtimeMs === null)
       .map(([filePath]) => filePath)
       .sort((left, right) => left.localeCompare(right));
   }
@@ -253,8 +289,10 @@ function FileDraftStore(
 
   return {
     clearBuffer,
+    createNewFileBuffer,
     getBuffer,
     getLocallyModifiedPaths,
+    getNewFilePaths,
     getSnapshot,
     hasSaveIssue,
     hydratePersistedDrafts,

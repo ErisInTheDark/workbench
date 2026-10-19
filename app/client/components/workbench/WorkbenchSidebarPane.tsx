@@ -1,20 +1,22 @@
 /*
  * Exports:
- * - default WorkbenchSidebarPane: the workbench sidebar (header links, projects, threads, folders, browse sessions, reload notice), reading the route's project selection itself.
+ * - default WorkbenchSidebarPane: the workbench sidebar (header links, projects, threads, folders with their working tree
+ *   and explorer, browse sessions, reload notice), reading the route's project selection and explorer itself.
  */
 "use client";
 
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps } from "react";
 
-import type { WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLogicalThreadRow } from "workbench-shared/types";
 import {
   createNewProjectRoute, createSettingsRoute, createStatsRoute, createToggledProjectSelectionRoute, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
-import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type WorkbenchBrowseSessionController from "../../workbench/browse/WorkbenchBrowseSessionController";
 import { useWorkbenchNavigate, useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import IconButton from "../ui/IconButton";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
+import { useWorkbenchExplorer } from "./explorer/workbench-explorer-context";
+import WorkbenchExplorerSection from "./explorer/WorkbenchExplorerSection";
 import WorkbenchGitSidebar from "./git/WorkbenchGitSidebar";
 import ProjectSidebar from "./ProjectSidebar";
 import ReloadNecessary from "./ReloadNecessary";
@@ -32,31 +34,30 @@ import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActio
 type ThreadSidebarProps = ComponentProps<typeof WorkbenchThreadSidebar>;
 type ActionsProps = ComponentProps<typeof WorkbenchThreadSidebarActionsProvider>;
 export default function WorkbenchSidebarPane({
-  activeProjectId, appRuntime, askAgentWithReferences, browseLocation, browseProjectId,
-  browseSessionController, collapsed, createThread, explorerSection, harness,
-  onAttachFeedback, onOpenQualifiedThread, onOpenThread,
-  onPresentationDraftDeleted, onThreadSettled, physicalProjects, projectSourceError,
+  activeProjectId, appRuntime, askAgentWithReferences,
+  browseSessionController, collapsed, createThread, currentFilePath, harness,
+  onAttachFeedback, onFileDeleted, onOpenQualifiedThread, onOpenThread,
+  onPresentationDraftDeleted, onThreadSettled, projectSourceError,
   renderThreadTooltipDetails, route, showGitView, showMosaicView,
   viewedProjectId,
 }: {
   activeProjectId: ActionsProps["projectId"];
   appRuntime: ComponentProps<typeof ReloadNecessary>["appRuntime"];
   askAgentWithReferences: ComponentProps<typeof ReloadNecessary>["onAskAgent"];
-  browseLocation: ProjectLocationReference | null;
-  browseProjectId: ThreadSidebarProps["projectId"];
   browseSessionController: WorkbenchBrowseSessionController;
   collapsed: boolean;
   createThread: ThreadSidebarProps["onCreateThread"];
-  /** The folder's explorer tree, rendered only while a folder is selected. */
-  explorerSection: ReactNode;
+  /** The file the main pane shows, highlighted in the explorer. */
+  currentFilePath: string;
   harness: ThreadSidebarProps["harness"];
   onAttachFeedback: ThreadSidebarProps["onAttachFeedback"];
+  /** Close the views of a file the explorer deleted or a new file it discarded. */
+  onFileDeleted: (path: string) => void;
   /** Context-menu "Open" for a listed thread row; row clicks follow their hrefs. */
   onOpenQualifiedThread: (row: WorkbenchLogicalThreadRow, selectedLogicalProjectId: string | null) => void;
   onOpenThread: ActionsProps["onOpenThread"];
   onPresentationDraftDeleted: NonNullable<ActionsProps["onPresentationDraftDeleted"]>;
   onThreadSettled: ActionsProps["onThreadSettled"];
-  physicalProjects: readonly WorkbenchProjectOption[];
   projectSourceError: string;
   renderThreadTooltipDetails: ThreadSidebarProps["renderThreadTooltipDetails"];
   route: WorkbenchRoute;
@@ -65,6 +66,10 @@ export default function WorkbenchSidebarPane({
   viewedProjectId: string;
 }) {
   const client = useWorkbenchClientController();
+  const explorer = useWorkbenchExplorer();
+  const physicalProjects = explorer.projects;
+  const browseLocation = explorer.browseLocation ?? null;
+  const browseProjectId = browseLocation?.projectId ?? explorer.currentProjectId;
   const search = useWorkbenchSearch();
   const projectHref = useWorkbenchProjectNavigation();
   const navigate = useWorkbenchNavigate();
@@ -199,7 +204,9 @@ export default function WorkbenchSidebarPane({
                 Choose a folder to see its working tree and files.
               </p>
             )}
-            {browseLocation ? explorerSection : null}
+            {browseLocation ? (
+              <WorkbenchExplorerSection currentPath={currentFilePath} onFileDeleted={onFileDeleted} route={route} />
+            ) : null}
           </WorkbenchFolderSidebar> : null}
           <WorkbenchBrowseSessionsSection controller={browseSessionController} />
           <ReloadNecessary

@@ -4,21 +4,13 @@
  */
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ButtonHTMLAttributes,
-  type ReactNode,
-  type TransitionEvent,
-} from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 import WorkbenchSpinningBorder from "../workbench/WorkbenchSpinningBorder";
+import useHoldToConfirm from "./use-hold-to-confirm";
 
 type PrimaryButtonShape = "pill" | "circle" | "compact";
 type PrimaryButtonTone = "attention" | "danger" | "default";
-type HoldSource = "keyboard" | "pointer";
 
 type PrimaryButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
@@ -74,10 +66,6 @@ const toneClassNames: Record<PrimaryButtonTone, string> = {
   `,
 };
 
-function isConfirmationKey (key: string) {
-  return key === "Enter" || key === " ";
-}
-
 export default function PrimaryButton ({
   children,
   className,
@@ -89,7 +77,6 @@ export default function PrimaryButton ({
   onKeyUp,
   onPointerCancel,
   onPointerDown,
-  onPointerLeave,
   onPointerUp,
   pendingHalo = false,
   shape = "pill",
@@ -97,146 +84,30 @@ export default function PrimaryButton ({
   type = "button",
   ...buttonProps
 }: PrimaryButtonProps) {
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const confirmedClickRef = useRef(false);
-  const holdSourceRef = useRef<HoldSource | null>(null);
-  const pointerHoldCompletedRef = useRef(false);
-  const [holdSource, setHoldSource] = useState<HoldSource | null>(null);
-  const showSpinningBorder = pendingHalo;
   const isDisabled = Boolean(disabled);
-  const confirmationMs = typeof holdToConfirmMs === "number" && Number.isFinite(holdToConfirmMs) && holdToConfirmMs > 0
-    ? holdToConfirmMs
-    : null;
-  const confirmationEnabled = confirmationMs !== null;
-
-  const cancelHold = useCallback((source?: HoldSource, preservePointerCompletion = false) => {
-    if (source && holdSourceRef.current !== source) return;
-    holdSourceRef.current = null;
-    if (!preservePointerCompletion) pointerHoldCompletedRef.current = false;
-    setHoldSource(null);
-  }, []);
-
-  const beginHold = useCallback((source: HoldSource) => {
-    if (!confirmationEnabled || isDisabled || holdSourceRef.current) return;
-    pointerHoldCompletedRef.current = false;
-    holdSourceRef.current = source;
-    setHoldSource(source);
-  }, [confirmationEnabled, isDisabled]);
-
-  useEffect(() => {
-    if (isDisabled) cancelHold();
-  }, [cancelHold, isDisabled]);
-
-  useEffect(() => {
-    if (holdSource !== "pointer") return;
-    const handlePointerUp = (event: PointerEvent) => {
-      const button = buttonRef.current;
-      if (button && event.composedPath().includes(button)) return;
-      cancelHold("pointer");
-    };
-    const handlePointerCancel = () => cancelHold("pointer");
-    window.addEventListener("pointerup", handlePointerUp, true);
-    window.addEventListener("pointercancel", handlePointerCancel, true);
-    return () => {
-      window.removeEventListener("pointerup", handlePointerUp, true);
-      window.removeEventListener("pointercancel", handlePointerCancel, true);
-    };
-  }, [cancelHold, holdSource]);
-
-  useEffect(() => () => {
-    holdSourceRef.current = null;
-    pointerHoldCompletedRef.current = false;
-  }, []);
-
-  function confirmHold (event: TransitionEvent<HTMLSpanElement>) {
-    const source = holdSourceRef.current;
-    if (event.propertyName !== "transform" || !source) return;
-    if (source === "pointer") {
-      pointerHoldCompletedRef.current = true;
-      return;
-    }
-    dispatchConfirmedClick();
-    cancelHold("keyboard");
-  }
-
-  function dispatchConfirmedClick () {
-    confirmedClickRef.current = true;
-    buttonRef.current?.click();
-    confirmedClickRef.current = false;
-  }
+  const hold = useHoldToConfirm(holdToConfirmMs, isDisabled);
 
   return (
     <button
       {...buttonProps}
-      ref={buttonRef}
+      {...hold.buttonProps({ onBlur, onClick, onKeyDown, onKeyUp, onPointerCancel, onPointerDown, onPointerUp })}
       type={type}
-      data-confirming={holdSource === "keyboard" ? "true" : undefined}
-      data-hold-to-confirm-ms={confirmationMs ?? undefined}
+      data-confirming={hold.holding === "keyboard" ? "true" : undefined}
+      data-hold-to-confirm-ms={hold.confirmationMs ?? undefined}
       data-tone={tone}
       disabled={disabled}
       className={joinClasses(
         baseClassName,
         shapeClassNames[shape],
         toneClassNames[tone],
-        confirmationEnabled && "touch-none select-none [-webkit-touch-callout:none]",
+        hold.enabled && "touch-none select-none [-webkit-touch-callout:none]",
         pendingHalo
           ? "disabled:text-fg/32"
           : "disabled:text-fg/10",
         className,
       )}
-      onBlur={(event) => {
-        onBlur?.(event);
-        cancelHold();
-      }}
-      onClick={(event) => {
-        const pointerConfirmed = pointerHoldCompletedRef.current && event.detail > 0;
-        if (!confirmationEnabled || confirmedClickRef.current || pointerConfirmed) {
-          confirmedClickRef.current = false;
-          pointerHoldCompletedRef.current = false;
-          onClick?.(event);
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      onKeyDown={(event) => {
-        onKeyDown?.(event);
-        if (!confirmationEnabled || event.defaultPrevented) return;
-        if (event.key === "Escape") {
-          cancelHold("keyboard");
-          return;
-        }
-        if (!isConfirmationKey(event.key)) return;
-        event.preventDefault();
-        if (!event.repeat) beginHold("keyboard");
-      }}
-      onKeyUp={(event) => {
-        onKeyUp?.(event);
-        if (!confirmationEnabled) return;
-        if (!isConfirmationKey(event.key)) return;
-        event.preventDefault();
-        cancelHold("keyboard");
-      }}
-      onPointerCancel={(event) => {
-        onPointerCancel?.(event);
-        cancelHold("pointer");
-      }}
-      onPointerDown={(event) => {
-        onPointerDown?.(event);
-        if (event.defaultPrevented || event.button !== 0 || !event.isPrimary) return;
-        beginHold("pointer");
-      }}
-      onPointerLeave={(event) => {
-        onPointerLeave?.(event);
-      }}
-      onPointerUp={(event) => {
-        onPointerUp?.(event);
-        const completed = pointerHoldCompletedRef.current;
-        cancelHold("pointer");
-        if (completed && !event.defaultPrevented) dispatchConfirmedClick();
-      }}
     >
-      {showSpinningBorder ? <WorkbenchSpinningBorder radius="50cqb" /> : null}
+      {pendingHalo ? <WorkbenchSpinningBorder radius="50cqb" /> : null}
       <span
         aria-hidden="true"
         className={joinClasses(
@@ -244,16 +115,16 @@ export default function PrimaryButton ({
           isDisabled
             ? "bg-transparent ring-1 ring-inset ring-[color:color-mix(in_srgb,var(--text)_10%,transparent)]"
             : "bg-[color:var(--primary-button-bg)]",
-          showSpinningBorder ? "inset-[3px]" : "inset-0",
+          pendingHalo ? "inset-[3px]" : "inset-0",
         )}
       />
       <span className="relative z-20 inline-flex items-center justify-center">{children}</span>
-      {confirmationEnabled ? (
+      {hold.enabled ? (
         <span
           aria-hidden="true"
           className={joinClasses(
             "pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-[inherit] transition-opacity duration-100",
-            holdSource ? "opacity-100" : "opacity-0",
+            hold.holding ? "opacity-100" : "opacity-0",
           )}
           data-primary-button-confirmation-rail="true"
         >
@@ -261,11 +132,7 @@ export default function PrimaryButton ({
             <span
               className="block h-full origin-left bg-[color:var(--text)] transition-transform ease-linear"
               data-primary-button-confirmation-progress="true"
-              onTransitionEnd={confirmHold}
-              style={{
-                transform: holdSource ? "scaleX(1)" : "scaleX(0)",
-                transitionDuration: holdSource ? `${confirmationMs}ms` : "0ms",
-              }}
+              {...hold.progressProps}
             />
           </span>
         </span>

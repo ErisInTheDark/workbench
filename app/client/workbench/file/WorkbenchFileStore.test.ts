@@ -1,8 +1,10 @@
-/* No exports. Protect file observation demand, folder identity and command isolation. */
+/* No exports. Protect file observation demand, folder identity, command isolation and late draft restoration. */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setImmediate } from "node:timers/promises";
 import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createWorkspaceClientFixture } from "../app/workspace-client-fixture";
+import WorkbenchClientStateController from "../state/WorkbenchClientStateController";
 import WorkbenchFileStore from "./WorkbenchFileStore";
 
 test("file consumers share a lease and identical paths on different daemons stay independent", async context => {
@@ -43,6 +45,28 @@ test("file consumers share a lease and identical paths on different daemons stay
     request => request.params.subscriptionId === read.params.subscriptionId);
   socket.reply(released, { ok: true });
   stopRemote();
+});
+
+test("drafts that app state restores after a folder's drafts opened are announced to their editors", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const state = new WorkbenchClientStateController({ mode: "memory" });
+  const store = new WorkbenchFileStore(fixture.workspace, state, () => "memory", message => assert.fail(message));
+  context.after(() => { store.dispose(); fixture.dispose(); });
+  const location = {
+    daemonId: DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001"),
+    projectId: ProjectIdSchema.parse("project"),
+  };
+  const drafts = store.draftsFor(location);
+  await setImmediate();
+  let announced = 0;
+  drafts.subscribe(() => { announced += 1; });
+  await state.put({
+    daemonRegistrationId: "memory", kind: "fileDraft", projectId: location.projectId, path: "untitled.md",
+    value: { baselineContent: "", content: "restored", expectedMtimeMs: null, headContent: null, mode: "rich" },
+  });
+  await setImmediate();
+  assert.equal(announced, 1);
+  assert.equal(drafts.getBuffer("untitled.md")?.content, "restored");
 });
 
 test("file writes use the document's folder without selecting or refreshing the sidebar", async context => {

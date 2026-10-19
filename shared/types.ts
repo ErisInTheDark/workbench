@@ -152,7 +152,6 @@
  * - WorkbenchControls: top-level Workbench command surface.
  * - WorkbenchBindings: Workbench UI bindings contract.
  * - FilePayload: file-read payload.
- * - CreateEntryPayload: project entry creation payload.
  * - DeleteFileRequest: file deletion request.
  * - DeleteFileConfirmationRequired: file deletion confirmation response.
  * - DeleteFilePayload: completed file deletion payload.
@@ -1226,6 +1225,8 @@ export type WorkbenchThreadRecallRequest = WorkbenchThreadRecallExpandRequest | 
 
 export interface FileNode {
   isIgnored?: boolean;
+  /** Git does not track this file, so deleting it loses it for good. */
+  isUntracked?: boolean;
   type: "file";
   name: string;
   path: string;
@@ -1269,6 +1270,8 @@ export interface ExplorerSnapshot {
   currentThreadId: string;
   expandedDirectories: string[];
   locallyModifiedPaths: string[];
+  /** Unsaved new files in the browsed folder, which exist only as drafts until saved under a name. */
+  newFileDraftPaths: string[];
   fontSize: number;
   workbenchStorageRootPath: string;
 }
@@ -1377,7 +1380,6 @@ export interface WorkbenchControls {
   toggleDirectory: (path: string) => void;
   updateThreadState: (request: WorkbenchThreadStateRequest) => Promise<void>;
   updateThreadStateWithAcceptance: (request: WorkbenchThreadStateRequest) => Promise<boolean>;
-  createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   deleteThreadDraft: (draftId: DraftId, projectId?: ProjectId) => Promise<void>;
   deletePresentationDraft: (draftId: DraftId) => Promise<void>;
@@ -1438,11 +1440,6 @@ export interface FilePayload {
   headContent: string | null;
   updatedAt: string;
   mtimeMs: number;
-}
-
-export interface CreateEntryPayload {
-  path: string;
-  type: "directory" | "file";
 }
 
 export interface DeleteFileRequest {

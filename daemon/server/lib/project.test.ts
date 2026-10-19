@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - No production exports; tests protect canonical checkout filtering, external aliases, hidden-folder skipping, and clone exclusion.
+ * - No production exports; tests protect canonical checkout filtering, external aliases, hidden-folder skipping, clone exclusion,
+ *   and untracked file marking.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -244,4 +245,41 @@ test("pinned checkouts are catalogued outside discovery folders exactly once", a
   const warning = context.mock.method(console, "warn", () => undefined);
   assert.deepEqual(await gitRoots([path.join(temporary.path, "not-a-checkout")]), [insidePath]);
   assert.equal(warning.mock.callCount(), 1, "A broken pinned root must be reported, not silently dropped");
+});
+
+test("project trees mark exactly the files Git does not track as untracked", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-untracked-");
+  const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
+  context.after(async () => {
+    if (originalWorkbenchLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
+    else process.env.WORKBENCH_LIBRARY_ROOT = originalWorkbenchLibraryRoot;
+    await temporary.dispose();
+  });
+  process.env.WORKBENCH_LIBRARY_ROOT ??= path.join(temporary.path, "library");
+  const { buildProjectTree } = await import("./project");
+  const untrackedFiles = async (root: string) => {
+    const marked: string[] = [];
+    const visit = (nodes: Awaited<ReturnType<typeof buildProjectTree>>) => {
+      for (const node of nodes) {
+        if (node.type === "directory") visit(node.children);
+        else if (node.isUntracked) marked.push(node.path);
+      }
+    };
+    visit(await buildProjectTree(root));
+    return marked.sort();
+  };
+
+  const repository = path.join(temporary.path, "repository");
+  await fs.mkdir(path.join(repository, "docs"), { recursive: true });
+  await git("init", "--quiet", repository);
+  for (const file of ["tracked.md", "docs/staged.md", "docs/draft.md", "loose.svg"]) {
+    await fs.writeFile(path.join(repository, file), "content", "utf8");
+  }
+  await git("-C", repository, "add", "tracked.md", "docs/staged.md");
+  assert.deepEqual(await untrackedFiles(repository), ["docs/draft.md", "loose.svg"]);
+
+  const plainFolder = path.join(temporary.path, "plain");
+  await fs.mkdir(plainFolder);
+  await fs.writeFile(path.join(plainFolder, "note.md"), "content", "utf8");
+  assert.deepEqual(await untrackedFiles(plainFolder), ["note.md"], "Outside Git, every file is untracked");
 });

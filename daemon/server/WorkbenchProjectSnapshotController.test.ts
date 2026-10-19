@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect project observation, best-known replay, serialized polling, change-only publication, mutation refresh, HTTP compatibility, and disposal.
+ * - No production exports; Node tests protect project observation, best-known replay, serialized polling, change-only publication, deletion refresh, the HTTP tree read, and disposal.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -49,13 +49,8 @@ function createSnapshot(projectId: string, fileName = "README.md"): ProjectSnaps
   };
 }
 
-function createRequest(method: string, url: string, body = "") {
-  const request = new Readable({
-    read() {
-      this.push(body || null);
-      if (body) this.push(null);
-    },
-  }) as Readable & { method: string; url: string };
+function createRequest(method: string, url: string) {
+  const request = new Readable({ read() { this.push(null); } }) as Readable & { method: string; url: string };
   request.method = method;
   request.url = url;
   return request;
@@ -112,7 +107,6 @@ function createHarness({
     now: () => now,
     operations: {
       assertProjectFileCanBeDeleted: async () => undefined,
-      createProjectEntry: async () => "created.md",
       deleteProjectFile: async (filePath) => { deletedPaths.push(filePath); },
       getProjectSnapshot: async (project) => {
         snapshotReads += 1;
@@ -310,15 +304,13 @@ test("bridge mutations return metadata and publish the resulting changed tree", 
   const updates: WorkbenchProjectStateUpdate[] = [];
   const stop = harness.controller.observe("alpha", (update) => updates.push(update));
   await waitFor(() => updates.length === 1, "Initial snapshot was not published.");
-  harness.setSnapshotReader(async () => createSnapshot("alpha", "created.md"));
+  harness.setSnapshotReader(async () => createSnapshot("alpha", "remaining.md"));
   const result = await harness.controller.handleRequest("alpha", {
-    method: "workbench/thread-state/project/entry/create",
-    name: "created.md",
-    parentPath: "",
+    method: "workbench/thread-state/project/file/delete",
+    path: "notes.md",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    type: "file",
   });
-  assert.deepEqual(result, { path: "created.md", type: "file" });
+  assert.deepEqual(result, { path: "notes.md", tracked: true });
   await waitFor(() => updates.length === 2, "Mutation snapshot was not published.");
   assert.equal(harness.snapshotReads, 2);
   stop();
@@ -354,22 +346,6 @@ test("confirmed untracked file deletion proceeds", async () => {
   });
   assert.deepEqual(harness.deletedPaths, ["notes.md"]);
   assert.deepEqual(result, { path: "notes.md", tracked: false });
-  harness.controller.dispose();
-});
-
-test("the dormant HTTP compatibility adapter delegates to the same mutation owner", async () => {
-  const harness = createHarness();
-  const response = await captureResponse(async (captured) => {
-    await harness.controller.handleTreeHttpRequest(createRequest("POST", "/daemon/tree", JSON.stringify({
-      name: "created",
-      parentPath: "",
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-      type: "file",
-    })) as never, captured as never);
-  });
-  assert.equal(response.statusCode, 200);
-  assert.equal(JSON.parse(response.body).path, "created.md");
-  assert.equal(harness.snapshotReads, 1);
   harness.controller.dispose();
 });
 

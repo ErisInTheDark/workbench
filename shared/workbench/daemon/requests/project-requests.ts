@@ -7,7 +7,6 @@
  */
 import { z } from "zod";
 import type {
-  CreateEntryPayload,
   DeleteFileResponse,
   FilePayload,
   OpenFileInEditorRequest,
@@ -38,7 +37,7 @@ import {
 } from "../../project/project-file-index.ts";
 import { WorkbenchProjectLocationsPayloadSchema, type WorkbenchProjectLocationsPayload } from "../../project/project-location.ts";
 import {
-  WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, WorkbenchProjectsPayloadSchema,
+  WorkbenchDeleteFileResultSchema, WorkbenchProjectsPayloadSchema,
 } from "../../project/project-state.ts";
 import {
   ProjectStoreSnapshotSchema, ProjectStoreUpdateResultSchema,
@@ -81,9 +80,6 @@ export const projectDaemonRequests = {
   "project/tree/refresh": defineDaemonRequest<{ projectId: string }, { accepted: true }>()({
     route: "folder", result: z.object({ accepted: z.literal(true) }),
   }),
-  "project/entry/create": defineDaemonRequest<
-    { projectId: string; parentPath: string; name: string; type: "directory" | "file" }, CreateEntryPayload
-  >()({ route: "folder", result: WorkbenchCreateEntryResultSchema }),
   "project/file/delete": defineDaemonRequest<{ projectId: string; path: string; confirmUntracked?: boolean }, DeleteFileResponse>()({
     route: "folder", result: WorkbenchDeleteFileResultSchema,
   }),

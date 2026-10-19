@@ -7,12 +7,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkbenchSearchHit } from "../../../workbench/search/WorkbenchSearchController";
+import { useWorkbenchExplorer } from "../explorer/workbench-explorer-context";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { useProjects } from "../use-projects";
 import WorkbenchProjectListItem from "../WorkbenchProjectListItem";
@@ -28,7 +28,8 @@ export function findSearchThreadEntry(readSummary: (threadId: string) => Workspa
   return located.summary.row.identity.harness === result.harnessId ? located.summary.row : undefined;
 }
 
-export default function WorkbenchSearchDialog({ projects }: { projects: readonly WorkbenchProjectOption[] }) {
+export default function WorkbenchSearchDialog() {
+  const { projects } = useWorkbenchExplorer();
   const controller = useWorkbenchSearch();
   const snapshot = useWorkbenchSearch.snapshot();
   const logicalProjects = useProjects();

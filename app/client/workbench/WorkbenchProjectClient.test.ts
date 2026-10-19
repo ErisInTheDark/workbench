@@ -109,10 +109,6 @@ function installProjectsPayloadFetch(payload: unknown) {
 function createTransport() {
   const calls: string[] = [];
   const transport: WorkbenchProjectTransport = {
-    async createEntry(projectId, parentPath, name, type) {
-      calls.push(`create:${projectId}:${parentPath}:${name}:${type}`);
-      return { path: parentPath ? `${parentPath}/${name}` : name, type };
-    },
     async deleteFile(projectId, filePath, options) {
       calls.push(`delete:${projectId}:${filePath}:${options.confirmUntracked === true}`);
       return { path: filePath, tracked: true };
@@ -333,18 +329,16 @@ test("observation reset accepts a restarted revision without clearing the best-k
   }
 });
 
-test("refresh, create, and delete use the injected bridge transport", async () => {
+test("refresh and delete use the injected bridge transport", async () => {
   const fetchHarness = installProjectsFetch([createProject("alpha")]);
   try {
     const { calls, transport } = createTransport();
     const client = WorkbenchProjectClient({ transport });
     await client.selectProjectStrict("alpha");
     await client.refreshProject();
-    assert.equal(await client.createEntry("src", "new.ts", "file"), "src/new.ts");
     assert.deepEqual(await client.deleteFile("src/old.ts", { confirmUntracked: true }), { path: "src/old.ts", tracked: true });
     assert.deepEqual(calls, [
       "refresh:alpha",
-      "create:alpha:src:new.ts:file",
       "delete:alpha:src/old.ts:true",
     ]);
     assert.deepEqual(fetchHarness.requests, ["/api/projects"]);

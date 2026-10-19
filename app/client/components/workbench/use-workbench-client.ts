@@ -25,6 +25,7 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   fontSize: 1.08,
   isProjectLoading: false,
   locallyModifiedPaths: [],
+  newFileDraftPaths: [],
   projectFileCandidates: ProjectTreeFileIndex.empty.candidates,
   projectFileIndexId: ProjectTreeFileIndex.empty.id,
   projectFileIndexKey: ProjectTreeFileIndex.empty.key,

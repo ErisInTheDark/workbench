@@ -26,7 +26,8 @@ import {
   WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema,
   type WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
-import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "workbench-shared/workbench/project/project-state";
+import { WorkbenchDeleteFileResultSchema } from "workbench-shared/workbench/project/project-state";
+import { isMarkdownFile } from "workbench-shared/workbench/project/tree-utils";
 import type {
   WorkspaceObservation, WorkspaceProjectReference, WorkspaceThreadMember, WorkspaceThreadPlacement,
 } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -83,6 +84,10 @@ type MountedControls = WorkbenchControls & {
   createTextFileDocumentPort(path: string, location?: ProjectLocationReference | null): TextFileDocumentPort;
   /** Create a new file holding `content`; rejects when the path already exists. */
   createTextFile(path: string, content: string, location?: ProjectLocationReference | null): Promise<void>;
+  /** Start an unsaved new file at `path` in the browsed folder; nothing is written until it is saved under a name. */
+  createFileDraft(path: string, content: string): void;
+  /** Drop the browsed folder's draft at `path`, such as an unsaved new file. */
+  discardFileDraft(path: string): Promise<void>;
 };
 
 export interface MountedWorkbenchClient {
@@ -304,9 +309,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       refresh: async projectId => {
         await workspace.request("project/tree/refresh", { projectId }, requiredFolderScope());
       },
-      createEntry: async (projectId, parentPath, name, type) =>
-        WorkbenchCreateEntryResultSchema.parse(await workspace.request(
-          "project/entry/create", { projectId, parentPath, name, type }, requiredFolderScope())),
       deleteFile: async (projectId, path, options) =>
         WorkbenchDeleteFileResultSchema.parse(await workspace.request(
           "project/file/delete", { projectId, path, ...options }, requiredFolderScope())),
@@ -619,6 +621,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         isProjectLoading: !!browseLocation && (!tree?.getSnapshot().value?.data || project.isLoading),
         currentThreadId: threads.currentThreadId,
         locallyModifiedPaths: browseLocation ? files.draftsFor(browseLocation).getLocallyModifiedPaths() : [],
+        newFileDraftPaths: browseLocation ? files.draftsFor(browseLocation).getNewFilePaths() : [],
         fontSize: fontSize?.preference.key === "editorFontSize" ? fontSize.preference.value : DEFAULT_EDITOR_FONT_SIZE,
       };
       if (areExplorerSnapshotsEquivalent(lastExplorer, snapshot)) return;
@@ -956,7 +959,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     toggleDirectory: path => { projectClient.toggleDirectory(path); },
     updateThreadState: async request => { await mutateThread(request); },
     updateThreadStateWithAcceptance: mutateThread,
-    createEntry: (...args) => projectClient.createEntry(...args),
     deleteFile: async (path, options) => {
       const location = browseLocation;
       const result = await projectClient.deleteFile(path, options);
@@ -1004,6 +1006,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
             history, mode: "plain", pendingWriteConflict: null, saveIssue: null,
           }),
           clear: () => drafts.clearBuffer(path),
+          subscribe: listener => drafts.subscribe(() => listener()),
         },
       };
     },
@@ -1013,9 +1016,16 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const operations = workspace.daemon({ kind: "folder", location });
       const existing = await operations.projects.files.read({ projectId: location.projectId, path }).then(() => true, () => false);
       if (existing) throw new Error(`${path} already exists.`);
-      // A forced save creates the missing file without the markdown naming rules of explorer entries.
+      // A forced save creates the missing file and any missing folders on its path.
       const saved = await operations.projects.files.save({ projectId: location.projectId, path, content, expectedMtimeMs: 0, force: true });
       if ("actualMtimeMs" in saved) throw new Error(saved.error);
+    },
+    createFileDraft: (path, content) => {
+      if (!browseLocation) throw new Error("Choose a folder before creating a file.");
+      files.draftsFor(browseLocation).createNewFileBuffer(path, content, isMarkdownFile(path) ? "rich" : "plain");
+    },
+    discardFileDraft: async path => {
+      if (browseLocation) await files.draftsFor(browseLocation).clearBuffer(path);
     },
   };
 

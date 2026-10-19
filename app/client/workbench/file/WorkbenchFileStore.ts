@@ -38,13 +38,24 @@ export default class WorkbenchFileStore {
   private readonly documents = new Map<string, { document: WorkbenchFileDocument; stop(): void }>();
   private readonly listeners = new Set<() => void>();
   private disposed = false;
+  /** App state can load after a folder's drafts open (a reload); drafts it restores reach their editors through this. */
+  private readonly stopRestoringDrafts: () => void;
 
   constructor(
     private readonly workspace: WorkbenchWorkspaceClient,
     private readonly state: WorkbenchClientStateController | undefined,
     private readonly registrationFor: (daemonId: DaemonId) => string,
     private readonly warn: (message: string) => void,
-  ) {}
+  ) {
+    this.stopRestoringDrafts = state?.subscribe(() => {
+      for (const drafts of this.drafts.values()) this.hydrate(drafts);
+    }) ?? (() => {});
+  }
+
+  private hydrate(drafts: FileDraftStore) {
+    void drafts.hydratePersistedDrafts().catch(error =>
+      this.warn(error instanceof Error ? error.message : "File drafts could not load."));
+  }
 
   subscribeDrafts = (listener: () => void) => {
     this.listeners.add(listener);
@@ -60,8 +71,7 @@ export default class WorkbenchFileStore {
         () => { for (const listener of this.listeners) listener(); }, this.state, this.warn,
         () => this.registrationFor(location.daemonId) || registration);
       this.drafts.set(key, drafts);
-      void drafts.hydratePersistedDrafts().catch(error =>
-        this.warn(error instanceof Error ? error.message : "File drafts could not load."));
+      this.hydrate(drafts);
     }
     return drafts;
   }
@@ -122,6 +132,7 @@ export default class WorkbenchFileStore {
 
   dispose() {
     this.disposed = true;
+    this.stopRestoringDrafts();
     for (const entry of this.documents.values()) entry.stop();
     this.documents.clear();
     this.drafts.clear();

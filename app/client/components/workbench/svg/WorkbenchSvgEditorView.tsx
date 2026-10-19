@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchSvgEditorView: one SVG file as a live canvas beside its highlighted source, sharing selection, history, drafts
- *   and saves. Mount with `key={path}` so selection and the last valid preview belong to one file.
+ * - default WorkbenchSvgEditorView: one SVG file as a live canvas beside its highlighted source, sharing selection, history, drafts,
+ *   saves and Save as (always Save as for an unsaved new file). Mount with `key={path}` so selection and the last valid
+ *   preview belong to one file.
  */
 "use client";
 
@@ -26,7 +27,10 @@ import type { WorkbenchMainPanelDragPayload } from "../../../workbench/layout/wo
 import IconButton from "../../ui/IconButton";
 import { useWorkbenchDrag } from "../drag/workbench-drag-context";
 import PlaintextEditable from "../thread-view/PlaintextEditable";
-import { PanelCloseIcon, Redo2Icon, ResetIcon, SaveAsIcon, SaveIcon, Undo2Icon, WandSparklesIcon } from "../workbench-icons";
+import WorkbenchSaveAsRow from "../file-actions/WorkbenchSaveAsRow";
+import WorkbenchSaveButton from "../file-actions/WorkbenchSaveButton";
+import DraftResetButton from "../markdown-editor/DraftResetButton";
+import { PanelCloseIcon, Redo2Icon, ResetIcon, Undo2Icon, WandSparklesIcon } from "../workbench-icons";
 import WorkbenchSvgCanvas, { type SvgCanvasAction, type SvgCanvasTool } from "./WorkbenchSvgCanvas";
 import WorkbenchSvgToolbar, { type SvgViewOptions } from "./WorkbenchSvgToolbar";
 
@@ -37,7 +41,8 @@ type TextFileDocumentControls = WorkbenchControls & {
 const TYPING_COALESCE = { key: "typing", windowMs: 1000 };
 const REAL_SIZES = [16, 24, 32, 48];
 const LOADING_STATE: TextFileDocumentState = {
-  status: "loading", content: "", baseline: "", dirty: false, saving: false, conflict: null, error: "", canUndo: false, canRedo: false,
+  status: "loading", content: "", baseline: "", dirty: false, saving: false, conflict: null, error: "", canUndo: false,
+  canRedo: false, isNew: false,
 };
 const DEFAULT_VIEW: SvgViewOptions = { colors: true, grid: true, guides: true, snap: "0.5" };
 type DistributiveOmit<Value, Key extends PropertyKey> = Value extends unknown ? Omit<Value, Key> : never;
@@ -118,7 +123,8 @@ export default function WorkbenchSvgEditorView({
   location = null,
   onClose,
   headerDrag,
-  onSaveAs,
+  onDiscarded,
+  onOpenCopy,
   path,
   sidebarToggleInset,
 }: {
@@ -127,8 +133,10 @@ export default function WorkbenchSvgEditorView({
   location?: ProjectLocationReference | null;
   onClose?: () => void;
   headerDrag?: WorkbenchMainPanelDragPayload;
-  /** Ask for a new path for `content`; call `done` once it is written so this file's draft can be dropped. */
-  onSaveAs?: (content: string, done: () => void) => void;
+  /** An unsaved new file was discarded; leave this view. Without it, new files cannot be discarded here. */
+  onDiscarded?: () => void;
+  /** Show the copy Save as wrote in place of this file. Without it, Save as is not offered. */
+  onOpenCopy?: (path: string) => void;
   path: string;
   sidebarToggleInset?: "collapsed" | "expanded";
 }) {
@@ -156,6 +164,8 @@ export default function WorkbenchSvgEditorView({
   const [action, setAction] = useState<SvgCanvasAction | null>(null);
   const sourceRef = useRef<HTMLDivElement>(null);
   const beginDrag = useWorkbenchDrag.mainPanel();
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
+  const openSaveAs = onOpenCopy && state.status === "ready" ? () => setSaveAsOpen(true) : undefined;
 
   const segmentRanges = useMemo(() => {
     if (!parsed.ok) return [];
@@ -224,7 +234,7 @@ export default function WorkbenchSvgEditorView({
     const key = event.key.toLowerCase();
     if (key === "s") {
       event.preventDefault();
-      if (event.shiftKey && onSaveAs) onSaveAs(state.content, () => { controller?.revert(); controller?.persistDraft(); });
+      if (event.shiftKey || state.isNew) openSaveAs?.();
       else void controller?.save();
     } else if (key === "z" || key === "y") {
       event.preventDefault();
@@ -240,7 +250,8 @@ export default function WorkbenchSvgEditorView({
   }
 
   const status = portError || state.error
-    || (state.saving ? "Saving..." : state.dirty ? "Unsaved changes. Save with Ctrl/Cmd+S." : state.status === "ready" ? "Saved" : "");
+    || (state.saving ? "Saving..." : state.isNew ? "Not saved yet. Name it with Save as."
+      : state.dirty ? "Unsaved changes. Save with Ctrl/Cmd+S." : state.status === "ready" ? "Saved" : "");
   const parseMessage = parsed.ok ? null : `Line ${parsed.error.line}, column ${parsed.error.column}: ${parsed.error.message}`;
   const selectionLabel = shown ? describeSelection(shown.elements, selection) : null;
   const canCirclify = parsed.ok && [...groupSvgSelection(selection)].some(([index, segments]) =>
@@ -270,6 +281,19 @@ export default function WorkbenchSvgEditorView({
           {onClose ? <IconButton label="Close panel" display="hover-border" onClick={onClose}><PanelCloseIcon size={16} /></IconButton> : null}
         </header>
       )}
+      {saveAsOpen && controller && onOpenCopy ? (
+        <WorkbenchSaveAsRow
+          initialPath={path}
+          location={location}
+          onCancel={() => setSaveAsOpen(false)}
+          onWritten={async (target) => {
+            await controller.handOffToCopy({ samePath: target === path });
+            setSaveAsOpen(false);
+            if (target !== path) onOpenCopy(target);
+          }}
+          readContent={() => controller.getSnapshot().content}
+        />
+      ) : null}
       <WorkbenchSvgToolbar
         canCirclify={canCirclify}
         canvasSize={shown ? readSvgViewBox(shown.root) : null}
@@ -280,16 +304,28 @@ export default function WorkbenchSvgEditorView({
             onClick={() => controller?.redo()}><Redo2Icon size={16} /></IconButton>
           <IconButton label="Format source" size="small" display="hover-border" disabled={!parsed.ok || state.status !== "ready"}
             onClick={format}><WandSparklesIcon size={16} /></IconButton>
-          <IconButton label="Save current file" title="Save (Ctrl/Cmd+S)" size="small" display="hover-border"
-            disabled={!state.dirty || state.saving} pendingHalo={state.saving} onClick={() => { void controller?.save(); }}>
-            <SaveIcon size={18} />
-          </IconButton>
-          {onSaveAs ? <IconButton label="Save as" title="Save as (Ctrl/Cmd+Shift+S)" size="small" display="hover-border" disabled={state.status !== "ready"}
-            onClick={() => onSaveAs(state.content, () => { controller?.revert(); controller?.persistDraft(); })}>
-            <SaveAsIcon size={16} />
-          </IconButton> : null}
-          <IconButton label="Revert to saved" title="Revert to saved (undoable)" size="small" display="hover-border" tone="danger"
-            disabled={!state.dirty} onClick={() => controller?.revert()}><ResetIcon size={16} /></IconButton>
+          <WorkbenchSaveButton
+            onSave={() => { void controller?.save(); }}
+            onSaveAs={openSaveAs}
+            saveAsDisabled={state.status !== "ready"}
+            saveAsOnly={state.isNew}
+            saveDisabled={!state.dirty || state.saving}
+            saving={state.saving}
+          />
+          {state.isNew ? (onDiscarded ? (
+            <DraftResetButton
+              hasDraft
+              isNewFile
+              onDeleteDraft={async () => {
+                await controller?.discard();
+                onDiscarded();
+              }}
+              savedDiffersFromHead={false}
+            />
+          ) : null) : (
+            <IconButton label="Revert to saved" title="Revert to saved (undoable)" size="small" display="hover-border" tone="danger"
+              disabled={!state.dirty} onClick={() => controller?.revert()}><ResetIcon size={16} /></IconButton>
+          )}
         </>}
         onCirclify={() => runAction("circlify")}
         onFlip={axis => runAction(axis === "horizontal" ? "flip-horizontal" : "flip-vertical")}

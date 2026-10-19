@@ -3,6 +3,7 @@
  * - getGitChanges: summarise tracked and untracked project changes for the explorer without writing the index.
  * - getHeadFileContent: read a tracked file from HEAD when available.
  * - listGitVisibleFiles: list tracked and non-ignored untracked paths, optionally narrowed by Git pathspecs.
+ * - listGitTrackedFiles: list every path Git tracks in its index under a folder; empty outside a repository.
  * - isGitTrackedFile: report whether Git tracks a project-relative path in its index.
  * - resolveGitDirectory: resolve ordinary and file-backed Git metadata directories.
  * - isLinkedGitWorktree: distinguish shared worktree metadata from independent Git directories.
@@ -397,6 +398,16 @@ export async function listGitVisibleFiles(rootDir: string, pathspecs: readonly s
       .map((filePath) => filePath.replace(/\\/gu, "/"))
       .filter(Boolean),
   ));
+}
+
+/** Index paths relative to `rootDir`. Like `isGitTrackedFile`, any Git failure counts as tracking nothing. */
+export async function listGitTrackedFiles(rootDir: string): Promise<Set<string>> {
+  try {
+    const { stdout } = await runGit(rootDir, ["ls-files", "-z", "--cached"]);
+    return new Set(stdout.split("\0").filter(Boolean).map((filePath) => filePath.replace(/\\/gu, "/")));
+  } catch {
+    return new Set();
+  }
 }
 
 export async function isGitTrackedFile(rootDir: string, filePath: string) {
