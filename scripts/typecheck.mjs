@@ -1,24 +1,38 @@
 /*
  * Exports:
- * - typecheckProjectConfigs: lists every portable TypeScript project checked by the public command.
+ * - typecheckProjects: maps each public filter flag to the TypeScript project configs it checks.
+ * - selectTypecheckConfigs: resolves filter flags to unique configs; no flags selects every project.
  * - summarizeTypecheckDiagnostics: retains bounded unique compiler diagnostics across project runs.
- * - runProjectTypechecks: runs every local compiler project and preserves failure after the complete sequence.
+ * - runProjectTypechecks: runs selected compiler projects and preserves failure after the complete sequence.
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(scriptPath), "..");
 const tscPath = path.join(projectRoot, "node_modules", "typescript", "bin", "tsc");
 
-export const typecheckProjectConfigs = [
-  "daemon/tsconfig.typecheck.json",
-  "app/tsconfig.json",
-  "daemon/host/tsconfig.json",
-  "shared/tsconfig.json",
-  "test/tsconfig.typecheck.json",
-];
+export const typecheckProjects = {
+  app: ["app/tsconfig.json"],
+  daemon: ["daemon/tsconfig.typecheck.json", "daemon/host/tsconfig.json"],
+  host: ["daemon/host/tsconfig.json"],
+  shared: ["shared/tsconfig.json"],
+  test: ["test/tsconfig.typecheck.json"],
+};
+
+export function selectTypecheckConfigs(args) {
+  const projectNames = Object.keys(typecheckProjects);
+  const { values } = parseArgs({
+    args,
+    strict: true,
+    options: Object.fromEntries(projectNames.map((name) => [name, { type: "boolean" }])),
+  });
+  const selected = projectNames.filter((name) => values[name]);
+  const names = selected.length > 0 ? selected : projectNames;
+  return [...new Set(names.flatMap((name) => typecheckProjects[name]))];
+}
 
 function runCompiler(configPath) {
   return new Promise((resolve) => {
@@ -62,10 +76,10 @@ export function summarizeTypecheckDiagnostics(outputs, limit = 100) {
   return diagnostics;
 }
 
-export async function runProjectTypechecks() {
+export async function runProjectTypechecks(configPaths) {
   let failed = false;
   const outputs = [];
-  for (const configPath of typecheckProjectConfigs) {
+  for (const configPath of configPaths) {
     const result = await runCompiler(configPath);
     const passed = result.code === 0;
     const status = passed ? "\x1b[32mpass\x1b[0m" : "\x1b[31mfail\x1b[0m";
@@ -78,8 +92,20 @@ export async function runProjectTypechecks() {
   return failed ? 1 : 0;
 }
 
+function selectCliConfigs() {
+  try {
+    return selectTypecheckConfigs(process.argv.slice(2));
+  } catch (error) {
+    const flags = Object.keys(typecheckProjects).map((name) => `[--${name}]`).join(" ");
+    console.error(`${error instanceof Error ? error.message : String(error)}\nUsage: pnpm typecheck ${flags}; no flags checks every project.`);
+    return null;
+  }
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
-  void runProjectTypechecks().then(
+  const configPaths = selectCliConfigs();
+  if (configPaths === null) process.exitCode = 1;
+  else void runProjectTypechecks(configPaths).then(
     (exitCode) => { process.exitCode = exitCode; },
     (error) => {
       console.error(`Workbench typecheck runner failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`);

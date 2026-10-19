@@ -44,14 +44,13 @@ CRITICAL INSTRUCTION EDITING RULES:
 
 ### Allowed Validation
 do not apply timeouts for validation command runs! they own their own timeouts
+**READ VALIDATION OUTPUT RAW.** never pipe, grep, `Select-String`, `Select-Object`, head/tail, truncate or redirect `pnpm typecheck` or test output. noisy, slow or timing-out output is a project defect relevant to your work: fix its source, or propose the fix. DO NOT FILTER OUTPUT; FIX OUTPUT
 
-1. `pnpm typecheck`
+1. `pnpm typecheck [--app] [--daemon] [--host] [--shared] [--test]`; no flags checks all
 
 2. tests:
-`wb test` tests full suite filtered by claims (run this first!)
+`wb test` tests full suite scoped to claims (run this first!)
 `wb test -- [<file>...]` tests only the specified files (useful for targeted retests)
-
-treat "noise" & slow/timing out tests in the output as relevant for your work. if you can address them, do so: DO NOT FILTER OUTPUT; FIX OUTPUT
 
 3. expensive scenario tests if necessary:
 note: the following two scenario tests take a LONG time, and should be used for FINAL validation
