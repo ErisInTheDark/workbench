@@ -66,12 +66,19 @@ export interface ReloadableNodeHostOptions {
 
 interface ActiveOperation {
   label: string;
+  owner: string;
   startedAt: number;
 }
 
 interface DrainBatch<TContext, TFeatures extends object, TNotification> {
   nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[];
   draining: boolean;
+  /**
+   * Operations running when the gates closed and not finished yet. Only their nested work may enter the batch, so
+   * work they leave behind cannot relay admission onward and hold the drain open.
+   */
+  roots: Set<symbol>;
+  rootWaiters: Array<() => void>;
 }
 
 interface ActiveNode<TContext, TFeatures extends object, TNotification> {
@@ -109,6 +116,8 @@ function formatDuration(ms: number) {
   const minutes = Math.floor(seconds / 60);
   return minutes < 60 ? `${minutes}m${seconds % 60}s` : `${Math.floor(minutes / 60)}h${minutes % 60}m`;
 }
+
+const formatMilliseconds = (ms: number) => `${ms}ms`;
 
 function boundedLabel(value: string) {
   const normalized = value.replace(/\s+/gu, " ").trim() || "unnamed operation";
@@ -317,17 +326,18 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       const leased = this.dependencyClosure(ownerId).map((nodeId) => this.requireNode(nodeId));
       if (leased.some((node) => !this.canEnter(node))) continue;
       const owner = this.requireNode(ownerId);
-      return await this.withOperation(leased, label, () => operation(owner.instance.registrations[key] as TFeatures[TKey]));
+      return await this.withOperation(leased, ownerId, label, () => operation(owner.instance.registrations[key] as TFeatures[TKey]));
     }
   }
 
   private async withOperation<TResult>(
     leased: readonly ActiveNode<TContext, TFeatures, TNotification>[],
+    owner: string,
     label: string,
     operation: () => Promise<TResult> | TResult,
   ): Promise<TResult> {
     const token = Symbol("workbench-reloadable-operation");
-    const activeOperation = { label: boundedLabel(label), startedAt: this.now() };
+    const activeOperation = { label: boundedLabel(label), owner, startedAt: this.now() };
     for (const node of leased) node.activeOperations.set(token, activeOperation);
     try {
       return await this.operationContext.run(
@@ -338,6 +348,10 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       for (const node of leased) {
         node.activeOperations.delete(token);
         this.resolveDrain(node);
+        const batch = node.gate?.drainBatch;
+        if (batch?.roots.delete(token) && batch.roots.size === 0) {
+          for (const resolve of batch.rootWaiters.splice(0)) resolve();
+        }
       }
     }
   }
@@ -471,16 +485,19 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
 
   /** Work still running on retired nodes: the usual reason a retired generation stays reachable. */
   private retiredOperationLabels() {
+    const nodes = [...this.retiredNodes].flatMap(reference => reference.deref() ?? []);
+    return this.describeOperations(nodes, formatDuration);
+  }
+
+  /** Each running operation once, named by its owner, however many nodes it leases. */
+  private describeOperations(
+    nodes: Iterable<ActiveNode<TContext, TFeatures, TNotification>>,
+    formatAge: (ms: number) => string,
+  ) {
     const now = this.now();
-    const labels: string[] = [];
-    for (const reference of this.retiredNodes) {
-      const node = reference.deref();
-      if (!node) continue;
-      for (const { label, startedAt } of node.activeOperations.values()) {
-        labels.push(`${node.definition.id}: ${label} (${formatDuration(Math.max(0, now - startedAt))})`);
-      }
-    }
-    return labels;
+    const operations = new Map<symbol, ActiveOperation>();
+    for (const node of nodes) for (const [token, operation] of node.activeOperations) operations.set(token, operation);
+    return [...operations.values()].map(({ label, owner, startedAt }) => `${owner}: ${label} (${formatAge(Math.max(0, now - startedAt))})`);
   }
 
   async observeProviderNotification(notification: TNotification, label = "provider notification") {
@@ -490,7 +507,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       await this.waitForOpenDependencyChain(nodeId);
       if (this.hardShutdownStarted) return;
       const leased = this.dependencyClosure(nodeId).map((dependencyId) => this.requireNode(dependencyId));
-      await this.withOperation(leased, label, () => this.requireNode(nodeId).instance.observeProviderNotification?.(notification));
+      await this.withOperation(leased, nodeId, label, () => this.requireNode(nodeId).instance.observeProviderNotification?.(notification));
     }
   }
 
@@ -593,20 +610,29 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         }
       }
       if (handoffs.size) {
-        const batch: DrainBatch<TContext, TFeatures, TNotification> = { nodes: previous, draining: true };
+        const batch: DrainBatch<TContext, TFeatures, TNotification> = {
+          nodes: previous, draining: true, rootWaiters: [],
+          roots: new Set(previous.flatMap(node => [...node.activeOperations.keys()])),
+        };
         for (const node of previous) this.closeGate(node, batch);
+        const expire = () => {
+          for (const node of previous) {
+            const handoff = handoffs.get(node.definition.id);
+            if (handoff) this.expireDrain(node, handoff);
+          }
+        };
         try {
           await transition.drain("feature graph: drain", async () => {
             await Promise.all([
-              ...previous.map((node) => this.waitForDrain(node)),
+              this.waitForRoots(batch),
               ...[...handoffs.values()].map((handoff) => handoff.waitForIdle()),
             ]);
-          }, () => {
-            for (const node of previous) {
-              const handoff = handoffs.get(node.definition.id);
-              if (handoff) this.expireDrain(node, handoff);
-            }
-          });
+            // Anything still leasing the batch was left behind by roots that never awaited it.
+            const detached = this.describeOperations(previous, formatMilliseconds);
+            if (!batch.draining || !detached.length) return;
+            this.logError(`Reload drain retired work its admitting operations left running: ${detached.join(", ")}`.slice(0, 2_000));
+            expire();
+          }, expire);
         } finally {
           batch.draining = false;
         }
@@ -1043,9 +1069,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     if (!node.gate) return true;
     const batch = node.gate.drainBatch;
     if (!batch?.draining) return false;
-    const ancestors = this.operationContext.getStore();
-    // Only a still-admitted operation can continue inside its own draining batch.
-    return ancestors?.some(token => batch.nodes.some(member => member.activeOperations.has(token))) ?? false;
+    return this.operationContext.getStore()?.some(token => batch.roots.has(token)) ?? false;
   }
 
   private closeGate(
@@ -1072,6 +1096,11 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     if (node.runtimeDrainStartedAt !== null) return;
     node.runtimeDrainStartedAt = this.now();
     node.instance.beginRuntimeDrain?.();
+  }
+
+  private async waitForRoots(batch: DrainBatch<TContext, TFeatures, TNotification>) {
+    if (batch.roots.size === 0) return;
+    await new Promise<void>((resolve) => batch.rootWaiters.push(resolve));
   }
 
   private async waitForDrain(node: ActiveNode<TContext, TFeatures, TNotification>) {
@@ -1177,10 +1206,8 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   }
 
   private describeNodes(nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[], prefix: string) {
-    const now = this.now();
-    const pending: string[] = [];
+    const pending = this.describeOperations(nodes, formatMilliseconds);
     for (const node of nodes) {
-      for (const { label, startedAt } of node.activeOperations.values()) pending.push(`${node.definition.id}: ${label} (${Math.max(0, now - startedAt)}ms)`);
       if (node.disposalPhase) pending.push(`${node.definition.id}: ${node.disposalPhase}`);
       for (const context of node.instance.listRuntimeDrainPending?.() ?? []) pending.push(`${node.definition.id}: ${boundedLabel(context.label)} (${Math.max(0, context.ageMs)}ms runtime context)`);
     }

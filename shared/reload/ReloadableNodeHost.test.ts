@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import ReloadableNode, { defineReloadableNodeGraph } from "./ReloadableNode";
-import ReloadableNodeHost from "./ReloadableNodeHost";
+import ReloadableNodeHost, { type ReloadableNodeHostOptions } from "./ReloadableNodeHost";
 import type { ReloadDirtSourceState } from "./ReloadDirtController";
 import type { ReloadableNodeHandoff, ReloadableNodeLease } from "./ReloadableNode";
 
@@ -301,7 +301,7 @@ void ReloadableNode.define<object, Objects, never>()({
   scope: "server:type-boundary",
 });
 
-function fixture(prefix: "server" | "client") {
+function fixture(prefix: "server" | "client", options: Pick<ReloadableNodeHostOptions, "createRuntimeDrainDeadline"> = {}) {
   let generation = 0;
   let fail = false;
   const draining = deferred();
@@ -336,6 +336,7 @@ function fixture(prefix: "server" | "client") {
     ]);
   };
   const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, {
+    ...options,
     topologyScope: `${prefix}:topology`,
   });
   return {
@@ -404,6 +405,36 @@ test("settled async context cannot bypass a later drain gate", async () => {
     await reload;
     assert.equal(await stale, 2);
   } finally { proceed.resolve(); await f.host.dispose(); }
+});
+
+test("work relayed beyond the operations a drain admitted cannot hold that drain open", async () => {
+  const f = fixture("server", { createRuntimeDrainDeadline: () => ({ cancel() {}, expired: new Promise<void>(() => undefined) }) });
+  await f.host.start();
+  const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+  let relaying = true;
+  let drainStarted = false;
+  let linksDuringDrain = 0;
+  const livelocked = deferred();
+  const migrated = deferred();
+  // Each link outlives the admission of the next one it leaves behind, like a fire-and-forget follow-up.
+  const relay = (): Promise<void> => f.host.run("consumer", async owner => {
+    const generation = await owner.read();
+    if (generation === 2) migrated.resolve();
+    if (drainStarted && generation === 1 && ++linksDuringDrain > 20) livelocked.resolve();
+    await tick();
+    if (relaying) void relay().catch(() => undefined);
+    await tick();
+  });
+  try {
+    void relay().catch(() => undefined);
+    await tick();
+    const reload = f.host.reload(f.scopes);
+    await f.draining.promise;
+    drainStarted = true;
+    const outcome = await Promise.race([reload.then(() => "reloaded"), livelocked.promise.then(() => "livelocked")]);
+    assert.equal(outcome, "reloaded");
+    await migrated.promise;
+  } finally { relaying = false; await f.host.dispose(); }
 });
 
 test("nested failure releases the drain and failed replacement restores operation access", async () => {

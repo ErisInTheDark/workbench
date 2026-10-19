@@ -2,7 +2,7 @@
 - Reload ownership comes from imports. Nodes declare only `entries` (code run outside the process module graph: workers, child processes, plugins) and `assets` (non-module runtime inputs); never list imported modules.
 - Retired reload generations must become garbage. Non-reloadable code, including Node's `module.children`, must not keep references to retired modules or node objects.
 - Long-lived work must not hold reloadable owners in closures; resolve owners through graph tools (`get`/`run`/leases) at each step.
-- Queued or coalesced work a leased caller awaits must enter its lease from that caller's async context; a shared worker loop's own context cannot pass a draining gate.
+- Queued or coalesced work a leased caller awaits must enter its lease from that caller's async context; a shared worker loop's own context cannot pass a draining gate. Drain admission flows only from operations admitted before the drain; work they leave running is forced to retire once they finish.
 - Nodes owning external processes are `destructive`, never dependants of non-destructive nodes, and keep churny orchestration in reloadable children.
 - Any content change to a file a destructive node owns, including type-only edits, dirties that node and restarts its processes on reload-all. Keep evolving contracts out of destructive-node files; extend shapes they reference additively.
 - Failed rollback blocks only failed owners and their dependants. Restartable owners may prepare fresh replacement without resuming; transactional owners must recover retained resources first. Keep unrelated branches available and log failed lifecycle phases with bounded causes.
