@@ -3,8 +3,8 @@
  * - WorkbenchDaemonSourceDescriptor: verified endpoint and access facts for one durable daemon.
  * - WorkbenchDaemonObservationFact: received data with connection-aware freshness.
  * - WorkbenchDaemonTranscriptEvent: source-owned transcript baseline, stream and freshness delivery.
- * - default WorkbenchDaemonSource: own one daemon connection, shared read interests, operation retention, socket spy answers
- *   and the daemon's peer fetch requests.
+ * - default WorkbenchDaemonSource: own one daemon connection, shared read interests kept warm briefly after release,
+ *   operation retention, socket spy answers and the daemon's peer fetch requests.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -86,6 +86,17 @@ interface Interest {
   /** Deltas that arrived before the first value they build on. */
   early: WorkspaceObservationDelta[];
   failure: string | null;
+  /** Cancels the grace that keeps an observer-less interest warm; null while observed. */
+  cancelLinger: (() => void) | null;
+}
+
+/** How long a released observation stays subscribed, so a reloading page re-attaches without a daemon round trip. */
+const WARM_OBSERVATION_GRACE_MS = 30_000;
+
+function lingerFor(expire: () => void) {
+  const timer = setTimeout(expire, WARM_OBSERVATION_GRACE_MS);
+  timer.unref();
+  return () => clearTimeout(timer);
 }
 
 const rpcError = z.object({ code: z.number().int(), message: z.string(), data: z.json().optional() });
@@ -119,6 +130,8 @@ export default class WorkbenchDaemonSource {
       /** Fetches a named peer's branch into one of this daemon's folders for its agents. */
       answerPeerFetch?: (question: GitPeerFetchQuestion) => Promise<GitPeerFetchOutcome>;
       transcriptReservoir?: WorkbenchTranscriptReservoir;
+      /** Schedules a released observation's upstream release and returns its cancel; defaults to a 30s unref'd timer. */
+      linger?: (expire: () => void) => () => void;
     },
   ) {
     this.socket = new WorkbenchSocketClient({
@@ -209,7 +222,7 @@ export default class WorkbenchDaemonSource {
   get hasDemand() { return this.interests.size > 0 || this.transcripts.size > 0 || this.leases.size > 0; }
   private get hasActiveDemand() {
     return this.leases.size > 0 || this.transcripts.size > 0 || [...this.interests.values()].some(interest =>
-      interest.query.kind !== "catalogue" && interest.query.kind !== "summaries"
+      interest.listeners.size > 0 && interest.query.kind !== "catalogue" && interest.query.kind !== "summaries"
       && interest.query.kind !== "runtime" && interest.query.kind !== "update" && interest.query.kind !== "branchPosition");
   }
   get httpOrigin() {
@@ -265,22 +278,23 @@ export default class WorkbenchDaemonSource {
     const parsed = DaemonWorkspaceQuerySchema.parse(input);
     const query: DaemonWorkspaceQuery = parsed.kind === "projectThreads"
       ? { ...parsed, projectIds: [...new Set(parsed.projectIds)].sort() } : parsed;
-    let interest = [...this.interests.values()].find(current => areDeeplyEqual(current.query, query));
+    let interest = this.findInterest(query);
     const created = !interest;
     if (!interest) {
       interest = { subscriptionId: randomUUID(), query, listeners: new Map(), raw: null, value: null, early: [], failure: null,
-        cancellation: new AbortController() };
+        cancellation: new AbortController(), cancelLinger: null };
       this.interests.set(interest.subscriptionId, interest);
     }
     const owner = {};
-    interest.listeners.set(owner, listener);
-    const retained = interest;
+    this.attach(interest, owner, listener);
+    let retained = interest;
     this.updateDemand();
     if (created && this.available) this.openInterest(retained);
     return {
       getSnapshot: () => this.readInterest(retained),
       /**
        * Swaps a sole owner's batch arguments in place; the daemon answers with a delta against the current value.
+       * An interest already holding the new arguments is adopted instead, and the old one lingers.
        * A daemon without retargeting gets a fresh subscription for the new arguments instead.
        */
       retarget: (next: DaemonWorkspaceQuery) => {
@@ -288,38 +302,67 @@ export default class WorkbenchDaemonSource {
         // Observers sharing a batch keep it when they ask for what it already holds.
         if (areDeeplyEqual(target, retained.query)) return;
         if (retained.listeners.size !== 1 || !retained.listeners.has(owner)) throw new Error("Only a sole observer can retarget a daemon observation.");
-        retained.query = target;
+        const held = this.findInterest(target);
+        if (held) {
+          this.attach(held, owner, listener);
+          this.detach(retained, owner);
+          retained = held;
+          return;
+        }
+        const moved = retained;
+        moved.query = target;
         if (!this.available) return;
         const generation = this.socket.getSnapshot().generation;
-        void this.request(WORKSPACE_RETARGET_METHOD, { subscriptionId: retained.subscriptionId, generation, query: target },
-          {}, { signal: retained.cancellation.signal }).catch(error => {
-          if (error instanceof WorkbenchRpcRequestInterruptedError || this.interests.get(retained.subscriptionId) !== retained
+        void this.request(WORKSPACE_RETARGET_METHOD, { subscriptionId: moved.subscriptionId, generation, query: target },
+          {}, { signal: moved.cancellation.signal }).catch(error => {
+          if (error instanceof WorkbenchRpcRequestInterruptedError || this.interests.get(moved.subscriptionId) !== moved
             || generation !== this.socket.getSnapshot().generation) return;
           if (!(error instanceof WorkbenchDaemonRequestError)) {
-            retained.failure = bounded(error);
-            this.options.warn(`Daemon observation retarget failed: ${retained.failure}`);
-            this.publishInterest(retained);
+            moved.failure = bounded(error);
+            this.options.warn(`Daemon observation retarget failed: ${moved.failure}`);
+            this.publishInterest(moved);
             return;
           }
-          this.resubscribe(retained);
+          this.resubscribe(moved);
         });
       },
-      release: () => {
-        if (!retained.listeners.delete(owner) || retained.listeners.size) return;
-        this.interests.delete(retained.subscriptionId);
-        retained.cancellation.abort();
-        if (this.hasDemand && this.available) {
-          void this.request(WORKSPACE_RELEASE_METHOD, {
-            subscriptionId: retained.subscriptionId, generation: this.socket.getSnapshot().generation,
-          }).catch(error => {
-            if (!(error instanceof WorkbenchRpcRequestInterruptedError)) {
-              this.options.warn(`Daemon observation release failed: ${bounded(error)}`);
-            }
-          });
-        }
-        this.updateDemand();
-      },
+      release: () => this.detach(retained, owner),
     };
+  }
+
+  /** Observed or lingering, an interest for the same query is shared rather than subscribed twice. */
+  private findInterest(query: DaemonWorkspaceQuery) {
+    return [...this.interests.values()].find(current => areDeeplyEqual(current.query, query));
+  }
+
+  private attach(interest: Interest, owner: object, listener: () => void) {
+    interest.cancelLinger?.();
+    interest.cancelLinger = null;
+    interest.listeners.set(owner, listener);
+  }
+
+  /** The last observer leaving starts a grace; only its expiry releases the daemon subscription. */
+  private detach(interest: Interest, owner: object) {
+    if (!interest.listeners.delete(owner) || interest.listeners.size) return;
+    interest.cancelLinger = (this.options.linger ?? lingerFor)(() => this.closeInterest(interest));
+    this.updateDemand();
+  }
+
+  private closeInterest(interest: Interest) {
+    if (interest.listeners.size || this.interests.get(interest.subscriptionId) !== interest) return;
+    interest.cancelLinger = null;
+    this.interests.delete(interest.subscriptionId);
+    interest.cancellation.abort();
+    if (this.hasDemand && this.available) {
+      void this.request(WORKSPACE_RELEASE_METHOD, {
+        subscriptionId: interest.subscriptionId, generation: this.socket.getSnapshot().generation,
+      }).catch(error => {
+        if (!(error instanceof WorkbenchRpcRequestInterruptedError)) {
+          this.options.warn(`Daemon observation release failed: ${bounded(error)}`);
+        }
+      });
+    }
+    this.updateDemand();
   }
 
   retain() {
@@ -402,6 +445,8 @@ export default class WorkbenchDaemonSource {
     this.socket.dispose();
     for (const unsubscribe of this.unsubscribe) unsubscribe();
     for (const interest of this.interests.values()) {
+      interest.cancelLinger?.();
+      interest.cancelLinger = null;
       interest.cancellation.abort();
       interest.listeners.clear();
     }

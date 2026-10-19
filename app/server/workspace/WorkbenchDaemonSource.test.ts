@@ -43,12 +43,18 @@ class Socket extends EventTarget {
 function fixture(transcriptReservoir?: WorkbenchTranscriptReservoir) {
   const created = Promise.withResolvers<Socket>();
   const warnings: string[] = [];
+  const lingering: Array<{ expire(): void; cancelled: boolean }> = [];
   const descriptor = {
     daemonId: DaemonIdSchema.parse(randomUUID()), hostname: "source", state: "ready" as const,
     endpoint: "ws://127.0.0.1:12345", access: true, failure: null,
   };
   const source = new WorkbenchDaemonSource(descriptor, {
     warn: message => warnings.push(message),
+    linger: expire => {
+      const entry = { expire, cancelled: false };
+      lingering.push(entry);
+      return () => { entry.cancelled = true; };
+    },
     ...(transcriptReservoir ? { transcriptReservoir } : {}),
     createSocket: () => {
       const socket = new Socket();
@@ -56,7 +62,10 @@ function fixture(transcriptReservoir?: WorkbenchTranscriptReservoir) {
       return socket as unknown as WebSocket;
     },
   });
-  return { source, descriptor, created: created.promise, warnings };
+  const expireLingering = () => {
+    for (const entry of lingering.splice(0)) if (!entry.cancelled) entry.expire();
+  };
+  return { source, descriptor, created: created.promise, warnings, expireLingering };
 }
 
 test("daemon response and push repairs preserve valid sibling peers and isolate lossy deltas", async context => {
@@ -358,6 +367,7 @@ test("one stalled source cannot hold another source's shared observation", async
   assert.equal(a.source.available, true);
   assert.equal(socket.sent.filter(request => request.method === "workspace/release").length, 0);
   second.release();
+  a.expireLingering();
   assert.equal(a.source.hasDemand, false);
   assert.equal(socket.readyState, WebSocket.CLOSED);
   assert.deepEqual(a.warnings, []);
@@ -517,6 +527,69 @@ test("a summary batch retargets in place, sharers asking for its current ids kee
   assert.deepEqual(reopened.params.query, { kind: "threadSummaries", threadIds: [first, second] });
   assert.ok(socket.sent.slice(fallbackOffset).some(message => message.method === "workspace/release"
     && message.params.subscriptionId === opened.params.subscriptionId), "the old subscription is released");
+});
+
+test("a released observation stays warm for a returning observer and releases upstream once when its grace expires", async context => {
+  const f = fixture();
+  context.after(() => f.source.dispose());
+  const query = { kind: "threadIdentity" as const, threadId: ThreadReferenceSchema.parse(randomUUID()) };
+  const demand = f.source.observe({ kind: "runtime" }, () => {});
+  const first = f.source.observe(query, () => {});
+  const socket = await f.created;
+  const opening = f.source.socket.connect(); socket.open(); await opening;
+  const request = socket.sent.find(message => message.method === "workspace/observe"
+    && (message.params.query as { kind?: string }).kind === "threadIdentity")!;
+  socket.notify({ method: "workspace/updated", params: {
+    kind: "threadIdentity", subscriptionId: request.params.subscriptionId,
+    generation: request.params.generation, revision: 1, phase: "current", failure: null, identity: null,
+  } });
+  const held = first.getSnapshot();
+  assert.equal(held.phase, "current");
+  first.release();
+  const offset = socket.sent.length;
+  const returning = f.source.observe(query, () => {});
+  assert.deepEqual(returning.getSnapshot(), held);
+  assert.equal(socket.sent.length, offset, "a returning observer re-attaches without a daemon round trip");
+  f.expireLingering();
+  assert.equal(socket.sent.length, offset, "a re-attached observation outlives its first grace");
+  returning.release();
+  f.expireLingering();
+  f.expireLingering();
+  assert.deepEqual(socket.sent.slice(offset).map(message => [message.method, message.params.subscriptionId]),
+    [["workspace/release", request.params.subscriptionId]]);
+  demand.release();
+  f.expireLingering();
+  assert.equal(f.source.hasDemand, false);
+  assert.equal(socket.readyState, WebSocket.CLOSED);
+});
+
+test("retargeting onto a warm batch adopts its held value instead of asking the daemon again", async context => {
+  const f = fixture();
+  context.after(() => f.source.dispose());
+  const [first, second] = ["00000001", "00000002"].map(prefix => ThreadReferenceSchema.parse(`${prefix}-0000-4000-8000-000000000000`));
+  const whole = { kind: "threadSummaries" as const, threadIds: [first, second] };
+  const previous = f.source.observe(whole, () => {});
+  const socket = await f.created;
+  const opening = f.source.socket.connect(); socket.open(); await opening;
+  const batch = await socket.request("workspace/observe");
+  socket.notify({ id: batch.id, result: {
+    kind: "threadSummaries", subscriptionId: batch.params.subscriptionId,
+    generation: batch.params.generation, revision: 1, phase: "current", failure: null, summaries: { [first]: null, [second]: null },
+  } });
+  await new Promise(setImmediate);
+  const held = previous.getSnapshot();
+  assert.equal(held.phase, "current");
+  previous.release();
+  const narrowOffset = socket.sent.length;
+  const reloaded = f.source.observe({ kind: "threadSummaries", threadIds: [first] }, () => {});
+  const narrow = await socket.request("workspace/observe", narrowOffset);
+  const offset = socket.sent.length;
+  reloaded.retarget(whole);
+  assert.deepEqual(reloaded.getSnapshot(), held);
+  assert.equal(socket.sent.length, offset, "the warm batch already holds the retargeted ids");
+  f.expireLingering();
+  assert.deepEqual(socket.sent.slice(offset).map(message => [message.method, message.params.subscriptionId]),
+    [["workspace/release", narrow.params.subscriptionId]], "only the abandoned narrow batch is released");
 });
 
 test("matching transcript views share an upstream subscription and late joiners receive a fresh baseline", async context => {
