@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect schema-guided repair from lossy whole-object fallback. Keywords: zod, schema, default, repair, conformance.
+ * Exports: none. Protect schema-guided repair, trusted defaults and fallback-free collection recovery.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -97,4 +97,47 @@ test("an invalid default is a programming error", () => {
     () => conformToZodSchema(schema, { count: "old" }, { count: "invalid" } as never),
     z.ZodError,
   );
+});
+
+test("fallback-free repair preserves nested siblings and reports discarded entries separately from extra keys", () => {
+  const row = z.object({
+    id: z.string(), note: z.string().optional(),
+    children: z.array(z.object({ id: z.string() }).strict()),
+  }).strict();
+  const schema = z.object({ rows: z.array(row), byId: z.record(z.string(), row) }).strict();
+  const result = conformToZodSchema(schema, {
+    rows: [
+      { id: "kept", note: 7, children: [{ id: "child", future: true }, { id: 2 }], future: true },
+      { id: 3, children: [] },
+    ],
+    byId: { kept: { id: "record", children: [], future: true }, bad: { id: false, children: [] } },
+    future: true,
+  });
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.deepEqual(result.data, {
+    rows: [{ id: "kept", children: [{ id: "child" }] }],
+    byId: { kept: { id: "record", children: [] } },
+  });
+  assert.ok(result.discardedPaths.some(path => path.join(".") === "rows.0.note"));
+  assert.ok(result.discardedPaths.some(path => path.join(".") === "rows.0.children.1"));
+  assert.ok(result.discardedPaths.some(path => path.join(".") === "rows.1"));
+  assert.ok(result.discardedPaths.some(path => path.join(".") === "byId.bad"));
+  assert.ok(!result.discardedPaths.some(path => path.at(-1) === "future"));
+  assert.ok(result.repairedPaths.some(path => path.join(".") === "rows.0.children.0.future"));
+});
+
+test("fallback-free unions follow the incoming discriminator and never invent required identity", () => {
+  const schema = z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("first"), id: z.uuid(), rows: z.array(z.string()) }).strict(),
+    z.object({ kind: z.literal("second"), title: z.string() }).strict(),
+  ]).transform(value => ({ ...value, accepted: true }));
+  const result = conformToZodSchema(schema, { kind: "second", title: "kept", future: true });
+  assert.equal(result.success, true);
+  if (result.success) {
+    assert.deepEqual(result.data, { kind: "second", title: "kept", accepted: true });
+    assert.deepEqual(result.discardedPaths, []);
+  }
+  assert.equal(conformToZodSchema(schema, { kind: "unknown", title: "kept" }).success, false);
+  assert.equal(conformToZodSchema(schema, { kind: "first", rows: [] }).success, false);
 });
