@@ -6,12 +6,14 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import {
   INSTALLATION_REPAIR_JOURNAL_SEGMENTS, INSTALLATION_UPDATE_MAX_CONFLICTS,
-  InstallationRepairJournalSchema,
-  type InstallationRepairJournal, type InstallationUpdate, type InstallationPullResult,
+  InstallationRepairJournalSchema, InstallationUpdateFailureSchema,
+  type InstallationUpdateFailure, type InstallationUpdate, type InstallationPullResult,
 } from "workbench-shared/workbench/installation-update";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import WorkbenchGitIntegration from "./lib/workbench/git/WorkbenchGitIntegration";
 import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
@@ -19,6 +21,14 @@ import watchGitRefs from "./lib/workbench/git/git-ref-watch";
 import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 type GitResult = { code: number; stdout: string; stderr: string };
+const journalSource = z.record(z.string(), z.json());
+const journalView = InstallationRepairJournalSchema.omit({ failure: true }).partial();
+const journalControl = InstallationRepairJournalSchema.pick({ version: true, id: true, phase: true }).strip();
+type JournalRead = {
+  source: z.infer<typeof journalSource> | null;
+  failure: InstallationUpdateFailure | null;
+  canDismiss: boolean;
+};
 type Options = {
   repoRoot: string;
   dataRoot?: string;
@@ -244,24 +254,57 @@ export default class WorkbenchInstallationUpdateController {
     });
   }
 
-  private async readJournal(): Promise<InstallationRepairJournal | null> {
+  private async readJournal(): Promise<JournalRead | null> {
     let text: string;
     try { text = await fs.readFile(this.journalPath, "utf8"); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
     }
-    try { return InstallationRepairJournalSchema.parse(JSON.parse(text)); }
-    catch { this.options.warn("Installation repair journal is invalid; ignoring it."); return null; }
+    const unknownFailure: InstallationUpdateFailure = {
+      at: Date.now(), logPath: "", message: "Installation repair journal needs attention.",
+    };
+    let decoded: unknown;
+    try { decoded = JSON.parse(text); }
+    catch {
+      this.options.warn("Installation repair journal contains malformed JSON.");
+      return { source: null, failure: unknownFailure, canDismiss: false };
+    }
+    const source = conformToZodSchema(journalSource, decoded);
+    if (!source.success) {
+      this.options.warn("Installation repair journal is not an object.");
+      return { source: null, failure: unknownFailure, canDismiss: false };
+    }
+    const { failure: storedFailure, ...fields } = source.data;
+    const view = conformToZodSchema(journalView, fields);
+    const control = conformToZodSchema(journalControl, source.data);
+    const fallback = { ...unknownFailure,
+      at: view.success ? view.data.updatedAt ?? view.data.createdAt ?? unknownFailure.at : unknownFailure.at,
+      logPath: view.success ? view.data.logPath ?? "" : "",
+    };
+    const failure = storedFailure === null ? null
+      : conformToZodSchema(InstallationUpdateFailureSchema, storedFailure, fallback);
+    const repairedPaths = [...view.repairedPaths, ...control.repairedPaths,
+      ...(failure?.repairedPaths.map(path => ["failure", ...path]) ?? [])];
+    if (repairedPaths.length) {
+      const paths = repairedPaths.slice(0, 5).map(path => path.map(String).join(".") || "<root>").join(", ")
+        .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").slice(0, 512);
+      this.options.warn(`Installation repair journal repaired: ${paths}`);
+    }
+    return {
+      source: source.data,
+      failure: failure?.data ?? (control.success && view.success ? null : fallback),
+      canDismiss: control.success && control.data.phase === "done",
+    };
   }
 
   async dismissFailure() {
     return this.options.transitions.run(this.options.repoRoot, async () => {
       const journal = await this.readJournal();
-      if (journal && journal.phase !== "done") throw new Error("Installation repair is not complete.");
+      if (journal && !journal.canDismiss) throw new Error("Installation repair is not complete or its journal identity is invalid.");
       if (journal?.failure) {
         const temporary = `${this.journalPath}.${process.pid}.tmp`;
-        await fs.writeFile(temporary, JSON.stringify({ ...journal, failure: null, updatedAt: Date.now() }));
+        await fs.writeFile(temporary, JSON.stringify({ ...journal.source, failure: null, updatedAt: Date.now() }));
         await fs.rename(temporary, this.journalPath);
       }
       this.publish({ ...this.value, failure: null });

@@ -203,12 +203,13 @@ test("repair failure is read and dismissal preserves journal identity and requir
   assert.deepEqual((await f.controller.check(false)).failure, journal.failure);
   await assert.rejects(f.controller.dismissFailure(), /not complete/u);
   assert.deepEqual(JSON.parse(await fs.readFile(journalPath, "utf8")), journal);
-  await fs.writeFile(journalPath, JSON.stringify({ ...journal, phase: "done" }));
+  await fs.writeFile(journalPath, JSON.stringify({ ...journal, phase: "done", future: { retained: true } }));
   await f.controller.dismissFailure();
   const saved: InstallationRepairJournal = JSON.parse(await fs.readFile(journalPath, "utf8"));
   assert.equal(saved.failure, null);
   assert.equal(saved.id, journal.id);
   assert.equal(saved.phase, "done");
+  assert.deepEqual(JSON.parse(await fs.readFile(journalPath, "utf8")).future, { retained: true });
   assert.equal(f.controller.read().failure, null);
 });
 
@@ -217,9 +218,38 @@ test("invalid repair journal warns without publishing rejected contents", async 
   const journalPath = path.join(f.temporary.path, "data", ...INSTALLATION_REPAIR_JOURNAL_SEGMENTS);
   await fs.mkdir(path.dirname(journalPath), { recursive: true });
   await fs.writeFile(journalPath, '{"secret":"private-value"}');
-  assert.equal((await f.controller.check(false)).failure, null);
-  assert.equal(f.warnings.length, 1);
-  assert.ok(!f.warnings[0]?.includes("private-value"));
+  assert.ok((await f.controller.check(false)).failure);
+  assert.ok(f.warnings.length > 0);
+  assert.ok(!f.warnings.join("\n").includes("private-value"));
+  await assert.rejects(f.controller.dismissFailure());
+  assert.equal(await fs.readFile(journalPath, "utf8"), '{"secret":"private-value"}');
+});
+
+test("journal repairs retain failure evidence without inventing dismissal authority", async t => {
+  const f = await fixture(t);
+  const journalPath = path.join(f.temporary.path, "data", ...INSTALLATION_REPAIR_JOURNAL_SEGMENTS);
+  await fs.mkdir(path.dirname(journalPath), { recursive: true });
+  const journal = {
+    version: 1, id: randomUUID(), phase: "done", fromSha: null, toSha: null,
+    logPath: "repair.log", lastError: null, createdAt: 1, updatedAt: 1,
+    failure: { at: "old", message: "keep this evidence", logPath: "repair.log", future: "private-value" },
+    future: "private-value",
+  };
+  for (const control of [{ phase: "future" }, { id: "invalid" }, { version: 2 }]) {
+    const text = JSON.stringify({ ...journal, ...control });
+    await fs.writeFile(journalPath, text);
+    const failure = (await f.controller.check(false)).failure;
+    assert.equal(failure?.message, journal.failure.message);
+    assert.equal(failure?.logPath, journal.failure.logPath);
+    await assert.rejects(f.controller.dismissFailure());
+    assert.equal(await fs.readFile(journalPath, "utf8"), text);
+  }
+  await fs.writeFile(journalPath, '{"phase":');
+  assert.ok((await f.controller.check(false)).failure);
+  await assert.rejects(f.controller.dismissFailure());
+  assert.equal(await fs.readFile(journalPath, "utf8"), '{"phase":');
+  assert.ok(f.warnings.some(message => message.includes("failure.at")));
+  assert.ok(!f.warnings.join("\n").includes("private-value"));
 });
 
 test("failed fetch stays unavailable through local recomputes and logs each failure once", async t => {
