@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendering tests protect tooltip plan reuse, preview ownership, live sidebar state, section urgency order, todos and waits.
+ * - No production exports; rendering tests protect tooltip plan reuse, preview ownership, live sidebar state, section urgency order, stack folding, todos and waits.
  */
 import assert from "node:assert/strict";
 import ThreadObservationController, { getThreadObservationKey } from "../../workbench/thread/ThreadObservationController";
@@ -507,21 +507,28 @@ test("stashed tooltips identify live claim owners without listing paths or plann
   assert.ok(cardStart < busyHtml.indexOf('data-thread-tooltip-proposal='));
 });
 
-test("tooltips name required todos and only count optional ones", async () => {
+test("tooltips name required todos by title and only count optional ones", async () => {
   const todo = (id: number, required: boolean, text: string) => ({ createdAt: id, id, required, text }) as WorkbenchThreadTodo;
   const html = await renderDetails(false, "C:/workspace", true, {
     pendingRequest: null, proposalId: null,
-    todos: [todo(1, true, "ship the tooltip"), todo(2, false, "polish later"), todo(3, false, "maybe never")],
+    todos: [
+      todo(1, true, "Ship the tooltip — the sidebar hover needs it before release"),
+      todo(4, true, "legacy first line\nmore detail"),
+      todo(2, false, "polish later"),
+      todo(3, false, "maybe never"),
+    ],
   });
-  assert.match(html, /ship the tooltip/u);
+  assert.match(html, /data-thread-tooltip-todo="1"[^>]*>Ship the tooltip</u);
+  assert.doesNotMatch(html, /before release/u);
+  assert.match(html, /data-thread-tooltip-todo="4"[^>]*>legacy first line</u);
   assert.doesNotMatch(html, /polish later|maybe never/u);
-  assert.match(html, /\+2 optional/u);
+  assert.match(html, /data-thread-tooltip-optional-todos="true"[^>]*>\+2 optional</u);
 
   const optionalOnly = await renderDetails(false, "C:/workspace", true, {
     pendingRequest: null, proposalId: null, todos: [todo(2, false, "polish later")],
   });
   assert.doesNotMatch(optionalOnly, /polish later/u);
-  assert.match(optionalOnly, /1 optional todo</u);
+  assert.match(optionalOnly, /data-thread-tooltip-optional-todos="true"[^>]*>1 optional</u);
 });
 
 test("tooltip proposals commit through the thread's own store, without a host-supplied cwd", async () => {
@@ -544,6 +551,23 @@ test("tooltip proposals are the status panel's list, with stack layers and commi
   assert.match(html, /data-thread-git-arc-commit-all="true"/u);
   assert.match(html, /data-thread-git-arc-stack-layer="layer"/u);
   assert.match(html, /data-thread-git-arc-proposal="lower"[\s\S]*data-thread-git-arc-proposal="upper"/u);
+});
+
+test("tall stacks fold layers above the committable one but keep them mounted for commit all", async () => {
+  const ids = ["l0", "l1", "l2", "l3", "l4", "l5"];
+  const html = await renderDetails(false, "C:/workspace", true, {
+    pendingRequest: null,
+    stack: {
+      proposalIds: ids,
+      stackLayers: ids.map((id, index) => ({ layerId: `layer-${index}`, proposalIds: [id], sealedAt: "2026-10-11", title: `Layer ${index}` })),
+    },
+  });
+  // Only the bottom layer can commit, so it alone offers the action.
+  assert.deepEqual([...html.matchAll(/data-thread-git-arc-commit-layer="([^"]+)"/gu)].map(([, layer]) => layer), ["layer-0"]);
+  assert.match(html, /data-thread-git-arc-more-layers="true"[^>]*>[\s\S]*?3 more layers</u);
+  const folded = html.slice(html.indexOf('data-thread-git-arc-folded-layers="true"'));
+  assert.match(folded, /data-thread-git-arc-stack-layer="layer-3"[\s\S]*data-thread-git-arc-proposal="l5"/u);
+  assert.doesNotMatch(folded, /data-thread-git-arc-stack-layer="layer-2"/u);
 });
 
 test("tooltips list the threads a thread waits for", async () => {

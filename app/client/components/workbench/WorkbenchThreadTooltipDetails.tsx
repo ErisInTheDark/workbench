@@ -1,12 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchThreadTooltipDetails: one sidebar thread's tooltip sections, read through the project that lists it, in urgency order: questionnaire card, active claim overlap notice, the status panel's pending proposal list, waits, quiet intersections and required todos; proposals observe through the leased thread store on the thread's own daemon.
+ * - default WorkbenchThreadTooltipDetails: one sidebar thread's tooltip sections, read through the project that lists it, in urgency order: questionnaire card, active claim overlap notice, the status panel's pending proposal list, waits, quiet intersections and todos; proposals observe through the leased thread store on the thread's own daemon.
  */
 "use client";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import { useMemo, useState } from "react";
 
@@ -16,7 +15,6 @@ import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersection
 import { ThreadStoreGitArcObservationProvider } from "./thread-view/ThreadGitArcObservationContext";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import WorkbenchThreadDaemonScope from "./WorkbenchThreadDaemonScope";
-import ThreadTodoPill from "./thread-view/ThreadTodoPill";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
 import { useProjects } from "./use-projects";
@@ -25,22 +23,7 @@ import { useThreads } from "./use-threads";
 import { useSettings } from "./use-settings";
 import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import { ThreadTooltipSection } from "./WorkbenchThreadTooltipContent";
-
-/** Required todos by text; optional ones only as a count, since the thread's own panel lists them. */
-function TooltipTodos({ todos }: { todos: readonly WorkbenchThreadTodo[] }) {
-  const required = todos.filter(todo => todo.required);
-  const optional = todos.length - required.length;
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1">
-      {required.map(todo => <ThreadTodoPill id={todo.id} key={todo.id} required text={todo.text} />)}
-      {optional ? (
-        <span className="px-1 text-[0.74rem] text-fg/muted">
-          {required.length ? `+${optional} optional` : `${optional} optional ${optional === 1 ? "todo" : "todos"}`}
-        </span>
-      ) : null}
-    </div>
-  );
-}
+import WorkbenchThreadTooltipTodos from "./WorkbenchThreadTooltipTodos";
 
 export default function WorkbenchThreadTooltipDetails({
   harness,
@@ -168,20 +151,23 @@ export default function WorkbenchThreadTooltipDetails({
       ) : null}
       {shown.filter(overlapsActive).map(entry => intersectionSection(entry, true))}
       {pendingProposals.length && cwd ? (
-        <ThreadTooltipSection aria-label="Commit proposals" bleed className="!pt-0" data-thread-tooltip-proposal="commit">
-          <ThreadGitArcProposalList
-            acceptance={stack?.acceptance ?? null}
-            commitActions={commitActions}
-            cwd={cwd}
-            harness={harness}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            proposals={pendingProposals}
-            stackLayers={stack?.stackLayers ?? []}
-            threadId={threadId}
-            workspaceRoots={workspaceRoots}
-          />
+        <ThreadTooltipSection aria-label="Commit proposals" className="!pt-0" data-thread-tooltip-proposal="commit">
+          {/* The list insets its own rows; its em-sized type is read here at the tooltip's section scale. */}
+          <div className="-mx-3 text-[1.1em]">
+            <ThreadGitArcProposalList
+              acceptance={stack?.acceptance ?? null}
+              commitActions={commitActions}
+              cwd={cwd}
+              harness={harness}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              proposals={pendingProposals}
+              stackLayers={stack?.stackLayers ?? []}
+              threadId={threadId}
+              workspaceRoots={workspaceRoots}
+            />
+          </div>
         </ThreadTooltipSection>
       ) : null}
       {waitingFor.length ? (
@@ -192,7 +178,7 @@ export default function WorkbenchThreadTooltipDetails({
       {shown.filter(entry => !overlapsActive(entry)).map(entry => intersectionSection(entry, false))}
       {todos.length ? (
         <ThreadTooltipSection aria-label="Todos">
-          <TooltipTodos todos={todos} />
+          <WorkbenchThreadTooltipTodos todos={todos} />
         </ThreadTooltipSection>
       ) : null}
     </div>

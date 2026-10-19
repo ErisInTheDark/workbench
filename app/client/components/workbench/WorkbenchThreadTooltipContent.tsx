@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadTooltipSection: one flush tooltip section under a hairline; `bleed` spans the tooltip surface's padding for edge-to-edge notices.
- * - default ThreadTooltipContent: render thread title (optionally after an agent name), title history and status, then caller sections and active claim paths grouped per coloured, titled subagent, without exposing stashed paths.
+ * - default ThreadTooltipContent: render thread title (optionally after an agent name) with its title history beneath, status, then caller sections and active claim paths grouped per coloured, titled subagent, without exposing stashed paths.
  */
 "use client";
 
@@ -59,11 +59,13 @@ export default function ThreadTooltipContent({
   const ownClaims = stashed ? [] : claimedPaths;
   return (
     <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">
-      <p className="m-0 truncate text-[0.9rem] font-medium leading-[1.45] text-text">
-        {agentName ? <>{agentName}{" "}</> : null}
-        {title}
-      </p>
-      {identity ? <WorkbenchThreadTitleHistory key={`${projectId}:${identity.harness}:${identity.threadId}`} projectId={projectId} harness={identity.harness} threadId={identity.threadId} /> : null}
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <p className="m-0 truncate text-[0.9rem] font-medium leading-[1.45] text-text">
+          {agentName ? <>{agentName}{" "}</> : null}
+          {title}
+        </p>
+        {identity ? <WorkbenchThreadTitleHistory key={`${projectId}:${identity.harness}:${identity.threadId}`} projectId={projectId} harness={identity.harness} threadId={identity.threadId} /> : null}
+      </div>
       <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-fg/muted">
         <Icon className={`shrink-0 ${statusClassName}`} size={14} />
         <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>

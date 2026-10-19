@@ -334,7 +334,7 @@ export default function Tooltip({
           role={interactive ? "dialog" : "tooltip"}
           aria-modal={interactive ? false : undefined}
           className={`
-            fixed flex w-max flex-col overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-overlay-glass px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl
+            scrollbar-hover-reveal fixed flex w-max flex-col overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-overlay-glass px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl
             ${interactive ? "pointer-events-auto" : "pointer-events-none"}
             ${surfaceClassName}
           `}

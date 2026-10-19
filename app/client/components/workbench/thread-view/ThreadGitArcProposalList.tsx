@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - getThreadAcceptedGitHistory: dedupe permanent commits against actionable live committed proposals.
- * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows (which load their source proposal for amend once opened); pending work sits under a persisted commit-all header (a lone proposal is its own persisted disclosure), accepted history under one group per commit age unless a single age is the whole panel.
+ * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows (which load their source proposal for amend once opened); pending work sits in a recessed card under a persisted commit-all header (a lone proposal is its own persisted disclosure) with tall stacks folded past the committable layer, accepted history under one group per commit age unless a single age is the whole panel.
  */
 "use client";
 
@@ -18,7 +18,7 @@ import type {
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { CheckCheckIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
+import { CheckCheckIcon, EllipsisIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
@@ -27,6 +27,9 @@ import Disclosure from "../../ui/Disclosure";
 import type { ThreadCommitDisclosure } from "./ThreadCheckpointCommitCard";
 import ThreadGitArcCommitGroup, { plural, threadGitArcCommitRowClassName } from "./ThreadGitArcCommitGroup";
 import { groupCommitsByAge } from "./thread-git-commit-age";
+
+/** Stack layers shown from the committable one up before the rest fold into one row. */
+const VISIBLE_LAYER_COUNT = 3;
 
 /** Pure pending or pure committed lists read as one noun; mixed lists split commits from proposals. */
 function formatProposalCounts(committed: number, proposed: number) {
@@ -131,6 +134,7 @@ export default function ThreadGitArcProposalList({
   const canPersist = clientState.schemaVersion >= appStateReleases.threadGitArcProposalsOpen.version;
   const [unpersistedOpen, setUnpersistedOpen] = useState(true);
   const [committingAll, setCommittingAll] = useState(false);
+  const [showAllLayers, setShowAllLayers] = useState(false);
   const pendingIdsOf = (values: typeof proposals) => values
     .filter(({ status }) => status === "proposed").map(({ proposalId }) => proposalId);
   const sealedIds = new Set(stackLayers.flatMap(({ proposalIds }) => proposalIds));
@@ -206,8 +210,8 @@ export default function ThreadGitArcProposalList({
   ) : null;
   const summary = (
     <span className="flex min-w-0 w-full flex-wrap items-center gap-x-3 gap-y-1">
-      <span className="flex min-w-0 grow basis-[16rem] items-center gap-1.5">
-        {proposedIds.length ? <GitArcProposalIcon className="shrink-0" size={14} /> : <CheckCheckIcon className="shrink-0" size={14} />}
+      <span className="flex min-w-0 grow basis-[16rem] items-center gap-2">
+        {proposedIds.length ? <GitArcProposalIcon className="shrink-0" size={16} /> : <CheckCheckIcon className="shrink-0" size={16} />}
         {formatProposalCounts(acceptedCount, proposedIds.length)}
       </span>
       {commitAllAction}
@@ -279,6 +283,43 @@ export default function ThreadGitArcProposalList({
   // Accepted history alone is the whole panel, so a single age group needs no group row of its own.
   const flattenAccepted = standalone && ageGroups.length === 1
     && !proposedIds.length && !layerGroups.length && !trailingProposals.length;
+  const layerRows = layerGroups.map((group) => {
+    const { layer, pendingIds: layerPendingIds, proposals: layerProposals } = group;
+    const pending = layerPendingIds.length;
+    const committed = layerProposals.length - pending;
+    return (
+      <ThreadGitArcCommitGroup
+        // Only the lowest pending layer can commit, so higher layers carry no button to disable.
+        action={group === lowestPendingGroup ? (
+          <span className="inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
+            <PrimaryButton
+              className="!px-3 !py-1 !text-[0.74rem]"
+              data-thread-git-arc-commit-layer={layer.layerId}
+              disabled={committing || !commitLayerReady}
+              onClick={() => void commitInOrder(layerPendingIds)}
+              pendingHalo={committing}
+            >
+              {committing ? "Committing…" : "Commit layer"}
+            </PrimaryButton>
+          </span>
+        ) : null}
+        // The list header already says these are commit proposals.
+        count={committed ? formatProposalCounts(committed, pending) : plural(pending, "proposal")}
+        data-thread-git-arc-stack-layer={layer.layerId}
+        icon={<GitArcStackIcon size={14} />}
+        iconLabel="stack layer"
+        // Sealed cards stay mounted so commit-all can walk the whole stack while layers are closed.
+        keepMounted
+        key={layer.layerId}
+        title={layer.title}
+      >
+        {layerProposals.map(({ proposalId }) => anchor(proposalId))}
+      </ThreadGitArcCommitGroup>
+    );
+  });
+  // Tall stacks show the committable layer and a few above it; folding a lone layer would save nothing.
+  const visibleLayerEnd = (lowestPendingGroup ? layerGroups.indexOf(lowestPendingGroup) : 0) + VISIBLE_LAYER_COUNT;
+  const foldedLayers = layerRows.length - visibleLayerEnd > 1 ? layerRows.slice(visibleLayerEnd) : [];
   const anchors = [
     ...(flattenAccepted ? ageGroups[0]!.entries.map(({ row }) => row()) : ageGroups.map(({ bucket, entries, title }) => (
       <ThreadGitArcCommitGroup
@@ -292,39 +333,32 @@ export default function ThreadGitArcProposalList({
         {entries.map(({ row }) => row())}
       </ThreadGitArcCommitGroup>
     ))),
-    ...layerGroups.map((group) => {
-      const { layer, pendingIds: layerPendingIds, proposals: layerProposals } = group;
-      const pending = layerPendingIds.length;
-      const lowest = group === lowestPendingGroup;
-      return (
-        <ThreadGitArcCommitGroup
-          action={pending ? (
-            <span className="inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
-              <PrimaryButton
-                className="!px-3 !py-1 !text-[0.74rem]"
-                data-thread-git-arc-commit-layer={layer.layerId}
-                disabled={committing || !lowest || !commitLayerReady}
-                onClick={() => void commitInOrder(layerPendingIds)}
-                pendingHalo={committing && lowest}
-                title={lowest ? undefined : "Commit lower layers first."}
-              >
-                {committing && lowest ? "Committing…" : "Commit layer"}
-              </PrimaryButton>
-            </span>
-          ) : null}
-          count={formatProposalCounts(layerProposals.length - pending, pending)}
-          data-thread-git-arc-stack-layer={layer.layerId}
-          icon={<GitArcStackIcon size={14} />}
-          iconLabel="stack layer"
-          // Sealed cards stay mounted so commit-all can walk the whole stack while layers are closed.
-          keepMounted
-          key={layer.layerId}
-          title={layer.title}
+    ...(foldedLayers.length ? layerRows.slice(0, visibleLayerEnd) : layerRows),
+    ...(foldedLayers.length ? [
+      showAllLayers ? null : (
+        <button
+          className={`
+            flex w-full cursor-pointer items-center gap-2 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-2
+            text-left text-[0.76em] leading-[1.45] text-fg/muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none
+          `}
+          data-thread-git-arc-more-layers="true"
+          key="more-layers"
+          onClick={() => setShowAllLayers(true)}
+          type="button"
         >
-          {layerProposals.map(({ proposalId }) => anchor(proposalId))}
-        </ThreadGitArcCommitGroup>
-      );
-    }),
+          {/* Same chevron slot and icon box as a layer row, so the fold lines up under the layers. */}
+          <EllipsisIcon aria-hidden="true" className="shrink-0" size={18} />
+          <span aria-hidden="true" className="flex size-[1.1rem] shrink-0 items-center justify-center">
+            <GitArcStackIcon size={14} />
+          </span>
+          {`${foldedLayers.length} more layers`}
+        </button>
+      ),
+      // Folded layers stay mounted for the same reason closed layers do: commit-all walks the whole stack.
+      <div className={showAllLayers ? "contents" : "hidden"} data-thread-git-arc-folded-layers="true" key="folded-layers">
+        {foldedLayers}
+      </div>,
+    ] : []),
     ...trailingProposals.map(({ proposalId }) => anchor(proposalId)),
   ];
 
@@ -349,6 +383,8 @@ export default function ThreadGitArcProposalList({
           {anchors}
         </div>
       ) : <Disclosure
+        // The same recessed card a group gives its own rows: hairlines between rows, none on top.
+        contentClassName="mx-3 mb-2 overflow-hidden rounded-[0.65rem] bg-fg/4 [&>*:first-child]:border-t-0"
         // Cards stay mounted while closed so they keep their edits and commit-all can reach them.
         keepMounted
         onToggle={(event) => setOpen(event.currentTarget.open)}
