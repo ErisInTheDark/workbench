@@ -1,4 +1,4 @@
-/* No production exports. Protect reader-pool dispatch order, the interactive reserve, queued-read abandonment, draining close and crash failure. */
+/* No production exports. Protect reader boot-before-open, dispatch order, the interactive reserve, queued-read abandonment, draining close and crash failure. */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
@@ -112,6 +112,23 @@ test("close lets queued and running reads finish before closing every reader", a
   assert.equal(closed, 2);
   assert.ok(f.readers.every(({ terminated }) => terminated));
   assert.equal(f.pool.ready, false);
+});
+
+test("readers boot before open, open initializes those same readers, and an unopened close only terminates them", async () => {
+  const readers: FakeReader[] = [];
+  const create = () => { const reader = new FakeReader([]); readers.push(reader); return reader; };
+  const pool = new WorkbenchDatabaseReadPool({ create, settle: () => {}, fail: () => {}, size: 2 });
+  assert.equal(readers.length, 2, "readers start booting while the writer prepares");
+  const initialized: FakeReader[] = [];
+  await pool.open(async (reader) => { initialized.push(reader as FakeReader); });
+  assert.deepEqual(initialized, readers);
+  assert.equal(readers.length, 2);
+
+  const unopened = new WorkbenchDatabaseReadPool({ create, settle: () => {}, fail: () => {}, size: 2 });
+  let closeRequests = 0;
+  await unopened.close(async () => { closeRequests += 1; });
+  assert.equal(closeRequests, 0, "booting readers hold no connection to close");
+  assert.ok(readers.slice(2).every(({ terminated }) => terminated));
 });
 
 test("an unexpected reader exit fails the owner, but closing or terminating does not", async () => {

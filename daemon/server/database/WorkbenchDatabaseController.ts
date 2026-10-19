@@ -336,6 +336,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
     }
     if (this.#state === "starting" && this.#startPromise === null) {
       this.#state = "closed";
+      await this.#readers.terminate();
       await (this.#termination ??= this.#worker.terminate());
       return;
     }

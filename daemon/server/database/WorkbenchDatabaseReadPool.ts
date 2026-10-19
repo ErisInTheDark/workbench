@@ -2,8 +2,9 @@
  * Exports:
  * - WorkbenchDatabaseReader: the worker surface the pool drives; a node Worker in production.
  * - WORKBENCH_DATABASE_READER_COUNT: reader workers (and read connections) beside the writer.
- * - default WorkbenchDatabaseReadPool: reader workers shared by priority. Each runs one read at a time, the most
- *   urgent queued read goes next, background reads never take the last free reader, and queued reads can be abandoned.
+ * - default WorkbenchDatabaseReadPool: reader workers shared by priority, spawned at construction so they boot beside the
+ *   writer. Each runs one read at a time, the most urgent queued read goes next, background reads never take the last
+ *   free reader, and queued reads can be abandoned.
  */
 import {
   isBackgroundDatabaseReadClass,
@@ -50,6 +51,8 @@ interface ReadPoolOptions {
 export default class WorkbenchDatabaseReadPool {
   readonly #options: ReadPoolOptions;
   #slots: Slot[] = [];
+  /** Set from `open` until close or termination; spawned readers are only booting before then. */
+  #opened = false;
   #ready = false;
   /** Set while closing: queued reads still drain, but new reads go to the writer so the drain can end. */
   #closing = false;
@@ -61,15 +64,18 @@ export default class WorkbenchDatabaseReadPool {
     // Background reads must leave one reader free, so a single reader would never run them.
     if ((options.size ?? WORKBENCH_DATABASE_READER_COUNT) < 2) throw new Error("The database read pool needs at least two readers.");
     this.#options = options;
+    this.#slots = this.#spawnAll();
   }
 
   /** False until every reader is initialized, and again from the start of closing; callers then read through the writer. */
   get ready() { return this.#ready && !this.#closing; }
 
+  /** Initializes the booted readers, or fresh ones after a close or termination. */
   async open(initialize: (reader: WorkbenchDatabaseReader) => Promise<void>) {
-    if (this.#slots.length) return;
-    const slots = Array.from({ length: this.#options.size ?? WORKBENCH_DATABASE_READER_COUNT }, () => this.#spawn());
-    this.#slots = slots;
+    if (this.#opened) return;
+    this.#opened = true;
+    if (!this.#slots.length) this.#slots = this.#spawnAll();
+    const slots = this.#slots;
     await Promise.all(slots.map(({ reader }) => initialize(reader)));
     if (this.#slots !== slots) return;
     this.#ready = true;
@@ -105,7 +111,10 @@ export default class WorkbenchDatabaseReadPool {
 
   /** Lets queued and running reads finish, then closes every reader. */
   async close(closeReader: (reader: WorkbenchDatabaseReader) => Promise<void>) {
-    if (!this.#slots.length) return;
+    if (!this.#opened) {
+      await this.terminate();
+      return;
+    }
     this.#closing = true;
     await new Promise<void>((resolve) => {
       this.#drainWaiters.push(resolve);
@@ -113,6 +122,7 @@ export default class WorkbenchDatabaseReadPool {
     });
     const slots = this.#slots;
     this.#slots = [];
+    this.#opened = false;
     this.#ready = false;
     this.#closing = false;
     await Promise.all(slots.map(async ({ reader }) => {
@@ -125,6 +135,7 @@ export default class WorkbenchDatabaseReadPool {
   async terminate() {
     const slots = this.#slots;
     this.#slots = [];
+    this.#opened = false;
     this.#ready = false;
     this.#closing = false;
     for (const entry of this.#queue.splice(0)) entry.detach();
@@ -138,6 +149,10 @@ export default class WorkbenchDatabaseReadPool {
       const { used_heap_size: used, total_heap_size: total } = await reader.getHeapStatistics();
       return { used, total };
     }));
+  }
+
+  #spawnAll() {
+    return Array.from({ length: this.#options.size ?? WORKBENCH_DATABASE_READER_COUNT }, () => this.#spawn());
   }
 
   #spawn(): Slot {

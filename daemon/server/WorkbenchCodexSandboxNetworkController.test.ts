@@ -2,87 +2,41 @@
  * No production exports. Tests protect persisted default-off global and project Codex sandbox network resolution.
  */
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
-import { join } from "node:path";
-import { after, before, test } from "node:test";
-import { promisify } from "node:util";
+import { test } from "node:test";
+import Database from "better-sqlite3";
+import { renderCreateTable } from "workbench-shared/database/schema/schema-definition";
+import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 
-import type { DaemonProcessContext } from "./daemon-process-context";
-let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
-let CodexConfigurationNode: typeof import("./CodexConfigurationNode").default;
-let discoveryRoot: string;
-let discoveryTemporary: WorkbenchTemporaryDirectory | null = null;
-const previousLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
-const execFileAsync = promisify(execFile);
+import WorkbenchCodexSandboxNetworkController, { type WorkbenchCodexSandboxNetworkDatabase } from "./WorkbenchCodexSandboxNetworkController";
+import { codexSandboxNetworkTables } from "./lib/workbench/database/schema/codex-sandbox-network-schema";
 
-before(async () => {
-  discoveryTemporary = await WorkbenchTemporaryDirectory.create("workbench-network-discovery-");
-  discoveryRoot = discoveryTemporary.path;
-  for (const name of ["project", "other"]) {
-    await mkdir(join(discoveryRoot, name), { recursive: true });
-    await execFileAsync("git", ["init", "-q"], { cwd: join(discoveryRoot, name), windowsHide: true });
-  }
-  process.env.WORKBENCH_LIBRARY_ROOT = join(discoveryRoot, "library");
-  ({ default: WorkbenchDatabaseNode } = await import("./WorkbenchDatabaseNode"));
-  ({ default: CodexConfigurationNode } = await import("./CodexConfigurationNode"));
-});
+const tables = Object.fromEntries(Object.values(codexSandboxNetworkTables).map(table => [table.name, table]));
 
-after(async () => {
-  if (previousLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
-  else process.env.WORKBENCH_LIBRARY_ROOT = previousLibraryRoot;
-  await discoveryTemporary?.dispose();
-});
-
-function createDatabaseNode(directory: string) {
-  return WorkbenchDatabaseNode.create(
-    { dataRootPath: join(directory, "data"), legacyMigrationProjectRoot: directory } as DaemonProcessContext,
-    {
-      get: () => {
-        throw new Error("The database root has no registration requirements");
-      },
-      run: () => { throw new Error("Unexpected graph operation in node fixture"); },
-      getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
-      handoffState: undefined,
-      isReplacing: () => false,
-      lease: { isCurrent: () => true },
-      mode: "initial",
+function networkDatabase(database: Database.Database): WorkbenchCodexSandboxNetworkDatabase {
+  for (const table of Object.values(tables)) database.exec(renderCreateTable(table));
+  return {
+    query: async <Row extends WorkbenchDatabaseRow>(query: Parameters<WorkbenchCodexSandboxNetworkDatabase["query"]>[0]) => {
+      const compiled = compileWorkbenchDatabaseStatement(tables, query);
+      return database.prepare(compiled.sql).all(...compiled.parameters) as Row[];
     },
-  );
-}
-
-function createConfigurationNode(database: NonNullable<ReturnType<typeof createDatabaseNode>["registrations"]["database"]>) {
-  return CodexConfigurationNode.create({} as DaemonProcessContext, {
-    get: key => {
-      if (key !== "database") throw new Error(`Unexpected configuration dependency ${key}.`);
-      return database as never;
-    },
-    run: () => { throw new Error("Unexpected graph operation in configuration fixture"); },
-    getSourceState: () => { throw new Error("Unexpected source access in configuration fixture"); },
-    handoffState: undefined,
-    isReplacing: () => false,
-    lease: { isCurrent: () => true },
-    mode: "initial",
-  });
+    executeTransaction: async statements => database.transaction(() => {
+      let changes = 0;
+      for (const statement of statements) {
+        const compiled = compileWorkbenchDatabaseStatement(tables, statement);
+        changes += database.prepare(compiled.sql).run(...compiled.parameters).changes;
+      }
+      return { changes };
+    })(),
+  };
 }
 
 test("Codex sandbox network settings persist global and project inheritance", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-codex-network-");
-  const directory = temporary.path;
-  let databaseNode = createDatabaseNode(directory);
-  let configurationNode = createConfigurationNode(databaseNode.registrations.database!);
+  const database = new Database(":memory:");
+  const port = networkDatabase(database);
+  const projectId = "project";
+  const otherId = "other";
   try {
-    await databaseNode.start();
-    assert.equal(databaseNode.registrations.database!.readInitialProjectCatalog(), null);
-    const { discoverProjectIdentities } = await import("./lib/project");
-    const projects = (await databaseNode.registrations.database!.reconcileProjectCatalog(
-      await discoverProjectIdentities([discoveryRoot]),
-    )).catalog;
-    const projectId = projects.find(record => record.project.name === "project")?.project.id;
-    const otherId = projects.find(record => record.project.name === "other")?.project.id;
-    assert.ok(projectId && otherId);
-    let settings = configurationNode.registrations.codexSandboxNetwork!;
+    let settings = new WorkbenchCodexSandboxNetworkController(port);
     assert.deepEqual(await settings.read(projectId), {
       effectiveEnabled: false,
       globalEnabled: false,
@@ -114,12 +68,8 @@ test("Codex sandbox network settings persist global and project inheritance", as
     });
 
     await settings.setProjectOverride(otherId, true);
-    await configurationNode.dispose();
-    await databaseNode.dispose();
-    databaseNode = createDatabaseNode(directory);
-    await databaseNode.start();
-    configurationNode = createConfigurationNode(databaseNode.registrations.database!);
-    settings = configurationNode.registrations.codexSandboxNetwork!;
+    await settings.waitForIdle();
+    settings = new WorkbenchCodexSandboxNetworkController(port);
     assert.equal((await settings.read(projectId)).projectOverride, false);
     assert.equal((await settings.read(otherId)).effectiveEnabled, true);
 
@@ -135,8 +85,6 @@ test("Codex sandbox network settings persist global and project inheritance", as
     assert.equal(await settings.resolve(projectId), false);
     assert.equal(await settings.resolve(otherId), true);
   } finally {
-    await configurationNode.dispose();
-    await databaseNode.dispose();
-    await temporary.dispose();
+    database.close();
   }
 });
