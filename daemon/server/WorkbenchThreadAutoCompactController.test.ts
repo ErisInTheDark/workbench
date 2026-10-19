@@ -1,4 +1,4 @@
-/* Exports: none. Protect conjunctive idle compaction, message ordering, queued user messages, overlap and failures. */
+/* Exports: none. Protect conjunctive idle compaction, message ordering, queued user messages, generation handoff, overlap and failures. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
@@ -6,19 +6,26 @@ import type { ThreadPayload } from "workbench-shared/types";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
-import WorkbenchThreadAutoCompactController, { type ThreadAutoCompactEvidence } from "./WorkbenchThreadAutoCompactController";
-import WorkbenchThreadCompactionController, { type QueuedThreadMessage } from "./WorkbenchThreadCompactionController";
+import WorkbenchThreadAutoCompactController, {
+  type QueuedMessageDelivery, type ThreadAutoCompactEvidence,
+} from "./WorkbenchThreadAutoCompactController";
+import WorkbenchThreadCompactionController, {
+  type CompactionQueueHandoff, type QueuedThreadMessage,
+} from "./WorkbenchThreadCompactionController";
 
 const compaction = {
-  compactInsideAdmission: async (
+  compactInsideAdmission: async <T>(
     threadId: string,
     provider: { threads: { compact: WorkbenchProvider["threads"]["compact"] } },
-    signal?: AbortSignal,
-  ) => provider.threads.compact(threadId, {
-    scope: { itemId: "item", turnId: "turn" } as never,
-    signal,
-  }),
+    _ticket: unknown,
+    options: { signal?: AbortSignal; then?: () => Promise<T> } = {},
+  ) => {
+    await provider.threads.compact(threadId, { scope: { itemId: "item", turnId: "turn" } as never, signal: options.signal });
+    return await options.then?.();
+  },
   enqueue: async () => false,
+  adopt: async () => {},
+  retireStranded: async () => {},
 };
 
 function fixture() {
@@ -316,8 +323,8 @@ function queueFixture(due = true) {
     isTurnLive: async () => false,
     compact: async () => { entered.resolve(); await release.promise; },
   } };
-  const deliver = async (message: QueuedThreadMessage, options: { skipAutoCompact?: boolean }) => {
-    if (options.skipAutoCompact && message.clientMessageId !== "direct") delivered.resolve(message);
+  const deliver: QueuedMessageDelivery = async (message, options) => {
+    if (options.admission) delivered.resolve(message);
     else direct.push(message);
     return { kind: "steered" as const, turnId: "turn" };
   };
@@ -338,6 +345,65 @@ test("a send that makes compaction due returns queued at once and heads the merg
   assert.deepEqual(merged.input.map(part => part.type === "text" ? part.text : part.type), ["first", "second"]);
   assert.deepEqual(f.direct, []);
   await f.owner.dispose();
+});
+
+test("a queued message cut off by a generation swap is delivered by the replacement generation", async () => {
+  /** The first final state any copy of the held message reaches. */
+  const settled = Promise.withResolvers<string>();
+  const release = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const provider = { threads: {
+    read: async () => ({ status: "idle" }) as ThreadPayload,
+    latestTurn: async () => ({ id: "00000000-0000-4000-8000-000000000012" }) as Turn,
+    isTurnLive: async () => false,
+    compact: async () => { entered.resolve(); await release.promise; },
+  } };
+  const delivered = Promise.withResolvers<{ generation: string; message: QueuedThreadMessage }>();
+  const generation = (name: string, handoff?: (threadId: string, handoff: CompactionQueueHandoff) => Promise<void>) => {
+    const admission = new WorkbenchThreadAdmissionController();
+    const compaction = new WorkbenchThreadCompactionController(admission, {
+      record: async entries => {
+        for (const entry of entries) {
+          if (entry.kind === "steer" && entry.entry.status !== "pending") settled.resolve(entry.entry.status);
+        }
+        return { changedThreadIds: [], compactionCompletions: [] };
+      },
+      now: () => 1,
+      ...(handoff ? { handoff } : {}),
+    });
+    const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
+      readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
+      readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+      readRuntime: async () => ({ latestTurn: null, status: "idle", turnLive: false }),
+      publish: () => {},
+      now: () => 30 * 60_000,
+      warn: () => {},
+    });
+    const deliver: QueuedMessageDelivery = async (message, options) => {
+      assert.ok(options.admission && admission.admits(queueThreadId, options.admission), "queued delivery holds its admission");
+      delivered.resolve({ generation: name, message });
+      return { kind: "steered", turnId: "turn" };
+    };
+    return { admission, compaction, deliver, owner };
+  };
+  const replacement = generation("replacement");
+  const retiring = generation("retiring", (threadId, handoff) => replacement.owner.adopt(threadId, provider, handoff, replacement.deliver));
+  const first: QueuedThreadMessage = { clientMessageId: "first", intent: "continue", input: [{ type: "text", text: "first", text_elements: [] }] };
+
+  assert.deepEqual(await retiring.owner.submit(queueThreadId, provider, first, retiring.deliver), { kind: "queued" });
+  await entered.promise;
+  // The host retires the old core while its compaction still runs.
+  retiring.compaction.beginRuntimeDrain();
+  retiring.admission.beginRuntimeDrain();
+  retiring.owner.beginRuntimeDrain();
+  release.resolve();
+
+  assert.equal(await settled.promise, "dismissed", "the message is delivered, never left undelivered");
+  const { generation: by, message } = await delivered.promise;
+  assert.equal(by, "replacement");
+  assert.deepEqual(message.input.map(part => part.type === "text" ? part.text : part.type), ["first"]);
+  await replacement.owner.dispose();
+  await retiring.owner.dispose();
 });
 
 test("a send with nothing to compact is delivered directly", async () => {

@@ -1,7 +1,7 @@
-/* Exports: none. Protect FIFO admission, successful rollover release, failed holds, and drain. */
+/* Exports: none. Protect FIFO admission, lane tickets, successful rollover release, failed holds, and drain. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
+import WorkbenchThreadAdmissionController, { type WorkbenchThreadAdmissionTicket } from "./WorkbenchThreadAdmissionController";
 
 test("messages queued after a hold release in FIFO order", async () => {
   const owner = new WorkbenchThreadAdmissionController();
@@ -28,6 +28,18 @@ test("failed holds reject every already-queued admission without poisoning later
   await assert.rejects(second, /rollover failed/u);
   await owner.run("thread", async () => { calls.push("later"); });
   assert.deepEqual(calls, ["later"]);
+  await owner.dispose();
+});
+
+test("a lane ticket proves admission only while its operation holds that thread's lane", async () => {
+  const owner = new WorkbenchThreadAdmissionController();
+  let held: WorkbenchThreadAdmissionTicket | null = null;
+  await owner.run("thread", async ticket => {
+    held = ticket;
+    assert.equal(owner.admits("thread", ticket), true);
+    assert.equal(owner.admits("other", ticket), false);
+  });
+  assert.equal(owner.admits("thread", held!), false);
   await owner.dispose();
 });
 

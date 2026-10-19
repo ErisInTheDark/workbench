@@ -6,6 +6,8 @@
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import type { WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import type { WorkbenchThreadMessage } from "workbench-shared/workbench/thread/thread-actions";
+import type { WorkbenchThreadAdmissionTicket } from "./WorkbenchThreadAdmissionController";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
 import type { WorkbenchProviderHandleOptions, WorkbenchProviderHiddenTurn } from "./WorkbenchProviderHandle";
@@ -47,5 +49,9 @@ export default class WorkbenchProviderDispatcher {
 
   admitHiddenTurn(key: WorkbenchProviderKey, turn: WorkbenchProviderHiddenTurn) {
     return this.handle(key).admitHiddenTurn(turn);
+  }
+
+  submitWithinAdmission(key: WorkbenchProviderKey, input: WorkbenchThreadMessage, admission: WorkbenchThreadAdmissionTicket) {
+    return this.handle(key).submitWithinAdmission(input, admission);
   }
 }

@@ -1,7 +1,9 @@
 /*
  * Exports:
  * - WorkbenchThreadAdmissionHold: one explicit per-thread barrier settlement.
- * - default WorkbenchThreadAdmissionController: own FIFO message admission and rollover holds.
+ * - WorkbenchThreadAdmissionTicket: opaque proof that one admission operation holds its thread's lane.
+ * - WorkbenchAdmissionDrainingError: the rejection a retiring admission owner gives work it will no longer admit.
+ * - default WorkbenchThreadAdmissionController: own FIFO message admission, lane tickets and rollover holds.
  */
 interface AdmissionHold {
   failed: unknown | null;
@@ -14,27 +16,51 @@ export interface WorkbenchThreadAdmissionHold {
   fail(error: unknown): void;
 }
 
+export interface WorkbenchThreadAdmissionTicket {
+  readonly threadId: string;
+}
+
+export class WorkbenchAdmissionDrainingError extends Error {
+  constructor(owner: string) {
+    super(`${owner} is reloading.`);
+    this.name = "WorkbenchAdmissionDrainingError";
+  }
+}
+
 export default class WorkbenchThreadAdmissionController {
   private readonly lanes = new Map<string, Promise<void>>();
   private readonly holds = new Map<string, AdmissionHold>();
+  /** The ticket of the operation currently admitting on each thread's lane. */
+  private readonly holders = new Map<string, WorkbenchThreadAdmissionTicket>();
   private readonly lifetime = new AbortController();
 
   hasPendingWork() { return this.lanes.size > 0 || this.holds.size > 0; }
 
-  run<T>(threadId: string, admit: () => Promise<T>): Promise<T> {
+  run<T>(threadId: string, admit: (ticket: WorkbenchThreadAdmissionTicket) => Promise<T>): Promise<T> {
     this.lifetime.signal.throwIfAborted();
     const previous = this.lanes.get(threadId) ?? Promise.resolve();
     const hold = this.holds.get(threadId);
     const operation = previous.then(async () => {
       this.lifetime.signal.throwIfAborted();
       if (hold?.failed) throw hold.failed;
-      return await admit();
+      const ticket: WorkbenchThreadAdmissionTicket = Object.freeze({ threadId });
+      this.holders.set(threadId, ticket);
+      try {
+        return await admit(ticket);
+      } finally {
+        if (this.holders.get(threadId) === ticket) this.holders.delete(threadId);
+      }
     });
     const tail = operation.then(() => {}, () => {}).finally(() => {
       if (this.lanes.get(threadId) === tail) this.lanes.delete(threadId);
     });
     this.lanes.set(threadId, tail);
     return operation;
+  }
+
+  /** True only while the operation that received `ticket` still admits on `threadId`'s lane. */
+  admits(threadId: string, ticket: WorkbenchThreadAdmissionTicket) {
+    return this.holders.get(threadId) === ticket;
   }
 
   hold(threadId: string): WorkbenchThreadAdmissionHold {
@@ -64,7 +90,7 @@ export default class WorkbenchThreadAdmissionController {
   }
 
   beginRuntimeDrain() {
-    if (!this.lifetime.signal.aborted) this.lifetime.abort(new Error("Thread message admission is reloading."));
+    if (!this.lifetime.signal.aborted) this.lifetime.abort(new WorkbenchAdmissionDrainingError("Thread message admission"));
     for (const hold of this.holds.values()) {
       hold.failed = this.lifetime.signal.reason;
       hold.releaseGate();

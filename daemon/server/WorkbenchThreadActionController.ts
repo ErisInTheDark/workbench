@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project, virtual-steer and transcript owners.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze, virtual-steer routing and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze, virtual-steer routing, compaction-queue adoption and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -34,7 +34,9 @@ import type WorkbenchThreadGoalController from "./WorkbenchThreadGoalController"
 import type WorkbenchThreadTodoController from "./WorkbenchThreadTodoController";
 import type WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
+import type { QueuedMessageDelivery } from "./WorkbenchThreadAutoCompactController";
 import type WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
+import type { CompactionQueueHandoff } from "./WorkbenchThreadCompactionController";
 import type WorkbenchQuestionnaireSteerController from "./WorkbenchQuestionnaireSteerController";
 import { assertWorkbenchSkillActivations } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
@@ -42,7 +44,7 @@ import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/threa
 export interface WorkbenchThreadActionOwners {
   /** Messages a held questionnaire keeps for its answer, released undelivered when stop dismisses it. */
   questionnaireSteers: Pick<WorkbenchQuestionnaireSteerController, "hold" | "release">;
-  autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe" | "submit">;
+  autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe" | "submit" | "adopt">;
   compaction: Pick<WorkbenchThreadCompactionController, "compact">;
   approvals: Pick<WorkbenchApprovalController, "list">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
@@ -55,7 +57,7 @@ export interface WorkbenchThreadActionOwners {
   settlement: Pick<WorkbenchTurnSettlementController, "settleIfOrphaned">;
   /** Workbench-started hidden turns (refresh, unfinished continuation) that a stop must win against. */
   continuations: Pick<WorkbenchTurnContinuationController, "cancel">;
-  providers: Pick<WorkbenchProviderDispatcher, "get">;
+  providers: Pick<WorkbenchProviderDispatcher, "get" | "submitWithinAdmission">;
   projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
   identities: Pick<WorkbenchThreadIdentityController, "resolve" | "resolveTurn">;
   profiles: Pick<WorkbenchThreadStateFeature, "captureCreationProfile" | "captureCreationProfileForProject">;
@@ -106,10 +108,14 @@ export default class WorkbenchThreadActionController {
     }
   }
 
-  private provider(harness: WorkbenchHarness) {
+  private providerKey(harness: WorkbenchHarness) {
     const key = installedProviderKeys.find(candidate => candidate === harness);
     if (!key) throw new Error(`Provider ${harness} is not installed.`);
-    return this.owners.providers.get(key);
+    return key;
+  }
+
+  private provider(harness: WorkbenchHarness) {
+    return this.owners.providers.get(this.providerKey(harness));
   }
 
   private async target(reference: string) {
@@ -273,7 +279,7 @@ export default class WorkbenchThreadActionController {
   }
 
   private async message(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageSubmitResult> {
-    const { identity, provider } = await this.target(input.threadId);
+    const { identity, harness, provider } = await this.target(input.threadId);
     const threadId = identity.threadId;
     // Senders that track skills claim them; the claim must match what this daemon would activate.
     const claimed = input.context?.activatedSkillPaths;
@@ -292,9 +298,24 @@ export default class WorkbenchThreadActionController {
     // Admission activates and records the skills the admitted input names.
     return await this.owners.questionnaireSteers.hold(threadId, message)
       ? { kind: "queued" }
-      : await this.owners.autoCompact.submit(threadId, provider, message, (queued, options) => provider.threads.submit({
-        ...queued, threadId, ...(options.skipAutoCompact ? { skipAutoCompact: true } : {}),
-      }), input.skipAutoCompact ? { skipAutoCompact: true } : {});
+      : await this.owners.autoCompact.submit(threadId, provider, message, this.delivery(harness, threadId),
+        input.skipAutoCompact ? { skipAutoCompact: true } : {});
+  }
+
+  /** The current generation delivers a compaction queue a retiring generation could not. */
+  async adoptCompactionQueue(threadId: WorkbenchThreadId, handoff: CompactionQueueHandoff) {
+    const { identity, harness, provider } = await this.target(threadId);
+    await this.owners.autoCompact.adopt(identity.threadId, provider, handoff, this.delivery(harness, identity.threadId));
+  }
+
+  /** Direct sends go through the provider's own admission; queued deliveries reuse the admission their compaction holds. */
+  private delivery(harness: WorkbenchHarness, threadId: string): QueuedMessageDelivery {
+    const key = this.providerKey(harness);
+    return (message, options) => options.admission
+      ? this.owners.providers.submitWithinAdmission(key, { ...message, threadId }, options.admission)
+      : this.owners.providers.get(key).threads.submit({
+        ...message, threadId, ...(options.skipAutoCompact ? { skipAutoCompact: true } : {}),
+      });
   }
 
   private async withAutoCompactStatus<Thread extends ThreadPayload>(thread: Thread): Promise<Thread> {

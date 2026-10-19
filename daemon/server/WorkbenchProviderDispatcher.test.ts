@@ -21,15 +21,18 @@ import WorkbenchThreadInstructionSelectionController from "./WorkbenchThreadInst
 import type { WorkbenchInstructionSelection, WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
 
 const compaction = {
-  compactInsideAdmission: async (
+  compactInsideAdmission: async <T>(
     threadId: string,
     provider: { threads: { compact: WorkbenchProvider["threads"]["compact"] } },
-    signal?: AbortSignal,
-  ) => provider.threads.compact(threadId, {
-    scope: { itemId: "item", turnId: "turn" } as never,
-    signal,
-  }),
+    _ticket: unknown,
+    options: { signal?: AbortSignal; then?: () => Promise<T> } = {},
+  ) => {
+    await provider.threads.compact(threadId, { scope: { itemId: "item", turnId: "turn" } as never, signal: options.signal });
+    return await options.then?.();
+  },
   enqueue: async () => false,
+  adopt: async () => {},
+  retireStranded: async () => {},
 };
 
 test("accepted agent messages wake matching message waits and end others without registry cancellation, while user steers still cancel", async () => {
@@ -190,6 +193,42 @@ test("user bypass skips Workbench compaction and is stripped before provider sub
     input: [],
     intent: "continue",
   }]);
+  await owner.dispose();
+  await admission.dispose();
+});
+
+test("a compaction queue's delivery admits inside the admission its compaction holds, never with a stale ticket", async () => {
+  const received: object[] = [];
+  const provider = { threads: {
+    read: async () => ({ status: "idle" }),
+    latestTurn: async () => ({ id: "previous", status: "completed" }),
+    isTurnLive: async () => false,
+    compact: async () => assert.fail("Queued delivery must not compact again."),
+    submit: async (input: object) => { received.push(input); return { kind: "started", turn: { id: "turn" } }; },
+  } } as unknown as WorkbenchProvider;
+  const admission = new WorkbenchThreadAdmissionController();
+  const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
+    readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
+    readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+    readRuntime: async () => ({ latestTurn: { id: "previous" }, status: "idle", turnLive: false }),
+    publish: () => {},
+    now: () => 30 * 60_000,
+    warn: () => {},
+  });
+  const dispatcher = new WorkbenchProviderDispatcher(
+    async (_registration, operation) => operation(provider),
+    { interruptSteerWaits: () => undefined, messageAdmission: owner.run.bind(owner) },
+  );
+  const merged = { threadId: "thread", clientMessageId: "queue", input: [], intent: "continue" as const };
+  let stale: Parameters<typeof dispatcher.submitWithinAdmission>[2] | null = null;
+  const result = await admission.run("thread", async ticket => {
+    stale = ticket;
+    return await dispatcher.submitWithinAdmission("claude", merged, ticket);
+  });
+  assert.equal(result.kind, "started");
+  assert.deepEqual(received, [merged]);
+  await assert.rejects(dispatcher.submitWithinAdmission("claude", merged, stale!), /no longer holds/u);
+  assert.equal(received.length, 1);
   await owner.dispose();
   await admission.dispose();
 });

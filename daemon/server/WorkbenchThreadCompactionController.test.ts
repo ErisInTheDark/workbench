@@ -1,8 +1,10 @@
-/* No exports. Protect shared compaction admission, scope, failure settlement and the compaction queue. */
+/* No exports. Protect shared compaction admission, scope, failure settlement, in-admission queue delivery, generation handoff and stranded holds. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
-import WorkbenchThreadCompactionController, { type QueuedThreadMessage } from "./WorkbenchThreadCompactionController";
+import WorkbenchThreadAdmissionController, { WorkbenchAdmissionDrainingError } from "./WorkbenchThreadAdmissionController";
+import WorkbenchThreadCompactionController, {
+  type CompactionQueueHandoff, type QueuedThreadMessage,
+} from "./WorkbenchThreadCompactionController";
 
 const threadId = "00000000-0000-4000-8000-000000000001";
 const turnId = "00000000-0000-4000-8000-000000000002";
@@ -12,9 +14,12 @@ function fixture() {
   const admission = new WorkbenchThreadAdmissionController();
   const observations: Array<{ phase?: string }> = [];
   const steers: Array<{ entryKey: string; status: string; clientUserMessageId?: string | null; error: string | null }> = [];
+  const retirements: string[] = [];
   const activity: boolean[] = [];
   const resolution = Promise.withResolvers<void>();
+  const handoffs: CompactionQueueHandoff[] = [];
   let compact = async () => {};
+  let handoff = async (_handoff: CompactionQueueHandoff) => {};
   const owner = new WorkbenchThreadCompactionController(admission, {
     itemId: () => itemId,
     now: () => observations.length + 1,
@@ -22,21 +27,24 @@ function fixture() {
       for (const entry of entries) {
         if (entry.kind === "contextCompaction") observations.push(entry);
         if (entry.kind === "steer") steers.push(entry.entry);
+        if (entry.kind === "abandonedHolds") retirements.push(entry.scope ?? "all");
       }
       if (entries.some(entry => entry.kind === "steer" && entry.entry.status !== "pending")) resolution.resolve();
       return { changedThreadIds: [threadId], compactionCompletions: [] };
     },
     setCompacting: (_threadId, compacting) => { activity.push(compacting); },
+    handoff: async (_threadId, next) => { handoffs.push(next); await handoff(next); },
   });
   const provider = { threads: {
     latestTurn: async () => ({ id: turnId }),
     compact: async () => compact(),
   } } as never;
   return {
-    activity, admission, observations, owner, provider, steers,
+    activity, admission, handoffs, observations, owner, provider, retirements, steers,
     /** Resolves once the queue records its held messages' final state. */
     resolved: resolution.promise,
     compact: (next: () => Promise<void>) => { compact = next; },
+    handoff: (next: (handoff: CompactionQueueHandoff) => Promise<void>) => { handoff = next; },
   };
 }
 
@@ -153,4 +161,103 @@ test("settles provider failure and rejects overlapping compaction", async () => 
   await assert.rejects(operation, /native failure/u);
   assert.deepEqual(f.observations.map(entry => entry.phase), ["started", "failed"]);
   assert.deepEqual(f.activity, [true, false]);
+});
+
+test("queued messages are admitted inside the compaction's own admission, ahead of input sent after it", async () => {
+  const f = fixture();
+  const held = heldCompaction(f);
+  const operation = f.owner.compact(threadId, f.provider);
+  await held.entered;
+  const order: string[] = [];
+  assert.equal(await f.owner.enqueue(threadId, message("first", "one"), async (_merged, ticket) => {
+    assert.equal(f.admission.admits(threadId, ticket), true, "delivery reuses the admission its compaction holds");
+    order.push("queued");
+  }), true);
+  const later = f.admission.run(threadId, async () => { order.push("later"); });
+  held.release();
+  await Promise.all([operation, later]);
+  assert.deepEqual(order, ["queued", "later"]);
+  assert.deepEqual(f.steers.map(steer => steer.status), ["pending", "dismissed"]);
+});
+
+test("a generation retiring mid-compaction hands its queue to the current one with holds still pending", async () => {
+  const f = fixture();
+  const held = heldCompaction(f);
+  const operation = f.owner.compact(threadId, f.provider);
+  await held.entered;
+  const deliver = async () => assert.fail("a retiring generation must not deliver into its own drained admission");
+  await f.owner.enqueue(threadId, message("first", "one"), deliver);
+  await f.owner.enqueue(threadId, message("second", "two"), deliver);
+  f.owner.beginRuntimeDrain();
+  held.release();
+  await operation;
+  assert.equal(f.handoffs.length, 1);
+  const [handoff] = f.handoffs;
+  assert.deepEqual(handoff!.messages.map(queued => queued.clientMessageId), ["first", "second"]);
+  assert.equal(handoff!.compacted, true, "the adopter must not compact again");
+  assert.equal(handoff!.queueId, f.steers[0]!.clientUserMessageId, "held copies keep naming the delivery");
+  assert.deepEqual(f.steers.map(steer => steer.status), ["pending", "pending"]);
+});
+
+test("delivery refused by a draining admission is handed off, not failed", async () => {
+  const f = fixture();
+  const held = heldCompaction(f);
+  const operation = f.owner.compact(threadId, f.provider);
+  await held.entered;
+  await f.owner.enqueue(threadId, message("first", "one"), async () => {
+    throw new WorkbenchAdmissionDrainingError("Auto-compaction admission");
+  });
+  held.release();
+  await operation;
+  assert.deepEqual(f.handoffs.map(handoff => handoff.compacted), [true]);
+  assert.deepEqual(f.steers.map(steer => steer.status), ["pending"]);
+});
+
+test("a queue no current generation can adopt is left undelivered for resend", async () => {
+  const f = fixture();
+  f.handoff(async () => { throw new Error("daemon is shutting down"); });
+  const held = heldCompaction(f);
+  const operation = f.owner.compact(threadId, f.provider);
+  await held.entered;
+  await f.owner.enqueue(threadId, message("first", "one"), async () => assert.fail("must not deliver"));
+  f.owner.beginRuntimeDrain();
+  held.release();
+  await operation;
+  await f.resolved;
+  assert.deepEqual(f.steers.map(steer => steer.status), ["pending", "interrupted"]);
+});
+
+test("an adopted queue is delivered under its original id without compacting again", async () => {
+  const f = fixture();
+  f.compact(async () => assert.fail("already compacted"));
+  const delivered: QueuedThreadMessage[] = [];
+  await f.admission.run(threadId, ticket => f.owner.adopt(threadId, f.provider, ticket, {
+    queueId: "queue", messages: [message("first", "one"), message("second", "two")], compacted: true,
+  }, async merged => { delivered.push(merged); }));
+  assert.deepEqual(delivered.map(merged => [merged.clientMessageId, merged.input.length]), [["queue", 2]]);
+  assert.deepEqual(f.steers.map(steer => `${steer.entryKey}:${steer.status}`), [
+    "compaction:first:pending", "compaction:second:pending", "compaction:first:dismissed", "compaction:second:dismissed",
+  ]);
+  assert.deepEqual(f.observations, []);
+  assert.deepEqual(f.retirements, [], "its own holds are not stranded");
+});
+
+test("stranded compaction holds are retired only while no queue owns the thread", async () => {
+  const f = fixture();
+  const held = heldCompaction(f);
+  const operation = f.owner.compact(threadId, f.provider);
+  await held.entered;
+  assert.deepEqual(f.retirements, ["compactionQueue"], "a new compaction first retires what nobody owns");
+  await f.owner.retireStranded(threadId);
+  const delivering = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  await f.owner.enqueue(threadId, message("first", "one"), async () => { delivering.resolve(); await finish.promise; });
+  held.release();
+  await delivering.promise;
+  await f.owner.retireStranded(threadId);
+  assert.deepEqual(f.retirements, ["compactionQueue"], "compacting and delivering queues are owned");
+  finish.resolve();
+  await operation;
+  await f.owner.retireStranded(threadId);
+  assert.deepEqual(f.retirements, ["compactionQueue", "compactionQueue"]);
 });

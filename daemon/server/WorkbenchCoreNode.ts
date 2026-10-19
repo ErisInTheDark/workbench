@@ -379,6 +379,7 @@ function createWorkbenchCoreFeature(
       }
     },
     beginRuntimeDrain: () => {
+      compaction.beginRuntimeDrain();
       admission.beginRuntimeDrain();
       autoCompact.beginRuntimeDrain();
       launches.beginRuntimeDrain();

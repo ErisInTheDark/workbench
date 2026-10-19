@@ -80,6 +80,10 @@ export default class WorkbenchTurnRuntimeFeature {
       setCompacting: (threadId, compacting) => ports.setSummaryFacts(threadId, { compacting }),
       now: Date.now,
       warn: message => console.warn(`[compaction] ${message.slice(0, 500)}`),
+      // The host resolves the current owner, so a retiring generation's queue reaches its replacement.
+      handoff: (threadId, handoff) => ports.run("threadActions", actions => actions.adoptCompactionQueue(
+        WorkbenchThreadIdSchema.parse(threadId), handoff,
+      ), "compaction queue handoff"),
     });
     const autoCompact = this.autoCompact = new WorkbenchThreadAutoCompactController(admission, compaction, {
       readSettings: () => ports.settings.readThreadAutoCompact(),

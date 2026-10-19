@@ -239,12 +239,14 @@ export interface WorkbenchTranscriptContextCompactionObservation<ThreadId extend
 /**
  * A cold start's retirement of what a previous daemon left waiting on settled turns: pending held steers become
  * undelivered and running compactions interrupted. Only holds created before `before` count, so live work survives.
+ * `compactionQueue` retires only compaction-queue holds no owner delivers, whatever questionnaire waits.
  */
 export interface WorkbenchTranscriptAbandonedHoldsObservation<ThreadId extends string = WorkbenchThreadId> {
   kind: "abandonedHolds";
   threadId: ThreadId;
   before: number;
   endedAt: number;
+  scope?: "compactionQueue";
 }
 
 export interface WorkbenchTranscriptProviderTurnScopeObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> {

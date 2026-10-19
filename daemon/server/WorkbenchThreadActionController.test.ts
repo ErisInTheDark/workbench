@@ -51,6 +51,7 @@ function fixture(providerWarning?: string) {
     autoCompact: {
       observe: async () => true,
       submit: async (_threadId, _provider, message, deliver, options) => deliver(message, options ?? {}),
+      adopt: unused,
     },
     compaction: { compact: unused },
     approvals: { list: () => [] },
@@ -60,7 +61,7 @@ function fixture(providerWarning?: string) {
     shells: { stopShell: () => { throw new Error("Unexpected shell stop."); } },
     settlement: { settleIfOrphaned: async () => { stopOrder.push("settle"); return false; } },
     continuations: { cancel: async () => undefined },
-    providers: { get: key => { assert.equal(key, "codex"); return provider; } },
+    providers: { get: key => { assert.equal(key, "codex"); return provider; }, submitWithinAdmission: unused },
     projects: { resolveProjectById: unused },
     identities: { resolveTurn: unused, resolve: async () => ({
       projectId, projectRoot: "C:/project", threadId,

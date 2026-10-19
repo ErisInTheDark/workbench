@@ -1772,8 +1772,21 @@ export default class WorkbenchTranscriptRepository {
     return { steers, compactions };
   }
 
+  /** Compaction-queue holds no owner delivers; no questionnaire keeps them, and compaction items settle through their own lifecycle. */
+  #abandonedCompactionHolds(before: number, threadId: string) {
+    const steers = this.#database.prepare(`
+      SELECT id, thread_id, turn_id
+      FROM thread_held_steers
+      WHERE state = 'pending' AND attempted_at < @before AND thread_id = @threadId AND entry_key LIKE 'compaction:%'
+      ORDER BY id
+    `).all({ before, threadId }) as Array<{ id: number; thread_id: string; turn_id: string }>;
+    return { steers, compactions: [] as TranscriptItemRow[] };
+  }
+
   #settleAbandonedHolds(observation: Extract<WorkbenchTranscriptObservation, { kind: "abandonedHolds" }>) {
-    const { steers, compactions } = this.#abandonedHolds(observation.before, observation.threadId);
+    const { steers, compactions } = observation.scope === "compactionQueue"
+      ? this.#abandonedCompactionHolds(observation.before, observation.threadId)
+      : this.#abandonedHolds(observation.before, observation.threadId);
     if (!steers.length && !compactions.length) return null;
     this.#interruptContextCompactions(compactions, observation.endedAt);
     for (const steer of steers) {

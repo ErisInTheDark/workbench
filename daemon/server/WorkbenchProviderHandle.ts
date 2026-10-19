@@ -3,11 +3,13 @@
  * - WorkbenchProviderMessageAdmission: one provider-chosen message outcome published after acceptance.
  * - WorkbenchProviderHiddenTurn: a Workbench-started hidden turn and its in-lane supersession check.
  * - WorkbenchProviderHandleOptions: post-admission hooks, instruction selection and shared message admission policy.
- * - default WorkbenchProviderHandle: forward operations through the current definition lease, supply thread instruction selections, and wake waits after accepted steers.
+ * - default WorkbenchProviderHandle: forward operations through the current definition lease, supply thread instruction selections, admit compaction-queue deliveries inside their compaction's admission, and wake waits after accepted steers.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import providerRegistrations, { type WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import type { WorkbenchThreadMessage } from "workbench-shared/workbench/thread/thread-actions";
+import type { WorkbenchThreadAdmissionTicket } from "./WorkbenchThreadAdmissionController";
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import type WorkbenchThreadInstructionSelectionController from "./WorkbenchThreadInstructionSelectionController";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
@@ -54,7 +56,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     threadId: string,
     provider: WorkbenchProvider,
     admit: () => Promise<T>,
-    options?: { skipAutoCompact?: boolean },
+    options?: Parameters<WorkbenchThreadAutoCompactController["run"]>[3],
   ) {
     return this.options.messageAdmission ? this.options.messageAdmission(threadId, provider, admit, options) : admit();
   }
@@ -168,15 +170,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     readLatest: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.readLatest(threadId), `${this.key}: threads.readLatest`),
     latestTurn: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.latestTurn(threadId), `${this.key}: threads.latestTurn`),
     admitTurn: (threadId, turnReference) => this.run(providerRegistrations[this.key], provider => provider.threads.admitTurn(threadId, turnReference), `${this.key}: threads.admitTurn`),
-    submit: async input => {
-      const { skipAutoCompact, ...providerInput } = input;
-      const result = this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
-        this.admitMessage(input.threadId, provider, () => this.withSelection(input.threadId, input.context, context => (
-          provider.threads.submit({ ...providerInput, ...(context ? { context } : {}) })
-        ), providerInput.input), { skipAutoCompact })
-      ), `${this.key}: threads.submit`));
-      return await this.publishAcceptedUserMessage(input, result);
-    },
+    submit: input => this.submitUserMessage(input, { skipAutoCompact: input.skipAutoCompact }),
     messageAgent: async input => {
       const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => (
         this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) }))
@@ -196,6 +190,21 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     isTurnLive: (threadId, turnId) => this.run(providerRegistrations[this.key], provider => provider.threads.isTurnLive(threadId, turnId), `${this.key}: threads.isTurnLive`),
     materialize: (threadId, turnIds, signal) => this.run(providerRegistrations[this.key], provider => provider.threads.materialize(threadId, turnIds, signal), `${this.key}: threads.materialize`),
   };
+
+  /** Admit a compaction queue's merged delivery inside the admission its compaction already holds. */
+  submitWithinAdmission(input: WorkbenchThreadMessage, admission: WorkbenchThreadAdmissionTicket) {
+    return this.submitUserMessage(input, { skipAutoCompact: true, admission });
+  }
+
+  private async submitUserMessage(input: WorkbenchThreadMessage, options: Parameters<WorkbenchThreadAutoCompactController["run"]>[3]) {
+    const { skipAutoCompact: _policy, ...providerInput } = input;
+    const result = this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
+      this.admitMessage(input.threadId, provider, () => this.withSelection(input.threadId, input.context, context => (
+        provider.threads.submit({ ...providerInput, ...(context ? { context } : {}) })
+      ), providerInput.input), options)
+    ), `${this.key}: threads.submit`));
+    return await this.publishAcceptedUserMessage(input, result);
+  }
 
   /** Start a Workbench-owned hidden turn with the thread's selection, unless newer work superseded it in the lane. */
   async admitHiddenTurn(turn: WorkbenchProviderHiddenTurn): Promise<"started" | "superseded"> {

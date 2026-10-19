@@ -3100,6 +3100,41 @@ test("abandoned holds on settled turns end undelivered and interrupted, sparing 
   }
 });
 
+test("stranded compaction holds end undelivered even while a questionnaire waits, sparing other holds and compactions", () => {
+  const { database, repository } = createRepository();
+  try {
+    const thread = fixtureIdentityValues.WorkbenchThreadId.thread;
+    const first = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("first");
+    const held = (entryKey: string, attemptedAt: number): StoredSteerEntry => ({
+      attemptedAt, canonicalItemId: null, clientUserMessageId: null, entryKey, error: null,
+      input: [{ type: "text", text: entryKey, text_elements: [] }], requestId: null, resolvedAt: null,
+      status: "pending", threadId: thread, turnId: first,
+    });
+    repository.settle([threadObservation(), turnObservation("first", 0), compaction("started", 100, { turnId: "first" })]);
+    repository.settle([
+      { kind: "steer", entry: held("compaction:stranded", 110), observedAt: 110 },
+      { kind: "steer", entry: held("compaction:owned", 300), observedAt: 300 },
+      { kind: "steer", entry: held("questionnaire:virtual", 120), observedAt: 120 },
+    ]);
+    database.prepare(`
+      INSERT INTO workbench_thread_states (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
+      SELECT thread_id, 'topLevel', harness_id, '', 0, 1 FROM thread_turns WHERE id = ?
+    `).run(first);
+    database.prepare(`
+      INSERT INTO workbench_thread_questionnaires (id, thread_id, state, turn_id, request_key, request_id, title, summary, submit_label)
+      VALUES ('question', ?, 'pending', ?, 'request', 'request', 'Question', '', 'Submit')
+    `).run(thread, first);
+
+    const settled = repository.settle([{ kind: "abandonedHolds", scope: "compactionQueue", threadId: thread, before: 200, endedAt: 250 }]);
+    assert.deepEqual(settled.changedThreadIds, [thread]);
+    assert.deepEqual(heldSteerRows(database).map(({ entry_key, state }) => `${entry_key}:${state}`),
+      ["compaction:stranded:interrupted", "compaction:owned:pending", "questionnaire:virtual:pending"]);
+    assert.deepEqual(readCompactions(repository).map(({ status }) => status), ["inProgress"]);
+  } finally {
+    database.close();
+  }
+});
+
 test("steers on a turn that ends while a questionnaire waits stay virtual until the questionnaire leaves", () => {
   const { database, repository } = createRepository();
   try {

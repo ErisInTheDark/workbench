@@ -1,12 +1,16 @@
 /*
  * Exports:
  * - QueuedThreadMessage: one user message waiting behind a compaction.
+ * - CompactionQueueDelivery: admit one merged queued message inside the admission its compaction holds.
+ * - CompactionQueueHandoff: queued messages a retiring generation hands to the current one.
  * - heldSteerInput: convert message input to held-steer history input with explicit placeholders.
- * - default WorkbenchThreadCompactionController: own canonical compaction admission, execution, failure settlement and the compaction queue.
+ * - default WorkbenchThreadCompactionController: own canonical compaction admission, execution, failure settlement and the
+ *   compaction queue: in-admission delivery, generation handoff and stranded-hold retirement.
  */
 import { randomUUID } from "node:crypto";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
+import { WorkbenchAdmissionDrainingError, type WorkbenchThreadAdmissionTicket } from "./WorkbenchThreadAdmissionController";
 import type { DaemonTranscriptRegistration } from "./daemon-runtime-objects";
 import type { WorkbenchThreadMessage } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
@@ -22,6 +26,15 @@ type CompactionProvider = {
 export type QueuedThreadMessage = Pick<Extract<WorkbenchThreadMessage, { intent: "continue" | "newTurn" }>,
   "clientMessageId" | "input" | "intent" | "context">;
 
+export type CompactionQueueDelivery = (message: QueuedThreadMessage, ticket: WorkbenchThreadAdmissionTicket) => Promise<unknown>;
+
+export interface CompactionQueueHandoff {
+  queueId: string;
+  messages: QueuedThreadMessage[];
+  /** The retiring generation finished native compaction, so the adopter must not compact again for these messages. */
+  compacted: boolean;
+}
+
 type HeldEntry = Extract<Parameters<DaemonTranscriptRegistration["record"]>[0][number], { kind: "steer" }>;
 
 interface QueuedSlot {
@@ -31,16 +44,25 @@ interface QueuedSlot {
   recording: Promise<void>;
 }
 
-/** Messages sent while a thread compacts; flushed as one message under `id` when compaction ends. */
+/** Messages held for one thread's compaction; delivered as one message under `id` before its admission ends. */
 interface CompactionQueue {
   id: string;
   turnId: Promise<WorkbenchTurnId>;
   slots: QueuedSlot[];
-  deliver: ((message: QueuedThreadMessage) => Promise<unknown>) | null;
+  deliver: CompactionQueueDelivery | null;
   closed: boolean;
 }
 
 type CompactionOutcome = "completed" | "failed" | "aborted";
+
+interface QueueRun<T> {
+  /** Run native compaction first; false only for a handed-off queue whose compaction already finished. */
+  native: boolean;
+  signal?: AbortSignal;
+  /** The admission that triggered compaction; it runs after compaction and before the queue, in send order. */
+  then?: () => Promise<T>;
+  adopted?: { handoff: CompactionQueueHandoff; deliver: CompactionQueueDelivery };
+}
 
 const COMPACTION_FAILED_ERROR = "Context compaction failed, so this message was not sent.";
 
@@ -75,10 +97,15 @@ function mergeQueuedMessages(clientMessageId: string, messages: readonly QueuedT
   };
 }
 
+function errorText(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 500);
+}
+
 export default class WorkbenchThreadCompactionController {
   private readonly active = new Set<string>();
+  /** Queues this generation owns, from compaction start until their messages are delivered, failed or handed off. */
   private readonly queues = new Map<string, CompactionQueue>();
-  private readonly flushes = new Set<Promise<void>>();
+  private retiring = false;
 
   constructor(
     private readonly admission: Pick<WorkbenchThreadAdmissionController, "run">,
@@ -88,29 +115,74 @@ export default class WorkbenchThreadCompactionController {
       now(): number;
       itemId?(): string;
       warn?(message: string): void;
+      /** Give queued messages to the current generation's admission; rejects when none can take them. */
+      handoff?(threadId: string, handoff: CompactionQueueHandoff): Promise<void>;
     },
   ) {}
 
-  hasPendingWork() { return this.active.size > 0 || this.flushes.size > 0; }
+  hasPendingWork() { return this.active.size > 0 || this.queues.size > 0; }
+
+  /** A retiring generation hands its queues to the current one instead of delivering into its own drained admission. */
+  beginRuntimeDrain() { this.retiring = true; }
 
   compact(threadId: string, provider: CompactionProvider, signal?: AbortSignal) {
     return this.exclusive(threadId, () => this.admission.run(
       threadId,
-      () => this.execute(threadId, provider, signal),
+      ticket => this.runQueue(threadId, provider, ticket, { native: true, signal }),
     ));
   }
 
-  compactInsideAdmission(threadId: string, provider: CompactionProvider, signal?: AbortSignal) {
-    return this.exclusive(threadId, () => this.execute(threadId, provider, signal));
+  /** Compact inside the caller's admission, run `then`, and deliver what queued before the admission ends. */
+  compactInsideAdmission<T = void>(
+    threadId: string,
+    provider: CompactionProvider,
+    ticket: WorkbenchThreadAdmissionTicket,
+    options: Omit<QueueRun<T>, "native"> = {},
+  ) {
+    return this.exclusive(threadId, () => this.runQueue(threadId, provider, ticket, { ...options, native: true }));
+  }
+
+  /** Deliver a handed-off queue whose compaction already finished, inside the caller's admission. */
+  async adopt(
+    threadId: string,
+    provider: CompactionProvider,
+    ticket: WorkbenchThreadAdmissionTicket,
+    handoff: CompactionQueueHandoff,
+    deliver: CompactionQueueDelivery,
+  ) {
+    await this.runQueue(threadId, provider, ticket, { native: false, adopted: { handoff, deliver } });
   }
 
   /**
    * Hold a message behind the thread's running compaction as a pending held steer; false when nothing compacts.
-   * `deliver` sends the merged queue later, outside this compaction's admission.
+   * `deliver` admits the merged queue inside that compaction's admission.
    */
-  async enqueue(threadId: string, message: QueuedThreadMessage, deliver: (message: QueuedThreadMessage) => Promise<unknown>) {
+  async enqueue(threadId: string, message: QueuedThreadMessage, deliver: CompactionQueueDelivery) {
     const queue = this.queues.get(threadId);
     if (!queue || queue.closed) return false;
+    await this.hold(threadId, queue, message, deliver);
+    return true;
+  }
+
+  /** Compaction holds nobody in this generation owns become undelivered, so none waits forever. */
+  async retireStranded(threadId: string) {
+    if (this.queues.has(threadId)) return;
+    await this.retireBefore(threadId, this.ports.now());
+  }
+
+  /** A safety net: failing to write it never blocks the admission that runs it. */
+  private async retireBefore(threadId: string, before: number) {
+    try {
+      await this.ports.record([{
+        kind: "abandonedHolds", scope: "compactionQueue",
+        threadId: WorkbenchThreadIdSchema.parse(threadId), before, endedAt: before,
+      }], { source: "workbench" });
+    } catch (error) {
+      this.warn(threadId, `could not retire stranded holds: ${errorText(error)}`);
+    }
+  }
+
+  private hold(threadId: string, queue: CompactionQueue, message: QueuedThreadMessage, deliver: CompactionQueueDelivery) {
     queue.deliver ??= deliver;
     const dispatchSequence = queue.slots.length;
     const slot: QueuedSlot = { message, held: null, recording: Promise.resolve() };
@@ -135,98 +207,125 @@ export default class WorkbenchThreadCompactionController {
     })();
     slot.recording = recording.catch(() => {});
     queue.slots.push(slot);
-    await recording;
-    return true;
+    return recording;
   }
 
-  private async exclusive(threadId: string, operation: () => Promise<void>) {
+  private async exclusive<T>(threadId: string, operation: () => Promise<T>) {
     if (this.active.has(threadId)) throw new Error("This thread is already compacting.");
     this.active.add(threadId);
     try {
-      await operation();
+      return await operation();
     } finally {
       this.active.delete(threadId);
     }
   }
 
-  private async execute(threadId: string, provider: CompactionProvider, signal?: AbortSignal) {
+  private async runQueue<T>(
+    threadId: string,
+    provider: CompactionProvider,
+    ticket: WorkbenchThreadAdmissionTicket,
+    options: QueueRun<T>,
+  ): Promise<T | undefined> {
+    const { native, signal, adopted } = options;
+    const before = this.ports.now();
     const turnId = Promise.withResolvers<WorkbenchTurnId>();
     turnId.promise.catch(() => {});
-    const queue: CompactionQueue = { id: randomUUID(), turnId: turnId.promise, slots: [], deliver: null, closed: false };
+    const queue: CompactionQueue = {
+      id: adopted?.handoff.queueId ?? randomUUID(), turnId: turnId.promise, slots: [], deliver: null, closed: false,
+    };
     this.queues.set(threadId, queue);
-    this.ports.setCompacting?.(threadId, true);
+    for (const message of adopted?.handoff.messages ?? []) void this.hold(threadId, queue, message, adopted!.deliver).catch(() => {});
+    if (native) this.ports.setCompacting?.(threadId, true);
     let outcome: CompactionOutcome = "failed";
+    let failure: unknown = null;
     try {
+      // A handed-off queue's own holds are older than this run; everything else left pending has no owner.
+      if (!adopted) await this.retireBefore(threadId, before);
       signal?.throwIfAborted();
       const turn = await provider.threads.latestTurn(threadId);
       signal?.throwIfAborted();
       if (!turn) throw new Error("Compaction requires an existing turn.");
-      const scope = {
-        itemId: WorkbenchItemIdSchema.parse(this.ports.itemId?.() ?? randomUUID()),
-        turnId: WorkbenchTurnIdSchema.parse(turn.id),
-      };
-      turnId.resolve(scope.turnId);
-      const canonicalThreadId = WorkbenchThreadIdSchema.parse(threadId);
-      await this.ports.record([{
-        kind: "contextCompaction",
-        itemId: scope.itemId,
-        threadId: canonicalThreadId,
-        turnId: scope.turnId,
-        phase: "started",
-        observedAt: this.ports.now(),
-        reference: null,
-      }], { source: "workbench" });
-      try {
-        await provider.threads.compact(threadId, { scope, signal });
-      } catch (error) {
-        await this.ports.record([{
-          kind: "contextCompaction",
-          itemId: scope.itemId,
-          threadId: canonicalThreadId,
-          turnId: scope.turnId,
-          phase: "failed",
-          observedAt: this.ports.now(),
-          reference: null,
-        }], { source: "workbench" });
-        throw error;
-      }
+      turnId.resolve(WorkbenchTurnIdSchema.parse(turn.id));
+      if (native) await this.compactNative(threadId, provider, WorkbenchTurnIdSchema.parse(turn.id), signal);
       outcome = "completed";
     } catch (error) {
       turnId.reject(error);
-      if (signal?.aborted) outcome = "aborted";
-      throw error;
+      failure = error;
+      outcome = signal?.aborted || this.retiring || error instanceof WorkbenchAdmissionDrainingError ? "aborted" : "failed";
+    }
+    queue.closed = true;
+    if (native) this.ports.setCompacting?.(threadId, false);
+    let result: T | undefined;
+    try {
+      if (!failure && options.then) result = await options.then();
     } finally {
-      queue.closed = true;
-      if (this.queues.get(threadId) === queue) this.queues.delete(threadId);
-      this.ports.setCompacting?.(threadId, false);
-      // Delivery re-enters message admission, which this compaction still holds; it runs detached.
-      this.track(this.settleQueue(threadId, queue, outcome));
+      try {
+        await this.settle(threadId, queue, outcome, ticket);
+      } finally {
+        if (this.queues.get(threadId) === queue) this.queues.delete(threadId);
+      }
+    }
+    if (failure) throw failure;
+    return result;
+  }
+
+  private async compactNative(threadId: string, provider: CompactionProvider, turnId: WorkbenchTurnId, signal?: AbortSignal) {
+    const scope = { itemId: WorkbenchItemIdSchema.parse(this.ports.itemId?.() ?? randomUUID()), turnId };
+    const canonicalThreadId = WorkbenchThreadIdSchema.parse(threadId);
+    const marker = (phase: "started" | "failed") => this.ports.record([{
+      kind: "contextCompaction", itemId: scope.itemId, threadId: canonicalThreadId, turnId,
+      phase, observedAt: this.ports.now(), reference: null,
+    }], { source: "workbench" });
+    await marker("started");
+    try {
+      await provider.threads.compact(threadId, { scope, signal });
+    } catch (error) {
+      await marker("failed");
+      throw error;
     }
   }
 
-  private track(flush: Promise<void>) {
-    this.flushes.add(flush);
-    void flush.finally(() => { this.flushes.delete(flush); });
-  }
-
-  /** Completed compaction delivers the queue; failure and reload leave each message undelivered for resend. */
-  private async settleQueue(threadId: string, queue: CompactionQueue, outcome: CompactionOutcome) {
+  /** Completed compaction delivers the queue in its own admission; failure leaves it undelivered; retirement hands it off. */
+  private async settle(threadId: string, queue: CompactionQueue, outcome: CompactionOutcome, ticket: WorkbenchThreadAdmissionTicket) {
     await Promise.all(queue.slots.map(slot => slot.recording));
+    const lost = queue.slots.filter(slot => !slot.held).length;
+    if (lost) this.warn(threadId, `${lost} queued message(s) could not be held; their senders were refused`);
     const held = queue.slots.flatMap(slot => slot.held ? [{ message: slot.message, entry: slot.held }] : []);
     if (!held.length) return;
-    if (outcome !== "completed" || !queue.deliver) {
-      await this.resolveHeld(threadId, held.map(({ entry }) => entry),
-        outcome === "aborted" ? "interrupted" : "failed", COMPACTION_FAILED_ERROR);
+    const entries = held.map(({ entry }) => entry);
+    const messages = held.map(({ message }) => message);
+    if (outcome === "failed") {
+      await this.resolveHeld(threadId, entries, "failed", COMPACTION_FAILED_ERROR);
       return;
     }
-    try {
-      await queue.deliver(mergeQueuedMessages(queue.id, held.map(({ message }) => message)));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.resolveHeld(threadId, held.map(({ entry }) => entry), "failed", message.slice(0, 500) || "Message delivery failed.");
-      return;
+    if (outcome === "completed" && !this.retiring) {
+      let failure: unknown = null;
+      try {
+        if (!queue.deliver) throw new Error("Queued message delivery is unavailable.");
+        await queue.deliver(mergeQueuedMessages(queue.id, messages), ticket);
+      } catch (error) {
+        failure = error;
+      }
+      if (!failure) {
+        await this.resolveHeld(threadId, entries, "dismissed", null);
+        return;
+      }
+      if (!(failure instanceof WorkbenchAdmissionDrainingError) && !this.retiring) {
+        await this.resolveHeld(threadId, entries, "failed", errorText(failure) || "Message delivery failed.");
+        return;
+      }
     }
-    await this.resolveHeld(threadId, held.map(({ entry }) => entry), "dismissed", null);
+    this.handOff(threadId, entries, { queueId: queue.id, messages, compacted: outcome === "completed" });
+  }
+
+  /** The current generation adopts the queue; only when nothing can is it left undelivered for resend. */
+  private handOff(threadId: string, entries: readonly HeldEntry["entry"][], handoff: CompactionQueueHandoff) {
+    const adopted = this.ports.handoff?.(threadId, handoff)
+      ?? Promise.reject(new Error("No current admission can adopt this compaction queue."));
+    void adopted.catch(async (error: unknown) => {
+      this.warn(threadId, `could not hand its queue to the current generation: ${errorText(error)}`);
+      await this.resolveHeld(threadId, entries, "interrupted", null);
+    });
   }
 
   private async resolveHeld(
@@ -243,8 +342,12 @@ export default class WorkbenchThreadCompactionController {
         observedAt: now,
       })), { source: "workbench" });
     } catch (recordError) {
-      const message = recordError instanceof Error ? recordError.message : String(recordError);
-      this.ports.warn?.(`Compaction queue for ${threadId.slice(0, 120)} could not record ${status}: ${message.slice(0, 300)}`);
+      // The queue is released after settlement, so the thread's next admission retires holds this left pending.
+      this.warn(threadId, `could not record ${status}: ${errorText(recordError)}`);
     }
+  }
+
+  private warn(threadId: string, message: string) {
+    this.ports.warn?.(`Compaction queue for ${threadId.slice(0, 120)} ${message.slice(0, 400)}`);
   }
 }
