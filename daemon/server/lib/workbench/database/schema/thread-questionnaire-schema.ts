@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - defineThreadQuestionnaireSchema: preserve questionnaire source facts, including the MCP tool an enable request is about, outside transcript materialisation.
+ * - defineThreadQuestionnaireSchema: preserve questionnaire source facts, including the MCP tool an enable request is about and the server link a sign-in request opens, outside transcript materialisation.
  */
 import {
   booleanInteger, check, defineTable, enumText, foreignKey, index, integer, literal,
@@ -124,11 +124,26 @@ export function defineThreadQuestionnaireSchema(schemaVersion: number) {
     versions: [tableVersion({ schemaVersion: releases.questionnaireMcpTools.version, table: mcpToolTable, migration: createTable(mcpToolTable) })],
   });
 
+  /** The server link a sign-in request asks the user to open; the one-time link is kept only while pending. */
+  const mcpAuthorizationTable = defineTable("workbench_thread_questionnaire_mcp_authorizations", {
+    questionnaire_id: text().primaryKey().references("workbench_thread_questionnaires", "id", { onDelete: "CASCADE" }),
+    server: text().notNull(),
+    host: text().notNull(),
+    url: text(),
+  });
+  const mcpAuthorizations = defineTableHistory({
+    current: mcpAuthorizationTable,
+    versions: [tableVersion({
+      schemaVersion: releases.mcpAuthorizations.version, table: mcpAuthorizationTable, migration: createTable(mcpAuthorizationTable),
+    })],
+  });
+
   return {
     tables: {
       questionnaires: questionnaires.current, questions: questions.current, options: options.current,
       answerGroups: answerGroups.current, answers: answers.current, mcpTools: mcpTools.current,
+      mcpAuthorizations: mcpAuthorizations.current,
     },
-    history: defineSubsystemHistory([questionnaires, questions, options, answerGroups, answers, mcpTools]),
+    history: defineSubsystemHistory([questionnaires, questions, options, answerGroups, answers, mcpTools, mcpAuthorizations]),
   };
 }

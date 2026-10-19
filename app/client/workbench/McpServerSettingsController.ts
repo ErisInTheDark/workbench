@@ -1,12 +1,12 @@
 /*
  * Exports:
  * - McpServerSettingsState: MCP server settings presentation state, including whether this browser can sign in.
- * - McpSignInPopup/openCenteredMcpSignInPopup: the sign-in popup window edge.
  * - default McpServerSettingsController: own one daemon's MCP server settings reads, fenced writes and OAuth sign-in starts.
  */
 import type {
   McpServerSettingsSnapshot, McpServerSettingsUpdate, McpServerSignInStartParams, McpServerSignInStartResult,
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
+import type { McpSignInPopup } from "./mcp-sign-in-popup";
 
 export interface McpServerSettingsState {
   settings: McpServerSettingsSnapshot | null;
@@ -14,25 +14,6 @@ export interface McpServerSettingsState {
   loopbackOrigin: string | null;
   busy: boolean;
   error: string;
-}
-
-export interface McpSignInPopup {
-  navigate(url: string): void;
-  close(): void;
-}
-
-const POPUP_WIDTH = 520;
-const POPUP_HEIGHT = 720;
-
-/** Opens synchronously inside the click, so popup blockers allow it; the provider page never gets our window. */
-export function openCenteredMcpSignInPopup(): McpSignInPopup | null {
-  const left = Math.round(window.screenX + Math.max(0, (window.outerWidth - POPUP_WIDTH) / 2));
-  const top = Math.round(window.screenY + Math.max(0, (window.outerHeight - POPUP_HEIGHT) / 2));
-  const popup = window.open("about:blank", "workbench-mcp-sign-in",
-    `popup,width=${POPUP_WIDTH},height=${POPUP_HEIGHT},left=${left},top=${top}`);
-  if (!popup) return null;
-  popup.opener = null;
-  return { navigate: url => { popup.location.href = url; }, close: () => popup.close() };
 }
 
 export default class McpServerSettingsController {

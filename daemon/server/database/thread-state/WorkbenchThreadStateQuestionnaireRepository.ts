@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadStateQuestionnaireRepository: persist one thread's canonical questionnaire source facts, including MCP tool enable context.
+ * - default WorkbenchThreadStateQuestionnaireRepository: persist one thread's canonical questionnaire source facts, including MCP tool enable and sign-in link context.
  * - WorkbenchThreadQuestionnaires: pending request and ordered answered history.
  */
 import { randomUUID } from "node:crypto";
@@ -40,10 +40,12 @@ type OptionRow = { questionnaire_id: string; question_index: number; option_inde
 type AnswerGroupRow = { questionnaire_id: string; question_id: string };
 type AnswerRow = { questionnaire_id: string; question_id: string; answer_index: number; answer: string };
 type McpToolRow = { questionnaire_id: string; server: string; tool: string; title: string | null; description: string };
+type McpAuthorizationRow = { questionnaire_id: string; server: string; host: string; url: string | null };
 interface QuestionnaireBatch {
   questions: Map<string, QuestionRow[]>;
   options: Map<string, OptionRow[]>;
   mcpTools: Map<string, McpToolRow>;
+  mcpAuthorizations: Map<string, McpAuthorizationRow>;
   groups: Map<string, AnswerGroupRow[]>;
   answers: Map<string, AnswerRow[]>;
 }
@@ -74,10 +76,13 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         .all(...ids) as AnswerRow[];
       const mcpTools = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_mcp_tools WHERE questionnaire_id IN (${selection})`)
         .all(...ids) as McpToolRow[];
+      const mcpAuthorizations = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_mcp_authorizations WHERE questionnaire_id IN (${selection})`)
+        .all(...ids) as McpAuthorizationRow[];
       const batch: QuestionnaireBatch = {
         questions: Map.groupBy(questions, row => row.questionnaire_id),
         options: Map.groupBy(options, row => row.questionnaire_id),
         mcpTools: new Map(mcpTools.map(row => [row.questionnaire_id, row])),
+        mcpAuthorizations: new Map(mcpAuthorizations.map(row => [row.questionnaire_id, row])),
         groups: Map.groupBy(groups, row => row.questionnaire_id),
         answers: Map.groupBy(answers, row => row.questionnaire_id),
       };
@@ -151,6 +156,13 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         INSERT INTO workbench_thread_questionnaire_mcp_tools(questionnaire_id, server, tool, title, description) VALUES (?, ?, ?, ?, ?)
       `).run(id, mcpTool.server, mcpTool.tool, mcpTool.title, mcpTool.description);
     }
+    const mcpAuthorization = entry.request.mcpAuthorization;
+    if (mcpAuthorization) {
+      // The link is often one-time OAuth state; answered history keeps only where it pointed.
+      this.database.prepare(`
+        INSERT INTO workbench_thread_questionnaire_mcp_authorizations(questionnaire_id, server, host, url) VALUES (?, ?, ?, ?)
+      `).run(id, mcpAuthorization.server, mcpAuthorization.host, answered ? null : mcpAuthorization.url ?? null);
+    }
     entry.request.questions.forEach((question, questionIndex) => {
       questionStatement.run(id, questionIndex, question.id, question.header, question.question, Number(question.allowOther), Number(question.isSecret));
       question.options.forEach((option, optionIndex) => {
@@ -176,9 +188,13 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
     const questions = batch.questions.get(row.id) ?? [];
     const options = batch.options.get(row.id) ?? [];
     const mcpTool = batch.mcpTools.get(row.id);
+    const mcpAuthorization = batch.mcpAuthorizations.get(row.id);
     return {
       id: row.request_id, title: row.title, summary: row.summary, submitLabel: row.submit_label,
       ...(mcpTool ? { mcpTool: { server: mcpTool.server, tool: mcpTool.tool, title: mcpTool.title, description: mcpTool.description } } : {}),
+      ...(mcpAuthorization ? { mcpAuthorization: {
+        server: mcpAuthorization.server, host: mcpAuthorization.host, ...(mcpAuthorization.url ? { url: mcpAuthorization.url } : {}),
+      } } : {}),
       questions: questions.map((question, questionIndex) => {
         if (question.question_index !== questionIndex) throw new Error("Questionnaire has incomplete question ordering.");
         return {

@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchMcpServerOptions: database, device identity and connection factory ports.
  * - McpServerCallOutcome: agent-facing text of one forwarded call and whether it failed.
- * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins, live connections and their recent raw traffic; answers settings reads/updates, sign-in steps and agent tool listing, enable requests, calls and `wb debug mcp`.
+ * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins, live connections and their recent raw traffic; answers settings reads/updates, sign-in steps and agent tool listing, enable requests, calls, requests to open links a server sent, and `wb debug mcp`.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import os from "node:os";
@@ -28,6 +28,7 @@ import McpServerConnection, {
 } from "./McpServerConnection";
 import McpServerOAuthProvider, { McpServerSignInRequiredError, type McpServerOAuthStore } from "./McpServerOAuthProvider";
 import { formatMcpToolListing, formatMcpToolResult, type McpToolListing } from "./mcp-tool-search";
+import { matchesMcpResultLink, mcpResultLinks } from "./mcp-result-links";
 
 export interface WorkbenchMcpServerOptions {
   database: {
@@ -63,6 +64,8 @@ type Catalog = { status: "ready"; tools: McpServerTool[] } | { status: "signInRe
 const SECRET_SCOPE = "mcp-servers";
 const UNREADABLE_CREDENTIAL = "The saved credential can't be read on this device or OS user. Set it again.";
 const SIGN_IN_TTL_MS = 10 * 60_000;
+const SENT_LINK_LIMIT = 20;
+const AUTHORIZE_HINT = "If a link above needs the user (e.g. to sign in), ask them to open it with mcp_call on server wb, tool mcp_authorize.\n";
 const SIGN_IN_EXPIRED = "This sign-in has expired or was already used. Start sign-in again from Workbench settings.";
 
 function sanitize(error: unknown) {
@@ -99,6 +102,8 @@ export default class WorkbenchMcpServerController {
   #secret: Promise<Buffer> | null = null;
   readonly #connections = new Map<string, McpServerConnectionPort>();
   readonly #traffic = new WebSocketTrafficBuffer({ maxEntries: 500, maxBytes: 4 * 1024 * 1024 });
+  /** Newest-first links each server sent in call replies; memory only, so a reload means calling again. */
+  readonly #sentLinks = new Map<string, string[]>();
 
   constructor(private readonly options: WorkbenchMcpServerOptions) {}
 
@@ -303,7 +308,28 @@ export default class WorkbenchMcpServerController {
     const offered = await connection.listTools(signal);
     if (!offered.some(tool => tool.name === input.tool)) throw new Error(`${input.server} does not offer a tool named ${input.tool}.`);
     const result = await connection.callTool(input.tool, input.arguments, signal);
-    return { text: formatMcpToolResult(result), isError: result.isError === true };
+    const links = mcpResultLinks(result);
+    if (links.length) this.#sentLinks.set(server.id, [...links, ...this.#sentLinks.get(server.id) ?? []].slice(0, SENT_LINK_LIMIT));
+    const isError = result.isError === true;
+    return { text: `${formatMcpToolResult(result)}${isError && links.length ? AUTHORIZE_HINT : ""}`, isError };
+  }
+
+  /**
+   * Ask the user, through `ask`, to open a link the server itself sent in a recent call reply, such as its sign-in page.
+   * Links the server never sent are rejected without asking, so an agent cannot dress up an arbitrary page as this server's.
+   */
+  async authorizeLink(
+    input: { server: string; url: string; reason: string },
+    ask: (mcpAuthorization: { server: string; url: string; host: string }) => Promise<boolean>,
+  ) {
+    const server = (await this.#servers()).find(candidate => candidate.name === input.server);
+    if (!server) throw new Error(`No MCP server is named ${input.server}.`);
+    const link = matchesMcpResultLink(input.url, this.#sentLinks.get(server.id) ?? []);
+    if (!link) throw new Error(`${input.server} did not send that link in a recent mcp_call reply. Pass a link exactly as the server returned it.`);
+    const done = await ask({ server: server.name, url: link, host: new URL(link).host });
+    return done
+      ? `The user says they finished signing in to ${server.name}. Retry the call.\n`
+      : `The user did not sign in to ${server.name}.\n`;
   }
 
   async dispose() {
@@ -353,6 +379,7 @@ export default class WorkbenchMcpServerController {
   async #disconnect(serverId: string) {
     const connection = this.#connections.get(serverId);
     this.#connections.delete(serverId);
+    this.#sentLinks.delete(serverId);
     await connection?.close();
   }
 

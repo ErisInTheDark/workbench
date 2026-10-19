@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - WorkbenchMcpRequestSchema: validate one `mcp tools` listing, `mcp request` enable request or `mcp call` forwarding request.
- * - WORKBENCH_MCP_COMMANDS: `wb mcp tools`, `wb mcp request` and `wb mcp call`, the only agent route to user-added MCP server tools, shared by CLI and MCP.
+ * - workbenchMcpFailure: a failed `/internal/mcp` reply in the Workbench error envelope, so tool text survives unwrapping whole.
+ * - WorkbenchMcpRequestSchema: validate one `mcp tools` listing, `mcp request` enable request, `mcp call` forwarding request or `mcp authorize` link request.
+ * - WORKBENCH_MCP_COMMANDS: `wb mcp tools`, `wb mcp request`, `wb mcp call` and deferred `wb mcp authorize`, the only agent route to user-added MCP server tools, shared by CLI and MCP.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -13,8 +14,17 @@ import {
   defineWorkbenchAgentCommand, managedWorkbenchAgentCommandBody, postWorkbenchAgentCommand, type JsonValue,
 } from "./workbench-agent-command-definition";
 
+/**
+ * Failed replies use the Workbench `{ error }` envelope: the CLI and MCP adapters unwrap a JSON body's `error`/`message`,
+ * and an external tool's own text is often JSON with a `message` key that would otherwise replace the whole text.
+ */
+export function workbenchMcpFailure(text: string, status: number) {
+  return Response.json({ error: text }, { status, headers: { "Cache-Control": "no-store" } });
+}
+
 const toolArguments = z.record(z.string(), z.unknown());
 const reason = z.string().trim().min(1).max(1000);
+const link = z.string().trim().min(1).max(8000);
 
 export const WorkbenchMcpRequestSchema = z.discriminatedUnion("action", [
   z.object({
@@ -27,6 +37,11 @@ export const WorkbenchMcpRequestSchema = z.discriminatedUnion("action", [
     requestKey: z.string().refine(value => value.startsWith(WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX)),
   }).strict(),
   z.object({ action: z.literal("call"), server: McpServerNameSchema, tool: McpServerToolNameSchema, arguments: toolArguments }).strict(),
+  z.object({
+    action: z.literal("authorize"), server: McpServerNameSchema, url: link, reason,
+    cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1),
+    requestKey: z.string().refine(value => value.startsWith(WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX)),
+  }).strict(),
 ]);
 
 const mcpTools = defineWorkbenchAgentCommand({
@@ -119,4 +134,31 @@ const mcpCall = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_MCP_COMMANDS = [mcpTools, mcpRequest, mcpCall] as const;
+const mcpAuthorize = defineWorkbenchAgentCommand({
+  words: ["mcp", "authorize"],
+  usage: "wb mcp authorize --server <name> --url <link> --reason <text>",
+  description: "Ask the user to open a link an MCP server sent in an mcp_call reply, such as its sign-in page, and wait until they say they finished or declined. Pass the link exactly as the server returned it.",
+  effects: { readOnly: false, openWorld: true },
+  helpGroups: ["mcp"],
+  mcpDeferred: true,
+  mcpCodeModeEligible: true,
+  mcpRuntimeDrainPolicy: "preserve-across-reload",
+  inputSchema: z.object({
+    server: McpServerNameSchema.describe("MCP server name whose reply contained the link."),
+    url: link.describe("The link exactly as the server returned it."),
+    reason: reason.describe("What the user is opening it for, shown to the user."),
+  }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--server", "--url", "--reason"] });
+    return { server: flags.required("--server"), url: flags.required("--url"), reason: flags.required("--reason") };
+  },
+  buildRequest(input, context) {
+    return postWorkbenchAgentCommand("/internal/mcp", {
+      action: "authorize", server: input.server, url: input.url, reason: input.reason,
+      ...managedWorkbenchAgentCommandBody(context),
+      requestKey: `${WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX}${randomUUID()}`,
+    });
+  },
+});
+
+export const WORKBENCH_MCP_COMMANDS = [mcpTools, mcpRequest, mcpCall, mcpAuthorize] as const;

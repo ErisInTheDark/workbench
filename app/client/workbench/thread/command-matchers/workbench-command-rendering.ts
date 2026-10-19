@@ -55,6 +55,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "mcp_tools",
   "mcp_request",
   "mcp_call",
+  "mcp_authorize",
   // Vis is deferred; its CLI matcher and `mcp_call` on server wb render through these names, which also keep earlier MCP calls rendering.
   "vis_start",
   "vis_end",
@@ -815,6 +816,7 @@ export function getWorkbenchCommandRoute(
         : simple("workbench-cli.mcp", actionTarget("Listing ", scope), actionTarget("Listed ", scope));
     }
     case "mcp_request":
+    case "mcp_authorize":
       // The composer request and its transcript decision card own this call's presentation.
       return hidden("workbench-cli.mcp-request");
     case "mcp_call": {

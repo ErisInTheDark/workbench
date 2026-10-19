@@ -10,7 +10,6 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { repairQuestionnaireQuestion } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import type {
   WorkbenchSkillSummary,
-  WorkbenchUserInputMcpToolContext,
   WorkbenchUserInputOption,
   WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
@@ -34,7 +33,7 @@ import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import { getNativeToolDisplay, isNativeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
-import { ThreadMcpToolDecisionCard } from "./ThreadMcpToolRequest";
+import { ThreadMcpDecisionCard, type ThreadMcpRequestSubject } from "./ThreadMcpToolRequest";
 import { isMcpToolRequestApproved } from "workbench-shared/workbench/mcp/mcp-tool-request";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
@@ -120,13 +119,19 @@ function parseQuestionnaireRequest (value: unknown, requestId: string) {
   } satisfies WorkbenchUserInputRequest;
 }
 
-/** The MCP tool an enable request was about, when this questionnaire was one. */
-function parseMcpToolContext (value: unknown): WorkbenchUserInputMcpToolContext | null {
-  const tool = asRecord(asRecord(value)?.mcpTool);
-  const server = asString(tool?.server);
-  const name = asString(tool?.tool);
-  if (!tool || !server || !name) return null;
-  return { server, tool: name, title: asString(tool.title), description: asString(tool.description) ?? "" };
+/** What an MCP enable or sign-in request was about, when this questionnaire was one. */
+function parseMcpRequestSubject (value: unknown): ThreadMcpRequestSubject | null {
+  const request = asRecord(value);
+  const tool = asRecord(request?.mcpTool);
+  const toolServer = asString(tool?.server);
+  const toolName = asString(tool?.tool);
+  if (tool && toolServer && toolName) {
+    return { kind: "tool", tool: { server: toolServer, tool: toolName, title: asString(tool.title), description: asString(tool.description) ?? "" } };
+  }
+  const authorization = asRecord(request?.mcpAuthorization);
+  const server = asString(authorization?.server);
+  const host = asString(authorization?.host);
+  return server && host ? { kind: "authorization", authorization: { server, host } } : null;
 }
 
 function parseQuestionnaireResponse (item: DynamicToolCallItem) {
@@ -510,11 +515,11 @@ export default function ThreadDynamicToolCallItem ({
   const presentedItem = visibleDurationMs === item.durationMs
     ? item
     : { ...item, durationMs: visibleDurationMs ?? null };
-  const mcpTool = item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME ? parseMcpToolContext(item.arguments) : null;
-  if (mcpTool) {
+  const mcpSubject = item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME ? parseMcpRequestSubject(item.arguments) : null;
+  if (mcpSubject) {
     const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
     return <div className="py-2">
-      <ThreadMcpToolDecisionCard tool={mcpTool} reason={request?.questions[0]?.question ?? ""}
+      <ThreadMcpDecisionCard subject={mcpSubject} reason={request?.questions[0]?.question ?? ""}
         approved={isMcpToolRequestApproved(parseQuestionnaireResponse(item).response)} />
     </div>;
   }

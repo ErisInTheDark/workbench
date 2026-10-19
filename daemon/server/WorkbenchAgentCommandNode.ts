@@ -7,7 +7,7 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands/questionnaire-command-definition";
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
 import { WorkbenchTodoRequestSchema } from "./lib/workbench/commands/todo-command-definitions";
-import { WorkbenchMcpRequestSchema } from "./lib/workbench/commands/mcp-command-definitions";
+import { WorkbenchMcpRequestSchema, workbenchMcpFailure } from "./lib/workbench/commands/mcp-command-definitions";
 import { isMcpToolRequestApproved, mcpToolRequestQuestions } from "workbench-shared/workbench/mcp/mcp-tool-request";
 import { WorkbenchVisRequestSchema } from "./lib/workbench/commands/vis-command-definitions";
 import { formatVisAnswers, formatVisSessionResult, parseVisProject } from "workbench-shared/workbench/vis/vis-contract";
@@ -256,7 +256,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeMcpRequest: async (body, signal) => {
         const headers = { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" };
         const parsed = WorkbenchMcpRequestSchema.safeParse(body);
-        if (!parsed.success) return new Response("Invalid mcp arguments.\n", { headers, status: 400 });
+        if (!parsed.success) return workbenchMcpFailure("Invalid mcp arguments.\n", 400);
         const request = parsed.data;
         const mcpServers = build.get("mcpServers");
         try {
@@ -272,11 +272,19 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             }, signal);
             return new Response(text, { headers });
           }
+          if (request.action === "authorize") {
+            const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
+            const text = await mcpServers.authorizeLink(request, async mcpAuthorization => isMcpToolRequestApproved(await questionnaires.request({
+              callerThreadId: identity.threadId, cwd: request.cwd, requestKey: request.requestKey, mcpAuthorization,
+              questions: mcpToolRequestQuestions(request.reason, "authorize"),
+            }, signal)));
+            return new Response(text, { headers });
+          }
           const outcome = await mcpServers.call(request, signal);
-          return new Response(outcome.text, { headers, status: outcome.isError ? 422 : 200 });
+          return outcome.isError ? workbenchMcpFailure(outcome.text, 422) : new Response(outcome.text, { headers });
         } catch (error) {
           if (signal.aborted) throw error;
-          return new Response(`${error instanceof Error ? error.message : "MCP request failed."}\n`, { headers, status: 400 });
+          return workbenchMcpFailure(`${error instanceof Error ? error.message : "MCP request failed."}\n`, 400);
         }
       },
       executeVisRequest: async (body, signal) => {

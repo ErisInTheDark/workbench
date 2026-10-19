@@ -77,7 +77,7 @@ import ThreadProfileEditorController, { type ProfileEditorSection } from "./Thre
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import { formatHarnessLabel } from "./harness-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
-import { ThreadMcpToolRequestPanel } from "./ThreadMcpToolRequest";
+import { ThreadMcpRequestPanel, type ThreadMcpRequestSubject } from "./ThreadMcpToolRequest";
 import {
   MCP_TOOL_REQUEST_APPROVE, MCP_TOOL_REQUEST_DENY, MCP_TOOL_REQUEST_QUESTION_ID,
 } from "workbench-shared/workbench/mcp/mcp-tool-request";
@@ -677,8 +677,11 @@ export default function ThreadComposer ({
     </button>
   ) : null;
 
-  // An MCP tool enable request is answered with its own Approve/Deny controls instead of the questionnaire form.
-  const pendingMcpTool = visiblePendingUserInputRequest?.request.mcpTool ?? null;
+  // MCP enable and sign-in requests are answered with their own Approve/Deny controls instead of the questionnaire form.
+  const pendingRequest = visiblePendingUserInputRequest?.request;
+  const pendingMcpSubject: ThreadMcpRequestSubject | null = pendingRequest?.mcpTool
+    ? { kind: "tool", tool: pendingRequest.mcpTool }
+    : pendingRequest?.mcpAuthorization ? { kind: "authorization", authorization: pendingRequest.mcpAuthorization } : null;
   const questionnairePreviewText = visiblePendingUserInputRequest
     ? getThreadUserInputRequestPreviewText(visiblePendingUserInputRequest.request)
     : "";
@@ -717,9 +720,9 @@ export default function ThreadComposer ({
           <SurfacePanels activeKey={activeComposerMode}>
             {visiblePendingUserInputRequest ? (
               <SurfacePanels.Panel active={isQuestionnairePanelActive}>
-                {pendingMcpTool ? <ThreadMcpToolRequestPanel
+                {pendingMcpSubject ? <ThreadMcpRequestPanel
                   key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
-                  tool={pendingMcpTool}
+                  subject={pendingMcpSubject}
                   reason={visiblePendingUserInputRequest.request.questions[0]?.question ?? ""}
                   actionTarget={questionnaireSubmitTarget}
                   stop={showStopButton && stopControlState.action === "stop" ? {
@@ -944,7 +947,7 @@ export default function ThreadComposer ({
                   />
                 ) : null}
               </div>
-              {pendingMcpTool && isQuestionnairePanelActive ? null : stopButton}
+              {pendingMcpSubject && isQuestionnairePanelActive ? null : stopButton}
             </div>
           </div>
         </div>

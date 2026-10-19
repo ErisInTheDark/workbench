@@ -7,7 +7,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { McpServerSnapshot } from "workbench-shared/workbench/mcp/mcp-server-settings";
-import McpServerSettingsController, { openCenteredMcpSignInPopup } from "../../workbench/McpServerSettingsController";
+import McpServerSettingsController from "../../workbench/McpServerSettingsController";
+import { openCenteredMcpSignInPopup } from "../../workbench/mcp-sign-in-popup";
 import { mcpToolLabel, mcpToolSharedPrefix } from "../../workbench/mcp-tool-label";
 import { readWorkbenchAppPort } from "../../workbench/app/workbench-app-port-client";
 import { useWorkbenchAppRpc } from "../../workbench/app/WorkbenchAppRpcContext";

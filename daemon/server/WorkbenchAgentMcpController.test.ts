@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
+import { workbenchMcpFailure } from "./lib/workbench/commands/mcp-command-definitions";
 import {
   getWorkbenchAgentCommandToolName,
   type WorkbenchAgentCommandRequest,
@@ -411,6 +412,28 @@ test("deferred commands are found and run through server wb without joining the 
     ]) assert.equal((await call("mcp_call", args)).isError, true, JSON.stringify(args));
     assert.equal((await call("mcp_request", { server: "wb", tool: "git_arc_tree", reason: "need it" })).isError, true);
     assert.equal(executed.length, dispatchesBefore);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("an external tool error whose text is JSON reaches the agent whole", async () => {
+  const text = JSON.stringify({ authorization_url: "https://accounts.example.test/auth?a=1&b=2", message: "Authorization required." });
+  const controller = codexController({
+    executeCommand: async () => workbenchMcpFailure(text, 422),
+    getReloadScopeCatalog: () => reloadCatalog,
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    lifecycleLogError: () => {},
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const result = await client.callTool({ name: "mcp_call", arguments: { server: "eris", tool: "search" }, _meta: { threadId: "native-thread" } });
+    assert.equal(result.isError, true);
+    assert.match(responseText(result), /https:\/\/accounts\.example\.test\/auth\?a=1&b=2/u);
   } finally {
     await client.close();
     await server.close();

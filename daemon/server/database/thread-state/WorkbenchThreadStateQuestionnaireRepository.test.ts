@@ -96,6 +96,24 @@ test("an MCP tool enable request keeps its tool context, pending and answered, a
   }
 });
 
+test("a sign-in request keeps its link only while pending; answered history keeps the server and host", () => {
+  const { database, threadId, value, repository } = fixture();
+  try {
+    const link = { server: "eris", host: "accounts.example.test", url: "https://accounts.example.test/auth?state=one-time" };
+    const pending = { ...value.pending!, request: { ...value.pending!.request, mcpAuthorization: link } };
+    const answered = { ...value.history[0]!, request: { ...value.history[0]!.request, mcpAuthorization: link } };
+    repository.replace(threadId, { pending, history: [answered] });
+    const read = repository.read(threadId);
+    assert.deepEqual(read.pending, pending);
+    assert.deepEqual(read.history[0]?.request.mcpAuthorization, { server: "eris", host: "accounts.example.test" });
+    assert.equal(JSON.stringify(database.prepare("SELECT * FROM workbench_thread_questionnaire_mcp_authorizations").all()).match(/state=one-time/gu)?.length, 1);
+    repository.replace(threadId, { pending: null, history: [] });
+    assert.deepEqual(database.prepare("SELECT * FROM workbench_thread_questionnaire_mcp_authorizations").all(), []);
+  } finally {
+    database.close();
+  }
+});
+
 test("stale pending approvals are never served while answered approval history stays", () => {
   const { database, threadId, value, repository } = fixture();
   try {

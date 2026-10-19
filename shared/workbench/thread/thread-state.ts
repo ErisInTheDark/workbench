@@ -438,6 +438,10 @@ const WorkbenchUserInputRequestSchema = z.object({
   mcpTool: z.object({
     server: z.string().min(1), tool: z.string().min(1), title: z.string().nullable(), description: z.string(),
   }).strict().optional(),
+  /** The server link a sign-in request asks the user to open. */
+  mcpAuthorization: z.object({
+    server: z.string().min(1), host: z.string().min(1), url: z.string().url().optional(),
+  }).strict().optional(),
   questions: z.array(WorkbenchUserInputQuestionSchema).min(1),
   submitLabel: z.string(),
   summary: z.string(),

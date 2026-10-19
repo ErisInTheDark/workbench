@@ -451,6 +451,46 @@ test("answered MCP tool enable requests keep their tool through the transcript",
   }
 });
 
+test("answered MCP sign-in requests keep their server and host, never the one-time link", () => {
+  const { database, repository } = createRepository();
+  const request = {
+    id: "request-sign-in",
+    mcpAuthorization: { server: "eris", host: "accounts.example.test", url: "https://accounts.example.test/auth?state=one-time" },
+    questions: [{
+      allowOther: false, header: "MCP sign-in", id: "decision", isSecret: false,
+      options: [{ description: "", label: "Approve" }, { description: "", label: "Deny" }],
+      question: "Sign in to search Drive.",
+    }],
+    submitLabel: "Submit", summary: "", title: "",
+  };
+  try {
+    repository.settle([canonicalWindow([
+      thread(),
+      turn("turn-1", 0),
+      {
+        entry: {
+          insertAfterItemId: null, insertAfterItemIndex: null, itemId: "sign-in", request, requestKey: "sign-in-key", resolvedAt: 2_000,
+          response: { answers: { decision: { answers: ["Approve"] } } },
+          threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId["turn-1"],
+        },
+        kind: "questionnaire",
+        observedAt: 2_000,
+      },
+    ], ["turn-1"])]);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    assert.ok(snapshot);
+    assert.doesNotMatch(JSON.stringify(snapshot), /one-time/u);
+    const result = projectWorkbenchTranscript(snapshot);
+    assert.equal(result.success, true);
+    if (!result.success) return;
+    const interaction = result.data.turns.flatMap(({ items }) => items).find(({ type }) => type === "questionnaire");
+    assert.ok(interaction?.type === "questionnaire");
+    assert.deepEqual(interaction.request.mcpAuthorization, { server: "eris", host: "accounts.example.test" });
+  } finally {
+    database.close();
+  }
+});
+
 test("projection reads an augmentation collection linearly as item count grows", () => {
   const { database, repository } = createRepository();
   try {

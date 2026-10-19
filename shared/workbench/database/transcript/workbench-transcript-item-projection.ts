@@ -442,12 +442,15 @@ function interactionItem(
   if (type === "questionnaire" && approvalContext.length) fail("unexpectedRow", "threadApprovalCommandContexts", itemId);
   const mcpToolRows = indexes.interactionMcpTools.get(itemId) ?? [];
   const mcpTool = mcpToolRows.length ? one(mcpToolRows, "threadInteractionMcpTools", itemId) : null;
+  const mcpAuthorizationRows = indexes.interactionMcpAuthorizations.get(itemId) ?? [];
+  const mcpAuthorization = mcpAuthorizationRows.length ? one(mcpAuthorizationRows, "threadInteractionMcpAuthorizations", itemId) : null;
   return {
     errorText: owner.error_text,
     id: itemId,
     request: {
       ...(approval ? { approval } : {}),
       ...(mcpTool ? { mcpTool: { server: mcpTool.server, tool: mcpTool.tool, title: mcpTool.title, description: mcpTool.description } } : {}),
+      ...(mcpAuthorization ? { mcpAuthorization: { server: mcpAuthorization.server, host: mcpAuthorization.host } } : {}),
       id: owner.request_id,
       questions,
       submitLabel: owner.submit_label,
@@ -576,6 +579,7 @@ function createIndexes(rows: Rows, sourceIdsByItemId: ReadonlyMap<number, string
     approvalActions: byItem(rows.threadApprovalCommandActions, sourceIdsByItemId),
     approvalContexts: byItem(rows.threadApprovalCommandContexts, sourceIdsByItemId),
     interactionMcpTools: byItem(rows.threadInteractionMcpTools ?? [], sourceIdsByItemId),
+    interactionMcpAuthorizations: byItem(rows.threadInteractionMcpAuthorizations ?? [], sourceIdsByItemId),
     assistantMessages: byItem(rows.threadItemAssistantMessages, sourceIdsByItemId),
     callableSources: byItem(rows.threadOperationCallableToolSources, sourceIdsByItemId),
     collaborationReceivers: byItem(rows.threadCollaborationReceivers, sourceIdsByItemId),

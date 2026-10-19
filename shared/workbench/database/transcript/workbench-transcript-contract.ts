@@ -76,6 +76,7 @@ export const transcriptSnapshotTables = Object.freeze({
   threadApprovalCommandContexts: interactionTables.threadApprovalCommandContexts,
   threadApprovalCommandActions: interactionTables.threadApprovalCommandActions,
   threadInteractionMcpTools: interactionTables.threadInteractionMcpTools,
+  threadInteractionMcpAuthorizations: interactionTables.threadInteractionMcpAuthorizations,
   threadBrowseEntries: evidenceTables.threadBrowseEntries,
   transcriptAssetRefs: evidenceTables.transcriptAssetRefs,
   transcriptAssets: evidenceTables.transcriptAssets,

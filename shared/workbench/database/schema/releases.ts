@@ -99,6 +99,7 @@ const databaseReleases = Object.freeze({
   questionnaireMcpTools: release(89, "2d375c3fb72e0d27d0854f43e4d1887b271c27a26902433615cd89360531ada8"),
   interactionMcpTools: release(90, "6848cb3d341a166b995748f896538f675fc4940edede9ecdcc79bc07baa3d85e"),
   feedbackResolution: release(91, "a59d6eaa28301dad6cd5ecad79330a5e3d905fd8e755743171e771f2bd513255"),
+  mcpAuthorizations: release(92, "706fd7221abea7f7d353efd63950d586c17d2a348e7186ecb3b4020ef64294d5"),
 });
 
 export default databaseReleases;

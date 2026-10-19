@@ -8,6 +8,7 @@
 
 import type {
   WorkbenchUserInputApprovalContext,
+  WorkbenchUserInputMcpAuthorizationContext,
   WorkbenchUserInputMcpToolContext,
   WorkbenchUserInputOption,
   WorkbenchUserInputQuestion,
@@ -83,6 +84,7 @@ export function buildWorkbenchQuestionnaireRequest(input: {
   id: string;
   questions: readonly WorkbenchQuestionnaireInputQuestion[];
   mcpTool?: WorkbenchUserInputMcpToolContext;
+  mcpAuthorization?: WorkbenchUserInputMcpAuthorizationContext;
 }): WorkbenchUserInputRequest {
   const questions = input.questions
     .map((question, index) => repairQuestionnaireQuestion(index, question))
@@ -91,6 +93,7 @@ export function buildWorkbenchQuestionnaireRequest(input: {
   return {
     id: input.id,
     ...(input.mcpTool ? { mcpTool: input.mcpTool } : {}),
+    ...(input.mcpAuthorization ? { mcpAuthorization: input.mcpAuthorization } : {}),
     questions: repaired,
     submitLabel: QUESTIONNAIRE_SUBMIT_LABEL,
     summary: repaired.length > 1 ? QUESTIONNAIRE_MULTI_QUESTION_SUMMARY : "",

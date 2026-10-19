@@ -1,6 +1,7 @@
 /*
  * No production exports. Tests protect the MCP server allow boundary (only allowed, currently offered tools are
- * forwarded), credential sealing, OAuth sign-in over real transport, per-server failure isolation and settings validation.
+ * forwarded), link requests limited to links the server sent, credential sealing, OAuth sign-in over real transport,
+ * per-server failure isolation and settings validation.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -25,6 +26,7 @@ class FakeServer {
   failure: Error | null = null;
   readonly endpoints: McpServerEndpoint[] = [];
   readonly calls: string[] = [];
+  result: CallToolResult | null = null;
   closed = 0;
 
   constructor(public reportedName: string | null = null) {}
@@ -42,7 +44,7 @@ class FakeServer {
       },
       callTool: async (name): Promise<CallToolResult> => {
         this.calls.push(name);
-        return { content: [{ type: "text", text: `ran ${name}` }] };
+        return this.result ?? { content: [{ type: "text", text: `ran ${name}` }] };
       },
       close: async () => { this.closed += 1; },
     };
@@ -239,6 +241,35 @@ test("an enable request asks only for offered disabled tools, and enables on the
     assert.deepEqual(asked, ["docs/DELETE_FILE: Delete a file", "docs/DELETE_FILE: Delete a file"]);
     assert.equal((await owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, signal())).isError, false);
     assert.deepEqual((await owner.read()).servers[0]?.allowedTools, ["DELETE_FILE", "SEARCH_FILES"]);
+  } finally { close(); }
+});
+
+test("a link request asks only about links the server itself sent, and tells the agent what the user decided", async () => {
+  const docs = new FakeServer("docs");
+  docs.tools = [tool("SEARCH")];
+  const { create, close } = setup({ docs });
+  const authorization = "https://accounts.example.test/auth?client=1&state=abc";
+  try {
+    const owner = create();
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH"] });
+    const asked: string[] = [];
+    const answer = (done: boolean) => async (link: { server: string; url: string; host: string }) => {
+      asked.push(`${link.server} ${link.host} ${link.url}`);
+      return done;
+    };
+    const authorize = (url: string, done = true) => owner.authorizeLink({ server: "docs", url, reason: "Sign in to search" }, answer(done));
+
+    await assert.rejects(authorize(authorization), /did not send that link/u);
+    docs.result = { isError: true, content: [{ type: "text", text: JSON.stringify({ authorization_url: authorization, message: "Sign in." }) }] };
+    const failed = await owner.call({ server: "docs", tool: "SEARCH", arguments: {} }, signal());
+    assert.match(failed.text, /mcp_authorize/u);
+    await assert.rejects(authorize("https://evil.example.test/login"), /did not send that link/u);
+    assert.deepEqual(asked, [], "unsent links never reach the user");
+
+    assert.match(await authorize(authorization.replace("&", "\\u0026")), /finished signing in to docs/u);
+    assert.match(await authorize(authorization, false), /did not sign in/u);
+    assert.deepEqual(asked, Array(2).fill(`docs accounts.example.test ${new URL(authorization).href}`));
   } finally { close(); }
 });
 

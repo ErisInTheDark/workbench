@@ -94,7 +94,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop",
   "task set", "task get", "task completed", "task blocked",
   "todo", "todo remove",
-  "mcp tools", "mcp request", "mcp call",
+  "mcp tools", "mcp request", "mcp call", "mcp authorize",
   "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git thread", "git repo", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
   "git arc status", "git arc edit start", "git arc edit view", "git arc edit apply", "git arc edit revert", "git arc edit end", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
@@ -177,8 +177,8 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "todo", usage: "wb todo [remove] [options]", words: ["todo"],
   },
   {
-    commandOrder: ["mcp tools", "mcp request", "mcp call"],
-    footer: "Only tools the user enabled are callable. --include-disabled lists the rest; mcp request asks the user to enable one.",
+    commandOrder: ["mcp tools", "mcp request", "mcp call", "mcp authorize"],
+    footer: "Only tools the user enabled are callable. --include-disabled lists the rest; mcp request asks the user to enable one; mcp authorize asks them to open a link a server sent.",
     key: "mcp", usage: "wb mcp <tools|request|call> [options]", words: ["mcp"],
   },
   {
