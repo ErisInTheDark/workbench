@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect thread emphasis delimiter pairing and editor-profile separation.
+ * No production exports. Regression wards protect thread emphasis delimiter pairing, fenced code scoping and editor-profile separation.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -65,6 +65,52 @@ test("thread disclosures pair nested tags and leave fenced examples untouched", 
   assert.match(blocks[0].text, /<details>\n<summary>inner<\/summary>/u);
   assert.match(blocks[0].text, /after$/u);
   assert.equal(parseBlocks("<details><summary>plain</summary>\nbody\n</details>")[0]?.type, "paragraph");
+});
+
+test("a fence opened on a list item's first line is a code child that closes at the item's indent", () => {
+  const blocks = parseBlocks([
+    "- ````ts",
+    "  event?(data: string): void",
+    "  ````",
+    "",
+    "after",
+  ].join("\n"));
+
+  assert.deepEqual(blocks.filter(block => block.type !== "break").map(block => block.type), ["ul", "paragraph"]);
+  if (blocks[0]?.type !== "ul") return;
+  assert.equal(blocks[0].items[0]?.text, "");
+  assert.deepEqual(blocks[0].items[0]?.children, [{ type: "code", language: "ts", text: "event?(data: string): void" }]);
+});
+
+test("thread plans, notices and disclosures close after a list item fence", () => {
+  const markdown = [
+    "<plan>",
+    "- ````ts",
+    "  code",
+    "  ````",
+    "</plan>",
+    "",
+    "<details><summary>more</summary>",
+    "- ```ts",
+    "  code",
+    "  ```",
+    "</details>",
+    "",
+    "<notice title=\"n\" color=\"blue\">",
+    "- ```ts",
+    "  code",
+    "  ```",
+    "</notice>",
+    "",
+    "tail",
+  ].join("\n");
+  const sections = parseThreadMarkdownSections(markdown);
+
+  assert.deepEqual(sections.map(section => section.kind), ["plan", "prose"]);
+  assert.deepEqual(
+    parseBlocks(sections[1]!.markdown, { profile: "thread" }).filter(block => block.type !== "break").map(block => block.type),
+    ["details", "notice", "paragraph"],
+  );
 });
 
 test("incomplete and unsupported thread disclosures remain literal", () => {

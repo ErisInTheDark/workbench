@@ -288,27 +288,10 @@ export function normalizeThreadBlockTagBoundaries(markdown: string, options: Mar
   }
 
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
+  const isFencedLine = createCodeFenceTracker();
 
   return lines
-    .map((line) => {
-      if (codeFenceOpener && isCodeFenceCloseLine(line, codeFenceOpener)) {
-        codeFenceOpener = null;
-        return line;
-      }
-
-      if (codeFenceOpener) {
-        return line;
-      }
-
-      const fenceOpener = parseCodeFenceOpenLine(line);
-      if (fenceOpener) {
-        codeFenceOpener = fenceOpener;
-        return line;
-      }
-
-      return normalizeThreadBlockTagLineBoundaries(line);
-    })
+    .map((line) => isFencedLine(line) ? line : normalizeThreadBlockTagLineBoundaries(line))
     .join("\n");
 }
 
@@ -992,9 +975,30 @@ function parseCodeFenceOpenLine(line: string): ParsedCodeFenceOpenLine | null {
   };
 }
 
+/** A list item whose first line opens a fence; its body and closer sit at the item's content indent. */
+function parseListItemCodeFenceOpenLine(line: string): ParsedCodeFenceOpenLine | null {
+  const listLine = parseListLine(line);
+  const opener = listLine && parseCodeFenceOpenLine(listLine.text);
+  return opener ? { ...opener, indent: " ".repeat(listLine.contentIndent) } : null;
+}
+
 function isCodeFenceCloseLine(line: string, opener: ParsedCodeFenceOpenLine) {
-  const match = line.match(/^( {0,3})(`{3,})[ \t]*$/);
+  const match = line.match(/^( *)(`{3,})[ \t]*$/);
   return !!match && match[1] === opener.indent && match[2].length >= opener.fenceLength;
+}
+
+/** Feeds raw lines in order; true when a line opens, continues or closes fenced code, top-level or list-item. */
+function createCodeFenceTracker() {
+  let opener: ParsedCodeFenceOpenLine | null = null;
+  return (line: string) => {
+    if (opener) {
+      if (isCodeFenceCloseLine(line, opener)) opener = null;
+      return true;
+    }
+
+    opener = parseCodeFenceOpenLine(line) ?? parseListItemCodeFenceOpenLine(line);
+    return opener !== null;
+  };
 }
 
 function isMarkdownCodeFenceLanguage(language: string) {
@@ -1093,10 +1097,11 @@ function parseListItemChildren(
   itemIndent: number,
   contentIndent: number,
   options: MarkdownParseOptions,
+  leadingFenceLine: string | null,
 ) {
-  const childLines: string[] = [];
+  const childLines = leadingFenceLine === null ? [] : [leadingFenceLine];
   let index = startIndex;
-  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
+  let codeFenceOpener = leadingFenceLine === null ? null : parseCodeFenceOpenLine(leadingFenceLine);
 
   while (index < lines.length) {
     const line = lines[index];
@@ -1161,10 +1166,12 @@ function parseSpecificListBlock(
     }
 
     const textLines = [line.text];
+    const leadingFenceLine = parseCodeFenceOpenLine(line.text) ? line.text : null;
     index += 1;
     // Hard-break continuation lines sit at the item's content indent (or are blank padding) and extend its text.
     while (
-      isEditorProfile(options)
+      leadingFenceLine === null
+      && isEditorProfile(options)
       && endsWithHardBreak(textLines.at(-1)!)
       && index < lines.length
       && (HARD_BREAK_BLANK_LINE.test(lines[index]) || (lines[index].trim() && getIndentWidth(lines[index]) >= line.contentIndent))
@@ -1177,11 +1184,11 @@ function parseSpecificListBlock(
       contentIndent: line.contentIndent,
       marker: line.marker,
       ordinal: type === "ol" ? line.marker.slice(0, -1) : null,
-      text: isEditorProfile(options) ? joinHardBreakLines(textLines) : line.text,
+      text: leadingFenceLine !== null ? "" : isEditorProfile(options) ? joinHardBreakLines(textLines) : line.text,
       children: [],
     };
 
-    const children = parseListItemChildren(lines, index, indent, line.contentIndent, options);
+    const children = parseListItemChildren(lines, index, indent, line.contentIndent, options, leadingFenceLine);
     item.children = children.blocks;
     index = children.nextIndex;
 
@@ -1262,29 +1269,14 @@ function isThreadPlanCloseLine(line: string) {
 
 function collectThreadPlanLines(lines: string[], startIndex: number) {
   const planLines: string[] = [];
-  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
+  const isFencedLine = createCodeFenceTracker();
   let index = startIndex;
 
   while (index < lines.length) {
     const line = lines[index];
 
-    if (codeFenceOpener) {
-      if (isCodeFenceCloseLine(line, codeFenceOpener)) {
-        codeFenceOpener = null;
-      }
-
-      planLines.push(line);
-      index += 1;
-      continue;
-    }
-
-    if (isThreadPlanCloseLine(line)) {
+    if (!isFencedLine(line) && isThreadPlanCloseLine(line)) {
       return { nextIndex: index + 1, planLines };
-    }
-
-    const fenceOpener = parseCodeFenceOpenLine(line);
-    if (fenceOpener) {
-      codeFenceOpener = fenceOpener;
     }
 
     planLines.push(line);
@@ -1322,23 +1314,13 @@ function parseThreadNoticeBlock(lines: string[], startIndex: number, options: Ma
   }
 
   const noticeLines: string[] = [];
-  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
+  const isFencedLine = createCodeFenceTracker();
   let index = startIndex + 1;
 
   while (index < lines.length) {
     const line = lines[index];
 
-    if (codeFenceOpener) {
-      if (isCodeFenceCloseLine(line, codeFenceOpener)) {
-        codeFenceOpener = null;
-      }
-
-      noticeLines.push(line);
-      index += 1;
-      continue;
-    }
-
-    if (THREAD_NOTICE_CLOSE_LINE_PATTERN.test(line.trim())) {
+    if (!isFencedLine(line) && THREAD_NOTICE_CLOSE_LINE_PATTERN.test(line.trim())) {
       return {
         block: {
           color: openingMatch[1] ?? openingMatch[4],
@@ -1349,11 +1331,6 @@ function parseThreadNoticeBlock(lines: string[], startIndex: number, options: Ma
         },
         nextIndex: index + 1,
       };
-    }
-
-    const fenceOpener = parseCodeFenceOpenLine(line);
-    if (fenceOpener) {
-      codeFenceOpener = fenceOpener;
     }
 
     noticeLines.push(line);
@@ -1379,18 +1356,10 @@ function parseThreadDetailsBlock(lines: string[], startIndex: number, options: M
   if (!summaryMatch || !summaryMatch[1].trim()) return null;
 
   let depth = 1;
-  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
+  const isFencedLine = createCodeFenceTracker();
   for (let index = summaryIndex + 1; index < lines.length; index += 1) {
     const line = lines[index];
-    if (codeFenceOpener) {
-      if (isCodeFenceCloseLine(line, codeFenceOpener)) codeFenceOpener = null;
-      continue;
-    }
-    const fenceOpener = parseCodeFenceOpenLine(line);
-    if (fenceOpener) {
-      codeFenceOpener = fenceOpener;
-      continue;
-    }
+    if (isFencedLine(line)) continue;
     if (THREAD_DETAILS_OPEN_LINE_PATTERN.test(line.trim())) {
       depth += 1;
       continue;

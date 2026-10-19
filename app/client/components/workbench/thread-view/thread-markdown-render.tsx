@@ -349,6 +349,9 @@ function renderThreadListItem (
   }
 
   const childContent = renderThreadChildBlocks(item.children, options, keyPrefix);
+  if (!content.length) {
+    return <li className="[&+li]:mt-1" key={keyPrefix} value={item.ordinal ?? undefined}>{childContent}</li>;
+  }
 
   return (
     <li className="[&+li]:mt-1" key={keyPrefix} value={item.ordinal ?? undefined}>
@@ -357,7 +360,7 @@ function renderThreadListItem (
         open
       >
         <summary className="flex min-w-0 max-w-full cursor-pointer list-none items-center [&::-webkit-details-marker]:hidden">
-          <span className="min-w-0">{content.length ? content : <br />}</span>
+          <span className="min-w-0">{content}</span>
           <ChevronIcon
             className="ml-[0.12em] transform-[rotate(-90deg)] [details[open]>summary_&]:transform-[rotate(0deg)] transition-transform"
             size={20}
