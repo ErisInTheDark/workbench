@@ -33,14 +33,16 @@ test("each commit is read once, a repeat ask while loading reads nothing new, an
   assert.deepEqual(history.get("other-thread", key("a")), { status: "loading" }, "threads keep separate histories");
 });
 
-test("a failed read reports per commit and the next ask reads it again", async () => {
+test("a failed read marks its commits failed, reports once, and the next ask reads them again", async () => {
   let fail = true;
+  const reports: string[] = [];
   const history = new ThreadGitCommitHistory(async (_threadId, commits) => {
     if (fail) throw new Error("daemon unavailable");
     return commits.map(item => commit(item.commitSha[0]!));
-  });
-  await history.load("thread", [key("a")]);
+  }, message => reports.push(message));
+  await history.load("thread", [key("a"), key("b")]);
   assert.deepEqual(history.get("thread", key("a")), { status: "failed", error: "daemon unavailable" });
+  assert.deepEqual(reports, ["daemon unavailable"], "one failed read is one report, not one per commit");
   fail = false;
   await history.load("thread", [key("a")]);
   assert.equal(history.get("thread", key("a")).status, "ready");

@@ -30,7 +30,11 @@ export default class ThreadGitCommitHistory {
   private readonly listeners = new Set<() => void>();
   private version = 0;
 
-  constructor(private readonly read: Read) {}
+  constructor(
+    private readonly read: Read,
+    /** One report per failed read; rows show a short notice, so the detail goes here. */
+    private readonly reportFailure: (message: string) => void = message => console.error("Commit details unavailable:", message),
+  ) {}
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -64,6 +68,7 @@ export default class ThreadGitCommitHistory {
     } catch (error) {
       const message = (error instanceof Error ? error.message : "Commit details could not be read.")
         .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 300);
+      this.reportFailure(message);
       for (const commit of missing) this.details.set(this.key(threadId, commit), { status: "failed", error: message });
     }
     this.changed();

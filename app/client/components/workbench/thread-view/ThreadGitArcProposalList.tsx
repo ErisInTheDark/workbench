@@ -100,10 +100,13 @@ function useObservedProposalCommits(commitActions: ThreadCheckpointCommitActions
 
 type AcceptedEntry = { committedAt?: string } & ({ commit: WorkbenchThreadGitCommitRef } | { row: () => ReactNode });
 
-/** Mounts only once its age group opens (or when it is the whole panel), so commit details load as rows become visible. */
+/**
+ * Mounts only once its age group opens (or when it is the whole panel), so commit details load as rows become visible.
+ * Commits whose details failed collapse into one notice whose retry reads them again; the store logs the cause.
+ */
 function AcceptedCommitRows({ entries, renderCommit, threadId }: {
   entries: readonly AcceptedEntry[];
-  renderCommit: (commit: WorkbenchThreadGitCommitRef, detail: ThreadGitCommitDetail) => ReactNode;
+  renderCommit: (commit: WorkbenchThreadGitCommitRef, detail: Exclude<ThreadGitCommitDetail, { status: "failed" }>) => ReactNode;
   threadId: string;
 }) {
   const history = threadGitCommitHistoryFor(useWorkbenchDaemonClient());
@@ -115,7 +118,29 @@ function AcceptedCommitRows({ entries, renderCommit, threadId }: {
   useEffect(() => {
     if (commitsKey) void history.load(threadId, latestCommits.current);
   }, [commitsKey, history, threadId]);
-  return <>{entries.map(entry => "commit" in entry ? renderCommit(entry.commit, history.get(threadId, entry.commit)) : entry.row())}</>;
+  const failed = commits.filter(commit => history.get(threadId, commit).status === "failed");
+  return (
+    <>
+      {entries.map(entry => {
+        if (!("commit" in entry)) return entry.row();
+        const detail = history.get(threadId, entry.commit);
+        return detail.status === "failed" ? null : renderCommit(entry.commit, detail);
+      })}
+      {failed.length ? (
+        <div className={`${threadGitArcCommitRowClassName} flex items-center gap-3 py-2 text-[0.8em] leading-[1.5]`} role="alert">
+          <span className="min-w-0 flex-1 text-danger">{`Details for ${plural(failed.length, "commit")} couldn't load.`}</span>
+          <button
+            className="shrink-0 cursor-pointer text-fg/muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none"
+            data-thread-git-commit-retry="true"
+            onClick={() => void history.load(threadId, failed)}
+            type="button"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 export default function ThreadGitArcProposalList({
@@ -262,18 +287,14 @@ export default function ThreadGitArcProposalList({
     </div>
   );
   // A permanent commit opens onto its source proposal, which loads (and offers amend) only once opened.
-  const historyRow = (ref: WorkbenchThreadGitCommitRef, detail: ThreadGitCommitDetail) => {
+  const historyRow = (ref: WorkbenchThreadGitCommitRef, detail: Exclude<ThreadGitCommitDetail, { status: "failed" }>) => {
     const key = workbenchThreadGitCommitKey(ref);
-    if (detail.status !== "ready") return (
+    if (detail.status === "loading") return (
       <div className={threadGitArcCommitRowClassName} data-thread-git-commit={ref.commitSha} key={key}>
-        {detail.status === "failed" ? (
-          <p className="m-0 py-2 text-[0.8em] leading-[1.5] text-danger" role="alert">{detail.error}</p>
-        ) : (
-          <div aria-hidden="true" className="flex items-center gap-2 py-2">
-            <span className="size-3 shrink-0 rounded workbench-skeleton" />
-            <span className="h-[1em] w-1/2 rounded workbench-skeleton" />
-          </div>
-        )}
+        <div aria-hidden="true" className="flex items-center gap-2 py-2">
+          <span className="size-3 shrink-0 rounded workbench-skeleton" />
+          <span className="h-[1em] w-1/2 rounded workbench-skeleton" />
+        </div>
       </div>
     );
     const commit = detail.commit;

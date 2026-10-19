@@ -143,6 +143,19 @@ test("commit rows whose details have not loaded hold their place without inventi
   assert.doesNotMatch(html, /durable commit/u);
 });
 
+test("commits whose details failed share one short notice with a retry, not an error per row", async context => {
+  const reports: unknown[][] = [];
+  context.mock.method(console, "error", (...args: unknown[]) => { reports.push(args); });
+  const daemon = new WorkbenchDaemonClient({ request: async () => { throw new Error("{\"code\":\"unrecognized_keys\"}"); } });
+  const other = { ...durableCommit, commitSha: "b".repeat(40), historyIndex: 1, sourceProposalId: "other", title: "other" };
+  await threadGitCommitHistoryFor(daemon).load("thread", [durableCommit, other]);
+  const html = renderList(false, [], "committed", [durableCommit, other], { standalone: true, daemon });
+  assert.equal(html.match(/role="alert"/gu)?.length, 1);
+  assert.match(html, /data-thread-git-commit-retry="true"/u);
+  assert.doesNotMatch(html, /unrecognized_keys/u);
+  assert.equal(reports.length, 1, "the cause is logged once for the whole read");
+});
+
 test("accepted history keeps its group when it shares the panel", () => {
   const withClaims = renderList(true, [], "committed", [durableCommit]);
   assert.match(withClaims, /data-thread-git-arc-accepted-group="older"/u);
