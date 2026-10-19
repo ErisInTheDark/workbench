@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchPresentationRepositoryOptions: durable shared-presentation database path.
  * - default WorkbenchPresentationRepository: own project, draft, layout and import transactions, projecting compact launch
- *   history; folder registration merges projects whose folders all re-keyed into their successor identity.
+ *   history and one shared frozen snapshot per revision; folder registration merges projects whose folders all re-keyed
+ *   into their successor identity.
  */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -47,6 +48,7 @@ export default class WorkbenchPresentationRepository {
   readonly databasePath: string;
   private database: Database.Database | null = null;
   private opening: Promise<void> | null = null;
+  private snapshot: { database: Database.Database; revision: number; value: PresentationSnapshot } | null = null;
 
   constructor(private readonly options: WorkbenchPresentationRepositoryOptions = {}) {
     this.databasePath = path.resolve(options.databasePath
@@ -80,6 +82,7 @@ export default class WorkbenchPresentationRepository {
     await this.opening;
     this.database?.close();
     this.database = null;
+    this.snapshot = null;
   }
 
   async resume(backupPath?: string) {
@@ -118,10 +121,21 @@ export default class WorkbenchPresentationRepository {
     return { threadId: receipt.accepted_thread_id, harness: this.selection(receipt.selection_json).settings.harness };
   }
 
+  /**
+   * Hot projections read the snapshot per daemon delta; one parsed copy serves every reader until a write or revision
+   * change, frozen because they all share it.
+   */
   read(): PresentationSnapshot {
     const db = this.requireDatabase();
-    const metadata = db.prepare("SELECT revision FROM presentation_metadata WHERE id = 'singleton'")
+    const { revision } = db.prepare("SELECT revision FROM presentation_metadata WHERE id = 'singleton'")
       .get() as PresentationRows["metadata"];
+    if (this.snapshot?.database === db && this.snapshot.revision === revision) return this.snapshot.value;
+    const value = freezeDeeply(this.readSnapshot(db, revision));
+    this.snapshot = { database: db, revision, value };
+    return value;
+  }
+
+  private readSnapshot(db: Database.Database, revision: number): PresentationSnapshot {
     const daemons = db.prepare("SELECT * FROM presentation_daemons ORDER BY id")
       .all() as PresentationRows["daemons"][];
     const projects = db.prepare("SELECT * FROM presentation_projects ORDER BY label, id")
@@ -152,7 +166,7 @@ export default class WorkbenchPresentationRepository {
     const hiddenLocations = db.prepare("SELECT * FROM presentation_hidden_locations ORDER BY logical_project_id, daemon_id, project_id")
       .all() as PresentationRows["hiddenLocations"][];
     return PresentationSnapshotSchema.parse({
-      revision: metadata.revision,
+      revision,
       daemons: daemons.map(row => ({ id: row.id, hostname: row.hostname })),
       projects: projects.map(row => ({ id: row.id, matchKey: row.match_key, label: row.label })),
       locations: locations.map(row => ({
@@ -209,6 +223,7 @@ export default class WorkbenchPresentationRepository {
   mutate(value: PresentationMutation) {
     const mutation = PresentationMutationSchema.parse(value);
     const db = this.requireDatabase();
+    this.snapshot = null;
     db.transaction(() => this.applyMutation(mutation))();
     return this.read();
   }
@@ -220,6 +235,7 @@ export default class WorkbenchPresentationRepository {
       && value.kind !== "finishImportDraft" && value.kind !== "importLayout")) {
       throw new Error("Import batch contains a non-import mutation.");
     }
+    this.snapshot = null;
     this.requireDatabase().transaction(() => {
       for (const mutation of mutations) this.applyMutation(mutation);
     })();
@@ -287,6 +303,7 @@ export default class WorkbenchPresentationRepository {
       throw new Error("Attachment completion is invalid.");
     }
     const db = this.requireDatabase();
+    this.snapshot = null;
     db.transaction(() => {
       const draft = this.draft(draftId);
       if (!draft || (draft.phase !== "unsent" && draft.phase !== "importing")) {
@@ -998,4 +1015,12 @@ export default class WorkbenchPresentationRepository {
     this.nextRevision();
     this.options.onDiagnostic?.("Legacy presentation source changed after app import.");
   }
+}
+
+function freezeDeeply<Value>(value: Value): Value {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const nested of Object.values(value)) freezeDeeply(nested);
+  }
+  return value;
 }

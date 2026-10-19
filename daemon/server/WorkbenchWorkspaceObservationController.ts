@@ -430,7 +430,9 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
 
   /**
    * Publishes every requested thread already summarised, removes threads dropped by a retarget, then reads the rest.
-   * A read that lands after its thread left the batch is discarded.
+   * Threads this daemon does not know resolve one owner lookup at a time and observers re-project the whole batch per
+   * delta, so their null answers wait for the next found summary or the last read. A read that lands after its thread
+   * left the batch is discarded.
    */
   private readSummaries(observation: Observation<Client>) {
     const query = observation.request.query;
@@ -451,10 +453,22 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       else missing.push(threadId);
     }
     this.update(observation, { kind: "threadSummaries", phase: missing.length ? "pending" : "current", failure: null, summaries });
+    let outstanding = missing.length;
+    const unknown: string[] = [];
+    const settled = () => {
+      outstanding -= 1;
+      if (outstanding) return;
+      for (const threadId of unknown.splice(0)) this.acceptSummary(observation, threadId);
+    };
     for (const threadId of missing) {
-      void index.read(threadId).then(() => this.acceptSummary(observation, threadId), error => {
+      void index.read(threadId).then(located => {
+        if (!located) unknown.push(threadId);
+        else for (const ready of [threadId, ...unknown.splice(0)]) this.acceptSummary(observation, ready);
+        settled();
+      }, error => {
         const message = failure(error);
         this.owners.warn(`Thread summary read failed: ${message}`);
+        settled();
         if (!this.active(observation) || observation.value.kind !== "threadSummaries") return;
         this.update(observation, { ...observation.value, phase: "stale", failure: message });
       });

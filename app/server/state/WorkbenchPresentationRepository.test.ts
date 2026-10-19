@@ -39,6 +39,33 @@ function catalog(rootPath: string, identityKey = remote) {
   }] };
 }
 
+test("readers share one frozen snapshot until a write or revision change replaces it", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-");
+  const databasePath = path.join(temporary.path, "presentation.sqlite3");
+  const repository = new WorkbenchPresentationRepository({ databasePath });
+  try {
+    await repository.start();
+    const empty = repository.read();
+    assert.equal(repository.read(), empty, "an unchanged revision serves the same snapshot");
+    assert.throws(() => { (empty.projects as unknown[]).push({}); }, TypeError, "shared snapshots cannot be edited in place");
+
+    const registered = repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo") });
+    assert.notEqual(registered, empty);
+    assert.equal(repository.read(), registered);
+    assert.equal(registered.projects.length, 1);
+
+    const other = new Database(databasePath);
+    try {
+      other.prepare("UPDATE presentation_projects SET label = 'renamed'").run();
+      other.prepare("UPDATE presentation_metadata SET revision = revision + 1").run();
+    } finally { other.close(); }
+    assert.equal(repository.read().projects[0]!.label, "renamed", "a revision written elsewhere is read fresh");
+  } finally {
+    await repository.close();
+    await temporary.dispose();
+  }
+});
+
 test("attachment admission order survives replacement, removal and reopen", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-");
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });

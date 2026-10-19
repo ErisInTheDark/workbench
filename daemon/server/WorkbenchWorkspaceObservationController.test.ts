@@ -262,6 +262,31 @@ test("thread summary reads and announcements publish one delta per task", async 
     "retargeting clears an obsolete queued summary without another publication");
 });
 
+test("thread summary reads settling across separate tasks still publish one batch", async context => {
+  const entries = [thread(0), thread(1), thread(2)].map(entry => {
+    if (entry.entryKind !== "thread") throw new Error("Expected thread fixture.");
+    return entry;
+  });
+  const reads = new Map<string, (value: null) => void>();
+  const f = fixture(context, { summaries: {
+    peek: () => null,
+    // Threads another daemon owns resolve one owner lookup at a time.
+    read: threadId => new Promise(resolve => { reads.set(threadId, resolve); }),
+    subscribe: () => () => {},
+  } });
+  const threadIds = entries.map(entry => entry.identity.threadId);
+  const opened = f.observe({ kind: "threadSummaries", threadIds: threadIds.map(id => ThreadReferenceSchema.parse(id)) });
+  const published = () => f.updates.filter(update => update.value.subscriptionId === opened.subscriptionId);
+  for (const threadId of threadIds) {
+    reads.get(threadId)!(null);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  const settled = await f.wait(value => value.subscriptionId === opened.subscriptionId && value.phase === "current");
+  assert.ok(settled.kind === "threadSummaries");
+  assert.deepEqual(threadIds.map(id => settled.summaries[id]), [null, null, null]);
+  assert.equal(published().length, 1, "unknown threads answer in one delta, not one per thread");
+});
+
 test("a thread summary batch reads unknown threads, retargets as deltas, and follows summary changes", async context => {
   const [first, second] = [thread(0), thread(1)];
   if (first.entryKind !== "thread" || second.entryKind !== "thread") throw new Error("Expected thread fixtures.");
