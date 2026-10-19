@@ -22,6 +22,8 @@ import OpenCodeEventController from "./OpenCodeEventController";
 import { writeTranscriptText, readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type { SessionMessageInfo } from "@opencode/client";
 import WorkbenchTranscriptAssetStore from "../../database/transcript/WorkbenchTranscriptAssetStore";
+import { OPENCODE_COMMENTARY_TOOL_NAME } from "./opencode-workbench-rpc";
+import { OPENCODE_COMMENTARY_HINT } from "./workbench-plugin/open-code-commentary-tool";
 
 test("converts cumulative OpenCode usage without losing cache or reasoning tokens", () => {
   assert.deepEqual(openCodeTokenBreakdown({
@@ -640,6 +642,56 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
       component: { kind: "item", index: 0 },
     },
   ]);
+});
+
+test("history replays commentary-tool input as exact commentary and keeps the hidden hint out", async () => {
+  let recorded: readonly WorkbenchTranscriptObservation[] = [];
+  const adapter = new OpenCodeTranscriptAdapter({
+    threads: {
+      observe: async () => ({ threadId: WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001") } as never),
+      observeTurns: async inputs => inputs.map((input, index) => ({
+        threadId: input.threadId,
+        turnId: WorkbenchTurnIdSchema.parse(`00000000-0000-4000-8000-00000000000${index + 2}`),
+        turnIndex: index,
+        native: {
+          harness: input.harnessId, nativeLocation: input.nativeLocation,
+          nativeThreadId: NativeThreadIdSchema.parse(input.nativeThreadId), nativeTurnId: NativeTurnIdSchema.parse(input.nativeTurnId),
+        },
+      })),
+    },
+    items: {
+      admit: async inputs => inputs.map((input, index) => ({
+        ...input,
+        sources: input.sources.map(source => ({ ...source, component: source.component ?? { kind: "item" as const, index: 0 } })),
+        itemId: input.itemId ?? WorkbenchItemIdSchema.parse(`00000000-0000-4000-8000-0000000001${String(index).padStart(2, "0")}`),
+      })),
+      itemIdForSource: () => { throw new Error("not used"); },
+    },
+    transcript: { record: async observations => { recorded = observations; return { changedThreadIds: [] }; } },
+  });
+  await adapter.record({
+    id: "session", projectID: "project", title: "Thread", cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 4 }, location: { directory: "C:/repo" },
+  }, [
+    { id: "user-1", type: "user", text: "hello", time: { created: 1 } },
+    { id: "hint-1", type: "synthetic", text: OPENCODE_COMMENTARY_HINT, time: { created: 2 } } as never,
+    {
+      id: "assistant-1", type: "assistant", agent: "agent", model: { id: "m", providerID: "p" },
+      content: [{
+        type: "tool", id: "message-1", name: OPENCODE_COMMENTARY_TOOL_NAME,
+        state: { status: "completed", input: { text: "**on it**" }, output: "", content: [{ type: "text", text: "Message delivered to user." }] },
+        time: { created: 3, ran: 3, completed: 3 },
+      } as never],
+      time: { created: 3, completed: 3 },
+    },
+  ], { id: "00000000-0000-4000-8000-000000000010", rootPath: "C:/repo" }, { settleUsage: true });
+  const items = recorded.flatMap(entry => entry.kind === "item" ? [entry.item] : []);
+  assert.deepEqual(items.map(item => item.type), ["userMessage", "agentMessage"]);
+  const commentary = items[1]!;
+  assert.ok(commentary.type === "agentMessage");
+  assert.deepEqual([commentary.text, commentary.phase], ["**on it**", "commentary"]);
+  assert.doesNotMatch(JSON.stringify(recorded), /Plain text output is not shown/u);
 });
 
 test("keeps the latest turn open while a WB steer awaits native delivery", async () => {

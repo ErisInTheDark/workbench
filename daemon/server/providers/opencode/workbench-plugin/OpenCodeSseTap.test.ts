@@ -26,7 +26,7 @@ function upstream(chunks: string[]) {
 test("events split across provider chunks reach OpenCode whole", async () => {
   const { input } = upstream(["data: {\"a\"", ":1}\n\ndata: b\r", "\n\r\n"]);
   const events: string[] = [];
-  OpenCodeSseTap.wrap(input, { event: data => events.push(data) });
+  OpenCodeSseTap.wrap(input, { event: data => { events.push(data); } });
   const reader = input.response.body!.getReader();
   assert.equal(decoder.decode((await reader.read()).value), "data: {\"a\":1}\n\n");
   assert.deepEqual(events, ["{\"a\":1}"]);
@@ -55,6 +55,32 @@ test("a cut decided after observing a segment forwards that segment but never a 
   let tap!: OpenCodeSseTap;
   tap = OpenCodeSseTap.wrap(input, { settle: async () => { await tap.cut("data: end\n\n"); } });
   assert.equal(await input.response.text(), "data: seen\n\ndata: end\n\n");
+});
+
+test("held events are released in order and dropped by a cut", async () => {
+  const forwarded = upstream(["data: hold-1\n\n", "data: hold-2\n\ndata: go\n\n"]);
+  OpenCodeSseTap.wrap(forwarded.input, { event: data => data.startsWith("hold") ? "hold" : "forward" });
+  const reader = forwarded.input.response.body!.getReader();
+  assert.equal(decoder.decode((await reader.read()).value), "data: hold-1\n\ndata: hold-2\n\ndata: go\n\n");
+  await reader.cancel();
+
+  const cut = upstream(["data: kept\n\ndata: hold\n\n"]);
+  let tap!: OpenCodeSseTap;
+  tap = OpenCodeSseTap.wrap(cut.input, {
+    event: data => data === "hold" ? "hold" : "forward",
+    settle: async () => { await tap.cut("data: end\n\n"); },
+  });
+  assert.equal(await cut.input.response.text(), "data: kept\n\ndata: end\n\n");
+});
+
+test("events still held when the provider body ends reach OpenCode", async () => {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(encoder.encode("data: hold\n\n")); controller.close(); },
+  });
+  const input = { kind: "primary", sessionID: "session",
+    response: new Response(body, { headers: { "content-type": "text/event-stream" } }) } as SessionHttpResponse;
+  OpenCodeSseTap.wrap(input, { event: () => "hold" });
+  assert.equal(await input.response.text(), "data: hold\n\n");
 });
 
 test("observation failure keeps forwarding native bytes", async () => {

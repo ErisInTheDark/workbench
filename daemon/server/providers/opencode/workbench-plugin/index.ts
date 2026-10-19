@@ -14,10 +14,12 @@ import type { ConnectionInfo } from "@opencode/client";
 import OpenCodeCompanionToolsController, { type CompanionToolClient } from "./OpenCodeCompanionToolsController";
 import OpenCodePatchStreamController from "./OpenCodePatchStreamController";
 import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
-import OpenCodeSteerCutController from "./OpenCodeSteerCutController";
+import OpenCodeStreamCutController from "./OpenCodeStreamCutController";
+import { OPENCODE_COMMENTARY_HINT, registerOpenCodeCommentaryTool } from "./open-code-commentary-tool";
 import providerAccountFingerprint from "../../provider-account-fingerprint";
 import {
   isOpenCodeWorkbenchToolName,
+  OPENCODE_COMMENTARY_TOOL_NAME,
   openCodeWorkbenchRpc,
   OpenCodeGoQuotaSchema,
   type OpenCodeGoQuotaResult,
@@ -229,9 +231,12 @@ export function createOpenCodeWorkbenchPlugin(
         emit: observation => rpc.events.emit("patchPreview", observation),
         warn: message => console.warn(`[workbench-opencode-preview] ${message}`),
       });
-      const cuts = new OpenCodeSteerCutController({
+      const cuts = new OpenCodeStreamCutController({
         isManagedSession,
-        warn: message => console.warn(`[workbench-opencode-steer] ${message}`),
+        hint: async sessionID => {
+          await context.session.synthetic({ sessionID, text: OPENCODE_COMMENTARY_HINT, delivery: "steer" });
+        },
+        warn: message => console.warn(`[workbench-opencode-cut] ${message}`),
       });
       const sessionLifetime = new AbortController();
       const sessionEvents = (async () => {
@@ -253,13 +258,13 @@ export function createOpenCodeWorkbenchPlugin(
             }
           }
           if (!sessionLifetime.signal.aborted) {
-            console.warn("[workbench-opencode] Session event subscription ended; previews and steer cuts disabled.");
+            console.warn("[workbench-opencode] Session event subscription ended; previews and stream cuts disabled.");
             cuts.dispose();
             await Promise.all([patches.dispose(), files.dispose()]);
           }
         } catch {
           if (!sessionLifetime.signal.aborted) {
-            console.warn("[workbench-opencode] Session event subscription failed; previews and steer cuts disabled.");
+            console.warn("[workbench-opencode] Session event subscription failed; previews and stream cuts disabled.");
             cuts.dispose();
             await Promise.all([patches.dispose(), files.dispose()]);
           }
@@ -267,14 +272,17 @@ export function createOpenCodeWorkbenchPlugin(
       })();
       const registrations = await Promise.allSettled([
         rpc,
-        // Patch observation wraps the provider body first; the steer cutter wraps that, so a cut cancels both.
+        // Patch observation wraps the provider body first; the stream cutter wraps that, so a cut cancels both.
         context.session.hook("http.response", async input => {
           await patches.httpResponse(input);
           await cuts.httpResponse(input);
         }),
         context.session.hook("experimental.ws.send", input => patches.websocketSend(input)),
         context.session.hook("experimental.ws.receive", input => patches.websocketReceive(input)),
-        context.tool.transform(editor => tools.register(editor)),
+        context.tool.transform(editor => {
+          tools.register(editor);
+          registerOpenCodeCommentaryTool(editor);
+        }),
         context.permission.hook("evaluate", async input => {
           if (input.action !== "edit") return;
           try {
@@ -298,7 +306,8 @@ export function createOpenCodeWorkbenchPlugin(
             execute.description = `${execute.description}\n\n${MANAGED_CODE_MODE_SCOPE}`;
           }
           for (const tool of Object.keys(input.tools)) {
-            if (managed ? MANAGED_DISABLED_NATIVE_TOOLS.has(tool) : isOpenCodeWorkbenchToolName(tool)) {
+            if (managed ? MANAGED_DISABLED_NATIVE_TOOLS.has(tool)
+              : isOpenCodeWorkbenchToolName(tool) || tool === OPENCODE_COMMENTARY_TOOL_NAME) {
               delete input.tools[tool];
             }
           }
@@ -312,6 +321,7 @@ export function createOpenCodeWorkbenchPlugin(
           }
         }),
         context.tool.hook("execute.before", async input => {
+          cuts.toolCalled(input.sessionID);
           const managed = await isManagedSession(input.sessionID);
           if (MANAGED_DISABLED_NATIVE_TOOLS.has(input.tool) && managed) {
             throw new Error(`Native OpenCode tool ${input.tool} is unavailable in a managed Workbench session.`);

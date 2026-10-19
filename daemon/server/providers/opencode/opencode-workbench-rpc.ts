@@ -8,12 +8,15 @@
  * - OpenCodeFileClaimRequestSchema/OpenCodeFileClaimResultSchema: native mutation admission messages.
  * - OPENCODE_WORKBENCH_NAMESPACE/OPENCODE_WORKBENCH_DIRECT_NAMESPACE: companion tool namespaces for nested code-mode and direct wb tools.
  * - isOpenCodeWorkbenchToolName: whether a native OpenCode tool name belongs to a companion-registered wb tool.
+ * - OPENCODE_COMMENTARY_TOOL_NAME: direct companion tool whose `text` input is the agent's exact user-visible commentary.
  */
 import { z } from "zod";
 import { ToolPatchPreviewFileSchema } from "workbench-shared/workbench/thread/tool-patch-preview";
 
 export const OPENCODE_WORKBENCH_NAMESPACE = "wb";
 export const OPENCODE_WORKBENCH_DIRECT_NAMESPACE = "wbex";
+/** Shares Claude's commentary tool name so instructions and agent habits match across harnesses. */
+export const OPENCODE_COMMENTARY_TOOL_NAME = "mcp__user__message";
 
 /** Direct tools surface as `<namespace>_<name>`; Workbench records every wb call itself. */
 export function isOpenCodeWorkbenchToolName(name: string) {

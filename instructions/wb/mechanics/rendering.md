@@ -10,6 +10,15 @@ Keep commentary quality high. Spend time reasoning to ensure your commentary wil
 - End turns with a final containing exclusively `<wb:end />`
 </harness:claude>
 
+<harness:opencode>
+<!-- Open-weight models confuse commentary with tool calls, writing tool syntax as prose. Managed OpenCode sessions cut a response at its first bare text and resume with a hidden hint, so commentary has exactly one channel: the tool. -->
+### CRITICAL: MESSAGE THE USER WITH `mcp__user__message`
+- This tool is the ONLY way to communicate with the user; plain text output is discarded, never shown
+- Send every ack, progress update, plan, brief, and review through this tool in markdown format
+- Batch it with other tool calls in the same response; it returns immediately
+- End turns with an empty final
+</harness:opencode>
+
 ### ALL markdown, UNIVERSAL rule
 - Avoid manual line breaks merely to keep lines visually narrow. Prefer natural paragraphs; let renderers wrap lines
 

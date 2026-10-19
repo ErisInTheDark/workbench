@@ -5,7 +5,7 @@
  * - subtractOpenCodeTokenBreakdowns: derive one turn or baseline from cumulative usage.
  * - openCodeToolContentItems: preserve provider tool content or its bounded structured failure.
  * - isOpenCodeTurnRoot: distinguish a new user turn from an in-turn Workbench steer.
- * - default OpenCodeTranscriptAdapter: translate canonical OpenCode sessions/messages into ordered WB transcript facts and report compaction lifecycle.
+ * - default OpenCodeTranscriptAdapter: translate canonical OpenCode sessions/messages (commentary-tool input as exact commentary) into ordered WB transcript facts and report compaction lifecycle.
  */
 import type {
   SessionInfo, SessionMessageAssistant, SessionMessageInfo, SessionMessageUser,
@@ -40,7 +40,7 @@ import {
   openCodeContentSource, openCodeItemSource, type OpenCodeTranscriptSource,
 } from "./open-code-source-id";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
-import { isOpenCodeWorkbenchToolName } from "./opencode-workbench-rpc";
+import { isOpenCodeWorkbenchToolName, OPENCODE_COMMENTARY_TOOL_NAME } from "./opencode-workbench-rpc";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 
 export interface OpenCodeTranscriptOwners {
@@ -259,6 +259,18 @@ function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
     // Workbench records direct wb tool calls itself, as the live path does.
     if (isOpenCodeWorkbenchToolName(part.name)) return [];
     const state = part.state;
+    if (part.name === OPENCODE_COMMENTARY_TOOL_NAME) {
+      const text = typeof state.input === "object" ? state.input.text : undefined;
+      return [{
+        kind: "item",
+        source: openCodeItemSource(part.id),
+        preferredItemId: null,
+        item: {
+          type: "agentMessage", id: part.id, text: typeof text === "string" ? text : "", phase: "commentary",
+          memoryCitation: null, delivery: null, questions: null,
+        },
+      }];
+    }
     const failed = state.status === "error"
       || state.status === "completed" && state.metadata?.error === true;
     return [{

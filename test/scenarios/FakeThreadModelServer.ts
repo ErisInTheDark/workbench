@@ -2,14 +2,17 @@
  * Exports:
  * - FakeThreadAction: one test-authored model response and optional tool request.
  * - FakeThreadWire: model wire selected by the request route.
- * - default FakeThreadModelServer: own a disposable loopback model endpoint for provider scenarios.
+ * - default FakeThreadModelServer: own a disposable loopback model endpoint for provider scenarios, optionally speaking commentary through a commentary tool.
  */
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 export type FakeThreadAction = {
+  /** Commentary: sent through the server's commentary tool when the request advertises it, otherwise bare text. */
   text?: string;
+  /** Stream `text` as bare assistant text even when the commentary tool is advertised. */
+  bare?: boolean;
   /** Visible reasoning streamed before any text or tool. */
   reasoning?: string;
   /** Keep the response open after its reasoning until the client disconnects. */
@@ -40,7 +43,13 @@ type ModelRequest = {
   contents?: Array<{ role?: string; parts?: Array<{ functionResponse?: { name?: string } }> }>;
   tools?: Tool[];
 };
-type PendingResult = { callId: string; provider: ProviderWire };
+type ToolCall = { id: string; name: string; arguments: Record<string, unknown> };
+/** `endAfter`: the call was a text-only action's commentary, so its result is answered with an empty final. */
+type PendingResult = { callId: string; provider: ProviderWire; endAfter: boolean };
+
+function toolName(tool: Tool) {
+  return tool.name ?? tool.function?.name ?? "";
+}
 
 function event(value: object, type?: string) {
   return `${type ? `event: ${type}\n` : ""}data: ${JSON.stringify(value)}\n\n`;
@@ -64,13 +73,16 @@ async function readRequest(request: IncomingMessage): Promise<ModelRequest> {
  * OpenCode rejects a compaction summary unless it repeats the section headings of the template its request carries,
  * so scripted text answering such a request is placed under every heading.
  */
-function fillSummaryTemplate(body: ModelRequest, action: FakeThreadAction): FakeThreadAction {
-  if (action.text === undefined || action.tool) return action;
+function summaryHeadings(body: ModelRequest) {
   const last = body.messages?.at(-1)?.content;
   const prompt = typeof last === "string" ? last : JSON.stringify(last ?? "");
   const template = /<template>([\s\S]*?)<\/template>/u.exec(prompt)?.[1];
-  if (!template) return action;
-  const headings = template.split(/\r?\n|\\n/u).filter(line => /^#{2,3} /u.test(line.trim())).map(line => line.trim());
+  return template?.split(/\r?\n|\\n/u).filter(line => /^#{2,3} /u.test(line.trim())).map(line => line.trim()) ?? [];
+}
+
+function fillSummaryTemplate(body: ModelRequest, action: FakeThreadAction): FakeThreadAction {
+  if (action.text === undefined || action.tool) return action;
+  const headings = summaryHeadings(body);
   return headings.length ? { ...action, text: headings.map(heading => `${heading}\n- ${action.text}`).join("\n\n") } : action;
 }
 
@@ -85,7 +97,11 @@ export default class FakeThreadModelServer {
   private readonly nextClaudeImages: Array<{ marker: string; data: readonly string[] }> = [];
   private readonly holds = new EventEmitter();
 
-  private constructor(private readonly server: Server, readonly baseUrl: string) {}
+  private constructor(
+    private readonly server: Server,
+    readonly baseUrl: string,
+    private readonly commentaryTool: string | null,
+  ) {}
 
   get lastFailure() { return this.failure; }
   /** Scripted responses no request has consumed yet. */
@@ -109,7 +125,8 @@ export default class FakeThreadModelServer {
     this.failure ??= error instanceof Error ? error : new Error("Fake model request failed.");
   }
 
-  static async start() {
+  /** `commentaryTool` names the tool a compliant model speaks through instead of bare text, on non-Codex wires. */
+  static async start(options: { commentaryTool?: string } = {}) {
     let owner: FakeThreadModelServer | null = null;
     const server = createServer((request, response) => {
       void owner?.handle(request, response).catch(error => {
@@ -128,7 +145,7 @@ export default class FakeThreadModelServer {
     });
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Fake model did not bind a loopback port.");
-    owner = new FakeThreadModelServer(server, `http://127.0.0.1:${address.port}`);
+    owner = new FakeThreadModelServer(server, `http://127.0.0.1:${address.port}`, options.commentaryTool ?? null);
     return owner;
   }
 
@@ -190,11 +207,25 @@ export default class FakeThreadModelServer {
         "Cache-Control": "no-store",
         "Content-Type": "text/event-stream; charset=utf-8",
       });
-      if (provider === "opencode") this.openCodeResponse(response, { text: "Scenario" }, undefined, null);
-      else if (provider === "claude") this.claudeResponse(response, body.model ?? "fake-model", { text: "Scenario" }, undefined, null);
-      else this.geminiResponse(response, { text: "Scenario" }, undefined);
+      this.chatResponse(provider, response, body, { text: "Scenario" }, []);
       response.end();
       return;
+    }
+    if (this.pendingResult) {
+      const pending = this.pendingResult;
+      if (pending.provider !== provider || !this.observedResult(pending, body)) {
+        this.recordFailure(new Error("Fake model tool result was not observed."));
+        response.writeHead(409);
+        response.end("Fake model tool result was not observed.");
+        return;
+      }
+      if (pending.endAfter) {
+        this.pendingResult = null;
+        response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "text/event-stream; charset=utf-8" });
+        this.chatResponse(provider, response, body, { text: "" }, []);
+        response.end();
+        return;
+      }
     }
     const expectedImages = this.nextClaudeImages[0];
     if (expectedImages && provider === "claude") {
@@ -217,25 +248,6 @@ export default class FakeThreadModelServer {
       }
       this.nextPromptText.shift();
     }
-    if (this.pendingResult) {
-      const pending = this.pendingResult;
-      const observed = pending.provider === "codex"
-        ? body.input?.some(item => ["function_call_output", "custom_tool_call_output"].includes(item.type ?? "")
-          && item.call_id === pending.callId)
-        : pending.provider === "opencode"
-          ? body.messages?.some(item => item.role === "tool" && item.tool_call_id === pending.callId)
-          : pending.provider === "gemini"
-            // Gemini function calls carry no id; the response names the call it answers.
-            ? body.contents?.some(content => content.parts?.some(part => part.functionResponse?.name === pending.callId))
-            : body.messages?.some(item => item.role === "user" && Array.isArray(item.content)
-              && item.content.some(part => part.type === "tool_result" && part.tool_use_id === pending.callId));
-      if (pending.provider !== provider || !observed) {
-        this.recordFailure(new Error("Fake model tool result was not observed."));
-        response.writeHead(409);
-        response.end("Fake model tool result was not observed.");
-        return;
-      }
-    }
     const action = this.actions[0];
     if (!action) {
       const system = JSON.stringify(body.messages?.[0] ?? body.system ?? body.systemInstruction ?? "").slice(0, 160);
@@ -253,34 +265,40 @@ export default class FakeThreadModelServer {
       throw new Error("Claude exposed native Bash in fake mode.");
     }
     const matches = action.tool ? tools.filter(tool => {
-      const name = tool.name ?? tool.function?.name ?? "";
+      const name = toolName(tool);
       return name === action.tool?.nameSuffix || name.endsWith(`__${action.tool?.nameSuffix}`)
         || name.endsWith(`_${action.tool?.nameSuffix}`) || name.endsWith(`.${action.tool?.nameSuffix}`);
     }) : [];
     if (action.tool && matches.length !== 1) {
-      const offered = tools.slice(0, 20).map(tool => (tool.name ?? tool.function?.name ?? "").slice(0, 80));
+      const offered = tools.slice(0, 20).map(tool => toolName(tool).slice(0, 80));
       throw new Error(`Expected fake model tool ${action.tool.nameSuffix} is unavailable or ambiguous; offered: ${offered.join(", ") || "none"}; request fields: ${Object.keys(body).sort().join(", ")}`);
     }
     if (action.tool && ("input" in action.tool) !== (provider === "codex" && matches[0]?.type === "custom")) {
       throw new Error("Fake model tool wire type does not match its scripted action.");
     }
     this.actions.shift();
-    const callId = !action.tool ? null
-      : provider === "gemini" ? matches[0]?.name ?? null
-        : `${provider === "claude" ? "toolu" : "call"}_${randomUUID()}`;
-    this.pendingResult = callId ? { callId, provider } : null;
+    const callIdFor = (tool: Tool) => provider === "gemini" ? toolName(tool)
+      : `${provider === "claude" ? "toolu" : "call"}_${randomUUID()}`;
+    const commentary = this.commentaryTool && provider !== "codex" && !action.bare && action.text?.trim()
+      && !summaryHeadings(body).length
+      ? tools.find(tool => toolName(tool) === this.commentaryTool) : undefined;
+    const calls: ToolCall[] = [];
+    if (commentary) calls.push({ id: callIdFor(commentary), name: toolName(commentary), arguments: { text: action.text! } });
+    const main = action.tool && matches[0] ? matches[0] : undefined;
+    const mainId = main ? callIdFor(main) : null;
+    if (main && mainId && action.tool && "arguments" in action.tool) {
+      calls.push({ id: mainId, name: toolName(main), arguments: action.tool.arguments });
+    }
+    this.pendingResult = mainId ? { callId: mainId, provider, endAfter: false }
+      : commentary ? { callId: calls[0]!.id, provider, endAfter: true } : null;
     response.writeHead(200, {
       "Cache-Control": "no-store",
       "Content-Type": "text/event-stream; charset=utf-8",
     });
     if (provider === "codex") {
-      await this.codexResponse(response, action, matches[0], callId);
-    } else if (provider === "opencode") {
-      this.openCodeResponse(response, fillSummaryTemplate(body, action), matches[0], callId);
-    } else if (provider === "claude") {
-      this.claudeResponse(response, body.model ?? "claude-sonnet-4-6", action, matches[0], callId);
+      await this.codexResponse(response, action, main, mainId);
     } else {
-      this.geminiResponse(response, action, matches[0]);
+      this.chatResponse(provider, response, body, commentary ? { ...action, text: undefined } : action, calls);
     }
     if (action.hold) {
       // The client owns the end of a held response; disconnecting before completion is the observed cut.
@@ -353,7 +371,27 @@ export default class FakeThreadModelServer {
     }, "response.completed"));
   }
 
-  private openCodeResponse(response: ServerResponse, action: FakeThreadAction, tool: Tool | undefined, callId: string | null) {
+  private observedResult(pending: PendingResult, body: ModelRequest) {
+    return pending.provider === "codex"
+      ? body.input?.some(item => ["function_call_output", "custom_tool_call_output"].includes(item.type ?? "")
+        && item.call_id === pending.callId)
+      : pending.provider === "opencode"
+        ? body.messages?.some(item => item.role === "tool" && item.tool_call_id === pending.callId)
+        : pending.provider === "gemini"
+          // Gemini function calls carry no id; the response names the call it answers.
+          ? body.contents?.some(content => content.parts?.some(part => part.functionResponse?.name === pending.callId))
+          : body.messages?.some(item => item.role === "user" && Array.isArray(item.content)
+            && item.content.some(part => part.type === "tool_result" && part.tool_use_id === pending.callId));
+  }
+
+  private chatResponse(provider: ProviderWire, response: ServerResponse, body: ModelRequest, action: FakeThreadAction, calls: ToolCall[]) {
+    if (provider === "opencode") this.openCodeResponse(response, fillSummaryTemplate(body, action), calls);
+    else if (provider === "claude") this.claudeResponse(response, body.model ?? "claude-sonnet-4-6", action, calls);
+    else if (provider === "gemini") this.geminiResponse(response, action, calls);
+    else throw new Error("Codex responses carry their own tool wire.");
+  }
+
+  private openCodeResponse(response: ServerResponse, action: FakeThreadAction, calls: ToolCall[]) {
     const id = `chatcmpl_${randomUUID()}`;
     const chunk = (delta: object, finish_reason: string | null = null) => event({
       id, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "fake",
@@ -363,19 +401,17 @@ export default class FakeThreadModelServer {
     if (action.reasoning !== undefined) response.write(chunk({ reasoning_content: action.reasoning }));
     if (action.hold) return;
     if (action.text !== undefined) response.write(chunk({ content: action.text }));
-    if (action.tool && callId && tool && "arguments" in action.tool) response.write(chunk({
+    for (const [index, call] of calls.entries()) response.write(chunk({
       tool_calls: [{
-        index: 0, id: callId, type: "function",
-        function: { name: tool.name ?? tool.function?.name, arguments: JSON.stringify(action.tool.arguments) },
+        index, id: call.id, type: "function",
+        function: { name: call.name, arguments: JSON.stringify(call.arguments) },
       }],
     }));
-    response.write(chunk({}, action.tool ? "tool_calls" : "stop"));
+    response.write(chunk({}, calls.length ? "tool_calls" : "stop"));
     response.write("data: [DONE]\n\n");
   }
 
-  private claudeResponse(
-    response: ServerResponse, model: string, action: FakeThreadAction, tool: Tool | undefined, callId: string | null,
-  ) {
+  private claudeResponse(response: ServerResponse, model: string, action: FakeThreadAction, calls: ToolCall[]) {
     const emit = (value: object) => response.write(event(value, (value as { type: string }).type));
     emit({
       type: "message_start",
@@ -398,26 +434,27 @@ export default class FakeThreadModelServer {
       emit({ type: "content_block_stop", index });
       index++;
     }
-    if (action.tool && callId && tool && "arguments" in action.tool) {
+    for (const call of calls) {
       emit({
         type: "content_block_start", index,
-        content_block: { type: "tool_use", id: callId, name: tool.name, input: {} },
+        content_block: { type: "tool_use", id: call.id, name: call.name, input: {} },
       });
       emit({
         type: "content_block_delta", index,
-        delta: { type: "input_json_delta", partial_json: JSON.stringify(action.tool.arguments) },
+        delta: { type: "input_json_delta", partial_json: JSON.stringify(call.arguments) },
       });
       emit({ type: "content_block_stop", index });
+      index++;
     }
     emit({
       type: "message_delta",
-      delta: { stop_reason: action.tool ? "tool_use" : "end_turn", stop_sequence: null },
+      delta: { stop_reason: calls.length ? "tool_use" : "end_turn", stop_sequence: null },
       usage: { output_tokens: 1 },
     });
     emit({ type: "message_stop" });
   }
 
-  private geminiResponse(response: ServerResponse, action: FakeThreadAction, tool: Tool | undefined) {
+  private geminiResponse(response: ServerResponse, action: FakeThreadAction, calls: ToolCall[]) {
     const chunk = (parts: object[], finishReason?: string) => response.write(event({
       candidates: [{ content: { role: "model", parts }, ...(finishReason ? { finishReason } : {}) }],
       ...(finishReason ? { usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } } : {}),
@@ -426,8 +463,7 @@ export default class FakeThreadModelServer {
     if (action.hold) return;
     chunk([
       ...(action.text !== undefined ? [{ text: action.text }] : []),
-      ...(action.tool && tool && "arguments" in action.tool
-        ? [{ functionCall: { name: tool.name, args: action.tool.arguments } }] : []),
+      ...calls.map(call => ({ functionCall: { name: call.name, args: call.arguments } })),
     ], "STOP");
   }
 

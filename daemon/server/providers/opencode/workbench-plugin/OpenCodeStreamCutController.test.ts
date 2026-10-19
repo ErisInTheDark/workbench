@@ -1,13 +1,15 @@
-/* No production exports. Tests protect when a pending steer may end a managed model response. */
+/* No production exports. Tests protect when a managed model response is ended early, for a pending steer or bare text. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SessionHttpResponse } from "@opencode/plugin/promise/session";
-import OpenCodeSteerCutController from "./OpenCodeSteerCutController";
+import OpenCodeStreamCutController from "./OpenCodeStreamCutController";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const reasoning = { choices: [{ index: 0, delta: { reasoning_content: "thinking" } }] };
 const commentary = { choices: [{ index: 0, delta: { content: "working" } }] };
+const whitespace = { choices: [{ index: 0, delta: { content: "\n\n" } }] };
+const toolCall = { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "c", function: { name: "x", arguments: "{}" } }] } }] };
 const opening = { id: "c", object: "chat.completion.chunk", model: "m", choices: [{ index: 0, delta: { role: "assistant" } }] };
 
 /** A provider body the test feeds frame by frame, plus OpenCode's reader of the tapped response. */
@@ -15,10 +17,12 @@ function provider(sessionID = "managed") {
   const queued: Uint8Array[] = [];
   let wake: (() => void) | null = null;
   let cancelled = false;
+  let ended = false;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      while (!queued.length && !cancelled) await new Promise<void>(resolve => { wake = resolve; });
+      while (!queued.length && !cancelled && !ended) await new Promise<void>(resolve => { wake = resolve; });
       if (queued.length) controller.enqueue(queued.shift()!);
+      else if (ended) controller.close();
     },
     cancel() { cancelled = true; wake?.(); },
   }, { highWaterMark: 0 });
@@ -29,6 +33,7 @@ function provider(sessionID = "managed") {
     input,
     cancelled: () => cancelled,
     send(frame: object) { queued.push(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)); wake?.(); },
+    end() { ended = true; wake?.(); },
     async read() {
       reader ??= input.response.body!.getReader();
       const chunk = await reader.read();
@@ -37,10 +42,24 @@ function provider(sessionID = "managed") {
   };
 }
 
-function controller(managed = true) {
+function controller(options: { managed?: boolean; hint?: () => Promise<void> } = {}) {
   const warnings: string[] = [];
-  const owner = new OpenCodeSteerCutController({ isManagedSession: async () => managed, warn: message => warnings.push(message) });
-  return { owner, warnings };
+  const hints: string[] = [];
+  const owner = new OpenCodeStreamCutController({
+    isManagedSession: async () => options.managed ?? true,
+    hint: async sessionID => { hints.push(sessionID); await options.hint?.(); },
+    warn: message => warnings.push(message),
+  });
+  return { owner, warnings, hints };
+}
+
+async function bareTextResponse(owner: OpenCodeStreamCutController) {
+  const body = provider();
+  await owner.httpResponse(body.input);
+  body.send(opening);
+  await body.read();
+  body.send(commentary);
+  return { body, output: await body.read() };
 }
 
 test("a steer during reasoning ends the response cleanly and cancels the provider", async () => {
@@ -72,13 +91,13 @@ test("a steer pending before reasoning cuts at the first reasoning frame", async
   assert.equal(await body.read(), null);
 });
 
-test("commentary and resolved steers are never cut", async () => {
+test("open tool calls and resolved steers are never cut for a steer", async () => {
   const { owner } = controller();
   const body = provider();
   await owner.httpResponse(body.input);
   body.send(opening);
   await body.read();
-  body.send(commentary);
+  body.send(toolCall);
   await body.read();
   await owner.steerPending("managed", "steer-1");
   owner.steerResolved("managed", "steer-1");
@@ -115,8 +134,77 @@ test("each steer cuts at most once even if its delivery is never observed", asyn
   assert.equal(next.cancelled(), false);
 });
 
+test("bare text never reaches OpenCode; the hint is admitted before the clean ending", async () => {
+  let ended = false;
+  const { owner, hints, warnings } = controller({ hint: async () => { assert.equal(ended, false); } });
+  const { body, output } = await bareTextResponse(owner);
+  ended = true;
+  assert.deepEqual(hints, ["managed"]);
+  assert.doesNotMatch(output!, /working/u);
+  assert.match(output!, /"finish_reason":"stop"[\s\S]*data: \[DONE\]/u);
+  assert.equal(await body.read(), null);
+  assert.equal(body.cancelled(), true);
+  assert.deepEqual(warnings, []);
+});
+
+test("bare text after a finished tool call keeps the tool call and ends for tool execution", async () => {
+  const { owner, hints } = controller();
+  const body = provider();
+  await owner.httpResponse(body.input);
+  body.send(opening);
+  await body.read();
+  body.send(toolCall);
+  assert.match((await body.read())!, /tool_calls/u);
+  body.send(commentary);
+  const output = await body.read();
+  assert.doesNotMatch(output!, /working/u);
+  assert.match(output!, /"finish_reason":"tool_calls"/u);
+  assert.deepEqual(hints, ["managed"]);
+});
+
+test("whitespace text is held, then released unchanged with the next frame", async () => {
+  const { owner, hints } = controller();
+  const body = provider();
+  await owner.httpResponse(body.input);
+  body.send(opening);
+  await body.read();
+  body.send(whitespace);
+  body.send(toolCall);
+  const output = await body.read();
+  assert.match(output!, /"content":"\\n\\n"[\s\S]*tool_calls/u);
+  body.end();
+  assert.equal(await body.read(), null);
+  assert.deepEqual(hints, []);
+});
+
+test("repeated bare text stops being cut until the agent calls a tool", async () => {
+  const { owner, hints, warnings } = controller();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    assert.doesNotMatch((await bareTextResponse(owner)).output!, /working/u);
+  }
+  assert.equal(warnings.length, 1, "reaching the limit is reported once");
+  assert.match((await bareTextResponse(owner)).output!, /working/u, "the next bare text is kept");
+  owner.toolCalled("managed");
+  assert.doesNotMatch((await bareTextResponse(owner)).output!, /working/u, "a tool call restores the cut");
+  assert.equal(hints.length, 4);
+});
+
+test("a failed hint keeps the bare text instead of ending the response silently", async () => {
+  const { owner, warnings } = controller({ hint: async () => { throw new Error("inbox closed"); } });
+  const body = provider();
+  await owner.httpResponse(body.input);
+  body.send(opening);
+  await body.read();
+  body.send(commentary);
+  body.send(toolCall);
+  const output = await body.read();
+  assert.match(output!, /working[\s\S]*tool_calls/u);
+  assert.equal(body.cancelled(), false);
+  assert.equal(warnings.length, 1);
+});
+
 test("unmanaged sessions keep their native response object", async () => {
-  const { owner } = controller(false);
+  const { owner } = controller({ managed: false });
   const body = provider("ordinary");
   const native = body.input.response;
   await owner.httpResponse(body.input);

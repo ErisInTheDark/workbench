@@ -62,6 +62,35 @@ test("fake OpenCode model uses chat tool chunks and rejects unexpected requests"
   } finally { await server.close(); }
 });
 
+test("fake OpenCode model speaks through an advertised commentary tool unless told to answer bare", async () => {
+  const server = await FakeThreadModelServer.start({ commentaryTool: "mcp__user__message" });
+  try {
+    server.enqueue([
+      { text: "working", tool: { nameSuffix: "shell", arguments: { command: "echo proof" } } },
+      { text: "done" },
+      { text: "leaked", bare: true },
+    ]);
+    const request = (messages: object[]) => fetch(`${server.baseUrl}/v1/chat/completions`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "fake", stream: true, messages, tools: [
+        { type: "function", function: { name: "mcp__user__message" } }, { type: "function", function: { name: "shell" } },
+      ] }),
+    });
+    const calls = async (response: Response) => [...(await response.text()).matchAll(/^data: (\{.+)$/gmu)]
+      .map(match => JSON.parse(match[1]!).choices[0].delta)
+      .flatMap(delta => [...(delta.content ? [{ content: delta.content }] : []), ...(delta.tool_calls ?? [])]);
+    const first = await calls(await request([]));
+    assert.deepEqual(first.map(call => call.function?.name ?? call.content), ["mcp__user__message", "shell"]);
+    assert.deepEqual(JSON.parse(first[0].function.arguments), { text: "working" });
+    const spoken = await calls(await request([{ role: "tool", tool_call_id: first[1].id, content: "proof" }]));
+    assert.deepEqual(spoken.map(call => call.function?.name), ["mcp__user__message"]);
+    const ended = await calls(await request([{ role: "tool", tool_call_id: spoken[0].id, content: "delivered" }]));
+    assert.deepEqual(ended, [], "a text-only action ends with an empty final once its commentary returns");
+    assert.equal(server.queuedActions, 1, "the empty final consumes no scripted action");
+    assert.deepEqual(await calls(await request([])), [{ content: "leaked" }]);
+  } finally { await server.close(); }
+});
+
 test("fake OpenCode title request does not consume the journey tool step", async () => {
   const server = await FakeThreadModelServer.start();
   try {

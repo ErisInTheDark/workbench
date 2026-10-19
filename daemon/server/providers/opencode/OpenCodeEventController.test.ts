@@ -11,6 +11,7 @@ import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import OpenCodeEventController from "./OpenCodeEventController";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
+import { OPENCODE_COMMENTARY_TOOL_NAME } from "./opencode-workbench-rpc";
 import { readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import { WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME } from "workbench-shared/workbench/thread/thread-context-rollover";
 
@@ -114,6 +115,27 @@ test("native error metadata marks success events failed while retaining complete
   assert.equal(final.item.status, "failed");
   assert.deepEqual(final.item.metadata, metadata);
   assert.equal(final.item.toolCallGroupId, "call");
+});
+
+test("commentary tool input records exact commentary on one item and never a tool call", async () => {
+  const items: Parameters<OpenCodeTranscriptAdapter["recordItem"]>[0][] = [];
+  const owner = new OpenCodeEventController({
+    observe: async () => undefined,
+    threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }), syncNative: async () => ({ threadId, turn: turn() }) },
+    transcript: { appendText: () => undefined, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
+      recordItem: async input => { items.push(input); return "canonical" as never; } },
+  });
+  const data = { sessionID: "session", id: "message" };
+  await owner.accept(event({ type: "session.tool.input.started", created: 1, data: { ...data, name: OPENCODE_COMMENTARY_TOOL_NAME } }));
+  await owner.accept(event({ type: "session.tool.input.ended", created: 2, data: { ...data, text: "{\"text\":\"**on it**\"}" } }));
+  await owner.accept(event({ type: "session.tool.called", created: 3, data: { ...data, input: { text: "**on it**" } } }));
+  await owner.accept(event({ type: "session.tool.success", created: 4,
+    data: { ...data, metadata: {}, content: [{ type: "text", text: "Message delivered to user." }] } }));
+  assert.ok(items.length > 0);
+  for (const recorded of items) {
+    assert.equal(recorded.source.reference, items[0]!.source.reference);
+    assert.deepEqual(recorded.item.type === "agentMessage" && [recorded.item.text, recorded.item.phase], ["**on it**", "commentary"]);
+  }
 });
 
 test("write settlement replaces its live preview on the same canonical item for success and failure", async () => {

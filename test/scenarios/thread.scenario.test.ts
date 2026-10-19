@@ -25,6 +25,8 @@ import {
   createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
   fakeCodexTool, fakeOpenCodeDirectTool, type ProviderBoundaryToolNames,
 } from "./provider-boundary-journey";
+import { OPENCODE_COMMENTARY_TOOL_NAME } from "../../daemon/server/providers/opencode/opencode-workbench-rpc";
+import { OPENCODE_COMMENTARY_HINT } from "../../daemon/server/providers/opencode/workbench-plugin/open-code-commentary-tool";
 
 const modelId = "opencode-go/muse-spark-1.3-contributor";
 type Provider = "codex" | "opencode" | "claude";
@@ -103,15 +105,18 @@ async function verifyOpenCodeSteerCuts(input: {
   for (const { model, wire } of cases) {
     const steerProof = passphrase();
     const answerProof = passphrase();
+    const bareProof = passphrase();
     const steer = `Stop deliberating. Reply with exactly: ${steerProof}`;
     const { agentPath, agentSource, harness, reasoningEffort, serviceTier, contextWindowTokens } = profile;
     const selection: WorkbenchComposerProfileTargetSelection = {
       kind: "custom",
       settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens },
     };
-    // The steered answer ends the turn with its task unfinished, so Workbench continues it once; that continuation completes the task.
+    // The steered step first answers in bare text, which is cut and hinted; the retried step answers through the
+    // commentary tool. That answer ends the turn with its task unfinished, so Workbench continues it once to completion.
     fakeModel?.enqueue([
       { reasoning: `Weighing ${answerProof}`, hold: true },
+      { text: bareProof, bare: true },
       { text: steerProof },
       fakeOpenCodeDirectTool("task_completed", {}),
       { text: "" },
@@ -137,6 +142,7 @@ async function verifyOpenCodeSteerCuts(input: {
       }
       const cut = fakeModel?.nextCut(signal);
       fakeModel?.expectNextPromptText(steerProof);
+      fakeModel?.expectNextPromptText(OPENCODE_COMMENTARY_HINT);
       fakeModel?.expectNextPromptText("inappropriately ended the turn");
       const steered = await runtime.daemon.threads.message({
         threadId, clientMessageId: randomUUID(), intent: "steer", expectedTurnId: turnId,
@@ -155,8 +161,9 @@ async function verifyOpenCodeSteerCuts(input: {
         .find(entry => JSON.stringify(entry.input).includes(steerProof));
       assert.equal(delivered?.status, "sent");
       if (fakeModel) {
-        assert.ok(items.slice(steerIndex + 1).some(item => item.type === "agentMessage"
-          && JSON.stringify(item).includes(steerProof)), "The post-steer step must answer the steer");
+        assert.ok(items.slice(steerIndex + 1).some(item => item.type === "agentMessage" && item.phase === "commentary"
+          && item.text.includes(steerProof)), "The post-steer step must answer the steer through the commentary tool");
+        assert.ok(!JSON.stringify(projection).includes(bareProof), "Cut bare text must never reach the transcript");
         const continued = await owner.waitForFact(() => owner.durable(), value =>
           value.turns.some(turn => turn.id !== turnId && turn.status === "completed"));
         assert.equal(continued.turns.length, 2, "Workbench must continue the unfinished turn exactly once");
@@ -415,7 +422,10 @@ test("selected providers complete the shared thread boundary journey in one clon
   const activeProfiles = selectedProviders.map(provider => profiles[provider]!);
   try {
     for (const provider of selectedProviders) {
-      if (selectedSelection[provider] === "fake") fakeModels[provider] = await FakeThreadModelServer.start();
+      if (selectedSelection[provider] === "fake") {
+        fakeModels[provider] = await FakeThreadModelServer.start(
+          provider === "opencode" ? { commentaryTool: OPENCODE_COMMENTARY_TOOL_NAME } : {});
+      }
     }
   } catch (error) {
     await Promise.all(Object.values(fakeModels).map(model => model.close()));

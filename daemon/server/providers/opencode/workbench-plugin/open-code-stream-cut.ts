@@ -1,22 +1,25 @@
 /*
  * Exports:
- * - OpenCodeStreamCutTracker: per-response block tracking that decides when reasoning is the open block.
- * - openCodeStreamCutTracker: recognise a supported model wire from its first frame and track it.
+ * - OpenCodeStreamCutTracker: per-response block tracking that reports open reasoning and bare assistant text.
+ * - openCodeStreamCutTracker: recognise a supported model wire from its first frame.
  */
 
 /**
- * One model response's block state. `cuttable` means the open block is reasoning and every earlier
- * block is complete, so ending the response with `terminator()` loses only unfinished reasoning.
+ * One model response's block state. Callers check `text` before `observe`, so a frame they never forward is never
+ * tracked. `terminator()` ends the response with a finish reason matching the forwarded frames.
  */
 export interface OpenCodeStreamCutTracker {
   readonly wire: "openai-chat" | "anthropic-messages" | "gemini";
+  /** Bare assistant text in the frame: "" when it only opens a text block, null when it carries none. */
+  text(frame: Record<string, unknown>): string | null;
   observe(frame: Record<string, unknown>): void;
-  readonly cuttable: boolean;
+  /** The open block is reasoning and every earlier block is complete, so a cut loses only unfinished reasoning. */
+  readonly reasoningOpen: boolean;
   /** Synthetic SSE frames that make OpenCode's parser finish this response with a known reason. */
   terminator(): string;
 }
 
-type Block = "reasoning" | "content";
+type Block = "reasoning" | "text" | "other";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -25,6 +28,10 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function filled(value: unknown) {
   return (typeof value === "string" && value.length > 0) || (Array.isArray(value) && value.length > 0);
+}
+
+function joined(parts: string[]) {
+  return parts.length ? parts.join("") : null;
 }
 
 function sse(value: object, event?: string) {
@@ -43,7 +50,15 @@ class OpenAIChatTracker implements OpenCodeStreamCutTracker {
     return Array.isArray(frame.choices) && record(record(frame.choices[0])?.delta) !== null;
   }
 
-  get cuttable() { return !this.finished && this.current === "reasoning"; }
+  get reasoningOpen() { return !this.finished && this.current === "reasoning"; }
+
+  text(frame: Record<string, unknown>) {
+    if (!Array.isArray(frame.choices)) return null;
+    return joined(frame.choices.flatMap(choice => {
+      const content = record(record(choice)?.delta)?.content;
+      return typeof content === "string" && content.length > 0 ? [content] : [];
+    }));
+  }
 
   observe(frame: Record<string, unknown>) {
     for (const key of ["id", "object", "created", "model"] as const) {
@@ -56,8 +71,10 @@ class OpenAIChatTracker implements OpenCodeStreamCutTracker {
       if (choice.finish_reason !== null && choice.finish_reason !== undefined) this.finished = true;
       const delta = record(choice.delta);
       if (!delta) continue;
-      if (filled(delta.tool_calls)) this.toolSeen = true;
-      if (filled(delta.content) || filled(delta.tool_calls)) this.current = "content";
+      if (filled(delta.tool_calls)) {
+        this.toolSeen = true;
+        this.current = "other";
+      } else if (filled(delta.content)) this.current = "text";
       else if (filled(delta.reasoning_content) || filled(delta.reasoning) || filled(delta.reasoning_text)
         || filled(delta.reasoning_details)) this.current = "reasoning";
     }
@@ -83,8 +100,18 @@ class AnthropicMessagesTracker implements OpenCodeStreamCutTracker {
     return frame.type === "message_start" && record(frame.message) !== null;
   }
 
-  get cuttable() {
+  get reasoningOpen() {
     return !this.finished && this.latest !== null && this.open.size === 1 && this.open.get(this.latest) === "reasoning";
+  }
+
+  text(frame: Record<string, unknown>) {
+    if (frame.type === "content_block_start") {
+      const block = record(frame.content_block);
+      return block?.type === "text" ? typeof block.text === "string" ? block.text : "" : null;
+    }
+    if (frame.type !== "content_block_delta") return null;
+    const delta = record(frame.delta);
+    return delta?.type === "text_delta" && typeof delta.text === "string" ? delta.text : null;
   }
 
   observe(frame: Record<string, unknown>) {
@@ -92,7 +119,7 @@ class AnthropicMessagesTracker implements OpenCodeStreamCutTracker {
     if (frame.type === "content_block_start" && index !== null) {
       const type = record(frame.content_block)?.type;
       if (type === "tool_use" || type === "server_tool_use") this.toolSeen = true;
-      this.open.set(index, type === "thinking" || type === "redacted_thinking" ? "reasoning" : "content");
+      this.open.set(index, type === "thinking" || type === "redacted_thinking" ? "reasoning" : type === "text" ? "text" : "other");
       this.latest = index;
     } else if (frame.type === "content_block_stop" && index !== null) {
       this.open.delete(index);
@@ -120,20 +147,27 @@ class GeminiTracker implements OpenCodeStreamCutTracker {
     return Array.isArray(frame.candidates) && record(frame.candidates[0]) !== null;
   }
 
-  get cuttable() { return !this.finished && this.current === "reasoning"; }
+  get reasoningOpen() { return !this.finished && this.current === "reasoning"; }
+
+  private parts(frame: Record<string, unknown>) {
+    const parts = Array.isArray(frame.candidates) ? record(record(frame.candidates[0])?.content)?.parts : undefined;
+    return Array.isArray(parts) ? parts.flatMap(part => record(part) ?? []) : [];
+  }
+
+  text(frame: Record<string, unknown>) {
+    return joined(this.parts(frame).flatMap(part =>
+      part.thought !== true && typeof part.text === "string" && part.text.length > 0 ? [part.text] : []));
+  }
 
   observe(frame: Record<string, unknown>) {
     if (!Array.isArray(frame.candidates)) return;
     const candidate = record(frame.candidates[0]);
     if (!candidate) return;
     if (candidate.finishReason !== null && candidate.finishReason !== undefined) this.finished = true;
-    const parts = record(candidate.content)?.parts;
-    if (!Array.isArray(parts)) return;
-    for (const value of parts) {
-      const part = record(value);
-      if (!part) continue;
+    for (const part of this.parts(frame)) {
       if (part.thought === true && filled(part.text)) this.current = "reasoning";
-      else if (filled(part.text) || part.functionCall !== undefined || part.inlineData !== undefined) this.current = "content";
+      else if (filled(part.text)) this.current = "text";
+      else if (part.functionCall !== undefined || part.inlineData !== undefined) this.current = "other";
     }
   }
 
@@ -148,8 +182,5 @@ const wires = [OpenAIChatTracker, AnthropicMessagesTracker, GeminiTracker];
 /** Track a response whose first JSON frame positively identifies a supported wire; otherwise never cut it. */
 export function openCodeStreamCutTracker(firstFrame: Record<string, unknown>): OpenCodeStreamCutTracker | null {
   const Wire = wires.find(candidate => candidate.sniff(firstFrame));
-  if (!Wire) return null;
-  const tracker = new Wire();
-  tracker.observe(firstFrame);
-  return tracker;
+  return Wire ? new Wire() : null;
 }

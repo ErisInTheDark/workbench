@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - OpenCodeEventControllerOptions: provider-local event, transcript, and lifecycle ports.
- * - default OpenCodeEventController: translate OpenCode events into direct live facts, compaction reports, and one terminal canonical settlement.
+ * - default OpenCodeEventController: translate OpenCode events (commentary-tool input as exact commentary) into direct live facts, compaction reports, and one terminal canonical settlement.
  */
 import type { OpenCodeEvent, SessionInfo, SessionToolFailed, SessionToolSuccess } from "@opencode/client";
 import type { WorkbenchProviderObservation, WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
@@ -13,7 +13,9 @@ import {
 import { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { openCodeContentSource, openCodeItemSource } from "./open-code-source-id";
-import { isOpenCodeWorkbenchToolName, type OpenCodePatchObservation } from "./opencode-workbench-rpc";
+import {
+  isOpenCodeWorkbenchToolName, OPENCODE_COMMENTARY_TOOL_NAME, type OpenCodePatchObservation,
+} from "./opencode-workbench-rpc";
 import type OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadContextRolloverController from "../../WorkbenchThreadContextRolloverController";
@@ -58,6 +60,14 @@ type DynamicToolItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 /** Direct wb tools reach Workbench through MCP, which records them; their native part would duplicate that item. */
 function isWorkbenchRecorded(tool: ToolState | undefined) {
   return tool !== undefined && isOpenCodeWorkbenchToolName(tool.name);
+}
+
+/** Commentary tool input is the agent's exact user-visible message, not a tool call. */
+function commentaryText(tool: ToolState | undefined) {
+  if (tool?.name !== OPENCODE_COMMENTARY_TOOL_NAME) return null;
+  const input = tool.input;
+  const text = input && typeof input === "object" && !Array.isArray(input) ? input.text : undefined;
+  return typeof text === "string" ? text : "";
 }
 
 function parseToolInput(text: string): JsonValue {
@@ -275,7 +285,7 @@ export default class OpenCodeEventController {
       case "session.tool.input.started": {
         const active = await this.active(sessionID);
         this.setTool(sessionID, event.data.id, { active, input: "", name: event.data.name, startedAt: event.created });
-        if (isOpenCodeWorkbenchToolName(event.data.name)) return;
+        if (isOpenCodeWorkbenchToolName(event.data.name) || event.data.name === OPENCODE_COMMENTARY_TOOL_NAME) return;
         await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
         return;
       }
@@ -287,7 +297,7 @@ export default class OpenCodeEventController {
           name: previous?.name ?? "unknown",
           startedAt: previous?.startedAt ?? event.created,
         });
-        if (!isWorkbenchRecorded(previous)) await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+        await this.recordInput(sessionID, event.data.id, event.created);
         return;
       }
       case "session.tool.called": {
@@ -298,14 +308,16 @@ export default class OpenCodeEventController {
           name: previous?.name ?? "unknown",
           startedAt: previous?.startedAt ?? event.created,
         });
-        if (!isWorkbenchRecorded(previous)) await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+        await this.recordInput(sessionID, event.data.id, event.created);
         return;
       }
       case "session.tool.progress": {
         const previous = this.getTool(sessionID, event.data.id);
         if (previous) {
           previous.metadata = event.data.metadata;
-          if (!isWorkbenchRecorded(previous)) await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+          if (!isWorkbenchRecorded(previous) && commentaryText(previous) === null) {
+            await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+          }
         }
         return;
       }
@@ -316,7 +328,7 @@ export default class OpenCodeEventController {
         const metadata = event.data.metadata ?? previous?.metadata;
         const succeeded = event.type === "session.tool.success"
           && !(metadata && typeof metadata === "object" && !Array.isArray(metadata) && metadata.error === true);
-        if (isWorkbenchRecorded(previous)) {
+        if (isWorkbenchRecorded(previous) || commentaryText(previous) !== null) {
           this.deleteTool(sessionID, event.data.id);
           return;
         }
@@ -440,6 +452,24 @@ export default class OpenCodeEventController {
     return recovered;
   }
 
+  /** Complete tool input becomes exact commentary for the commentary tool, otherwise an in-progress tool item. */
+  private async recordInput(sessionID: string, id: string, observedAt: number) {
+    const state = this.getTool(sessionID, id);
+    if (isWorkbenchRecorded(state)) return;
+    const text = commentaryText(state);
+    if (text === null) {
+      await this.recordTool(sessionID, id, "inProgress", observedAt);
+      return;
+    }
+    await this.options.transcript.recordItem({
+      ...(state?.active ?? await this.active(sessionID)),
+      source: openCodeItemSource(id),
+      item: this.agentMessage(text, "commentary"),
+      lifecycle: "completed",
+      observedAt,
+    });
+  }
+
   private async recordTool(sessionID: string, id: string, status: "inProgress", observedAt: number) {
     const state = this.getTool(sessionID, id);
     const active = state?.active ?? await this.active(sessionID);
@@ -508,12 +538,12 @@ export default class OpenCodeEventController {
     };
   }
 
-  private agentMessage(text: string): ThreadItem {
+  private agentMessage(text: string, phase: "commentary" | null = null): ThreadItem {
     return {
       type: "agentMessage",
       id: "pending",
       text,
-      phase: null,
+      phase,
       memoryCitation: null,
       delivery: null,
       questions: null,
