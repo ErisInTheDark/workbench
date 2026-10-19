@@ -157,6 +157,7 @@
   --selection: #1a42b044;
   --app-bg-solid: var(--bg);
   --fg-bg: var(--app-bg-solid);
+  --recess-shade: 6%;
   --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 26rem), var(--bg);
   --edge-fade: color-mix(in srgb, var(--text) 12%, transparent);
   --attention: #7a5b00;
@@ -228,6 +229,7 @@
     --shadow: rgba(0, 0, 0, 0.35);
     --selection: #74a0ff44;
     --app-bg-solid: var(--bg);
+    --recess-shade: 25%;
     --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 26rem), var(--bg);
     --edge-fade: color-mix(in srgb, var(--text) 14%, transparent);
     --attention: #ffd84d;

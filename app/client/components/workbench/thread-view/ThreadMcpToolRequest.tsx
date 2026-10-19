@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - McpToolCard: dark card naming one MCP server tool, with its markdown description clamped to three lines until expanded.
+ * - McpToolCard: recessed card naming one MCP server tool, with its markdown description clamped to three lines until expanded.
  * - ThreadMcpToolRequestPanel: the composer's pending "Enable MCP tool" request; Approve and Deny (Shift: Stop) render into the composer's action slot.
  * - ThreadMcpToolDecisionCard: the transcript's record of an answered request.
  */
@@ -28,7 +28,7 @@ export function McpToolCard({ tool, rounded = true }: { tool: WorkbenchUserInput
     observer.observe(element);
     return () => observer.disconnect();
   }, [open, tool.description]);
-  return <div className={`bg-black/25 px-3.5 py-3 ${rounded ? "rounded-[0.9rem]" : ""}`}>
+  return <div className={`bg-recess px-3.5 py-3 ${rounded ? "rounded-[0.9rem]" : ""}`}>
     <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
       <span className="text-base font-semibold text-text">{mcpToolLabel({ name: tool.tool, title: tool.title })}</span>
       <code className="break-all text-[0.8rem] text-fg/muted">{tool.server}/{tool.tool}</code>
@@ -92,7 +92,7 @@ export function ThreadMcpToolDecisionCard({ tool, reason, approved }: {
   reason: string;
   approved: boolean;
 }) {
-  return <div className="overflow-hidden rounded-[0.95rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
+  return <div className="overflow-hidden rounded-[0.95rem] border border-fg-alpha/10">
     <div className="flex items-center gap-3 px-3.5 py-2 text-sm">
       <span className={`inline-flex shrink-0 items-center gap-1 font-medium ${approved ? "text-success" : "text-danger"}`}>
         {approved ? <CheckIcon size={14} /> : <XIcon size={14} />}{approved ? "Enabled MCP tool" : "Denied MCP tool"}

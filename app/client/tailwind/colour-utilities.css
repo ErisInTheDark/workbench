@@ -78,6 +78,12 @@
   --fg-bg: color-mix(in srgb, black 5%, var(--app-bg-solid));
 }
 
+/* Sunken well darkened by the theme's --recess-shade; foreground mixes inside resolve against the darkened colour. */
+@utility bg-recess {
+  background-color: color-mix(in srgb, black var(--recess-shade), transparent);
+  --fg-bg: color-mix(in srgb, black var(--recess-shade), var(--app-bg-solid));
+}
+
 @utility bg-alpha-* {
   background-color: color-mix(in srgb, --value(--default(var(--app-bg-solid))) calc(--modifier(number, [number]) * 1%), transparent);
   background-color: color-mix(in srgb, --value(--default(var(--app-bg-solid))) --modifier(--opacity-*), transparent);
