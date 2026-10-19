@@ -4,6 +4,7 @@
  * - ThreadMcpRequestSubject: what a pending MCP request asks about, an enable (tool) or a sign-in (server link).
  * - ThreadMcpRequestPanel: the composer's pending MCP request; Approve and Deny (Shift: Stop) render into the composer's action slot.
  * - ThreadMcpDecisionCard: the transcript's record of an answered enable or sign-in request.
+ * - ThreadMcpDownloadCard: the transcript's record of an `mcp_download`: status and server, then the file name and source URL.
  */
 "use client";
 
@@ -14,7 +15,7 @@ import { mcpToolLabel } from "../../../workbench/mcp-tool-label";
 import { openCenteredMcpSignInPopup } from "../../../workbench/mcp-sign-in-popup";
 import MarkdownRender from "../../ui/MarkdownRender";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { CheckIcon, ChevronDownIcon, KeyRoundIcon, SquareIcon, XIcon } from "../workbench-icons";
+import { CheckIcon, ChevronDownIcon, DownloadIcon, KeyRoundIcon, SquareIcon, XIcon } from "../workbench-icons";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 
 export type ThreadMcpRequestSubject =
@@ -125,6 +126,36 @@ export function ThreadMcpRequestPanel({ subject, reason, actionTarget, onDecide,
     {reason ? <p className="m-0 whitespace-pre-wrap break-words text-[0.95rem] leading-[1.6] text-text">{reason}</p> : null}
     {error ? <p role="alert" className="m-0 text-[0.84em] text-danger">{error}</p> : null}
     {actionTarget ? createPortal(actions, actionTarget) : <div className="flex items-center justify-end gap-2">{actions}</div>}
+  </div>;
+}
+
+/** The saved file name from `mcp_download`'s "Saved <name> (<type>, <n> bytes) to <path>" output. */
+function savedFileName(output: string) {
+  return /^Saved (.+) \([^()]*, \d+ bytes\) to /mu.exec(output)?.[1] ?? null;
+}
+
+export function ThreadMcpDownloadCard({ server, url, name, outcome, output }: {
+  server: string;
+  url: string;
+  name: string | null;
+  outcome: "inProgress" | "completed" | "failed";
+  output: string;
+}) {
+  const file = (outcome === "completed" ? savedFileName(output) : null) ?? name;
+  const status = outcome === "inProgress" ? "Downloading a file" : outcome === "completed" ? "Downloaded a file" : "Download failed";
+  return <div className="overflow-hidden rounded-[0.95rem] border border-fg-alpha/10">
+    <div className="flex items-center gap-1.5 px-3.5 py-2 text-sm">
+      <span className={`inline-flex shrink-0 items-center gap-1.5 font-medium ${outcome === "failed" ? "text-danger" : "text-text"}`}>
+        <DownloadIcon size={14} />{status}
+      </span>
+      <span className="text-fg/muted">from</span>
+      <code className="min-w-0 truncate text-[0.85em] text-fg/muted">{server}</code>
+    </div>
+    <div className="flex flex-col gap-1 bg-recess px-3.5 py-3">
+      {file ? <span className="break-all text-base font-semibold text-text">{file}</span> : null}
+      <code className="break-all text-[0.8rem] text-fg/muted">{url}</code>
+      {outcome === "failed" && output.trim() ? <p role="alert" className="m-0 mt-1 text-sm text-danger">{output.trim()}</p> : null}
+    </div>
   </div>;
 }
 

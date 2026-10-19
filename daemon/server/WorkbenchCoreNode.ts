@@ -44,6 +44,8 @@ import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mc
 import { readDeviceIdentity } from "./store/device-identity";
 import type { WorkbenchApprovalHandoff } from "./WorkbenchApprovalController";
 import WorkbenchMcpServerController from "./mcp-servers/WorkbenchMcpServerController";
+import McpDownloadStore from "./mcp-servers/McpDownloadStore";
+import { logError } from "./process-helpers";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import type { WorkbenchMessageWaitHandoff } from "./WorkbenchMessageWaitController";
 import type { WorkbenchSubagentQueueHandoff } from "./WorkbenchSubagentQueueController";
@@ -221,7 +223,19 @@ function createWorkbenchCoreFeature(
     warn: logThreadStateWarning,
   });
   const { approvalReview, approvals, questionnaires, questionnaireSteers, questionnaireResponses } = interactions;
-  const mcpServers = new WorkbenchMcpServerController({ database, readDeviceIdentity });
+  const mcpDownloads = new McpDownloadStore({
+    directory: path.join(context.dataRootPath, ".cache", "mcp-downloads"),
+    database,
+    threads: {
+      onSettled: listener => threadStateController.subscribe((_projectId, entry) => {
+        if (entry.entryKind !== "draft" && entry.lifecycle.settled) listener(entry.identity.threadId);
+      }),
+      settled: async threadId => (await lookup.entry(threadId))?.lifecycle.settled ?? null,
+    },
+    onError: error => logError("mcp-downloads", `cleanup failed: ${error instanceof Error ? error.message : String(error)}`),
+  });
+  mcpDownloads.start();
+  const mcpServers = new WorkbenchMcpServerController({ database, readDeviceIdentity, downloads: mcpDownloads });
   const threadActions = new WorkbenchThreadActionController({
     questionnaireSteers,
     autoCompact,
@@ -423,6 +437,7 @@ function createWorkbenchCoreFeature(
       gitArc.dispose();
       reportPhase("MCP server disposal");
       await mcpServers.dispose();
+      await mcpDownloads.dispose();
       reportPhase("stats disposal");
       await stats.dispose();
       reportPhase("questionnaire disposal");

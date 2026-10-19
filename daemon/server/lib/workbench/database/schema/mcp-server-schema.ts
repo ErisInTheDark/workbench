@@ -4,7 +4,8 @@
  * - mcpServerTools: individually allowed tools per server.
  * - mcpServerAuth: optional per-server credential header, sealed per device and user.
  * - mcpServerOAuthClients/mcpServerOAuthTokens/mcpServerOAuthPending: OAuth sign-in registration, sealed tokens and started sign-ins awaiting their callback.
- * - mcpServerSchemaHistory: MCP server settings schema.
+ * - mcpDownloads: files agents downloaded from server links, owned by the downloading thread until it settles.
+ * - mcpServerSchemaHistory: MCP server settings and download schema.
  */
 import { blob, booleanInteger, defineTable, integer, primaryKey, text } from "workbench-shared/database/schema/schema-definition";
 import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "workbench-shared/database/schema/schema-history";
@@ -88,12 +89,25 @@ const oauthPendingHistory = defineTableHistory({
   versions: [tableVersion({ schemaVersion: releases.mcpServerOAuth.version, table: oauthPending, migration: createTable(oauthPending) })],
 });
 
+/** One file an agent downloaded from a link an MCP server sent; it lives until its thread settles. */
+const downloads = defineTable("mcp_downloads", {
+  id: text().primaryKey(),
+  thread_id: text().notNull(),
+  directory: text().notNull(),
+  created_at: integer().notNull().nonNegative(),
+});
+const downloadHistory = defineTableHistory({
+  current: downloads,
+  versions: [tableVersion({ schemaVersion: releases.mcpDownloads.version, table: downloads, migration: createTable(downloads) })],
+});
+
 export const mcpServers = serverHistory.current;
 export const mcpServerTools = toolHistory.current;
 export const mcpServerAuth = authHistory.current;
 export const mcpServerOAuthClients = oauthClientHistory.current;
 export const mcpServerOAuthTokens = oauthTokenHistory.current;
 export const mcpServerOAuthPending = oauthPendingHistory.current;
+export const mcpDownloads = downloadHistory.current;
 export const mcpServerSchemaHistory = defineSubsystemHistory([
-  serverHistory, toolHistory, authHistory, oauthClientHistory, oauthTokenHistory, oauthPendingHistory,
+  serverHistory, toolHistory, authHistory, oauthClientHistory, oauthTokenHistory, oauthPendingHistory, downloadHistory,
 ]);

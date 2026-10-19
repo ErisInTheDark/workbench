@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests protect the MCP server allow boundary (only allowed, currently offered tools are
- * forwarded), link requests limited to links the server sent, credential sealing, OAuth sign-in over real transport,
+ * forwarded), link requests and downloads limited to links the server sent, credential sealing, OAuth sign-in over real transport,
  * per-server failure isolation and settings validation.
  */
 import assert from "node:assert/strict";
@@ -27,6 +27,7 @@ class FakeServer {
   readonly endpoints: McpServerEndpoint[] = [];
   readonly calls: string[] = [];
   result: CallToolResult | null = null;
+  respond: ((name: string, args: Record<string, unknown>) => CallToolResult) | null = null;
   closed = 0;
 
   constructor(public reportedName: string | null = null) {}
@@ -42,9 +43,9 @@ class FakeServer {
         if (this.failure) throw this.failure;
         return this.reportedName;
       },
-      callTool: async (name): Promise<CallToolResult> => {
+      callTool: async (name, args): Promise<CallToolResult> => {
         this.calls.push(name);
-        return this.result ?? { content: [{ type: "text", text: `ran ${name}` }] };
+        return this.respond?.(name, args) ?? this.result ?? { content: [{ type: "text", text: `ran ${name}` }] };
       },
       close: async () => { this.closed += 1; },
     };
@@ -270,6 +271,88 @@ test("a link request asks only about links the server itself sent, and tells the
     assert.match(await authorize(authorization.replace("&", "\\u0026")), /finished signing in to docs/u);
     assert.match(await authorize(authorization, false), /did not sign in/u);
     assert.deepEqual(asked, Array(2).fill(`docs accounts.example.test ${new URL(authorization).href}`));
+  } finally { close(); }
+});
+
+test("downloads fetch, without asking, only links the server itself sent", async () => {
+  const docs = new FakeServer("docs");
+  docs.tools = [tool("EXPORT")];
+  const { create, close } = setup({ docs });
+  const exported = "https://files.example.test/export?sig=1&x=2";
+  try {
+    const fetched: string[] = [];
+    const owner = create({
+      downloads: { download: async (threadId, url, name) => {
+        fetched.push(`${threadId} ${url} ${name}`);
+        return { name: "Doc.html", path: "/cache/Doc.html", contentType: "text/html", bytes: 9 };
+      } },
+    });
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    await owner.update({ action: "setTools", id: server!.id, tools: ["EXPORT"] });
+
+    await assert.rejects(owner.downloadLink({ threadId: "t", server: "docs", url: exported }, signal()), /did not send that link/u);
+    docs.result = { content: [{ type: "text", text: JSON.stringify({ data: { s3url: exported } }) }] };
+    const ran = await owner.call({ server: "docs", tool: "EXPORT", arguments: {} }, signal());
+    assert.match(ran.text, /mcp_download/u, "successful replies with links point at the download tool");
+    await assert.rejects(owner.downloadLink({ threadId: "t", server: "docs", url: "https://evil.example.test/x" }, signal()), /did not send that link/u);
+    assert.deepEqual(fetched, []);
+
+    assert.match(await owner.downloadLink({ threadId: "t", server: "docs", url: exported, name: "Doc" }, signal()), /Saved Doc\.html .* to \/cache\/Doc\.html/u);
+    assert.deepEqual(fetched, [`t ${new URL(exported).href} Doc`]);
+  } finally { close(); }
+});
+
+test("a renamed server keeps its allow rules under its new name and refuses a taken or reserved name", async () => {
+  const drive = new FakeServer("drive");
+  drive.tools = [tool("SEARCH")];
+  const docs = new FakeServer(null);
+  const { create, close } = setup({ drive, docs });
+  try {
+    const owner = create();
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH"] });
+    await assert.rejects(owner.update({ action: "rename", id: server!.id, name: "docs.example" }), /already named/u);
+    await assert.rejects(owner.update({ action: "rename", id: server!.id, name: "wb" }), /reserved/u);
+
+    const renamed = await owner.update({ action: "rename", id: server!.id, name: "gdrive" });
+    assert.deepEqual(renamed.servers.map(entry => entry.name).sort(), ["docs.example", "gdrive"]);
+    assert.equal((await owner.call({ server: "gdrive", tool: "SEARCH", arguments: {} }, signal())).isError, false);
+    await assert.rejects(owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, signal()), /No MCP server is named drive/u);
+  } finally { close(); }
+});
+
+test("a Composio server is unwrapped: meta tools hidden, inner tools searched, enabled and called by their own names", async () => {
+  const composio = new FakeServer("composio");
+  composio.tools = ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS", "COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_REMOTE_BASH_TOOL"].map(name => tool(name));
+  const schema = { tool_slug: "GOOGLEDRIVE_DOWNLOAD_FILE", description: "Downloads a Drive file's content.", input_schema: { type: "object", properties: { fileId: { type: "string" } } } };
+  const json = (value: unknown): CallToolResult => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
+  const executed: unknown[] = [];
+  composio.respond = (name, args) => {
+    if (name === "COMPOSIO_SEARCH_TOOLS") return json({ data: { results: [{ primary_tool_slugs: ["GOOGLEDRIVE_DOWNLOAD_FILE"] }], tool_schemas: { GOOGLEDRIVE_DOWNLOAD_FILE: { ...schema, hasFullSchema: true } } } });
+    if (name === "COMPOSIO_GET_TOOL_SCHEMAS") return json({ data: { tool_schemas: Object.fromEntries((args.tool_slugs as string[]).filter(slug => slug === schema.tool_slug).map(slug => [slug, schema])) } });
+    executed.push(args.tools);
+    return json({ data: { results: [{ response: { successful: true, data: { exported: true } } }] } });
+  };
+  const { create, close } = setup({ composio });
+  try {
+    const owner = create();
+    await owner.update({ action: "add", url: "https://composio.example/mcp" });
+    const listed = await owner.listTools({ includeDisabled: true }, signal());
+    assert.doesNotMatch(listed, /COMPOSIO_/u);
+    assert.match(listed, /composio is search-based/u);
+    assert.match(await owner.listTools({ query: "export a google doc", includeDisabled: true }, signal()), /^composio\/GOOGLEDRIVE_DOWNLOAD_FILE$/mu);
+
+    await assert.rejects(owner.call({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", arguments: {} }, signal()), /not enabled/u);
+    await assert.rejects(owner.requestTool({ server: "composio", tool: "NOPE", reason: "r" }, async () => true, signal()), /does not offer/u);
+    assert.match(await owner.requestTool({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", reason: "r" }, async () => true, signal()), /^Enabled/u);
+    const catalog = (await owner.read()).servers[0]!.catalog;
+    assert.ok(catalog.status === "ready" && catalog.search === true);
+    assert.deepEqual(catalog.tools.map(entry => entry.name), ["GOOGLEDRIVE_DOWNLOAD_FILE"], "settings list the enabled inner tools");
+
+    const ran = await owner.call({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", arguments: { fileId: "1" } }, signal());
+    assert.deepEqual(JSON.parse(ran.text), { successful: true, data: { exported: true } });
+    assert.deepEqual(executed, [[{ tool_slug: "GOOGLEDRIVE_DOWNLOAD_FILE", arguments: { fileId: "1" } }]]);
   } finally { close(); }
 });
 

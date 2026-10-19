@@ -12,6 +12,7 @@ import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { McpServerSignInRequiredError } from "./McpServerOAuthProvider";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { McpWrapperSession } from "./wrappers/mcp-wrapper";
 import {
   CallToolResultSchema, McpError, ToolListChangedNotificationSchema,
   type CallToolResult, type JSONRPCMessage, type MessageExtraInfo,
@@ -42,7 +43,10 @@ export interface McpServerTool {
 }
 
 export interface McpServerConnectionPort {
+  /** Tools the server lists directly; a search-based (wrapped) server lists none and answers `wrapped` instead. */
   listTools(signal?: AbortSignal): Promise<McpServerTool[]>;
+  /** The inner-tool session when the server is a known meta-tool wrapper; null when it offers its tools directly. */
+  wrapped?(signal?: AbortSignal): Promise<McpWrapperSession | null>;
   /** The `serverInfo.name` the server reported when its session started. */
   serverName(): Promise<string | null>;
   callTool(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult>;

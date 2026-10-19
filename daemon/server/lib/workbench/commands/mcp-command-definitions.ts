@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - workbenchMcpFailure: a failed `/internal/mcp` reply in the Workbench error envelope, so tool text survives unwrapping whole.
- * - WorkbenchMcpRequestSchema: validate one `mcp tools` listing, `mcp request` enable request, `mcp call` forwarding request or `mcp authorize` link request.
- * - WORKBENCH_MCP_COMMANDS: `wb mcp tools`, `wb mcp request`, `wb mcp call` and deferred `wb mcp authorize`, the only agent route to user-added MCP server tools, shared by CLI and MCP.
+ * - WorkbenchMcpRequestSchema: validate one `mcp tools` listing, `mcp request` enable request, `mcp call` forwarding request, `mcp authorize` link request or `mcp download` link download.
+ * - WORKBENCH_MCP_COMMANDS: `wb mcp tools`, `wb mcp request`, `wb mcp call`, and deferred `wb mcp authorize` and `wb mcp download`, the only agent route to user-added MCP server tools, shared by CLI and MCP.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -25,6 +25,7 @@ export function workbenchMcpFailure(text: string, status: number) {
 const toolArguments = z.record(z.string(), z.unknown());
 const reason = z.string().trim().min(1).max(1000);
 const link = z.string().trim().min(1).max(8000);
+const fileName = z.string().trim().min(1).max(200);
 
 export const WorkbenchMcpRequestSchema = z.discriminatedUnion("action", [
   z.object({
@@ -37,6 +38,10 @@ export const WorkbenchMcpRequestSchema = z.discriminatedUnion("action", [
     requestKey: z.string().refine(value => value.startsWith(WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX)),
   }).strict(),
   z.object({ action: z.literal("call"), server: McpServerNameSchema, tool: McpServerToolNameSchema, arguments: toolArguments }).strict(),
+  z.object({
+    action: z.literal("download"), server: McpServerNameSchema, url: link, name: fileName.optional(),
+    cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1),
+  }).strict(),
   z.object({
     action: z.literal("authorize"), server: McpServerNameSchema, url: link, reason,
     cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1),
@@ -161,4 +166,30 @@ const mcpAuthorize = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_MCP_COMMANDS = [mcpTools, mcpRequest, mcpCall, mcpAuthorize] as const;
+const mcpDownload = defineWorkbenchAgentCommand({
+  words: ["mcp", "download"],
+  usage: "wb mcp download --server <name> --url <link> [--name <file name>]",
+  description: "Download a file link an MCP server sent in an mcp_call reply, such as an export URL, and print the local path it was saved to; the file is deleted when this thread settles. Pass the link exactly as the server returned it; name sets the saved file name.",
+  effects: { readOnly: true, openWorld: true },
+  helpGroups: ["mcp"],
+  mcpDeferred: true,
+  mcpCodeModeEligible: true,
+  inputSchema: z.object({
+    server: McpServerNameSchema.describe("MCP server name whose reply contained the link."),
+    url: link.describe("The link exactly as the server returned it."),
+    name: fileName.optional().describe("File name to save as, such as the document title the server reported."),
+  }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--server", "--url", "--name"] });
+    const name = flags.optional("--name");
+    return { server: flags.required("--server"), url: flags.required("--url"), ...name ? { name } : {} };
+  },
+  buildRequest(input, context) {
+    return postWorkbenchAgentCommand("/internal/mcp", {
+      action: "download", server: input.server, url: input.url, ...input.name ? { name: input.name } : {},
+      ...managedWorkbenchAgentCommandBody(context),
+    });
+  },
+});
+
+export const WORKBENCH_MCP_COMMANDS = [mcpTools, mcpRequest, mcpCall, mcpAuthorize, mcpDownload] as const;

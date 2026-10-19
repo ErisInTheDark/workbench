@@ -13,6 +13,7 @@ import { mcpToolLabel, mcpToolSharedPrefix } from "../../workbench/mcp-tool-labe
 import { readWorkbenchAppPort } from "../../workbench/app/workbench-app-port-client";
 import { useWorkbenchAppRpc } from "../../workbench/app/WorkbenchAppRpcContext";
 import IconButton, { iconButtonClassName } from "../ui/IconButton";
+import FlushInput from "../ui/FlushInput";
 import MarkdownRender from "../ui/MarkdownRender";
 import PressDragMenu from "../ui/PressDragMenu";
 import PrimaryButton from "../ui/PrimaryButton";
@@ -76,6 +77,9 @@ function ToolList({ server, controller, busy }: ServerProps) {
     <WorkbenchCheckbox className={row} label={<span className="text-text">All tools, including ones added later</span>}
       checked={server.allowAll} disabled={busy}
       onChange={allowAll => { void controller.update({ action: "setAllowAll", id: server.id, allowAll }); }} />
+    {server.catalog.status === "ready" && server.catalog.search
+      ? <p className="m-0 px-1 text-[0.8rem] text-fg/muted">Search-based server: agents find its tools by searching and ask you to enable them.</p>
+      : null}
     {listed.map(tool => <WorkbenchCheckbox key={tool.name} className={row} disabled={busy || server.allowAll}
       checked={server.allowAll || server.allowedTools.includes(tool.name)} onChange={allowed => setTool(tool.name, allowed)}
       label={<span className="flex min-w-0 flex-col">
@@ -94,8 +98,13 @@ function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & 
   const [keyOpen, setKeyOpen] = useState(false);
   const { tone, status } = presentStatus(server);
   const ready = server.catalog.status === "ready";
-  const toolCount = server.catalog.status === "ready"
-    ? server.allowAll ? "All tools" : `${server.allowedTools.length} of ${server.catalog.tools.length} tools` : "";
+  // Only offered tools count; picks the server no longer offers stay listed below but are not "enabled".
+  const enabledCount = server.catalog.status === "ready"
+    ? server.catalog.tools.filter(tool => server.allowedTools.includes(tool.name)).length : 0;
+  const toolCount = server.catalog.status !== "ready" ? ""
+    : server.allowAll ? "All tools"
+      // A search-based server's total is unknown: it holds thousands, found by searching.
+      : server.catalog.search ? `${enabledCount} enabled` : `${enabledCount} of ${server.catalog.tools.length} tools`;
   const menu = [
     server.auth?.kind === "header"
       ? { id: "remove-key", content: <MenuItem icon={<KeyRoundOffIcon />}>Remove API key</MenuItem> }
@@ -103,7 +112,10 @@ function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & 
     ...server.auth?.kind === "oauth" ? [{ id: "sign-out", content: <MenuItem icon={<KeyRoundOffIcon />}>Sign out</MenuItem> }] : [],
     { id: "remove", content: <MenuItem icon={<Trash2Icon />} danger>Remove server</MenuItem> },
   ];
-  return <WorkbenchSettingsStatusRow label={server.name} tone={tone} status={status} detail={server.url.replace(/^https?:\/\//u, "")}
+  return <WorkbenchSettingsStatusRow tone={tone}
+    label={<FlushInput ariaLabel="Server name" value={server.name} disabled={busy}
+      className="-mx-1 rounded-md px-1 hover:bg-fg/5 focus:bg-fg/8"
+      onCommit={name => { void controller.update({ action: "rename", id: server.id, name }); }} />} status={status} detail={server.url.replace(/^https?:\/\//u, "")}
     error={server.catalog.status === "error" ? server.catalog.detail : ""}
     body={<>
       {keyOpen ? <ApiKeyFields server={server} controller={controller} busy={busy} onDone={() => setKeyOpen(false)} /> : null}

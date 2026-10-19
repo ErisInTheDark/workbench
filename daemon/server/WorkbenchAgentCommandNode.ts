@@ -272,6 +272,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             }, signal);
             return new Response(text, { headers });
           }
+          if (request.action === "download") {
+            const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
+            return new Response(await mcpServers.downloadLink({ ...request, threadId: identity.threadId }, signal), { headers });
+          }
           if (request.action === "authorize") {
             const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
             const text = await mcpServers.authorizeLink(request, async mcpAuthorization => isMcpToolRequestApproved(await questionnaires.request({

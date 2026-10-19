@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default PlaintextEditable: plaintext input with autofocus, overlays and portal-isolated mention suggestions.
+ * - default PlaintextEditable: plaintext input with autofocus, overlays, portal-isolated mention suggestions and an optional single-line mode.
  * - PlaintextEditableHandle: focus, insert or apply guarded in-place text edits.
  * - PlaintextHighlight: one overlay range and its classes.
  * - threadPlaintextEditableClassName: shared Tailwind styling for thread text editors.
@@ -252,6 +252,7 @@ export default function PlaintextEditable ({
   mentionSuggestionsPlacement = "above",
   readOnly = false,
   ref,
+  singleLine = false,
   spellCheck = false,
   value,
 }: {
@@ -279,6 +280,8 @@ export default function PlaintextEditable ({
   mentionSuggestionsPlacement?: "above" | "below";
   readOnly?: boolean;
   ref?: Ref<PlaintextEditableHandle>;
+  /** One line: Enter goes to `onKeyDown` instead of breaking the line, line breaks are stripped, and there is no dictation. */
+  singleLine?: boolean;
   spellCheck?: boolean;
   value: string;
 }) {
@@ -297,7 +300,8 @@ export default function PlaintextEditable ({
   ].sort((left, right) => left.start - right.start);
   const savedVoiceSelection = useRef<{ text: string } & ({ selection: VoiceSelection } | { error: Error }) | null>(null);
   const pendingVoiceSelection = useRef<{ text: string; selection: VoiceSelection } | null>(null);
-  const voice = useVoiceInput(value, onChange, !disabled && !readOnly, {
+  // Without a change handler the voice control stays hidden, which is how single-line fields opt out of dictation.
+  const voice = useVoiceInput(value, singleLine ? undefined : onChange, !disabled && !readOnly && !singleLine, {
     read() {
       const current = elementRef.current ? capturePlaintextSelection(elementRef.current, value) : null;
       if (current) return current;
@@ -547,7 +551,7 @@ export default function PlaintextEditable ({
           ref={elementRef}
           aria-disabled={disabled || undefined}
           aria-label={ariaLabel}
-          aria-multiline="true"
+          aria-multiline={!singleLine}
           aria-readonly={readOnly || voice.locked || undefined}
           className={joinClasses(className, "relative z-10", highlightText && "!text-transparent caret-text",
             voice.visible && "pr-[calc(var(--voice-field-font-size)*2)]")}
@@ -584,6 +588,12 @@ export default function PlaintextEditable ({
           onInput={(event) => {
             if (applyingEdits.current) return;
             if (voice.locked) { event.currentTarget.textContent = value; return; }
+            if (singleLine && /[\r\n]/u.test(event.currentTarget.innerText)) {
+              // Pasted or dropped line breaks never reach the model; the DOM is rewritten so the caret stays put.
+              const caret = getEditableCaretOffset(event.currentTarget);
+              const before = event.currentTarget.innerText.slice(0, caret ?? undefined).replace(/\r?\n/gu, "").length;
+              setEditableValueAndCaret(event.currentTarget, event.currentTarget.innerText.replace(/\r?\n/gu, ""), before);
+            }
             const nextValue = normalizePlaintextEditableValue(event.currentTarget.innerText);
             if (!nextValue) {
               event.currentTarget.replaceChildren();
@@ -624,6 +634,7 @@ export default function PlaintextEditable ({
               }
             }
 
+            if (singleLine && event.key === "Enter") event.preventDefault();
             onKeyDown?.(event);
           }}
           onPaste={event => { if (voice.locked) { event.preventDefault(); return; } onPaste?.(event); }}

@@ -6,7 +6,7 @@
  * - McpServerAuthHeaderSchema: custom request header name carrying a server's sealed credential.
  * - McpServerToolNameSchema: one tool name a server offers.
  * - McpServerSettingsSnapshotSchema/McpServerSettingsSnapshot/McpServerSnapshot: configured servers, allow rules and live catalogues; credential values are never included.
- * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add, removal, credential, allow-rule, refresh or sign-out change.
+ * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add, removal, rename, credential, allow-rule, refresh or sign-out change.
  * - McpServerSignInStart{Params,Result}Schema: begin an OAuth sign-in and receive the provider's authorization URL.
  * - McpServerSignInFinish{Params,Result}Schema: hand the provider's callback (code or error) to the daemon and report the outcome.
  */
@@ -50,6 +50,8 @@ const catalog = z.discriminatedUnion("status", [
       title: z.string().max(256).nullable().default(null),
       description: z.string(),
     }).strict()),
+    /** Search-based (wrapped) server: `tools` holds only enabled tools; agents find the rest by searching. */
+    search: z.boolean().optional(),
   }).strict(),
   z.object({ status: z.literal("signInRequired") }).strict(),
   z.object({ status: z.literal("error"), detail: z.string().max(300) }).strict(),
@@ -85,6 +87,10 @@ export const McpServerSettingsUpdateSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("setTools"), id, tools: z.array(McpServerToolNameSchema).max(1000) }).strict(),
   z.object({ action: z.literal("refresh"), id }).strict(),
   z.object({ action: z.literal("signOut"), id }).strict(),
+  z.object({
+    action: z.literal("rename"), id,
+    name: McpServerNameSchema.refine(name => name !== WORKBENCH_MCP_SERVER_NAME, `"${WORKBENCH_MCP_SERVER_NAME}" is reserved for Workbench's own tools.`),
+  }).strict(),
 ]);
 export type McpServerSettingsUpdate = z.input<typeof McpServerSettingsUpdateSchema>;
 

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - McpToolListing: one server's offered tools with their allowed state, or why they are unavailable.
- * - formatMcpToolListing: agent-facing text for `mcp_tools`; allowed tools first, then disabled ones under one hint; a query ranks matches and adds input schemas.
+ * - formatMcpToolListing: agent-facing text for `mcp_tools`; allowed tools first, then disabled ones under one hint; a query ranks matches (a wrapped server's own search leads) and adds input schemas.
  * - formatWorkbenchToolSection: the same ranked text for Workbench's deferred tools under server `wb`.
  * - formatMcpToolResult: agent-facing text for one `mcp_call` result, including structured content its text does not already mirror.
  */
@@ -10,12 +10,13 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { McpServerTool } from "./McpServerConnection";
 
+/** `search` marks a wrapped server whose tools are found by query; `ranked` tools came from its own search, best first. */
 export type McpToolListing =
-  | { server: string; status: "ready"; tools: { tool: McpServerTool; allowed: boolean }[] }
+  | { server: string; status: "ready"; search?: boolean; tools: { tool: McpServerTool; allowed: boolean; ranked?: boolean }[] }
   | { server: string; status: "signInRequired" }
   | { server: string; status: "error"; detail: string };
 
-type Entry = { server: string; tool: McpServerTool; allowed: boolean };
+type Entry = { server: string; tool: McpServerTool; allowed: boolean; ranked?: boolean };
 
 const MAX_MATCHES = 10;
 const NO_SERVERS = "No MCP servers are configured. The user can add them in Settings > Agents > MCP servers.";
@@ -58,13 +59,15 @@ function section(lines: readonly string[], separator: string) {
   return lines.join(separator);
 }
 
+/** A wrapped server's own search already ranked its matches, so they lead, in its order, ahead of local term matches. */
 function rank(candidates: readonly Entry[], queryTerms: readonly string[]) {
   if (!queryTerms.length) return [...candidates];
-  return candidates.map(entry => ({ entry, score: score(entry, queryTerms) }))
+  const local = candidates.filter(entry => !entry.ranked).map(entry => ({ entry, score: score(entry, queryTerms) }))
     .filter(({ score }) => score > 0)
     .sort((left, right) => right.score - left.score
       || `${left.entry.server}/${left.entry.tool.name}`.localeCompare(`${right.entry.server}/${right.entry.tool.name}`))
-    .slice(0, MAX_MATCHES).map(({ entry }) => entry);
+    .map(({ entry }) => entry);
+  return [...candidates.filter(entry => entry.ranked), ...local].slice(0, MAX_MATCHES);
 }
 
 /** Workbench's deferred tools as one `wb/<tool>` block, ranked and rendered exactly like server tools. */
@@ -80,7 +83,10 @@ export function formatWorkbenchToolSection(tools: readonly McpServerTool[], quer
 export function formatMcpToolListing(listings: readonly McpToolListing[], query: string | undefined, includeDisabled = false) {
   if (!listings.length) return `${NO_SERVERS}\n`;
   const entries = listings.flatMap(listing => listing.status === "ready"
-    ? listing.tools.map(({ tool, allowed }): Entry => ({ server: listing.server, tool, allowed }))
+    ? listing.tools.map(({ tool, allowed, ranked }): Entry => ({ server: listing.server, tool, allowed, ranked }))
+    : []);
+  const searchable = listings.flatMap(listing => listing.status === "ready" && listing.search
+    ? [`${listing.server} is search-based: pass a query to find more of its tools.`]
     : []);
   const unavailable = listings.flatMap(listing => listing.status === "error"
     ? [`${listing.server}: unavailable (${listing.detail})`]
@@ -100,6 +106,7 @@ export function formatMcpToolListing(listings: readonly McpToolListing[], query:
   else blocks.push("No MCP server tools are enabled.");
   if (disabled.length) blocks.push(`${DISABLED_HINT}\n${section(disabled, separator)}`);
   else if (!includeDisabled && !enabled.length) blocks.push("Search again with includeDisabled to see tools the user could enable.");
+  if (!queryTerms.length && searchable.length) blocks.push(searchable.join("\n"));
   if (unavailable.length) blocks.push(unavailable.join("\n"));
   return `${blocks.join("\n\n")}\n`;
 }

@@ -374,6 +374,14 @@ test("MCP server CLI and MCP calls read as their intent, and enable requests lea
   assert.ok(call?.kind === "simple");
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: { server: "pd-connect", tool: "x", reason: "y" }, server: "wb", tool: "mcp_request" })
     ?.rendering.result.omitFromDisplay, true);
+  assert.equal(display("wb mcp download --server composio --url https://files.example.test/x --name 'Doc.html'").summaryText,
+    "Downloaded Doc.html from composio");
+  const download = getWorkbenchMcpCommandRoute({
+    argumentsValue: { server: "wb", tool: "mcp_download", arguments: { server: "composio", url: "https://files.example.test/x" } },
+    server: "wb", tool: "mcp_call",
+  });
+  assert.ok(download?.kind === "specialized" && download.operation.kind === "mcpDownload");
+  assert.deepEqual(download.operation, { kind: "mcpDownload", server: "composio", url: "https://files.example.test/x", name: null });
   // Sign-in requests are owned by their composer request and decision card, whether run by CLI or deferred through mcp_call.
   assert.equal(display("wb mcp authorize --server eris --url https://accounts.example.test/auth --reason 'Sign in'").omitFromDisplay, true);
   assert.equal(getWorkbenchMcpCommandRoute({

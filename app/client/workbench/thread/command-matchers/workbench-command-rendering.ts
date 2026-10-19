@@ -56,6 +56,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "mcp_request",
   "mcp_call",
   "mcp_authorize",
+  "mcp_download",
   // Vis is deferred; its CLI matcher and `mcp_call` on server wb render through these names, which also keep earlier MCP calls rendering.
   "vis_start",
   "vis_end",
@@ -203,7 +204,8 @@ export type WorkbenchSpecializedOperation =
   | { kind: "subagent"; operation: WorkbenchSubagentOperation }
   | { kind: "threadRecall"; operation: WorkbenchThreadRecallOperation }
   | { kind: "threadStatus"; status: "blocked" | "completed" }
-  | { kind: "threadTitle"; title: string };
+  | { kind: "threadTitle"; title: string }
+  | { kind: "mcpDownload"; server: string; url: string; name: string | null };
 
 export interface WorkbenchCommandRendering {
   claimedBy: string;
@@ -819,6 +821,16 @@ export function getWorkbenchCommandRoute(
     case "mcp_authorize":
       // The composer request and its transcript decision card own this call's presentation.
       return hidden("workbench-cli.mcp-request");
+    case "mcp_download": {
+      const server = readString(args.server);
+      const url = readString(args.url);
+      if (!server || !url) return null;
+      const name = readString(args.name) ?? null;
+      const file = name ?? "a file";
+      return specializedWithSummary("workbench-cli.mcp-download", { kind: "mcpDownload", server, url, name },
+        [...actionTarget("Downloading ", file), ...actionTarget(" from ", server)],
+        [...actionTarget("Downloaded ", file), ...actionTarget(" from ", server)]);
+    }
     case "mcp_call": {
       const server = readString(args.server);
       const tool = readString(args.tool);

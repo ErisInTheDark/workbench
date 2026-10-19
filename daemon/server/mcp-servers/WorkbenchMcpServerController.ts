@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchMcpServerOptions: database, device identity and connection factory ports.
+ * - WorkbenchMcpServerOptions: database, device identity, connection factory and download ports.
  * - McpServerCallOutcome: agent-facing text of one forwarded call and whether it failed.
- * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins, live connections and their recent raw traffic; answers settings reads/updates, sign-in steps and agent tool listing, enable requests, calls, requests to open links a server sent, and `wb debug mcp`.
+ * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins, live (meta-tool unwrapped) connections and their recent raw traffic; answers settings reads/updates, sign-in steps and agent tool listing, enable requests, calls, requests to open or download links a server sent, and `wb debug mcp`.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import os from "node:os";
@@ -29,6 +29,8 @@ import McpServerConnection, {
 import McpServerOAuthProvider, { McpServerSignInRequiredError, type McpServerOAuthStore } from "./McpServerOAuthProvider";
 import { formatMcpToolListing, formatMcpToolResult, type McpToolListing } from "./mcp-tool-search";
 import { matchesMcpResultLink, mcpResultLinks } from "./mcp-result-links";
+import type McpDownloadStore from "./McpDownloadStore";
+import WrappedMcpConnection from "./WrappedMcpConnection";
 
 export interface WorkbenchMcpServerOptions {
   database: {
@@ -37,6 +39,8 @@ export interface WorkbenchMcpServerOptions {
   };
   readDeviceIdentity(): Promise<string>;
   connect?: (endpoint: McpServerEndpoint) => McpServerConnectionPort;
+  /** Fetches links servers sent; absent where downloads are not offered. */
+  downloads?: Pick<McpDownloadStore, "download">;
   user?: () => string;
   now?: () => number;
 }
@@ -58,14 +62,18 @@ interface StoredServer {
   oauth: { redirectUri: string | null; signedIn: boolean };
 }
 
-type Catalog = { status: "ready"; tools: McpServerTool[] } | { status: "signInRequired" } | { status: "error"; detail: string };
+/** `search` marks a wrapped server: its tools are found by query, so `tools` holds only the enabled ones and `matches`. */
+type Catalog =
+  | { status: "ready"; tools: McpServerTool[]; search?: { matches: McpServerTool[] } }
+  | { status: "signInRequired" }
+  | { status: "error"; detail: string };
 
 // Secrets are sealed with the project-store cipher, bound to this device, OS user, this scope and each secret's own key.
 const SECRET_SCOPE = "mcp-servers";
 const UNREADABLE_CREDENTIAL = "The saved credential can't be read on this device or OS user. Set it again.";
 const SIGN_IN_TTL_MS = 10 * 60_000;
 const SENT_LINK_LIMIT = 20;
-const AUTHORIZE_HINT = "If a link above needs the user (e.g. to sign in), ask them to open it with mcp_call on server wb, tool mcp_authorize.\n";
+const LINK_HINT = "To open a link above for the user use wb/mcp_authorize; to fetch a file link use wb/mcp_download (both via mcp_call on server wb).\n";
 const SIGN_IN_EXPIRED = "This sign-in has expired or was already used. Start sign-in again from Workbench settings.";
 
 function sanitize(error: unknown) {
@@ -122,7 +130,10 @@ export default class WorkbenchMcpServerController {
         id: server.id, name: names.get(server.id) ?? server.name, url: server.url, allowAll: server.allowAll, allowedTools: server.allowedTools,
         auth: server.header ? { kind: "header", header: server.header.name } : server.oauth.signedIn ? { kind: "oauth" } : null,
         catalog: catalog.status === "ready"
-          ? { status: "ready", tools: catalog.tools.map(tool => ({ name: tool.name, title: tool.title ?? null, description: tool.description })) }
+          ? {
+            status: "ready", tools: catalog.tools.map(tool => ({ name: tool.name, title: tool.title ?? null, description: tool.description })),
+            ...catalog.search ? { search: true } : {},
+          }
           : catalog,
       };
     }) };
@@ -197,6 +208,14 @@ export default class WorkbenchMcpServerController {
       case "refresh":
         await this.#disconnect(server.id);
         break;
+      case "rename":
+        if (update.name === server.name) break;
+        if (servers.some(candidate => candidate.id !== server.id && candidate.name === update.name)) {
+          throw new Error(`Another MCP server is already named ${update.name}.`);
+        }
+        // Allow rules, credentials and remembered links are keyed by id, so only the row's name changes.
+        await this.options.database.executeTransaction([updateRows(mcpServers, { name: update.name }, { id: server.id })]);
+        break;
     }
     return await this.read();
   }
@@ -258,9 +277,17 @@ export default class WorkbenchMcpServerController {
     const servers = (await this.#servers()).filter(server => !input.server || server.name === input.server);
     if (input.server && !servers.length) throw new Error(`No MCP server is named ${input.server}.`);
     const listings = await Promise.all(servers.map(async (server): Promise<McpToolListing> => {
-      const catalog = await this.#catalog(server, signal);
+      const catalog = await this.#catalog(server, signal, input.query);
       if (catalog.status === "ready") {
-        return { server: server.name, status: "ready", tools: catalog.tools.map(tool => ({ tool, allowed: this.#allows(server, tool.name) })) };
+        const entry = (tool: McpServerTool, ranked: boolean) => ({ tool, allowed: this.#allows(server, tool.name), ranked });
+        const matches = catalog.search?.matches ?? [];
+        return {
+          server: server.name, status: "ready", search: Boolean(catalog.search),
+          tools: [
+            ...matches.map(tool => entry(tool, true)),
+            ...catalog.tools.filter(tool => !matches.some(match => match.name === tool.name)).map(tool => entry(tool, false)),
+          ],
+        };
       }
       return catalog.status === "signInRequired"
         ? { server: server.name, status: "signInRequired" }
@@ -285,7 +312,7 @@ export default class WorkbenchMcpServerController {
     const catalog = await this.#catalog(server, signal);
     if (catalog.status === "signInRequired") throw new Error(`${input.server} needs authentication first; ask the user to authenticate it in Settings > Agents > MCP servers.`);
     if (catalog.status === "error") throw new Error(`${input.server} is unavailable: ${catalog.detail}`);
-    const tool = catalog.tools.find(candidate => candidate.name === input.tool);
+    const tool = await this.#offered(server, input.tool, signal);
     if (!tool) throw new Error(`${input.server} does not offer a tool named ${input.tool}.`);
     const enabled = await ask({ server: server.name, tool: tool.name, title: tool.title ?? null, description: tool.description });
     if (!enabled) return `The user did not enable ${input.server}/${input.tool}.\n`;
@@ -304,14 +331,28 @@ export default class WorkbenchMcpServerController {
     if (!server) throw new Error(`No MCP server is named ${input.server}.`);
     if (!this.#allows(server, input.tool)) throw new Error(`${input.server}/${input.tool} is not enabled. Ask the user to enable it with mcp_request.`);
     if (server.header && server.header.value === null) throw new Error(UNREADABLE_CREDENTIAL);
-    const connection = this.#connection(server);
-    const offered = await connection.listTools(signal);
-    if (!offered.some(tool => tool.name === input.tool)) throw new Error(`${input.server} does not offer a tool named ${input.tool}.`);
-    const result = await connection.callTool(input.tool, input.arguments, signal);
+    if (!await this.#offered(server, input.tool, signal)) throw new Error(`${input.server} does not offer a tool named ${input.tool}.`);
+    const result = await this.#connection(server).callTool(input.tool, input.arguments, signal);
     const links = mcpResultLinks(result);
     if (links.length) this.#sentLinks.set(server.id, [...links, ...this.#sentLinks.get(server.id) ?? []].slice(0, SENT_LINK_LIMIT));
-    const isError = result.isError === true;
-    return { text: `${formatMcpToolResult(result)}${isError && links.length ? AUTHORIZE_HINT : ""}`, isError };
+    return { text: `${formatMcpToolResult(result)}${links.length ? LINK_HINT : ""}`, isError: result.isError === true };
+  }
+
+  /** Download, without asking, a link the server itself sent in a recent call reply; the file lives until the thread settles. */
+  async downloadLink(input: { threadId: string; server: string; url: string; name?: string | undefined }, signal: AbortSignal) {
+    const downloads = this.options.downloads;
+    if (!downloads) throw new Error("Downloads are not available here.");
+    const link = await this.#sentLink(input.server, input.url);
+    const saved = await downloads.download(input.threadId, link.url, input.name, signal);
+    return `Saved ${saved.name} (${saved.contentType}, ${saved.bytes} bytes) to ${saved.path}\n`;
+  }
+
+  async #sentLink(serverName: string, url: string) {
+    const server = (await this.#servers()).find(candidate => candidate.name === serverName);
+    if (!server) throw new Error(`No MCP server is named ${serverName}.`);
+    const link = matchesMcpResultLink(url, this.#sentLinks.get(server.id) ?? []);
+    if (!link) throw new Error(`${serverName} did not send that link in a recent mcp_call reply. Pass a link exactly as the server returned it.`);
+    return { server, url: link };
   }
 
   /**
@@ -322,10 +363,7 @@ export default class WorkbenchMcpServerController {
     input: { server: string; url: string; reason: string },
     ask: (mcpAuthorization: { server: string; url: string; host: string }) => Promise<boolean>,
   ) {
-    const server = (await this.#servers()).find(candidate => candidate.name === input.server);
-    if (!server) throw new Error(`No MCP server is named ${input.server}.`);
-    const link = matchesMcpResultLink(input.url, this.#sentLinks.get(server.id) ?? []);
-    if (!link) throw new Error(`${input.server} did not send that link in a recent mcp_call reply. Pass a link exactly as the server returned it.`);
+    const { server, url: link } = await this.#sentLink(input.server, input.url);
     const done = await ask({ server: server.name, url: link, host: new URL(link).host });
     return done
       ? `The user says they finished signing in to ${server.name}. Retry the call.\n`
@@ -346,15 +384,32 @@ export default class WorkbenchMcpServerController {
     return server.allowAll || server.allowedTools.includes(tool);
   }
 
-  async #catalog(server: StoredServer, signal?: AbortSignal): Promise<Catalog> {
+  /** A wrapped server answers with its enabled tools described, plus `query` matches when a query is given. */
+  async #catalog(server: StoredServer, signal?: AbortSignal, query?: string): Promise<Catalog> {
     if (server.header && server.header.value === null) return { status: "error", detail: UNREADABLE_CREDENTIAL };
     try {
-      return { status: "ready", tools: await this.#connection(server).listTools(signal) };
+      const connection = this.#connection(server);
+      const wrapped = await connection.wrapped?.(signal) ?? null;
+      if (!wrapped) return { status: "ready", tools: await connection.listTools(signal) };
+      const abort = signal ?? new AbortController().signal;
+      const [tools, matches] = await Promise.all([
+        wrapped.describe(server.allowedTools, abort),
+        query?.trim() ? wrapped.search(query.trim(), abort) : [],
+      ]);
+      return { status: "ready", tools, search: { matches } };
     } catch (error) {
       signal?.throwIfAborted();
       if (error instanceof McpServerSignInRequiredError) return { status: "signInRequired" };
       return { status: "error", detail: sanitize(error) || "The server could not be reached." };
     }
+  }
+
+  /** The named tool when the server offers it now; wrapped servers are asked about that tool alone. */
+  async #offered(server: StoredServer, name: string, signal: AbortSignal) {
+    const connection = this.#connection(server);
+    const wrapped = await connection.wrapped?.(signal) ?? null;
+    const tools = wrapped ? await wrapped.describe([name], signal) : await connection.listTools(signal);
+    return tools.find(tool => tool.name === name) ?? null;
   }
 
   #connection(server: StoredServer) {
@@ -370,7 +425,7 @@ export default class WorkbenchMcpServerController {
             kind: "background", redirectUri: server.oauth.redirectUri ?? undefined,
           }),
         };
-      connection = (this.options.connect ?? (value => new McpServerConnection(value)))(endpoint);
+      connection = new WrappedMcpConnection((this.options.connect ?? (value => new McpServerConnection(value)))(endpoint));
       this.#connections.set(server.id, connection);
     }
     return connection;

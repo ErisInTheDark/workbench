@@ -37,6 +37,7 @@ import {
 } from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcWaitItem from "./ThreadGitArcWaitItem";
+import { ThreadMcpDownloadCard } from "./ThreadMcpToolRequest";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
 import ThreadAgentMessageItem from "./ThreadAgentMessageItem";
 import MarkdownRender from "../../ui/MarkdownRender";
@@ -139,6 +140,12 @@ export default function ThreadWorkbenchCommandItem({
         threadId={threadId}
       />
     );
+  }
+  if (operation.kind === "mcpDownload") {
+    return <div className="py-2">
+      <ThreadMcpDownloadCard server={operation.server} url={operation.url} name={operation.name} output={output}
+        outcome={outcome === "inProgress" ? "inProgress" : outcome === "completed" ? "completed" : "failed"} />
+    </div>;
   }
   if (operation.kind === "threadTitle") {
     return <ThreadTitleCommandItem failureText={output} outcome={outcome} title={operation.title} />;

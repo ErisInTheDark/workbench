@@ -63,7 +63,7 @@ export default function WorkbenchSettingsPreferences({
       {definition.type === "text" && typeof value === "string"
         ? <FlushInput ariaLabel={definition.label} placeholder={definition.placeholder} value={value}
           maxLength={definition.maxLength} disabled={unavailable}
-          className="w-full max-w-sm rounded-[0.6rem] bg-fg/5 px-3 py-1.5 text-sm text-text focus:bg-fg/8 disabled:opacity-50"
+          className="w-full max-w-sm rounded-[0.6rem] bg-fg/5 px-3 py-1.5 text-sm text-text focus:bg-fg/8 aria-disabled:opacity-50"
           onCommit={next => { void settings.set(key, next as never).catch(report); }} />
         : definition.type === "markTags" && Array.isArray(value)
         ? <div className="max-w-lg">

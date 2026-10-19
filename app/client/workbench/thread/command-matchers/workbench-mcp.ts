@@ -141,7 +141,8 @@ export function shouldUseWorkbenchMcpSpecializedRenderer(
     || route.operation.kind === "gitArc"
     || route.operation.kind === "gitArcWait"
     || route.operation.kind === "threadTitle"
-    || route.operation.kind === "threadStatus";
+    || route.operation.kind === "threadStatus"
+    || route.operation.kind === "mcpDownload";
 }
 
 export function getWorkbenchMcpCommandDisplay({

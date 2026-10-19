@@ -450,9 +450,17 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage, summaryParts }) => {
       if (summaryParts.length) return null;
       const normalized = stage.text.trim();
-      const action = /^wb(?:\.cmd)?\s+mcp\s+(tools|request|call|authorize)(?=\s|$)/iu.exec(normalized)?.[1]?.toLowerCase();
+      const action = /^wb(?:\.cmd)?\s+mcp\s+(tools|request|call|authorize|download)(?=\s|$)/iu.exec(normalized)?.[1]?.toLowerCase();
       if (!action || hasBooleanFlag(normalized, "help")) return null;
       if (action === "authorize") return getWorkbenchCommandRendering("mcp_authorize", {})?.result ?? null;
+      if (action === "download") {
+        const name = readFlagValue(normalized, "name");
+        const server = readFlagValue(normalized, "server");
+        const url = readFlagValue(normalized, "url");
+        return getWorkbenchCommandRendering("mcp_download", {
+          ...name ? { name } : {}, ...server ? { server } : {}, ...url ? { url } : {},
+        })?.result ?? null;
+      }
       const server = readFlagValue(normalized, "server");
       if (action === "tools") {
         const separator = normalized.indexOf(" -- ");

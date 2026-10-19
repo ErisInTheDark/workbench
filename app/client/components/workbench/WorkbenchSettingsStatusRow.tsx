@@ -18,7 +18,8 @@ const toneClassName: Record<WorkbenchSettingsStatusTone, string> = {
 };
 
 export default function WorkbenchSettingsStatusRow({ label, tone, status, detail, error = "", body, children }: {
-  label: string;
+  /** The capability's name; a node lets it be edited in place. */
+  label: ReactNode;
   tone: WorkbenchSettingsStatusTone;
   status: string;
   detail: string;

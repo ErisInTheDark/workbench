@@ -4,7 +4,8 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useState } from "react";
+import FlushInput from "../../ui/FlushInput";
 import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerProfileSlot, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import IconButton from "../../ui/IconButton";
@@ -14,30 +15,6 @@ import PlaintextEditable from "./PlaintextEditable";
 import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import { orderComposerProfiles } from "./composer-profile-order";
-
-function ProfileNameEditable ({ fallback, name, onCommit }: { fallback: string; name: string; onCommit: (name: string) => void }) {
-  const editableRef = useRef<HTMLSpanElement>(null);
-  const [hasText, setHasText] = useState(Boolean(name));
-
-  useEffect(() => {
-    const editable = editableRef.current;
-    if (!editable || document.activeElement === editable) return;
-    if ((editable.textContent ?? "") !== name) editable.textContent = name;
-    setHasText(Boolean(name));
-  }, [name]);
-
-  const commit = () => {
-    const value = (editableRef.current?.textContent ?? "").trim();
-    if (editableRef.current && editableRef.current.textContent !== value) editableRef.current.textContent = value;
-    setHasText(Boolean(value));
-    if (value !== name) onCommit(value);
-  };
-
-  return <span className="relative inline-grid min-w-[8ch] max-w-full">
-    {!hasText ? <span aria-hidden="true" className="pointer-events-none col-start-1 row-start-1 whitespace-nowrap text-[0.96em] font-semibold text-fg/muted">{fallback}</span> : null}
-    <span ref={editableRef} aria-label="Profile name" contentEditable="plaintext-only" suppressContentEditableWarning role="textbox" className="relative col-start-1 row-start-1 inline-block min-w-[8ch] max-w-full overflow-hidden whitespace-nowrap text-[0.96em] font-semibold text-text outline-none" onBlur={commit} onClick={(event) => event.stopPropagation()} onInput={(event) => setHasText(Boolean(event.currentTarget.textContent))} onKeyDown={(event: KeyboardEvent<HTMLSpanElement>) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }}>{name}</span>
-  </span>;
-}
 
 function normalizeProfileDescription (value: string) {
   return value.replace(/\r\n?/gu, "\n").trim();
@@ -95,7 +72,11 @@ export default function ThreadProfilePicker ({ agents, currentSettings, models, 
       showMarker={false}
       label={label}
       onClick={() => controller.selectProfile(slot, profile.id)}
-      labelEditor={active ? <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} /> : undefined}
+      labelEditor={active ? <span className="inline-block min-w-[8ch] max-w-full" onClick={(event) => event.stopPropagation()}>
+        <FlushInput ariaLabel="Profile name" placeholder={label} value={profile.name}
+          className="text-[0.96em] font-semibold text-text"
+          onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} />
+      </span> : undefined}
       actions={<>
         {projectId ? <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} /> : null}
         <IconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon size={16} /></IconButton>
