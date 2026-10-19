@@ -1644,14 +1644,11 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     target: { kind: "provider", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one") },
   });
   const observedThread = observed.entries[0];
-  assert.deepEqual(observedThread?.entryKind === "thread" ? observedThread.gitCommits : null, [{
-    commitSha: "f".repeat(40),
-    description: "accepted description",
-    historyIndex: 0,
-    rootId: "root",
-    sourceProposalId: "proposal-two",
-    title: "accepted title",
-  }]);
+  const ref = { commitSha: "f".repeat(40), historyIndex: 0, rootId: "root" };
+  assert.deepEqual(observedThread?.entryKind === "thread" ? observedThread.gitCommits : null, [ref]);
+  assert.deepEqual(await feature.controller.readGitCommitDetails(
+    fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"), [ref],
+  ), [{ ...ref, description: "accepted description", sourceProposalId: "proposal-two", title: "accepted title" }]);
   await feature.dispose();
   await temporary.dispose();
 });

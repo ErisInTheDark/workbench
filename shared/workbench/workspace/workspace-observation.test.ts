@@ -115,26 +115,26 @@ test("a draft edit ships that draft's changed fields, not the whole presentation
   assert.deepEqual(applyObservationDelta(before, delta, shape), after);
 });
 
-test("a resolved questionnaire ships its one history row, not the whole history", () => {
-  const history = (count: number) => Array.from({ length: count }, (_, index) => ({
-    itemId: null, requestKey: `request-${index}`, turnId: "turn", threadId, resolvedAt: index,
-    insertAfterItemId: null, insertAfterItemIndex: null, response: { answers: {} },
-    request: { id: `request-${index}`, submitLabel: "", summary: "", title: "",
-      questions: [{ allowOther: false, header: "", id: "q", isSecret: false, options: [], question: "?" }] },
+test("a newly accepted commit ships its one ref at both hops, not the thread's whole history", () => {
+  const commits = (count: number) => Array.from({ length: count }, (_, index) => ({
+    commitSha: String(index).repeat(40).slice(0, 40), historyIndex: index, rootId: "root",
   }));
-  const observation = (count: number) => DaemonWorkspaceObservationSchema.parse({
-    kind: "thread", subscriptionId, generation: 1, revision: 1, phase: "current", failure: null,
-    data: {
-      entries: [entry(1, { questionnaireHistory: history(count) })], error: null, freshness: "fresh", projectId: "project",
-      revision: 1, subscriptionId, target: { kind: "provider", threadId }, updateKind: "threadObservation", version: 2,
-    },
+  const data = (count: number) => ({
+    entries: [entry(1, { gitCommits: commits(count) })], error: null, freshness: "fresh", projectId: "project",
+    revision: 1, subscriptionId, target: { kind: "provider", threadId }, updateKind: "threadObservation", version: 2,
   });
-  const shape = daemonObservationShape("thread");
-  const delta = diffObservationValue(observation(2), observation(3), shape)!;
-  assert.deepEqual(delta.objects?.data?.collections?.entries?.update?.[0]?.delta, {
-    collections: { questionnaireHistory: { add: [{ key: "request-2", item: history(3)[2]! }] } },
-  });
-  assert.deepEqual(applyObservationDelta(observation(2), delta, shape), observation(3));
+  const envelope = { kind: "thread", subscriptionId, generation: 1, revision: 1, phase: "current", failure: null, runtime: {} };
+  for (const [observation, shape] of [
+    [(count: number) => DaemonWorkspaceObservationSchema.parse({ ...envelope, data: data(count) }), daemonObservationShape("thread")],
+    [(count: number) => WorkspaceObservationSchema.parse({ ...envelope, data: data(count),
+      owner: { phase: "pending", failure: null } }), workspaceObservationShape("thread")],
+  ] as const) {
+    const delta = diffObservationValue(observation(2), observation(3), shape)!;
+    assert.deepEqual(delta.objects?.data?.collections?.entries?.update?.[0]?.delta, {
+      collections: { gitCommits: { add: [{ key: `root\0${commits(3)[2]!.commitSha}`, item: commits(3)[2]! }] } },
+    });
+    assert.deepEqual(applyObservationDelta(observation(2), delta, shape), observation(3));
+  }
 });
 
 test("each resolved startup project drops one pending id instead of resending the pending list", () => {

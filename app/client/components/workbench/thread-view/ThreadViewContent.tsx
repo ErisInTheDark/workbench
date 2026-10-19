@@ -42,7 +42,7 @@ import ThreadItemActionsContext, { type ThreadItemActions } from "./ThreadItemAc
 import type {
   WorkbenchGitArcLifecycleState,
   WorkbenchGitArcPlanState,
-  WorkbenchThreadGitCommit,
+  WorkbenchThreadGitCommitRef,
   WorkbenchThreadLifecycle,
   WorkbenchThreadRouteTarget as WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -456,7 +456,7 @@ export default memo(function ThreadViewContent ({
   const activeGitArcSelection = useMemo<{
     gitArc: WorkbenchGitArcLifecycleState | null;
     gitArcPlan: WorkbenchGitArcPlanState | null;
-    gitCommits: WorkbenchThreadGitCommit[];
+    gitCommits: WorkbenchThreadGitCommitRef[];
     lifecycle: WorkbenchThreadLifecycle;
   } | null>(() => activeSidebarEntry ? {
     gitArc: activeSidebarEntry.gitArc ?? null,

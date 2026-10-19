@@ -13,7 +13,7 @@ import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thr
 import {
   isWorkbenchThreadStatusProviderOwned,
   type WorkbenchHarnessId,
-  type WorkbenchThreadGitCommit,
+  type WorkbenchThreadGitCommitRef,
   type WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -70,7 +70,7 @@ export default function ThreadStatusArea({
   ...shared
 }: {
   gitArc: Omit<ThreadGitArcWorkProps, "projectFilePaths" | "projectId" | "projectRootPath" | "threadId" | "workspaceRoots"> | null;
-  gitCommits?: readonly WorkbenchThreadGitCommit[];
+  gitCommits?: readonly WorkbenchThreadGitCommitRef[];
   harness: WorkbenchHarnessId;
   live: ThreadLiveActivityView | null;
   projectFilePaths?: readonly string[];

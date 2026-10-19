@@ -4901,6 +4901,39 @@ test("only an observed thread's untimed commits learn their times from Git, afte
   }
 });
 
+test("an observed thread carries commit refs, and only the commits a group asks for come back in full", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-commit-refs-");
+  const root = temporary.path;
+  const commit = (sha: string, historyIndex: number) => ({
+    committedAt: "2026-10-01T00:00:00.000Z", commitSha: sha.repeat(40), description: `${sha} body`, historyIndex,
+    rootId: "root", sourceProposalId: `proposal-${sha}`, title: `${sha} title`,
+  });
+  await seedProjectState(root, "project", { drafts: [], records: [pinnedRecord("a", "A")], version: 3 });
+  const persistence = testPersistence(root);
+  persistence.gitCommits.set("a", [commit("a", 0), commit("b", 1), commit("c", 2)]);
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog, reconcileProject: async () => [], storageRoot: root,
+  });
+  try {
+    const served = await controller.readWorkspaceThread({
+      projectId: fixtureProjectIds["project"], subscriptionId: "observer",
+      target: { kind: "provider", threadId: WorkbenchThreadIdSchema.parse("a") },
+    });
+    const entry = served.entries[0];
+    assert.ok(entry?.entryKind === "thread");
+    assert.deepEqual(entry.gitCommits, ["a", "b", "c"].map((sha, historyIndex) => ({
+      committedAt: "2026-10-01T00:00:00.000Z", commitSha: sha.repeat(40), historyIndex, rootId: "root",
+    })), "titles, descriptions and source proposals stay home until a group opens");
+    const details = await controller.readGitCommitDetails(WorkbenchThreadIdSchema.parse("a"), [
+      { commitSha: "c".repeat(40), rootId: "root" }, { commitSha: "f".repeat(40), rootId: "root" },
+    ]);
+    assert.deepEqual(details, [commit("c", 2)]);
+  } finally {
+    await controller.dispose();
+    await temporary.dispose();
+  }
+});
+
 test("durable proposal ids are the source proposals of each thread's permanent commits", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-durable-proposals-");
   const root = temporary.path;

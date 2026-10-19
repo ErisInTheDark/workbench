@@ -20,6 +20,7 @@
  * - WorkspaceReleaseSchema: release only the matching observation generation.
  * - WORKSPACE_RETARGET_METHOD/DaemonWorkspaceRetargetSchema/WorkspaceRetargetSchema/WorkspaceRetargetResultSchema: swap a live observation's arguments, answered with a delta.
  * - RETARGETABLE_QUERY_KINDS: batch kinds that accept a retarget.
+ * - ThreadSummariesPatchSchema/ThreadSummariesPatch/diffThreadSummaryIds/applyThreadSummariesPatch: a summary batch's gained and lost ids.
  * - WorkspaceThreadSummarySchema/WorkspaceThreadSummariesSchema: located thread summaries a `threadSummaries` batch returns, keyed by thread id.
  * - WORKSPACE_OBSERVE_METHOD/WORKSPACE_RELEASE_METHOD/WORKSPACE_UPDATED_METHOD: shared observation protocol.
  * - WORKSPACE_DELTA_METHOD/WorkspaceObservationDeltaSchema/WorkspaceObservationDelta: keyed delta onto one observation revision.
@@ -45,7 +46,7 @@ import {
   WorkbenchProjectThreadSummarySchema, WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadObservationSnapshotSchema,
   WorkbenchProjectThreadSummaryCountsSchema, WorkbenchPinnedThreadSummaryEntrySchema,
-  WorkbenchProjectThreadSummaryEntrySchema, ThreadRuntimeRecordSchema, ThreadRuntimeSchema,
+  WorkbenchProjectThreadSummaryEntrySchema, ThreadRuntimeRecordSchema, ThreadRuntimeSchema, workbenchThreadGitCommitKey,
 } from "../thread/thread-state";
 import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity";
 import { LocatedThreadSummariesSchema, LocatedThreadSummarySchema, ThreadSummarySchema } from "../thread/thread-summary";
@@ -134,10 +135,37 @@ export const WorkspaceReleaseSchema = z.object({
   subscriptionId: z.uuid(),
   generation: revision,
 }).strict();
-/** Swap a live observation's arguments for the same kind; the change arrives as an ordinary delta against its last value. */
-export const DaemonWorkspaceRetargetSchema = DaemonWorkspaceObserveSchema;
-export type DaemonWorkspaceRetarget = DaemonWorkspaceObserve;
+/** The ids a `threadSummaries` batch gains and loses, instead of resending every id it holds. */
+export const ThreadSummariesPatchSchema = z.object({
+  kind: z.literal("threadSummaries"),
+  add: z.array(ThreadReferenceSchema),
+  remove: z.array(ThreadReferenceSchema),
+}).strict();
+export type ThreadSummariesPatch = z.infer<typeof ThreadSummariesPatchSchema>;
+const retargetPatch = z.object({ subscriptionId: z.uuid(), generation: revision, patch: ThreadSummariesPatchSchema }).strict();
+/**
+ * Swap a live observation's arguments for the same kind, as a whole query or a summary-id patch; the change arrives
+ * as an ordinary delta against its last value.
+ */
+export const DaemonWorkspaceRetargetSchema = z.union([DaemonWorkspaceObserveSchema, retargetPatch]);
+export type DaemonWorkspaceRetarget = z.infer<typeof DaemonWorkspaceRetargetSchema>;
 export const WorkspaceRetargetResultSchema = z.object({ revision }).strict();
+
+/** The patch turning `from` into `to`, or null when nothing changes. */
+export function diffThreadSummaryIds(from: readonly string[], to: readonly string[]): ThreadSummariesPatch | null {
+  const before = new Set(from);
+  const after = new Set(to);
+  const add = [...after].filter(id => !before.has(id)).map(id => ThreadReferenceSchema.parse(id));
+  const remove = [...before].filter(id => !after.has(id)).map(id => ThreadReferenceSchema.parse(id));
+  return add.length || remove.length ? { kind: "threadSummaries", add, remove } : null;
+}
+
+/** The sorted id set a patch leaves, matching how batches order their ids. */
+export function applyThreadSummariesPatch(threadIds: readonly string[], patch: ThreadSummariesPatch) {
+  const removed = new Set<string>(patch.remove);
+  return [...new Set([...threadIds.filter(id => !removed.has(id)), ...patch.add])].sort()
+    .map(id => ThreadReferenceSchema.parse(id));
+}
 /** Batch kinds a sole observer retargets in place on the daemon and app alike, so the change ships as a delta. */
 export const RETARGETABLE_QUERY_KINDS: ReadonlySet<string> = new Set([
   "threadSummaries", "projectSelection", "projectThreads", "archivedThreads",
@@ -273,12 +301,12 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("threadSummaries"), threadIds: z.array(ThreadReferenceSchema) }).strict(),
 ]);
 export type WorkspaceQuery = z.infer<typeof WorkspaceQuerySchema>;
-/** Swap a live observation's arguments for the same kind; the change arrives as an ordinary delta against its last value. */
-export const WorkspaceRetargetSchema = z.object({
+/** Swap a live observation's arguments for the same kind, as a whole query or a summary-id patch. */
+export const WorkspaceRetargetSchema = z.union([z.object({
   subscriptionId: z.uuid(),
   generation: revision,
   query: WorkspaceQuerySchema,
-}).strict();
+}).strict(), retargetPatch]);
 export type WorkspaceRetarget = z.infer<typeof WorkspaceRetargetSchema>;
 
 export const WorkspaceDaemonFactSchema = z.object({
@@ -524,10 +552,10 @@ const gitArcPlanShape = observationShape.object({ fields: {
   scopePaths: pathList,
   members: observationShape.keyed(gitArcMemberKey, z.json(), { fields: { scopePaths: pathList } }),
 } });
-// Questionnaire history only grows, and a long-lived thread's history reaches hundreds of KB.
+// A long-lived thread reaches hundreds of accepted commits; one new commit ships one ref.
 const entryFields = {
   gitArc: gitArcShape, gitArcPlan: gitArcPlanShape,
-  questionnaireHistory: observationShape.keyed((entry: { requestKey: string }) => entry.requestKey, z.json()),
+  gitCommits: observationShape.keyed(workbenchThreadGitCommitKey, z.json()),
 };
 const entryShape: ObservationShape = { fields: entryFields };
 // Thread-state revision counters bump on background passes with no visible change; they ride along only with real changes.

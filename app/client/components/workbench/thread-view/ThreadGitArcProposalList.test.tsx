@@ -10,8 +10,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import type { WorkbenchThreadGitCommit } from "workbench-shared/workbench/thread/thread-state";
+import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchClientStateController, { type WorkbenchClientStateSnapshot } from "../../../workbench/state/WorkbenchClientStateController";
+import { threadGitCommitHistoryFor } from "../../../workbench/thread/ThreadGitCommitHistory";
 import { WorkbenchClientStateContext } from "../workbench-client-state-context";
+import { WorkbenchOperationsContext } from "../WorkbenchWorkspaceContext";
 import ThreadCheckpointCommitActions, { type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
 import ThreadGitArcProposalList, { getThreadAcceptedGitHistory } from "./ThreadGitArcProposalList";
 
@@ -44,28 +47,40 @@ function clientState(open: boolean) {
   } as unknown as WorkbenchClientStateController;
 }
 
+/** The daemon the list reads commit details from; `loaded` commits are already in its shared history. */
+async function daemonWith(loaded: readonly WorkbenchThreadGitCommit[]) {
+  // The transport edge answers raw JSON; the daemon facade validates it with the action's result schema.
+  const daemon = new WorkbenchDaemonClient({ request: async <T,>() => ({ data: loaded }) as T });
+  await threadGitCommitHistoryFor(daemon).load("thread", loaded);
+  return daemon;
+}
+
+const refOf = ({ committedAt, commitSha, historyIndex, rootId }: WorkbenchThreadGitCommit) =>
+  ({ ...(committedAt ? { committedAt } : {}), commitSha, historyIndex, rootId });
+
 /** Bulk summaries stand in for cards that a collapsed header never lets load, so readiness is real. */
 function renderList(
   open: boolean,
   proposalIds: readonly string[],
   status: "committed" | "proposed" = "proposed",
   history: WorkbenchThreadGitCommit[] = [],
-  { standalone = false }: { standalone?: boolean } = {},
+  { standalone = false, daemon = null }: { standalone?: boolean; daemon?: WorkbenchDaemonClient | null } = {},
 ) {
   const commitActions = new ThreadCheckpointCommitActions();
   commitActions.setStored(status === "proposed" ? proposalIds.map(stored) : [], () => {});
-  return renderToStaticMarkup(createElement(WorkbenchClientStateContext.Provider, { value: clientState(open) },
-    createElement(ThreadGitArcProposalList, {
-      acceptance: null,
-      commitActions,
-      cwd: "/repo",
-      harness: "opencode",
-      history,
-      proposals: proposalIds.map(proposalId => ({ proposalId, status })),
-      stackLayers: [],
-      standalone,
-      threadId: "thread",
-    })));
+  return renderToStaticMarkup(createElement(WorkbenchOperationsContext.Provider, { value: daemon },
+    createElement(WorkbenchClientStateContext.Provider, { value: clientState(open) },
+      createElement(ThreadGitArcProposalList, {
+        acceptance: null,
+        commitActions,
+        cwd: "/repo",
+        harness: "opencode",
+        history: history.map(refOf),
+        proposals: proposalIds.map(proposalId => ({ proposalId, status })),
+        stackLayers: [],
+        standalone,
+        threadId: "thread",
+      }))));
 }
 
 function commitAllTag(html: string) {
@@ -101,9 +116,9 @@ const durableCommit = {
   title: "durable commit",
 };
 
-test("accepted history alone opens straight onto closed commit rows", () => {
+test("accepted history alone opens straight onto closed commit rows", async () => {
   // A closed header preference must not hide history that has nothing to commit.
-  const html = renderList(false, [], "committed", [durableCommit], { standalone: true });
+  const html = renderList(false, [], "committed", [durableCommit], { standalone: true, daemon: await daemonWith([durableCommit]) });
   assert.doesNotMatch(html, /data-thread-git-arc-accepted-group/u);
   assert.doesNotMatch(html, /<details/u);
   assert.match(html, /aria-expanded="false"/u);
@@ -112,11 +127,20 @@ test("accepted history alone opens straight onto closed commit rows", () => {
   assert.equal(commitAllTag(html), null);
 });
 
-test("a durable commit row addresses its source proposal, so opening it can load amend state", () => {
-  const html = renderList(false, [], "committed", [durableCommit], { standalone: true });
+test("a durable commit row addresses its source proposal, so opening it can load amend state", async () => {
+  const html = renderList(false, [], "committed", [durableCommit], { standalone: true, daemon: await daemonWith([durableCommit]) });
   assert.match(html, /data-thread-git-arc-proposal="accepted"/u);
   assert.match(html, /aria-expanded="false"/u);
   assert.match(html, /durable commit/u);
+});
+
+test("commit rows whose details have not loaded hold their place without inventing a source proposal", () => {
+  const html = renderList(false, [], "committed", [durableCommit], { standalone: true, daemon: new WorkbenchDaemonClient({
+    request: async () => { throw new Error("not read during a static render"); },
+  }) });
+  assert.match(html, new RegExp(`data-thread-git-commit="${durableCommit.commitSha}"`, "u"));
+  assert.doesNotMatch(html, /data-thread-git-arc-proposal=/u);
+  assert.doesNotMatch(html, /durable commit/u);
 });
 
 test("accepted history keeps its group when it shares the panel", () => {
@@ -158,7 +182,7 @@ test("live accepted proposals win over duplicate durable commits", () => {
       mode: "commit",
       title: "live copy",
     },
-  }], [duplicate, distinct]);
+  }], [duplicate, distinct].map(refOf));
   assert.equal(result.acceptedCount, 2);
-  assert.deepEqual(result.historicalCommits, [distinct]);
+  assert.deepEqual(result.historicalCommits, [refOf(distinct)]);
 });

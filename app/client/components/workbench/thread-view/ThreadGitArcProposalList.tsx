@@ -1,21 +1,23 @@
 /*
  * Exports:
  * - getThreadAcceptedGitHistory: dedupe permanent commits against actionable live committed proposals.
- * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows (which load their source proposal for amend once opened); pending work sits in a recessed card under a persisted commit-all header (a lone proposal is its own persisted disclosure) with tall stacks folded past the committable layer, accepted history under one group per commit age unless a single age is the whole panel.
+ * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows (whose details load when their age group first mounts, and which load their source proposal for amend once opened); pending work sits in a recessed card under a persisted commit-all header (a lone proposal is its own persisted disclosure) with tall stacks folded past the committable layer, accepted history under one group per commit age unless a single age is the whole panel.
  */
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
-import type {
-  WorkbenchGitArcLifecycleState,
-  WorkbenchGitArcProposalState,
-  WorkbenchHarnessId,
-  WorkbenchThreadGitCommit,
+import {
+  workbenchThreadGitCommitKey,
+  type WorkbenchGitArcLifecycleState,
+  type WorkbenchGitArcProposalState,
+  type WorkbenchHarnessId,
+  type WorkbenchThreadGitCommitRef,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import { threadGitCommitHistoryFor, type ThreadGitCommitDetail } from "../../../workbench/thread/ThreadGitCommitHistory";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../../ui/PrimaryButton";
 import { CheckCheckIcon, EllipsisIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
@@ -40,16 +42,16 @@ function formatProposalCounts(committed: number, proposed: number) {
 
 export function getThreadAcceptedGitHistory(
   proposals: readonly WorkbenchGitArcProposalState[],
-  history: readonly WorkbenchThreadGitCommit[],
+  history: readonly WorkbenchThreadGitCommitRef[],
 ) {
   const liveCommitKeys = new Set(proposals.flatMap(({ rootId, status, summary }) => (
-    status === "committed" && rootId && summary?.committedSha ? [`${rootId}\0${summary.committedSha}`] : []
+    status === "committed" && rootId && summary?.committedSha ? [workbenchThreadGitCommitKey({ rootId, commitSha: summary.committedSha })] : []
   )));
   const historicalCommits = history
-    .filter(({ commitSha, rootId }) => !liveCommitKeys.has(`${rootId}\0${commitSha}`))
+    .filter(commit => !liveCommitKeys.has(workbenchThreadGitCommitKey(commit)))
     .slice().sort((left, right) => left.historyIndex - right.historyIndex
       || left.rootId.localeCompare(right.rootId)
-      || left.sourceProposalId.localeCompare(right.sourceProposalId));
+      || left.commitSha.localeCompare(right.commitSha));
   return {
     acceptedCount: proposals.filter(({ status }) => status === "committed").length + historicalCommits.length,
     historicalCommits,
@@ -96,6 +98,26 @@ function useObservedProposalCommits(commitActions: ThreadCheckpointCommitActions
   return failure;
 }
 
+type AcceptedEntry = { committedAt?: string } & ({ commit: WorkbenchThreadGitCommitRef } | { row: () => ReactNode });
+
+/** Mounts only once its age group opens (or when it is the whole panel), so commit details load as rows become visible. */
+function AcceptedCommitRows({ entries, renderCommit, threadId }: {
+  entries: readonly AcceptedEntry[];
+  renderCommit: (commit: WorkbenchThreadGitCommitRef, detail: ThreadGitCommitDetail) => ReactNode;
+  threadId: string;
+}) {
+  const history = threadGitCommitHistoryFor(useWorkbenchDaemonClient());
+  useSyncExternalStore(history.subscribe, history.getVersion, history.getVersion);
+  const commits = entries.flatMap(entry => "commit" in entry ? [entry.commit] : []);
+  const commitsKey = commits.map(workbenchThreadGitCommitKey).join("\n");
+  const latestCommits = useRef(commits);
+  useEffect(() => { latestCommits.current = commits; });
+  useEffect(() => {
+    if (commitsKey) void history.load(threadId, latestCommits.current);
+  }, [commitsKey, history, threadId]);
+  return <>{entries.map(entry => "commit" in entry ? renderCommit(entry.commit, history.get(threadId, entry.commit)) : entry.row())}</>;
+}
+
 export default function ThreadGitArcProposalList({
   acceptance,
   commitActions,
@@ -116,7 +138,7 @@ export default function ThreadGitArcProposalList({
   commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
-  history?: readonly WorkbenchThreadGitCommit[];
+  history?: readonly WorkbenchThreadGitCommitRef[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -240,45 +262,64 @@ export default function ThreadGitArcProposalList({
     </div>
   );
   // A permanent commit opens onto its source proposal, which loads (and offers amend) only once opened.
-  const historyRow = (commit: WorkbenchThreadGitCommit) => (
-    <div
-      className={threadGitArcCommitRowClassName}
-      data-thread-git-arc-proposal={commit.sourceProposalId}
-      data-thread-git-commit={commit.commitSha}
-      key={`${commit.rootId}:${commit.sourceProposalId}`}
-    >
-      <ThreadCheckpointCommitController
-        cwd={cwd}
-        harness={harness}
-        intent={null}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        proposalId={commit.sourceProposalId}
-        sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
-        summary={{
-          changes: null,
-          ...(commit.committedAt ? { committedAt: commit.committedAt } : {}),
-          committedSha: commit.commitSha,
-          description: commit.description,
-          mode: "commit",
-          title: commit.title,
-        }}
-        threadId={threadId}
-        workspaceRoots={workspaceRoots}
-      />
-    </div>
-  );
+  const historyRow = (ref: WorkbenchThreadGitCommitRef, detail: ThreadGitCommitDetail) => {
+    const key = workbenchThreadGitCommitKey(ref);
+    if (detail.status !== "ready") return (
+      <div className={threadGitArcCommitRowClassName} data-thread-git-commit={ref.commitSha} key={key}>
+        {detail.status === "failed" ? (
+          <p className="m-0 py-2 text-[0.8em] leading-[1.5] text-danger" role="alert">{detail.error}</p>
+        ) : (
+          <div aria-hidden="true" className="flex items-center gap-2 py-2">
+            <span className="size-3 shrink-0 rounded workbench-skeleton" />
+            <span className="h-[1em] w-1/2 rounded workbench-skeleton" />
+          </div>
+        )}
+      </div>
+    );
+    const commit = detail.commit;
+    return (
+      <div
+        className={threadGitArcCommitRowClassName}
+        data-thread-git-arc-proposal={commit.sourceProposalId}
+        data-thread-git-commit={commit.commitSha}
+        key={key}
+      >
+        <ThreadCheckpointCommitController
+          cwd={cwd}
+          harness={harness}
+          intent={null}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          proposalId={commit.sourceProposalId}
+          sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
+          summary={{
+            changes: null,
+            ...(commit.committedAt ? { committedAt: commit.committedAt } : {}),
+            committedSha: commit.commitSha,
+            description: commit.description,
+            mode: "commit",
+            title: commit.title,
+          }}
+          threadId={threadId}
+          workspaceRoots={workspaceRoots}
+        />
+      </div>
+    );
+  };
   // A live summary from the startup cache has no time yet; its permanent row may already know it.
-  const recordedTimes = new Map(history.map(({ commitSha, committedAt, rootId }) => [`${rootId}\0${commitSha}`, committedAt]));
+  const recordedTimes = new Map(history.map(commit => [workbenchThreadGitCommitKey(commit), commit.committedAt]));
   // Chronological: durable history in acceptance order, then this arc's own accepted proposals.
-  const acceptedEntries = [
-    ...historicalCommits.map(commit => ({ committedAt: commit.committedAt, row: () => historyRow(commit) })),
+  const acceptedEntries: AcceptedEntry[] = [
+    ...historicalCommits.map(commit => ({ committedAt: commit.committedAt, commit })),
     ...acceptedProposals.map(({ proposalId, rootId, summary }) => ({
       committedAt: summary?.committedAt ?? recordedTimes.get(`${rootId}\0${summary?.committedSha}`),
       row: () => anchor(proposalId),
     })),
   ];
+  const acceptedRows = (entries: readonly AcceptedEntry[], key?: string) => (
+    <AcceptedCommitRows entries={entries} key={key} renderCommit={historyRow} threadId={threadId} />
+  );
   const ageGroups = groupCommitsByAge(acceptedEntries, ({ committedAt }) => committedAt, new Date());
   // Accepted history alone is the whole panel, so a single age group needs no group row of its own.
   const flattenAccepted = standalone && ageGroups.length === 1
@@ -321,7 +362,7 @@ export default function ThreadGitArcProposalList({
   const visibleLayerEnd = (lowestPendingGroup ? layerGroups.indexOf(lowestPendingGroup) : 0) + VISIBLE_LAYER_COUNT;
   const foldedLayers = layerRows.length - visibleLayerEnd > 1 ? layerRows.slice(visibleLayerEnd) : [];
   const anchors = [
-    ...(flattenAccepted ? ageGroups[0]!.entries.map(({ row }) => row()) : ageGroups.map(({ bucket, entries, title }) => (
+    ...(flattenAccepted ? [acceptedRows(ageGroups[0]!.entries, "accepted")] : ageGroups.map(({ bucket, entries, title }) => (
       <ThreadGitArcCommitGroup
         count={plural(entries.length, "commit")}
         data-thread-git-arc-accepted-group={bucket}
@@ -330,7 +371,7 @@ export default function ThreadGitArcProposalList({
         key={`accepted:${bucket}`}
         title={title}
       >
-        {entries.map(({ row }) => row())}
+        {acceptedRows(entries)}
       </ThreadGitArcCommitGroup>
     ))),
     ...(foldedLayers.length ? layerRows.slice(0, visibleLayerEnd) : layerRows),

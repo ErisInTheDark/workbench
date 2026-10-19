@@ -5,8 +5,9 @@
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  DaemonWorkspaceObserveSchema, DaemonWorkspaceRetargetSchema, RETARGETABLE_QUERY_KINDS, WorkspaceReleaseSchema, daemonObservationShape,
-  type DaemonWorkspaceObserve, type DaemonWorkspaceObservation, type DaemonWorkspaceRetarget,
+  DaemonWorkspaceObserveSchema, DaemonWorkspaceRetargetSchema, RETARGETABLE_QUERY_KINDS, WorkspaceReleaseSchema,
+  applyThreadSummariesPatch, daemonObservationShape,
+  type DaemonWorkspaceObserve, type DaemonWorkspaceObservation, type DaemonWorkspaceQuery, type DaemonWorkspaceRetarget,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { LocatedThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
 import type WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
@@ -73,6 +74,14 @@ function archivedRows(sidebar: WorkbenchThreadSidebarSnapshot, limit: number) {
   const archived = sidebar.entries.filter(entry => entry.entryKind === "thread" && entry.metadata.archived)
     .sort((left, right) => right.activityAt - left.activityAt);
   return { total: archived.length, rows: archived.slice(0, limit).map(entry => projectSidebarRow(entry)) };
+}
+
+/** Thread observers read questionnaire history through its own paged read, so the family value leaves it out. */
+function observedThreadEntry(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadSidebarEntry {
+  const activityAt = coarseActivity(entry.activityAt);
+  if (entry.entryKind === "draft") return { ...entry, activityAt };
+  const { questionnaireHistory: _history, ...rest } = entry;
+  return { ...rest, activityAt };
 }
 
 function replaceProject<Item extends { projectId: string }>(items: readonly Item[], next: Item) {
@@ -318,11 +327,15 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     if (!observation || observation.request.generation !== request.generation) {
       throw new Error("Workspace observation to retarget is not open.");
     }
-    const kind = request.query.kind;
-    if (observation.request.query.kind !== kind || !RETARGETABLE_QUERY_KINDS.has(kind)) {
+    const current = observation.request.query;
+    const query: DaemonWorkspaceQuery | null = !("patch" in request) ? request.query
+      : current.kind === "threadSummaries"
+        ? { kind: "threadSummaries", threadIds: applyThreadSummariesPatch(current.threadIds, request.patch) } : null;
+    const kind = query?.kind;
+    if (!query || current.kind !== kind || !RETARGETABLE_QUERY_KINDS.has(kind)) {
       throw new Error("Only thread summary batches and project selections or rows can be retargeted.");
     }
-    observation.request = request;
+    observation.request = { subscriptionId: request.subscriptionId, generation: request.generation, query };
     if (kind === "projectSelection") this.updateDemand?.refresh();
     else if (kind === "threadSummaries") this.readSummaries(observation);
     // Rows already held for projects that stay selected are kept, so the change ships as a delta.
@@ -827,7 +840,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
           const runtime = await this.familyRuntime(observation, data.entries);
           if (!this.active(observation)) return;
           this.update(observation, { kind: "thread", phase: "current", failure: null, runtime,
-            data: { ...data, entries: data.entries.map(entry => ({ ...entry, activityAt: coarseActivity(entry.activityAt) })) } });
+            data: { ...data, entries: data.entries.map(observedThreadEntry) } });
         } catch (error) {
           if (!this.active(observation)) return;
           const message = failure(error);

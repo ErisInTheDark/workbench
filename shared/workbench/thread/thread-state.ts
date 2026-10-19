@@ -28,6 +28,7 @@
  * - WorkbenchComposerProfileSlotSchema: strict target slot contract.
  * - WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema and state types: re-export composer profile contracts.
  * - WorkbenchComposerProfileSlotInputSchema: unresolved thread references accepted at profile RPC ingress.
+ * - WorkbenchThreadGitCommitRefSchema/workbenchThreadGitCommitKey: the per-commit facts a thread entry carries, and their stable key.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchThreadGitCommitSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema: current project and grouped sidebar facts.
  * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order.
@@ -316,6 +317,13 @@ export const WorkbenchThreadGitCommitSchema = z.object({
   title: z.string(),
 }).strict();
 export type WorkbenchThreadGitCommit = z.infer<typeof WorkbenchThreadGitCommitSchema>;
+/** What a thread's entry carries per accepted commit: enough to count and group it; details load on demand. */
+export const WorkbenchThreadGitCommitRefSchema = WorkbenchThreadGitCommitSchema.pick({
+  committedAt: true, commitSha: true, historyIndex: true, rootId: true,
+}).strict();
+export type WorkbenchThreadGitCommitRef = z.infer<typeof WorkbenchThreadGitCommitRefSchema>;
+export const workbenchThreadGitCommitKey = (commit: Pick<WorkbenchThreadGitCommitRef, "commitSha" | "rootId">) =>
+  `${commit.rootId}\0${commit.commitSha}`;
 
 /** Own sealed stack layers, bottom first; proposals listed here render inside their layer. Absent means none. */
 const WorkbenchGitArcStackLayersSchema = z.array(z.object({
@@ -524,7 +532,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   entryKind: z.literal("thread"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
-  gitCommits: z.array(WorkbenchThreadGitCommitSchema).optional(),
+  gitCommits: z.array(WorkbenchThreadGitCommitRefSchema).optional(),
   identity: ThreadIdentitySchema,
   /** The app draft launch that created this thread, while the daemon remembers it; that draft lists in its place until accepted. */
   launchId: CanonicalUuidSchema.optional(),
@@ -545,7 +553,7 @@ const SubagentEntryBaseSchema = SidebarCommonSchema.extend({
   entryKind: z.literal("subagent"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
-  gitCommits: z.array(WorkbenchThreadGitCommitSchema).optional(),
+  gitCommits: z.array(WorkbenchThreadGitCommitRefSchema).optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   name: z.string().trim().min(1),

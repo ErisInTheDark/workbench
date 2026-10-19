@@ -15,6 +15,7 @@
  * - WorkbenchThreadSteerTargetSchema/WorkbenchThreadSteerTarget: one held steer to resend or dismiss.
  * - WorkbenchThreadShellTargetSchema/WorkbenchThreadShellTarget: one running wb shell item for the user to stop.
  * - WorkbenchThreadHistoryReadSchema: thread history read, optionally narrowed to some turns.
+ * - WorkbenchThreadGitCommitsReadSchema: accepted-commit details for named commit refs.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
  * - WorkbenchThreadPageResult/WorkbenchThreadPageResultSchema: WB page and domain-history facts.
  * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry; actions route by thread unless they name another route.
@@ -30,7 +31,10 @@ import { WorkbenchMessageContextSchema, WorkbenchUserInputSchema } from "../prov
 import { WorkbenchThreadGoalObjectiveSchema, WorkbenchThreadGoalSchema } from "./thread-goal.ts";
 import { WorkbenchThreadTodoSchema, WorkbenchThreadTodoTextSchema } from "./thread-todo.ts";
 import { WORKBENCH_APPROVAL_OUTCOMES, type WorkbenchApprovalOutcomeEntry } from "../provider/provider-approval.ts";
-import { WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema } from "./thread-state.ts";
+import {
+  WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema,
+  WorkbenchThreadGitCommitRefSchema, WorkbenchThreadGitCommitSchema,
+} from "./thread-state.ts";
 import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
 import { VIS_MAX_ANSWER_LENGTH } from "../vis/vis-contract.ts";
 
@@ -200,6 +204,10 @@ const browseHistory = z.object({
 export const WorkbenchThreadHistoryReadSchema = WorkbenchThreadTargetSchema.extend({
   turnIds: z.array(z.string().min(1)).min(1).max(50).optional(),
 });
+/** Accepted-commit details for the refs one age group shows. */
+export const WorkbenchThreadGitCommitsReadSchema = WorkbenchThreadTargetSchema.extend({
+  commits: z.array(WorkbenchThreadGitCommitRefSchema.pick({ commitSha: true, rootId: true })).min(1).max(5_000),
+});
 /** `turnIds` is present only when the data covers just those turns; absent means the whole thread. */
 const historyResult = <Entry extends z.ZodTypeAny>(entry: Entry) => z.object({
   data: z.array(entry), turnIds: z.array(z.string()).optional(),
@@ -211,6 +219,7 @@ export const workbenchThreadActions = {
   "thread/steers/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(steerHistory) },
   "thread/browse/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(browseHistory) },
   "thread/approvals/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(approvalOutcome) },
+  "thread/git-commits/read": { params: WorkbenchThreadGitCommitsReadSchema, result: z.object({ data: z.array(WorkbenchThreadGitCommitSchema) }) },
   // Browser creation uses saved-draft launch, not daemon thread creation.
   "thread/create": { params: WorkbenchThreadCreateSchema, result: WorkbenchThreadPayloadSchema, route: "app" },
   "thread/metadata/read": { params: WorkbenchThreadTargetSchema, result: WorkbenchThreadPayloadSchema },

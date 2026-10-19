@@ -16,7 +16,7 @@ import {
 import type {
   WorkbenchGitArcLifecycleState,
   WorkbenchHarnessId,
-  WorkbenchThreadGitCommit,
+  WorkbenchThreadGitCommitRef,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import PrimaryButton from "../../ui/PrimaryButton";
@@ -45,7 +45,7 @@ export interface ThreadGitArcWorkProps {
   commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
-  history?: readonly WorkbenchThreadGitCommit[];
+  history?: readonly WorkbenchThreadGitCommitRef[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;

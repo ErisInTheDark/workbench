@@ -100,6 +100,7 @@ class WorkbenchDaemonClient {
       steers: (params: WorkbenchDaemonParams<"thread/steers/read">) => this.request("thread/steers/read", params),
       browse: (params: WorkbenchDaemonParams<"thread/browse/read">) => this.request("thread/browse/read", params),
       approvals: (params: WorkbenchDaemonParams<"thread/approvals/read">) => this.request("thread/approvals/read", params),
+      gitCommits: (params: WorkbenchDaemonParams<"thread/git-commits/read">) => this.request("thread/git-commits/read", params),
     },
     questionnaire: {
       respond: (params: WorkbenchDaemonParams<"questionnaire/respond">) => this.request("questionnaire/respond", params),

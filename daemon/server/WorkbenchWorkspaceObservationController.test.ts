@@ -9,7 +9,7 @@ import type { WorkbenchThreadIdentityRecord } from "./database/thread-identity/w
 import WorkbenchWorkspaceObservationController, { type DaemonObservationChange } from "./WorkbenchWorkspaceObservationController";
 import { applyObservationDelta, describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import { daemonObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
-import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchQuestionnaireHistoryEntrySchema, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { InstallationUpdate } from "workbench-shared/workbench/installation-update";
 import { createThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
 import WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
@@ -339,7 +339,9 @@ test("a thread summary batch reads unknown threads, retargets as deltas, and fol
   assert.ok(grown.kind === "threadSummaries" && f.updates.at(-1)?.change, "a retarget publishes a delta, never a fresh value");
   assert.equal(grown.summaries[firstId], loaded.summaries[firstId], "kept threads keep their value");
 
-  retarget([secondId]);
+  // An id patch lands on the ids the batch already holds.
+  f.owner.retarget("connection", { subscriptionId: opened.subscriptionId, generation: opened.generation,
+    patch: { kind: "threadSummaries", add: [], remove: [ThreadReferenceSchema.parse(firstId)] } });
   const shrunk = f.updates.at(-1)!.value;
   assert.ok(shrunk.kind === "threadSummaries");
   assert.deepEqual(Object.keys(shrunk.summaries), [secondId]);
@@ -572,6 +574,27 @@ test("a thread family's runtime is one batched read, and releasing during it pub
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(runtimeReads.length, 1);
   assert.equal(f.updates.some(update => update.value.kind === "thread" && update.value.phase === "current"), false);
+});
+
+test("thread observers get the family without questionnaire history, which has its own paged read", async context => {
+  const history = [WorkbenchQuestionnaireHistoryEntrySchema.parse({
+    itemId: null, requestKey: "asked", turnId: "turn", threadId, resolvedAt: 1,
+    insertAfterItemId: null, insertAfterItemIndex: null, response: { answers: {} },
+    request: { id: "asked", submitLabel: "", summary: "", title: "",
+      questions: [{ allowOther: false, header: "", id: "q", isSecret: false, options: [], question: "?" }] },
+  })];
+  const entries = [thread(0, { questionnaireHistory: history }), thread(1)];
+  const f = fixture(context, { runtime: { readMany: async () => new Map(), readTokenUsage: async () => null, subscribe: () => () => {} } });
+  f.owners.identities.findThread = () => ({ threadId, projectId: a, projectRoot: "C:/a", bindings: [] });
+  f.owners.threads.readWorkspaceThread = async request => ({
+    entries, error: null, freshness: "fresh", projectId: a, revision: 1, subscriptionId: request.subscriptionId,
+    target: { kind: "provider", threadId, harness: "codex" }, updateKind: "threadObservation", version: 2,
+  });
+  const observation = f.observe({ kind: "thread", projectId: a, threadId: ThreadReferenceSchema.parse(threadId) });
+  const current = await f.wait(value => value.subscriptionId === observation.subscriptionId && value.phase === "current");
+  assert.ok(current.kind === "thread" && current.data);
+  assert.deepEqual(current.data.entries.map(entry => entry.title), entries.map(entry => entry.title));
+  assert.ok(current.data.entries.every(entry => !("questionnaireHistory" in entry)));
 });
 
 test("a failed refresh retains previous rows and waits for a new fact instead of retrying itself", async context => {

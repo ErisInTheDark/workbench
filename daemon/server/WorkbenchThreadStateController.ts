@@ -6,7 +6,7 @@
  * - WorkbenchThreadGitArcSnapshot: project Git arc projection.
  * - WorkbenchThreadClaimContext: thread-owned claim context.
  * - WorkbenchObservedLifecycleEvent: identity-owned provider lifecycle input.
- * - default WorkbenchThreadStateController: coordinate admission, provider observation, cross-project operations, publication, and owned project stores.
+ * - default WorkbenchThreadStateController: coordinate admission, provider observation, cross-project operations, publication, owned project stores, and on-demand accepted-commit details.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { createHash } from "node:crypto";
@@ -65,6 +65,7 @@ import {
   isWorkbenchSidebarThreadCompletionAvailable,
   reduceWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
+  workbenchThreadGitCommitKey,
   type WorkbenchLifecycleEvent,
   type WorkbenchComposerProfileSelectionState,
   type WorkbenchDurableQuestionnaire,
@@ -1593,10 +1594,19 @@ export default class WorkbenchThreadStateController {
     const history = new Map((await this.options.threadStateStore.readGitCommits(threadIds)).map(({ commits, threadId }) => [threadId, commits]));
     if (!history.size) return [...entries];
     for (const [threadId, commits] of history) this.backfillGitCommitTimes(projectId, state, threadId, commits);
+    // Entries carry refs to count and group commits; `readGitCommitDetails` serves the rest when a group opens.
     return entries.map(entry => {
-      const gitCommits = entry.entryKind === "draft" ? undefined : history.get(entry.identity.threadId);
-      return gitCommits ? { ...entry, gitCommits } : entry;
+      const commits = entry.entryKind === "draft" ? undefined : history.get(entry.identity.threadId);
+      return commits ? { ...entry, gitCommits: commits.map(({ committedAt, commitSha, historyIndex, rootId }) =>
+        ({ ...(committedAt ? { committedAt } : {}), commitSha, historyIndex, rootId })) } : entry;
     });
+  }
+
+  /** Full commits for the requested keys of one thread's accepted history; unknown keys are left out. */
+  async readGitCommitDetails(threadId: WorkbenchThreadId, keys: readonly Pick<WorkbenchThreadGitCommit, "commitSha" | "rootId">[]) {
+    const wanted = new Set(keys.map(workbenchThreadGitCommitKey));
+    const [history] = await this.options.threadStateStore.readGitCommits([threadId]);
+    return (history?.commits ?? []).filter(commit => wanted.has(workbenchThreadGitCommitKey(commit)));
   }
 
   /**

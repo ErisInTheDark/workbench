@@ -80,6 +80,7 @@ function fixture(providerWarning?: string) {
     state: {
       getCanonicalThreadEntry: async () => null,
       listPendingQuestionnaires: () => [],
+      readGitCommitDetails: unused,
       handleRequest: async (connectionId, request) => {
         connections.push(connectionId);
         mutations.push(request);
