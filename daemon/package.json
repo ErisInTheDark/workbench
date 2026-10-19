@@ -18,7 +18,7 @@
     "@opencode/plugin": "2.0.32",
     "@streamparser/json": "0.0.26",
     "better-sqlite3": "13.0.3",
-    "browse": "^0.9.1",
+    "browse": "0.9.1",
     "eventsource-parser": "4.1.0",
     "js-tiktoken": "1.0.21",
     "tsx": "4.23.13",

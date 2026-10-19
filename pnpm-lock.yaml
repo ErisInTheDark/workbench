@@ -330,7 +330,7 @@ importers:
         specifier: 13.0.3
         version: 13.0.3
       browse:
-        specifier: ^0.9.1
+        specifier: 0.9.1
         version: 0.9.1(bufferutil@4.1.0)(playwright-core@1.63.0)(supports-color@8.1.1)
       eventsource-parser:
         specifier: 4.1.0
