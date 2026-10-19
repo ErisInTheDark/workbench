@@ -2,8 +2,11 @@
  * Exports:
  * - WORKBENCH_APP_NETWORK_SOCKET_PATH: the app workspace upgrade route.
  * - WorkbenchAppNetworkEventSchema/WorkbenchAppNetworkEvent: validated workspace notifications.
+ * - conformWorkbenchAppNetworkEvent: repair envelopes and return repaired transcript/delta payloads.
  */
 import { z } from "zod";
+import { conformToZodSchema, type ZodSchemaRepair } from "../workbench/zod-schema-conformer";
+import { conformWorkspaceObservationDelta } from "../workbench/workspace/workspace-observation-conformance";
 import { WorkspaceObservationDeltaSchema, WorkspaceTranscriptStateSchema } from "../workbench/workspace/workspace-observation";
 import { VoiceSessionEventSchema } from "../workbench/voice/voice-session-contract";
 import { isWorkbenchPublicNotification, type WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation";
@@ -37,3 +40,28 @@ export const WorkbenchAppNetworkEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("mcp-sign-in"), daemonId: DaemonIdSchema, outcome: z.enum(["signedIn", "failed"]) }).strict(),
 ]);
 export type WorkbenchAppNetworkEvent = z.infer<typeof WorkbenchAppNetworkEventSchema>;
+
+export function conformWorkbenchAppNetworkEvent(value: unknown): ZodSchemaRepair<WorkbenchAppNetworkEvent> {
+  const envelope = conformToZodSchema(z.looseObject({ kind: z.string() }), value);
+  if (envelope.success === false) return {
+    success: false, repairedPaths: envelope.repairedPaths, discardedPaths: envelope.discardedPaths,
+  };
+  const event = envelope.data;
+  if (event.kind === "workspaceDelta") {
+    const delta = conformWorkspaceObservationDelta(event.delta);
+    const repairedPaths = delta.repairedPaths.map(path => ["delta", ...path]);
+    const discardedPaths = delta.discardedPaths.map(path => ["delta", ...path]);
+    if (!delta.success) return { success: false, repairedPaths, discardedPaths };
+    const result = conformToZodSchema(WorkbenchAppNetworkEventSchema, { ...event, delta: delta.data });
+    return { ...result, repairedPaths: [...repairedPaths, ...result.repairedPaths], discardedPaths };
+  }
+  if (event.kind === "transcriptSnapshot" || event.kind === "transcriptStream") {
+    const transcript = event.kind === "transcriptSnapshot"
+      ? conformWorkbenchTranscriptUpdated(event.data) : conformWorkbenchTranscriptStreamed(event.data);
+    const repairedPaths = transcript.repairedPaths.map(path => ["data", ...path]);
+    if (!("data" in transcript)) return { success: false, repairedPaths, discardedPaths: transcript.issues.map(issue => ["data", ...issue.path]) };
+    const result = conformToZodSchema(WorkbenchAppNetworkEventSchema, { ...event, data: transcript.data });
+    return { ...result, repairedPaths: [...repairedPaths, ...result.repairedPaths] };
+  }
+  return conformToZodSchema(WorkbenchAppNetworkEventSchema, value);
+}

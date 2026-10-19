@@ -4,13 +4,14 @@
  * - ObservationShape/ObservationShapeNode: declare an observation's validated fields, nested objects, records and keyed collections.
  * - observationShape: helpers that build shape nodes (`object`, `record`, `keyed`).
  * - diffObservationValue: smallest structured delta from one value to the next; null when nothing changed.
- * - applyObservationDelta: apply a delta, validating every touched field and item; throws on invalid deltas.
+ * - applyObservationDelta: apply non-lossy conformed fields/items, reporting repairs and rejecting invalid operations.
  * - describeObservationDelta: bounded log summary naming collections, keys and changed fields, never values.
  * - observationDeltaSubjects: the thread/project ids a delta is about and its changed field names, for subject-grouped logs.
  * - measureObservationDelta: count changed items so senders can name oversized updates.
  */
 import { z } from "zod";
 import { areDeeplyEqual } from "../deep-equality";
+import { conformToZodSchema } from "../zod-schema-conformer";
 
 type Fields = Record<string, unknown>;
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
@@ -188,20 +189,22 @@ function orderMoves(base: readonly string[], target: readonly string[]) {
   return target.flatMap((itemKey, index) => stable.has(index) ? [] : [{ key: itemKey, after: target[index - 1] ?? null }]);
 }
 
-export function applyObservationDelta<Value extends object>(value: Value, delta: ObservationDelta, shape: ObservationShape = {}): Value {
-  return applyFields(value as Fields, delta, shape, "value") as Value;
+export function applyObservationDelta<Value extends object>(value: Value, delta: ObservationDelta, shape: ObservationShape = {},
+  onRepair?: (paths: PropertyKey[][]) => void): Value {
+  const repairedPaths: PropertyKey[][] = [];
+  const next = applyFields(value as Fields, delta, shape, "value", repairedPaths) as Value;
+  if (repairedPaths.length) onRepair?.(repairedPaths);
+  return next;
 }
 
-function validateField(shape: ObservationShape, field: string, value: unknown, path: string) {
+function validateField(shape: ObservationShape, field: string, value: unknown, path: string, repairs: PropertyKey[][]) {
   if (!shape.schema) return value;
   const fieldSchema = shape.schema.shape[field];
   if (!fieldSchema) throw new Error(`Observation delta sets unknown field ${path}.${field}.`);
-  const parsed = fieldSchema.safeParse(value);
-  if (!parsed.success) throw new Error(`Observation delta set an invalid ${path}.${field}.`);
-  return parsed.data;
+  return parseItem(fieldSchema, value, `${path}.${field}`, repairs);
 }
 
-function applyFields(target: Fields, delta: ObservationDelta, shape: ObservationShape, path: string): Fields {
+function applyFields(target: Fields, delta: ObservationDelta, shape: ObservationShape, path: string, repairs: PropertyKey[][]): Fields {
   const next: Fields = { ...target };
   for (const field of delta.unset ?? []) {
     if (shape.schema && !shape.schema.shape[field]) throw new Error(`Observation delta unsets unknown field ${path}.${field}.`);
@@ -210,8 +213,8 @@ function applyFields(target: Fields, delta: ObservationDelta, shape: Observation
   for (const [field, value] of Object.entries(delta.set ?? {})) {
     const node = shape.fields?.[field];
     next[field] = node?.kind === "record" && isFields(value)
-      ? Object.fromEntries(Object.entries(value).map(([recordKey, item]) => [recordKey, parseItem(node.value, item, `${path}.${field}`)]))
-      : validateField(shape, field, value, path);
+      ? Object.fromEntries(Object.entries(value).map(([recordKey, item]) => [recordKey, parseItem(node.value, item, `${path}.${field}.${recordKey}`, repairs)]))
+      : validateField(shape, field, value, path, repairs);
   }
   for (const [field, nested] of Object.entries(delta.objects ?? {})) {
     const node = shape.fields?.[field];
@@ -219,32 +222,34 @@ function applyFields(target: Fields, delta: ObservationDelta, shape: Observation
     if (!node || node.kind === "keyed") throw new Error(`Observation delta patches unknown object ${path}.${field}.`);
     if (!isFields(current)) throw new Error(`Observation delta patches missing object ${path}.${field}.`);
     if (node.kind === "record") {
-      const record = applyFields(current, nested, recordShape(node, current), `${path}.${field}`);
+      const record = applyFields(current, nested, recordShape(node, current), `${path}.${field}`, repairs);
       for (const recordKey of [...Object.keys(nested.set ?? {}), ...Object.keys(nested.objects ?? {})]) {
-        record[recordKey] = parseItem(node.value, record[recordKey], `${path}.${field}`);
+        record[recordKey] = parseItem(node.value, record[recordKey], `${path}.${field}.${recordKey}`, repairs);
       }
       next[field] = record;
     } else {
-      const applied = applyFields(current, nested, node.shape, `${path}.${field}`);
-      next[field] = node.shape.validate ? parseItem(node.shape.validate, applied, `${path}.${field}`) : applied;
+      const applied = applyFields(current, nested, node.shape, `${path}.${field}`, repairs);
+      next[field] = node.shape.validate ? parseItem(node.shape.validate, applied, `${path}.${field}`, repairs) : applied;
     }
   }
   for (const [field, keyed] of Object.entries(delta.collections ?? {})) {
     const node = shape.fields?.[field];
     const current = next[field];
     if (node?.kind !== "keyed" || !Array.isArray(current)) throw new Error(`Observation delta patches unknown collection ${path}.${field}.`);
-    next[field] = applyKeyed(current, keyed, node, `${path}.${field}`);
+    next[field] = applyKeyed(current, keyed, node, `${path}.${field}`, repairs);
   }
   return next;
 }
 
-function parseItem(schema: z.ZodType, item: unknown, path: string) {
-  const parsed = schema.safeParse(item);
-  if (!parsed.success) throw new Error(`Observation delta carried an invalid item in ${path}.`);
+function parseItem(schema: z.ZodType, item: unknown, path: string, repairs: PropertyKey[][]) {
+  const parsed = conformToZodSchema(schema, item);
+  if (!parsed.success || parsed.discardedPaths.length) throw new Error(`Observation delta carried an invalid item in ${path}.`);
+  repairs.push(...parsed.repairedPaths.map(repair => [path, ...repair]));
   return parsed.data;
 }
 
-function applyKeyed(items: readonly unknown[], delta: KeyedDelta, node: Extract<ObservationShapeNode, { kind: "keyed" }>, path: string) {
+function applyKeyed(items: readonly unknown[], delta: KeyedDelta, node: Extract<ObservationShapeNode, { kind: "keyed" }>, path: string,
+  repairs: PropertyKey[][]) {
   const keyOf = node.key as (item: unknown) => string;
   const byKey = new Map(items.map(item => [keyOf(item), item]));
   const order = items.map(keyOf);
@@ -254,13 +259,13 @@ function applyKeyed(items: readonly unknown[], delta: KeyedDelta, node: Extract<
     const current = byKey.get(itemKey);
     if (!isFields(current)) throw new Error(`Observation delta updates missing ${path} item.`);
     const shape = node.shape ?? {};
-    const merged = applyFields(current, itemDelta, shape, path);
-    byKey.set(itemKey, shape.schema ? merged : parseItem(node.item, merged, path));
+    const merged = applyFields(current, itemDelta, shape, path, repairs);
+    byKey.set(itemKey, parseItem(node.item, merged, path, repairs));
   }
   const added: string[] = [];
   for (const { key: itemKey, item } of delta.add ?? []) {
     if (byKey.has(itemKey)) throw new Error(`Observation delta adds a duplicate ${path} item.`);
-    const parsed = parseItem(node.item, item, path);
+    const parsed = parseItem(node.item, item, path, repairs);
     if (keyOf(parsed) !== itemKey) throw new Error(`Observation delta added a ${path} item under the wrong key.`);
     byKey.set(itemKey, parsed);
     added.push(itemKey);

@@ -93,6 +93,21 @@ test("deltas that set invalid items or unknown fields are rejected", () => {
   assert.throws(() => applyObservationDelta(before, { collections: { projects: { remove: ["missing"] } } }, shape), /missing/);
 });
 
+test("delta item drift is repaired without accepting discarded edits", () => {
+  const before = value([]);
+  const repairs: PropertyKey[][] = [];
+  const delta = { collections: { projects: { update: [{ key: "p1", delta: {
+    collections: { rows: { add: [{ key: "a", item: { id: "a", title: "kept", activityAt: 1, future: true } }] } },
+  } }] } } };
+  const after = applyObservationDelta(before, delta, shape, paths => repairs.push(...paths));
+  assert.deepEqual(after.projects[0]?.rows, [{ id: "a", title: "kept", activityAt: 1 }]);
+  assert.ok(repairs.some(path => path.at(-1) === "future"));
+  assert.throws(() => applyObservationDelta(before, { collections: { projects: { update: [{ key: "p1", delta: {
+    set: { rows: [{ id: "a", title: "kept", activityAt: 1, tags: ["valid", 4] }] },
+  } }] } } }, shape), /invalid/u);
+  assert.deepEqual(before.projects[0]?.rows, []);
+});
+
 test("summaries name collections, keys and changed fields without values", () => {
   const before = value(rows(3));
   const after: Value = { ...before, projects: [{ ...before.projects[0]!,

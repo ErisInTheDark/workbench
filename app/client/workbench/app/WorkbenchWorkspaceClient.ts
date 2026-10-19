@@ -5,11 +5,12 @@
  * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection.
  */
 import {
-  WorkspaceQuerySchema, WorkspaceObservationSchema, workspaceObservationShape,
+  WorkspaceQuerySchema, workspaceObservationShape,
   type WorkspaceQuery, type WorkspaceObservation, type WorkspaceObservationDelta,
   type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import { conformWorkspaceObservation, describeObservationRepairs } from "workbench-shared/workbench/workspace/workspace-observation-conformance";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
@@ -378,9 +379,11 @@ export default class WorkbenchWorkspaceClient {
       method: "workspace/observe", params: { subscriptionId: interest.id, generation, query: interest.query },
     }, { signal: interest.cancellation.signal }).then(result => {
       if (!this.active(interest) || !this.rpc.connected || generation !== this.rpc.getSnapshot().generation) return;
-      const parsed = WorkspaceObservationSchema.safeParse(result);
+      const parsed = conformWorkspaceObservation(result);
+      if (parsed.repairedPaths.length) {
+        console.warn(`Workspace ${interest.query.kind} response repaired: ${describeObservationRepairs(parsed.repairedPaths)}`);
+      }
       if (!parsed.success) {
-        reportClientSchemaError("Rejected workspace query response", parsed.error);
         throw new Error("Workspace query response was invalid.");
       }
       this.accept(parsed.data);
@@ -445,7 +448,11 @@ export default class WorkbenchWorkspaceClient {
     }
     let next: WorkspaceObservation;
     try {
-      next = { ...applyObservationDelta(raw, delta.delta, workspaceObservationShape(raw.kind)), revision: delta.revision };
+      const applied = applyObservationDelta(raw, delta.delta, workspaceObservationShape(raw.kind),
+        paths => console.warn(`Workspace ${raw.kind} delta repaired: ${describeObservationRepairs(paths)}`));
+      const conformed = conformWorkspaceObservation(applied);
+      if (!conformed.success || conformed.discardedPaths.length) throw new Error("The workspace delta discarded invalid data.");
+      next = { ...conformed.data, revision: delta.revision };
     } catch (error) {
       this.resync(interest, error instanceof Error ? error.message.slice(0, 300) : "invalid delta");
       return;
@@ -467,6 +474,7 @@ export default class WorkbenchWorkspaceClient {
     if (!interest || !this.rpc.connected || generation !== this.rpc.getSnapshot().generation) return;
     this.publish(interest, { ...interest.snapshot, phase: interest.snapshot.value ? "stale" : "failed",
       failure: "Workspace query update was invalid." });
+    this.resync(interest, "the app published an invalid delta");
   }
 
   private publish(interest: Interest, snapshot: WorkspaceQuerySnapshot) {

@@ -221,6 +221,94 @@ test("app deltas update the exact retained value and a gap re-observes instead o
   assert.match(warnings.join("\n"), /runtime observation resync/u);
 });
 
+test("snapshot repairs preserve sibling rows but a lossy delta retains its base and requests a fresh value", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const handle = fixture.workspace.observe({ kind: "runtime" });
+  const request = await socket.request("workspace/observe");
+  const scope = { scope: "client:workspace", description: "workspace", dependantScopes: [], destructive: false };
+  socket.reply(request, {
+    ...runtime, subscriptionId: request.params.subscriptionId, generation: request.params.generation, revision: 1,
+    data: { ...runtime.data, reloadDirt: { ...runtime.data.reloadDirt,
+      dirtyScopes: [{ ...scope, future: "private-value" }, { ...scope, scope: 3 }] } },
+  });
+  await fixture.workspace.waitFor(handle);
+  assert.deepEqual(handle.getSnapshot().value?.data?.reloadDirt.dirtyScopes, [scope]);
+  const address = { subscriptionId: request.params.subscriptionId, generation: request.params.generation,
+    kind: "runtime", baseRevision: 1, revision: 2 };
+  socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+    kind: "workspaceDelta", delta: { ...address, future: true, delta: {
+      set: { data: { ...runtime.data, reloadDirt: { ...runtime.data.reloadDirt, dirtyScopes: [{ ...scope, future: true }] } } },
+    } },
+  }) }));
+  assert.equal(handle.getSnapshot().value?.revision, 2);
+  assert.deepEqual(handle.getSnapshot().value?.data?.reloadDirt.dirtyScopes, [scope]);
+  const accepted = handle.getSnapshot().value;
+  const offset = socket.sent.length;
+  socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+    kind: "workspaceDelta", delta: { ...address, baseRevision: 2, revision: 3, delta: {
+      set: { data: { ...runtime.data, reloadDirt: { ...runtime.data.reloadDirt, dirtyScopes: [{ ...scope, scope: 3 }] } } },
+    } },
+  }) }));
+  assert.equal(handle.getSnapshot().value, accepted);
+  const reobserved = await socket.request("workspace/observe", offset);
+  assert.equal(reobserved.params.subscriptionId, request.params.subscriptionId);
+  assert.ok(warnings.some(message => message.includes("dirtyScopes")));
+  assert.ok(!warnings.join("\n").includes("private-value"));
+});
+
+test("app-state observations return conformed tables rather than the original predicate-accepted payload", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const handle = fixture.workspace.observe({ kind: "appState", browserStateId: null });
+  const request = await socket.request("workspace/observe");
+  socket.reply(request, {
+    kind: "appState", subscriptionId: request.params.subscriptionId, generation: request.params.generation,
+    revision: 1, phase: "current", failure: null,
+    data: { kind: "snapshot", daemonRegistrationId: "registration", revision: 4, oldestAvailableRevision: 0,
+      rows: { future: [{ secret: "private-value" }] } },
+  });
+  await fixture.workspace.waitFor(handle);
+  const data = handle.getSnapshot().value?.data;
+  assert.ok(data);
+  assert.equal(data.revision, 4);
+  assert.equal(data.daemonRegistrationId, "registration");
+  assert.equal(Object.hasOwn(data.rows, "future"), false);
+  assert.ok(Object.keys(data.rows).length > 0);
+  assert.ok(warnings.some(message => message.includes("data.rows.future")));
+  assert.ok(!warnings.join("\n").includes("private-value"));
+  const offset = socket.sent.length;
+  socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+    kind: "workspaceDelta", delta: {
+      subscriptionId: request.params.subscriptionId, generation: request.params.generation,
+      kind: "appState", baseRevision: 1, revision: 2,
+      delta: { set: { data: { ...data, revision: 5, future: "private-value" } } },
+    },
+  }) }));
+  assert.equal(handle.getSnapshot().value?.revision, 2, "harmless app-state drift must not trigger a resync");
+  assert.equal(handle.getSnapshot().value?.data?.revision, 5);
+  assert.equal(Object.hasOwn(handle.getSnapshot().value?.data ?? {}, "future"), false);
+  assert.equal(socket.sent.length, offset);
+  const beforeLoss = handle.getSnapshot().value;
+  socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+    kind: "workspaceDelta", delta: {
+      subscriptionId: request.params.subscriptionId, generation: request.params.generation,
+      kind: "appState", baseRevision: 2, revision: 3,
+      delta: { set: { data: { ...data, revision: 6,
+        rows: { ...data.rows, globalPreferences: [{ key: "future-preference", revision: 6 }] } } } },
+    },
+  }) }));
+  assert.equal(handle.getSnapshot().value, beforeLoss, "dropping an unknown preference row requires a fresh baseline");
+  const reopened = await socket.request("workspace/observe", offset);
+  assert.equal(reopened.params.subscriptionId, request.params.subscriptionId);
+});
+
 test("replaced interest ignores a delayed acknowledgement and cancels its waiter", async context => {
   const fixture = createWorkspaceClientFixture();
   context.after(() => fixture.dispose());

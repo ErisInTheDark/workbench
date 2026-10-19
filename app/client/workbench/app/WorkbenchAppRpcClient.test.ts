@@ -26,6 +26,46 @@ test("an initial import warning reaches a later settings subscriber", async cont
   assert.deepEqual(observed, [1]);
 });
 
+test("repairable app event drift reaches late listeners as conformed data without exposing values", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+    kind: "presentation-import", future: "private-value",
+    status: { phase: "partial", scanned: 2, imported: 1, failed: 1, future: "private-value" },
+  }) }));
+  const observed: object[] = [];
+  fixture.rpc.onEvent(event => observed.push(event));
+  assert.deepEqual(observed, [{
+    kind: "presentation-import", status: { phase: "partial", scanned: 2, imported: 1, failed: 1 },
+  }]);
+  assert.ok(warnings.some(message => message.includes("status.future")));
+  assert.ok(!warnings.join("\n").includes("private-value"));
+});
+
+test("transcript event predicates deliver the repaired payload rather than the original object", async context => {
+  context.mock.method(console, "warn", () => {});
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const observed: object[] = [];
+  fixture.rpc.onEvent(event => observed.push(event));
+  for (const event of [
+    { kind: "transcriptSnapshot", data: {
+      subscriptionId: "transcript", stream: "workbench:transcript", snapshot: null,
+    } },
+    { kind: "transcriptStream", data: { subscriptionId: "transcript", update: { kind: "absent" } } },
+  ]) {
+    socket.dispatchEvent(new MessageEvent("message", {
+      data: JSON.stringify({ ...event, data: { ...event.data, future: "private-value" } }),
+    }));
+    assert.deepEqual(observed.at(-1), event);
+  }
+  assert.equal(observed.length, 2);
+});
+
 test("socket loss reports uncertain dispatch and reconnect never replays the mutation", async context => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   const fixture = createWorkspaceClientFixture();

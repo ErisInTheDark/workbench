@@ -3,8 +3,10 @@
  * - default WorkbenchAppRpcClient: own the early tab-level app RPC transport.
  */
 import { z } from "zod";
-import { WORKBENCH_APP_NETWORK_SOCKET_PATH, WorkbenchAppNetworkEventSchema,
+import { WORKBENCH_APP_NETWORK_SOCKET_PATH, conformWorkbenchAppNetworkEvent,
   type WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
+import { describeObservationRepairs } from "workbench-shared/workbench/workspace/workspace-observation-conformance";
 import type { WorkbenchAppRpcIntent } from "workbench-shared/http/workbench-app-rpc";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import WorkbenchRpcSocketClient, { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
@@ -43,10 +45,13 @@ export default class WorkbenchAppRpcClient {
     this.transport = transport;
     transport.onMessage(value => {
       if (this.lifetime.signal.aborted || !value || typeof value !== "object" || "id" in value) return;
-      const parsed = WorkbenchAppNetworkEventSchema.safeParse(value);
+      const parsed = conformWorkbenchAppNetworkEvent(value);
+      if (parsed.repairedPaths.length) {
+        console.warn(`Workbench app RPC ${parsed.success ? parsed.data.kind : "event"} repaired: ${describeObservationRepairs(parsed.repairedPaths)}`);
+      }
       if (!parsed.success) {
-        reportClientSchemaError("Rejected Workbench app RPC event", parsed.error);
-        const address = WorkspaceObservationAddress.safeParse(value);
+        console.warn("Workbench app RPC event could not be conformed.");
+        const address = conformToZodSchema(WorkspaceObservationAddress, value);
         if (address.success) for (const listener of this.invalidObservationListeners) {
           try { listener(address.data); }
           catch (error) { console.error("Workspace failure listener failed:", boundedListenerError(error)); }

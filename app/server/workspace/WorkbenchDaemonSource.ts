@@ -19,13 +19,15 @@ import {
   type WebSocketTrafficQuery, type WebSocketTrafficResult,
 } from "workbench-shared/process/WebSocketTrafficBuffer";
 import {
-  DaemonWorkspaceQuerySchema, DaemonWorkspaceObservationSchema, WorkspaceObservationDeltaSchema,
+  DaemonWorkspaceQuerySchema,
   daemonObservationShape, type WorkspaceObservationDelta,
   WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_RETARGET_METHOD, WORKSPACE_UPDATED_METHOD,
   type DaemonWorkspaceQuery, type DaemonWorkspaceObservation,
   type WorkspaceDaemonFact, type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import { conformDaemonWorkspaceObservation, conformWorkspaceObservationDelta, describeObservationRepairs } from "workbench-shared/workbench/workspace/workspace-observation-conformance";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   GIT_PEER_FETCH_REQUEST_METHOD, GIT_PEER_FETCH_RESULT_METHOD, GitPeerFetchRequestNotificationSchema,
   type GitPeerFetchOutcome, type GitPeerFetchQuestion,
@@ -183,11 +185,13 @@ export default class WorkbenchDaemonSource {
           return;
         }
         if (notification.method !== WORKSPACE_UPDATED_METHOD) return;
-        const parsed = DaemonWorkspaceObservationSchema.safeParse(notification.params);
+        const parsed = conformDaemonWorkspaceObservation(notification.params);
+        if (parsed.repairedPaths.length) {
+          this.options.warn(`Daemon ${parsed.success ? parsed.data.kind : "observation"} repaired: ${describeObservationRepairs(parsed.repairedPaths)}`);
+        }
         if (!parsed.success) {
-          reportClientSchemaError("Rejected daemon workspace observation", parsed.error);
           this.options.warn("Daemon workspace observation did not match its contract.");
-          const address = observationAddress.safeParse(notification.params);
+          const address = conformToZodSchema(observationAddress, notification.params);
           const interest = address.success ? this.interests.get(address.data.subscriptionId) : null;
           if (interest && address.success && address.data.generation === this.socket.getSnapshot().generation) {
             interest.failure = "The daemon published invalid observation data.";
@@ -489,9 +493,9 @@ export default class WorkbenchDaemonSource {
   }
 
   private receiveTranscript(notification: { method: string; params: unknown }) {
-    const address = z.object({ subscriptionId: z.uuid() }).safeParse(notification.params);
+    const address = conformToZodSchema(z.object({ subscriptionId: z.uuid() }), notification.params);
     if (!address.success) {
-      reportClientSchemaError("Rejected daemon transcript address", address.error);
+      this.options.warn("Daemon transcript notification has an invalid subscription address.");
       return;
     }
     const interest = address.success ? this.transcripts.get(address.data.subscriptionId) : null;
@@ -601,9 +605,13 @@ export default class WorkbenchDaemonSource {
     void this.request<DaemonWorkspaceObservation>(WORKSPACE_OBSERVE_METHOD, {
       subscriptionId: interest.subscriptionId, generation, query: interest.query,
     }, {}, { signal: interest.cancellation.signal }).then(value => {
-      const parsed = DaemonWorkspaceObservationSchema.safeParse(value);
+      if (this.disposed || this.interests.get(interest.subscriptionId) !== interest
+        || generation !== this.socket.getSnapshot().generation) return;
+      const parsed = conformDaemonWorkspaceObservation(value);
+      if (parsed.repairedPaths.length) {
+        this.options.warn(`Daemon ${interest.query.kind} response repaired: ${describeObservationRepairs(parsed.repairedPaths)}`);
+      }
       if (!parsed.success) {
-        reportClientSchemaError("Rejected daemon observation response", parsed.error);
         throw new Error("The daemon returned an invalid observation.");
       }
       this.accept(parsed.data);
@@ -639,12 +647,17 @@ export default class WorkbenchDaemonSource {
   }
 
   private receiveDelta(params: unknown) {
-    const parsed = WorkspaceObservationDeltaSchema.safeParse(params);
+    const parsed = conformWorkspaceObservationDelta(params);
+    if (parsed.repairedPaths.length) {
+      this.options.warn(`Daemon ${parsed.success ? parsed.data.kind : "delta"} repaired: ${describeObservationRepairs(parsed.repairedPaths)}`);
+    }
     if (!parsed.success) {
-      reportClientSchemaError("Rejected daemon workspace delta", parsed.error);
-      const address = observationAddress.safeParse(params);
+      const address = conformToZodSchema(observationAddress, params);
       const interest = address.success ? this.interests.get(address.data.subscriptionId) : null;
-      if (interest) this.resync(interest, "the daemon published an invalid delta");
+      if (interest && address.success && this.available
+        && address.data.generation === this.socket.getSnapshot().generation) {
+        this.resync(interest, "the daemon published an invalid delta");
+      }
       return;
     }
     const delta = parsed.data;
@@ -668,7 +681,11 @@ export default class WorkbenchDaemonSource {
     }
     let next: DaemonWorkspaceObservation;
     try {
-      next = { ...applyObservationDelta(raw, delta.delta, daemonObservationShape(raw.kind)), revision: delta.revision };
+      const applied = applyObservationDelta(raw, delta.delta, daemonObservationShape(raw.kind),
+        paths => this.options.warn(`Daemon ${raw.kind} delta repaired: ${describeObservationRepairs(paths)}`));
+      const conformed = conformDaemonWorkspaceObservation(applied);
+      if (!conformed.success || conformed.discardedPaths.length) throw new Error("The daemon delta discarded invalid data.");
+      next = { ...conformed.data, revision: delta.revision };
     } catch (error) {
       this.resync(interest, bounded(error));
       return;

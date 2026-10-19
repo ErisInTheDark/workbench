@@ -59,6 +59,51 @@ function fixture(transcriptReservoir?: WorkbenchTranscriptReservoir) {
   return { source, descriptor, created: created.promise, warnings };
 }
 
+test("daemon response and push repairs preserve valid sibling peers and isolate lossy deltas", async context => {
+  const f = fixture();
+  context.after(() => f.source.dispose());
+  const ready = Promise.withResolvers<void>();
+  const projectId = ProjectIdSchema.parse("folder");
+  const handle = f.source.observe({ kind: "branchPosition", projectId, peers: [] }, () => {
+    if (handle.getSnapshot().phase !== "pending") ready.resolve();
+  });
+  const socket = await f.created;
+  const opening = f.source.socket.connect(); socket.open(); await opening;
+  const request = await socket.request("workspace/observe");
+  const peer = { daemonId: f.descriptor.daemonId, projectId, tip: null, ahead: 1, behind: 0 };
+  const envelope = { kind: "branchPosition", subscriptionId: request.params.subscriptionId,
+    generation: request.params.generation, revision: 1, phase: "current", failure: null };
+  socket.notify({ id: request.id, result: { ...envelope, position: { branch: "main", head: null,
+    peers: [{ ...peer, future: "private-value" }, { ...peer, ahead: "bad" }] } } });
+  await ready.promise;
+  const first = handle.getSnapshot().value;
+  assert.ok(first?.kind === "branchPosition");
+  assert.deepEqual(first.position?.peers, [peer]);
+  socket.notify({ method: "workspace/updated", params: { ...envelope, revision: 2,
+    position: { branch: "main", head: null, peers: [{ ...peer, ahead: 2, future: true }] }, future: true } });
+  const accepted = handle.getSnapshot().value;
+  assert.ok(accepted?.kind === "branchPosition");
+  assert.deepEqual(accepted.position?.peers, [{ ...peer, ahead: 2 }]);
+  const beforeRetired = socket.sent.length;
+  socket.notify({ method: "workspace/delta", params: {
+    subscriptionId: request.params.subscriptionId, generation: request.params.generation! - 1,
+    kind: "branchPosition", baseRevision: 2, revision: 3, delta: "invalid",
+  } });
+  assert.equal(handle.getSnapshot().value, accepted);
+  assert.equal(socket.sent.length, beforeRetired, "a malformed retired delta must not resubscribe the current observation");
+  const offset = socket.sent.length;
+  socket.notify({ method: "workspace/delta", params: {
+    subscriptionId: request.params.subscriptionId, generation: request.params.generation,
+    kind: "branchPosition", baseRevision: 2, revision: 3,
+    delta: { set: { position: { branch: "main", head: null, peers: [{ ...peer, ahead: "bad" }] } } },
+  } });
+  assert.equal(handle.getSnapshot().value, accepted);
+  const reopened = await socket.request("workspace/observe", offset);
+  assert.equal(reopened.params.subscriptionId, request.params.subscriptionId);
+  assert.ok(f.warnings.some(message => message.includes("position.peers")));
+  assert.ok(!f.warnings.join("\n").includes("private-value"));
+});
+
 test("file observations retain their data through pending daemon facts", async context => {
   const f = fixture();
   context.after(() => f.source.dispose());
