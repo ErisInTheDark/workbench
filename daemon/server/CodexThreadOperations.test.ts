@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import CodexThreadOperations from "./CodexThreadOperations";
+import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
 import CodexStdioBridge from "./CodexStdioBridge";
 import type CodexAppServer from "./CodexAppServer";
 import type { JsonRpcRequest } from "./bridge-types";
@@ -20,6 +21,7 @@ import type { WorkbenchThreadReconcile } from "workbench-shared/workbench/thread
 
 async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object>, options: {
   injectContext?: (threadId: string, text: string, signal?: AbortSignal) => Promise<void>;
+  ensureInitialized?: () => Promise<void>;
   nativeQuestionnaireRequestKey?: string;
   workbenchQuestionnaireRequestKey?: string;
 } = {}) {
@@ -40,7 +42,7 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   const bridge = {
     injectAgentContext: options.injectContext ?? (async () => { assert.fail("Unexpected passive context"); }),
     reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
-    ensureInitialized: async () => {},
+    ensureInitialized: options.ensureInitialized ?? (async () => {}),
     handleServerRequest: async (request: JsonRpcRequest) => ({ id: request.id ?? null, result: await handle(request) }),
     canDeliverQuestionnaire: (requestedThreadId: string, requestKey: string) => (
       requestedThreadId === native.nativeThreadId
@@ -89,6 +91,19 @@ test("passive context resolves canonical identity without ordinary provider admi
   assert.equal(await fixture.operations.context.inject({ threadId: fixture.threadId, text: "accepted" }), "admitted");
   await assert.rejects(fixture.operations.context.inject({ threadId: fixture.threadId, text: "rejected" }), /provider rejected/u);
   assert.deepEqual(seen, ["accepted", "rejected"]);
+});
+
+test("creation that fails while Codex initializes is typed as not dispatched", async () => {
+  const fixture = await threadFixture(async () => assert.fail("thread/start must not be requested"), {
+    ensureInitialized: async () => { throw new Error("The previous Codex process has not retired."); },
+  });
+  await assert.rejects(fixture.operations.create({
+    cwd: "C:/project",
+    profile: { kind: "custom", settings: {
+      agentPath: null, agentSource: null, harness: "codex", model: "test", reasoningEffort: null, serviceTier: null,
+    } },
+  }), error => error instanceof WorkbenchThreadCreationNotDispatchedError
+    && error.message === "The previous Codex process has not retired.");
 });
 
 for (const fails of [false, true]) {

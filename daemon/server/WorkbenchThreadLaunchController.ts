@@ -15,9 +15,8 @@ import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseContro
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
-import WorkbenchThreadActionController, {
-  WorkbenchThreadCreationNotDispatchedError,
-} from "./WorkbenchThreadActionController";
+import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
+import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 
 export default class WorkbenchThreadLaunchController {
   private readonly active = new Map<string, Promise<WorkbenchThreadLaunchState>>();

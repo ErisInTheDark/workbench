@@ -1,13 +1,13 @@
 /*
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project, virtual-steer and transcript owners.
- * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
  * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze, virtual-steer routing and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness, WorkbenchSkillSummary } from "workbench-shared/types";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
+import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
 import {
   workbenchThreadActions, type WorkbenchThreadActionMap, type WorkbenchThreadCreate,
   type WorkbenchThreadMessage, type WorkbenchThreadMessageSubmitResult,
@@ -90,8 +90,6 @@ type Actions = {
     connectionId?: string,
   ) => Promise<WorkbenchThreadActionMap[Method]["result"]>;
 };
-
-export class WorkbenchThreadCreationNotDispatchedError extends Error {}
 
 export default class WorkbenchThreadActionController {
   /** Per-thread redelivery chain, so overlapping turn starts never send one stranded message twice. */

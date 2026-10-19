@@ -105,7 +105,9 @@ import type { CodexQuestionnairePort } from "./CodexQuestionnaireAdapter";
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
 import ProviderCompactionCompletionController from "./ProviderCompactionCompletionController";
 import CodexThreadWindowLoader, { type CodexThreadWindowStore } from "./CodexThreadWindowLoader";
-import type { WorkbenchProviderTranscriptReconcile } from "workbench-shared/workbench/provider/provider-thread";
+import {
+  WorkbenchThreadCreationNotDispatchedError, type WorkbenchProviderTranscriptReconcile,
+} from "workbench-shared/workbench/provider/provider-thread";
 import type CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
 import type { WorkbenchThreadPageReadParams } from "workbench-shared/workbench/thread/workbench-thread-page";
@@ -1617,21 +1619,28 @@ export default class CodexStdioBridge {
     log("daemon", `WS codex:thread/start phase (${fields.join(", ")})`);
   }
 
+  /** Until native `thread/start` is written, every failure is a definite non-dispatch; after it, the thread may exist. */
   private async createManagedThread(message: JsonRpcRequest) {
     this.traceThreadCreation(message.id, "queued");
-    return this.enqueueCommand(async () => {
-      this.traceThreadCreation(message.id, "dispatch");
-      try {
-        const response = await this.createThread!(
-          message, request => this.dispatchManagedProviderRequest(request, this.generation.signal), this.generation.signal,
-        );
+    let written = false;
+    const create = async (request: JsonRpcRequest) => {
+      const dispatch = await this.dispatchRequest(request, { signal: this.generation.signal });
+      written = dispatch.sent;
+      return await dispatch.response;
+    };
+    try {
+      return await this.enqueueCommand(async () => {
+        this.traceThreadCreation(message.id, "dispatch");
+        const response = await this.createThread!(message, create, this.generation.signal);
         this.traceThreadCreation(message.id, response.error ? "failed" : "completed");
         return response;
-      } catch (error) {
-        this.traceThreadCreation(message.id, "failed");
-        throw error;
-      }
-    });
+      });
+    } catch (error) {
+      this.traceThreadCreation(message.id, "failed");
+      if (written) throw error;
+      throw new WorkbenchThreadCreationNotDispatchedError(
+        error instanceof Error ? error.message : "Codex thread creation was not dispatched.", { cause: error });
+    }
   }
 
   async injectAgentContext(threadId: NativeThreadId, text: string, signal?: AbortSignal) {
@@ -1722,6 +1731,7 @@ export default class CodexStdioBridge {
       if (method === "turn/steer") await capture;
       else void capture;
     }
+    let sent = false;
     try {
       signal.throwIfAborted();
       if (method === "thread/start") this.traceThreadCreation(message.id, "native-send", upstreamRequestId);
@@ -1730,6 +1740,7 @@ export default class CodexStdioBridge {
         ? { ...upstreamMessage, params: { ...params, input: frameCodexAttachmentInput<unknown>(params.input) } }
         : upstreamMessage;
       this.send(wireMessage);
+      sent = true;
     } catch (error) {
       this.pendingResponses.delete(upstreamRequestId);
       if (method === "turn/steer") {
@@ -1741,6 +1752,7 @@ export default class CodexStdioBridge {
       response: signal
         ? responsePromise.finally(() => signal.removeEventListener("abort", abortPendingResponse))
         : responsePromise,
+      sent,
     };
   }
 

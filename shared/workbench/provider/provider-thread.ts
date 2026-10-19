@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_THREAD_HISTORY_PENDING/WorkbenchThreadHistoryPendingError: provider history is not materialised yet.
+ * - WorkbenchThreadCreationNotDispatchedError: creation definitely failed before any creation request reached the provider.
  * - WorkbenchProviderThreadCreate: resolved creation context supplied by the daemon.
  * - WorkbenchProviderCompactionScope: canonical item and turn owned by one compaction execution.
  * - WorkbenchProviderThreadList: bounded provider discovery request.
@@ -34,6 +35,7 @@ export interface WorkbenchProviderCompactionScope {
 
 export const WORKBENCH_THREAD_HISTORY_PENDING = -32010;
 export class WorkbenchThreadHistoryPendingError extends Error {}
+export class WorkbenchThreadCreationNotDispatchedError extends Error {}
 
 export interface WorkbenchProviderThreadCreate {
   cwd: string;

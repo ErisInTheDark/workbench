@@ -1,9 +1,8 @@
 /* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement, parent-agent stop questionnaire dismissal, undelivered steer resend/dismiss, user shell stops and agent-message redelivery. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import WorkbenchThreadActionController, {
-  WorkbenchThreadCreationNotDispatchedError, type WorkbenchThreadActionOwners,
-} from "./WorkbenchThreadActionController";
+import WorkbenchThreadActionController, { type WorkbenchThreadActionOwners } from "./WorkbenchThreadActionController";
+import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";

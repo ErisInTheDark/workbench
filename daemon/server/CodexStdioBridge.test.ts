@@ -13,6 +13,7 @@ import { captureTestOutput } from "../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
 
 import type CodexAppServer from "./CodexAppServer";
+import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadItem as WorkbenchThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -417,6 +418,37 @@ for (const route of ["managed-creation", "internal"] as const) {
       }
     });
   }
+}
+
+for (const route of ["unsent", "sent"] as const) {
+  test(`managed creation types a failure ${route === "unsent" ? "before" : "after"} native thread/start ${route === "unsent" ? "as" : "without"} non-dispatch`, async () => {
+    const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-creation-dispatch-");
+    const bridge = new CodexStdioBridge({
+      appServer: { send(request: JsonRpcRequest) {
+        if (route === "unsent") throw new Error("The previous Codex process has not retired.");
+        queueMicrotask(() => void bridge.handleUpstreamMessage({
+          id: request.id ?? null, result: { thread: { ...bridgeThread(), turns: [] } },
+        }));
+      } } as unknown as CodexAppServer,
+      createThread: async (request, create) => {
+        await create(request);
+        throw new Error("Profile installation failed.");
+      },
+      resolveProjectFromCwd: async () => null,
+      handleWorkbenchRequest: rejectWorkbenchRequest,
+      instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", temporary.path, readNoLocalCapabilities),
+      onNotification() {},
+    });
+    try {
+      await assert.rejects(bridge.handleBridgeRequest({ id: "create", method: "thread/start", params: { cwd: "C:/repo" } }),
+        error => error instanceof Error
+          && (error instanceof WorkbenchThreadCreationNotDispatchedError) === (route === "unsent")
+          && error.message === (route === "unsent" ? "The previous Codex process has not retired." : "Profile installation failed."));
+    } finally {
+      await bridge.dispose();
+      await temporary.dispose();
+    }
+  });
 }
 
 function databaseFixture() {

@@ -1,14 +1,16 @@
 /*
  * Exports:
  * - CodexThreadOperationOwners: existing bridge, project and identity admission ports.
- * - default CodexThreadOperations: translate WB thread intent into Codex admission, reads, thread interruption and interactions.
+ * - default CodexThreadOperations: translate WB thread intent into Codex admission, reads, thread interruption and interactions; creation that fails before native start is typed as not dispatched.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn as NativeTurn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
 import { toThreadPayload, toThreadTurn } from "workbench-shared/codex/thread-adapter";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import { WorkbenchThreadHistoryPendingError } from "workbench-shared/workbench/provider/provider-thread";
+import {
+  WorkbenchThreadCreationNotDispatchedError, WorkbenchThreadHistoryPendingError,
+} from "workbench-shared/workbench/provider/provider-thread";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
   ThreadPayload, WorkbenchPendingUserInputRequest,
@@ -170,10 +172,14 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     }));
   }
 
-  private async dispatch(request: JsonRpcRequest, options?: { waitForCompletion?: boolean; signal?: AbortSignal }): Promise<JsonRpcResponse> {
+  private async initialize() {
     await this.owners.bridge.ensureInitialized(createInitializeRequest(0, {
       capabilities: createInitializeCapabilities({ experimentalApi: true }),
     }));
+  }
+
+  private async dispatch(request: JsonRpcRequest, options?: { waitForCompletion?: boolean; signal?: AbortSignal }): Promise<JsonRpcResponse> {
+    await this.initialize();
     return this.owners.bridge.handleServerRequest(request, options);
   }
 
@@ -250,7 +256,12 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
           exclude_tmpdir_env_var: false, exclude_slash_tmp: false,
         } },
       } : {};
-    const response = await this.dispatch({
+    try { await this.initialize(); }
+    catch (error) {
+      throw new WorkbenchThreadCreationNotDispatchedError(
+        error instanceof Error ? error.message : "Codex was not ready for thread creation.", { cause: error });
+    }
+    const response = await this.owners.bridge.handleServerRequest({
       id: 0,
       method: "thread/start",
       params: { cwd: input.cwd, ephemeral: false, ...sandbox },

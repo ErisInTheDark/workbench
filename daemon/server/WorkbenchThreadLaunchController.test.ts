@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadLaunchRequestSchema, type WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
-import { WorkbenchThreadCreationNotDispatchedError } from "./WorkbenchThreadActionController";
+import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
 import { WorkbenchSkillActivationMismatchError } from "workbench-shared/workbench/thread/thread-skill-mentions";
 
 const review = { name: "review", description: "", path: "C:/skills/review/SKILL.md", relativePath: "skills/review/SKILL.md" };
