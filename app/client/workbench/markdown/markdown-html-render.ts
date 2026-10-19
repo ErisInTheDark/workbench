@@ -109,6 +109,15 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
       case "mark":
         html += `<mark>${renderInlineHtml(node.children)}</mark>`;
         break;
+      case "underline":
+        html += `<u>${renderInlineHtml(node.children)}</u>`;
+        break;
+      case "subscript":
+        html += `<sub>${renderInlineHtml(node.children)}</sub>`;
+        break;
+      case "superscript":
+        html += `<sup>${renderInlineHtml(node.children)}</sup>`;
+        break;
       case "markTag":
         html += `<u ${REVIEW_ATTRIBUTES.markTag}="${escapeHtml(node.name)}" title="${escapeHtml(node.name)}">${renderInlineHtml(node.children)}</u>`;
         break;

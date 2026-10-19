@@ -179,29 +179,34 @@ test("paired thread icons attach a markdown label in the chosen color", () => {
   assert.doesNotMatch(html, /&lt;\/?icon/u);
 });
 
-test("paired icons inherit text color and malformed pairs stay literal", () => {
+test("paired icons inherit text color and an unclosed opener leaves later text uncoloured", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     '<icon type="check">done</icon>',
-    '<icon color="orange" type="check">unsupported color</icon>',
-    '<icon type="x">unclosed',
+    '<icon color="orange" type="check">aliased color</icon>',
+    '<icon color="red" type="x">unclosed',
   ].join("\n\n"))));
 
-  assert.match(html, /data-thread-inline-icon="check"/u);
   assert.match(html, /data-thread-inline-icon="check"[^>]*>.*done/u);
-  assert.match(html, /&lt;icon color=&quot;orange&quot; type=&quot;check&quot;&gt;unsupported color&lt;\/icon&gt;/u);
+  assert.match(html, /data-thread-inline-icon-color="yellow"[^>]*>.*aliased color/u);
+  assert.match(html, /<span[^>]*aria-label="red x marker"[^>]*>(?:(?!<\/span>).)*<\/span>unclosed/u);
+  assert.doesNotMatch(html, /&lt;\/?icon/u);
 });
 
-test("unsupported and code-span markers remain literal text", () => {
+test("markers without icon intent and code-span markers remain literal text", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     '<icon color="red" type="red" /> unsupported type',
-    '<icon color="orange" type="alert" /> unsupported color',
     '`<icon color="blue" type="alert" />` code span',
   ].join("\n\n"))));
 
   assert.match(html, /&lt;icon color=&quot;red&quot; type=&quot;red&quot; \/&gt; unsupported type/u);
-  assert.match(html, /&lt;icon color=&quot;orange&quot; type=&quot;alert&quot; \/&gt; unsupported color/u);
   assert.match(html, /<code[^>]*>&lt;icon color=&quot;blue&quot; type=&quot;alert&quot; \/&gt;<\/code> code span/u);
   assert.doesNotMatch(html, /data-thread-inline-icon=/u);
+});
+
+test("thread underline, subscript and superscript tags render as html formatting", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown("<u>under</u> H<sub>2</sub>O x<sup>2</sup> <b>bold</b>")));
+
+  assert.match(html, /<u>under<\/u> H<sub>2<\/sub>O x<sup>2<\/sup> <strong>bold<\/strong>/u);
 });
 
 test("thread notices render compact and two-paragraph Markdown bodies", () => {

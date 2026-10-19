@@ -250,6 +250,12 @@ function renderThreadInlineNodes (
             {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
           </mark>
         );
+      case "underline":
+        return <u key={key}>{renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}</u>;
+      case "subscript":
+        return <sub key={key}>{renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}</sub>;
+      case "superscript":
+        return <sup key={key}>{renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}</sup>;
       case "markTag":
         return (
           <u data-mark={node.name} key={key} title={node.name}>
@@ -265,7 +271,6 @@ function renderThreadInlineNodes (
             iconType={node.iconType}
             key={key}
             label={node.children ? renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath) : null}
-            source={node.source}
           />
         );
       case "attachmentMention":

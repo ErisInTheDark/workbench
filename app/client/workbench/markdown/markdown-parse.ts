@@ -29,6 +29,7 @@ import {
     readCommentRun,
     type MarkdownComment,
 } from "./comment-markdown";
+import { readInlineHtmlTag } from "./inline-html-tags";
 import { isIntrawordUnderscore } from "./markdown-escape";
 import { readSuggestionBlock } from "./markdown-suggestion";
 import {
@@ -39,6 +40,7 @@ import {
     resolveProjectFileLinkTarget,
     type WorkspaceFileLinkRoot,
 } from "./markdown-links";
+import { readThreadIconMarker, type ThreadEmphasisColor, type ThreadIconType } from "./thread-icon-marker";
 
 export interface ParsedListItem {
   contentIndent: number;
@@ -92,8 +94,11 @@ export type ParsedInlineNode =
   | { type: "inlineComment"; children: ParsedInlineNode[] }
   | { type: "commentThread"; comments: MarkdownComment[] }
   | { type: "mark"; children: ParsedInlineNode[] }
+  | { type: "underline"; children: ParsedInlineNode[] }
+  | { type: "subscript"; children: ParsedInlineNode[] }
+  | { type: "superscript"; children: ParsedInlineNode[] }
   | { type: "markTag"; children: ParsedInlineNode[]; name: string }
-  | { type: "threadIcon"; children: ParsedInlineNode[] | null; color: string | null; iconType: string; source: string }
+  | { type: "threadIcon"; children: ParsedInlineNode[] | null; color: ThreadEmphasisColor | null; iconType: ThreadIconType }
   | { type: "knownSkillMention"; text: string; title: string }
   | { type: "attachmentMention"; text: string; number: number | null }
   | {
@@ -567,31 +572,34 @@ function parseExplicitProjectFileMention(markdown: string, index: number, option
 }
 
 function parseThreadIconMarker(markdown: string, index: number, options: MarkdownParseOptions) {
-  if ((options.profile ?? "editor") !== "thread" || !markdown.startsWith("<icon ", index)) {
+  if ((options.profile ?? "editor") !== "thread" || markdown[index] !== "<") {
     return null;
   }
 
-  const source = markdown.slice(index);
-  const marker = /^<icon (?:(?:color="([a-z][a-z0-9-]*)" type="([a-z][a-z0-9-]*)")|(?:type="([a-z][a-z0-9-]*)"(?: color="([a-z][a-z0-9-]*)")?))\s*(\/>|>)/u.exec(source);
+  const marker = readThreadIconMarker(markdown, index);
   if (!marker) return null;
 
-  const openingTag = marker[0];
-  const paired = marker[5] === ">";
-  let closeIndex = paired ? markdown.indexOf("</icon>", index + openingTag.length) : -1;
-  if (paired && closeIndex === -1) closeIndex = markdown.length - marker.index;
-  const end = paired && closeIndex !== -1 ? closeIndex + "</icon>".length : index + openingTag.length;
-  const label = paired ? markdown.slice(index + openingTag.length, closeIndex) : "";
-
   return {
-    end,
+    end: marker.end,
     node: {
-      children: label.trim() ? parseInlineMarkdown(label, options) : null,
-      color: marker[1] ?? marker[4] ?? null,
-      iconType: marker[2] ?? marker[3],
-      source: markdown.slice(index, end),
+      children: marker.label?.trim() ? parseInlineMarkdown(marker.label, options) : null,
+      color: marker.color,
+      iconType: marker.iconType,
       type: "threadIcon" as const,
     },
   };
+}
+
+function parseInlineHtmlTag(markdown: string, index: number, options: MarkdownParseOptions) {
+  const tag = readInlineHtmlTag(markdown, index, options.profile ?? "editor");
+  if (!tag) return null;
+
+  const node: ParsedInlineNode = tag.format === "break"
+    ? { type: "break" }
+    : tag.format === "code"
+      ? { text: tag.content, type: "code" }
+      : { children: parseInlineMarkdown(tag.content, options), type: tag.format };
+  return { end: tag.end, node };
 }
 
 const MARK_TAG_OPENER = "<u data-mark=\"";
@@ -647,40 +655,11 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       continue;
     }
 
-    if (markdown.startsWith("<del>", index)) {
-      const closeIndex = markdown.indexOf("</del>", index + 5);
-      if (closeIndex !== -1) {
-        nodes.push({
-          children: parseInlineMarkdown(markdown.slice(index + 5, closeIndex), options),
-          type: "delete",
-        });
-        index = closeIndex + 6;
-        continue;
-      }
-    }
-
-    if (markdown.startsWith("<ins>", index)) {
-      const closeIndex = markdown.indexOf("</ins>", index + 5);
-      if (closeIndex !== -1) {
-        nodes.push({
-          children: parseInlineMarkdown(markdown.slice(index + 5, closeIndex), options),
-          type: "insert",
-        });
-        index = closeIndex + 6;
-        continue;
-      }
-    }
-
-    if (markdown.startsWith("<mark>", index)) {
-      const closeIndex = markdown.indexOf("</mark>", index + 6);
-      if (closeIndex !== -1) {
-        nodes.push({
-          children: parseInlineMarkdown(markdown.slice(index + 6, closeIndex), options),
-          type: "mark",
-        });
-        index = closeIndex + 7;
-        continue;
-      }
+    const htmlTag = parseInlineHtmlTag(markdown, index, options);
+    if (htmlTag) {
+      nodes.push(htmlTag.node);
+      index = htmlTag.end;
+      continue;
     }
 
     const markTag = readMarkTag(markdown, index);

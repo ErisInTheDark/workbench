@@ -53,6 +53,9 @@ function inlineNodeChildren(node: ParsedInlineNode) {
     case "link":
     case "inlineComment":
     case "mark":
+    case "underline":
+    case "subscript":
+    case "superscript":
     case "markTag":
       return node.children;
     default:
@@ -71,7 +74,10 @@ function inlineNodeSemanticsEqual(previous: ParsedInlineNode, next: ParsedInline
     || previous.type === "delete"
     || previous.type === "insert"
     || previous.type === "inlineComment"
-    || previous.type === "mark";
+    || previous.type === "mark"
+    || previous.type === "underline"
+    || previous.type === "subscript"
+    || previous.type === "superscript";
 }
 
 function findFinalTextExtension(
@@ -113,6 +119,9 @@ function inlineVisibleText(node: ParsedInlineNode): string {
     case "link":
     case "inlineComment":
     case "mark":
+    case "underline":
+    case "subscript":
+    case "superscript":
     case "markTag":
       return node.children.map(inlineVisibleText).join("");
     case "commentThread":

@@ -1,33 +1,28 @@
 /*
  * Exports:
- * - default ThreadInlineIcon: resolve and render one supported agent-authored inline icon marker.
+ * - default ThreadInlineIcon: render one resolved agent-authored inline icon marker.
  */
 
 import type { ComponentType, ReactNode } from "react";
 
+import type { ThreadEmphasisColor, ThreadIconType } from "../../../workbench/markdown/thread-icon-marker";
 import { AsteriskIcon, CheckIcon, CircleAlertIcon, type IconProps, XIcon } from "../workbench-icons";
 import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 
-type InlineIconComponent = ComponentType<IconProps>;
+const THREAD_INLINE_ICON_REGISTRY = {
+  alert: CircleAlertIcon,
+  asterisk: AsteriskIcon,
+  check: CheckIcon,
+  x: XIcon,
+} satisfies Record<ThreadIconType, ComponentType<IconProps>>;
 
-const THREAD_INLINE_ICON_REGISTRY = new Map<string, InlineIconComponent>([
-  ["alert", CircleAlertIcon],
-  ["check", CheckIcon],
-  ["asterisk", AsteriskIcon],
-  ["x", XIcon],
-]);
-
-export default function ThreadInlineIcon ({ color, iconType, label, source }: {
-  color: string | null;
-  iconType: string;
+export default function ThreadInlineIcon ({ color, iconType, label }: {
+  color: ThreadEmphasisColor | null;
+  iconType: ThreadIconType;
   label: ReactNode | null;
-  source: string;
 }) {
-  const Icon = THREAD_INLINE_ICON_REGISTRY.get(iconType);
+  const Icon = THREAD_INLINE_ICON_REGISTRY[iconType];
   const colors = color === null ? null : getThreadMarkdownEmphasisColors(color);
-  if (!Icon || (color !== null && !colors)) {
-    return source;
-  }
 
   return (
     <span

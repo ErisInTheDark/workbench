@@ -113,6 +113,35 @@ test("thread plans, notices and disclosures close after a list item fence", () =
   );
 });
 
+test("thread inline html formatting tags parse like their markdown equivalents", () => {
+  const thread = { profile: "thread" } as const;
+  const cases = [
+    ["<b>x</b>", "strong"], ["<STRONG>x</STRONG>", "strong"],
+    ["<i>x</i>", "em"], ["<em>x</em>", "em"],
+    ["<s>x</s>", "delete"], ["<strike>x</strike>", "delete"], ["<del>x</del>", "delete"],
+    ["<ins>x</ins>", "insert"], ["<mark>x</mark>", "mark"],
+    ["<u>x</u>", "underline"], ["<sub>x</sub>", "subscript"], ["<sup>x</sup>", "superscript"],
+  ] as const;
+  for (const [markdown, type] of cases) {
+    assert.deepEqual(parseInlineMarkdown(markdown, thread), [{ children: [{ text: "x", type: "text" }], type }], markdown);
+  }
+
+  assert.deepEqual(parseInlineMarkdown("<b>a <b>b</b> c</b>", thread).map(node => node.type), ["strong"]);
+  assert.deepEqual(parseInlineMarkdown("<code>**x**</code> <kbd>Ctrl</kbd>", thread), [
+    { text: "**x**", type: "code" }, { text: " ", type: "text" }, { text: "Ctrl", type: "code" },
+  ]);
+  assert.deepEqual(parseInlineMarkdown("a<br>b<br/>c<BR />d", thread).map(node => node.type), ["text", "break", "text", "break", "text", "break", "text"]);
+  assert.deepEqual(parseInlineMarkdown("<b>unclosed", thread), [{ text: "<b>unclosed", type: "text" }]);
+  assert.equal(parseInlineMarkdown('<b class="x">attrs</b>', thread).some(node => node.type === "strong"), false);
+});
+
+test("editor markdown only reads its review html tags so saves never rewrite other html", () => {
+  assert.deepEqual(parseInlineMarkdown("<del>a</del><ins>b</ins><mark>c</mark>").map(node => node.type), ["delete", "insert", "mark"]);
+  for (const markdown of ["<b>x</b>", "<u>x</u>", "<DEL>x</DEL>", "a<br>b"]) {
+    assert.deepEqual(parseInlineMarkdown(markdown), [{ text: markdown, type: "text" }], markdown);
+  }
+});
+
 test("incomplete and unsupported thread disclosures remain literal", () => {
   for (const markdown of [
     "<details><summary>unfinished</summary>\nbody",
