@@ -13,7 +13,7 @@ import { WorkbenchVisRequestSchema } from "./lib/workbench/commands/vis-command-
 import { formatVisAnswers, formatVisSessionResult, parseVisProject } from "workbench-shared/workbench/vis/vis-contract";
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/commands/workbench-agent-command-definition";
 import {
-  WorkbenchHeapSnapshotRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchSocketSpy,
+  WorkbenchHeapSnapshotRequestSchema, WorkbenchMcpSpyRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchMcpSpy, formatWorkbenchSocketSpy,
 } from "./lib/workbench/commands/debug-command-definitions";
 import { writeDaemonHeapSnapshot } from "./daemon-heap-snapshot";
 import WorkbenchThreadRecallController from "./lib/workbench/thread/WorkbenchThreadRecallController";
@@ -223,6 +223,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
         });
       },
+      executeMcpSpy: async body => new Response(formatWorkbenchMcpSpy(build.get("mcpServers").traffic(WorkbenchMcpSpyRequestSchema.parse(body))), {
+        headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+      }),
       executeHeapSnapshot: async (body, signal) => {
         WorkbenchHeapSnapshotRequestSchema.parse(body);
         signal.throwIfAborted();

@@ -42,6 +42,7 @@ interface WorkbenchAgentDirectPort {
   executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeTranscriptQuery?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSocketSpy?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeMcpSpy?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeHeapSnapshot?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeClaimStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeToolStats?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -424,6 +425,10 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/internal/debug/socket" && request.body) {
       if (!this.direct.executeSocketSpy) throw new Error("Socket spy is not configured.");
       return await this.direct.executeSocketSpy(request.body, signal);
+    }
+    if (request.path === "/internal/debug/mcp" && request.body) {
+      if (!this.direct.executeMcpSpy) throw new Error("MCP traffic is not configured.");
+      return await this.direct.executeMcpSpy(request.body, signal);
     }
     if (request.path === "/internal/debug/heap" && request.body) {
       if (!this.direct.executeHeapSnapshot) throw new Error("Heap snapshots are not configured.");

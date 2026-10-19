@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - McpServerEndpoint: url and request headers of one user-added MCP server.
+ * - McpServerTrafficFrame: one recorded JSON-RPC message exchanged with a server.
+ * - McpServerEndpoint: url, request headers and optional traffic recorder of one user-added MCP server.
  * - McpServerTool: one offered tool with its input schema.
  * - McpServerConnectionPort: the catalogue/call/close surface the server controller depends on.
  * - default McpServerConnection: SDK streamable-HTTP client for one server, authenticated by a header or OAuth; caches the catalogue until the server reports a change, reconnects after transport failure and reports a needed sign-in as McpServerSignInRequiredError.
@@ -10,13 +11,27 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { McpServerSignInRequiredError } from "./McpServerOAuthProvider";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { CallToolResultSchema, McpError, ToolListChangedNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import {
+  CallToolResultSchema, McpError, ToolListChangedNotificationSchema,
+  type CallToolResult, type JSONRPCMessage, type MessageExtraInfo,
+} from "@modelcontextprotocol/sdk/types.js";
+
+export interface McpServerTrafficFrame {
+  direction: "in" | "out";
+  /** The request or notification method, or `result`/`error` for replies. */
+  label: string;
+  /** The exact JSON-RPC body; credentials travel in HTTP headers and never appear here. */
+  payload: string;
+}
 
 export interface McpServerEndpoint {
   url: string;
   headers: Record<string, string>;
   /** OAuth sign-in for servers without a credential header; the SDK refreshes its tokens on 401. */
   authProvider?: OAuthClientProvider;
+  /** Receives every JSON-RPC message exchanged with the server, for `wb debug mcp`. */
+  record?: (frame: McpServerTrafficFrame) => void;
 }
 
 export interface McpServerTool {
@@ -38,6 +53,29 @@ const CATALOGUE_TIMEOUT_MS = 20_000;
 // Matches the direct wb tool ceiling; connection waits such as Composio's can legitimately run for minutes.
 const CALL_TIMEOUT_MS = 30 * 60_000;
 const MAX_CATALOGUE_PAGES = 50;
+
+function trafficLabel(message: JSONRPCMessage) {
+  if ("method" in message) return message.method;
+  return "error" in message ? "error" : "result";
+}
+
+/** Taps both directions; `onmessage` is intercepted by accessor because the client assigns it during `connect`, before `initialize` answers. */
+function recordTraffic(transport: Transport, record: (frame: McpServerTrafficFrame) => void) {
+  const send = transport.send.bind(transport);
+  transport.send = (message, options) => {
+    record({ direction: "out", label: trafficLabel(message), payload: JSON.stringify(message) });
+    return send(message, options);
+  };
+  let receive: Transport["onmessage"];
+  Object.defineProperty(transport, "onmessage", {
+    configurable: true,
+    get: () => receive && ((message: JSONRPCMessage, extra?: MessageExtraInfo) => {
+      record({ direction: "in", label: trafficLabel(message), payload: JSON.stringify(message) });
+      receive!(message, extra);
+    }),
+    set: (handler: Transport["onmessage"]) => { receive = handler; },
+  });
+}
 
 function describeFailure(error: unknown, signedIn: boolean) {
   // A failed refresh or a missing sign-in both mean the user must sign in again.
@@ -126,6 +164,7 @@ export default class McpServerConnection implements McpServerConnectionPort {
       requestInit: { headers: this.endpoint.headers },
       ...this.endpoint.authProvider ? { authProvider: this.endpoint.authProvider } : {},
     });
+    if (this.endpoint.record) recordTraffic(transport, this.endpoint.record);
     try {
       await client.connect(transport, { timeout: CATALOGUE_TIMEOUT_MS });
     } catch (error) {

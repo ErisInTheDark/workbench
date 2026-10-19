@@ -2,13 +2,15 @@
  * Exports:
  * - WorkbenchSocketSpyRequestSchema: validate one socket spy search or read for daemon and app frame buffers.
  * - formatWorkbenchSocketSpy: render spy answers as scannable text with exact payloads on read.
+ * - WorkbenchMcpSpyRequestSchema: validate one search or read of recent raw MCP server traffic.
+ * - formatWorkbenchMcpSpy: render MCP traffic answers in the socket spy's format.
  * - WorkbenchHeapSnapshotRequestSchema: the (empty) `wb debug heap` request.
- * - WORKBENCH_DEBUG_COMMANDS: `wb debug socket` and `wb debug heap`; CLI only, shown and runnable only from the Workbench repo cwd.
+ * - WORKBENCH_DEBUG_COMMANDS: `wb debug socket`, `wb debug mcp` and `wb debug heap`; CLI only, shown and runnable only from the Workbench repo cwd.
  */
 import { z } from "zod";
 
 import {
-  WebSocketTrafficQuerySchema, type WebSocketTrafficResult,
+  WebSocketTrafficQuerySchema, type WebSocketTrafficQuery, type WebSocketTrafficResult,
 } from "workbench-shared/process/WebSocketTrafficBuffer";
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
@@ -102,6 +104,53 @@ const socket = defineWorkbenchAgentCommand({
   },
 });
 
+export const WorkbenchMcpSpyRequestSchema = WebSocketTrafficQuerySchema;
+
+const MCP_USAGE = "wb debug mcp [--server <name>] [--grep <text>] [--direction in|out] [--before <seq>] [--limit <n>] | wb debug mcp --show <seq>";
+
+function parseMcp(args: string[]): WebSocketTrafficQuery {
+  const flags = new WorkbenchAgentCommandFlags(args, {
+    values: ["--server", "--grep", "--direction", "--before", "--limit", "--show"],
+  });
+  const show = flags.optional("--show");
+  if (show) {
+    const seq = /^(?:mcp:)?(\d+)$/u.exec(show)?.[1];
+    if (!seq) throw new Error("--show takes a <seq> printed by a search.");
+    return { action: "read", seq: Number(seq) };
+  }
+  const number = (flag: string) => {
+    const value = flags.optional(flag);
+    return value === null ? undefined : Number(value);
+  };
+  const server = flags.optional("--server");
+  return WebSocketTrafficQuerySchema.parse({
+    action: "search",
+    // Labels are `<server> <method>`; the trailing space keeps `eris` from matching `erisx`.
+    ...(server ? { label: `${server} ` } : {}),
+    ...(flags.optional("--grep") ? { grep: flags.optional("--grep") } : {}),
+    ...(flags.optional("--direction") ? { direction: flags.optional("--direction") } : {}),
+    ...(number("--before") !== undefined ? { before: number("--before") } : {}),
+    ...(number("--limit") !== undefined ? { limit: number("--limit") } : {}),
+  });
+}
+
+export function formatWorkbenchMcpSpy(result: WebSocketTrafficResult) {
+  return `${renderResult("mcp", result)}\n`;
+}
+
+const mcp = defineWorkbenchAgentCommand({
+  ...DEBUG_VISIBILITY,
+  description: "Search recent raw JSON-RPC traffic with user-added MCP servers, or print one message's exact payload.",
+  effects: { idempotent: true, openWorld: false, readOnly: true },
+  words: ["debug", "mcp"],
+  usage: MCP_USAGE,
+  inputSchema: WorkbenchMcpSpyRequestSchema,
+  parseCliArgs: parseMcp,
+  buildRequest(input) {
+    return postWorkbenchAgentCommand("/internal/debug/mcp", input);
+  },
+});
+
 export const WorkbenchHeapSnapshotRequestSchema = z.object({}).strict();
 
 const heap = defineWorkbenchAgentCommand({
@@ -121,4 +170,4 @@ const heap = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_DEBUG_COMMANDS = [socket, heap] as const;
+export const WORKBENCH_DEBUG_COMMANDS = [socket, mcp, heap] as const;

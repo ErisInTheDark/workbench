@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchMcpServerOptions: database, device identity and connection factory ports.
  * - McpServerCallOutcome: agent-facing text of one forwarded call and whether it failed.
- * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins and live connections; answers settings reads/updates, sign-in steps and agent tool listing, enable requests and calls.
+ * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins, live connections and their recent raw traffic; answers settings reads/updates, sign-in steps and agent tool listing, enable requests, calls and `wb debug mcp`.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import os from "node:os";
@@ -22,7 +22,10 @@ import {
   mcpServerAuth, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServers, mcpServerTools,
 } from "../lib/workbench/database/schema/mcp-server-schema";
 import { deriveProjectStoreKey, openProjectStoreValue, sealProjectStoreValue } from "../store/project-store-crypto";
-import McpServerConnection, { type McpServerConnectionPort, type McpServerEndpoint, type McpServerTool } from "./McpServerConnection";
+import WebSocketTrafficBuffer, { type WebSocketTrafficQuery } from "workbench-shared/process/WebSocketTrafficBuffer";
+import McpServerConnection, {
+  type McpServerConnectionPort, type McpServerEndpoint, type McpServerTool, type McpServerTrafficFrame,
+} from "./McpServerConnection";
 import McpServerOAuthProvider, { McpServerSignInRequiredError, type McpServerOAuthStore } from "./McpServerOAuthProvider";
 import { formatMcpToolListing, formatMcpToolResult, type McpToolListing } from "./mcp-tool-search";
 
@@ -95,8 +98,14 @@ function credentialKey(serverId: string, header: string) {
 export default class WorkbenchMcpServerController {
   #secret: Promise<Buffer> | null = null;
   readonly #connections = new Map<string, McpServerConnectionPort>();
+  readonly #traffic = new WebSocketTrafficBuffer({ maxEntries: 500, maxBytes: 4 * 1024 * 1024 });
 
   constructor(private readonly options: WorkbenchMcpServerOptions) {}
+
+  /** Recent raw JSON-RPC traffic with every server, labelled `<server> <method|result|error>`, for `wb debug mcp`. */
+  traffic(query: WebSocketTrafficQuery) {
+    return this.#traffic.query(query);
+  }
 
   async read(): Promise<McpServerSettingsSnapshot> {
     const servers = await this.#servers();
@@ -325,10 +334,12 @@ export default class WorkbenchMcpServerController {
   #connection(server: StoredServer) {
     let connection = this.#connections.get(server.id);
     if (!connection) {
+      const label = server.name || hostnameOf(server.url);
+      const record = (frame: McpServerTrafficFrame) => this.#traffic.record({ ...frame, connection: label, label: `${label} ${frame.label}` });
       const endpoint: McpServerEndpoint = server.header
-        ? { url: server.url, headers: server.header.value ? { [server.header.name]: server.header.value } : {} }
+        ? { url: server.url, headers: server.header.value ? { [server.header.name]: server.header.value } : {}, record }
         : {
-          url: server.url, headers: {},
+          url: server.url, headers: {}, record,
           authProvider: new McpServerOAuthProvider(this.#oauthStore(server.id), {
             kind: "background", redirectUri: server.oauth.redirectUri ?? undefined,
           }),
