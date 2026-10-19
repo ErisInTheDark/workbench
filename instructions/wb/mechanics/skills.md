@@ -13,10 +13,11 @@ Trigger skills when:
 <!-- Agents matched triggers against request wording only, then planned or implemented without skills whose triggers named
 the technology they touched. Requests rarely name that technology; inspection reveals it, so triggers are rechecked there.
 The previous sole hard rule here only discouraged loading, so it doubled as an excuse to skip; loading is now the hard rule,
-and the redundant-read guard lives on as a bullet. -->
+and the redundant-read guard lives on as a bullet. Agents also matched triggers against their own task framing (eg calling a .tsx
+effect edit "state controller work") and treated one loaded skill as satisfying the rest. -->
 **Hard rule: load triggered skills before planning or editing**
 
-- Recheck triggers once inspection shows touched files and technologies; requests rarely name them
+- Recheck triggers against each edited file, not task framing; one loaded skill never satisfies another
 - `wb:activated-skills` contains preloaded skill text. Only manually load skills genuinely missing
 - If absent, use `wb skill <name>`; catalogs show triggers, not bodies
 </docs>
