@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, project selections and rows, and folder peer sync) and publication fences.
+ * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, projected once per burst of answers, project selections and rows, and folder peer sync) and publication fences.
  */
 import {
-  RETARGETABLE_QUERY_KINDS, WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, workspaceObservationShape,
+  RETARGETABLE_QUERY_KINDS, WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, applyThreadSummariesPatch,
+  workspaceObservationShape,
   type WorkspaceArchivedThreads, type WorkspaceObservationDelta, type WorkspaceObserve, type WorkspaceObservation,
-  type WorkspaceRetarget, type WorkspaceThreadRows, type WorkspaceThreadSummaries,
+  type WorkspaceQuery, type WorkspaceRetarget, type WorkspaceThreadRows, type WorkspaceThreadSummaries,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
@@ -110,6 +111,8 @@ function isLiveBaseline(event: WorkbenchDaemonTranscriptEvent) {
 export default class WorkbenchWorkspaceRequestController {
   private readonly interests = new Map<string, Interest>();
   private readonly pendingRefresh = new Set<Interest>();
+  /** Summary batches whose daemon answers changed since the last projection this turn. */
+  private readonly deferredRefresh = new Set<Interest>();
   private refreshing = false;
   private closed = false;
   private readonly cancellation = new AbortController();
@@ -149,6 +152,8 @@ export default class WorkbenchWorkspaceRequestController {
     publishThreadEvent(notification: WorkbenchClientNotification, harness: WorkbenchHarness, daemonId: DaemonId): void;
     publishTranscript(event: WorkbenchDaemonTranscriptEvent): void;
     warn(message: string): void;
+    /** Runs deferred batch projections once per event-loop turn; defaults to `setImmediate`. */
+    schedule?: (run: () => void) => void;
   }) {}
 
   async layout(input: WorkspaceLayoutRequest) {
@@ -681,10 +686,14 @@ export default class WorkbenchWorkspaceRequestController {
     const request = WorkspaceRetargetSchema.parse(input);
     const interest = this.interests.get(request.subscriptionId);
     if (!interest || interest.request.generation !== request.generation) throw new Error("Workspace observation to retarget is not open.");
-    if (interest.request.query.kind !== request.query.kind || !RETARGETABLE_QUERY_KINDS.has(request.query.kind)) {
+    const current = interest.request.query;
+    const query: WorkspaceQuery | null = !("patch" in request) ? request.query
+      : current.kind === "threadSummaries"
+        ? { kind: "threadSummaries", threadIds: applyThreadSummariesPatch(current.threadIds, request.patch) } : null;
+    if (!query || current.kind !== query.kind || !RETARGETABLE_QUERY_KINDS.has(query.kind)) {
       throw new Error("Only thread summary batches and project selections or rows can be retargeted.");
     }
-    interest.request = request;
+    interest.request = { subscriptionId: request.subscriptionId, generation: request.generation, query };
     this.refresh(interest);
     return { revision: interest.value.revision };
   }
@@ -709,6 +718,7 @@ export default class WorkbenchWorkspaceRequestController {
       }).finally(() => this.releaseVoice(sessionId));
     }
     this.pendingRefresh.clear();
+    this.deferredRefresh.clear();
   }
 
   private initial(request: WorkspaceObserve): Payload {
@@ -757,6 +767,22 @@ export default class WorkbenchWorkspaceRequestController {
         if (this.active(next)) this.project(next);
       }
     } finally { this.refreshing = false; }
+  }
+
+  /**
+   * Every summary batch re-projects all of its threads, and a daemon may answer one thread per message,
+   * so its answers project once per event-loop turn instead of once per message.
+   */
+  private refreshLater(interest: Interest) {
+    if (!this.active(interest)) return;
+    const first = !this.deferredRefresh.size;
+    this.deferredRefresh.add(interest);
+    if (!first) return;
+    (this.options.schedule ?? setImmediate)(() => {
+      const ready = [...this.deferredRefresh];
+      this.deferredRefresh.clear();
+      for (const next of ready) this.refresh(next);
+    });
   }
 
   private project(interest: Interest) {
@@ -1139,11 +1165,11 @@ export default class WorkbenchWorkspaceRequestController {
       const existing = interest.summaryBatches.get(source.id);
       try {
         if (existing) existing.retarget(batchQuery);
-        else interest.summaryBatches.set(source.id, source.observe(batchQuery, () => this.refresh(interest)));
+        else interest.summaryBatches.set(source.id, source.observe(batchQuery, () => this.refreshLater(interest)));
       } catch {
         // Another caller shares this batch's previous ids; take a batch of our own for the new ones.
         existing?.release();
-        interest.summaryBatches.set(source.id, source.observe(batchQuery, () => this.refresh(interest)));
+        interest.summaryBatches.set(source.id, source.observe(batchQuery, () => this.refreshLater(interest)));
       }
     }
     let failure: string | null = null;
@@ -1252,6 +1278,7 @@ export default class WorkbenchWorkspaceRequestController {
     for (const source of interest.sources.values()) source.observation.release();
     for (const batch of interest.summaryBatches.values()) batch.release();
     this.pendingRefresh.delete(interest);
+    this.deferredRefresh.delete(interest);
   }
 
   private failure(error: unknown) {

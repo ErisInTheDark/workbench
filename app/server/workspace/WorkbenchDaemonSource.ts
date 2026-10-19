@@ -3,8 +3,8 @@
  * - WorkbenchDaemonSourceDescriptor: verified endpoint and access facts for one durable daemon.
  * - WorkbenchDaemonObservationFact: received data with connection-aware freshness.
  * - WorkbenchDaemonTranscriptEvent: source-owned transcript baseline, stream and freshness delivery.
- * - default WorkbenchDaemonSource: own one daemon connection, shared read interests kept warm briefly after release,
- *   operation retention, socket spy answers and the daemon's peer fetch requests.
+ * - default WorkbenchDaemonSource: own one daemon connection, shared read interests kept warm briefly after release
+ *   and retargeted by summary-id patch, operation retention, socket spy answers and the daemon's peer fetch requests.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -19,8 +19,8 @@ import {
   type WebSocketTrafficQuery, type WebSocketTrafficResult,
 } from "workbench-shared/process/WebSocketTrafficBuffer";
 import {
-  DaemonWorkspaceQuerySchema,
-  daemonObservationShape, type WorkspaceObservationDelta,
+  DaemonWorkspaceQuerySchema, diffThreadSummaryIds,
+  daemonObservationShape, type ThreadSummariesPatch, type WorkspaceObservationDelta,
   WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_RETARGET_METHOD, WORKSPACE_UPDATED_METHOD,
   type DaemonWorkspaceQuery, type DaemonWorkspaceObservation,
   type WorkspaceDaemonFact, type WorkspaceSourcePhase, type WorkspaceTranscriptState,
@@ -118,6 +118,8 @@ export default class WorkbenchDaemonSource {
   private readonly endpointListeners = new Set<() => void>();
   private readonly unsubscribe: Array<() => void>;
   private releaseTranscriptReservoir: (() => void) | null = null;
+  /** The socket generation whose daemon rejected a summary-id patch; it gets whole queries instead. */
+  private patchlessGeneration: number | null = null;
   private disposed = false;
 
   constructor(
@@ -310,24 +312,42 @@ export default class WorkbenchDaemonSource {
           return;
         }
         const moved = retained;
+        const previous = moved.query;
         moved.query = target;
         if (!this.available) return;
         const generation = this.socket.getSnapshot().generation;
-        void this.request(WORKSPACE_RETARGET_METHOD, { subscriptionId: moved.subscriptionId, generation, query: target },
-          {}, { signal: moved.cancellation.signal }).catch(error => {
-          if (error instanceof WorkbenchRpcRequestInterruptedError || this.interests.get(moved.subscriptionId) !== moved
-            || generation !== this.socket.getSnapshot().generation) return;
-          if (!(error instanceof WorkbenchDaemonRequestError)) {
-            moved.failure = bounded(error);
-            this.options.warn(`Daemon observation retarget failed: ${moved.failure}`);
-            this.publishInterest(moved);
-            return;
-          }
-          this.resubscribe(moved);
-        });
+        const patch = previous.kind === "threadSummaries" && target.kind === "threadSummaries" && this.patchlessGeneration !== generation
+          ? diffThreadSummaryIds(previous.threadIds, target.threadIds) : null;
+        this.sendRetarget(moved, generation, patch);
       },
       release: () => this.detach(retained, owner),
     };
+  }
+
+  /**
+   * A summary batch sends only its gained and lost ids. A rejected patch (an older daemon, or a batch that diverged)
+   * is answered by the whole query, which resynchronises it, and this connection stops patching; a daemon that
+   * rejects the whole query too gets a fresh subscription.
+   */
+  private sendRetarget(interest: Interest, generation: number, patch: ThreadSummariesPatch | null) {
+    const params = patch ? { subscriptionId: interest.subscriptionId, generation, patch }
+      : { subscriptionId: interest.subscriptionId, generation, query: interest.query };
+    void this.request(WORKSPACE_RETARGET_METHOD, params, {}, { signal: interest.cancellation.signal }).catch(error => {
+      if (error instanceof WorkbenchRpcRequestInterruptedError || this.interests.get(interest.subscriptionId) !== interest
+        || generation !== this.socket.getSnapshot().generation) return;
+      if (!(error instanceof WorkbenchDaemonRequestError)) {
+        interest.failure = bounded(error);
+        this.options.warn(`Daemon observation retarget failed: ${interest.failure}`);
+        this.publishInterest(interest);
+        return;
+      }
+      if (patch) {
+        this.patchlessGeneration = generation;
+        this.sendRetarget(interest, generation, null);
+        return;
+      }
+      this.resubscribe(interest);
+    });
   }
 
   /** Observed or lingering, an interest for the same query is shared rather than subscribed twice. */

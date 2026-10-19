@@ -3,11 +3,11 @@
  * - WorkspaceQuerySnapshot: stable received facts and app-connection-aware freshness.
  * - WorkspaceQueryHandle: caller-owned typed observation, retarget and release boundary.
  * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection, kept warm
- *   briefly after release.
+ *   briefly after release, retargeting summary batches by id patch.
  */
 import {
-  WorkspaceQuerySchema, workspaceObservationShape,
-  type WorkspaceQuery, type WorkspaceObservation, type WorkspaceObservationDelta,
+  WorkspaceQuerySchema, diffThreadSummaryIds, workspaceObservationShape,
+  type ThreadSummariesPatch, type WorkspaceQuery, type WorkspaceObservation, type WorkspaceObservationDelta,
   type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
@@ -90,6 +90,8 @@ export default class WorkbenchWorkspaceClient {
   private readonly notificationListeners = new Set<(notification: Notification) => void>();
   private readonly threadObservations = new Map<string, { release(): void }>();
   private readonly facades = new Map<string, WorkbenchDaemonClient>();
+  /** The connection generation whose app rejected a summary-id patch; it gets whole queries instead. */
+  private patchlessGeneration: number | null = null;
 
   constructor(readonly rpc: WorkbenchAppRpcClient, private readonly options: {
     /** Schedules a released query's upstream release and returns its cancel; defaults to a 5s timer. */
@@ -372,16 +374,33 @@ export default class WorkbenchWorkspaceClient {
   private retarget(interest: Interest, token: object, query: WorkspaceQuery) {
     if (interest.listeners.size !== 1 || !interest.listeners.has(token)) throw new Error("Only a sole observer can retarget a workspace query.");
     const next = WorkspaceQuerySchema.parse(query);
-    if (areDeeplyEqual(next, interest.query)) return;
+    const previous = interest.query;
+    if (areDeeplyEqual(next, previous)) return;
     interest.query = next;
     if (!this.rpc.connected || !this.active(interest)) return;
     const generation = this.rpc.getSnapshot().generation;
-    void this.rpc.requestRaw({ method: "workspace/retarget", params: { subscriptionId: interest.id, generation, query: next } },
-      { signal: interest.cancellation.signal }).catch(error => {
+    const patch = previous.kind === "threadSummaries" && next.kind === "threadSummaries" && this.patchlessGeneration !== generation
+      ? diffThreadSummaryIds(previous.threadIds, next.threadIds) : null;
+    this.sendRetarget(interest, generation, patch);
+  }
+
+  /**
+   * A summary batch sends only its gained and lost ids. A rejected patch (an older app, or a stored batch that
+   * diverged) is answered by the whole query, which resynchronises it, and this connection stops patching.
+   */
+  private sendRetarget(interest: Interest, generation: number, patch: ThreadSummariesPatch | null) {
+    const params = patch ? { subscriptionId: interest.id, generation, patch }
+      : { subscriptionId: interest.id, generation, query: interest.query };
+    void this.rpc.requestRaw({ method: "workspace/retarget", params }, { signal: interest.cancellation.signal }).catch(error => {
       if (!this.active(interest) || generation !== this.rpc.getSnapshot().generation
         || error instanceof WorkbenchRpcRequestInterruptedError) return;
       if (!(error instanceof WorkbenchDaemonRequestError)) {
         this.warn("Workspace query retarget failed", error);
+        return;
+      }
+      if (patch) {
+        this.patchlessGeneration = generation;
+        this.sendRetarget(interest, generation, null);
         return;
       }
       void this.rpc.requestRaw({ method: "workspace/release", params: { subscriptionId: interest.id, generation } })

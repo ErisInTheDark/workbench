@@ -198,25 +198,36 @@ test("a query re-observed during its release grace keeps the held value, and onl
   assert.deepEqual(socket.sent.slice(offset).map(item => item.method), ["workspace/release"]);
 });
 
-test("a summary batch retargets in place, and an app without retargeting gets a fresh subscription", async context => {
+test("a summary batch retargets by id patch; a rejected patch resends the whole query, then a fresh subscription", async context => {
   const fixture = createWorkspaceClientFixture();
   context.after(() => fixture.dispose());
   const socket = await fixture.open();
-  const [first, second] = ["00000001", "00000002"].map(prefix => ThreadReferenceSchema.parse(`${prefix}-0000-4000-8000-000000000000`));
+  const [first, second, third] = ["00000001", "00000002", "00000003"].map(prefix => ThreadReferenceSchema.parse(`${prefix}-0000-4000-8000-000000000000`));
   const handle = fixture.workspace.observe({ kind: "threadSummaries", threadIds: [first] });
   const opened = await socket.request("workspace/observe");
   await socket.observation(opened, { kind: "threadSummaries", phase: "current", failure: null, data: {} }, 1, true);
   const offset = socket.sent.length;
   handle.retarget({ kind: "threadSummaries", threadIds: [first, second] });
-  const retarget = await socket.request("workspace/retarget", offset);
-  assert.equal(retarget.params.subscriptionId, opened.params.subscriptionId);
-  assert.deepEqual(retarget.params.query, { kind: "threadSummaries", threadIds: [first, second] });
+  const patched = await socket.request("workspace/retarget", offset);
+  assert.equal(patched.params.subscriptionId, opened.params.subscriptionId);
+  assert.deepEqual("patch" in patched.params && patched.params.patch, { kind: "threadSummaries", add: [second], remove: [] });
+
+  // An older app rejects the patch; the whole query resynchronises it and later retargets stop patching.
+  const wholeOffset = socket.sent.length;
+  socket.fail(patched, "Invalid request.", -32600);
+  const whole = await socket.request("workspace/retarget", wholeOffset);
+  assert.deepEqual("query" in whole.params && whole.params.query, { kind: "threadSummaries", threadIds: [first, second] });
+  socket.reply(whole, { revision: 1 });
+  const laterOffset = socket.sent.length;
+  handle.retarget({ kind: "threadSummaries", threadIds: [first, second, third] });
+  const later = await socket.request("workspace/retarget", laterOffset);
+  assert.ok("query" in later.params, "a connection that rejected a patch keeps sending whole queries");
 
   const fallbackOffset = socket.sent.length;
-  socket.fail(retarget, "Invalid request.", -32600);
+  socket.fail(later, "Invalid request.", -32600);
   const reopened = await socket.request("workspace/observe", fallbackOffset);
   assert.notEqual(reopened.params.subscriptionId, opened.params.subscriptionId);
-  assert.deepEqual(reopened.params.query, { kind: "threadSummaries", threadIds: [first, second] });
+  assert.deepEqual(reopened.params.query, { kind: "threadSummaries", threadIds: [first, second, third] });
   assert.ok(socket.sent.slice(fallbackOffset).some(message => message.method === "workspace/release"
     && message.params.subscriptionId === opened.params.subscriptionId), "the old subscription is released");
 });

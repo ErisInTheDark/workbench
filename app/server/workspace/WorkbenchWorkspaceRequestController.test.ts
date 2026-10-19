@@ -350,6 +350,7 @@ async function fixture(
   context: TestContext,
   daemons?: { get(daemonId: string): object | undefined; attached?: object; all?(): object[] },
   owners?: Partial<Pick<WorkbenchWorkspaceThreads, "observe" | "withThread">>,
+  { schedule = queueMicrotask }: { schedule?: (run: () => void) => void } = {},
 ) {
   const temporary = await WorkbenchTemporaryDirectory.create("workspace-request-owner-");
   const directory = temporary.path;
@@ -400,6 +401,7 @@ async function fixture(
       for (const listener of [...transcriptListeners]) listener();
     },
     warn: message => warnings.push(message),
+    schedule,
   });
   context.after(async () => {
     owner.dispose(); threads.dispose(); workspace.dispose(); sources.dispose();
@@ -917,10 +919,48 @@ test("a thread summary batch asks every daemon once, locates each thread from it
   f.owner.retarget({ subscriptionId, generation: 1, query: { kind: "threadSummaries", threadIds: threadIds(firstId, secondId) } });
   for (const source of [here, there]) assert.equal(source.calls.at(-1), `retarget ${firstId},${secondId}`);
   assert.equal(f.deltas.at(-1)?.delta.objects?.data !== undefined, true, "the browser receives changes as deltas");
+  // A browser patch lands on the ids the batch already holds.
+  f.owner.retarget({ subscriptionId, generation: 1,
+    patch: { kind: "threadSummaries", add: threadIds(unknownId), remove: threadIds(secondId) } });
+  for (const source of [here, there]) assert.equal(source.calls.at(-1), `retarget ${firstId},${unknownId}`);
   assert.throws(() => f.owner.retarget({ subscriptionId, generation: 1,
     query: { kind: "threadOwner", threadId: ThreadReferenceSchema.parse(firstId) } }), /Only thread summary batches/u);
   f.owner.release({ subscriptionId, generation: 1 });
   for (const source of [here, there]) assert.equal(source.calls.at(-1), "release");
+});
+
+test("a burst of daemon summary deltas projects the batch once per turn, not once per delta", async context => {
+  const threadIds = Array.from({ length: 50 }, (_, index) =>
+    ThreadReferenceSchema.parse(`${String(index + 1).padStart(8, "0")}-0000-4000-8000-000000000000`));
+  const answered = new Set<string>();
+  let notify = () => {};
+  const source = {
+    id: DaemonIdSchema.parse(randomUUID()),
+    observe: (_query: object, listener: () => void) => {
+      notify = listener;
+      return {
+        getSnapshot: () => ({ phase: answered.size === threadIds.length ? "current" : "pending", failure: null,
+          value: { kind: "threadSummaries", summaries: Object.fromEntries([...answered].map(id => [id, null])) } }),
+        retarget: () => {}, release: () => {},
+      };
+    },
+  };
+  const queued: Array<() => void> = [];
+  const f = await fixture(context, { get: id => id === source.id ? source : undefined, all: () => [source] }, undefined,
+    { schedule: run => { queued.push(run); } });
+  f.owner.observe({ subscriptionId: randomUUID(), generation: 1, query: { kind: "threadSummaries", threadIds } });
+  const before = f.deltas.length;
+  // An older daemon answers each unknown thread in its own message.
+  for (const threadId of threadIds) { answered.add(threadId); notify(); }
+  assert.equal(f.deltas.length, before, "nothing projects while the burst is still arriving");
+  for (const run of queued.splice(0)) run();
+  assert.equal(f.deltas.length, before + 1, "the whole burst lands as one browser delta");
+  const value = f.updates.at(-1);
+  assert.ok(value?.kind === "threadSummaries" && value.phase === "current");
+  assert.equal(Object.keys(value.data).length, threadIds.length);
+  answered.delete(threadIds[0]!);
+  notify();
+  assert.equal(queued.length, 1, "a later delta schedules its own projection");
 });
 
 test("two daemons both claiming a thread read as a conflict, not either owner", async context => {

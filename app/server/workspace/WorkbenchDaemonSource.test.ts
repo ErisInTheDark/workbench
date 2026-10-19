@@ -517,8 +517,16 @@ test("a summary batch retargets in place, sharers asking for its current ids kee
   assert.equal(socket.sent.length, sharedOffset, "sharing and same-id retargets send nothing upstream");
   const offset = socket.sent.length;
   handle.retarget({ kind: "threadSummaries", threadIds: [first, second] });
-  const retarget = await socket.request("workspace/retarget", offset);
-  assert.equal(retarget.params.subscriptionId, opened.params.subscriptionId);
+  const patched = await socket.request("workspace/retarget", offset);
+  assert.equal(patched.params.subscriptionId, opened.params.subscriptionId);
+  assert.deepEqual((patched.params as { patch?: object }).patch, { kind: "threadSummaries", add: [second], remove: [] },
+    "a summary retarget sends only the ids that changed");
+
+  // A daemon that rejects patches gets the whole query; one that cannot retarget at all gets a fresh subscription.
+  const wholeOffset = socket.sent.length;
+  socket.notify({ id: patched.id, error: { code: -32602, message: "Invalid params" } });
+  const retarget = await socket.request("workspace/retarget", wholeOffset);
+  assert.deepEqual(retarget.params.query, { kind: "threadSummaries", threadIds: [first, second] });
 
   const fallbackOffset = socket.sent.length;
   socket.notify({ id: retarget.id, error: { code: -32601, message: "Method not found" } });

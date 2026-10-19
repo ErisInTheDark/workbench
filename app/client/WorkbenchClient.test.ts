@@ -39,12 +39,13 @@ async function rowsRequest(socket: ObservedSocket, after: number, accept: (proje
   const selected = (query: { kind: string; projects?: RowSelection }) => query.kind === "projectThreads" && accept(query.projects ?? null);
   const asked = await Promise.race([
     socket.request("workspace/observe", after, request => selected(request.params.query)),
-    socket.request("workspace/retarget", after, request => selected(request.params.query)),
+    socket.request("workspace/retarget", after, request => "query" in request.params && selected(request.params.query)),
   ]);
+  if (!("query" in asked.params)) throw new Error("Row selections retarget with a whole query.");
   const observed = socket.sent.findLast(request => request.method === "workspace/observe"
     && request.params.subscriptionId === asked.params.subscriptionId);
   assert.ok(observed?.method === "workspace/observe");
-  return { observed, asked };
+  return { observed, asked, query: asked.params.query };
 }
 async function openProjectHome(client: ReturnType<typeof WorkbenchClient>, route: WorkbenchRoute) {
   const result = await client.controls.applyRoute(route);
@@ -449,9 +450,9 @@ test("an older app broadens row demand only when project groups are unavailable"
     request => request.params.query.kind === "projectGroups");
   const offset = socket.sent.length;
   socket.fail(groups, "Unknown query kind");
-  const { asked: fallback } = await rowsRequest(socket, offset, projects => projects === null);
-  assert.ok(fallback.params.query.kind === "projectThreads");
-  assert.equal(fallback.params.query.projects, null);
+  const { query: fallback } = await rowsRequest(socket, offset, projects => projects === null);
+  assert.ok(fallback.kind === "projectThreads");
+  assert.equal(fallback.projects, null);
   assert.ok(warnings.some(message => message.includes("Workspace query failed")));
 });
 
@@ -738,9 +739,9 @@ test("a thread viewed from another project keeps demand for its owning project r
     location: ownerLocation, logicalProjectId: ownerLogicalId,
   } });
   const opening = client.controls.applyRoute(route);
-  const { asked: rows } = await rowsRequest(socket, ownerRowOffset, projects => projects?.length === 2);
-  if (rows.params.query.kind !== "projectThreads") throw new Error("Expected owner row observation.");
-  assert.deepEqual(rows.params.query.projects, [
+  const { query: rows } = await rowsRequest(socket, ownerRowOffset, projects => projects?.length === 2);
+  if (rows.kind !== "projectThreads") throw new Error("Expected owner row observation.");
+  assert.deepEqual(rows.projects, [
     { kind: "logical", projectId: logicalId },
     { kind: "logical", projectId: ownerLogicalId },
   ]);
