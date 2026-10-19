@@ -9,7 +9,6 @@
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
  * - isHiddenCommandExecution/hasReasoningSteps: shared visibility decisions.
  * - CommandSequenceRenderSegment/buildCommandSequenceRenderSegments: final command presentation groups.
- * - isBrowseCommandItem: identify commands rendered separately as Browse requests.
  * - getRenderableBlockItems/getRenderableBlockKey: identify grouped render rows.
  * - reuseRenderableBlocks/hasSameBlockTimeline: retain unchanged rows across transcript item arrivals.
  */
@@ -34,7 +33,7 @@ import {
   getNativeToolDisplay,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
   isNativeFileOperation, getNativeFileChanges,
-  isBrowseCommandMatcherClaim, isGitArcWaitMatcherClaim, isThreadContextMatcherClaim,
+  isGitArcWaitMatcherClaim, isThreadContextMatcherClaim,
   isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
   parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
   type CommandShell,
@@ -510,7 +509,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       if (shell) { if (!isHiddenCommandExecution(shell.command)) commands(shell); continue; }
       const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
       if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) continue;
-      if (route?.kind === "simple" && route.rendering.claimedBy !== "browse.command") { commands(item); continue; }
+      if (route?.kind === "simple") { commands(item); continue; }
     }
     if (item.type === "reasoning") {
       const visible = omitThreadReasoningStep(item, hidden.reasoningStep);
@@ -570,12 +569,6 @@ type CommandContext = {
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 };
-
-export function isBrowseCommandItem({ item, ...context }: CommandContext & { item: CommandSequenceItem }) {
-  return item.type === "commandExecution" && isBrowseCommandMatcherClaim(getThreadCommandDisplay({
-    command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell, ...context,
-  }).claimedBy);
-}
 
 export type CommandSequenceRenderSegment =
   | { items: CommandSequenceItem[]; kind: "commands" }

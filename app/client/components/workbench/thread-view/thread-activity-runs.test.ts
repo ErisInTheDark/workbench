@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 import { buildActivityRuns } from "./thread-activity-runs";
 import { buildRenderableBlocks, getRenderableBlockItems, type CommandItem, type ThreadRenderableBlock } from "./thread-render-blocks";
@@ -73,6 +74,31 @@ test("matcher-named vis checks group like other commands while unnamed dedicated
   assert.deepEqual(shape([command("before"), command("shot", "wb vis screenshot mockups/a.tsx"), command("after")]), [
     ["run", [["commands", ["before", "shot", "after"]]]],
   ]);
+});
+
+function screenshotSteer(id: string, url: string): ThreadItem {
+  return { id, type: "userMessage", clientId: null, content: [
+    { type: "text", text: createAgentScreenshotSteerText(), text_elements: [] },
+    { type: "image", url },
+  ] };
+}
+
+test("CLI and MCP Browse calls join runs, and their screenshot steers fold into the step that took them", () => {
+  const cli = command("cli", 'wb browse run --session lab --command "open http://localhost:3002" --command screenshot');
+  const tool = { ...mcp("tool", "browse_run", { commands: ["snapshot --compact"], session: "lab" }) };
+  assert.deepEqual(shape([command("before"), cli, tool, command("after")]), [
+    ["run", [["commands", ["before", "cli", "tool", "after"]]]],
+  ]);
+
+  const shown = new Set(["/asset/shot.png"]);
+  const items = [cli, screenshotSteer("shot", "/asset/shot.png"), command("after")];
+  const folded = buildActivityRuns(buildRenderableBlocks(items), { browseScreenshotUrls: shown });
+  assert.deepEqual(folded.map(block => [block.kind, getRenderableBlockItems(block).map(item => item.id)]), [
+    ["activityRun", ["cli", "after"]],
+  ]);
+
+  const unrelated = buildActivityRuns(buildRenderableBlocks([cli, screenshotSteer("vis", "/asset/vis.png"), command("after")]), { browseScreenshotUrls: shown });
+  assert.deepEqual(unrelated.map(block => block.kind), ["activityRun", "item", "activityRun"]);
 });
 
 test("hidden calls leave no step and agent-only patch recovery context is never shown", () => {

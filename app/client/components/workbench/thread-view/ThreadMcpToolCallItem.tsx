@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadMcpToolCallItem: render user-controlled MCP details with summary metadata, approval glyph, results, and errors.
+ * - default ThreadMcpToolCallItem: render user-controlled MCP details with summary metadata, approval glyph, results, and errors; structured details replace the raw invocation unless the call failed.
  */
 "use client";
 
@@ -65,7 +65,8 @@ export default function ThreadMcpToolCallItem ({
     : item.status === "failed" || Boolean(item.error) ? "failed" : "completed";
   const outcomeDisplay = commandDisplay ? getThreadCommandOutcomeDisplay(commandDisplay, outcome) : null;
 
-  if (item.status !== "completed") {
+  // A live call already reads as ongoing in its summary; only settled non-success outcomes need naming.
+  if (item.status !== "completed" && item.status !== "inProgress") {
     metaParts.push(
       <ThreadSummaryText
         key={`${item.id}:status`}
@@ -131,13 +132,15 @@ export default function ThreadMcpToolCallItem ({
           </div>
         ) : null}
         {details}
-        <ThreadHydratedToolCallDetails
-          invocation={formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool })}
-          item={item}
-          output={body => body.resultExpiredAt
-            ? "Result expired after 1 day."
-            : body.error?.message || formatToolCallOutput({ content: body.result?.content, fallback: body.result?.structuredContent ?? body.result?._meta })}
-        />
+        {details && outcome !== "failed" ? null : (
+          <ThreadHydratedToolCallDetails
+            invocation={formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool })}
+            item={item}
+            output={body => body.resultExpiredAt
+              ? "Result expired after 1 day."
+              : body.error?.message || formatToolCallOutput({ content: body.result?.content, fallback: body.result?.structuredContent ?? body.result?._meta })}
+          />
+        )}
       </>
       )}
     />

@@ -106,6 +106,7 @@ export function tokenizeCommand(value: string) {
 
 export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {
   return {
+    browseActions: 0,
     deletedPaths: 0,
     gitCheckpointCreates: 0,
     gitCheckpointDiffs: 0,

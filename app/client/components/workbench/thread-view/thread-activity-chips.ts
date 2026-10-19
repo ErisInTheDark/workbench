@@ -4,7 +4,7 @@
  * - CommandChipContext: matcher context for summarising commands.
  * - getCommandBlockItems: command items in the shape the command matchers summarise.
  * - getCommandItemDisplay: one command's matcher display.
- * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then its matched command categories.
+ * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then its matched command categories, with Browse screenshots beside browser steps.
  */
 import type { ComponentType } from "react";
 
@@ -17,11 +17,12 @@ import {
   type ThreadCommandSummaryStats,
 } from "../../../workbench/thread/thread-command-matchers";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary } from "workbench-shared/types";
 import {
-  BookBookmarkIcon, BookSearchIcon, CodeIcon, EyeIcon, FileAddIcon, FileDeleteIcon, FileTextIcon, FileUpdateIcon,
-  FolderClosedIcon, GitArcProposalIcon, GitGraphIcon, SearchIcon, TerminalIcon, type IconProps,
+  BookBookmarkIcon, BookSearchIcon, BrowserSessionIcon, CodeIcon, EyeIcon, FileAddIcon, FileDeleteIcon, FileTextIcon, FileUpdateIcon,
+  FolderClosedIcon, GitArcProposalIcon, GitGraphIcon, ImageIcon, SearchIcon, TerminalIcon, type IconProps,
 } from "../workbench-icons";
+import { getBrowseItemSteps, getBrowseScreenshots } from "./thread-browse-steps";
 import { getThreadFileChangeEntries } from "./ThreadFileChangeItem";
 import type { ActivitySegment, CommandSequenceItem } from "./thread-render-blocks";
 
@@ -35,6 +36,8 @@ export interface ActivityChip {
 }
 
 export interface CommandChipContext {
+  /** Recorded Browse results, so Browse steps can count and show their screenshots. */
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
   threadCwdPath?: string;
@@ -52,6 +55,7 @@ const COMMAND_CHIPS: ReadonlyArray<{ Icon: ComponentType<IconProps>; key: string
   { Icon: GitArcProposalIcon, key: "arc", stats: ["gitCheckpointCreates", "gitCheckpointDiffs", "gitCheckpointRestores"], verb: "arc steps" },
   { Icon: CodeIcon, key: "typechecked", stats: ["typescriptBuilds", "typescriptValidations"], verb: "typechecked" },
   { Icon: BookBookmarkIcon, key: "skills", stats: ["skillLoads"], verb: "skills" },
+  { Icon: BrowserSessionIcon, key: "browse", stats: ["browseActions"], verb: "browser steps" },
   { Icon: BookSearchIcon, key: "web", stats: ["webRequests"], verb: "web" },
   { Icon: TerminalIcon, key: "ran", stats: ["otherCommands"], verb: "ran" },
 ];
@@ -109,7 +113,16 @@ export function getActivityChips(segments: readonly ActivitySegment[], context: 
     : null;
   const commandChips = COMMAND_CHIPS.flatMap(({ Icon, key, stats: statKeys, verb }) => {
     const count = (stats ? statKeys.reduce((total, stat) => total + stats[stat], 0) : 0) + (key === "web" ? searches : 0);
-    return count ? [{ Icon, count, key, verb }] : [];
+    const chip = count ? [{ Icon, count, key, verb }] : [];
+    return key === "browse" ? [...chip, ...screenshotChip(commands, context)] : chip;
   });
   return [...fileChips(segments), ...commandChips];
+}
+
+/** Screenshots Browse steps captured, next to the browser steps that took them. */
+function screenshotChip(commands: readonly CommandSequenceItem[], context: CommandChipContext): ActivityChip[] {
+  const urls = new Set(commands.flatMap(item => getBrowseScreenshots(
+    getBrowseItemSteps(item, getCommandItemDisplay(item, context), context.browseResultEntries ?? []) ?? [],
+  )));
+  return urls.size ? [{ Icon: ImageIcon, count: urls.size, key: "screenshots", verb: "screenshots" }] : [];
 }

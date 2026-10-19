@@ -63,6 +63,7 @@
  * - Redo2Icon/Grid3x3Icon/WandSparklesIcon: editor redo, grid and format glyphs.
  * - MousePointerIcon/PenToolIcon/CircleIcon/CircleDotIcon/FlipHorizontalIcon/FlipVerticalIcon/PaletteIcon/RulerIcon/SaveAsIcon:
  *   svg editor tools, transforms, overlay toggles and save as.
+ * - KeyboardIcon/TextCursorInputIcon/HighlighterIcon: browser step input and highlight glyphs.
  * - MagnetIcon/MagnetOffIcon: point snapping on and off.
  * - BoldIcon/ItalicIcon/CodeIcon/Heading1Icon/Heading2Icon/Heading3Icon/TextQuoteIcon/ListOrderedIcon: markdown toolbar glyphs.
  * - MessageSquareTextIcon/SparklesIcon: markdown comment and suggest-mode glyphs (FeatherIcon is edit mode).
@@ -1025,6 +1026,24 @@ export function Grid3x3Icon(props: IconProps) {
 
 export function MousePointerIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" /></OutlinedIcon>;
+}
+
+export function KeyboardIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M10 8h.01" /><path d="M12 12h.01" /><path d="M14 8h.01" /><path d="M16 12h.01" /><path d="M18 8h.01" />
+    <path d="M6 8h.01" /><path d="M7 16h10" /><path d="M8 12h.01" /><rect width="20" height="16" x="2" y="4" rx="2" />
+  </OutlinedIcon>;
+}
+
+export function TextCursorInputIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M12 20h-1a2 2 0 0 1-2-2 2 2 0 0 1-2 2H6" /><path d="M13 8h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7" />
+    <path d="M5 16H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h1" /><path d="M6 4h1a2 2 0 0 1 2 2 2 2 0 0 1 2-2h1" /><path d="M9 6v12" />
+  </OutlinedIcon>;
+}
+
+export function HighlighterIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="m9 11-6 6v3h9l3-3" /><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" /></OutlinedIcon>;
 }
 
 export function PenToolIcon(props: IconProps) {

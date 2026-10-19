@@ -300,6 +300,7 @@ test("SQLite projection preserves canonical order with initially closed Browse d
   };
 
   const html = renderToStaticMarkup(
+    <ThreadTestOpenActivityRuns runIds={[browse.id]}>
     <ThreadTranscriptProjection
       canLoadPreviousTurn={false}
       historySentinelRef={createRef<HTMLDivElement>()}
@@ -313,12 +314,13 @@ test("SQLite projection preserves canonical order with initially closed Browse d
       relatedThreadsById={{}}
       subagents={[]}
       workspaceRoots={[]}
-    />,
+    />
+    </ThreadTestOpenActivityRuns>,
   );
 
   const firstIndex = html.indexOf("First SQLite item");
   const lastIndex = html.indexOf("Last SQLite item");
-  const browseIndex = html.indexOf("Check page");
+  const browseIndex = html.indexOf("Attached to turn two");
   assert.notEqual(firstIndex, -1);
   assert.notEqual(browseIndex, -1);
   assert.notEqual(lastIndex, -1);

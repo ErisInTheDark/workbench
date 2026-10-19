@@ -1,34 +1,36 @@
 /*
  * Exports:
- * - buildActivityRuns: fold consecutive reasoning, plain commands, file changes and web searches into activity runs; every other block stays a boundary.
+ * - buildActivityRuns: fold consecutive reasoning, plain commands (Browse included), file changes and web searches into activity runs; screenshot steers a Browse step already shows fold away; every other block stays a boundary.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { getAgentScreenshotSteerImages, isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import {
   buildCommandSequenceRenderSegments,
-  isBrowseCommandItem,
   type ActivitySegment,
   type ThreadRenderableBlock,
 } from "./thread-render-blocks";
 
 type ActivityRunBlock = Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
 
-type CommandContext = Omit<Parameters<typeof buildCommandSequenceRenderSegments>[0], "items">;
+type CommandContext = Omit<Parameters<typeof buildCommandSequenceRenderSegments>[0], "items"> & {
+  /** Screenshots Browse steps already show; steers carrying only these are duplicates. */
+  browseScreenshotUrls?: ReadonlySet<string>;
+};
 
-/** Plain commands join runs; lifecycle commands (arc, subagents, titles, approvals, Browse) keep their own rows and end the run. */
+/** Plain commands join runs; lifecycle commands (arc, subagents, titles, approvals) keep their own rows and end the run. */
 function splitCommandBlock(block: Extract<ThreadRenderableBlock, { kind: "commandSequence" }>, context: CommandContext) {
-  return buildCommandSequenceRenderSegments({ items: block.items, ...context }).flatMap<ActivitySegment | ThreadRenderableBlock>(segment => {
-    if (segment.kind !== "commands") {
-      if (segment.kind === "approval") return [{ items: segment.items, kind: "commandSequence" }];
-      if (segment.kind === "subagentWait") return [{ items: segment.group.entries.map(entry => entry.item), kind: "commandSequence" }];
-      return [{ items: [segment.item], kind: "commandSequence" }];
-    }
-    const pieces: Array<ActivitySegment | ThreadRenderableBlock> = [];
-    for (const item of segment.items) {
-      if (isBrowseCommandItem({ item, ...context })) pieces.push({ items: [item], kind: "commandSequence" });
-      else pieces.push({ items: [item], kind: "commands" });
-    }
-    return pieces;
+  return buildCommandSequenceRenderSegments({ items: block.items, ...context }).map<ActivitySegment | ThreadRenderableBlock>(segment => {
+    if (segment.kind === "commands") return { items: segment.items, kind: "commands" };
+    if (segment.kind === "approval") return { items: segment.items, kind: "commandSequence" };
+    if (segment.kind === "subagentWait") return { items: segment.group.entries.map(entry => entry.item), kind: "commandSequence" };
+    return { items: [segment.item], kind: "commandSequence" };
   });
+}
+
+function isBrowseScreenshotDuplicate(block: ThreadRenderableBlock, urls: ReadonlySet<string> | undefined) {
+  if (!urls?.size || block.kind !== "item" || block.item.type !== "userMessage" || !isAgentScreenshotSteerUserMessage(block.item)) return false;
+  const images = getAgentScreenshotSteerImages(block.item);
+  return images.length > 0 && images.every(image => urls.has(image.url));
 }
 
 function toSegments(block: ThreadRenderableBlock, context: CommandContext): Array<ActivitySegment | ThreadRenderableBlock> {
@@ -52,7 +54,8 @@ function segmentItems(segment: ActivitySegment): ThreadItem[] {
 export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], context: CommandContext = {}): ThreadRenderableBlock[] {
   const result: ThreadRenderableBlock[] = [];
   let run: ActivityRunBlock | null = null;
-  for (const piece of blocks.flatMap(block => toSegments(block, context))) {
+  const visible = blocks.filter(block => !isBrowseScreenshotDuplicate(block, context.browseScreenshotUrls));
+  for (const piece of visible.flatMap(block => toSegments(block, context))) {
     if (!isSegment(piece)) {
       run = null;
       result.push(piece);

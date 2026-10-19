@@ -89,7 +89,11 @@ export interface ThreadCommandDetailTarget {
 }
 
 export interface ThreadCommandDetailRow {
+  /** Machine action name (e.g. a BrowseMD command), for presentation lookups such as icons. */
+  action?: string | null;
   contextText?: string | null;
+  /** The row's content is the point of the step (an explicit screenshot), so it shows open. */
+  defaultOpen?: boolean;
   detailKind?: ThreadCommandDetailResultKind;
   detailLabel?: string | null;
   detailText?: string | null;
@@ -104,6 +108,7 @@ export interface ThreadCommandDetailRow {
 }
 
 export interface ThreadCommandSummaryStats {
+  browseActions: number;
   deletedPaths: number;
   gitCheckpointCreates: number;
   gitCheckpointDiffs: number;

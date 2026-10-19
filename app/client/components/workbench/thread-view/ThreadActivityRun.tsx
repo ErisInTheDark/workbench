@@ -13,6 +13,7 @@ import ChevronIcon from "../ChevronIcon";
 import { LoaderIcon } from "../workbench-icons";
 import { isNativeFileOperation } from "../../../workbench/thread/thread-command-matchers";
 import { getActivityChips, getCommandItemDisplay, type ActivityChip, type CommandChipContext } from "./thread-activity-chips";
+import { describeBrowseStep, getBrowseItemSteps, getCurrentBrowseStep } from "./thread-browse-steps";
 import type { ActivitySegment, CommandSequenceItem, ThreadRenderableBlock } from "./thread-render-blocks";
 import { getThreadFileChangeEntries, ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import ThreadDurationText from "./ThreadDurationText";
@@ -99,8 +100,11 @@ function StatusContent({ context, item }: { context: CommandChipContext; item: T
   if (item.type !== "commandExecution" && item.type !== "mcpToolCall" && item.type !== "dynamicToolCall") {
     return <span className={shimmerTextClassName}>Working</span>;
   }
+  const display = getCommandItemDisplay(item, context);
+  const browseStep = getCurrentBrowseStep(getBrowseItemSteps(item, display, context.browseResultEntries ?? []) ?? []);
   // Plain text, like the live status panel: shimmer cannot paint through rich summary chips.
-  return <span className={shimmerTextClassName}>{getCommandItemDisplay(item, context)?.ongoingSummaryText || "Working"}</span>;
+  const text = browseStep ? `Browsing: ${describeBrowseStep(browseStep)}` : display?.ongoingSummaryText;
+  return <span className={shimmerTextClassName}>{text || "Working"}</span>;
 }
 
 function segmentItems(segment: ActivitySegment): ThreadItem[] {
@@ -132,8 +136,13 @@ export default function ThreadActivityRun({
     const entry = itemTimeline?.find(candidate => candidate.itemId === item.id);
     return entry ? [entry.startedAt ?? entry.firstSeenAt] : [];
   }).find((time): time is number => time !== null) ?? null;
-  const durationMs = useThreadLiveDuration(current ? 0 : settledDurationMs, current ? startedAtMs : null);
-  const status = current ? <StatusContent context={context} item={current} /> : null;
+  // While the turn works and nothing has followed this run, it stays live: between steps it is thinking,
+  // so its status row never collapses and re-expands from one step to the next.
+  const live = Boolean(current) || (turnLive && isMostRecent);
+  const durationMs = useThreadLiveDuration(live ? 0 : settledDurationMs, live ? startedAtMs : null);
+  const status = current
+    ? <StatusContent context={context} item={current} />
+    : live ? <span className={shimmerTextClassName}>Thinking</span> : null;
 
   return (
     <div className="my-1.5" data-thread-activity-run="true">

@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - default ThreadCommandDetailRows: render the shared matcher detail rows.
+ * - default ThreadCommandDetailRows: render the shared matcher detail rows, nested or as full command rows with an icon each; rows marked default-open show their content.
  */
 "use client";
+import type { ReactNode } from "react";
 import type { ThreadCommandDetailRow, ThreadCommandDetailTarget } from "../../../workbench/thread/thread-command-matchers";
 import { createEmptyCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
@@ -106,22 +107,27 @@ function getDetailRowSummary(row: ThreadCommandDetailRow): ThreadCommandDetailRo
   };
 }
 
-export default function ThreadCommandDetailRows({ rows, projectFilePaths, projectId }: {
+/** `icon` presents rows as full command rows (command sizing, the icon leading each summary) instead of nested detail rows. */
+export default function ThreadCommandDetailRows({ icon, rows, projectFilePaths, projectId }: {
+  icon?: (row: ThreadCommandDetailRow) => ReactNode;
   rows: ThreadCommandDetailRow[]; projectFilePaths?: readonly string[]; projectId?: string | null;
 }) {
   if (!rows.length) return null;
   const contexts = Array.from(new Set(rows.map(row => row.contextText?.trim()).filter(Boolean)));
   const hideSharedContext = contexts.length === 1 && rows.length > 1;
-  return <div className="space-y-0.5">
+  const rowClassName = icon ? "py-2" : "py-1";
+  const summaryClassName = icon ? "text-[0.92em] leading-[1.6]" : "text-[0.9em] leading-[1.55]";
+  return <div className={icon ? "" : "space-y-0.5"}>
     {rows.map(row => {
-      const summary = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />;
+      const details = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />;
+      const summary = icon ? <span className="inline-flex min-w-0 max-w-full items-center gap-2">{icon(row)}{details}</span> : details;
       const hasExpandableContent = shouldRenderFramedDetailTarget(row) || Boolean(row.imageUrl || row.imageUrls?.length);
       return <ThreadMeasuredContent key={row.id}><div className="space-y-1">
-        {hasExpandableContent ? <Disclosure className="py-1" contentClassName="space-y-1"
-          leading={renderCommandDetailStateIcon(row)} leadingClassName={getCommandDetailStateMarkerClassName(row)}
-          leadingLabel={getCommandDetailStateLabel(row)} summary={summary} summaryClassName="text-[0.9em] leading-[1.55]">
+        {hasExpandableContent ? <Disclosure className={rowClassName} contentClassName="space-y-1" defaultOpen={row.defaultOpen ?? false}
+          leading={icon ? undefined : renderCommandDetailStateIcon(row)} leadingClassName={getCommandDetailStateMarkerClassName(row)}
+          leadingLabel={getCommandDetailStateLabel(row)} summary={summary} summaryClassName={summaryClassName}>
           <ThreadCommandDetailResultBlock row={row} /><ThreadCommandDetailImageBlock row={row} />
-        </Disclosure> : <DisclosureStaticRow className="py-1" summary={summary} summaryClassName="text-[0.9em] leading-[1.55]" />}
+        </Disclosure> : <DisclosureStaticRow className={rowClassName} summary={summary} summaryClassName={summaryClassName} />}
       </div></ThreadMeasuredContent>;
     })}
   </div>;

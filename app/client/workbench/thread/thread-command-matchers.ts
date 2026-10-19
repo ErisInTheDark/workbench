@@ -285,6 +285,15 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
       : `checking vis ${count} times`,
   },
   {
+    key: "browseActions",
+    format: (count) => count === 1
+      ? "ran 1 browser step"
+      : `ran ${count} browser steps`,
+    formatOngoing: (count) => count === 1
+      ? "running 1 browser step"
+      : `running ${count} browser steps`,
+  },
+  {
     key: "webRequests",
     format: (count) => count === 1
       ? "made a web request"

@@ -431,7 +431,18 @@ function formatBrowseActionLabel(action: string) {
   return labels[action] ?? action.replace(/[-_]+/gu, " ").replace(/^./u, (character) => character.toUpperCase());
 }
 
+/** BrowseMD runs page JavaScript from a fenced `js` or `init-js` block; its body is the step's target. */
+function readBrowseScriptFence(command: string) {
+  const fence = /^```(init-js|js)[^\n]*\n([\s\S]*?)\n?```\s*$/u.exec(command.trim());
+  return fence ? { action: fence[1] === "js" ? "eval" : "init-js", body: fence[2]!.trim() } : null;
+}
+
 function buildBrowseDetailRow(command: string, index: number): ThreadCommandDetailRow {
+  const script = readBrowseScriptFence(command);
+  if (script) {
+    const label = script.action === "eval" ? "Evaluate" : "Install page script";
+    return { action: script.action, id: `browse-command-${index}`, label, summaryParts: [CommandMatcher.Text(label)], target: { kind: "code", text: script.body } };
+  }
   const tokens = tokenizeCommand(command) ?? [command];
   const action = tokens[0] ?? "command";
   const args = tokens.slice(1);
@@ -440,6 +451,7 @@ function buildBrowseDetailRow(command: string, index: number): ThreadCommandDeta
     : ["mouse", "move"].includes(action) ? args.join(" ") || null : null;
   const label = formatBrowseActionLabel(action);
   return {
+    action,
     id: `browse-command-${index}`,
     label,
     summaryParts: [CommandMatcher.Text(label)],
@@ -479,7 +491,7 @@ function renderBrowse(name: WorkbenchCommandPresentationName, args: { [key: stri
         hideCommandCwd: true,
         hideCommandOutput: true,
         ongoing: ongoingParts,
-        stats: { webRequests: 1 },
+        stats: { browseActions: Math.max(commands.length, 1) },
         summary: summaryParts,
       }),
     };
@@ -493,7 +505,7 @@ function renderBrowse(name: WorkbenchCommandPresentationName, args: { [key: stri
     appendBrowseSession(ongoingParts, session);
     return {
       kind: "simple",
-      rendering: rendering({ claimedBy: "browse.command", hideCommandCwd: true, hideCommandOutput: true, ongoing: ongoingParts, stats: { webRequests: 1 }, summary: summaryParts }),
+      rendering: rendering({ claimedBy: "browse.command", hideCommandCwd: true, hideCommandOutput: true, ongoing: ongoingParts, stats: { browseActions: 1 }, summary: summaryParts }),
     };
   }
   const action = name.slice("browse_".length);
@@ -505,7 +517,7 @@ function renderBrowse(name: WorkbenchCommandPresentationName, args: { [key: stri
   appendBrowseSession(ongoingParts, session);
   return {
     kind: "simple",
-    rendering: rendering({ claimedBy: "browse.command", hideCommandCwd: true, hideCommandOutput: true, ongoing: ongoingParts, stats: { webRequests: 1 }, summary: summaryParts }),
+    rendering: rendering({ claimedBy: "browse.command", hideCommandCwd: true, hideCommandOutput: true, ongoing: ongoingParts, stats: { browseActions: 1 }, summary: summaryParts }),
   };
 }
 

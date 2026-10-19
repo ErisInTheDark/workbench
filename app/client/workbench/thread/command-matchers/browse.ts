@@ -2,7 +2,7 @@
  * Exports:
  * - BROWSE_COMMAND_MATCHERS: semantic command matcher for wb browse commands. Keywords: browse, workbench, cli, command matcher.
  * - isBrowseCommandMatcherClaim: detect Browse matcher ids for specialized sequence rendering. Keywords: browse, command matcher, sequence.
- * - parseBrowseSequenceCommandOutput: parse streamed or complete Browse output into semantic result metadata. Keywords: browse, output, detail rows.
+ * - parseBrowseSequenceCommandOutput: parse streamed or complete Browse output into semantic result metadata, including captured screenshot assets. Keywords: browse, output, detail rows.
  */
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
@@ -94,7 +94,7 @@ export function isBrowseCommandMatcherClaim(value: string | null | undefined) {
   return value?.split(",").some((claim) => claim.trim() === BROWSE_MATCHER_ID) ?? false;
 }
 
-type BrowseOutputRow = Partial<Pick<ThreadCommandDetailRow, "detailKind" | "detailLabel" | "detailText" | "durationMs" | "state">>;
+type BrowseOutputRow = Partial<Pick<ThreadCommandDetailRow, "detailKind" | "detailLabel" | "detailText" | "durationMs" | "imageUrl" | "state">>;
 
 export function parseBrowseSequenceCommandOutput(output: string | null | undefined): BrowseOutputRow[] {
   const events = String(output ?? "")
@@ -149,8 +149,10 @@ function formatBrowseResult(value: unknown): BrowseOutputRow {
   const stderr = typeof value.stderr === "string" ? value.stderr.trim() : "";
   const stdout = typeof value.stdout === "string" ? value.stdout.trim() : "";
   const detailText = error || stderr || stdout;
+  const imageUrl = readScreenshotAssetUrl(value.assetUrl) ?? readScreenshotAssetUrl(parseRecord(stdout)?.assetUrl);
   return {
     ...(typeof value.durationMs === "number" ? { durationMs: value.durationMs } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
     ...(detailText
       ? {
         detailKind: error || stderr ? "error" as const : "result" as const,
@@ -160,6 +162,10 @@ function formatBrowseResult(value: unknown): BrowseOutputRow {
       : {}),
     state: ok ? "completed" : "failed",
   };
+}
+
+function readScreenshotAssetUrl(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function parseRecord(value: string) {

@@ -43,6 +43,17 @@ test("file chips lead in created, edited, deleted order, counting each file once
   ]);
 });
 
+test("Browse calls count their steps, then the screenshots the agent explicitly took", () => {
+  const run = command("browse", 'wb browse run --command "open http://localhost:3002" --command screenshot --command "click text=Save"');
+  const entry = (actionIndex: number, action: string, assetUrl: string) => ({ action, actionIndex, assetUrl, commandItemId: "browse",
+    durationMs: 5, entryKey: action, recordedAt: actionIndex, session: null, state: "completed" as const, threadId: "thread", turnId: "turn" });
+  const entries = [entry(0, "open", "/asset/auto.png"), entry(1, "screenshot", "/asset/shot.png")];
+  assert.deepEqual(getActivityChips([{ items: [run], kind: "commands" }], { browseResultEntries: entries }).map(chip => [chip.key, chip.count]), [
+    ["browse", 3],
+    ["screenshots", 1],
+  ]);
+});
+
 test("web searches count with matched web requests and a reasoning-only run has no chips", () => {
   assert.deepEqual(chips([{ items: [
     { action: null, id: "web", query: "workbench", type: "webSearch" } as Extract<ThreadItem, { type: "webSearch" }>,

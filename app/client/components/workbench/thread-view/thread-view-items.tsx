@@ -38,6 +38,9 @@ import type { ThreadTextPresentationSource } from "../../../workbench/thread/Thr
 import { ThreadEntryAnimation } from "./ThreadRevealText";
 import ThreadActivityRun from "./ThreadActivityRun";
 import { buildActivityRuns } from "./thread-activity-runs";
+import { getBrowseItemSteps, getBrowseScreenshotUrls, getLiftedBrowseSteps } from "./thread-browse-steps";
+import { getCommandItemDisplay } from "./thread-activity-chips";
+import ThreadBrowseStepIcon from "./ThreadBrowseStepIcon";
 import {
   WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
 } from "workbench-shared/workbench/thread/thread-questionnaire-history";
@@ -67,6 +70,7 @@ import {
   getThreadCommandOutcomeDisplay,
   getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
+  getWorkbenchCommandRouteSummaryDisplay,
   getNativeToolDisplay,
   shouldUseWorkbenchMcpSpecializedRenderer,
   getGitArcMatcherAction,
@@ -77,7 +81,6 @@ import {
   parseGitArcWaitRef,
   parseWorkbenchMessageCommand,
   parseWorkbenchSubagentCommand,
-  parseBrowseSequenceCommandOutput,
   parseGitCheckpointCompareOutput,
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
@@ -88,13 +91,11 @@ import {
   parseWorkbenchTodoCommand,
   parseWorkbenchVisCommand,
   type ThreadCommandSummaryDisplay,
-  type ThreadCommandDetailRow,
 } from "../../../workbench/thread/thread-command-matchers";
 import {
   getSubagentSummary,
   resolveWorkbenchSubagentCommandTargets,
 } from "../../../workbench/thread/thread-subagents";
-import { formatDuration } from "workbench-shared/workbench/format-duration";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import { ThreadItemApprovalsContext, useThreadItemApproval } from "../../../workbench/thread/thread-item-approvals";
 import ThreadGitArcProposalItem from "./ThreadGitArcProposalItem";
@@ -188,7 +189,7 @@ import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 import {
   buildRenderableBlocks, buildCommandSequenceRenderSegments,
   getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, groupIncomingAgentMessageRuns,
-  hasReasoningSteps, hasSameBlockTimeline, isBrowseCommandItem, reuseRenderableBlocks,
+  hasReasoningSteps, hasSameBlockTimeline, reuseRenderableBlocks,
   type AgentCommentaryItem, type CommandItem, type CommandSequenceItem, type IncomingAgentMessageItem,
   type SubagentWaitItem, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
@@ -394,43 +395,6 @@ function useEntryMotionAfterMount(enabled: boolean) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   return enabled && mounted;
-}
-
-function formatBrowseResultEntryActionLabel(action: string) {
-  return action
-    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
-    .replace(/[-_]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .replace(/^./u, (value) => value.toUpperCase()) || "BrowseMD";
-}
-
-function shouldUseBrowseResultDetailAsTarget(entry: WorkbenchBrowseResultEntry) {
-  return entry.detailKind === "text"
-    && !entry.detailLabel
-    && Boolean(entry.detailText?.trim())
-    && /\b(?:directory|file|files|working directory)\b/iu.test(entry.action);
-}
-
-function createBrowseResultEntryDetailRows(entries: readonly WorkbenchBrowseResultEntry[]): ThreadCommandDetailRow[] {
-  return [...entries]
-    .sort((left, right) => left.actionIndex - right.actionIndex || left.recordedAt - right.recordedAt)
-    .map((entry) => {
-      const label = formatBrowseResultEntryActionLabel(entry.action);
-      const useDetailAsTarget = shouldUseBrowseResultDetailAsTarget(entry);
-      return {
-        detailKind: entry.detailKind ?? undefined,
-        detailLabel: entry.detailLabel ?? null,
-        detailText: useDetailAsTarget ? null : entry.detailText ?? null,
-        durationMs: entry.durationMs ?? null,
-        id: `browse-result:${entry.entryKey}`,
-        imageUrl: entry.assetUrl ?? null,
-        label,
-        state: entry.state,
-        summaryParts: [{ text: label, type: "text" as const }],
-        target: useDetailAsTarget && entry.detailText ? { kind: "code" as const, text: entry.detailText } : null,
-      };
-    });
 }
 
 function ThreadUserInputLine ({
@@ -1379,74 +1343,6 @@ function ThreadReasoningSequence ({
   );
 }
 
-function getDefaultBrowseDetailRowState(
-  rows: readonly ThreadCommandDetailRow[],
-  outputRows: readonly Partial<ThreadCommandDetailRow>[],
-  commandStatus: CommandItem["status"],
-  index: number,
-) {
-  const explicitState = outputRows[index]?.state;
-  if (explicitState) {
-    return explicitState;
-  }
-
-  if (commandStatus === "completed") {
-    return "completed";
-  }
-
-  if (commandStatus === "failed") {
-    return index === rows.length - 1 ? "failed" : "completed";
-  }
-
-  if (commandStatus === "inProgress") {
-    const activeIndex = outputRows.findIndex((row) => row.state === "inProgress");
-    if (activeIndex >= 0) {
-      return index < activeIndex ? "completed" : index === activeIndex ? "inProgress" : "queued";
-    }
-
-    const completedCount = outputRows.filter((row) => row.state === "completed" || row.state === "failed").length;
-    return index < completedCount ? "completed" : index === completedCount ? "inProgress" : "queued";
-  }
-
-  return rows[index]?.state ?? null;
-}
-
-function mergeCommandDetailRowsWithBrowseOutput(
-  rows: ThreadCommandDetailRow[] | undefined,
-  output: string | null,
-  browseResultEntries: readonly WorkbenchBrowseResultEntry[] = [],
-  commandStatus: CommandItem["status"] = "completed",
-) {
-  if (!rows?.length) {
-    return createBrowseResultEntryDetailRows(browseResultEntries);
-  }
-
-  const outputRows = parseBrowseSequenceCommandOutput(output);
-  const sidecarRows = new Map<number, WorkbenchBrowseResultEntry>();
-  for (const entry of browseResultEntries) {
-    sidecarRows.set(entry.actionIndex, entry);
-  }
-
-  return rows.map((row, index) => {
-    const sidecarRow = sidecarRows.get(index);
-    const durationMs = row.durationMs ?? sidecarRow?.durationMs ?? outputRows[index]?.durationMs ?? null;
-    const shouldSuppressDuplicateWaitDuration = row.label === "Wait"
-      && row.target?.kind === "text"
-      && durationMs !== null
-      && formatDuration(durationMs) === row.target.text;
-
-    return {
-      ...row,
-      detailKind: row.detailKind ?? sidecarRow?.detailKind ?? outputRows[index]?.detailKind,
-      detailLabel: row.detailLabel ?? sidecarRow?.detailLabel ?? outputRows[index]?.detailLabel ?? null,
-      detailText: row.detailText ?? sidecarRow?.detailText ?? outputRows[index]?.detailText ?? null,
-      durationMs: shouldSuppressDuplicateWaitDuration ? null : durationMs,
-      imageUrl: row.imageUrl ?? sidecarRow?.assetUrl ?? null,
-      state: row.state ?? sidecarRow?.state ?? getDefaultBrowseDetailRowState(rows, outputRows, commandStatus, index),
-    };
-  });
-}
-
 /** Enough recent context to follow a working child; older turn content stays one tab-click away. */
 const SUBAGENT_ACTIVITY_WINDOW_BLOCKS = 24;
 const NO_BLOCKS: ThreadRenderableBlock[] = [];
@@ -1737,16 +1633,10 @@ function ThreadCommandExecutionDetails ({
   const isBrowseCommand = isBrowseCommandMatcherClaim(commandDisplay.claimedBy);
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
     && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
-  const commandDetailRows = useMemo(() => (
-    isBrowseCommand
-      ? mergeCommandDetailRowsWithBrowseOutput(
-        commandDisplay.detailRows,
-        item.aggregatedOutput,
-        browseResultEntries.filter((entry) => entry.commandItemId === item.id),
-        item.status,
-      )
-      : commandDisplay.detailRows ?? []
-  ), [browseResultEntries, commandDisplay.detailRows, isBrowseCommand, item.aggregatedOutput, item.id, item.status]);
+  const commandDetailRows = useMemo(
+    () => getBrowseItemSteps(item, commandDisplay, browseResultEntries) ?? commandDisplay.detailRows ?? [],
+    [browseResultEntries, commandDisplay, item],
+  );
   const shouldHideCommandOutput = commandDisplay.hideCommandOutput
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
   const feedbackCommand = parseWorkbenchFeedbackCommand(commandDisplay.unwrappedCommand);
@@ -2028,7 +1918,7 @@ function ThreadCommandExecutionDetails ({
       summaryDisplay={outcomeCommandDisplay}
       detailRows={commandDetailRows}
       output={item.aggregatedOutput}
-      browse={isBrowseCommand}
+      browse={isBrowseCommand && (commandOutcome === "failed" || !commandDetailRows.length)}
       projectFilePaths={projectFilePaths}
       projectId={projectId}
       meta={metaParts.length ? (
@@ -2121,9 +2011,13 @@ function ThreadRegularCommandItem ({
       server: item.server,
       tool: item.tool,
     });
+    const browseSteps = getBrowseItemSteps(item, getWorkbenchCommandRouteSummaryDisplay(route), browseResultEntries);
     return (
       <ThreadApprovalAwareMcpToolCallItem
         activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
+        details={browseSteps?.length
+          ? <ThreadCommandDetailRows rows={browseSteps} projectFilePaths={projectFilePaths} projectId={projectId} />
+          : undefined}
         item={item}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
@@ -2198,18 +2092,6 @@ function ThreadRegularCommandSequence ({
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const allBrowseRequests = useMemo(() => {
-    if (items.length <= 1) {
-      return false;
-    }
-
-    return items.every((item) => isBrowseCommandItem({
-      item,
-      knownSkills,
-      projectRootPath,
-      workspaceRoots,
-    }));
-  }, [items, knownSkills, projectRootPath, workspaceRoots]);
   const commandBlockItems = useMemo(() => items.flatMap<CommandBlockItem>((item) => {
     if (item.type === "commandExecution") {
       return [{
@@ -2232,7 +2114,7 @@ function ThreadRegularCommandSequence ({
     return display ? [{ display }] : [];
   }), [items, knownSkills, projectRootPath, threadCwdPath, workspaceRoots]);
   const commandBlockDisplay = useMemo(() => {
-    if (items.length <= 1 || allBrowseRequests) {
+    if (items.length <= 1) {
       return null;
     }
 
@@ -2242,36 +2124,10 @@ function ThreadRegularCommandSequence ({
       projectRootPath,
       workspaceRoots,
     });
-  }, [allBrowseRequests, commandBlockItems, items.length, knownSkills, projectRootPath, workspaceRoots]);
+  }, [commandBlockItems, items.length, knownSkills, projectRootPath, workspaceRoots]);
 
   if (items.length === 1) {
     return <ThreadRegularCommandItem browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecent} item={items[0]} itemTimeline={itemTimeline} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
-  }
-
-  if (allBrowseRequests) {
-    return (
-      <div className="space-y-1">
-        {items.map((item, index) => (
-          <ThreadRegularCommandItem
-            browseResultEntries={browseResultEntries}
-            inlineMentionSources={inlineMentionSources}
-            isMostRecent={isMostRecent && index === items.length - 1}
-            item={item}
-            itemTimeline={itemTimeline}
-            key={item.id}
-            knownSkills={knownSkills}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            relatedThreadsById={relatedThreadsById}
-            subagents={subagents}
-            threadCwdPath={threadCwdPath}
-            threadId={threadId}
-            workspaceRoots={workspaceRoots}
-          />
-        ))}
-      </div>
-    );
   }
 
   if (!commandBlockDisplay) {
@@ -2566,20 +2422,25 @@ function ThreadRenderableBlockViewComponent ({
     return (
       <ThreadActivityRun
         block={block}
-        context={{ knownSkills, projectFilePaths, projectId, projectRootPath, threadCwdPath, workspaceRoots }}
+        context={{ browseResultEntries, knownSkills, projectFilePaths, projectId, projectRootPath, threadCwdPath, workspaceRoots }}
         isMostRecent={isMostRecentBlock}
         itemTimeline={itemTimeline}
         renderers={{
-          commands: (items, isLastSegment) => items.map((item, index) => (
-            <ThreadCommandSequence
+          commands: (items, isLastSegment) => items.map((item, index) => {
+            const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, { knownSkills, projectRootPath, threadCwdPath, workspaceRoots }), browseResultEntries ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES);
+            if (browseSteps) {
+              return <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id}
+                projectFilePaths={projectFilePaths} projectId={projectId} rows={browseSteps} />;
+            }
+            return <ThreadCommandSequence
               browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources}
               isMostRecent={isMostRecentBlock && isLastSegment && index === items.length - 1}
               itemTimeline={itemTimeline} items={[item]} key={item.id} knownSkills={knownSkills} presentationSource={presentationSource}
               projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath}
               relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath}
               threadId={threadId} turnId={turnId} workspaceRoots={workspaceRoots}
-            />
-          )),
+            />;
+          }),
           files: (items) => (
             <ThreadFileChangeItem animateEntries={animateEntries} items={items} projectFilePaths={projectFilePaths}
               projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
@@ -2849,23 +2710,9 @@ function ThreadRenderableBlockViewComponent ({
           />
         );
       }
-      const browseDetails = route?.kind === "simple" && route.rendering.claimedBy === "browse.command"
-        ? mergeCommandDetailRowsWithBrowseOutput(
-          route.rendering.result.detailRows,
-          formatToolCallOutput({
-            content: block.item.result?.content,
-            fallback: block.item.result?.structuredContent ?? block.item.result?._meta,
-          }),
-          (browseResultEntries ?? []).filter((entry) => entry.commandItemId === block.item.id),
-          block.item.status,
-        )
-        : [];
       return (
         <ThreadApprovalAwareMcpToolCallItem
           activeStartedAtMs={getActiveItemStartedAtMs(block.item, itemTimeline)}
-          details={browseDetails.length ? (
-            <ThreadCommandDetailRows rows={browseDetails} projectFilePaths={projectFilePaths} projectId={projectId} />
-          ) : undefined}
           item={block.item}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
@@ -2973,12 +2820,16 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
     }
     return timeline;
   }, [items, itemTimeline]);
+  const browseScreenshotUrls = useMemo(
+    () => getBrowseScreenshotUrls(items.flatMap(item => item.type === "commandExecution" ? [item] : []), browseResultEntries),
+    [browseResultEntries, items],
+  );
   let pendingItems: ThreadItem[] = [];
   const flushItems = () => {
     if (!pendingItems.length) return;
     entries.push(...buildActivityRuns(
       buildRenderableBlocks(pendingItems, { reasoningStep: hiddenReasoningStep }, threadCwdPath),
-      { knownSkills, projectRootPath, workspaceRoots },
+      { browseScreenshotUrls, knownSkills, projectRootPath, workspaceRoots },
     ).map(block => ({ block, kind: "block" as const })));
     pendingItems = [];
   };
