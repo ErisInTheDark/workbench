@@ -2,7 +2,8 @@
  * Exports:
  * - default ThreadVisSessionCard: show each live vis session's latest render under a summary row, keeping it while
  *   a new render is in flight, with frame-reload and end buttons and the outcome of the latest answer the page sent through
- *   `wb.send`. Frameless and presentational: its host frames it, and the thread view observes the sessions.
+ *   `wb.send`. With several sessions each is an open disclosure whose summary row carries its buttons. Frameless and
+ *   presentational: its host frames it, and the thread view observes the sessions.
  * - getVisSessionsUpdatedAt: latest render time across sessions.
  */
 "use client";
@@ -10,6 +11,7 @@
 import { useState } from "react";
 import type { VisLiveSession } from "workbench-shared/workbench/vis/vis-contract";
 import LoaderIcon from "../LoaderIcon";
+import Disclosure from "../../ui/Disclosure";
 import IconButton from "../../ui/IconButton";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import { CheckIcon, RefreshCwIcon, XIcon } from "../workbench-icons";
@@ -48,25 +50,17 @@ function AnswerStatusLine({ status }: { status: AnswerStatus | undefined }) {
   );
 }
 
-/** A lone session's path, time and buttons are the card's summary, so only multi-file cards repeat them per row. */
-function VisSession({ actions, answerStatus, onAnswer, reloads, session }: {
-  actions: Parameters<typeof SessionActions>[0] | null;
+type VisSessionProps = {
   answerStatus: AnswerStatus | undefined;
   onAnswer: (value: string) => void;
   /** Bumping this remounts the frame, rerunning the same document from scratch. */
   reloads: number;
   session: VisLiveSession;
-}) {
+};
+
+function VisSessionBody({ answerStatus, onAnswer, reloads, session }: VisSessionProps) {
   return (
-    <div className="space-y-1.5 px-3 py-2 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
-      {actions ? (
-        <div className="flex min-w-0 items-center gap-2 text-[0.76rem] text-fg/muted">
-          <span className="min-w-0 truncate font-mono text-text">{session.path}</span>
-          {session.render ? <WorkbenchRelativeTime className="shrink-0" timestampMs={session.render.renderedAt} /> : null}
-          {session.rendering ? <Spinner label="Rendering the latest change" /> : null}
-          <SessionActions {...actions} />
-        </div>
-      ) : null}
+    <>
       {session.failure ? <p className="m-0 whitespace-pre-wrap text-[0.74rem] text-danger" role="alert">{session.failure}</p> : null}
       <AnswerStatusLine status={answerStatus} />
       {session.render ? (
@@ -80,7 +74,30 @@ function VisSession({ actions, answerStatus, onAnswer, reloads, session }: {
       ) : (
         <div aria-hidden="true" className="h-48 animate-pulse rounded-[0.65rem] bg-fg/4 motion-reduce:animate-none" />
       )}
-    </div>
+    </>
+  );
+}
+
+/** One of several sessions: an open disclosure whose summary row carries its path, time and buttons. */
+function CollapsibleVisSession({ actions, ...props }: VisSessionProps & { actions: Parameters<typeof SessionActions>[0] }) {
+  const { session } = props;
+  return (
+    <Disclosure
+      className="px-3 py-2 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+      contentClassName="mt-1.5 space-y-1.5"
+      defaultOpen
+      summary={
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 truncate font-mono text-text">{session.path}</span>
+          {session.render ? <WorkbenchRelativeTime className="shrink-0" timestampMs={session.render.renderedAt} /> : null}
+          {session.rendering ? <Spinner label="Rendering the latest change" /> : null}
+          <SessionActions {...actions} />
+        </span>
+      }
+      summaryClassName="text-[0.76rem]"
+    >
+      <VisSessionBody {...props} />
+    </Disclosure>
   );
 }
 
@@ -114,18 +131,29 @@ export default function ThreadVisSessionCard({ onAnswer, onEnd, sessions }: {
         {rendering && lone ? <Spinner label="Rendering" /> : null}
         {lone ? <SessionActions onEnd={onEnd} onReload={onReload} session={lone} /> : null}
       </div>
-      <div>
-        {sessions.map((session) => (
-          <VisSession
-            actions={lone ? null : { onEnd, onReload, session }}
-            answerStatus={answers[session.sessionId]}
-            key={session.sessionId}
-            onAnswer={answer(session.sessionId)}
-            reloads={reloads[session.sessionId] ?? 0}
-            session={session}
+      {lone ? (
+        <div className="space-y-1.5 px-3 py-2">
+          <VisSessionBody
+            answerStatus={answers[lone.sessionId]}
+            onAnswer={answer(lone.sessionId)}
+            reloads={reloads[lone.sessionId] ?? 0}
+            session={lone}
           />
-        ))}
-      </div>
+        </div>
+      ) : (
+        <div>
+          {sessions.map((session) => (
+            <CollapsibleVisSession
+              actions={{ onEnd, onReload, session }}
+              answerStatus={answers[session.sessionId]}
+              key={session.sessionId}
+              onAnswer={answer(session.sessionId)}
+              reloads={reloads[session.sessionId] ?? 0}
+              session={session}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
