@@ -36,7 +36,7 @@ import type {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
-import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
+import { ThreadEntryAnimation } from "./ThreadRevealText";
 import {
   WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
 } from "workbench-shared/workbench/thread/thread-questionnaire-history";
@@ -1217,7 +1217,7 @@ function ThreadAgentCommentarySequence ({
       {items.map((item, index) => (
         <ThreadEntryMotion enabled={animateEntries && index > 0} identity={getThreadEntryMotionIdentity(item)} key={item.id}>
           {(animate) => (
-            <div className={animate ? `block ${enterMotionClassName}` : undefined}>
+            <ThreadEntryAnimation play={animate}>
               <ThreadAgentMessageItem
                 {...itemProps}
                 copyRuns={copyRuns[index]}
@@ -1225,7 +1225,7 @@ function ThreadAgentCommentarySequence ({
                 isMostRecent={Boolean(itemProps.isMostRecent) && index === items.length - 1}
                 item={item}
               />
-            </div>
+            </ThreadEntryAnimation>
           )}
         </ThreadEntryMotion>
       ))}
@@ -3004,7 +3004,7 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
       identity={identity}
       key={entryKeys[index]}
     >
-      {(animate) => <div className={animate ? `block ${enterMotionClassName}` : undefined}>
+      {(animate) => <ThreadEntryAnimation play={animate}>
         {entry.kind === "generic" ? (
           <ThreadGenericItem item={entry.item} threadId={threadId} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
         ) : (
@@ -3033,7 +3033,7 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
             workspaceRoots={workspaceRoots}
           />
         )}
-      </div>}
+      </ThreadEntryAnimation>}
     </ThreadEntryMotion>;
   };
   const renderWindowedEntries = (windowEntries: RenderEntry[], start: number, groupIdentity: string) => {

@@ -37,6 +37,7 @@ const appStateReleases = Object.freeze({
   fileDraftHistory: release(27, "12c480e88156890ba2a5586bf9ea1c4ecf6742469801f465bd4d05fdd237389e"),
   userName: release(28, "31cae2bd2c7675926bd69692f7c481a858739aff75993c78e2dd5ddf58bba0f8"),
   markTags: release(29, "a1cd8c4419af799ba9ab691c2a3b59d4b58f86d308f96bcee150744b2650606d"),
+  threadAnimationStyle: release(30, "f9508fa690d598edf193f50c151007c2871a9e00d4899ef6bf738d8303fc95af"),
 });
 
 export default appStateReleases;

@@ -1,37 +1,62 @@
 /*
  * Exports:
- * - default ThreadRevealText: fade one run of newly streamed content in, continuing from when it first appeared.
+ * - default ThreadRevealText: fade one run of newly streamed text in with the style's text motion, continuing from when it first appeared.
+ * - ThreadRevealBlock: play the style's block motion on a framed block that first appeared in streamed text.
+ * - ThreadEntryAnimation: play the style's item motion on a newly arrived thread item.
+ * - ThreadStreamCaret: the typewriter caret riding the end of streaming text.
  */
 "use client";
 
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useContext, useLayoutEffect, useRef, type ReactNode } from "react";
 
-import { REVEAL_DURATION_MS } from "../../../workbench/markdown/MarkdownRevealTimeline";
-
-const REVEAL_KEYFRAMES: Keyframe[] = [
-  { filter: "blur(0.14em)", opacity: 0, top: "0.12em" },
-  { filter: "blur(0)", opacity: 1, top: "0" },
-];
-const REVEAL_EASING = "cubic-bezier(0.22, 0.82, 0.28, 1)";
+import type { ThreadMotion } from "../../../workbench/thread/thread-animation-styles";
+import ThreadAnimationStyleContext from "./ThreadAnimationStyleContext";
 
 /**
- * Re-renders split or remount a run while it is still fading (a closer arrives, a chip forms);
- * a timeline-relative delay continues the fade instead of restarting it.
+ * Re-renders split or remount a run while it is still animating (a closer arrives, a chip forms);
+ * a timeline-relative delay continues the motion instead of restarting it.
  */
-export default function ThreadRevealText ({ children, startedAt }: { children: ReactNode; startedAt: number }) {
-  const ref = useRef<HTMLSpanElement>(null);
+function usePlayOnMount<Element extends HTMLElement>(motion: ThreadMotion | null, startedAt: number | null) {
+  const ref = useRef<Element>(null);
   useLayoutEffect(() => {
     const element = ref.current;
-    if (!element?.animate) return;
-    const animation = element.animate(REVEAL_KEYFRAMES, {
-      delay: startedAt - performance.now(),
-      duration: REVEAL_DURATION_MS,
-      easing: REVEAL_EASING,
+    if (!motion || !element?.animate || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const animation = element.animate(motion.keyframes(element), {
+      delay: startedAt === null ? 0 : startedAt - performance.now(),
+      duration: motion.duration,
+      easing: motion.easing,
       fill: "backwards",
     });
     return () => animation.cancel();
-    // A run fades once from when it appeared; later renders of the same run never restart it.
+    // A run animates once from when it appeared; later renders of the same run never restart it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  return ref;
+}
+
+export default function ThreadRevealText ({ children, startedAt }: { children: ReactNode; startedAt: number }) {
+  const ref = usePlayOnMount<HTMLSpanElement>(useContext(ThreadAnimationStyleContext).text, startedAt);
   return <span className="relative" data-thread-reveal="true" ref={ref}>{children}</span>;
+}
+
+export function ThreadRevealBlock ({ children, startedAt }: { children: ReactNode; startedAt: number }) {
+  const ref = usePlayOnMount<HTMLDivElement>(useContext(ThreadAnimationStyleContext).block, startedAt);
+  return <div data-thread-reveal-block="true" ref={ref}>{children}</div>;
+}
+
+/** `play` is read once at mount, so the wrapper never changes shape and its children never remount. */
+export function ThreadEntryAnimation ({ children, play }: { children: ReactNode; play: boolean }) {
+  const motion = useContext(ThreadAnimationStyleContext).item;
+  const ref = usePlayOnMount<HTMLDivElement>(play ? motion : null, null);
+  return <div className="block" ref={ref}>{children}</div>;
+}
+
+export function ThreadStreamCaret () {
+  return (
+    <span
+      aria-hidden="true"
+      className="ml-px inline-block h-[1.05em] w-[0.12em] translate-y-[0.15em] animate-blink bg-accent motion-reduce:animate-none"
+      data-thread-stream-caret="true"
+    />
+  );
 }

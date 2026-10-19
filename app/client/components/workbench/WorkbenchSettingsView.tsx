@@ -230,7 +230,7 @@ export default function WorkbenchSettingsView({
       {place.kind === "app" && place.page === "general" ? <>
         <FormSection id="settings-appearance" title="Appearance">
           <WorkbenchThemeSetting logicalProjectId={null} onError={onError} />
-          {preferences(["editorFontSize"])}
+          {preferences(["editorFontSize", "threadAnimationStyle"])}
         </FormSection>
         <WorkbenchProjectPreferenceSettings id="settings-editing" projects={projects} onError={onError} />
         <FormSection id="settings-git" title="Git">

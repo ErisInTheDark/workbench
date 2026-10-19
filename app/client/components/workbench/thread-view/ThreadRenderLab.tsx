@@ -16,6 +16,12 @@ import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/t
 import ThreadTextPresentationController, { type ThreadTextPresentationField } from "../../../workbench/thread/ThreadTextPresentationController";
 import ThreadTextPresentationContext from "../ThreadTextPresentationContext";
 import ThreadItemActionsContext, { type ThreadItemActions } from "./ThreadItemActionsContext";
+import ThreadAnimationStyleContext from "./ThreadAnimationStyleContext";
+import { THREAD_ANIMATION_STYLES } from "../../../workbench/thread/thread-animation-styles";
+import {
+  WORKBENCH_SETTING_DEFINITIONS,
+  type WorkbenchThreadAnimationStyle,
+} from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
 const labReadOnly = async () => { throw new Error("Thread lab fixtures are read-only."); };
 /** Item action controls render as in the app; pressing one reports that fixtures cannot be changed. */
@@ -38,6 +44,7 @@ export default function ThreadRenderLab() {
   const [fontSize, setFontSize] = useState(1);
   const [theme, setTheme] = useState("default");
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [animationStyle, setAnimationStyle] = useState<WorkbenchThreadAnimationStyle>("soft");
   const [textOwner] = useState(() => new ThreadTextPresentationController());
   const [streamTurn, setStreamTurn] = useState("");
   const [streamItem, setStreamItem] = useState("");
@@ -125,6 +132,11 @@ export default function ThreadRenderLab() {
           <label className="text-sm">Palette<select aria-label="Preview palette" className={`${inputClass} block`} value={theme} onChange={event => setTheme(event.target.value)}>
             <option value="default">Default</option><option value="magical-girl">Magical girl</option><option value="winter">Winter</option>
           </select></label>
+          <label className="text-sm">Animation<select aria-label="Preview animation style" className={`${inputClass} block`} value={animationStyle}
+            onChange={event => setAnimationStyle(current => WORKBENCH_SETTING_DEFINITIONS.threadAnimationStyle.options
+              ?.find(option => option.value === event.target.value)?.value ?? current)}>
+            {WORKBENCH_SETTING_DEFINITIONS.threadAnimationStyle.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select></label>
         </fieldset>
         <details>
           <summary className="cursor-pointer text-sm">Streaming text</summary>
@@ -158,12 +170,14 @@ export default function ThreadRenderLab() {
       <section aria-label="Thread preview" className="min-w-0 overflow-x-auto">
         <div className="border border-fg-15" style={{ width: width || "100%", height }} data-thread-render-lab-preview>
           <ThreadRenderLabBoundary revision={revision}>
+            <ThreadAnimationStyleContext value={THREAD_ANIMATION_STYLES[animationStyle]}>
             <ThreadTextPresentationContext value={textOwner}>
               <ThreadItemActionsContext.Provider value={labItemActions}>
                 <ThreadRenderSurface key={mount} thread={thread} context={fixture.context} flags={flags} fontSizeRem={fontSize} emptyMessage="No fixture applied."
                   presentationSource={source} sql={fixture.projection ? { projection: fixture.projection, loading: false, canLoadPrevious: false, loadPrevious: () => {} } : undefined} />
               </ThreadItemActionsContext.Provider>
             </ThreadTextPresentationContext>
+            </ThreadAnimationStyleContext>
           </ThreadRenderLabBoundary>
         </div>
       </section>

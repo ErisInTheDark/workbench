@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ResolveExternalFileLinkRootsResponse } from "workbench-shared/types";
 import { collectPlaintextAbsoluteFileLinkPaths } from "../../workbench/markdown/markdown-file-autolinks";
@@ -14,6 +14,7 @@ import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../workbe
 import MarkdownRevealTimeline from "../../workbench/markdown/MarkdownRevealTimeline";
 import { renderThreadMarkdown } from "../workbench/thread-view/thread-markdown-render";
 import { useWorkbenchDaemonClient } from "../workbench/WorkbenchWorkspaceContext";
+import ThreadAnimationStyleContext from "../workbench/thread-view/ThreadAnimationStyleContext";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -315,11 +316,13 @@ export default memo(function MarkdownRender ({
     [inlineMentionSources, projectFilePaths, projectId, projectRootPath, resolvedWorkspaceRoots, threadCwdPath],
   );
   const timeline = useRevealTimeline(live, streaming, contextKey);
+  const animationStyle = useContext(ThreadAnimationStyleContext);
+  const caret = streaming && animationStyle.caret;
   const presentation = useMemo(() => {
     if (!live) return { cursor: null, rendered: renderCachedThreadMarkdown(markdown, renderOptions, cacheKey) };
     const cursor = timeline?.cursor(performance.now()) ?? null;
-    return { cursor, rendered: renderThreadMarkdown(markdown, { ...renderOptions, partial: streaming, reveal: cursor ?? undefined }) };
-  }, [cacheKey, live, markdown, renderOptions, streaming, timeline]);
+    return { cursor, rendered: renderThreadMarkdown(markdown, { ...renderOptions, caret, partial: streaming, reveal: cursor ?? undefined }) };
+  }, [cacheKey, caret, live, markdown, renderOptions, streaming, timeline]);
 
   useLayoutEffect(() => {
     if (presentation.cursor) timeline?.commit(presentation.cursor);

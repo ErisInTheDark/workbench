@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadView: hold a launched draft until canonical content is renderable, and gate ordinary thread loads.
+ * - default ThreadView: hold a launched draft until canonical content is renderable, gate ordinary thread loads, and provide the thread animation style.
  */
 "use client";
 
@@ -11,6 +11,8 @@ import { useThread } from "../use-thread";
 import { useTranscript } from "../use-transcript";
 import { resolveThreadViewHandoff, type ThreadViewDisplay } from "./thread-view-handoff";
 import ThreadViewContent from "./ThreadViewContent";
+import ThreadAnimationStyleContext from "./ThreadAnimationStyleContext";
+import { THREAD_ANIMATION_STYLES } from "../../../workbench/thread/thread-animation-styles";
 import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import { useSettings } from "../use-settings";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -86,6 +88,7 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
     {settingsFailure?.owner === settings.projectId && settingsFailure
       ? <p role="alert" className="px-6 py-3 text-danger">{settingsFailure.message}</p> : null}
     {holdingDraft && error ? <p role="alert" className="px-6 py-3 text-danger">{error}</p> : null}
+    <ThreadAnimationStyleContext value={THREAD_ANIMATION_STYLES[settings.get("threadAnimationStyle")]}>
     <ThreadViewContent {...props}
       composerSpellCheck={settings.get("composerSpellCheck")}
       threadCodeBlockWrap={settings.get("threadCodeBlockWrap")}
@@ -98,5 +101,6 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
       selectedThreadId={holdingDraft && display.target.kind === "draft" ? display.target.draftId : selectedId}
       onSelectedThreadChange={selectThread}
     />
+    </ThreadAnimationStyleContext>
   </>;
 }

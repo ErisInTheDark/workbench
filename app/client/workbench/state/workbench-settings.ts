@@ -46,8 +46,10 @@ import {
   type WorkbenchFileOpenSettingKey,
   type WorkbenchGlobalSettings,
   type WorkbenchOtherFileOpenDestination,
+  type WorkbenchProjectSettingKey,
   type WorkbenchSettingKey,
   type WorkbenchTheme,
+  type WorkbenchThreadAnimationStyle,
   type WorkbenchViewableFileOpenDestination,
   USER_NAME_MAX_LENGTH,
 } from "workbench-shared/workbench/settings/workbench-setting-definitions";
@@ -61,9 +63,11 @@ export {
   type WorkbenchEditorFontFamily,
   type WorkbenchFileOpenPolicy,
   type WorkbenchGlobalSettings,
+  type WorkbenchProjectSettingKey,
   type WorkbenchSettingDefinition,
   type WorkbenchSettingKey,
   type WorkbenchTheme,
+  type WorkbenchThreadAnimationStyle,
 } from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
 export const DEFAULT_EDITOR_FONT_SIZE = 1.08;
@@ -78,7 +82,7 @@ export type WorkbenchProjectSettingOverride<K extends WorkbenchSettingKey = Work
 };
 
 export type WorkbenchProjectSettings = {
-  [K in WorkbenchSettingKey]: WorkbenchProjectSettingOverride<K>;
+  [K in WorkbenchProjectSettingKey]: WorkbenchProjectSettingOverride<K>;
 };
 
 export interface WorkbenchGlobalSidebarPreferences {
@@ -118,6 +122,10 @@ function clampEditorFontSize(value: unknown) {
 
 function normalizeTheme(value: unknown): WorkbenchTheme {
   return value === "magical-girl" || value === "winter" ? value : "default";
+}
+
+function normalizeThreadAnimationStyle(value: unknown): WorkbenchThreadAnimationStyle {
+  return WORKBENCH_SETTING_DEFINITIONS.threadAnimationStyle.options?.find(option => option.value === value)?.value ?? "soft";
 }
 
 function normalizeEditorFontFamily(value: unknown): WorkbenchEditorFontFamily {
@@ -171,13 +179,14 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
     gitPeerSyncMode: normalizeGitPeerSyncMode(candidate.gitPeerSyncMode),
     showUnopenableFiles: typeof candidate.showUnopenableFiles === "boolean" ? candidate.showUnopenableFiles : false,
     theme: normalizeTheme(candidate.theme),
+    threadAnimationStyle: normalizeThreadAnimationStyle(candidate.threadAnimationStyle),
     threadCodeBlockWrap: typeof candidate.threadCodeBlockWrap === "boolean" ? candidate.threadCodeBlockWrap : false,
     threadCodeDetails: typeof candidate.threadCodeDetails === "boolean" ? candidate.threadCodeDetails : false,
     userName: normalizeUserName(candidate.userName),
   };
 }
 
-function normalizeProjectOverride<K extends WorkbenchSettingKey>(
+function normalizeProjectOverride<K extends WorkbenchProjectSettingKey>(
   key: K,
   value: unknown,
 ): WorkbenchProjectSettingOverride<K> {
@@ -228,6 +237,7 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     gitPeerSyncMode: "merge",
     showUnopenableFiles: false,
     theme: "default",
+    threadAnimationStyle: "soft",
     threadCodeBlockWrap: false,
     threadCodeDetails: false,
     userName: "",
@@ -409,7 +419,7 @@ export function readProjectWorkbenchSettings(
 }
 
 /** Daemon-scoped project rows predate list-valued settings, which only logical projects override. */
-export async function writeProjectWorkbenchSetting<K extends Exclude<WorkbenchSettingKey, "markTags">>(
+export async function writeProjectWorkbenchSetting<K extends Exclude<WorkbenchProjectSettingKey, "markTags">>(
   controller: WorkbenchClientStateController,
   projectId: string,
   key: K,
@@ -436,7 +446,7 @@ export function readLogicalProjectWorkbenchSettings(
   return normalizePreferenceOverrides(candidate);
 }
 
-export async function writeLogicalProjectWorkbenchSetting<K extends WorkbenchSettingKey>(
+export async function writeLogicalProjectWorkbenchSetting<K extends WorkbenchProjectSettingKey>(
   controller: WorkbenchClientStateController,
   logicalProjectId: LogicalProjectId,
   key: K,
@@ -545,6 +555,7 @@ export function resolveWorkbenchSettings(
     gitPeerSyncMode: projectSettings.gitPeerSyncMode.enabled ? projectSettings.gitPeerSyncMode.value : globalSettings.gitPeerSyncMode,
     showUnopenableFiles: projectSettings.showUnopenableFiles.enabled ? projectSettings.showUnopenableFiles.value : globalSettings.showUnopenableFiles,
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,
+    threadAnimationStyle: globalSettings.threadAnimationStyle,
     threadCodeBlockWrap: projectSettings.threadCodeBlockWrap.enabled ? projectSettings.threadCodeBlockWrap.value : globalSettings.threadCodeBlockWrap,
     threadCodeDetails: projectSettings.threadCodeDetails.enabled ? projectSettings.threadCodeDetails.value : globalSettings.threadCodeDetails,
     userName: projectSettings.userName.enabled ? projectSettings.userName.value : globalSettings.userName,

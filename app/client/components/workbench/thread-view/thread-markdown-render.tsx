@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - createSvgCodeBlockPreviewSrcDoc: build the sandboxed SVG preview document and its content policy.
- * - ThreadRenderOptions: parse options plus the live reveal cursor that fades newly streamed text in document order.
+ * - ThreadRenderOptions: parse options plus the live reveal cursor that animates newly streamed text and framed blocks in document order, and the frontier caret.
  * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers; top-level section breaks host section-action slots; partial text renders its stream frontier.
  * - renderThreadInlineMarkdown: render inline markdown without a block container.
  */
@@ -43,7 +43,7 @@ import ThreadMarkdownSectionActions from "./ThreadMarkdownSectionActions";
 import ThreadNotice from "./ThreadNotice";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
-import ThreadRevealText from "./ThreadRevealText";
+import ThreadRevealText, { ThreadRevealBlock, ThreadStreamCaret } from "./ThreadRevealText";
 import ThreadVisFrame from "./ThreadVisFrame";
 
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
@@ -80,10 +80,23 @@ interface ThreadCodeBlockHeader {
 }
 
 /** Parse options plus the live reveal cursor; `partial` only ever reaches the block and inline text at the stream frontier. */
-export type ThreadRenderOptions = MarkdownParseOptions & { reveal?: MarkdownRevealCursor };
+export type ThreadRenderOptions = MarkdownParseOptions & {
+  /** The stream frontier draws a typewriter caret after its last visible character. */
+  caret?: boolean;
+  reveal?: MarkdownRevealCursor;
+};
 
 function settledOptions (options: ThreadRenderOptions): ThreadRenderOptions {
-  return options.partial ? { ...options, partial: false } : options;
+  return options.partial || options.caret ? { ...options, caret: false, partial: false } : options;
+}
+
+const FRAMED_BLOCK_TYPES: ReadonlySet<ParsedBlock["type"]> = new Set(["blockquote", "code", "details", "hr", "notice", "ol", "plan", "table", "ul"]);
+
+/** A framed block whose first character is still arriving enters with the style's block motion. */
+function renderEnteringBlock (block: ParsedBlock, options: ThreadRenderOptions, key: string, render: () => ReactNode) {
+  const startedAt = FRAMED_BLOCK_TYPES.has(block.type) ? options.reveal?.blockEntry() ?? null : null;
+  const rendered = render();
+  return startedAt === null ? rendered : <ThreadRevealBlock key={key} startedAt={startedAt}>{rendered}</ThreadRevealBlock>;
 }
 
 function lastContentBlockIndex (blocks: readonly ParsedBlock[]) {
@@ -307,7 +320,8 @@ export function renderThreadInlineMarkdown (
   options: ThreadRenderOptions,
   keyPrefix: string,
 ) {
-  return renderThreadInlineNodes(parseInlineMarkdown(markdown, options), keyPrefix, options);
+  const nodes = renderThreadInlineNodes(parseInlineMarkdown(markdown, options), keyPrefix, options);
+  return options.caret ? [...nodes, <ThreadStreamCaret key={`${keyPrefix}-caret`} />] : nodes;
 }
 
 /** Only the last content block is at the stream frontier; everything before it is settled. */
@@ -319,12 +333,12 @@ function renderThreadBlockSequence (
 ) {
   const frontierIndex = lastContentBlockIndex(blocks);
   const settled = settledOptions(options);
-  return blocks.map((block, index) => renderThreadBlock(
+  return blocks.map((block, index) => renderEnteringBlock(block, options, `${keyFor(index)}-entry`, () => renderThreadBlock(
     block,
     index === frontierIndex ? options : settled,
     keyFor(index),
     sectionActionsFor?.(block),
-  ));
+  )));
 }
 
 function renderThreadChildBlocks (
@@ -792,9 +806,12 @@ function ThreadCodeBlock ({
 function renderThreadCodeBlock (block: Extract<ParsedBlock, { type: "code" }>, options: ThreadRenderOptions, keyPrefix: string) {
   const { reveal: _reveal, ...chromeOptions } = options;
   const header = parseThreadCodeBlockHeader(block.language, chromeOptions);
-  const content = isDiffCodeBlockLanguage(header.language)
-    ? renderThreadDiffCodeBlock(block.text, keyPrefix, options)
-    : renderRevealedText(block.text, options, `${keyPrefix}-code`);
+  const content = <>
+    {isDiffCodeBlockLanguage(header.language)
+      ? renderThreadDiffCodeBlock(block.text, keyPrefix, options)
+      : renderRevealedText(block.text, options, `${keyPrefix}-code`)}
+    {options.caret ? <ThreadStreamCaret /> : null}
+  </>;
   return (
     <ThreadCodeBlock block={block} content={content} header={header} key={keyPrefix} keyPrefix={keyPrefix} options={chromeOptions} />
   );

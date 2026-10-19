@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - REVEAL_DURATION_MS: how long newly visible streamed text takes to fade in.
+ * - REVEAL_WINDOW_MS: how long newly visible streamed text stays animating; covers every style's text motion.
  * - MarkdownRevealPiece: one run of rendered text and when its fade started, or null once settled.
  * - MarkdownRevealCursor: walks one render's visible text in document order and marks what is still fading in.
  * - default MarkdownRevealTimeline: remembers when each run of visible characters appeared, so fades survive re-renders and remounts.
  */
 
-export const REVEAL_DURATION_MS = 240;
+export const REVEAL_WINDOW_MS = 800;
 
 interface RevealSegment {
   start: number;
@@ -62,6 +62,11 @@ export class MarkdownRevealCursor {
     return pieces;
   }
 
+  /** When the next visible character first appeared, or null once settled; a framed block starting here entered with it. */
+  blockEntry() {
+    return this.#segments[this.#segmentIndexAt(this.#offset)]?.startedAt ?? null;
+  }
+
   /** An indivisible rendered token (icon, chip, mention) fades as a whole; returns its fade start, or null once settled. */
   atom(length = 1) {
     const start = this.#offset;
@@ -80,7 +85,7 @@ export default class MarkdownRevealTimeline {
   }
 
   cursor(now: number) {
-    this.#segments = this.#segments.filter((segment) => now - segment.startedAt < REVEAL_DURATION_MS);
+    this.#segments = this.#segments.filter((segment) => now - segment.startedAt < REVEAL_WINDOW_MS);
     const open = this.#length === null ? [] : [{ start: this.#length, startedAt: now }];
     return new MarkdownRevealCursor([...this.#segments, ...open], now, this.#length !== null);
   }

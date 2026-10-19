@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTheme: available themes.
+ * - WorkbenchThreadAnimationStyle: how streamed thread text, items and blocks animate in.
  * - WorkbenchEditorFontFamily: editor font choices.
  * - WorkbenchViewableFileOpenDestination: where a file kind with a Workbench view opens.
  * - WorkbenchOtherFileOpenDestination: where files without a Workbench view open.
@@ -8,6 +9,7 @@
  * - WorkbenchFileOpenPolicy: every per-file-kind open destination.
  * - WORKBENCH_FILE_OPEN_SETTING_KEYS: file kind to its open destination setting.
  * - WorkbenchSettingKey: configurable setting identities.
+ * - WorkbenchGlobalOnlySettingKey/WorkbenchProjectSettingKey/isWorkbenchGlobalOnlySettingKey: which settings projects may override.
  * - WorkbenchGlobalSettings: global preference values.
  * - USER_NAME_MAX_LENGTH: longest stored user name.
  * - WorkbenchSettingDefinition: setting control metadata.
@@ -18,6 +20,7 @@ import type { WorkbenchFileKind } from "../project/tree-utils";
 import type { MarkTag } from "./mark-tags";
 
 export type WorkbenchTheme = "default" | "magical-girl" | "winter";
+export type WorkbenchThreadAnimationStyle = "soft" | "calm" | "ink" | "pop" | "glide" | "glow" | "typewriter";
 export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
 export type WorkbenchViewableFileOpenDestination = "workbench" | "vscode";
 export type WorkbenchOtherFileOpenDestination = "vscode" | "none";
@@ -25,7 +28,15 @@ export type WorkbenchFileOpenSettingKey = "openMarkdownFilesWith" | "openSvgFile
 export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
   | "editorFontSize" | WorkbenchFileOpenSettingKey | "gitPeerSyncMode"
-  | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails" | "userName" | "markTags";
+  | "showUnopenableFiles" | "threadAnimationStyle" | "threadCodeBlockWrap" | "threadCodeDetails" | "userName" | "markTags";
+
+/** Personal preferences that projects never override. */
+export type WorkbenchGlobalOnlySettingKey = "threadAnimationStyle";
+export type WorkbenchProjectSettingKey = Exclude<WorkbenchSettingKey, WorkbenchGlobalOnlySettingKey>;
+
+export function isWorkbenchGlobalOnlySettingKey(key: WorkbenchSettingKey): key is WorkbenchGlobalOnlySettingKey {
+  return key === "threadAnimationStyle";
+}
 
 export const WORKBENCH_FILE_OPEN_SETTING_KEYS = {
   markdown: "openMarkdownFilesWith",
@@ -46,6 +57,7 @@ export interface WorkbenchGlobalSettings {
   markTags: readonly MarkTag[];
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
+  threadAnimationStyle: WorkbenchThreadAnimationStyle;
   threadCodeBlockWrap: boolean;
   threadCodeDetails: boolean;
   /** Signs new markdown comments; empty leaves them unsigned. */
@@ -114,6 +126,19 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     ],
   },
   showUnopenableFiles: { description: "Controls whether the project sidebar shows files Workbench cannot open directly.", key: "showUnopenableFiles", label: "Show unsupported files", type: "boolean" },
+  threadAnimationStyle: {
+    columns: "two", description: "Controls how streamed thread text, new thread items and new blocks animate in.",
+    key: "threadAnimationStyle", label: "Thread animation", type: "select",
+    options: [
+      { description: "Words lift and unblur; blocks open their space first.", label: "Soft rise", value: "soft" },
+      { description: "Plain fades with minimal motion.", label: "Calm", value: "calm" },
+      { description: "Long soft fades that leave a gradient trailing edge.", label: "Ink", value: "ink" },
+      { description: "Words pop in with a tiny overshoot.", label: "Pop", value: "pop" },
+      { description: "Words slide in; items wipe in from the top.", label: "Glide", value: "glide" },
+      { description: "Fresh words glow in the accent colour, then cool.", label: "Glow", value: "glow" },
+      { description: "No fades; a caret rides the end of the text.", label: "Typewriter", value: "typewriter" },
+    ],
+  },
   threadCodeBlockWrap: { description: "Controls whether thread markdown code blocks wrap long lines instead of using horizontal scrolling.", key: "threadCodeBlockWrap", label: "Wrap thread code blocks", type: "boolean" },
   threadCodeDetails: { description: "Show code-mode source and raw output alongside captured tool calls. Failed executions and calls without captured tool results remain visible.", key: "threadCodeDetails", label: "Show code details", type: "boolean" },
   editorSpellCheck: { description: "Controls browser spellcheck in the rich markdown editor.", key: "editorSpellCheck", label: "Editor spellcheck", type: "boolean" },

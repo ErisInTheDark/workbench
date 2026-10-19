@@ -40,7 +40,7 @@ import appStateReleases from "./workbench-app-state-releases.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
 import { z } from "zod";
 import { GitPeerSyncModeSchema, type GitPeerSyncMode } from "../workbench/git/git-peer-contracts";
-import { USER_NAME_MAX_LENGTH } from "../workbench/settings/workbench-setting-definitions.ts";
+import { USER_NAME_MAX_LENGTH, type WorkbenchThreadAnimationStyle } from "../workbench/settings/workbench-setting-definitions.ts";
 import {
   MARK_TAG_COLORS,
   MARK_TAG_LIMIT,
@@ -113,7 +113,8 @@ export type WorkbenchGlobalPreference =
   | { key: "theme"; value: WorkbenchThemeValue }
   | { key: "transcriptProjectionMode"; value: WorkbenchTranscriptModeValue }
   | { key: "userName"; value: string }
-  | { key: "markTags"; value: readonly MarkTag[] };
+  | { key: "markTags"; value: readonly MarkTag[] }
+  | { key: "threadAnimationStyle"; value: WorkbenchThreadAnimationStyle };
 
 export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails"; value: boolean }
@@ -270,6 +271,7 @@ const preferenceBoolean = z.object({
 const ViewableFileOpenSchema = z.enum(["vscode", "workbench"]);
 const OtherFileOpenSchema = z.enum(["none", "vscode"]);
 const UserNameSchema = z.string().max(USER_NAME_MAX_LENGTH);
+const ThreadAnimationStyleSchema = z.enum(["soft", "calm", "ink", "pop", "glide", "glow", "typewriter"]);
 const MarkTagsSchema = z.array(z.object({
   color: z.enum(MARK_TAG_COLORS),
   name: z.string().trim().min(1).max(MARK_TAG_NAME_MAX_LENGTH),
@@ -288,6 +290,7 @@ const GlobalPreferenceSchema = z.union([
   z.object({ key: z.literal("transcriptProjectionMode"), value: z.enum(["compare", "json", "sqlite"]) }),
   z.object({ key: z.literal("userName"), value: UserNameSchema }),
   z.object({ key: z.literal("markTags"), value: MarkTagsSchema }),
+  z.object({ key: z.literal("threadAnimationStyle"), value: ThreadAnimationStyleSchema }),
 ]);
 const ProjectPreferenceSchema = z.union([
   z.object({ enabled: z.boolean(), key: z.enum([
@@ -382,7 +385,7 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
     "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen", "voiceInputEnabled",
     "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
     "harness", "theme", "transcriptProjectionMode", "gitPeerSyncMode",
-    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName", "markTags",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName", "markTags", "threadAnimationStyle",
   ]) }),
   z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
     key: z.enum(logicalProjectPreferenceKeys) }),

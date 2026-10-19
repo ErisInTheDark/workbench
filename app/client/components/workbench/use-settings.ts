@@ -10,7 +10,10 @@ import type { LogicalProjectId } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
-import { WORKBENCH_FILE_OPEN_SETTING_KEYS } from "workbench-shared/workbench/settings/workbench-setting-definitions";
+import {
+  isWorkbenchGlobalOnlySettingKey,
+  WORKBENCH_FILE_OPEN_SETTING_KEYS,
+} from "workbench-shared/workbench/settings/workbench-setting-definitions";
 import {
   readGlobalWorkbenchSettings,
   readLogicalProjectWorkbenchSettings,
@@ -31,6 +34,7 @@ const KEY_RELEASES: Partial<Record<WorkbenchSettingKey, number>> = {
   openMarkdownFilesWith: appStateReleases.fileOpenDestinations.version,
   openOtherFilesWith: appStateReleases.fileOpenDestinations.version,
   openSvgFilesWith: appStateReleases.fileOpenDestinations.version,
+  threadAnimationStyle: appStateReleases.threadAnimationStyle.version,
   threadCodeDetails: appStateReleases.threadCodeDetails.version,
   userName: appStateReleases.userName.version,
 };
@@ -50,24 +54,24 @@ function useBoundSettings(logicalProjectId: LogicalProjectId | null, unresolved 
     return retained.current;
   }, [select]);
   const snapshot = useSyncExternalStore(controller.subscribe, read, read);
-  const unavailable = useCallback((key: WorkbenchSettingKey) => unresolved || snapshot.schemaVersion < Math.max(
-      KEY_RELEASES[key] ?? 0,
-      logicalProjectId ? appStateReleases.logicalProjectPreferences.version : 0,
-    ), [logicalProjectId, snapshot.schemaVersion, unresolved]);
+  // Global-only settings ignore the bound project: they always read and write the global value.
+  const unavailable = useCallback((key: WorkbenchSettingKey) => snapshot.schemaVersion < (KEY_RELEASES[key] ?? 0) || (!isWorkbenchGlobalOnlySettingKey(key)
+    && (unresolved || snapshot.schemaVersion < (logicalProjectId ? appStateReleases.logicalProjectPreferences.version : 0))),
+  [logicalProjectId, snapshot.schemaVersion, unresolved]);
   return useMemo(() => ({
     projectId: logicalProjectId,
     get<K extends WorkbenchSettingKey>(key: K): WorkbenchGlobalSettings[K] { return snapshot.values[key]; },
-    overridden: (key: WorkbenchSettingKey) => Boolean(logicalProjectId && snapshot.project[key].enabled),
+    overridden: (key: WorkbenchSettingKey) => !isWorkbenchGlobalOnlySettingKey(key) && Boolean(logicalProjectId && snapshot.project[key].enabled),
     unavailable,
     async set<K extends WorkbenchSettingKey>(key: K, value: WorkbenchGlobalSettings[K]) {
       if (unavailable(key)) throw new Error("The settings owner or schema is unavailable.");
-      await (logicalProjectId
+      await (logicalProjectId && !isWorkbenchGlobalOnlySettingKey(key)
         ? writeLogicalProjectWorkbenchSetting(controller, logicalProjectId, key, { enabled: true, value })
         : writeGlobalWorkbenchSetting(controller, key, value));
     },
     async reset(key: WorkbenchSettingKey) {
       if (unavailable(key)) throw new Error("The settings owner or schema is unavailable.");
-      if (!logicalProjectId) return;
+      if (!logicalProjectId || isWorkbenchGlobalOnlySettingKey(key)) return;
       const project = readLogicalProjectWorkbenchSettings(logicalProjectId, controller.getSnapshot().records);
       await writeLogicalProjectWorkbenchSetting(controller, logicalProjectId, key, { ...project[key], enabled: false });
     },
