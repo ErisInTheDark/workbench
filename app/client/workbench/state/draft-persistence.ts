@@ -35,7 +35,8 @@ export type ComposerDraftTarget =
   | {
     kind: "presentation"; draftId: DraftId; isNew: boolean;
     logicalProjectId: LogicalProjectId; location: ProjectLocationReference;
-    selection: () => WorkbenchComposerProfileTargetSelection;
+    /** The settled profile selection to save beside the draft; waits for the slot's saved selection first. */
+    selection: () => Promise<WorkbenchComposerProfileTargetSelection>;
     owner: WorkbenchPresentationClient;
     placement?: Parameters<WorkbenchPresentationClient["putDraft"]>[1];
     materialize: () => void;
@@ -137,13 +138,14 @@ export async function saveComposerDraft(
     // Attachments and references make a draft worth keeping on their own; bare text waits for a few words.
     if (target.isNew && !existing && options.reason === "autosave"
       && !input.attachments.length && !references.length && countDraftPromptTokens(input.text) < 3) return null;
+    const selection = await target.selection();
     await target.owner.putDraft({
       id: target.draftId,
       logicalProjectId: existing?.logicalProjectId ?? target.logicalProjectId,
       target: existing?.target ?? target.location,
       prompt: input.text,
       references,
-      selection: target.selection(),
+      selection,
       updatedAt: input.updatedAt,
     }, target.placement);
     for (const attachment of input.attachments) {

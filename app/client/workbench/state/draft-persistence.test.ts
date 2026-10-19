@@ -43,7 +43,7 @@ function presentationFixture() {
     logicalProjectId: fixtureIdentitySchemas.LogicalProjectIdSchema.parse(crypto.randomUUID()),
     location: { daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
       projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
-    selection: () => owner.draft(draftId)?.selection ?? selection,
+    selection: async () => owner.draft(draftId)?.selection ?? selection,
     materialize: () => { navigations.push(draftId); }, dematerialize: () => {},
   };
   return { records, navigations, owner, target };
@@ -81,7 +81,7 @@ test("saved presentation draft keeps its owner location when a queued save captu
   } as unknown as WorkbenchPresentationClient;
   const target: ComposerDraftTarget = {
     kind: "presentation", draftId, isNew: false, logicalProjectId,
-    location: oldLocation, owner, selection: () => selection, materialize: () => {}, dematerialize: () => {},
+    location: oldLocation, owner, selection: async () => selection, materialize: () => {}, dematerialize: () => {},
   };
   await saveComposerDraft(new WorkbenchClientStateController(), target,
     draft => ({ ...draft, text: "edited words" }), autosave);
@@ -149,7 +149,7 @@ test("clearing the last app draft content dematerialises its current route only 
   } as unknown as WorkbenchPresentationClient;
   const target: ComposerDraftTarget = {
     kind: "presentation", draftId, isNew: false, logicalProjectId,
-    location: oldLocation, owner, selection: () => selection,
+    location: oldLocation, owner, selection: async () => selection,
     materialize: () => {}, dematerialize: () => { events.push("route"); },
   };
   await saveComposerDraft(new WorkbenchClientStateController(), target,
@@ -189,7 +189,7 @@ test("a still-new presentation view retries its draft handoff after later succes
   } as unknown as WorkbenchPresentationClient;
   const target: ComposerDraftTarget = {
     kind: "presentation", draftId, isNew: true, logicalProjectId, location, owner,
-    selection: () => selection, materialize: () => { handoffs++; }, dematerialize: () => {},
+    selection: async () => selection, materialize: () => { handoffs++; }, dematerialize: () => {},
   };
   await saveComposerDraft(new WorkbenchClientStateController(), target,
     draft => ({ ...draft, text: "first saved words" }), autosave);

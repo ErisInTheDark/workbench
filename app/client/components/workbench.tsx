@@ -1022,11 +1022,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       }
       return {
         kind: "presentation", draftId, isNew, logicalProjectId, location, owner, placement,
-        selection: () => {
+        selection: async () => {
           const slot = isNew
             ? { kind: "new-thread" as const, projectId: ownerProjectId }
             : { kind: "draft" as const, projectId: ownerProjectId, draftId,
               harness: draftThread?.harness ?? defaultProviderKey };
+          await draftProfiles.waitForSelection(slot);
           return draftProfiles.getDraftSelection(slot, {
             agentPath: draftThread?.agentPath ?? null, agentSource: null,
             harness: draftThread?.harness ?? defaultProviderKey, model: draftThread?.model ?? "",
@@ -1065,24 +1066,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     reason: "autosave" | "submission" | "retarget" = "autosave", target?: WorkbenchThreadTarget, detached = false,
   ) => {
     try {
-      const draftTarget = getComposerDraftTarget(projectId, threadId, target);
-      const profiles = draftTarget.kind === "presentation"
-        ? profileControllerFor(draftTarget.location.daemonId) : composerProfileController;
-      if (draftTarget.kind === "presentation" && draftTarget.isNew) {
-        await profiles.waitForSelection({ kind: "new-thread", projectId: draftTarget.location.projectId });
-      }
-      if (draftTarget.kind === "presentation" && !draftTarget.isNew) {
-        await profiles.waitForSelection({
-          kind: "draft", projectId: draftTarget.location.projectId,
-          draftId: draftTarget.draftId, harness: currentThread?.harness ?? defaultProviderKey,
-        });
-      }
-      return await saveComposerDraft(clientStateController, draftTarget, update, { reason, detached });
+      return await saveComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, target),
+        update, { reason, detached });
     } catch (error) {
       setSelectionError(error instanceof Error ? error.message : "Unable to save composer draft.");
       throw error;
     }
-  }, [clientStateController, composerProfileController, currentThread?.harness, getComposerDraftTarget, profileControllerFor]);
+  }, [clientStateController, getComposerDraftTarget]);
 
   const handleThreadComposerDraftClear = useCallback(async (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => {
     try {
