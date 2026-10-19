@@ -4,7 +4,7 @@
  * - McpServerEndpoint: url, request headers and optional traffic recorder of one user-added MCP server.
  * - McpServerTool: one offered tool with its input schema.
  * - McpServerConnectionPort: the catalogue/call/close surface the server controller depends on.
- * - default McpServerConnection: SDK streamable-HTTP client for one server, authenticated by a header or OAuth; caches the catalogue until the server reports a change, reconnects after transport failure and reports a needed sign-in as McpServerSignInRequiredError.
+ * - default McpServerConnection: SDK streamable-HTTP client for one server, authenticated by a header or OAuth; caches the catalogue until the server reports a change (or for 30 s when it never promised to), reconnects after transport failure and reports a needed sign-in as McpServerSignInRequiredError.
  */
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -53,6 +53,8 @@ const CATALOGUE_TIMEOUT_MS = 20_000;
 // Matches the direct wb tool ceiling; connection waits such as Composio's can legitimately run for minutes.
 const CALL_TIMEOUT_MS = 30 * 60_000;
 const MAX_CATALOGUE_PAGES = 50;
+// Long enough that one agent burst (search, request, call) shares a read; short enough that toolbox edits show up.
+const UNPROMISED_CATALOGUE_MAX_AGE_MS = 30_000;
 
 function trafficLabel(message: JSONRPCMessage) {
   if ("method" in message) return message.method;
@@ -93,15 +95,29 @@ function describeFailure(error: unknown, signedIn: boolean) {
 export default class McpServerConnection implements McpServerConnectionPort {
   #client: Promise<Client> | null = null;
   #tools: Promise<McpServerTool[]> | null = null;
+  /** When the cached list was read from a server that never promised change notifications; null while it may be kept. */
+  #toolsReadAt: number | null = null;
 
-  constructor(private readonly endpoint: McpServerEndpoint) {}
+  constructor(private readonly endpoint: McpServerEndpoint, private readonly options: { now?: () => number } = {}) {}
 
   listTools(signal?: AbortSignal) {
-    const tools = this.#tools ??= this.#use(client => this.#readCatalogue(client, signal));
+    if (this.#tools && this.#toolsReadAt !== null && this.#now() - this.#toolsReadAt >= UNPROMISED_CATALOGUE_MAX_AGE_MS) {
+      this.#tools = null;
+      // Cleared so callers arriving while the re-read is in flight share it instead of starting another.
+      this.#toolsReadAt = null;
+    }
+    const tools = this.#tools ??= this.#use(async client => {
+      const read = await this.#readCatalogue(client, signal);
+      // Only a server that promises `tools/list_changed` may keep its list until it reports a change.
+      if (this.#tools === tools) this.#toolsReadAt = client.getServerCapabilities()?.tools?.listChanged === true ? null : this.#now();
+      return read;
+    });
     // A failed or cancelled read must not stay cached for the next caller.
     tools.catch(() => { if (this.#tools === tools) this.#tools = null; });
     return tools;
   }
+
+  #now() { return (this.options.now ?? Date.now)(); }
 
   serverName() {
     return this.#use(async client => client.getServerVersion()?.name?.trim() || null);

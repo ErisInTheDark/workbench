@@ -25,6 +25,12 @@ test("structured content mirrored as text prints once", () => {
   assert.equal(text.split("https://example.test/authorize").length - 1, 1);
 });
 
+test("structured content wrapping a mirrored array in its only field prints once", () => {
+  const matches = [{ tool: "export", url: "https://example.test/one" }];
+  const text = formatMcpToolResult({ content: [{ type: "text", text: JSON.stringify(matches) }], structuredContent: { matches } });
+  assert.equal(text.split("https://example.test/one").length - 1, 1);
+});
+
 test("structured-only results still print", () => {
   assert.match(formatMcpToolResult({ content: [], structuredContent: authorization }), /example\.test\/authorize/);
 });

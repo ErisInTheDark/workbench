@@ -5,7 +5,9 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import McpServerConnection from "./McpServerConnection";
@@ -69,6 +71,60 @@ test("recorded traffic keeps the exact server replies, including fields the resu
     assert.ok(frames.some(frame => frame.direction === "out" && frame.label === "tools/call" && frame.payload.includes("\"authorize\"")));
     const reply = frames.find(frame => frame.direction === "in" && frame.payload.includes("authorization_url"));
     assert.equal(JSON.parse(reply!.payload).result._meta.authorization_url, "https://example.test/authorize");
+  } finally {
+    await connection.close();
+    await server.close();
+  }
+});
+
+/** A stateless server whose tool list can change between requests; `promise` decides whether it declares `tools.listChanged`. */
+async function startChangingServer(promise: boolean) {
+  const names = ["first"];
+  const server = http.createServer((request, response) => {
+    const mcp = new Server({ name: "changing", version: "1.0.0" }, { capabilities: { tools: promise ? { listChanged: true } : {} } });
+    mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: names.map(name => ({ name, description: name, inputSchema: { type: "object" as const } })),
+    }));
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    response.on("close", () => { void transport.close(); void mcp.close(); });
+    void mcp.connect(transport).then(() => transport.handleRequest(request, response));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  return {
+    names,
+    url: `http://127.0.0.1:${address.port}/mcp`,
+    close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
+  };
+}
+
+test("a server that never promises change notifications has its tool list re-read once it is 30 seconds old", async () => {
+  const server = await startChangingServer(false);
+  let now = 0;
+  const connection = new McpServerConnection({ url: server.url, headers: {} }, { now: () => now });
+  try {
+    assert.deepEqual((await connection.listTools()).map(tool => tool.name), ["first"]);
+    server.names.push("added");
+    now = 29_999;
+    assert.deepEqual((await connection.listTools()).map(tool => tool.name), ["first"], "a burst of uses shares one read");
+    now = 30_000;
+    assert.deepEqual((await connection.listTools()).map(tool => tool.name), ["first", "added"]);
+  } finally {
+    await connection.close();
+    await server.close();
+  }
+});
+
+test("a server that promises change notifications keeps its tool list until it reports a change", async () => {
+  const server = await startChangingServer(true);
+  let now = 0;
+  const connection = new McpServerConnection({ url: server.url, headers: {} }, { now: () => now });
+  try {
+    await connection.listTools();
+    server.names.push("added");
+    now = 10 * 60_000;
+    assert.deepEqual((await connection.listTools()).map(tool => tool.name), ["first"]);
   } finally {
     await connection.close();
     await server.close();

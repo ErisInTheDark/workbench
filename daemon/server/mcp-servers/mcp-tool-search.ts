@@ -122,11 +122,17 @@ export function formatMcpToolResult(result: CallToolResult) {
   return `${parts.join("\n") || "(no content)"}\n`;
 }
 
-/** The spec asks servers to echo structured output as a JSON text block; printing both would duplicate it. */
+/**
+ * The spec asks servers to echo structured output as a JSON text block; printing both would duplicate it.
+ * Structured content must be an object, so servers wrap an array result in one field and echo the bare array.
+ */
 function mirrors(text: string, structured: Record<string, unknown>) {
+  let parsed: unknown;
   try {
-    return isDeepStrictEqual(JSON.parse(text), structured);
+    parsed = JSON.parse(text);
   } catch {
     return false;
   }
+  const values = Object.values(structured);
+  return isDeepStrictEqual(parsed, structured) || (values.length === 1 && isDeepStrictEqual(parsed, values[0]));
 }
