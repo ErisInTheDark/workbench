@@ -1,4 +1,4 @@
-/* Exports: none. Protect Claude admission, missing-runtime rejection, context, compaction admission, thread interruption and turn liveness. */
+/* Exports: none. Protect Claude admission, missing-runtime rejection, context, compaction admission, pre-history rename/delete, thread interruption and turn liveness. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -375,6 +375,29 @@ test("a Claude turn is live only while this daemon runs it or still owns its tra
   (Reflect.get(owner, "live") as Map<string, { turnId: string }>).set(threadId, { turnId });
   assert.equal(await owner.isTurnLive(threadId, turnId), true);
   assert.equal(await owner.isTurnLive(threadId, WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000009")), false);
+});
+
+test("a Claude thread without native history renames and deletes without its unwritten native session", async () => {
+  const titles: string[] = [];
+  const observed: string[] = [];
+  const owner = new ClaudeThreadOperations({
+    daemonOrigin: "http://127.0.0.1:1",
+    sessions: new ClaudeSessionHost({ viewsRoot: null }),
+    signal: new AbortController().signal,
+    transcript: { rename: async (_threadId: string, _project: unknown, title: string) => { titles.push(title); } },
+    identities: { observe: async ({ title }: { title: string }) => { observed.push(title); } },
+  } as never);
+  Object.assign(owner, {
+    identity: async () => ({
+      threadId, projectId, projectRoot: "C:/repo",
+      bindings: [{ harness: "claude", nativeLocation: "C:/repo", nativeThreadId: "00000000-0000-4000-8000-0000000000aa" }],
+    }),
+    read: async () => ({ turns: [], createdAt: 1 }),
+  });
+  await owner.rename(threadId, "Child task");
+  assert.deepEqual(titles, ["Child task"]);
+  assert.deepEqual(observed, ["Child task"]);
+  await owner.delete(threadId);
 });
 
 for (const fails of [false, true]) {

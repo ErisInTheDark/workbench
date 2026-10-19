@@ -515,9 +515,11 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const identity = await this.identity(threadId);
     const binding = identity.bindings.find(value => value.harness === "claude");
     if (!binding) throw new Error("Claude thread has no native session identity.");
-    await renameSession(binding.nativeThreadId, title, { dir: binding.nativeLocation });
+    const thread = await this.read(threadId);
+    // The CLI writes the native session file on the first turn; before that only the canonical title exists.
+    if (thread.turns.at(-1)) await renameSession(binding.nativeThreadId, title, { dir: binding.nativeLocation });
     // Public thread timestamps are seconds; canonical transcript observations use integer milliseconds.
-    const createdAt = Math.round((await this.read(threadId)).createdAt * 1000);
+    const createdAt = Math.round(thread.createdAt * 1000);
     try {
       await this.options.transcript.rename(identity.threadId, {
         id: identity.projectId, rootPath: identity.projectRoot, createdAt,
@@ -598,7 +600,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const identity = await this.identity(threadId);
     const binding = identity.bindings.find(value => value.harness === "claude");
     if (!binding) throw new Error("Claude thread has no native session identity.");
-    await deleteSession(binding.nativeThreadId, { dir: binding.nativeLocation });
+    if ((await this.read(threadId)).turns.at(-1)) await deleteSession(binding.nativeThreadId, { dir: binding.nativeLocation });
   }
 
   async interrupt(threadId: string) {
