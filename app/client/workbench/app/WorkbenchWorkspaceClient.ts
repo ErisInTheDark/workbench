@@ -2,7 +2,8 @@
  * Exports:
  * - WorkspaceQuerySnapshot: stable received facts and app-connection-aware freshness.
  * - WorkspaceQueryHandle: caller-owned typed observation, retarget and release boundary.
- * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection.
+ * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection, kept warm
+ *   briefly after release.
  */
 import {
   WorkspaceQuerySchema, workspaceObservationShape,
@@ -69,9 +70,17 @@ interface Interest {
   /** Deltas that arrived before the first value they build on. */
   early: WorkspaceObservationDelta[];
   snapshot: WorkspaceQuerySnapshot;
+  /** Cancels the grace that keeps an observer-less interest warm; null while observed. */
+  cancelLinger: (() => void) | null;
 }
 const MAX_EARLY_DELTAS = 32;
+/** How long a released query stays subscribed, so re-keyed views and quick returns re-attach to the held value. */
+const RELEASED_QUERY_GRACE_MS = 5_000;
 
+function lingerFor(expire: () => void) {
+  const timer = setTimeout(expire, RELEASED_QUERY_GRACE_MS);
+  return () => clearTimeout(timer);
+}
 
 export default class WorkbenchWorkspaceClient {
   private readonly interests = new Map<string, Interest>();
@@ -82,7 +91,10 @@ export default class WorkbenchWorkspaceClient {
   private readonly threadObservations = new Map<string, { release(): void }>();
   private readonly facades = new Map<string, WorkbenchDaemonClient>();
 
-  constructor(readonly rpc: WorkbenchAppRpcClient) {
+  constructor(readonly rpc: WorkbenchAppRpcClient, private readonly options: {
+    /** Schedules a released query's upstream release and returns its cancel; defaults to a 5s timer. */
+    linger?: (expire: () => void) => () => void;
+  } = {}) {
     this.unsubscribe = [
       rpc.onEvent(event => { if (event.kind === "workspaceDelta") this.acceptDelta(event.delta); }),
       rpc.onInvalidObservation(address => this.rejectObservation(address.subscriptionId, address.generation)),
@@ -278,9 +290,11 @@ export default class WorkbenchWorkspaceClient {
     const created = !interest;
     if (!interest) {
       interest = { id: crypto.randomUUID(), query: parsed, cancellation: new AbortController(),
-        listeners: new Map(), raw: null, early: [], snapshot: { phase: "pending", failure: null, value: null } };
+        listeners: new Map(), raw: null, early: [], snapshot: { phase: "pending", failure: null, value: null }, cancelLinger: null };
       this.interests.set(interest.id, interest);
     }
+    interest.cancelLinger?.();
+    interest.cancelLinger = null;
     const token = {};
     const retained = interest;
     const listeners = new Set([listener]);
@@ -299,17 +313,23 @@ export default class WorkbenchWorkspaceClient {
         if (!retained.listeners.delete(token)) return;
         cancellation.abort(new Error("Workspace query released."));
         if (retained.listeners.size) return;
-        this.interests.delete(retained.id);
-        retained.cancellation.abort();
-        if (this.rpc.connected) {
-          void this.rpc.requestRaw({ method: "workspace/release", params: {
-            subscriptionId: retained.id, generation: this.rpc.getSnapshot().generation,
-          } }).catch(error => {
-            if (!(error instanceof WorkbenchRpcRequestInterruptedError)) this.warn("Workspace release failed", error);
-          });
-        }
+        retained.cancelLinger = (this.options.linger ?? lingerFor)(() => this.close(retained));
       },
     };
+  }
+
+  /** Only the grace's expiry releases the app subscription; a returning observer cancels it first. */
+  private close(interest: Interest) {
+    if (interest.listeners.size || !this.active(interest)) return;
+    interest.cancelLinger = null;
+    this.interests.delete(interest.id);
+    interest.cancellation.abort();
+    if (!this.rpc.connected) return;
+    void this.rpc.requestRaw({ method: "workspace/release", params: {
+      subscriptionId: interest.id, generation: this.rpc.getSnapshot().generation,
+    } }).catch(error => {
+      if (!(error instanceof WorkbenchRpcRequestInterruptedError)) this.warn("Workspace release failed", error);
+    });
   }
 
   async launchDraft(draftId: string, expectedRevision: number, options: WorkbenchSendThreadMessageOptions = {}) {
@@ -336,6 +356,8 @@ export default class WorkbenchWorkspaceClient {
     for (const observation of this.threadObservations.values()) observation.release();
     this.threadObservations.clear();
     for (const interest of this.interests.values()) {
+      interest.cancelLinger?.();
+      interest.cancelLinger = null;
       interest.cancellation.abort();
       for (const owner of interest.listeners.values()) owner.cancellation.abort(new Error("Workspace client closed."));
     }

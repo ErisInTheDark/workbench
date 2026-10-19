@@ -29,7 +29,7 @@ import {
 import { WorkbenchDeleteFileResultSchema } from "workbench-shared/workbench/project/project-state";
 import { isMarkdownFile } from "workbench-shared/workbench/project/tree-utils";
 import type {
-  WorkspaceObservation, WorkspaceProjectReference, WorkspaceThreadMember, WorkspaceThreadPlacement,
+  WorkspaceProjectReference, WorkspaceQuery, WorkspaceThreadMember, WorkspaceThreadPlacement,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { WorkspaceThreadActionResultSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import {
@@ -41,6 +41,7 @@ import reportClientSchemaError from "workbench-shared/workbench/report-client-sc
 import frontendJavaScriptGeneration from "workbench-shared/frontend-generation";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type WorkbenchWorkspaceClient from "./workbench/app/WorkbenchWorkspaceClient";
+import type { WorkspaceQueryHandle } from "./workbench/app/WorkbenchWorkspaceClient";
 import type WorkbenchAppRpcClient from "./workbench/app/WorkbenchAppRpcClient";
 import WorkbenchNetworkClient from "./workbench/app/WorkbenchNetworkClient";
 import WorkbenchPresentationClient from "./workbench/state/WorkbenchPresentationClient";
@@ -67,10 +68,7 @@ import type ThreadTextPresentationController from "./workbench/thread/ThreadText
 import WorkbenchVoiceClient from "./workbench/voice/WorkbenchVoiceClient";
 
 type ThreadClient = ReturnType<typeof WorkbenchThreadClient>;
-type QueryHandle<K extends WorkspaceObservation["kind"]> = {
-  getSnapshot(): import("./workbench/app/WorkbenchWorkspaceClient").WorkspaceQuerySnapshot<K>;
-  release(): void;
-};
+type QueryHandle<K extends WorkspaceQuery["kind"]> = WorkspaceQueryHandle<K>;
 type ViewContext = {
   daemonId: DaemonId;
   daemon: WorkbenchDaemonClient;
@@ -393,8 +391,20 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     }
   }
 
+  /** A sole observer swaps its arguments in place, so the change ships as a delta; a shared one takes its own. */
+  function retargeted<Kind extends "projectThreads" | "archivedThreads">(handle: QueryHandle<Kind>,
+    query: Extract<WorkspaceQuery, { kind: Kind }>) {
+    try { handle.retarget(query); return true; }
+    catch { return false; }
+  }
+
   function selectRows(selection: WorkspaceProjectReference[] | null) {
     if (rowSelection !== undefined && areDeeplyEqual(rowSelection, selection)) return;
+    if (rows && retargeted(rows, { kind: "projectThreads", projects: selection })) {
+      rowSelection = selection;
+      observeArchived();
+      return;
+    }
     const next = workspace.observe({ kind: "projectThreads", projects: selection }, factsChanged);
     const retained = usableRows(rows) ? rows : previousRows;
     if (rows && rows !== retained) rows.release();
@@ -414,6 +424,10 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       return;
     }
     if (archived && archived.limit === archivedLimit && areDeeplyEqual(archived.selection, selection)) return;
+    if (archived && retargeted(archived.handle, { kind: "archivedThreads", projects: selection, limit: archivedLimit })) {
+      archived = { ...archived, limit: archivedLimit, selection };
+      return;
+    }
     const previous = archived;
     archived = { limit: archivedLimit, selection,
       handle: workspace.observe({ kind: "archivedThreads", projects: selection, limit: archivedLimit }, factsChanged) };

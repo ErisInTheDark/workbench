@@ -193,6 +193,31 @@ test("one thread tick in a 1,000-row project publishes one small delta that name
     update.value);
 });
 
+test("retargeting selected project rows keeps rows already held and ships only the change as a delta", async context => {
+  const f = fixture(context);
+  const rows = { [a]: { ...sidebar(a), entries: [thread(0)] }, [b]: { ...sidebar(b), entries: [thread(1)] } };
+  let loaded = new Set<ProjectId>([a]);
+  f.owners.threads.peekProject = projectId => loaded.has(projectId) ? rows[projectId as "a" | "b"] : null;
+  f.owners.threads.readProject = async projectId => { loaded = new Set([...loaded, projectId]); return rows[projectId as "a" | "b"]; };
+  const first = f.observe({ kind: "projectThreads", projectIds: [a] });
+  assert.equal(first.phase, "current");
+  f.owner.retarget("connection", { subscriptionId: first.subscriptionId, generation: 1,
+    query: { kind: "projectThreads", projectIds: [a, b] } });
+  const grown = await f.wait(value => value.subscriptionId === first.subscriptionId && value.phase === "current"
+    && value.kind === "projectThreads" && value.projects.length === 2);
+  assert.ok(f.updates.every(update => update.change), "a retarget publishes deltas, never a fresh value");
+  assert.doesNotMatch(JSON.stringify(f.updates.map(update => update.change?.delta)), /Thread 0 with/u,
+    "rows the observer already holds are not resent");
+  assert.ok(grown.kind === "projectThreads");
+  assert.deepEqual(grown.projects.map(project => project.sidebar?.entries[0]?.title),
+    ["Thread 0 with a realistic title", "Thread 1 with a realistic title"]);
+  f.owner.retarget("connection", { subscriptionId: first.subscriptionId, generation: 1,
+    query: { kind: "projectThreads", projectIds: [b] } });
+  const shrunk = f.updates.at(-1)!.value;
+  assert.ok(shrunk.kind === "projectThreads");
+  assert.deepEqual(shrunk.projects.map(project => project.projectId), [b]);
+});
+
 test("lean rows leave out archived threads and their subagents but count them", context => {
   const archived = thread(1, { metadata: { archived: true, pinned: false, snoozed: false } });
   const child: WorkbenchThreadSidebarEntry = {
@@ -326,9 +351,9 @@ test("a thread summary batch reads unknown threads, retargets as deltas, and fol
   assert.equal(counted.summaries[secondId]?.projectId, a);
   assert.deepEqual(counted.summaries[secondId]?.summary.facts, { requiredTodoCount: 4 });
 
-  const rows = f.observe({ kind: "projectThreads", projectIds: [a] });
+  const placement = f.observe({ kind: "projectPlacement" });
   assert.throws(() => f.owner.retarget("connection", {
-    subscriptionId: rows.subscriptionId, generation: rows.generation, query: { kind: "projectThreads", projectIds: [b] },
+    subscriptionId: placement.subscriptionId, generation: placement.generation, query: { kind: "projectPlacement" },
   }), /Only thread summary batches/u);
 });
 

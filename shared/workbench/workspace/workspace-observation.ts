@@ -19,6 +19,7 @@
  * - WorkspaceObserveSchema/WorkspaceObserve: replace one named observation's arguments.
  * - WorkspaceReleaseSchema: release only the matching observation generation.
  * - WORKSPACE_RETARGET_METHOD/DaemonWorkspaceRetargetSchema/WorkspaceRetargetSchema/WorkspaceRetargetResultSchema: swap a live observation's arguments, answered with a delta.
+ * - RETARGETABLE_QUERY_KINDS: batch kinds that accept a retarget.
  * - WorkspaceThreadSummarySchema/WorkspaceThreadSummariesSchema: located thread summaries a `threadSummaries` batch returns, keyed by thread id.
  * - WORKSPACE_OBSERVE_METHOD/WORKSPACE_RELEASE_METHOD/WORKSPACE_UPDATED_METHOD: shared observation protocol.
  * - WORKSPACE_DELTA_METHOD/WorkspaceObservationDeltaSchema/WorkspaceObservationDelta: keyed delta onto one observation revision.
@@ -137,6 +138,10 @@ export const WorkspaceReleaseSchema = z.object({
 export const DaemonWorkspaceRetargetSchema = DaemonWorkspaceObserveSchema;
 export type DaemonWorkspaceRetarget = DaemonWorkspaceObserve;
 export const WorkspaceRetargetResultSchema = z.object({ revision }).strict();
+/** Batch kinds a sole observer retargets in place on the daemon and app alike, so the change ships as a delta. */
+export const RETARGETABLE_QUERY_KINDS: ReadonlySet<string> = new Set([
+  "threadSummaries", "projectSelection", "projectThreads", "archivedThreads",
+] satisfies Array<DaemonWorkspaceQuery["kind"]>);
 
 /**
  * One stats section. `refinement` stays pending while published data is provisional: claim hotspots arrive

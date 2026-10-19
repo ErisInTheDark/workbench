@@ -1,7 +1,7 @@
 /*
  * Test-only exports:
  * - WorkspaceTestSocket: controllable transport edge with real app protocol decoding.
- * - createWorkspaceClientFixture: production app/workspace clients with explicit socket readiness.
+ * - createWorkspaceClientFixture: production app/workspace clients with explicit socket readiness and release graces.
  */
 import { WorkbenchAppRpcRequestSchema, type WorkbenchAppRpcRequest } from "workbench-shared/http/workbench-app-rpc";
 import type { WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
@@ -84,7 +84,15 @@ export class WorkspaceTestSocket extends EventTarget {
   }
 }
 
-export function createWorkspaceClientFixture() {
+/** Released queries expire on the next microtask unless a test schedules their grace itself. */
+const microtaskLinger = (expire: () => void) => {
+  queueMicrotask(expire);
+  return () => {};
+};
+
+export function createWorkspaceClientFixture({ linger = microtaskLinger }: {
+  linger?: (expire: () => void) => () => void;
+} = {}) {
   const sockets: WorkspaceTestSocket[] = [];
   const created = Promise.withResolvers<WorkspaceTestSocket>();
   const socketListeners = new Set<() => void>();
@@ -97,7 +105,7 @@ export function createWorkspaceClientFixture() {
       return socket as unknown as WebSocket;
     },
   });
-  const workspace = new WorkbenchWorkspaceClient(rpc);
+  const workspace = new WorkbenchWorkspaceClient(rpc, { linger });
   return {
     rpc, workspace, sockets,
     nextSocket(after: number) {

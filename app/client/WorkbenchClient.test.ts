@@ -2,10 +2,10 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import type { ExplorerSnapshot, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
-import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkspaceProjectReference, WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { projectWorkbenchThreadMembership } from "workbench-shared/workbench/project/workbench-project-projection";
-import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
 import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalMosaicRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
@@ -29,6 +29,22 @@ async function providePresentation(socket: ObservedSocket, data: PresentationSna
   const presentation = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "presentation");
   await socket.observation(presentation, { kind: "presentation", phase: "current", failure: null, data });
+}
+type RowSelection = WorkspaceProjectReference[] | null;
+/**
+ * Rows observe once, then retarget that subscription as the selection changes. Resolves the observe request
+ * (where values publish) once a row selection after `after` matches `accept`.
+ */
+async function rowsRequest(socket: ObservedSocket, after: number, accept: (projects: RowSelection) => boolean) {
+  const selected = (query: { kind: string; projects?: RowSelection }) => query.kind === "projectThreads" && accept(query.projects ?? null);
+  const asked = await Promise.race([
+    socket.request("workspace/observe", after, request => selected(request.params.query)),
+    socket.request("workspace/retarget", after, request => selected(request.params.query)),
+  ]);
+  const observed = socket.sent.findLast(request => request.method === "workspace/observe"
+    && request.params.subscriptionId === asked.params.subscriptionId);
+  assert.ok(observed?.method === "workspace/observe");
+  return { observed, asked };
 }
 async function openProjectHome(client: ReturnType<typeof WorkbenchClient>, route: WorkbenchRoute) {
   const result = await client.controls.applyRoute(route);
@@ -326,7 +342,7 @@ test("mounted project navigation keeps its identity while project facts change",
   assert.equal(navigator.href(route), "/renamed/@/");
 });
 
-test("project row observations hand off without blanking visible threads", async context => {
+test("project row selections retarget one subscription without blanking or refetching visible threads", async context => {
   const warnings: string[] = [];
   context.mock.method(console, "warn", (message: string) => warnings.push(message));
   const fixture = createWorkspaceClientFixture();
@@ -349,8 +365,7 @@ test("project row observations hand off without blanking visible threads", async
   await providePresentation(socket);
 
   assert.equal((await openProjectHome(client, createLogicalProjectRoute(logicalId))).ok, true);
-  const firstQuery = await socket.request("workspace/observe", 0, request =>
-    request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 1);
+  const { observed: rows } = await rowsRequest(socket, 0, projects => projects?.length === 1);
   const firstRow = {
     logicalProjectId: logicalId, location, hostname: "local", rootPath: project.rootPath,
     entry: {
@@ -360,56 +375,46 @@ test("project row observations hand off without blanking visible threads", async
       lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
     },
   } satisfies WorkbenchLogicalThreadRow;
-  await socket.observation(firstQuery, { kind: "projectThreads", phase: "current", failure: null,
+  await socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
     data: membership([firstRow]) });
   await Promise.resolve();
   assert.deepEqual(memberTitles(client), ["first"]);
 
   const beforeAdd = socket.sent.length;
-  assert.equal((await client.controls.applyRoute(withProjectSelection(createLogicalProjectRoute(logicalId),
-    [logicalId, secondId]))).ok, true);
-  const added = await socket.request("workspace/observe", beforeAdd, request =>
-    request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 2);
-  await socket.observation(added, { kind: "projectThreads", phase: "pending", failure: null,
-    data: membership([]) });
-  await Promise.resolve();
+  const select = async (ids: LogicalProjectId[], revision: number, payload: Parameters<typeof socket.observation>[1]) => {
+    const offset = socket.sent.length;
+    const route = createLogicalProjectRoute(logicalId);
+    assert.equal((await client.controls.applyRoute(ids.length > 1 ? withProjectSelection(route, ids) : route)).ok, true);
+    const { asked } = await rowsRequest(socket, offset, projects => projects?.length === ids.length);
+    assert.equal(asked.method, "workspace/retarget", "a selection change retargets the held rows");
+    assert.equal(asked.params.subscriptionId, rows.params.subscriptionId);
+    await socket.observation(rows, payload, revision);
+    await Promise.resolve();
+  };
+  // The app keeps rows it already holds while the added project loads.
+  await select([logicalId, secondId], 2, { kind: "projectThreads", phase: "stale", failure: null, data: membership([firstRow]) });
   assert.deepEqual(memberTitles(client), ["first"]);
-  assert.equal(socket.sent.some(item => item.method === "workspace/release"
-    && item.params.subscriptionId === firstQuery.params.subscriptionId), false);
-
-  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
-  const superseded = await socket.request("workspace/release", beforeAdd,
-    request => request.params.subscriptionId === added.params.subscriptionId);
-  assert.equal(superseded.params.subscriptionId, added.params.subscriptionId);
-  assert.deepEqual(memberTitles(client), ["first"]);
-
-  const beforeRetry = socket.sent.length;
-  assert.equal((await client.controls.applyRoute(withProjectSelection(createLogicalProjectRoute(logicalId),
-    [logicalId, secondId]))).ok, true);
-  const retry = await socket.request("workspace/observe", beforeRetry, request =>
-    request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 2);
   const secondRow = {
     ...firstRow, logicalProjectId: secondId, location: secondLocation, rootPath: "C:/git/app/other",
     entry: { ...firstRow.entry, title: "second",
       identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("second") } },
   } satisfies WorkbenchLogicalThreadRow;
-  await socket.observation(retry, { kind: "projectThreads", phase: "current", failure: null,
-    data: membership([firstRow, secondRow]) });
-  await socket.request("workspace/release", beforeRetry,
-    request => request.params.subscriptionId === firstQuery.params.subscriptionId);
+  await socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
+    data: membership([firstRow, secondRow]) }, 3);
+  await Promise.resolve();
   assert.deepEqual(memberTitles(client), ["first", "second"]);
+  await select([logicalId], 4, { kind: "projectThreads", phase: "current", failure: null, data: membership([firstRow]) });
+  assert.deepEqual(memberTitles(client), ["first"]);
+  assert.equal(socket.sent.slice(beforeAdd).some(item => item.method === "workspace/release"
+    || item.method === "workspace/observe" && item.params.query.kind === "projectThreads"), false,
+  "no selection change throws held rows away to fetch them again");
 
-  const beforeFailure = socket.sent.length;
-  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
-  const failing = await socket.request("workspace/observe", beforeFailure, request =>
-    request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 1);
-  socket.fail(failing, "project rows unavailable");
-  await socket.request("workspace/release", beforeFailure,
-    request => request.params.subscriptionId === retry.params.subscriptionId);
+  await socket.observation(rows, { kind: "projectThreads", phase: "failed", failure: "project rows unavailable",
+    data: membership([]) }, 5);
   await Promise.resolve();
   assert.deepEqual(memberTitles(client), []);
   assert.match(client.threadSidebar.getListing?.().status.error ?? "", /project rows unavailable/);
-  assert.ok(warnings.some(message => message.includes("Workspace query failed")));
+  assert.deepEqual(warnings, []);
 });
 
 test("composing from the default project list keeps row demand on every project", async context => {
@@ -439,18 +444,14 @@ test("an older app broadens row demand only when project groups are unavailable"
   await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
   await providePresentation(socket);
   assert.equal((await openProjectHome(client, createLogicalProjectRoute(logicalId))).ok, true);
-  const focused = await socket.request("workspace/observe", 0,
-    request => request.params.query.kind === "projectThreads"
-      && request.params.query.projects?.length === 1);
-  assert.equal(focused.params.query.kind, "projectThreads");
+  await rowsRequest(socket, 0, projects => projects?.length === 1);
   const groups = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projectGroups");
   const offset = socket.sent.length;
   socket.fail(groups, "Unknown query kind");
-  const fallback = await socket.request("workspace/observe", offset,
-    request => request.params.query.kind === "projectThreads" && request.params.query.projects === null);
-  assert.equal(fallback.params.query.kind, "projectThreads");
-  if (fallback.params.query.kind === "projectThreads") assert.equal(fallback.params.query.projects, null);
+  const { asked: fallback } = await rowsRequest(socket, offset, projects => projects === null);
+  assert.ok(fallback.params.query.kind === "projectThreads");
+  assert.equal(fallback.params.query.projects, null);
   assert.ok(warnings.some(message => message.includes("Workspace query failed")));
 });
 
@@ -530,8 +531,7 @@ test("observed unsettled opencode threads warm their source but settled and code
   const home = await client.controls.applyRoute(createLogicalProjectRoute(logicalId));
   assert.equal(home.ok, true);
   assert.ok(home.canonicalRoute);
-  const rows = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projectThreads"
-    && request.params.query.projects?.length === 1);
+  const { observed: rows } = await rowsRequest(socket, 0, projects => projects?.length === 1);
   const base = {
     logicalProjectId: logicalId, location, hostname: "local", rootPath: project.rootPath,
     entry: {
@@ -738,10 +738,7 @@ test("a thread viewed from another project keeps demand for its owning project r
     location: ownerLocation, logicalProjectId: ownerLogicalId,
   } });
   const opening = client.controls.applyRoute(route);
-  const rows = await socket.request("workspace/observe", ownerRowOffset, request =>
-    request.params.query.kind === "projectThreads"
-      && request.params.query.projects?.length === 2);
-  assert.equal(rows.params.query.kind, "projectThreads");
+  const { asked: rows } = await rowsRequest(socket, ownerRowOffset, projects => projects?.length === 2);
   if (rows.params.query.kind !== "projectThreads") throw new Error("Expected owner row observation.");
   assert.deepEqual(rows.params.query.projects, [
     { kind: "logical", projectId: logicalId },

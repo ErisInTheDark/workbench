@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, and folder peer sync) and publication fences.
+ * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, project selections and rows, and folder peer sync) and publication fences.
  */
 import {
-  WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, workspaceObservationShape,
+  RETARGETABLE_QUERY_KINDS, WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, workspaceObservationShape,
   type WorkspaceArchivedThreads, type WorkspaceObservationDelta, type WorkspaceObserve, type WorkspaceObservation,
   type WorkspaceRetarget, type WorkspaceThreadRows, type WorkspaceThreadSummaries,
 } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -681,9 +681,8 @@ export default class WorkbenchWorkspaceRequestController {
     const request = WorkspaceRetargetSchema.parse(input);
     const interest = this.interests.get(request.subscriptionId);
     if (!interest || interest.request.generation !== request.generation) throw new Error("Workspace observation to retarget is not open.");
-    if (interest.request.query.kind !== request.query.kind
-      || request.query.kind !== "threadSummaries" && request.query.kind !== "projectSelection") {
-      throw new Error("Only thread summary batches and project selections can be retargeted.");
+    if (interest.request.query.kind !== request.query.kind || !RETARGETABLE_QUERY_KINDS.has(request.query.kind)) {
+      throw new Error("Only thread summary batches and project selections or rows can be retargeted.");
     }
     interest.request = request;
     this.refresh(interest);
@@ -1054,13 +1053,13 @@ export default class WorkbenchWorkspaceRequestController {
     return { workspace, targets };
   }
 
-  /** Keep one daemon observation per source, replaced only when its project set changes. */
+  /** Keep one daemon observation per source, retargeted in place when its project set changes. */
   private observeTargets(interest: Interest, targets: ReadonlyMap<DaemonId, ReadonlySet<ProjectId>>,
     query: (projectIds: ProjectId[]) => Parameters<WorkbenchDaemonSource["observe"]>[0]) {
     for (const [id, existing] of interest.sources) {
       const projectIds = [...targets.get(id) ?? []].sort();
       if (areDeeplyEqual(projectIds, existing.projectIds)) continue;
-      if (interest.request.query.kind === "projectSelection" && projectIds.length) {
+      if (projectIds.length) {
         const next = query(projectIds);
         try {
           existing.observation.retarget(next);

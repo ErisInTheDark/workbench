@@ -266,6 +266,38 @@ test("selected logical projects relay demand to every location and clear it on d
   assert.ok(demands.every(demand => demand.released));
 });
 
+test("changing a row selection retargets each daemon's rows in place and reaches the browser as a delta", async context => {
+  const logicalId = LogicalProjectIdSchema.parse(randomUUID());
+  const otherId = LogicalProjectIdSchema.parse(randomUUID());
+  const location = { daemonId: DaemonIdSchema.parse(randomUUID()), projectId: ProjectIdSchema.parse("one") };
+  const other = ProjectIdSchema.parse("two");
+  const calls: string[] = [];
+  const source = {
+    id: location.daemonId, available: true, observe: (query: { projectIds: string[] }) => {
+      calls.push(`observe ${query.projectIds.join(",")}`);
+      return { getSnapshot: () => ({ phase: "pending", failure: null, value: null }),
+        retarget: (next: { projectIds: string[] }) => { calls.push(`retarget ${next.projectIds.join(",")}`); },
+        release: () => { calls.push("release"); } };
+    },
+  };
+  const f = await fixture(context, { get: id => id === source.id ? source : undefined });
+  const snapshot = f.workspace.getSnapshot();
+  context.mock.method(f.workspace, "getSnapshot", () => ({ ...snapshot, projects: [logicalId, otherId].map(id => ({
+    id, matchKey: id, label: id, locations: [{ target: { ...location, projectId: id === logicalId ? location.projectId : other },
+      daemonId: location.daemonId, hostname: "here", name: id, rootPath: `/${id}`, project: null }],
+  })) }));
+  const subscriptionId = randomUUID();
+  f.owner.observe({ subscriptionId, generation: 1,
+    query: { kind: "projectThreads", projects: [{ kind: "logical", projectId: logicalId }] } });
+  const deltas = f.deltas.length;
+  f.owner.retarget({ subscriptionId, generation: 1, query: { kind: "projectThreads", projects: [
+    { kind: "logical", projectId: logicalId }, { kind: "logical", projectId: otherId },
+  ] } });
+  assert.deepEqual(calls, ["observe one", "retarget one,two"]);
+  assert.ok(f.deltas.length > deltas, "the browser hears the new selection as a delta on the same subscription");
+  assert.equal(f.deltas.at(-1)?.subscriptionId, subscriptionId);
+});
+
 test("peer previews route first-three and full-history demand to the selected checkout and release both", async context => {
   const daemonId = DaemonIdSchema.parse(randomUUID());
   const peer = { daemonId: DaemonIdSchema.parse(randomUUID()), projectId: ProjectIdSchema.parse("peer") };

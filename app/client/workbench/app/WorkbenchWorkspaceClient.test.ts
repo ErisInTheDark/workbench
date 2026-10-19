@@ -167,7 +167,35 @@ test("matching interests share work and releasing one does not retire the other"
     reloadDirt: { ...runtime.data.reloadDirt, error: "reload failed" } } }, 2);
   assert.equal(second.getSnapshot().value?.data?.reloadDirt.error, "reload failed");
   second.release();
+  await Promise.resolve();
   assert.equal(socket.sent.filter(item => item.method === "workspace/release").length, 1);
+});
+
+test("a query re-observed during its release grace keeps the held value, and only expiry releases it once", async context => {
+  const graces: Array<{ expire(): void; cancelled: boolean }> = [];
+  const expire = () => { for (const grace of graces.splice(0)) if (!grace.cancelled) grace.expire(); };
+  const fixture = createWorkspaceClientFixture({ linger: run => {
+    const grace = { expire: run, cancelled: false };
+    graces.push(grace);
+    return () => { grace.cancelled = true; };
+  } });
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const first = fixture.workspace.observe({ kind: "runtime" });
+  const request = await socket.request("workspace/observe");
+  await socket.observation(request, runtime);
+  const held = first.getSnapshot();
+  const offset = socket.sent.length;
+  first.release();
+  for (let hop = 0; hop < 20; hop++) await Promise.resolve();
+  const second = fixture.workspace.observe({ kind: "runtime" });
+  assert.equal(second.getSnapshot(), held);
+  expire();
+  assert.equal(socket.sent.length, offset, "the returning observer neither releases nor observes again");
+  second.release();
+  expire();
+  expire();
+  assert.deepEqual(socket.sent.slice(offset).map(item => item.method), ["workspace/release"]);
 });
 
 test("a summary batch retargets in place, and an app without retargeting gets a fresh subscription", async context => {

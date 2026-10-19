@@ -5,7 +5,7 @@
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  DaemonWorkspaceObserveSchema, DaemonWorkspaceRetargetSchema, WorkspaceReleaseSchema, daemonObservationShape,
+  DaemonWorkspaceObserveSchema, DaemonWorkspaceRetargetSchema, RETARGETABLE_QUERY_KINDS, WorkspaceReleaseSchema, daemonObservationShape,
   type DaemonWorkspaceObserve, type DaemonWorkspaceObservation, type DaemonWorkspaceRetarget,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { LocatedThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
@@ -318,13 +318,15 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     if (!observation || observation.request.generation !== request.generation) {
       throw new Error("Workspace observation to retarget is not open.");
     }
-    if (observation.request.query.kind !== request.query.kind
-      || request.query.kind !== "threadSummaries" && request.query.kind !== "projectSelection") {
-      throw new Error("Only thread summary batches and project selections can be retargeted.");
+    const kind = request.query.kind;
+    if (observation.request.query.kind !== kind || !RETARGETABLE_QUERY_KINDS.has(kind)) {
+      throw new Error("Only thread summary batches and project selections or rows can be retargeted.");
     }
     observation.request = request;
-    if (request.query.kind === "projectSelection") this.updateDemand?.refresh();
-    else this.readSummaries(observation);
+    if (kind === "projectSelection") this.updateDemand?.refresh();
+    else if (kind === "threadSummaries") this.readSummaries(observation);
+    // Rows already held for projects that stay selected are kept, so the change ships as a delta.
+    else this.selectProjects(observation);
     return { revision: observation.value.revision };
   }
 
