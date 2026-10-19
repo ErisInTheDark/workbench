@@ -3,8 +3,9 @@
  * - McpToolListing: one server's offered tools with their allowed state, or why they are unavailable.
  * - formatMcpToolListing: agent-facing text for `mcp_tools`; allowed tools first, then disabled ones under one hint; a query ranks matches and adds input schemas.
  * - formatWorkbenchToolSection: the same ranked text for Workbench's deferred tools under server `wb`.
- * - formatMcpToolResult: agent-facing text for one `mcp_call` result.
+ * - formatMcpToolResult: agent-facing text for one `mcp_call` result, including structured content its text does not already mirror.
  */
+import { isDeepStrictEqual } from "node:util";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { McpServerTool } from "./McpServerConnection";
@@ -114,6 +115,18 @@ export function formatMcpToolResult(result: CallToolResult) {
       default: return "";
     }
   }).filter(Boolean);
-  if (!parts.length && result.structuredContent) parts.push(JSON.stringify(result.structuredContent, null, 2));
+  const structured = result.structuredContent;
+  if (structured && !result.content.some(part => part.type === "text" && mirrors(part.text, structured))) {
+    parts.push(JSON.stringify(structured, null, 2));
+  }
   return `${parts.join("\n") || "(no content)"}\n`;
+}
+
+/** The spec asks servers to echo structured output as a JSON text block; printing both would duplicate it. */
+function mirrors(text: string, structured: Record<string, unknown>) {
+  try {
+    return isDeepStrictEqual(JSON.parse(text), structured);
+  } catch {
+    return false;
+  }
 }
