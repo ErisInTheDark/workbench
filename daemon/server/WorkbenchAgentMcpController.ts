@@ -51,8 +51,8 @@ import {
   type WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 import {
+  keepWorkbenchMcpCallAlive,
   sanitizeWorkbenchMcpError as sanitizeError,
-  scheduleWorkbenchMcpProgress,
   sendWorkbenchMcpJsonRpcError as sendJsonRpcError,
   serveWorkbenchMcpHttpRequest,
   type WorkbenchMcpCallOutcome,
@@ -460,24 +460,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return await this.finishTranscript(tools, call.transcript as WorkbenchToolTranscriptReference | null, result);
   }
 
-  private startProgressKeepalive(
-    sendProgress: ((progress: number) => Promise<void>) | undefined,
-    signal: AbortSignal,
-  ): (() => void) | null {
-    if (!sendProgress) return null;
-    let progress = 0;
-    return (this.injectedScheduleProgress ?? scheduleWorkbenchMcpProgress)(async () => {
-      try {
-        await sendProgress(++progress);
-      } catch (error) {
-        this.lifecycleLogError("workbench-mcp-progress", sanitizeError(error) || "Workbench MCP progress failed.");
-      }
-    }, signal);
-  }
-
   /**
    * Shells only prepare here: the ingress runs the command through the exec node, so neither an approval wait nor a
    * running command holds this generation or any provider generation. An older ingress gets the same steps inline.
+   * Preparation is kept alive too, since an approval wait can outlast client idle timeouts.
    */
   private async callShell(
     scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchEscalatingShellInput,
@@ -502,6 +488,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     }
     registration.markDrainIndependent();
     const signal = AbortSignal.any([call.signal, registration.signal]);
+    const stopProgress = keepWorkbenchMcpCallAlive(call, signal, this.lifecycleLogError, this.injectedScheduleProgress);
     let prepared: WorkbenchPreparedShell;
     try {
       prepared = await this.prepareShell(input, call.meta, {
@@ -509,6 +496,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         ...(started.reference ? { itemId: started.reference.itemId, turnId: started.reference.turnId } : {}),
       }, signal, tools, escalation);
     } catch (error) {
+      stopProgress?.();
       registration.unregister();
       return await finishFailure(error, signal);
     }
@@ -518,8 +506,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       keepalive: true, shell: prepared, signal, toolName: "shell", transcript: started.reference,
       unregister: registration.unregister,
     };
-    if (call.detachableShell) return { kind: "detached", call: detached };
-    const stopProgress = this.startProgressKeepalive(call.sendProgress, signal);
+    if (call.detachableShell) {
+      stopProgress?.();
+      return { kind: "detached", call: detached };
+    }
     let outcome: WorkbenchMcpCallOutcome;
     try {
       const shellResult = this.injectedExecuteShell

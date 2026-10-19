@@ -4,6 +4,7 @@
  * - WorkbenchMcpToolCall/WorkbenchMcpDetachedCall/WorkbenchMcpToolStep/WorkbenchMcpCallOutcome: step contracts between ingress and generation, for detached commands and shells.
  * - WorkbenchMcpToolGeneration: the current MCP generation's short describe, call and finish steps.
  * - scheduleWorkbenchMcpProgress: request-owned 60s progress keepalive.
+ * - keepWorkbenchMcpCallAlive: pulse a call's request-owned progress until stopped, logging failed pulses.
  * - sanitizeWorkbenchMcpError: bounded error text without paths or secrets.
  * - sendWorkbenchMcpJsonRpcError: write a JSON-RPC error when the response is still open.
  * - serveWorkbenchMcpHttpRequest: own one MCP HTTP request, resolving the current generation at every step.
@@ -43,7 +44,8 @@ export interface WorkbenchMcpToolCall {
   meta: Record<string, unknown> | undefined;
   name: string;
   requestId: WorkbenchMcpRequestId;
-  sendProgress?: (progress: number) => Promise<void>;
+  /** Sends the request's next progress value; the ingress owns the counter so every phase stays monotonic. */
+  sendProgress?: () => Promise<void>;
   signal: AbortSignal;
 }
 
@@ -97,6 +99,21 @@ export function scheduleWorkbenchMcpProgress(pulse: () => Promise<void>, signal:
   };
   signal.addEventListener("abort", stop, { once: true });
   return stop;
+}
+
+export function keepWorkbenchMcpCallAlive(
+  call: Pick<WorkbenchMcpToolCall, "sendProgress">, signal: AbortSignal, logError: (name: string, message: string) => void,
+  schedule: (pulse: () => Promise<void>, signal: AbortSignal) => () => void = scheduleWorkbenchMcpProgress,
+) {
+  const { sendProgress } = call;
+  if (!sendProgress) return null;
+  return schedule(async () => {
+    try {
+      await sendProgress();
+    } catch (error) {
+      logError("workbench-mcp-progress", sanitizeWorkbenchMcpError(error) || "Workbench MCP progress failed.");
+    }
+  }, signal);
 }
 
 export function sanitizeWorkbenchMcpError(error: unknown) {
@@ -174,6 +191,7 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
     server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: description.tools }));
     server.setRequestHandler(CallToolRequestSchema, async (message, extra) => {
       const progressToken = extra._meta?.progressToken;
+      let progress = 0;
       return await callTool(options, {
         arguments: message.params.arguments,
         detachableShell: true,
@@ -182,9 +200,9 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
         requestId: extra.requestId,
         signal: AbortSignal.any([requestAbort.signal, extra.signal]),
         ...(progressToken === undefined ? {} : {
-          sendProgress: async (progress: number) => await extra.sendNotification({
+          sendProgress: async () => await extra.sendNotification({
             method: "notifications/progress",
-            params: { progressToken, progress },
+            params: { progressToken, progress: ++progress },
           }),
         }),
       });
@@ -213,15 +231,8 @@ async function callTool(options: WorkbenchMcpIngressOptions, call: WorkbenchMcpT
   const step = await (await registry.awaitToolGeneration(call.signal)).call(scope, call);
   if (step.kind === "result") return step.result;
   const detached = step.call;
-  let progress = 0;
-  const stopProgress = detached.keepalive && call.sendProgress
-    ? (detached.scheduleProgress ?? scheduleWorkbenchMcpProgress)(async () => {
-      try {
-        await call.sendProgress!(++progress);
-      } catch (error) {
-        logError("workbench-mcp-progress", sanitizeWorkbenchMcpError(error) || "Workbench MCP progress failed.");
-      }
-    }, detached.signal)
+  const stopProgress = detached.keepalive
+    ? keepWorkbenchMcpCallAlive(call, detached.signal, logError, detached.scheduleProgress)
     : null;
   let outcome: WorkbenchMcpCallOutcome;
   try {

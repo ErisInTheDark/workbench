@@ -1302,23 +1302,37 @@ test("keeps declared Code Mode waits alive with request-owned progress only", as
   }
 });
 
-test("shell calls that request progress keep their stream alive", { timeout: 5_000 }, async () => {
+test("outside-sandbox shells keep their stream alive through approval and run with monotonic progress", { timeout: 5_000 }, async () => {
   const cwd = process.cwd();
   const pulses: Array<() => Promise<void>> = [];
-  const stopped: string[] = [];
+  let stopped = 0;
   const progress: number[] = [];
-  const progressed = deferred<number>();
-  const started = deferred<void>();
+  let progressed = deferred<number>();
+  const approvalRequested = deferred<void>();
+  const approval = deferred<void>();
+  const running = deferred<void>();
   const release = deferred<void>();
-  const controller = codexController({
-    executeCommand: async () => new Response("unused"),
-    daemonOrigin: "http://127.0.0.1:4500",
-    lifecycleLogError: () => {},
+  const run = { kind: "sandboxed" as const, label: "pnpm test", expensive: false, request: {
+    command: ["pwsh", "-Command", "pnpm test"], cwd, permissions: { type: "disabled" as const },
+    windowsSandboxLevel: "disabled" as const, windowsSandboxPrivateDesktop: false, workspaceRoots: [cwd],
+  } };
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true }),
+    patchClaims: async () => "",
+    prepareShell: async () => ({ run, cwd, shell: "pwsh" }),
+    prepareExecution: async () => run,
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", lifecycleLogError: () => {},
     requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
-    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd } } }),
-    shell: { prepareAdmitted: async () => preparedShell(cwd).run },
+    approveHostedShell: async () => {
+      approvalRequested.resolve();
+      await approval.promise;
+      return { kind: "allowOnce" };
+    },
     executeShell: async () => {
-      started.resolve();
+      running.resolve();
       await release.promise;
       return { exitCode: 0, stderr: "", stdout: "complete" };
     },
@@ -1329,7 +1343,7 @@ test("shell calls that request progress keep their stream alive", { timeout: 5_0
       });
       return () => {
         active = false;
-        stopped.push("stopped");
+        stopped += 1;
       };
     },
   });
@@ -1338,7 +1352,7 @@ test("shell calls that request progress keep their stream alive", { timeout: 5_0
   try {
     const call = client.callTool({
       _meta: { threadId: "thread-1" },
-      arguments: { command: "pnpm test:lifecycle" },
+      arguments: { command: "pnpm test", outside_sandbox: true, justification: "test" },
       name: "shell",
     }, undefined, {
       onprogress: update => {
@@ -1347,18 +1361,29 @@ test("shell calls that request progress keep their stream alive", { timeout: 5_0
       },
       resetTimeoutOnProgress: true,
     });
-    await started.promise;
-    assert.equal(pulses.length, 1);
+    await approvalRequested.promise;
+    assert.equal(pulses.length, 1, "the approval wait is kept alive");
     await pulses[0]!();
     assert.equal(await progressed.promise, 1);
+
+    progressed = deferred<number>();
+    approval.resolve();
+    await running.promise;
+    assert.equal(stopped, 1, "the approval keepalive stops before the run takes over");
+    assert.equal(pulses.length, 2, "the run is kept alive");
+    await pulses[0]!();
+    await pulses[1]!();
+    assert.equal(await progressed.promise, 2);
+
     release.resolve();
     const result = await call;
     assert.equal(result.isError, false);
     assert.match(responseText(result), /complete/u);
-    assert.deepEqual(stopped, ["stopped"]);
-    await pulses[0]!();
-    assert.deepEqual(progress, [1]);
+    assert.equal(stopped, 2);
+    await pulses[1]!();
+    assert.deepEqual(progress, [1, 2]);
   } finally {
+    approval.resolve();
     release.resolve();
     await client.close();
     await server.close();
