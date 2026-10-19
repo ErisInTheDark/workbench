@@ -96,7 +96,8 @@ export default function useThreadLiveActivity({
               projectFilePaths={projectFilePaths}
               projectId={projectId}
               projectRootPath={projectRootPath}
-              revealAppends={Boolean(presentationSource)}
+              live={Boolean(presentationSource)}
+              streaming={Boolean(presentationSource)}
               workspaceRoots={workspaceRoots}
             /> : activity.kind === "webSearch" ? activity.contextItems.map(item => (
               <p key={item.id} className="m-0 text-[0.8em] text-fg/muted"><ThreadWebSearchActionRow item={item} /></p>

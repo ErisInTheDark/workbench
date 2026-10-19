@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect SVG preview policy/laziness, ordered-list ordinals, agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback.
+ * No production exports. Regression wards protect SVG preview policy/laziness, ordered-list ordinals, agent-authored inline markers, notice blocks, Markdown bodies, literal fallback, and streamed reveal/frontier rendering.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -11,6 +11,7 @@ import {
   renderThreadInlineMarkdown,
   renderThreadMarkdown,
 } from "./thread-markdown-render";
+import MarkdownRevealTimeline from "../../../workbench/markdown/MarkdownRevealTimeline";
 
 test("attachment references render without filesystem navigation", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadInlineMarkdown("#[attach:2]", { profile: "thread" }, "attachment")));
@@ -90,21 +91,6 @@ test("prose and formatting stop file-link grouping", () => {
 
   assert.doesNotMatch(html, /[23] files/u);
   assert.equal(Array.from(html.matchAll(/data-project-file-relative-path=/gu)).length, 3);
-});
-
-test("file grouping stays whole across an append boundary and outside thread mode stays unchanged", () => {
-  const markdown = "#[a.ts], #[b.ts]";
-  const options = { projectFilePaths: ["a.ts", "b.ts"], projectId: "project" };
-  const appended = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
-    markdown, options, { blockIndex: 0, kind: "inlineTail", revisionKey: "append", startNodeIndex: 1 },
-  )));
-  const editorInline = renderToStaticMarkup(createElement(Fragment, null,
-    renderThreadInlineMarkdown("[a.ts](a.ts), [b.ts](b.ts)", options, "editor-inline")));
-
-  assert.match(appended, /2 files/u);
-  assert.doesNotMatch(appended, /data-thread-markdown-append-reveal=/u);
-  assert.doesNotMatch(editorInline, /2 files/u);
-  assert.equal(Array.from(editorInline.matchAll(/data-project-file-relative-path=/gu)).length, 2);
 });
 
 test("thread alert markers render every supported semantic color", () => {
@@ -387,31 +373,57 @@ test("malformed and fenced disclosure tags render as escaped text", () => {
   assert.match(html, /&lt;summary&gt;example&lt;\/summary&gt;/u);
 });
 
-test("append presentation isolates the semantic suffix without duplicating text", () => {
-  const textAppend = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
-    "Hello world",
-    {},
-    {
-      blockIndex: 0,
-      kind: "text",
-      nodePath: [0],
-      prefixLength: 5,
-      revisionKey: "5:11",
-    },
-  )));
-  const formattedAppend = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
-    "Hello **world**",
-    {},
-    {
-      blockIndex: 0,
-      kind: "inlineTail",
-      revisionKey: "5:15",
-      startNodeIndex: 1,
-    },
-  )));
+/** Renders `previous` then `next` through one timeline and returns the second render. */
+function renderGrowth(previous: string, next: string, options: { partial?: boolean } = {}) {
+  const timeline = new MarkdownRevealTimeline(null);
+  const first = timeline.cursor(0);
+  renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(previous, { ...options, reveal: first })));
+  timeline.commit(first);
+  return renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(next, { ...options, reveal: timeline.cursor(16) })));
+}
 
-  assert.match(textAppend, /Hello<span[^>]+data-thread-markdown-append-reveal="true"[^>]*> world<\/span>/u);
-  assert.equal(textAppend.replace(/<[^>]+>/gu, ""), "Hello world");
-  assert.match(formattedAppend, /Hello <span[^>]+data-thread-markdown-append-reveal="true"[^>]*><strong>world<\/strong><\/span>/u);
-  assert.equal(formattedAppend.replace(/<[^>]+>/gu, ""), "Hello world");
+const REVEALED = /<span[^>]*data-thread-reveal="true"[^>]*>((?:(?!<\/span>)[\s\S])*)<\/span>/gu;
+
+test("newly visible text fades in wherever it lands, without duplicating text", () => {
+  const cases = [
+    ["Hello", "Hello world", " world"],
+    ["Hello", "Hello **world**", " world"],
+    ["- one", "- one\n- two", "two"],
+    ["| a | b |\n| --- | --- |\n| 1 | 2 |", "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |", "34"],
+    ["```ts\nconst a = 1;\n```", "```ts\nconst a = 1;\nconst b = 2;\n```", "\nconst b = 2;"],
+    ['<notice title="n" color="blue">\nfirst\n</notice>', '<notice title="n" color="blue">\nfirst second\n</notice>', " second"],
+  ] as const;
+  for (const [previous, next, revealed] of cases) {
+    const html = renderGrowth(previous, next);
+    assert.equal(Array.from(html.matchAll(REVEALED), match => match[1]!.replace(/<[^>]+>/gu, "")).join(""), revealed, next);
+  }
+});
+
+test("file grouping fades in whole and outside thread mode stays unchanged", () => {
+  const options = { projectFilePaths: ["a.ts", "b.ts"], projectId: "project" };
+  const timeline = new MarkdownRevealTimeline(0);
+  const streamed = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    "#[a.ts], #[b.ts]", { ...options, reveal: timeline.cursor(0) },
+  )));
+  const editorInline = renderToStaticMarkup(createElement(Fragment, null,
+    renderThreadInlineMarkdown("[a.ts](a.ts), [b.ts](b.ts)", options, "editor-inline")));
+
+  assert.equal(Array.from(streamed.matchAll(/data-thread-reveal="true"/gu)).length, 1);
+  assert.match(streamed, /data-thread-reveal="true".*2 files/u);
+  assert.doesNotMatch(editorInline, /2 files/u);
+  assert.equal(Array.from(editorInline.matchAll(/data-project-file-relative-path=/gu)).length, 2);
+});
+
+test("streaming text renders its frontier: hidden partial tokens, optimistic closers, open notices", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    "Settled **stars",
+    "",
+    '<notice title="Heads up" color="yellow">',
+    'body **bold so far <icon color="re',
+  ].join("\n"), { partial: true })));
+
+  assert.match(html, /Settled \*\*stars/u);
+  assert.match(html, /data-thread-notice-color="yellow"/u);
+  assert.match(html, /body <strong>bold so far <\/strong><\/p>/u);
+  assert.doesNotMatch(html, /&lt;icon/u);
 });

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadNotice: render one agent-authored notice with a title row and Markdown body content.
+ * - default ThreadNotice: render one agent-authored notice with a title row and Markdown body content; a body still streaming may be empty.
  */
 
 import type { ReactNode } from "react";
@@ -16,7 +16,7 @@ export default function ThreadNotice ({ bodyMarkdown, children, color, source, t
   title: string;
 }) {
   const colors = getThreadMarkdownEmphasisColors(color);
-  if (!colors || !bodyMarkdown.trim()) {
+  if (!colors) {
     return <p className="mb-[0.9em] whitespace-pre-wrap last:mb-0">{source}</p>;
   }
 
@@ -43,9 +43,11 @@ export default function ThreadNotice ({ bodyMarkdown, children, color, source, t
         </span>
         <span>{title}</span>
       </div>
-      <div className="mt-[0.45rem]" data-thread-notice-body="true">
-        {children}
-      </div>
+      {bodyMarkdown.trim() ? (
+        <div className="mt-[0.45rem]" data-thread-notice-body="true">
+          {children}
+        </div>
+      ) : null}
     </aside>
   );
 }

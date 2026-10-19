@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - createSvgCodeBlockPreviewSrcDoc: build the sandboxed SVG preview document and its content policy.
- * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers; top-level section breaks host section-action slots.
+ * - ThreadRenderOptions: parse options plus the live reveal cursor that fades newly streamed text in document order.
+ * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers; top-level section breaks host section-action slots; partial text renders its stream frontier.
  * - renderThreadInlineMarkdown: render inline markdown without a block container.
  */
 
@@ -25,7 +26,7 @@ import {
   type ParsedTableCell,
 } from "../../../workbench/markdown/markdown-parse";
 import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
-import type { ThreadMarkdownAppendRenderTarget } from "../../../workbench/markdown/markdown-append-presentation";
+import type { MarkdownRevealCursor } from "../../../workbench/markdown/MarkdownRevealTimeline";
 import {
   splitUnifiedDiffLine,
   type UnifiedDiffDisplayLine,
@@ -42,6 +43,7 @@ import ThreadMarkdownSectionActions from "./ThreadMarkdownSectionActions";
 import ThreadNotice from "./ThreadNotice";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
+import ThreadRevealText from "./ThreadRevealText";
 import ThreadVisFrame from "./ThreadVisFrame";
 
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
@@ -77,20 +79,30 @@ interface ThreadCodeBlockHeader {
   language: string;
 }
 
-function areNumberArraysEqual(left: readonly number[], right: readonly number[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+/** Parse options plus the live reveal cursor; `partial` only ever reaches the block and inline text at the stream frontier. */
+export type ThreadRenderOptions = MarkdownParseOptions & { reveal?: MarkdownRevealCursor };
+
+function settledOptions (options: ThreadRenderOptions): ThreadRenderOptions {
+  return options.partial ? { ...options, partial: false } : options;
 }
 
-function renderAppendReveal(children: ReactNode, key: string) {
-  return (
-    <span
-      className="relative animate-slide-reveal motion-reduce:(animate-none filter-none opacity-100 top-0)"
-      data-thread-markdown-append-reveal="true"
-      key={key}
-    >
-      {children}
-    </span>
-  );
+function lastContentBlockIndex (blocks: readonly ParsedBlock[]) {
+  return blocks.findLastIndex((block) => block.type !== "break" && block.type !== "list-break");
+}
+
+/** Visible text in document order; runs still fading in from the stream are wrapped in their fade. */
+function renderRevealedText (text: string, options: ThreadRenderOptions, key: string): ReactNode {
+  const cursor = options.reveal;
+  if (!cursor) return text;
+  return cursor.text(text).map((piece) => piece.startedAt === null
+    ? <Fragment key={`${key}-${piece.key}`}>{piece.text}</Fragment>
+    : <ThreadRevealText key={`${key}-${piece.key}`} startedAt={piece.startedAt}>{piece.text}</ThreadRevealText>);
+}
+
+/** An indivisible inline token (chip, mention, bare icon) fades in whole. */
+function renderRevealedAtom (node: ReactNode, visibleLength: number, options: ThreadRenderOptions, key: string): ReactNode {
+  const startedAt = options.reveal?.atom(visibleLength) ?? null;
+  return startedAt === null ? node : <ThreadRevealText key={key} startedAt={startedAt}>{node}</ThreadRevealText>;
 }
 
 export function createSvgCodeBlockPreviewSrcDoc (svgSource: string) {
@@ -134,75 +146,40 @@ function collectFileLinkRun(nodes: ParsedInlineNode[], start: number) {
   return files.length > 1 ? { end, files } : null;
 }
 
+function fileLinkLabelLength (file: Extract<ParsedInlineNode, { type: "projectFileLink" }>) {
+  return (file.label ?? file.relativePath).length;
+}
+
 function renderThreadInlineNodes (
   nodes: ParsedInlineNode[],
   keyPrefix: string,
-  options: MarkdownParseOptions,
-  appendTarget?: ThreadMarkdownAppendRenderTarget,
-  path: number[] = [],
-  indexOffset = 0,
+  options: ThreadRenderOptions,
 ): ReactNode[] {
-  if (appendTarget?.kind === "inlineTail" && path.length === 0) {
-    const crossesAppendBoundary = options.profile === "thread" && nodes.some((_, index) => {
-      const run = collectFileLinkRun(nodes, index);
-      return run && index < appendTarget.startNodeIndex && run.end > appendTarget.startNodeIndex;
-    });
-    if (crossesAppendBoundary) {
-      return renderThreadInlineNodes(nodes, keyPrefix, options);
-    }
-    return [
-      ...renderThreadInlineNodes(nodes.slice(0, appendTarget.startNodeIndex), keyPrefix, options),
-      renderAppendReveal(
-        renderThreadInlineNodes(
-          nodes.slice(appendTarget.startNodeIndex),
-          keyPrefix,
-          options,
-          undefined,
-          [],
-          appendTarget.startNodeIndex,
-        ),
-        `${keyPrefix}-append-${appendTarget.revisionKey}`,
-      ),
-    ];
-  }
   let consumedThrough = -1;
   return nodes.map((node, index) => {
     if (index < consumedThrough) return null;
-    const actualIndex = index + indexOffset;
-    const key = `${keyPrefix}-${actualIndex}`;
-    const nodePath = [...path, actualIndex];
+    const key = `${keyPrefix}-${index}`;
     const run = options.profile === "thread" ? collectFileLinkRun(nodes, index) : null;
     if (run) {
       consumedThrough = run.end;
-      return <ThreadFileList files={run.files} key={key} projectId={options.projectId} />;
+      const visibleLength = run.files.reduce((total, file) => total + fileLinkLabelLength(file), 0);
+      return renderRevealedAtom(<ThreadFileList files={run.files} key={key} projectId={options.projectId} />, visibleLength, options, key);
     }
 
     switch (node.type) {
-      case "text": {
-        const isTarget = appendTarget?.kind === "text"
-          && areNumberArraysEqual(nodePath, appendTarget.nodePath);
-        if (!isTarget) return <Fragment key={key}>{node.text}</Fragment>;
-        return (
-          <Fragment key={key}>
-            {node.text.slice(0, appendTarget.prefixLength)}
-            {renderAppendReveal(
-              node.text.slice(appendTarget.prefixLength),
-              `${key}-append-${appendTarget.revisionKey}`,
-            )}
-          </Fragment>
-        );
-      }
+      case "text":
+        return <Fragment key={key}>{renderRevealedText(node.text, options, key)}</Fragment>;
       case "strong":
-        return <strong key={key}>{renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}</strong>;
+        return <strong key={key}>{renderThreadInlineNodes(node.children, key, options)}</strong>;
       case "em":
-        return <em key={key}>{renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}</em>;
+        return <em key={key}>{renderThreadInlineNodes(node.children, key, options)}</em>;
       case "delete":
         return (
           <del
             className="-mx-[0.04em] rounded-[0.2em] bg-[color-mix(in srgb, var(--danger) 16%, transparent)] px-[0.08em] text-inherit decoration-current decoration-[0.08em]"
             key={key}
           >
-            {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </del>
         );
       case "insert":
@@ -211,16 +188,17 @@ function renderThreadInlineNodes (
             className="-mx-[0.04em] rounded-[0.2em] bg-[color-mix(in srgb, var(--success) 16%, transparent)] px-[0.08em] text-inherit no-underline"
             key={key}
           >
-            {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </ins>
         );
       case "code":
         return (
           <ThreadInlineCode key={key}>
-            {node.text}
+            {renderRevealedText(node.text, options, key)}
           </ThreadInlineCode>
         );
       case "break":
+        options.reveal?.atom();
         return <br key={key} />;
       case "link":
         return (
@@ -231,7 +209,7 @@ function renderThreadInlineNodes (
             rel="noreferrer"
             target="_blank"
           >
-            {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </a>
         );
       case "inlineComment":
@@ -241,45 +219,51 @@ function renderThreadInlineNodes (
             data-inline-comment="true"
             key={key}
           >
-            {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </span>
         );
       case "mark":
         return (
           <mark className="rounded-[0.2em] bg-[color-mix(in srgb, var(--attention) 22%, transparent)] px-[0.08em] text-inherit" key={key}>
-            {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </mark>
         );
       case "underline":
-        return <u key={key}>{renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}</u>;
+        return <u key={key}>{renderThreadInlineNodes(node.children, key, options)}</u>;
       case "subscript":
-        return <sub key={key}>{renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}</sub>;
+        return <sub key={key}>{renderThreadInlineNodes(node.children, key, options)}</sub>;
       case "superscript":
-        return <sup key={key}>{renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}</sup>;
+        return <sup key={key}>{renderThreadInlineNodes(node.children, key, options)}</sup>;
       case "markTag":
         return (
           <u data-mark={node.name} key={key} title={node.name}>
-            {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </u>
         );
       case "commentThread":
         return null;
-      case "threadIcon":
+      case "threadIcon": {
+        if (!node.children) {
+          return renderRevealedAtom(<ThreadInlineIcon color={node.color} iconType={node.iconType} key={key} label={null} />, 1, options, key);
+        }
+        options.reveal?.atom();
         return (
           <ThreadInlineIcon
+            animateLabelTint={options.reveal?.animates ?? false}
             color={node.color}
             iconType={node.iconType}
             key={key}
-            label={node.children ? renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath) : null}
+            label={renderThreadInlineNodes(node.children, key, options)}
           />
         );
+      }
       case "attachmentMention":
-        return <span key={key} title={node.number === null ? "Removed attachment" : `Attachment ${node.number}`}
+        return renderRevealedAtom(<span key={key} title={node.number === null ? "Removed attachment" : `Attachment ${node.number}`}
           className={`${getInlineMentionMarkClassName("attachment")} rounded-[0.35rem] px-[0.34em] py-[0.08em] ${node.number === null ? "text-danger" : ""}`}>
           {node.text}
-        </span>;
+        </span>, node.text.length, options, key);
       case "knownSkillMention":
-        return (
+        return renderRevealedAtom(
           <span
             className={`
               ${getInlineMentionMarkClassName("skill")}
@@ -290,10 +274,13 @@ function renderThreadInlineNodes (
             title={node.title}
           >
             {node.text}
-          </span>
+          </span>,
+          node.text.length,
+          options,
+          key,
         );
       case "projectFileLink": {
-        return (
+        return renderRevealedAtom(
           <ProjectFilePath
             absolutePath={node.absolutePath}
             columnNumber={node.columnNumber}
@@ -305,7 +292,10 @@ function renderThreadInlineNodes (
             path={node.relativePath}
             projectId={node.projectId ?? options.projectId}
             targetType={node.targetType}
-          />
+          />,
+          fileLinkLabelLength(node),
+          options,
+          key,
         );
       }
     }
@@ -314,41 +304,66 @@ function renderThreadInlineNodes (
 
 export function renderThreadInlineMarkdown (
   markdown: string,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
-  appendTarget?: ThreadMarkdownAppendRenderTarget,
 ) {
-  return renderThreadInlineNodes(parseInlineMarkdown(markdown, options), keyPrefix, options, appendTarget);
+  return renderThreadInlineNodes(parseInlineMarkdown(markdown, options), keyPrefix, options);
+}
+
+/** Only the last content block is at the stream frontier; everything before it is settled. */
+function renderThreadBlockSequence (
+  blocks: readonly ParsedBlock[],
+  options: ThreadRenderOptions,
+  keyFor: (index: number) => string,
+  sectionActionsFor?: (block: ParsedBlock) => ReactNode,
+) {
+  const frontierIndex = lastContentBlockIndex(blocks);
+  const settled = settledOptions(options);
+  return blocks.map((block, index) => renderThreadBlock(
+    block,
+    index === frontierIndex ? options : settled,
+    keyFor(index),
+    sectionActionsFor?.(block),
+  ));
 }
 
 function renderThreadChildBlocks (
   children: ParsedBlock[],
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
 ) {
-  return children.map((child, index) => renderThreadBlock(child, options, `${keyPrefix}-child-${index}`));
+  return renderThreadBlockSequence(children, options, (index) => `${keyPrefix}-child-${index}`);
 }
 
 function renderThreadListBlock (
   block: Extract<ParsedBlock, { type: "ul" | "ol" }>,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
 ) {
   const Tag = block.type;
+  const settled = settledOptions(options);
 
   return (
     <Tag className={`${BLOCK_SPACING_CLASS} ${block.type === "ul" ? "list-disc" : "list-decimal"} pl-[1.3rem]`} key={keyPrefix}>
-      {block.items.map((item, index) => renderThreadListItem(item, options, `${keyPrefix}-item-${index}`))}
+      {block.items.map((item, index) => renderThreadListItem(
+        item,
+        index === block.items.length - 1 ? options : settled,
+        `${keyPrefix}-item-${index}`,
+      ))}
     </Tag>
   );
 }
 
+function renderThreadListItemText (item: ParsedListItem, options: ThreadRenderOptions, keyPrefix: string) {
+  return renderThreadInlineMarkdown(item.text, item.children.length ? settledOptions(options) : options, `${keyPrefix}-content`);
+}
+
 function renderThreadListItem (
   item: ParsedListItem,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
 ) {
-  const content = renderThreadInlineMarkdown(item.text, options, `${keyPrefix}-content`);
+  const content = renderThreadListItemText(item, options, keyPrefix);
   if (!item.children.length) {
     return <li className="[&+li]:mt-1" key={keyPrefix} value={item.ordinal ?? undefined}>{content.length ? content : <br />}</li>;
   }
@@ -379,7 +394,7 @@ function renderThreadListItem (
 
 function isThreadSingleItemOrderedStep (
   block: Extract<ParsedBlock, { type: "ol" }>,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
 ) {
   return (options.profile ?? "editor") === "thread"
     && block.items.length === 1
@@ -388,11 +403,11 @@ function isThreadSingleItemOrderedStep (
 
 function renderThreadSingleItemOrderedStep (
   block: Extract<ParsedBlock, { type: "ol" }>,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
 ) {
   const item = block.items[0];
-  const content = renderThreadInlineMarkdown(item.text, options, `${keyPrefix}-content`);
+  const content = renderThreadListItemText(item, options, keyPrefix);
   const childContent = renderThreadChildBlocks(item.children, options, keyPrefix);
 
   // multiple periods = probably not top level step marker, render as normal list item with marker in content
@@ -441,14 +456,13 @@ function renderThreadStateChange (mode: string, keyPrefix: string, sectionAction
   );
 }
 
-function renderThreadMarkdownBlocks (markdown: string, options: MarkdownParseOptions, keyPrefix: string) {
-  return parseBlocks(markdown, options)
-    .map((block, index) => renderThreadBlock(block, options, `${keyPrefix}-${index}`));
+function renderThreadMarkdownBlocks (markdown: string, options: ThreadRenderOptions, keyPrefix: string) {
+  return renderThreadBlockSequence(parseBlocks(markdown, options), options, (index) => `${keyPrefix}-${index}`);
 }
 
 function renderThreadPlanBlock (
   block: Extract<ParsedBlock, { type: "plan" }>,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
   sectionActions?: ReactNode,
 ) {
@@ -483,13 +497,13 @@ function renderThreadPlanBlock (
   );
 }
 
-function renderThreadDetailsBlock (block: Extract<ParsedBlock, { type: "details" }>, options: MarkdownParseOptions, keyPrefix: string) {
+function renderThreadDetailsBlock (block: Extract<ParsedBlock, { type: "details" }>, options: ThreadRenderOptions, keyPrefix: string) {
   return (
     <div className={BLOCK_SPACING_CLASS} key={keyPrefix}>
       <Disclosure
         contentClassName="mt-[0.25em] pl-[1.625rem]"
         initialOpen={block.open}
-        summary={renderThreadInlineMarkdown(block.summary, options, `${keyPrefix}-summary`)}
+        summary={renderThreadInlineMarkdown(block.summary, block.text ? settledOptions(options) : options, `${keyPrefix}-summary`)}
         summaryClassName="font-semibold !text-text"
       >
         {renderThreadMarkdownBlocks(block.text, options, `${keyPrefix}-content`)}
@@ -512,7 +526,7 @@ function getThreadTableCellAlignClassName (alignment: ParsedTableAlignment) {
 
 function renderThreadTableCellContent (
   cell: ParsedTableCell,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
 ) {
   const content = renderThreadInlineMarkdown(cell.text, options, keyPrefix);
@@ -521,9 +535,14 @@ function renderThreadTableCellContent (
 
 function renderThreadTableBlock (
   block: Extract<ParsedBlock, { type: "table" }>,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
 ) {
+  const settled = settledOptions(options);
+  const frontierRow = block.rows.length ? block.rows.at(-1)! : block.header;
+  const cellOptions = (row: readonly ParsedTableCell[], columnIndex: number) => (
+    row === frontierRow && columnIndex === row.length - 1 ? options : settled
+  );
   return (
     <div
       className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in srgb, var(--text) 4%, transparent)]`}
@@ -539,7 +558,7 @@ function renderThreadTableBlock (
                   key={`${keyPrefix}-header-${index}`}
                   scope="col"
                 >
-                  {renderThreadTableCellContent(cell, options, `${keyPrefix}-header-${index}`)}
+                  {renderThreadTableCellContent(cell, cellOptions(block.header, index), `${keyPrefix}-header-${index}`)}
                 </th>
               ))}
             </tr>
@@ -557,7 +576,7 @@ function renderThreadTableBlock (
                       className={`${getThreadTableCellAlignClassName(block.alignments[columnIndex] ?? null)} ${THREAD_TABLE_CELL_CLASS} px-[0.85rem] py-[0.5rem] align-top text-text`}
                       key={`${keyPrefix}-row-${rowIndex}-cell-${columnIndex}`}
                     >
-                      {renderThreadTableCellContent(cell, options, `${keyPrefix}-row-${rowIndex}-cell-${columnIndex}`)}
+                      {renderThreadTableCellContent(cell, cellOptions(row, columnIndex), `${keyPrefix}-row-${rowIndex}-cell-${columnIndex}`)}
                     </td>
                   );
                 })}
@@ -570,7 +589,7 @@ function renderThreadTableBlock (
   );
 }
 
-function renderThreadNoticeBlock (block: Extract<ParsedBlock, { type: "notice" }>, options: MarkdownParseOptions, keyPrefix: string) {
+function renderThreadNoticeBlock (block: Extract<ParsedBlock, { type: "notice" }>, options: ThreadRenderOptions, keyPrefix: string) {
   return (
     <ThreadNotice
       bodyMarkdown={block.text}
@@ -596,14 +615,15 @@ function isDiffCodeBlockLanguage (language: string) {
   return getCodeBlockLanguageToken(language) === "diff";
 }
 
-function renderThreadDiffCodeBlock (text: string, keyPrefix: string) {
+function renderThreadDiffCodeBlock (text: string, keyPrefix: string, options: ThreadRenderOptions) {
   const lines = text.split("\n");
 
   return lines.map((line, index) => {
     const displayLine = splitUnifiedDiffLine(line);
+    const lineKey = `${keyPrefix}-diff-line-${index}`;
 
     return (
-      <Fragment key={`${keyPrefix}-diff-line-${index}`}>
+      <Fragment key={lineKey}>
         <span
           className={`block min-h-[1lh] px-[0.95rem] ${DIFF_CODE_BLOCK_LINE_CLASS_NAMES[displayLine.type]}`}
           data-thread-codeblock-diff-line={displayLine.type}
@@ -611,7 +631,7 @@ function renderThreadDiffCodeBlock (text: string, keyPrefix: string) {
           {displayLine.prefix ? (
             <span className="sr-only" data-thread-codeblock-diff-prefix="true">{displayLine.prefix}</span>
           ) : null}
-          {displayLine.text}
+          {renderRevealedText(displayLine.text, options, lineKey)}
         </span>
         {index < lines.length - 1 ? (
           <span aria-hidden="true" className="hidden" data-thread-codeblock-diff-separator="true">{"\n"}</span>
@@ -654,16 +674,20 @@ function getCompletedSvgPreviewSource(svgSource: string) {
     : "";
 }
 
+/** Code body is rendered (and reveal-split) in document order by the caller; the component only owns chrome state. */
 function ThreadCodeBlock ({
   block,
+  content,
+  header,
   keyPrefix,
   options,
 }: {
   block: Extract<ParsedBlock, { type: "code" }>;
+  content: ReactNode;
+  header: ThreadCodeBlockHeader;
   keyPrefix: string;
   options: MarkdownParseOptions;
 }) {
-  const header = parseThreadCodeBlockHeader(block.language, options);
   const language = header.language;
   const isDiffCodeBlock = isDiffCodeBlockLanguage(language);
   const isSvgCodeBlock = isSvgCodeBlockLanguage(language);
@@ -752,7 +776,7 @@ function ThreadCodeBlock ({
             "
             data-thread-codeblock-code="true"
           >
-            {isDiffCodeBlock ? renderThreadDiffCodeBlock(block.text, keyPrefix) : block.text}
+            {content}
           </code>
         </pre>
         {svgPreviewSrcDoc ? (
@@ -765,11 +789,21 @@ function ThreadCodeBlock ({
   );
 }
 
+function renderThreadCodeBlock (block: Extract<ParsedBlock, { type: "code" }>, options: ThreadRenderOptions, keyPrefix: string) {
+  const { reveal: _reveal, ...chromeOptions } = options;
+  const header = parseThreadCodeBlockHeader(block.language, chromeOptions);
+  const content = isDiffCodeBlockLanguage(header.language)
+    ? renderThreadDiffCodeBlock(block.text, keyPrefix, options)
+    : renderRevealedText(block.text, options, `${keyPrefix}-code`);
+  return (
+    <ThreadCodeBlock block={block} content={content} header={header} key={keyPrefix} keyPrefix={keyPrefix} options={chromeOptions} />
+  );
+}
+
 function renderThreadBlock (
   block: ParsedBlock,
-  options: MarkdownParseOptions,
+  options: ThreadRenderOptions,
   keyPrefix: string,
-  appendTarget?: ThreadMarkdownAppendRenderTarget,
   sectionActions?: ReactNode,
 ) {
   switch (block.type) {
@@ -782,7 +816,7 @@ function renderThreadBlock (
       return Array.from({ length: block.count }, (_, index) => <br key={`${keyPrefix}-${index}`} />);
     case "heading": {
       const Tag = `h${block.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
-      return <Tag className={HEADING_CLASSES[block.level as 1 | 2 | 3 | 4 | 5 | 6]} key={keyPrefix}>{renderThreadInlineMarkdown(block.text, options, keyPrefix, appendTarget)}</Tag>;
+      return <Tag className={HEADING_CLASSES[block.level as 1 | 2 | 3 | 4 | 5 | 6]} key={keyPrefix}>{renderThreadInlineMarkdown(block.text, options, keyPrefix)}</Tag>;
     }
     case "blockquote":
       return (
@@ -790,7 +824,7 @@ function renderThreadBlock (
           className={`${BLOCK_SPACING_CLASS} border-l-[0.18rem] [border-left-color: color-mix(in srgb, var(--text) 14%, transparent)] pl-[0.9rem] text-fg/muted`}
           key={keyPrefix}
         >
-          {renderThreadInlineMarkdown(block.text, options, keyPrefix, appendTarget)}
+          {renderThreadInlineMarkdown(block.text, options, keyPrefix)}
         </blockquote>
       );
     case "plan":
@@ -806,7 +840,7 @@ function renderThreadBlock (
           data-block-comment="true"
           key={keyPrefix}
         >
-          {parseCommentLine(block.text)?.map((comment) => comment.body).join(" ") ?? block.text}
+          {renderRevealedText(parseCommentLine(block.text)?.map((comment) => comment.body).join(" ") ?? block.text, options, keyPrefix)}
         </p>
       );
     case "suggestion":
@@ -820,40 +854,39 @@ function renderThreadBlock (
     case "hr":
       return <hr className="[margin-inline: 10%] my-8 [border-color: color-mix(in srgb, var(--text), var(--app-bg-solid) 70%)]" key={keyPrefix} />;
     case "code":
-      return <ThreadCodeBlock block={block} key={keyPrefix} keyPrefix={keyPrefix} options={options} />;
+      return renderThreadCodeBlock(block, options, keyPrefix);
     case "table":
       return renderThreadTableBlock(block, options, keyPrefix);
     case "paragraph": {
       const stateChangeMode = parseThreadStateChangeMode(block.text, options);
       if (stateChangeMode) {
+        options.reveal?.atom(stateChangeMode.length);
         return renderThreadStateChange(stateChangeMode, keyPrefix, sectionActions);
       }
 
-      return <p className={BLOCK_SPACING_CLASS} key={keyPrefix}>{renderThreadInlineMarkdown(block.text, options, keyPrefix, appendTarget)}</p>;
+      return <p className={BLOCK_SPACING_CLASS} key={keyPrefix}>{renderThreadInlineMarkdown(block.text, options, keyPrefix)}</p>;
     }
   }
 }
 
+/** `partial` marks text still streaming; `reveal` walks visible text so newly streamed runs fade in. */
 export function renderThreadMarkdown (
   markdown: string,
-  options: MarkdownParseOptions = {},
-  appendTarget?: ThreadMarkdownAppendRenderTarget,
+  options: ThreadRenderOptions = {},
 ) {
   const threadOptions = {
     ...options,
     profile: "thread",
-  } satisfies MarkdownParseOptions;
+  } satisfies ThreadRenderOptions;
   let sectionBreakIndex = 0;
-  const renderedBlocks = parseBlocks(markdown, threadOptions)
-    .map((block, index) => renderThreadBlock(
-      block,
-      threadOptions,
-      `thread-markdown-${index}`,
-      appendTarget?.blockIndex === index ? appendTarget : undefined,
-      isThreadMarkdownSectionBreak(block, threadOptions)
-        ? <ThreadMarkdownSectionActions breakIndex={sectionBreakIndex++} />
-        : undefined,
-    ));
+  const renderedBlocks = renderThreadBlockSequence(
+    parseBlocks(markdown, threadOptions),
+    threadOptions,
+    (index) => `thread-markdown-${index}`,
+    (block) => isThreadMarkdownSectionBreak(block, threadOptions)
+      ? <ThreadMarkdownSectionActions breakIndex={sectionBreakIndex++} />
+      : undefined,
+  );
 
   return renderedBlocks.length ? renderedBlocks : <p className={BLOCK_SPACING_CLASS}><br /></p>;
 }

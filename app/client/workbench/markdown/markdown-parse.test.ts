@@ -135,6 +135,57 @@ test("thread inline html formatting tags parse like their markdown equivalents",
   assert.equal(parseInlineMarkdown('<b class="x">attrs</b>', thread).some(node => node.type === "strong"), false);
 });
 
+const PARTIAL = { partial: true, profile: "thread" } as const;
+
+test("partial thread text closes unclosed formatting at the frontier and stays literal once settled", () => {
+  for (const [markdown, type] of [
+    ["**bold text ", "strong"], ["*it ", "em"], ["~~gone ", "delete"], ["`code here ", "code"],
+    ["<b>bold ", "strong"], ["<sup>up ", "superscript"], ['<u data-mark="x">tagged ', "markTag"], ["<!-- note ", "inlineComment"],
+  ] as const) {
+    assert.equal(parseInlineMarkdown(markdown, PARTIAL)[0]?.type, type, markdown);
+    assert.equal(parseInlineMarkdown(markdown, { profile: "thread" })[0]?.type, "text", markdown);
+  }
+  assert.deepEqual(parseInlineMarkdown("**a *b ", PARTIAL), [
+    { children: [{ text: "a ", type: "text" }, { children: [{ text: "b ", type: "text" }], type: "em" }], type: "strong" },
+  ]);
+});
+
+test("partial thread text hides its unfinished frontier token, even inside optimistic formatting", () => {
+  assert.deepEqual(parseInlineMarkdown("see app/client/Fo", PARTIAL), [{ text: "see ", type: "text" }]);
+  assert.deepEqual(parseInlineMarkdown('ok <icon color="re', PARTIAL), [{ text: "ok ", type: "text" }]);
+  assert.deepEqual(parseInlineMarkdown("**bold wor", PARTIAL), [{ children: [{ text: "bold ", type: "text" }], type: "strong" }]);
+  assert.deepEqual(parseInlineMarkdown("**done** then wor", { profile: "thread", partial: false }).at(-1), { text: " then wor", type: "text" });
+});
+
+test("an unclosed partial icon stays a bare marker so later text is not recoloured", () => {
+  const nodes = parseInlineMarkdown('<icon color="red" type="x">blocked ', PARTIAL);
+  assert.deepEqual(nodes.map(node => node.type), ["threadIcon", "text"]);
+  assert.equal(nodes[0]?.type === "threadIcon" && nodes[0].children, null);
+});
+
+test("partial thread blocks hide unfinished frontier lines and close open containers", () => {
+  const types = (markdown: string) => parseBlocks(markdown, PARTIAL).filter(block => block.type !== "break").map(block => block.type);
+
+  assert.deepEqual(types("para\n\n| a | b |\n| --"), ["paragraph"]);
+  assert.deepEqual(types("para\n\n| a | b |\n| --- | --- |"), ["paragraph"]);
+  assert.deepEqual(types("| a | b |\n| --- | --- |\n| 1 | 2"), ["table"]);
+  assert.deepEqual(types("text\n```t"), ["paragraph"]);
+  assert.deepEqual(types("text\n\n#"), ["paragraph"]);
+  assert.deepEqual(types("text\n\n- word"), ["paragraph"]);
+  assert.deepEqual(types("<details>\n<summary>wh"), []);
+  assert.deepEqual(parseBlocks("```ts\ncode\n``", PARTIAL), [{ language: "ts", text: "code", type: "code" }]);
+
+  const [notice] = parseBlocks('<notice title="n" color="blue">\nbody ', PARTIAL);
+  assert.equal(notice?.type === "notice" && notice.text, "body");
+  const [emptyNotice] = parseBlocks('<notice title="n" color="blue">\n', PARTIAL);
+  assert.equal(emptyNotice?.type === "notice" && emptyNotice.text, "");
+  const [details] = parseBlocks("<details>\n<summary>why so ", PARTIAL);
+  assert.equal(details?.type === "details" && details.summary, "why so");
+
+  assert.deepEqual(types('<notice title="n" color="blue">\nbody'), ["notice"]);
+  assert.equal(parseBlocks('<notice title="n" color="blue">\nbody', { profile: "thread" }).some(block => block.type === "notice"), false);
+});
+
 test("editor markdown only reads its review html tags so saves never rewrite other html", () => {
   assert.deepEqual(parseInlineMarkdown("<del>a</del><ins>b</ins><mark>c</mark>").map(node => node.type), ["delete", "insert", "mark"]);
   for (const markdown of ["<b>x</b>", "<u>x</u>", "<DEL>x</DEL>", "a<br>b"]) {

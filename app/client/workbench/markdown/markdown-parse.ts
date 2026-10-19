@@ -7,11 +7,11 @@
  * - ParsedInlineNode: inline node union shared by HTML and React markdown render targets. Keywords: markdown, inline, parser, AST.
  * - MarkdownParseProfile: parser behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
  * - MarkdownParseOptions: optional project-root, mention, and autolink context for richer thread parsing. Keywords: markdown, file link, skills, mentions, autolink.
- * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
+ * - parseBlocks: parse markdown into block nodes for rendering and diffing; partial thread text hides unfinished frontier lines. Keywords: markdown, parser, blocks, streaming.
  * - SourcedBlock/parseSourcedBlocks: top-level editor blocks with the source lines each was read from.
  * - ThreadMarkdownSection/parseThreadMarkdownSections: split thread markdown source into prose, plan, and mode-change sections.
  * - isThreadMarkdownSectionBreak: identify the parsed blocks that end a thread prose section.
- * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes. Keywords: markdown, inline, parser.
+ * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes; partial thread text closes open formatting at its end. Keywords: markdown, inline, parser, streaming.
  * - parseThreadStateChangeMode: detect display-only thread mode change tags. Keywords: thread, mode, state, parser.
  * - normalizeThreadBlockTagBoundaries: isolate known thread block tags before line-oriented parsing. Keywords: thread, HTML, block, parser.
  * - getThreadStateChangeTagText: normalize display-only thread mode change tags. Keywords: thread, mode, state, parser.
@@ -30,6 +30,7 @@ import {
     type MarkdownComment,
 } from "./comment-markdown";
 import { readInlineHtmlTag } from "./inline-html-tags";
+import { findHeldInlineFrontierStart, isHeldFrontierLine } from "./markdown-frontier";
 import { isIntrawordUnderscore } from "./markdown-escape";
 import { readSuggestionBlock } from "./markdown-suggestion";
 import {
@@ -117,6 +118,8 @@ export type ParsedInlineNode =
 
 export interface MarkdownParseOptions {
   inlineMentionSources?: InlineMentionHighlightSources | null;
+  /** Thread text still streaming and ending at the frontier: unfinished tokens hide and missing closers close at the end. */
+  partial?: boolean;
   threadCwdPath?: string;
   profile?: MarkdownParseProfile;
   projectFilePaths?: readonly string[];
@@ -590,31 +593,34 @@ function parseThreadIconMarker(markdown: string, index: number, options: Markdow
   };
 }
 
-function parseInlineHtmlTag(markdown: string, index: number, options: MarkdownParseOptions) {
-  const tag = readInlineHtmlTag(markdown, index, options.profile ?? "editor");
+function parseInlineHtmlTag(markdown: string, index: number, options: MarkdownParseOptions, settledOptions: MarkdownParseOptions) {
+  const tag = readInlineHtmlTag(markdown, index, options.profile ?? "editor", Boolean(options.partial));
   if (!tag) return null;
 
   const node: ParsedInlineNode = tag.format === "break"
     ? { type: "break" }
     : tag.format === "code"
       ? { text: tag.content, type: "code" }
-      : { children: parseInlineMarkdown(tag.content, options), type: tag.format };
+      : { children: parseInlineMarkdown(tag.content, tag.closed ? settledOptions : options), type: tag.format };
   return { end: tag.end, node };
 }
 
 const MARK_TAG_OPENER = "<u data-mark=\"";
 const ATTRIBUTE_ENTITIES: Record<string, string> = { amp: "&", gt: ">", lt: "<", quot: "\"" };
 
-/** `<u data-mark="name">words</u>`: words carrying one mark tag. */
-function readMarkTag(markdown: string, index: number) {
+/** `<u data-mark="name">words</u>`: words carrying one mark tag; partial text closes it at its end. */
+function readMarkTag(markdown: string, index: number, partial: boolean) {
   if (!markdown.startsWith(MARK_TAG_OPENER, index)) return null;
   const nameStart = index + MARK_TAG_OPENER.length;
   const nameEnd = markdown.indexOf("\">", nameStart);
-  const closeIndex = nameEnd === -1 ? -1 : markdown.indexOf("</u>", nameEnd + 2);
-  if (closeIndex === -1) return null;
+  if (nameEnd === -1) return null;
+  const closeIndex = markdown.indexOf("</u>", nameEnd + 2);
+  if (closeIndex === -1 && !partial) return null;
   const name = markdown.slice(nameStart, nameEnd).replace(/&(amp|gt|lt|quot);/g, (_, entity: string) => ATTRIBUTE_ENTITIES[entity]!);
   if (!name.trim() || name.includes("\n")) return null;
-  return { content: markdown.slice(nameEnd + 2, closeIndex), end: closeIndex + "</u>".length, name };
+  return closeIndex === -1
+    ? { closed: false, content: markdown.slice(nameEnd + 2), end: markdown.length, name }
+    : { closed: true, content: markdown.slice(nameEnd + 2, closeIndex), end: closeIndex + "</u>".length, name };
 }
 
 export function parseInlineMarkdown(markdown: string, options: MarkdownParseOptions = {}) {
@@ -623,8 +629,16 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
   const inlineMentionHighlights = getInlineMentionHighlights(markdown, options);
   const attachments = new Map(attachmentReferences(markdown).map(reference => [reference.start, reference]));
   let inlineMentionIndex = 0;
+  // Partial text ends at the stream frontier: unfinished tokens stay hidden and missing closers close there.
+  const partial = Boolean(options.partial) && (options.profile ?? "editor") === "thread";
+  const heldStart = partial ? findHeldInlineFrontierStart(markdown) : null;
+  const settledOptions = partial ? { ...options, partial: false } : options;
+  const closeAtFrontier = (closeIndex: number) => closeIndex === -1 && partial ? markdown.length : closeIndex;
+  const contentOptions = (closeIndex: number) => closeIndex === markdown.length ? options : settledOptions;
 
   while (index < markdown.length) {
+    if (heldStart !== null && index >= heldStart) break;
+
     if (markdown[index] === "\\") {
       pushTextNode(nodes, markdown.slice(index + 1, index + 2));
       index += 2;
@@ -637,7 +651,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       continue;
     }
 
-    const threadIconMarker = parseThreadIconMarker(markdown, index, options);
+    const threadIconMarker = parseThreadIconMarker(markdown, index, settledOptions);
     if (threadIconMarker) {
       nodes.push(threadIconMarker.node);
       index = threadIconMarker.end;
@@ -655,16 +669,16 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       continue;
     }
 
-    const htmlTag = parseInlineHtmlTag(markdown, index, options);
+    const htmlTag = parseInlineHtmlTag(markdown, index, options, settledOptions);
     if (htmlTag) {
       nodes.push(htmlTag.node);
       index = htmlTag.end;
       continue;
     }
 
-    const markTag = readMarkTag(markdown, index);
+    const markTag = readMarkTag(markdown, index, partial);
     if (markTag) {
-      nodes.push({ children: parseInlineMarkdown(markTag.content, options), name: markTag.name, type: "markTag" });
+      nodes.push({ children: parseInlineMarkdown(markTag.content, markTag.closed ? settledOptions : options), name: markTag.name, type: "markTag" });
       index = markTag.end;
       continue;
     }
@@ -679,54 +693,54 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
     }
 
     if (markdown.startsWith("<!--", index)) {
-      const closeIndex = markdown.indexOf("-->", index + 4);
+      const closeIndex = closeAtFrontier(markdown.indexOf("-->", index + 4));
       if (closeIndex !== -1) {
         const commentBody = markdown.slice(index + 4, closeIndex).trim();
         nodes.push({
-          children: parseInlineMarkdown(commentBody, options),
+          children: parseInlineMarkdown(commentBody, contentOptions(closeIndex)),
           type: "inlineComment",
         });
-        index = closeIndex + 3;
+        index = Math.min(markdown.length, closeIndex + 3);
         continue;
       }
     }
 
     if (markdown.startsWith("***", index) || markdown.startsWith("___", index)) {
       const marker = markdown.slice(index, index + 3);
-      const closeIndex = findClosingToken(markdown, marker, index + 3);
+      const closeIndex = closeAtFrontier(findClosingToken(markdown, marker, index + 3));
       if (closeIndex !== -1) {
         nodes.push({
-          children: [{ children: parseInlineMarkdown(markdown.slice(index + 3, closeIndex), options), type: "em" }],
+          children: [{ children: parseInlineMarkdown(markdown.slice(index + 3, closeIndex), contentOptions(closeIndex)), type: "em" }],
           type: "strong",
         });
-        index = closeIndex + 3;
+        index = Math.min(markdown.length, closeIndex + 3);
         continue;
       }
     }
 
     if (markdown.startsWith("**", index) || markdown.startsWith("__", index)) {
       const marker = markdown.slice(index, index + 2);
-      const closeIndex = marker === "__" && (options.profile ?? "editor") === "thread"
+      const closeIndex = closeAtFrontier(marker === "__" && (options.profile ?? "editor") === "thread"
         ? findClosingThreadStrongUnderscore(markdown, index + 2)
-        : findClosingToken(markdown, marker, index + 2);
+        : findClosingToken(markdown, marker, index + 2));
       if (closeIndex !== -1) {
         nodes.push({
-          children: parseInlineMarkdown(markdown.slice(index + 2, closeIndex), options),
+          children: parseInlineMarkdown(markdown.slice(index + 2, closeIndex), contentOptions(closeIndex)),
           type: "strong",
         });
-        index = closeIndex + 2;
+        index = Math.min(markdown.length, closeIndex + 2);
         continue;
       }
     }
 
     if (markdown.startsWith("~~", index)) {
-      const closeIndex = findClosingToken(markdown, "~~", index + 2);
+      const closeIndex = closeAtFrontier(findClosingToken(markdown, "~~", index + 2));
       if (closeIndex !== -1) {
         nodes.push({
-          children: parseInlineMarkdown(markdown.slice(index + 2, closeIndex), options),
+          children: parseInlineMarkdown(markdown.slice(index + 2, closeIndex), contentOptions(closeIndex)),
           type: "delete",
         });
-        index = closeIndex + 2;
+        index = Math.min(markdown.length, closeIndex + 2);
         continue;
       }
     }
@@ -739,24 +753,24 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
         continue;
       }
 
-      const closeIndex = findClosingSingleEmphasisToken(markdown, marker, index + 1, options);
+      const closeIndex = closeAtFrontier(findClosingSingleEmphasisToken(markdown, marker, index + 1, options));
       if (closeIndex !== -1) {
         nodes.push({
-          children: parseInlineMarkdown(markdown.slice(index + 1, closeIndex), options),
+          children: parseInlineMarkdown(markdown.slice(index + 1, closeIndex), contentOptions(closeIndex)),
           type: "em",
         });
-        index = closeIndex + 1;
+        index = Math.min(markdown.length, closeIndex + 1);
         continue;
       }
     }
 
     if (markdown[index] === "`") {
       const fenceLength = getBacktickRunLength(markdown, index);
-      const closeIndex = findClosingCodeSpanFence(markdown, fenceLength, index + fenceLength);
+      const closeIndex = closeAtFrontier(findClosingCodeSpanFence(markdown, fenceLength, index + fenceLength));
       if (closeIndex !== -1) {
         const content = markdown.slice(index + fenceLength, closeIndex);
         nodes.push({ text: trimCodeSpanPadding(content), type: "code" });
-        index = closeIndex + fenceLength;
+        index = Math.min(markdown.length, closeIndex + fenceLength);
         continue;
       }
     }
@@ -831,7 +845,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
           const url = sanitizeMarkdownHref(rawUrl, options);
           if (url) {
             nodes.push({
-              children: parseInlineMarkdown(label, { ...options, suppressPlaintextAutolinks: true }),
+              children: parseInlineMarkdown(label, { ...settledOptions, suppressPlaintextAutolinks: true }),
               external: isExternalMarkdownHref(url),
               href: url,
               type: "link",
@@ -969,7 +983,7 @@ function isCodeFenceCloseLine(line: string, opener: ParsedCodeFenceOpenLine) {
 /** Feeds raw lines in order; true when a line opens, continues or closes fenced code, top-level or list-item. */
 function createCodeFenceTracker() {
   let opener: ParsedCodeFenceOpenLine | null = null;
-  return (line: string) => {
+  const feed = (line: string) => {
     if (opener) {
       if (isCodeFenceCloseLine(line, opener)) opener = null;
       return true;
@@ -978,6 +992,39 @@ function createCodeFenceTracker() {
     opener = parseCodeFenceOpenLine(line) ?? parseListItemCodeFenceOpenLine(line);
     return opener !== null;
   };
+  return Object.assign(feed, { isOpen: () => opener !== null });
+}
+
+const TABLE_ROW_LINE = /^\s*\|/;
+const FENCE_CLOSER_PREFIX_LINE = /^\s*`+\s*$/;
+
+/**
+ * Streamed lines that would render as something else once finished stay hidden: an unfinished final line,
+ * a table still waiting for its delimiter row, and a disclosure still waiting for its summary.
+ */
+function trimHeldFrontierLines(lines: string[], options: MarkdownParseOptions) {
+  const trimmed = [...lines];
+  const fences = createCodeFenceTracker();
+  for (const line of trimmed.slice(0, -1)) fences(line);
+  const frontierLine = trimmed.at(-1) ?? "";
+  const frontierUnterminated = frontierLine.trim() !== "";
+  if (frontierUnterminated && (fences.isOpen() ? FENCE_CLOSER_PREFIX_LINE.test(frontierLine) : isHeldFrontierLine(frontierLine))) {
+    trimmed.pop();
+  }
+  if (fences.isOpen()) return trimmed;
+
+  let tableStart = trimmed.length;
+  while (tableStart > 0 && TABLE_ROW_LINE.test(trimmed[tableStart - 1]!)) tableStart -= 1;
+  const delimiterIndex = tableStart + 1;
+  const delimiterSettled = delimiterIndex < trimmed.length
+    && !(frontierUnterminated && delimiterIndex === lines.length - 1)
+    && parseTableDelimiterRow(trimmed[delimiterIndex]!, options);
+  if (tableStart < trimmed.length && !delimiterSettled) trimmed.length = tableStart;
+
+  let lastContent = trimmed.length - 1;
+  while (lastContent >= 0 && !trimmed[lastContent]!.trim()) lastContent -= 1;
+  if (lastContent >= 0 && THREAD_DETAILS_OPEN_LINE_PATTERN.test(trimmed[lastContent]!.trim())) trimmed.length = lastContent;
+  return trimmed;
 }
 
 function isMarkdownCodeFenceLanguage(language: string) {
@@ -1123,7 +1170,9 @@ function parseListItemChildren(
   }
 
   return {
-    blocks: childLines.length ? parseBlocksFromLines(childLines, options) : [],
+    blocks: childLines.length
+      ? parseBlocksFromLines(childLines, index === lines.length ? options : { ...options, partial: false })
+      : [],
     nextIndex: index,
   };
 }
@@ -1295,33 +1344,35 @@ function parseThreadNoticeBlock(lines: string[], startIndex: number, options: Ma
   const noticeLines: string[] = [];
   const isFencedLine = createCodeFenceTracker();
   let index = startIndex + 1;
+  const noticeEndingAt = (end: number) => ({
+    block: {
+      color: openingMatch[1] ?? openingMatch[4],
+      source: lines.slice(startIndex, end).join("\n"),
+      text: noticeLines.join("\n").trim(),
+      title: (openingMatch[2] ?? openingMatch[3])?.trim() || "notice",
+      type: "notice" as const,
+    },
+    nextIndex: end,
+  });
 
   while (index < lines.length) {
     const line = lines[index];
 
     if (!isFencedLine(line) && THREAD_NOTICE_CLOSE_LINE_PATTERN.test(line.trim())) {
-      return {
-        block: {
-          color: openingMatch[1] ?? openingMatch[4],
-          source: lines.slice(startIndex, index + 1).join("\n"),
-          text: noticeLines.join("\n").trim(),
-          title: (openingMatch[2] ?? openingMatch[3])?.trim() || "notice",
-          type: "notice" as const,
-        },
-        nextIndex: index + 1,
-      };
+      return noticeEndingAt(index + 1);
     }
 
     noticeLines.push(line);
     index += 1;
   }
 
-  return null;
+  return options.partial ? noticeEndingAt(lines.length) : null;
 }
 
 const THREAD_DETAILS_OPEN_LINE_PATTERN = /^<details( open)?>$/;
 const THREAD_DETAILS_CLOSE_LINE_PATTERN = /^<\/details>$/;
 const THREAD_DETAILS_SUMMARY_LINE_PATTERN = /^<summary>(.*?)<\/summary>$/;
+const THREAD_DETAILS_PARTIAL_SUMMARY_LINE_PATTERN = /^<summary>(.*?)(?:<\/summary>)?$/;
 
 function parseThreadDetailsBlock(lines: string[], startIndex: number, options: MarkdownParseOptions) {
   if ((options.profile ?? "editor") !== "thread") return null;
@@ -1331,8 +1382,21 @@ function parseThreadDetailsBlock(lines: string[], startIndex: number, options: M
 
   let summaryIndex = startIndex + 1;
   while (summaryIndex < lines.length && !lines[summaryIndex].trim()) summaryIndex += 1;
-  const summaryMatch = THREAD_DETAILS_SUMMARY_LINE_PATTERN.exec(lines[summaryIndex]?.trim() ?? "");
+  const summaryPattern = options.partial && summaryIndex === lines.length - 1
+    ? THREAD_DETAILS_PARTIAL_SUMMARY_LINE_PATTERN
+    : THREAD_DETAILS_SUMMARY_LINE_PATTERN;
+  const summaryMatch = summaryPattern.exec(lines[summaryIndex]?.trim() ?? "");
   if (!summaryMatch || !summaryMatch[1].trim()) return null;
+  const detailsEndingAt = (bodyEnd: number, end: number) => ({
+    block: {
+      open: Boolean(openingMatch[1]),
+      source: lines.slice(startIndex, end).join("\n"),
+      summary: summaryMatch[1].trim(),
+      text: lines.slice(summaryIndex + 1, bodyEnd).join("\n").trim(),
+      type: "details" as const,
+    },
+    nextIndex: end,
+  });
 
   let depth = 1;
   const isFencedLine = createCodeFenceTracker();
@@ -1346,19 +1410,10 @@ function parseThreadDetailsBlock(lines: string[], startIndex: number, options: M
     if (!THREAD_DETAILS_CLOSE_LINE_PATTERN.test(line.trim())) continue;
     depth -= 1;
     if (depth !== 0) continue;
-    return {
-      block: {
-        open: Boolean(openingMatch[1]),
-        source: lines.slice(startIndex, index + 1).join("\n"),
-        summary: summaryMatch[1].trim(),
-        text: lines.slice(summaryIndex + 1, index).join("\n").trim(),
-        type: "details" as const,
-      },
-      nextIndex: index + 1,
-    };
+    return detailsEndingAt(index, index + 1);
   }
 
-  return null;
+  return options.partial ? detailsEndingAt(lines.length, lines.length) : null;
 }
 
 function isThreadStateChangeLine(line: string, options: MarkdownParseOptions) {
@@ -1751,7 +1806,9 @@ function splitMarkdownLines(markdown: string, options: MarkdownParseOptions) {
 }
 
 export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
-  return parseBlocksFromLines(splitMarkdownLines(markdown, options), options);
+  const lines = splitMarkdownLines(markdown, options);
+  const partial = options.partial && (options.profile ?? "editor") === "thread";
+  return parseBlocksFromLines(partial ? trimHeldFrontierLines(lines, options) : lines, options);
 }
 
 /** Editor blocks with their source lines, so unedited blocks can be written back exactly as they were read. */

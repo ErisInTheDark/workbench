@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - InlineHtmlFormat: inline node formats that html formatting tags map onto.
- * - readInlineHtmlTag: read one attribute-free inline html formatting tag and its matching closer for a markdown profile.
+ * - THREAD_INLINE_HTML_TAG_NAMES: tag names thread markdown reads as formatting.
+ * - readInlineHtmlTag: read one attribute-free inline html formatting tag and its matching closer for a markdown profile; partial text closes at its end.
  */
 
 export type InlineHtmlFormat =
@@ -30,6 +31,8 @@ const THREAD_TAG_FORMATS = new Map<string, InlineHtmlFormat>([
   ["br", "break"],
 ]);
 
+export const THREAD_INLINE_HTML_TAG_NAMES: readonly string[] = [...THREAD_TAG_FORMATS.keys()];
+
 /** Editor markdown saves only review markup as html, so other tags must stay literal to survive a save. */
 const EDITOR_TAG_FORMATS = new Map<string, InlineHtmlFormat>([
   ["del", "delete"],
@@ -52,7 +55,7 @@ function findMatchingClose(markdown: string, tag: string, from: number, caseInse
   return -1;
 }
 
-export function readInlineHtmlTag(markdown: string, index: number, profile: "editor" | "thread") {
+export function readInlineHtmlTag(markdown: string, index: number, profile: "editor" | "thread", partial = false) {
   if (markdown[index] !== "<") return null;
   const thread = profile === "thread";
   const opening = (thread ? THREAD_OPENING_TAG : EDITOR_OPENING_TAG).exec(markdown.slice(index));
@@ -61,10 +64,12 @@ export function readInlineHtmlTag(markdown: string, index: number, profile: "edi
   if (!opening || !tag || !format) return null;
 
   const contentStart = index + opening[0].length;
-  if (format === "break") return { content: "", end: contentStart, format };
+  if (format === "break") return { closed: true, content: "", end: contentStart, format };
   if (opening[2]) return null;
 
   const closeIndex = findMatchingClose(markdown, tag, contentStart, thread);
-  if (closeIndex === -1) return null;
-  return { content: markdown.slice(contentStart, closeIndex), end: closeIndex + tag.length + 3, format };
+  if (closeIndex === -1) {
+    return thread && partial ? { closed: false, content: markdown.slice(contentStart), end: markdown.length, format } : null;
+  }
+  return { closed: true, content: markdown.slice(contentStart, closeIndex), end: closeIndex + tag.length + 3, format };
 }

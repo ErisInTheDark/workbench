@@ -1175,6 +1175,7 @@ function ThreadAgentMessageItem ({
   copyRuns,
   inlineMentionSources,
   isFinal,
+  isMostRecent = false,
   item,
   presentationSource,
   threadCwdPath,
@@ -1190,6 +1191,8 @@ function ThreadAgentMessageItem ({
   copyRuns?: ThreadCommentaryRunActions;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isFinal: boolean;
+  /** Nothing follows this item yet, so a live message may still be streaming. */
+  isMostRecent?: boolean;
   item: Extract<ThreadItem, { type: "agentMessage" }>;
   presentationSource?: ThreadTextPresentationSource | null;
   threadCwdPath?: string;
@@ -1200,14 +1203,17 @@ function ThreadAgentMessageItem ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const text = stripWorkbenchTurnEndMarker(useTranscript.presentedText({
+  const presentedText = useTranscript.presentedText({
     canonicalText: item.text,
     field: "agentMessageText",
     itemId: item.id,
     source: presentationSource,
     threadId,
     turnId,
-  }));
+  });
+  const text = stripWorkbenchTurnEndMarker(presentedText);
+  // No provider-neutral item completion exists; a later item proves this text finished, and a lagging reveal is still streaming.
+  const streaming = Boolean(presentationSource) && (isMostRecent || presentedText !== item.text);
   const breakCopyMarkdown = copyRuns?.breakCopyMarkdown;
   const renderBreakActions = useCallback((breakIndex: number) => {
     const markdown = breakCopyMarkdown?.[breakIndex];
@@ -1224,7 +1230,8 @@ function ThreadAgentMessageItem ({
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
-          revealAppends={Boolean(presentationSource)}
+          live={Boolean(presentationSource)}
+          streaming={streaming}
           workspaceRoots={workspaceRoots}
         />
       </ThreadMarkdownSectionActionsProvider>
@@ -1250,7 +1257,13 @@ function ThreadAgentCommentarySequence ({
         <ThreadEntryMotion enabled={animateEntries && index > 0} identity={getThreadEntryMotionIdentity(item)} key={item.id}>
           {(animate) => (
             <div className={animate ? `block ${enterMotionClassName}` : undefined}>
-              <ThreadAgentMessageItem {...itemProps} copyRuns={copyRuns[index]} isFinal={false} item={item} />
+              <ThreadAgentMessageItem
+                {...itemProps}
+                copyRuns={copyRuns[index]}
+                isFinal={false}
+                isMostRecent={Boolean(itemProps.isMostRecent) && index === items.length - 1}
+                item={item}
+              />
             </div>
           )}
         </ThreadEntryMotion>
@@ -1369,7 +1382,8 @@ function ThreadReasoningSequence ({
       projectId={projectId}
       projectRootPath={projectRootPath}
       workspaceRoots={workspaceRoots}
-      revealAppends={Boolean(presentationSource)}
+      live={Boolean(presentationSource)}
+      streaming={Boolean(presentationSource) && (isMostRecent || presentedOnlyStepMarkdown !== canonicalOnlyStep?.markdown)}
     />
   ) : (
     <div className="space-y-4">
@@ -1377,6 +1391,7 @@ function ThreadReasoningSequence ({
         <ThreadReasoningItem
           key={item.id}
           className={index ? "border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] pt-4" : undefined}
+          isMostRecent={isMostRecent && index === visibleItems.length - 1}
           item={item}
           presentationSource={presentationSource}
           inlineMentionSources={inlineMentionSources}
@@ -2630,6 +2645,7 @@ function ThreadRenderableBlockViewComponent ({
         animateEntries={animateEntries}
         completedAt={turnCompletedAt}
         inlineMentionSources={inlineMentionSources}
+        isMostRecent={isMostRecentBlock}
         items={block.items}
         presentationSource={presentationSource}
         projectFilePaths={projectFilePaths}
@@ -2755,6 +2771,7 @@ function ThreadRenderableBlockViewComponent ({
         <ThreadAgentMessageItem
           completedAt={turnCompletedAt}
           isFinal={block.item.id === finalAgentMessageId}
+          isMostRecent={isMostRecentBlock}
           item={block.item}
           presentationSource={presentationSource}
           inlineMentionSources={inlineMentionSources}

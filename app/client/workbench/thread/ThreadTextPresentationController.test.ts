@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect exact-field isolation, smooth bounded replay, canonical reconciliation, source reset, and disposal.
+ * No production exports. Tests protect exact-field isolation, delta-shape-independent token pacing, canonical reconciliation, source reset, and disposal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -41,14 +41,23 @@ function harness(options: { reducedMotion?: boolean } = {}) {
       timestamp += elapsedMs;
       callback?.(timestamp);
     },
+    /** Run frames for a span of presentation time. */
+    play(durationMs: number) {
+      for (let elapsed = 0; elapsed < durationMs; elapsed += 16) this.advance();
+    },
     cancellations: () => cancellations,
     controller,
     drain() {
       while (scheduled) this.advance();
     },
     scheduled: () => scheduled !== null,
+    wait(elapsedMs: number) {
+      timestamp += elapsedMs;
+    },
   };
 }
+
+const WORDS = "word ".repeat(100);
 
 test("ordered appends notify only the exact source-qualified field", () => {
   const testHarness = harness();
@@ -56,101 +65,106 @@ test("ordered appends notify only the exact source-qualified field", () => {
   const sqliteKey = key("sqlite");
   let jsonChanges = 0;
   let sqliteChanges = 0;
-  testHarness.controller.subscribe(jsonKey, "a", () => { jsonChanges += 1; });
-  testHarness.controller.subscribe(sqliteKey, "a", () => { sqliteChanges += 1; });
+  testHarness.controller.subscribe(jsonKey, "a ", () => { jsonChanges += 1; });
+  testHarness.controller.subscribe(sqliteKey, "a ", () => { sqliteChanges += 1; });
 
-  testHarness.controller.acceptDelta({ canonicalText: "ab", delta: "b", key: jsonKey });
-  testHarness.controller.acceptDelta({ canonicalText: "abc", delta: "c", key: jsonKey });
-  assert.equal(testHarness.controller.getSnapshot(jsonKey), "a");
-  testHarness.advance();
-
-  assert.notEqual(testHarness.controller.getSnapshot(jsonKey), "a");
-  assert.equal(testHarness.controller.getSnapshot(sqliteKey), "a");
+  testHarness.controller.acceptDelta({ canonicalText: "a b ", delta: "b ", key: jsonKey });
+  testHarness.controller.acceptDelta({ canonicalText: "a b c", delta: "c", key: jsonKey });
+  assert.equal(testHarness.controller.getSnapshot(jsonKey), "a ");
   testHarness.drain();
-  assert.equal(testHarness.controller.getSnapshot(jsonKey), "abc");
-  assert.equal(testHarness.controller.getSnapshot(sqliteKey), "a");
+
+  assert.equal(testHarness.controller.getSnapshot(jsonKey), "a b c");
+  assert.equal(testHarness.controller.getSnapshot(sqliteKey), "a ");
   assert.ok(jsonChanges > 0);
   assert.equal(sqliteChanges, 0);
+});
+
+test("a whole-paragraph delta reveals token by token at the owned pace", () => {
+  const testHarness = harness();
+  const field = key("json");
+  testHarness.controller.subscribe(field, "", () => undefined);
+  testHarness.controller.acceptDelta({ canonicalText: WORDS, delta: WORDS, key: field });
+
+  testHarness.play(100);
+  const early = testHarness.controller.getSnapshot(field) ?? "";
+  assert.ok(early.length > 0 && early.length < WORDS.length / 4, `revealed ${early.length}`);
+  assert.equal(early.length % "word ".length, 0, "reveal stops on token boundaries");
+  testHarness.drain();
+  assert.equal(testHarness.controller.getSnapshot(field), WORDS);
+});
+
+test("reveal pace ignores how the provider chunked the same text", () => {
+  const whole = harness();
+  const chunked = harness();
+  const field = key("json");
+  whole.controller.subscribe(field, "", () => undefined);
+  chunked.controller.subscribe(field, "", () => undefined);
+  whole.controller.acceptDelta({ canonicalText: WORDS, delta: WORDS, key: field });
+  let canonicalText = "";
+  for (const token of WORDS.match(/\S+\s*/g)!) {
+    canonicalText += token;
+    chunked.controller.acceptDelta({ canonicalText, delta: token, key: field });
+  }
+
+  for (const elapsed of [50, 200, 600]) {
+    whole.play(elapsed);
+    chunked.play(elapsed);
+    assert.equal(whole.controller.getSnapshot(field), chunked.controller.getSnapshot(field));
+  }
 });
 
 test("simultaneous fields each make bounded playback progress", () => {
   const testHarness = harness();
   const jsonKey = key("json");
   const sqliteKey = key("sqlite");
-  const delta = "x".repeat(200);
   testHarness.controller.subscribe(jsonKey, "", () => undefined);
   testHarness.controller.subscribe(sqliteKey, "", () => undefined);
-  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: jsonKey });
-  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: sqliteKey });
+  testHarness.controller.acceptDelta({ canonicalText: WORDS, delta: WORDS, key: jsonKey });
+  testHarness.controller.acceptDelta({ canonicalText: WORDS, delta: WORDS, key: sqliteKey });
 
-  testHarness.advance();
+  testHarness.play(100);
 
-  const jsonLength = testHarness.controller.getSnapshot(jsonKey)?.length ?? 0;
-  const sqliteLength = testHarness.controller.getSnapshot(sqliteKey)?.length ?? 0;
-  assert.ok(jsonLength > 0 && jsonLength < delta.length);
-  assert.ok(sqliteLength > 0 && sqliteLength < delta.length);
+  for (const field of [jsonKey, sqliteKey]) {
+    const length = testHarness.controller.getSnapshot(field)?.length ?? 0;
+    assert.ok(length > 0 && length < WORDS.length);
+  }
 });
 
-test("large backlogs preserve partial reveal but complete within one visual window", () => {
+test("large backlogs catch up within a bounded time without losing text", () => {
   const testHarness = harness();
   const field = key("json");
-  const delta = "x".repeat(20_000);
+  const dump = "abcd ".repeat(4_000);
   testHarness.controller.subscribe(field, "", () => undefined);
-  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: field });
+  testHarness.controller.acceptDelta({ canonicalText: dump, delta: dump, key: field });
 
   testHarness.advance();
   const firstFrame = testHarness.controller.getSnapshot(field)?.length ?? 0;
-  assert.ok(firstFrame > 0 && firstFrame < delta.length);
-  for (let frame = 0; frame < 11; frame += 1) testHarness.advance();
-  assert.equal(testHarness.controller.getSnapshot(field), delta);
+  assert.ok(firstFrame < dump.length);
+  testHarness.play(1_000);
+  assert.ok((testHarness.controller.getSnapshot(field)?.length ?? 0) > dump.length / 2, "catch-up scales with backlog");
+  testHarness.play(7_000);
+  assert.equal(testHarness.controller.getSnapshot(field), dump);
 });
 
-test("late frames advance along elapsed presentation time instead of accumulating frame debt", () => {
-  const testHarness = harness();
-  const field = key("json");
-  const delta = "x".repeat(20_000);
-  testHarness.controller.subscribe(field, "", () => undefined);
-  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: field });
-
-  testHarness.advance(70);
-  assert.ok((testHarness.controller.getSnapshot(field)?.length ?? 0) < delta.length);
-  testHarness.advance(70);
-  testHarness.advance(70);
-  assert.equal(testHarness.controller.getSnapshot(field), delta);
-});
-
-test("frame starvation with many tiny deltas retains animated playback", () => {
+test("a late frame advances a bounded step instead of dumping the backlog", () => {
   const testHarness = harness();
   const field = key("json");
   testHarness.controller.subscribe(field, "", () => undefined);
-  let canonicalText = "";
-  for (let index = 0; index < 1_000; index += 1) {
-    canonicalText += "x";
-    testHarness.controller.acceptDelta({ canonicalText, delta: "x", key: field });
-  }
+  testHarness.controller.acceptDelta({ canonicalText: WORDS, delta: WORDS, key: field });
 
-  assert.equal(testHarness.controller.getSnapshot(field), "");
-  testHarness.advance();
-  const firstFrame = testHarness.controller.getSnapshot(field) ?? "";
-  assert.ok(firstFrame.length > 0);
-  assert.ok(firstFrame.length < canonicalText.length);
-  testHarness.drain();
-  assert.equal(testHarness.controller.getSnapshot(field), canonicalText);
+  testHarness.advance(5_000);
+  assert.ok((testHarness.controller.getSnapshot(field)?.length ?? 0) < WORDS.length / 4);
 });
 
-test("large backlogs catch up in bounded frame work without losing text", () => {
+test("long unbroken tokens reveal whole without stalling", () => {
   const testHarness = harness();
   const field = key("json");
+  const text = `${"x".repeat(200)} tail`;
   testHarness.controller.subscribe(field, "", () => undefined);
-  const delta = "x".repeat(20_000);
-  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: field });
+  testHarness.controller.acceptDelta({ canonicalText: text, delta: text, key: field });
 
-  testHarness.advance();
-  const firstLength = testHarness.controller.getSnapshot(field)?.length ?? 0;
-  assert.ok(firstLength > 0);
-  assert.ok(firstLength < delta.length);
-  testHarness.drain();
-  assert.equal(testHarness.controller.getSnapshot(field), delta);
+  testHarness.play(250);
+  assert.equal(testHarness.controller.getSnapshot(field), text);
 });
 
 test("canonical mismatch and reduced motion fail closed to canonical text", () => {
@@ -168,15 +182,40 @@ test("canonical mismatch and reduced motion fail closed to canonical text", () =
   assert.equal(reducedHarness.scheduled(), false);
 });
 
-test("an inactive source retains current canonical text without scheduling replay", () => {
+test("an unwatched mid-item delta keeps canonical text without scheduling replay", () => {
   const testHarness = harness();
   const sqliteKey = key("sqlite");
-  testHarness.controller.acceptDelta({ canonicalText: "current", delta: "current", key: sqliteKey });
+  testHarness.controller.acceptDelta({ canonicalText: "current", delta: "rent", key: sqliteKey });
 
   assert.equal(testHarness.controller.getSnapshot(sqliteKey), "current");
   assert.equal(testHarness.scheduled(), false);
   testHarness.controller.subscribe(sqliteKey, "cur", () => undefined);
   assert.equal(testHarness.controller.getSnapshot(sqliteKey), "current");
+  assert.equal(testHarness.scheduled(), false);
+});
+
+test("an item's first text reveals from empty once promptly watched", () => {
+  const testHarness = harness();
+  const field = key("json");
+  testHarness.controller.acceptDelta({ canonicalText: "hello ", delta: "hello ", key: field });
+  testHarness.controller.acceptDelta({ canonicalText: "hello world", delta: "world", key: field });
+
+  assert.equal(testHarness.controller.getSnapshot(field), "");
+  assert.equal(testHarness.scheduled(), false);
+  testHarness.controller.subscribe(field, "hello world", () => undefined);
+  testHarness.drain();
+  assert.equal(testHarness.controller.getSnapshot(field), "hello world");
+});
+
+test("an item's first text settles to canonical when nobody watches it in time", () => {
+  const testHarness = harness();
+  const field = key("json");
+  testHarness.controller.acceptDelta({ canonicalText: "hello ", delta: "hello ", key: field });
+  testHarness.wait(2_000);
+  testHarness.controller.acceptDelta({ canonicalText: "hello world", delta: "world", key: field });
+
+  assert.equal(testHarness.controller.getSnapshot(field), "hello world");
+  assert.equal(testHarness.scheduled(), false);
 });
 
 test("completion drains an exact narrative backlog and snaps missing text or commands", () => {

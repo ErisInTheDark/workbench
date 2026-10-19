@@ -1,17 +1,17 @@
 /*
  * Exports:
- * - default MarkdownRender: render cached thread markdown with project, workspace, and external absolute file links. Keywords: thread markdown, file links, external git roots.
- * - Local helpers: bound rendered Markdown and external-root caches, then classify safe append presentation. Keywords: cache, markdown, append, presentation.
+ * - default MarkdownRender: render cached thread markdown with project, workspace, and external absolute file links; live text fades in and streaming text renders its frontier. Keywords: thread markdown, file links, external git roots, streaming.
+ * - Local helpers: bound rendered Markdown and external-root caches, and own one reveal timeline per live render context. Keywords: cache, markdown, reveal.
  */
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ResolveExternalFileLinkRootsResponse } from "workbench-shared/types";
 import { collectPlaintextAbsoluteFileLinkPaths } from "../../workbench/markdown/markdown-file-autolinks";
 import type { InlineMentionHighlightSources } from "../../workbench/thread/inline-mention-highlights";
 import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
-import { deriveMarkdownAppendPresentation } from "../../workbench/markdown/markdown-append-presentation";
+import MarkdownRevealTimeline from "../../workbench/markdown/MarkdownRevealTimeline";
 import { renderThreadMarkdown } from "../workbench/thread-view/thread-markdown-render";
 import { useWorkbenchDaemonClient } from "../workbench/WorkbenchWorkspaceContext";
 
@@ -244,28 +244,48 @@ function renderCachedThreadMarkdown(
   return renderedMarkdown;
 }
 
+function prefersReducedMotion() {
+  return typeof window !== "undefined" && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+}
+
+/** One reveal timeline per live render context; a changed context starts settled again. */
+function useRevealTimeline(live: boolean, streaming: boolean, contextKey: string) {
+  const timelineRef = useRef<{ contextKey: string; timeline: MarkdownRevealTimeline } | null>(null);
+  if (!live || prefersReducedMotion()) {
+    timelineRef.current = null;
+    return null;
+  }
+  if (timelineRef.current?.contextKey !== contextKey) {
+    timelineRef.current = { contextKey, timeline: new MarkdownRevealTimeline(streaming ? 0 : null) };
+  }
+  return timelineRef.current.timeline;
+}
+
 export default memo(function MarkdownRender ({
   className,
   inlineMentionSources,
+  live = false,
   markdown,
+  streaming = false,
   threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
-  revealAppends = false,
   workspaceRoots,
 }: {
   className?: string;
   inlineMentionSources?: InlineMentionHighlightSources | null;
+  /** Text presented from a live source: newly visible text fades in. */
+  live?: boolean;
   markdown: string;
+  /** Text still streaming: its end is the stream frontier, so unfinished tokens hide and open markup closes there. */
+  streaming?: boolean;
   threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
-  revealAppends?: boolean;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const committedPresentationRef = useRef<{ contextKey: string; markdown: string } | null>(null);
   const projectFilePathsKey = getProjectFilePathsCacheKey(projectFilePaths);
   const externalFileLinkRoots = useExternalFileLinkRoots(markdown);
   const resolvedWorkspaceRoots = useMemo(
@@ -294,35 +314,22 @@ export default memo(function MarkdownRender ({
     () => ({ inlineMentionSources, threadCwdPath, projectFilePaths, projectId, projectRootPath, workspaceRoots: resolvedWorkspaceRoots }),
     [inlineMentionSources, projectFilePaths, projectId, projectRootPath, resolvedWorkspaceRoots, threadCwdPath],
   );
-  const appendPresentation = useMemo(() => {
-    const previous = committedPresentationRef.current;
-    if (!revealAppends || !previous || previous.contextKey !== contextKey) return { kind: "instant" as const };
-    return deriveMarkdownAppendPresentation({
-      nextMarkdown: markdown,
-      options: renderOptions,
-      previousMarkdown: previous.markdown,
-      reducedMotion: typeof window !== "undefined"
-        && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false),
-    });
-  }, [contextKey, markdown, renderOptions, revealAppends]);
-  const presentedMarkdown = useMemo(
-    () => appendPresentation.kind === "append"
-      ? renderThreadMarkdown(markdown, renderOptions, appendPresentation.target)
-      : revealAppends
-        ? renderThreadMarkdown(markdown, renderOptions)
-        : renderCachedThreadMarkdown(markdown, renderOptions, cacheKey),
-    [appendPresentation, cacheKey, markdown, renderOptions, revealAppends],
-  );
+  const timeline = useRevealTimeline(live, streaming, contextKey);
+  const presentation = useMemo(() => {
+    if (!live) return { cursor: null, rendered: renderCachedThreadMarkdown(markdown, renderOptions, cacheKey) };
+    const cursor = timeline?.cursor(performance.now()) ?? null;
+    return { cursor, rendered: renderThreadMarkdown(markdown, { ...renderOptions, partial: streaming, reveal: cursor ?? undefined }) };
+  }, [cacheKey, live, markdown, renderOptions, streaming, timeline]);
 
-  useEffect(() => {
-    committedPresentationRef.current = { contextKey, markdown };
-  }, [contextKey, markdown]);
+  useLayoutEffect(() => {
+    if (presentation.cursor) timeline?.commit(presentation.cursor);
+  }, [presentation, timeline]);
 
   return (
     <div
       className={joinClasses(THREAD_MARKDOWN_CLASS, className)}
     >
-      {presentedMarkdown}
+      {presentation.rendered}
     </div>
   );
 });

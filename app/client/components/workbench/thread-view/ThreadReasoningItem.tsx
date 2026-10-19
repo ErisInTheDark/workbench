@@ -20,6 +20,7 @@ function ThreadReasoningSection({
   canonicalMarkdown,
   index,
   inlineMentionSources,
+  isMostRecent,
   itemId,
   presentationSource,
   source,
@@ -34,6 +35,7 @@ function ThreadReasoningSection({
   canonicalMarkdown: string;
   index: number;
   inlineMentionSources?: InlineMentionHighlightSources | null;
+  isMostRecent: boolean;
   itemId: string;
   presentationSource?: ThreadTextPresentationSource | null;
   source: "content" | "summary";
@@ -62,7 +64,8 @@ function ThreadReasoningSection({
       projectFilePaths={projectFilePaths}
       projectId={projectId}
       projectRootPath={projectRootPath}
-      revealAppends={Boolean(presentationSource)}
+      live={Boolean(presentationSource)}
+      streaming={Boolean(presentationSource) && (isMostRecent || markdown !== canonicalMarkdown)}
       workspaceRoots={workspaceRoots}
       className="text-[0.8em] text-fg/muted"
     />
@@ -72,6 +75,7 @@ function ThreadReasoningSection({
 export default function ThreadReasoningItem ({
   className,
   inlineMentionSources,
+  isMostRecent = false,
   item,
   presentationSource,
   threadCwdPath,
@@ -84,6 +88,8 @@ export default function ThreadReasoningItem ({
 }: {
   className?: string;
   inlineMentionSources?: InlineMentionHighlightSources | null;
+  /** Nothing follows this item yet, so its last section may still be streaming. */
+  isMostRecent?: boolean;
   item: Extract<ThreadItem, { type: "reasoning" }>;
   presentationSource?: ThreadTextPresentationSource | null;
   threadCwdPath?: string;
@@ -106,6 +112,7 @@ export default function ThreadReasoningItem ({
           canonicalMarkdown={summaryMarkdown}
           index={i}
           inlineMentionSources={inlineMentionSources}
+          isMostRecent={isMostRecent && i === visible.sections.length - 1}
           itemId={item.id}
           presentationSource={presentationSource}
           source={visible.source}

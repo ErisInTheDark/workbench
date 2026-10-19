@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - default ThreadInlineIcon: render one resolved agent-authored inline icon marker.
+ * - default ThreadInlineIcon: render one resolved agent-authored inline icon marker; a streamed label eases into its colour.
  */
 
-import type { ComponentType, ReactNode } from "react";
+import { useLayoutEffect, useRef, type ComponentType, type ReactNode } from "react";
 
 import type { ThreadEmphasisColor, ThreadIconType } from "../../../workbench/markdown/thread-icon-marker";
 import { AsteriskIcon, CheckIcon, CircleAlertIcon, type IconProps, XIcon } from "../workbench-icons";
@@ -15,14 +15,34 @@ const THREAD_INLINE_ICON_REGISTRY = {
   check: CheckIcon,
   x: XIcon,
 } satisfies Record<ThreadIconType, ComponentType<IconProps>>;
+const LABEL_TINT_DURATION_MS = 400;
 
-export default function ThreadInlineIcon ({ color, iconType, label }: {
+/** When a label appears, its text eases from the surrounding text colour into the marker colour. */
+function useLabelTint(tinted: boolean) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const label = ref.current;
+    const surrounding = label?.parentElement?.parentElement;
+    if (!tinted || !label?.animate || !surrounding) return;
+    const animation = label.animate(
+      [{ color: getComputedStyle(surrounding).color }, { color: getComputedStyle(label).color }],
+      { duration: LABEL_TINT_DURATION_MS, easing: "ease-out" },
+    );
+    return () => animation.cancel();
+  }, [tinted]);
+  return ref;
+}
+
+export default function ThreadInlineIcon ({ animateLabelTint = false, color, iconType, label }: {
+  /** Streaming: label text was visible uncoloured until its closing tag arrived, so its colour eases in. */
+  animateLabelTint?: boolean;
   color: ThreadEmphasisColor | null;
   iconType: ThreadIconType;
   label: ReactNode | null;
 }) {
   const Icon = THREAD_INLINE_ICON_REGISTRY[iconType];
   const colors = color === null ? null : getThreadMarkdownEmphasisColors(color);
+  const labelRef = useLabelTint(animateLabelTint && label !== null && colors !== null);
 
   return (
     <span
@@ -33,7 +53,7 @@ export default function ThreadInlineIcon ({ color, iconType, label }: {
       role={label ? undefined : "img"}
     >
       <Icon className={label ? "mr-[0.25em] inline-block align-[-0.12em]" : undefined} size={16} />
-      {label}
+      {label === null ? null : <span ref={labelRef}>{label}</span>}
     </span>
   );
 }
