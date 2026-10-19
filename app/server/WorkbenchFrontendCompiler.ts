@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchFrontendCompilerOptions: repository, output, environment and compiler boundary configuration.
- * - default WorkbenchFrontendCompiler: own frontend output, generation identity and compiler lifecycles.
+ * - default WorkbenchFrontendCompiler: own frontend output, generation identity, compiler lifecycles and per-file
+ *   variant-group expansions reused across rebuilds.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -83,6 +84,8 @@ export default class WorkbenchFrontendCompiler {
   private readonly spawnTailwind: NonNullable<WorkbenchFrontendCompilerOptions["spawnTailwind"]>;
   private readonly children = new Set<ChildProcess>();
   private readonly publicationListeners = new Set<() => void>();
+  /** Each browser source's variant-group expansion keyed by its exact text, so a rebuild parses only changed files. */
+  private readonly expansions = new Map<string, { source: string; result: ReturnType<typeof expandVariantGroupsInSource> }>();
   private javascriptOutput: { generation: string; files: esbuild.OutputFile[] } | null = null;
   private stylesheetOutput: { generation: string; contents: string; sourceMap: Buffer } | null = null;
   private publishing = true;
@@ -342,7 +345,7 @@ export default class WorkbenchFrontendCompiler {
           const relative = path.relative(this.appDirectoryPath, args.path);
           if (relative.startsWith("..") || path.isAbsolute(relative)) return;
           const source = await readFile(args.path, "utf8");
-          const transformed = expandVariantGroupsInSource(source, args.path);
+          const transformed = this.expand(args.path, source);
           if (!transformed.map) return;
           const sourceMap = Buffer.from(transformed.map).toString("base64");
           return {
@@ -453,18 +456,30 @@ export default class WorkbenchFrontendCompiler {
     ];
   }
 
+  private expand(filePath: string, source: string) {
+    const key = path.resolve(filePath);
+    const held = this.expansions.get(key);
+    if (held?.source === source) return held.result;
+    const result = expandVariantGroupsInSource(source, filePath);
+    this.expansions.set(key, { source, result });
+    return result;
+  }
+
   private async runTailwindOnce() {
     this.generation.signal.throwIfAborted();
     const groupedSourcePath = path.join(this.workingDirectoryPath, "variant-groups.html");
     const groupedSources: string[] = [];
+    const present = new Set<string>();
     for (const extension of ["ts", "tsx", "js", "jsx"]) {
       for await (const relativePath of glob(`**/*.${extension}`, { cwd: this.appDirectoryPath })) {
         const filePath = path.join(this.appDirectoryPath, relativePath);
+        present.add(path.resolve(filePath));
         const source = await readFile(filePath, "utf8");
-        const transformed = expandVariantGroupsInSource(source, filePath);
+        const transformed = this.expand(filePath, source);
         if (transformed.map) groupedSources.push(transformed.code);
       }
     }
+    for (const filePath of this.expansions.keys()) if (!present.has(filePath)) this.expansions.delete(filePath);
     this.generation.signal.throwIfAborted();
     await writeFile(groupedSourcePath, groupedSources.join("\n"), "utf8");
     const groupedSourceReference = path.relative(this.appDirectoryPath, groupedSourcePath).replaceAll("\\", "/");
