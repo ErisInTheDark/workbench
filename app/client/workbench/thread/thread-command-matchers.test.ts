@@ -557,6 +557,21 @@ test("message wait CLI and MCP presentation preserve the same mixed sender selec
   assert.deepEqual(cli.ongoingSummaryParts, mcp.ongoingSummaryParts);
 });
 
+test("everyday read and list spellings count as reads and listings in their own shell", () => {
+  const display = (command: string, shell: "bash" | "pwsh") => getThreadCommandDisplay({
+    command, commandActions: [], cwd: `${PROJECT_ROOT}/src`, projectRootPath: PROJECT_ROOT, shell,
+  });
+  for (const command of ["cat a.ts", "type a.ts"]) {
+    assert.equal(display(command, "pwsh").summaryStats.readFiles, 1, command);
+  }
+  const listed = display("ls -la lib", "bash");
+  assert.equal(listed.summaryStats.listedFiles, 1);
+  assert.deepEqual(pathOperands(listed.summaryParts), ["src/lib"]);
+  const recursive = display("ls -R", "bash");
+  assert.equal(recursive.summaryStats.listedFiles, 1);
+  assert.match(recursive.summaryText, /under/u);
+});
+
 test("wb shell MCP evidence derives ordinary command execution presentation", () => {
   const running = getWorkbenchMcpShellCommandItem(shellMcpItem(), PROJECT_ROOT);
   assert.ok(running);

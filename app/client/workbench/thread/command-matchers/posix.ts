@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - POSIX_COMMAND_MATCHERS: POSIX shell stage matchers for reads, listings, and searches. Keywords: thread, command, matcher, bash, sh.
+ * - POSIX_COMMAND_MATCHERS: POSIX shell stage matchers for reads (cat, sed, head, tail), listings (ls, rg --files), and searches. Keywords: thread, command, matcher, bash, sh.
  */
 
 import {
@@ -114,6 +114,29 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "posix.read-tail",
     match: (context) => matchHeadOrTail(context, "tail"),
+  }),
+  CommandMatcher({
+    id: "posix.list-ls",
+    match: (context) => {
+      const parsedStage = parsePosixStage(context.stage.text);
+      if (parsedStage.commandName !== "ls") {
+        return null;
+      }
+
+      const path = getPosixPositionalArguments(parsedStage)[0];
+      const pathPart = path ? buildCommandPathPart(path, context) : buildDisplayPathPart(context.cwdDisplay);
+      if (!pathPart) {
+        return null;
+      }
+
+      const recursive = parsedStage.tokens.some((token) => /^-[a-zA-Z]*R[a-zA-Z]*$/u.test(token) || token === "--recursive");
+      const location = recursive ? "under" : "in";
+      return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text(`Listing items ${location} `), pathPart],
+        summaryStats: { listedFiles: 1 },
+        summaryParts: [CommandMatcher.Text(`List items ${location} `), pathPart],
+      });
+    },
   }),
   CommandMatcher({
     id: "posix.list-rg-files",

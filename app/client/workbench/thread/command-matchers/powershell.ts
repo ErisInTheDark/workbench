@@ -224,7 +224,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: "powershell.read",
     match: (context) => {
       const parsedStage = parsePowerShellStage(context.stage.text);
-      if (!matchesPowerShellCommand(parsedStage, ["get-content", "gc"])) {
+      if (!matchesPowerShellCommand(parsedStage, ["get-content", "gc", "cat", "type"])) {
         return null;
       }
 
