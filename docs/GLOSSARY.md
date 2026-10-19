@@ -27,8 +27,6 @@
 | virtual steer | Pending held steer on an ended turn while its thread holds a pending questionnaire. Never sent to the provider; delivered after the answer in the continuation's first user message |
 | transcripts | Actual thread data instead of just the visible narrative. `wb transcript --help` for looking through them |
 | workbench item | A transcript item Workbench records itself (compaction, steers, user vis ends) via a `kind: "item"` observation with `source: "workbench"`. Non-core types store as generic payloads and render through `thread-generic-item-matchers.ts` |
-| logs | Persisted daemon and app server logs under `.workbench/logs/`. |
-| socket spy | `wb debug socket`: search recent daemon and app WebSocket frames held in memory, or print one frame's exact payload. |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
 | daemon | The Workbench harness, applied on top of existing harnesses. Server source lives in `daemon/server/`. |
 | daemon host | Lightweight service under `daemon/host/`. Owns networking, durable daemon identity and supervised daemon startup independently of the app. |

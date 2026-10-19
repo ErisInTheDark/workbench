@@ -24,6 +24,7 @@
 | /test | test runner |
 | /scripts | stuff used by package scripts, installation |
 | /docs | glossary and invariants ONLY |
+| /.workbench/logs | daemon & app logs. ignore host logs |
 
 ## Updating Instructions
 
