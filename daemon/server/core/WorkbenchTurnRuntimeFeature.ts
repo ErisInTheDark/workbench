@@ -86,6 +86,7 @@ export default class WorkbenchTurnRuntimeFeature {
       handoff: (threadId, handoff) => ports.run("threadActions", actions => actions.adoptCompactionQueue(
         WorkbenchThreadIdSchema.parse(threadId), handoff,
       ), "compaction queue handoff"),
+      readStrandedThreadIds: before => transcript.readAbandonedHoldThreadIds(before, "compactionQueue"),
     });
     const autoCompact = this.autoCompact = new WorkbenchThreadAutoCompactController(admission, compaction, {
       readSettings: () => ports.settings.readThreadAutoCompact(),

@@ -117,6 +117,8 @@ export default class WorkbenchThreadCompactionController {
       warn?(message: string): void;
       /** Give queued messages to the current generation's admission; rejects when none can take them. */
       handoff?(threadId: string, handoff: CompactionQueueHandoff): Promise<void>;
+      /** Threads holding pending compaction-queue holds attempted before `before`. */
+      readStrandedThreadIds?(before: number): Promise<readonly string[]>;
     },
   ) {}
 
@@ -168,6 +170,20 @@ export default class WorkbenchThreadCompactionController {
   async retireStranded(threadId: string) {
     if (this.queues.has(threadId)) return;
     await this.retireBefore(threadId, this.ports.now());
+  }
+
+  /** A starting generation owns no earlier queue, so every compaction hold from before `before` it does not own is stranded. */
+  async retireStrandedBefore(before: number) {
+    let threadIds: readonly string[];
+    try {
+      threadIds = await this.ports.readStrandedThreadIds?.(before) ?? [];
+    } catch (error) {
+      this.ports.warn?.(`Stranded compaction hold sweep could not list threads: ${errorText(error)}`);
+      return;
+    }
+    for (const threadId of threadIds) {
+      if (!this.queues.has(threadId)) await this.retireBefore(threadId, before);
+    }
   }
 
   /** A safety net: failing to write it never blocks the admission that runs it. */

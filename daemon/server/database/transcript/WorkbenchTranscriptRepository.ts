@@ -501,8 +501,18 @@ export default class WorkbenchTranscriptRepository {
     })();
   }
 
-  /** Threads holding steers or compactions created before `before` that wait on settled turns. */
-  readAbandonedHoldThreadIds(before: number) {
+  /**
+   * Threads holding steers or compactions created before `before` that wait on settled turns; `compactionQueue`
+   * lists only threads with compaction-queue holds no owner delivers.
+   */
+  readAbandonedHoldThreadIds(before: number, scope?: "compactionQueue") {
+    if (scope === "compactionQueue") {
+      return (this.#database.prepare(`
+        SELECT DISTINCT thread_id FROM thread_held_steers
+        WHERE state = 'pending' AND attempted_at < @before AND entry_key LIKE 'compaction:%'
+        ORDER BY thread_id
+      `).all({ before }) as Array<{ thread_id: string }>).map(row => row.thread_id);
+    }
     const { steers, compactions } = this.#abandonedHolds(before, null);
     return [...new Set([...steers, ...compactions].map(row => row.thread_id))].sort();
   }

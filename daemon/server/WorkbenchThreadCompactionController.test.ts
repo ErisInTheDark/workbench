@@ -15,6 +15,8 @@ function fixture() {
   const observations: Array<{ phase?: string }> = [];
   const steers: Array<{ entryKey: string; status: string; clientUserMessageId?: string | null; error: string | null }> = [];
   const retirements: string[] = [];
+  const retired: Array<{ threadId: string; before: number }> = [];
+  let stranded: string[] = [];
   const activity: boolean[] = [];
   const resolution = Promise.withResolvers<void>();
   const handoffs: CompactionQueueHandoff[] = [];
@@ -27,20 +29,25 @@ function fixture() {
       for (const entry of entries) {
         if (entry.kind === "contextCompaction") observations.push(entry);
         if (entry.kind === "steer") steers.push(entry.entry);
-        if (entry.kind === "abandonedHolds") retirements.push(entry.scope ?? "all");
+        if (entry.kind === "abandonedHolds") {
+          retirements.push(entry.scope ?? "all");
+          retired.push({ threadId: entry.threadId, before: entry.before });
+        }
       }
       if (entries.some(entry => entry.kind === "steer" && entry.entry.status !== "pending")) resolution.resolve();
       return { changedThreadIds: [threadId], compactionCompletions: [] };
     },
     setCompacting: (_threadId, compacting) => { activity.push(compacting); },
     handoff: async (_threadId, next) => { handoffs.push(next); await handoff(next); },
+    readStrandedThreadIds: async () => stranded,
   });
   const provider = { threads: {
     latestTurn: async () => ({ id: turnId }),
     compact: async () => compact(),
   } } as never;
   return {
-    activity, admission, handoffs, observations, owner, provider, retirements, steers,
+    activity, admission, handoffs, observations, owner, provider, retired, retirements, steers,
+    stranded: (threadIds: string[]) => { stranded = threadIds; },
     /** Resolves once the queue records its held messages' final state. */
     resolved: resolution.promise,
     compact: (next: () => Promise<void>) => { compact = next; },
@@ -240,6 +247,20 @@ test("an adopted queue is delivered under its original id without compacting aga
   ]);
   assert.deepEqual(f.observations, []);
   assert.deepEqual(f.retirements, [], "its own holds are not stranded");
+});
+
+test("a starting generation retires every thread's stranded compaction holds except queues it already owns", async () => {
+  const f = fixture();
+  const other = "00000000-0000-4000-8000-000000000009";
+  const held = heldCompaction(f);
+  const operation = f.owner.compact(threadId, f.provider);
+  await held.entered;
+  f.retired.length = 0;
+  f.stranded([threadId, other]);
+  await f.owner.retireStrandedBefore(100);
+  assert.deepEqual(f.retired, [{ threadId: other, before: 100 }], "the compacting thread's queue is owned");
+  held.release();
+  await operation;
 });
 
 test("stranded compaction holds are retired only while no queue owns the thread", async () => {

@@ -57,7 +57,7 @@ export const transcriptRequests = {
   }),
   readTranscriptAbandonedHoldThreadIds: defineDatabaseRequest({
     read: "query",
-    run: ({ transcripts }, before: number) => transcripts.readAbandonedHoldThreadIds(before),
+    run: ({ transcripts }, before: number, scope?: "compactionQueue") => transcripts.readAbandonedHoldThreadIds(before, scope),
   }),
   /** Query errors are an expected answer, so they cross the worker boundary as a value. */
   queryTranscriptPage: defineDatabaseRequest({

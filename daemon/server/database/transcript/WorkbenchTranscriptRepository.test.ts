@@ -3125,11 +3125,14 @@ test("stranded compaction holds end undelivered even while a questionnaire waits
       VALUES ('question', ?, 'pending', ?, 'request', 'request', 'Question', '', 'Submit')
     `).run(thread, first);
 
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(100, "compactionQueue"), [], "newer holds are still owned");
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(200, "compactionQueue"), [thread], "a waiting questionnaire keeps no compaction hold");
     const settled = repository.settle([{ kind: "abandonedHolds", scope: "compactionQueue", threadId: thread, before: 200, endedAt: 250 }]);
     assert.deepEqual(settled.changedThreadIds, [thread]);
     assert.deepEqual(heldSteerRows(database).map(({ entry_key, state }) => `${entry_key}:${state}`),
       ["compaction:stranded:interrupted", "compaction:owned:pending", "questionnaire:virtual:pending"]);
     assert.deepEqual(readCompactions(repository).map(({ status }) => status), ["inProgress"]);
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(200, "compactionQueue"), [], "only virtual and owned holds remain");
   } finally {
     database.close();
   }

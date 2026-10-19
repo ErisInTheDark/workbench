@@ -110,7 +110,7 @@ export interface DaemonTranscriptRegistration {
   read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<WorkbenchTranscriptSnapshot | null>;
   readContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   readMaterializedTurnIds(threadId: string, turnIds: readonly string[]): Promise<string[]>;
-  readAbandonedHoldThreadIds(before: number): Promise<string[]>;
+  readAbandonedHoldThreadIds(before: number, scope?: "compactionQueue"): Promise<string[]>;
   record(
     observations: readonly WorkbenchTranscriptObservation[],
     context: WorkbenchTranscriptRecordingContext,

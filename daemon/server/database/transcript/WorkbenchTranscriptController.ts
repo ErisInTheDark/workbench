@@ -597,12 +597,12 @@ export default class WorkbenchTranscriptController {
     return this.#database.readTranscriptMaterializedTurnIds(threadId, turnIds);
   }
 
-  async readAbandonedHoldThreadIds(before: number) {
+  async readAbandonedHoldThreadIds(before: number, scope?: "compactionQueue") {
     this.#assertActive();
     if (!this.#database.readTranscriptAbandonedHoldThreadIds) {
       throw new Error("Workbench transcript abandoned hold reads are not configured");
     }
-    return this.#database.readTranscriptAbandonedHoldThreadIds(before);
+    return this.#database.readTranscriptAbandonedHoldThreadIds(before, scope);
   }
 
   /** A thread-wide provider read failed; the gap anchors the thread's latest stored turn. */

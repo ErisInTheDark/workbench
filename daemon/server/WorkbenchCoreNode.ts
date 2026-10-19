@@ -98,6 +98,8 @@ function createWorkbenchCoreFeature(
   messageWaitHandoff?: WorkbenchMessageWaitHandoff,
   subagentQueueHandoff?: WorkbenchSubagentQueueHandoff,
 ) {
+  /** Compaction holds attempted before this generation existed belong to no queue it will deliver. */
+  const generationStartedAt = Date.now();
   const modules = createModules();
   const projects = new WorkbenchCoreProjectsFeature({ context, database, initialCatalog });
   const { catalog: projectCatalog, settings } = projects;
@@ -365,6 +367,7 @@ function createWorkbenchCoreFeature(
     afterCommit: () => {
       approvals.activate();
       if (coldStart) void turnSettlement.startColdSweep();
+      void compaction.retireStrandedBefore(generationStartedAt);
       if (!initialCatalog) return;
       stats.start();
       browseSessionCleanup.start();
