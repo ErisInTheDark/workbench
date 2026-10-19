@@ -279,6 +279,7 @@ test("wb shell calls render through the ordinary command execution surface", () 
     tool: "shell",
   });
   const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
+    openActivityRunIds: [item.id],
     projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
@@ -301,7 +302,7 @@ test("wb shell calls render through the ordinary command execution surface", () 
   assert.doesNotMatch(html, /mcp__wb__shell/u);
 });
 
-test("adjacent wb rg and shell calls share a command summary while retaining separate terminal entries", () => {
+test("adjacent wb rg and shell calls count into one run summary while retaining separate terminal entries", () => {
   const rgItem = makeItem({
     arguments: { args: ["needle", "webapp"] },
     id: "rg-one",
@@ -344,11 +345,12 @@ test("adjacent wb rg and shell calls share a command summary while retaining sep
   }));
   const visibleText = html.replace(/<[^>]+>/gu, "");
 
-  assert.match(visibleText, /Searched 1 file, listed files/u);
+  assert.match(visibleText, /1searched/u);
+  assert.match(visibleText, /1listed/u);
   assert.equal(getThreadTerminalEntries([rgItem, shellItem], { cwd: "C:/workspace" }).length, 2);
 });
 
-test("adjacent provider-native reads share one command summary", () => {
+test("adjacent provider-native reads count into one run summary", () => {
   const read = (id: string, path: string): Extract<ThreadItem, { type: "dynamicToolCall" }> => ({
     arguments: { file_path: path },
     contentItems: null,
@@ -376,5 +378,5 @@ test("adjacent provider-native reads share one command summary", () => {
   }));
   const visibleText = html.replace(/<[^>]+>/gu, "");
 
-  assert.match(visibleText, /Read 2 files/u);
+  assert.match(visibleText, /2read/u);
 });

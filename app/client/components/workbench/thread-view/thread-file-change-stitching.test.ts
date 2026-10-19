@@ -1,4 +1,4 @@
-/* No production exports. Tests protect which native file pieces grow one row and which stay standalone. */
+/* No production exports. Tests protect which native and canonical file pieces grow one row and which stay standalone. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -20,10 +20,24 @@ function edit(id: string, path: string, status: Status = "completed", { tool = "
 const unclaimed = (id: string, status: Status = "failed") => edit(id, "a.ts", status, { unclaimed: true });
 
 function rows(items: Parameters<typeof stitchFileOperationRows>[0]) {
-  return stitchFileOperationRows(items).map(group => group.kind === "native"
-    ? group.rows.map(row => row.pieces.map(piece => piece.item.id).join("+"))
-    : [group.item.id]);
+  return stitchFileOperationRows(items).map(group => group.kind === "fileChange" && !group.rows.length
+    ? [group.item.id]
+    : group.rows.map(row => row.pieces.map(piece => piece.item.id).join("+")));
 }
+
+function codexEdit(id: string, path: string, kind: "add" | "update" = "update", status: WorkbenchFileChangeItem["status"] = "completed"): WorkbenchFileChangeItem {
+  return {
+    id, type: "fileChange", status,
+    changes: [{ path, diff: "@@ -1,1 +1,1 @@\n-a\n+b", kind: kind === "add" ? { type: "add" } : { type: "update", move_path: null } }],
+  };
+}
+
+test("back-to-back canonical changes of one kind on one file grow one row", () => {
+  assert.deepEqual(rows([codexEdit("1", "a.ts"), codexEdit("2", "a.ts"), codexEdit("3", "a.ts")]), [["1+2+3"]]);
+  assert.deepEqual(rows([codexEdit("1", "a.ts", "add"), codexEdit("2", "a.ts")]), [["1"], ["2"]]);
+  assert.deepEqual(rows([codexEdit("1", "a.ts"), codexEdit("2", "b.ts"), codexEdit("3", "a.ts")]), [["1"], ["2"], ["3"]]);
+  assert.deepEqual(rows([codexEdit("1", "a.ts"), codexEdit("2", "a.ts", "update", "failed")]), [["1"], ["2"]]);
+});
 
 test("back-to-back edits of one file grow one row anchored at the first, including a streaming edit", () => {
   assert.deepEqual(rows([edit("1", "a.ts"), edit("2", "a.ts"), edit("3", "a.ts", "inProgress")]), [["1+2+3"]]);

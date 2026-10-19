@@ -1,0 +1,189 @@
+/*
+ * Exports:
+ * - default ThreadActivityRun: one run of consecutive work as a tinted summary (counted chips, live duration, current step) that expands into its steps.
+ */
+"use client";
+
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+import { getThreadItemTimelineDurationMs, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
+import ChevronIcon from "../ChevronIcon";
+import { LoaderIcon } from "../workbench-icons";
+import { isNativeFileOperation } from "../../../workbench/thread/thread-command-matchers";
+import { getActivityChips, getCommandItemDisplay, type ActivityChip, type CommandChipContext } from "./thread-activity-chips";
+import type { ActivitySegment, CommandSequenceItem, ThreadRenderableBlock } from "./thread-render-blocks";
+import { getThreadFileChangeEntries, ThreadFileChangeTotals } from "./ThreadFileChangeItem";
+import ThreadDurationText from "./ThreadDurationText";
+import ThreadInlineCode from "./ThreadInlineCode";
+import { useThreadLiveDuration } from "./use-thread-live-duration";
+import useThreadActivityRun from "./use-thread-activity-run";
+
+type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
+type FileItem = Extract<ActivitySegment, { kind: "files" }>["items"][number];
+const REASONING_SWAP_MS = 800;
+const FILE_VERBS = { add: "Creating", delete: "Deleting", update: "Editing" } as const;
+
+/** Each group's existing renderer draws its steps; the run owns only summary, status and layout. */
+export interface ThreadActivityRunRenderers {
+  commands: (items: CommandSequenceItem[], isLastSegment: boolean) => ReactNode;
+  files: (items: FileItem[]) => ReactNode;
+  reasoning: (item: ReasoningItem, isLastSegment: boolean) => ReactNode;
+  webSearch: (items: Extract<ActivitySegment, { kind: "webSearch" }>["items"]) => ReactNode;
+}
+
+function isRunning(item: ThreadItem) {
+  return "status" in item && item.status === "inProgress";
+}
+
+function firstSentence(text: string) {
+  return text.trim().match(/^.*?[.!?](?=\s|$)/su)?.[0] ?? text.trim().split("\n")[0] ?? "";
+}
+
+function latestParagraph(item: ReasoningItem) {
+  const sections = item.summary.length ? item.summary : item.content;
+  return sections.at(-1)?.split(/\n\s*\n/u).filter(part => part.trim()).at(-1) ?? "";
+}
+
+/** The latest paragraph's first sentence, changing at most every 800ms; newer paragraphs wait their turn. */
+function useThrottledSentence(sentence: string) {
+  const [shown, setShown] = useState(sentence);
+  const lastSwap = useRef(0);
+  useEffect(() => {
+    if (sentence === shown) return;
+    const timer = window.setTimeout(() => {
+      lastSwap.current = performance.now();
+      setShown(sentence);
+    }, Math.max(0, lastSwap.current + REASONING_SWAP_MS - performance.now()));
+    return () => window.clearTimeout(timer);
+  }, [sentence, shown]);
+  return shown;
+}
+
+function ChipRow({ chips }: { chips: ActivityChip[] }) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-3.5 overflow-hidden whitespace-nowrap">
+      {chips.map(chip => (
+        <span className="inline-flex items-center gap-1" key={chip.key}>
+          <chip.Icon size={14} />
+          <b className="inline-block animate-tick font-semibold text-text motion-reduce:animate-none" key={chip.count}>{chip.count}</b>
+          {chip.verb}
+          {chip.additions !== undefined || chip.deletions !== undefined ? (
+            <span className="ml-0.5"><ThreadFileChangeTotals additions={chip.additions ?? 0} animateChanges deletions={chip.deletions ?? 0} /></span>
+          ) : null}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function ReasoningStatus({ item }: { item: ReasoningItem }) {
+  const sentence = useThrottledSentence(firstSentence(latestParagraph(item)));
+  return <span className={shimmerTextClassName} key={sentence}>{sentence || "Thinking"}</span>;
+}
+
+function StatusContent({ context, item }: { context: CommandChipContext; item: ThreadItem }) {
+  if (item.type === "reasoning") return <ReasoningStatus item={item} />;
+  if (item.type === "fileChange" || isNativeFileOperation(item)) {
+    const file = getThreadFileChangeEntries([item]).at(-1);
+    if (!file) return <span className={shimmerTextClassName}>Editing files</span>;
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1.5">
+        <span className={shimmerTextClassName}>{FILE_VERBS[file.kind]}</span>
+        <ThreadInlineCode>{file.path}</ThreadInlineCode>
+        <ThreadFileChangeTotals additions={file.additions} animateChanges deletions={file.deletions} />
+      </span>
+    );
+  }
+  if (item.type !== "commandExecution" && item.type !== "mcpToolCall" && item.type !== "dynamicToolCall") {
+    return <span className={shimmerTextClassName}>Working</span>;
+  }
+  // Plain text, like the live status panel: shimmer cannot paint through rich summary chips.
+  return <span className={shimmerTextClassName}>{getCommandItemDisplay(item, context)?.ongoingSummaryText || "Working"}</span>;
+}
+
+function segmentItems(segment: ActivitySegment): ThreadItem[] {
+  return segment.kind === "reasoning" ? [segment.item] : segment.items;
+}
+
+export default function ThreadActivityRun({
+  block,
+  context,
+  isMostRecent,
+  itemTimeline,
+  renderers,
+  turnLive,
+}: {
+  block: Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
+  context: CommandChipContext & { projectFilePaths?: readonly string[]; projectId?: string | null };
+  isMostRecent: boolean;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
+  renderers: ThreadActivityRunRenderers;
+  turnLive: boolean;
+}) {
+  const run = useThreadActivityRun(block.items[0]?.id ?? "");
+  const lastItem = block.items.at(-1);
+  // Reasoning has no lifecycle of its own; it is current while nothing has followed it in a live turn.
+  const current = lastItem && (isRunning(lastItem) || (lastItem.type === "reasoning" && turnLive && isMostRecent)) ? lastItem : null;
+  const chips = getActivityChips(block.segments, context);
+  const settledDurationMs = getThreadItemTimelineDurationMs(block.items.map(item => item.id), itemTimeline);
+  const startedAtMs = block.items.flatMap(item => {
+    const entry = itemTimeline?.find(candidate => candidate.itemId === item.id);
+    return entry ? [entry.startedAt ?? entry.firstSeenAt] : [];
+  }).find((time): time is number => time !== null) ?? null;
+  const durationMs = useThreadLiveDuration(current ? 0 : settledDurationMs, current ? startedAtMs : null);
+  const status = current ? <StatusContent context={context} item={current} /> : null;
+
+  return (
+    <div className="my-1.5" data-thread-activity-run="true">
+      <button
+        aria-expanded={run.open}
+        className="block w-full rounded-lg bg-fg/4 px-3 text-left text-[0.86em] text-fg/muted"
+        onClick={run.toggle}
+        type="button"
+      >
+        <span className="flex h-8 min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 overflow-hidden">
+            {chips.length ? <ChipRow chips={chips} /> : status
+              ? <span className="flex min-w-0 items-center gap-2"><LoaderIcon className="shrink-0" />{status}</span>
+              : <span>Reasoned</span>}
+          </span>
+          {durationMs ? <ThreadDurationText className="shrink-0" durationMs={durationMs} /> : null}
+          <ChevronIcon
+            className={`
+              shrink-0 opacity-60 transition-transform
+              ${run.open ? "" : "-rotate-90"}
+            `}
+            size={16}
+          />
+        </span>
+        {chips.length && status ? (
+          <span className="-mt-1 flex h-7 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap pb-0.5 text-[1.05em]">
+            <LoaderIcon className="shrink-0" />
+            <span className="min-w-0 truncate">{status}</span>
+          </span>
+        ) : null}
+      </button>
+      {run.open ? (
+        <div className="px-3 pt-1.5">
+          {block.segments.map((segment, index) => {
+            const previous = block.segments[index - 1];
+            // Adjacent action groups sit tight; reasoning gets breathing room either side.
+            const gap = !previous ? "" : segment.kind !== "reasoning" && previous.kind !== "reasoning" ? "mt-0.5" : "mt-2";
+            const key = segmentItems(segment)[0]?.id ?? index;
+            const last = index === block.segments.length - 1;
+            if (segment.kind === "reasoning") {
+              return <div className={gap} key={key}>{renderers.reasoning(segment.item, last)}</div>;
+            }
+            if (segment.kind === "commands") {
+              return <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>{renderers.commands(segment.items, last)}</div>;
+            }
+            if (segment.kind === "files") return <div className={gap} key={key}>{renderers.files(segment.items)}</div>;
+            return <div className={gap} key={key}>{renderers.webSearch(segment.items)}</div>;
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}

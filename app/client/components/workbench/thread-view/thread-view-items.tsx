@@ -22,7 +22,6 @@ import WorkbenchClientContext from "../workbench-client-context";
 import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import {
   findWorkbenchThreadItemTimelineEntry,
-  getThreadItemTimelineDurationMs,
   upsertWorkbenchThreadItemTimelineEntry,
   type WorkbenchThreadItemTimelineEntry,
 } from "workbench-shared/workbench/thread/thread-item-timeline";
@@ -37,6 +36,8 @@ import type {
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import { ThreadEntryAnimation } from "./ThreadRevealText";
+import ThreadActivityRun from "./ThreadActivityRun";
+import { buildActivityRuns } from "./thread-activity-runs";
 import {
   WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
 } from "workbench-shared/workbench/thread/thread-questionnaire-history";
@@ -185,15 +186,12 @@ import { readComposerReferenceMessage, type ComposerReference } from "workbench-
 import { TranscriptBodiesContext, useTranscript } from "../use-transcript";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 import {
-  buildRenderableBlocks, buildCommandSequenceRenderSegments, getWorkedBlockRows,
+  buildRenderableBlocks, buildCommandSequenceRenderSegments,
   getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, groupIncomingAgentMessageRuns,
   hasReasoningSteps, hasSameBlockTimeline, isBrowseCommandItem, reuseRenderableBlocks,
   type AgentCommentaryItem, type CommandItem, type CommandSequenceItem, type IncomingAgentMessageItem,
   type SubagentWaitItem, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
-import ThreadWorkedRun from "./ThreadWorkedRun";
-import { getThreadFileChangeTotals } from "./ThreadFileChangeItem";
-import { partitionWorkedRows } from "./thread-worked-run";
 
 const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 
@@ -2564,6 +2562,42 @@ function ThreadRenderableBlockViewComponent ({
   turnStatus: Turn["status"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  if (block.kind === "activityRun") {
+    return (
+      <ThreadActivityRun
+        block={block}
+        context={{ knownSkills, projectFilePaths, projectId, projectRootPath, threadCwdPath, workspaceRoots }}
+        isMostRecent={isMostRecentBlock}
+        itemTimeline={itemTimeline}
+        renderers={{
+          commands: (items, isLastSegment) => items.map((item, index) => (
+            <ThreadCommandSequence
+              browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources}
+              isMostRecent={isMostRecentBlock && isLastSegment && index === items.length - 1}
+              itemTimeline={itemTimeline} items={[item]} key={item.id} knownSkills={knownSkills} presentationSource={presentationSource}
+              projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath}
+              relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath}
+              threadId={threadId} turnId={turnId} workspaceRoots={workspaceRoots}
+            />
+          )),
+          files: (items) => (
+            <ThreadFileChangeItem animateEntries={animateEntries} items={items} projectFilePaths={projectFilePaths}
+              projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
+          ),
+          reasoning: (item, isLastSegment) => (
+            <ThreadReasoningSequence
+              block={{ items: [item], kind: "reasoningSequence" }} inlineMentionSources={inlineMentionSources}
+              isMostRecent={isMostRecentBlock && isLastSegment} presentationSource={presentationSource} projectFilePaths={projectFilePaths}
+              projectId={projectId} projectRootPath={projectRootPath} threadCwdPath={threadCwdPath}
+              threadId={threadId} turnId={turnId} workspaceRoots={workspaceRoots}
+            />
+          ),
+          webSearch: (items) => <ThreadWebSearchSequence items={items} />,
+        }}
+        turnLive={turnStatus === "inProgress"}
+      />
+    );
+  }
   if (block.kind === "subagentCoordination") {
     return (
       <ThreadSubagentCoordination
@@ -2876,7 +2910,6 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
 ));
 
 interface ThreadTranscriptItemsDetailsProps {
-  initialInactiveItemIds?: ReadonlySet<string>;
   initialUserItemId?: string | null;
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
@@ -2900,7 +2933,6 @@ interface ThreadTranscriptItemsDetailsProps {
 }
 
 export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsDetails({
-  initialInactiveItemIds,
   initialUserItemId = null,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   hiddenReasoningStep = null,
@@ -2924,8 +2956,8 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
 }: ThreadTranscriptItemsDetailsProps) {
   const animateEntries = useEntryMotionAfterMount(turnStatus === "inProgress");
   type RenderEntry =
-    | { block: ThreadRenderableBlock; kind: "block"; eligible: boolean }
-    | { item: WorkbenchProjectedGenericItem; kind: "generic"; eligible: false };
+    | { block: ThreadRenderableBlock; kind: "block" }
+    | { item: WorkbenchProjectedGenericItem; kind: "generic" };
   const entries: RenderEntry[] = [];
   const renderItemTimeline = useMemo(() => {
     let timeline = itemTimeline ?? [];
@@ -2944,19 +2976,16 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
   let pendingItems: ThreadItem[] = [];
   const flushItems = () => {
     if (!pendingItems.length) return;
-    entries.push(...buildRenderableBlocks(
-      pendingItems,
-      { reasoningStep: hiddenReasoningStep },
-      threadCwdPath,
-    ).flatMap((block) => initialInactiveItemIds
-      ? getWorkedBlockRows(block, { knownSkills, projectRootPath, workspaceRoots }).map(row => ({ ...row, kind: "block" as const }))
-      : [{ block, eligible: false, kind: "block" as const }]));
+    entries.push(...buildActivityRuns(
+      buildRenderableBlocks(pendingItems, { reasoningStep: hiddenReasoningStep }, threadCwdPath),
+      { knownSkills, projectRootPath, workspaceRoots },
+    ).map(block => ({ block, kind: "block" as const })));
     pendingItems = [];
   };
   for (const item of items) {
     if (item.type === "generic") {
       flushItems();
-      entries.push({ item, kind: "generic", eligible: false });
+      entries.push({ item, kind: "generic" });
     } else {
       pendingItems.push(isProjectedInteractionItem(item)
         ? adaptProjectedInteractionItem(item)
@@ -2968,14 +2997,13 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
   let stableBlockIndex = 0;
   const stableEntries = entries.map(entry => entry.kind === "block"
     ? { ...entry, block: stableBlocks[stableBlockIndex++]! } : entry);
-  // Content keys, never positions: history landing above must not re-key the rows already on screen.
+  // Content keys, never positions: history landing above must not re-key the rows already on screen,
+  // and a block keeps its key as it grows, so a live activity run never remounts.
   const keyOccurrences = new Map<string, number>();
   const entryKeys = stableEntries.map(entry => {
     const base = entry.kind === "generic"
       ? `generic:${entry.item.id}`
-      : initialInactiveItemIds
-        ? `${entry.block.kind}:${getRenderableBlockItems(entry.block)[0]?.id}`
-        : getRenderableBlockKey(entry.block);
+      : `${entry.block.kind}:${getRenderableBlockItems(entry.block)[0]?.id}`;
     const occurrence = (keyOccurrences.get(base) ?? 0) + 1;
     keyOccurrences.set(base, occurrence);
     return occurrence > 1 ? `${base}#${occurrence}` : base;
@@ -3065,48 +3093,7 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
       />
     );
   };
-  const groups = initialInactiveItemIds ? partitionWorkedRows(stableEntries) : [stableEntries];
-  const groupStarts: number[] = [];
-  let offset = 0;
-  for (const group of groups) {
-    groupStarts.push(offset);
-    offset += group.length;
-  }
-  const groupIdentities = chunkIdentities.groups(groups.map((group, index) => (
-    entryKeys.slice(groupStarts[index]!, groupStarts[index]! + group.length)
-  )));
-  const progressiveGroups: ThreadProgressiveWindowChunk[] = groups.map((group, groupIndex) => {
-    const start = groupStarts[groupIndex]!;
-    const groupIdentity = groupIdentities[groupIndex]!;
-    const children = renderWindowedEntries(group, start, groupIdentity);
-    const firstEntry = group[0];
-    const key = `group:${groupIdentity}`;
-    if (!firstEntry?.eligible) return { key, content: children };
-    const ids = group.flatMap(entry => entry.kind === "block" ? getRenderableBlockItems(entry.block).map(item => item.id) : [entry.item.id]);
-    const activity = ids.map(id => {
-      const timeline = findWorkbenchThreadItemTimelineEntry(id, renderItemTimeline);
-      const times = timeline ? [timeline.startedAt, timeline.firstSeenAt, timeline.completedAt, timeline.lastSeenAt].filter((time): time is number => time !== null) : [];
-      return times.length ? Math.max(...times) : null;
-    });
-    return {
-      key,
-      content: (
-        <ThreadWorkedRun
-          identity={ids[0]!}
-          count={group.length}
-          durationMs={getThreadItemTimelineDurationMs(ids, renderItemTimeline)}
-          fileTotals={getThreadFileChangeTotals(group.flatMap(entry => entry.kind === "block"
-            ? getRenderableBlockItems(entry.block).filter((item): item is Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" }> => item.type === "fileChange" || item.type === "dynamicToolCall")
-            : []))}
-          initialInactive={ids.every(id => initialInactiveItemIds?.has(id) ?? false)}
-          newestActivityAt={activity.some(time => time === null) ? null : Math.max(...activity as number[])}
-        >
-          {children}
-        </ThreadWorkedRun>
-      ),
-    };
-  });
-  return <ThreadProgressiveWindow chunks={progressiveGroups} identity={`${turnId}:groups`} />;
+  return renderWindowedEntries(stableEntries, 0, chunkIdentities.groups([entryKeys])[0]!);
 });
 
 export function ThreadTranscriptItemDetails ({

@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { Fragment, useMemo, useRef, type Ref } from "react";
+import { Fragment, useMemo, type Ref } from "react";
 
 import type {
   ThreadPayload,
@@ -22,7 +22,6 @@ import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entri
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import { ThreadTranscriptItemsDetails } from "./thread-view-items";
-import { admitSettledItems, type SettledItemAdmission } from "./thread-worked-run";
 
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 
@@ -87,13 +86,6 @@ export default function ThreadTranscriptProjection({
   subagents: readonly WorkbenchSubagentSummary[];
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
 }) {
-  const settledRef = useRef<{ threadId: string; admission: SettledItemAdmission } | null>(null);
-  if (settledRef.current?.threadId !== projection.thread.id) {
-    settledRef.current = { threadId: projection.thread.id, admission: admitSettledItems(null, projection.turns, liveTurnId) };
-  } else {
-    settledRef.current.admission = admitSettledItems(settledRef.current.admission, projection.turns, liveTurnId);
-  }
-  const settledItemIds = settledRef.current.admission.settled;
   // A turn renders live only while the thread works on it; an orphaned provider status renders settled.
   const displayStatus = (turn: WorkbenchTranscriptProjection["turns"][number]) => turn.id === liveTurnId ? "inProgress" as const
     : turn.status === "inProgress" ? "completed" as const : turn.status;
@@ -139,7 +131,6 @@ export default function ThreadTranscriptProjection({
                 : "pb-3"}
               >
                 <ThreadTranscriptItemsDetails
-                  initialInactiveItemIds={settledItemIds}
                   initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
                   browseResultEntries={browseResultEntries}
                   hiddenReasoningStep={hiddenReasoningStep}

@@ -12,6 +12,7 @@ import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
 
 function renderCommand(command: string, aggregatedOutput: string) {
   return renderToStaticMarkup(createElement(ThreadTestTurn, {
+    openActivityRunIds: ["title-command"],
     projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {

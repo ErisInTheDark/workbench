@@ -1,0 +1,115 @@
+/*
+ * Exports:
+ * - ActivityChip: one counted kind of work in an activity run summary, with change totals for file chips.
+ * - CommandChipContext: matcher context for summarising commands.
+ * - getCommandBlockItems: command items in the shape the command matchers summarise.
+ * - getCommandItemDisplay: one command's matcher display.
+ * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then its matched command categories.
+ */
+import type { ComponentType } from "react";
+
+import {
+  getNativeToolDisplay,
+  getThreadCommandBlockDisplay,
+  getThreadCommandDisplay,
+  getWorkbenchMcpCommandDisplay,
+  type ThreadCommandSummaryDisplay,
+  type ThreadCommandSummaryStats,
+} from "../../../workbench/thread/thread-command-matchers";
+import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import {
+  BookBookmarkIcon, BookSearchIcon, CodeIcon, EyeIcon, FileAddIcon, FileDeleteIcon, FileTextIcon, FileUpdateIcon,
+  FolderClosedIcon, GitArcProposalIcon, GitGraphIcon, SearchIcon, TerminalIcon, type IconProps,
+} from "../workbench-icons";
+import { getThreadFileChangeEntries } from "./ThreadFileChangeItem";
+import type { ActivitySegment, CommandSequenceItem } from "./thread-render-blocks";
+
+export interface ActivityChip {
+  additions?: number;
+  count: number;
+  deletions?: number;
+  Icon: ComponentType<IconProps>;
+  key: string;
+  verb: string;
+}
+
+export interface CommandChipContext {
+  knownSkills?: WorkbenchSkillSummary[];
+  projectRootPath?: string;
+  threadCwdPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}
+
+/** Matcher categories in summary order; each chip counts every stat it names. */
+const COMMAND_CHIPS: ReadonlyArray<{ Icon: ComponentType<IconProps>; key: string; stats: ReadonlyArray<keyof ThreadCommandSummaryStats>; verb: string }> = [
+  { Icon: FileTextIcon, key: "read", stats: ["readFiles"], verb: "read" },
+  { Icon: SearchIcon, key: "searched", stats: ["searchedFiles"], verb: "searched" },
+  { Icon: FolderClosedIcon, key: "listed", stats: ["listedFiles"], verb: "listed" },
+  { Icon: EyeIcon, key: "checked", stats: ["pathChecks", "visChecks"], verb: "checked" },
+  { Icon: FileDeleteIcon, key: "removed", stats: ["deletedPaths"], verb: "removed" },
+  { Icon: GitGraphIcon, key: "git", stats: ["gitStatusChecks", "gitDiffChecks"], verb: "git checks" },
+  { Icon: GitArcProposalIcon, key: "arc", stats: ["gitCheckpointCreates", "gitCheckpointDiffs", "gitCheckpointRestores"], verb: "arc steps" },
+  { Icon: CodeIcon, key: "typechecked", stats: ["typescriptBuilds", "typescriptValidations"], verb: "typechecked" },
+  { Icon: BookBookmarkIcon, key: "skills", stats: ["skillLoads"], verb: "skills" },
+  { Icon: BookSearchIcon, key: "web", stats: ["webRequests"], verb: "web" },
+  { Icon: TerminalIcon, key: "ran", stats: ["otherCommands"], verb: "ran" },
+];
+
+/** One command's matcher display, or null when no matcher describes it. */
+export function getCommandItemDisplay(item: CommandSequenceItem, context: CommandChipContext): ThreadCommandSummaryDisplay | null {
+  const [entry] = getCommandBlockItems([item], context);
+  if (!entry) return null;
+  return "display" in entry ? entry.display : getThreadCommandDisplay({ ...entry, knownSkills: context.knownSkills,
+    projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots });
+}
+
+type CommandBlockItem = Parameters<typeof getThreadCommandBlockDisplay>[0]["items"][number];
+
+export function getCommandBlockItems(items: readonly CommandSequenceItem[], context: CommandChipContext): CommandBlockItem[] {
+  const mcpContext = { knownSkills: context.knownSkills, ...(context.threadCwdPath
+    ? { cwd: context.threadCwdPath, projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots } : {}) };
+  return items.flatMap<CommandBlockItem>(item => {
+    if (item.type === "commandExecution") {
+      return [{ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell }];
+    }
+    const display = item.type === "dynamicToolCall"
+      ? getNativeToolDisplay(item, { knownSkills: context.knownSkills })
+      : getWorkbenchMcpCommandDisplay({ argumentsValue: item.arguments, context: mcpContext, server: item.server, tool: item.tool });
+    return display ? [{ display }] : [];
+  });
+}
+
+const FILE_CHIPS = [
+  { Icon: FileAddIcon, key: "add", verb: "created" },
+  { Icon: FileUpdateIcon, key: "update", verb: "edited" },
+  { Icon: FileDeleteIcon, key: "delete", verb: "deleted" },
+] as const;
+
+function fileChips(segments: readonly ActivitySegment[]): ActivityChip[] {
+  const entries = getThreadFileChangeEntries(segments.flatMap(segment => segment.kind === "files" ? segment.items : []));
+  return FILE_CHIPS.flatMap(({ Icon, key, verb }) => {
+    const matching = entries.filter(entry => entry.kind === key);
+    if (!matching.length) return [];
+    const additions = matching.reduce((total, entry) => total + entry.additions, 0);
+    const deletions = matching.reduce((total, entry) => total + entry.deletions, 0);
+    return [{
+      Icon, count: new Set(matching.map(entry => entry.path)).size, key, verb,
+      ...(key !== "delete" ? { additions } : {}),
+      ...(key !== "add" ? { deletions } : {}),
+    }];
+  });
+}
+
+export function getActivityChips(segments: readonly ActivitySegment[], context: CommandChipContext): ActivityChip[] {
+  const commands = segments.flatMap(segment => segment.kind === "commands" ? segment.items : []);
+  const searches = segments.reduce((total, segment) => total + (segment.kind === "webSearch" ? segment.items.length : 0), 0);
+  const stats = commands.length
+    ? getThreadCommandBlockDisplay({ items: getCommandBlockItems(commands, context), ...context }).summaryStats
+    : null;
+  const commandChips = COMMAND_CHIPS.flatMap(({ Icon, key, stats: statKeys, verb }) => {
+    const count = (stats ? statKeys.reduce((total, stat) => total + stats[stat], 0) : 0) + (key === "web" ? searches : 0);
+    return count ? [{ Icon, count, key, verb }] : [];
+  });
+  return [...fileChips(segments), ...commandChips];
+}

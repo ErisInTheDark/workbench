@@ -88,7 +88,7 @@ import ThreadMessageBoard from "./ThreadMessageBoard";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadEntryMotionController, { getProjectedEntryMotionIdentities } from "./ThreadEntryMotionController";
-import ThreadWorkedRunController from "./ThreadWorkedRunController";
+import ThreadActivityRunController from "./ThreadActivityRunController";
 import {
   ThreadScrollViewportContext,
   useThreadScrollViewportContext,
@@ -411,7 +411,7 @@ export default memo(function ThreadViewContent ({
     : viewInstanceKey;
   const entryMotionOwnerRef = useRef<{
     controller: ThreadEntryMotionController;
-    workedRunController: ThreadWorkedRunController;
+    activityRunController: ThreadActivityRunController;
     key: string;
     initialThreadId: string;
     threadId: string;
@@ -427,7 +427,7 @@ export default memo(function ThreadViewContent ({
   if (entryMotionOwnerRef.current?.key !== entryMotionOwnerKey) {
     entryMotionOwnerRef.current = {
       controller: new ThreadEntryMotionController(motionTurns ? motionIdentities(motionTurns) : undefined),
-      workedRunController: new ThreadWorkedRunController(),
+      activityRunController: new ThreadActivityRunController(),
       key: entryMotionOwnerKey,
       initialThreadId: activeThreadId,
       threadId: activeThreadId,
@@ -443,12 +443,12 @@ export default memo(function ThreadViewContent ({
   }
   if (entryMotionOwnerRef.current.seeded) entryMotionOwnerRef.current.admitted = motionTurns;
   const entryMotionController = entryMotionOwnerRef.current.controller;
-  const workedRunController = entryMotionOwnerRef.current.workedRunController;
+  const activityRunController = entryMotionOwnerRef.current.activityRunController;
   const entryMotionContext = useMemo(() => ({
     ...threadScrollViewport,
+    activityRuns: activityRunController,
     entryMotion: entryMotionController,
-    workedRunState: workedRunController,
-  }), [entryMotionController, threadScrollViewport, workedRunController]);
+  }), [activityRunController, entryMotionController, threadScrollViewport]);
   const activeProvider = activeThread?.harness ?? thread.harness;
   const activeSidebarEntry = active.entry;
   const activeThreadSnoozed = activeSidebarEntry?.entryKind === "thread"

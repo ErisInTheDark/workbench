@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows, growing back-to-back native edits or identical failed attempts on one file into one row.
+ * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows, growing back-to-back edits of one kind or identical native failed attempts on one file into one row.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes, marking binary diffs without previews.
  * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
  * - ThreadFileChangeListChange: reusable file-change row input.
  * - getThreadFileChangeTotals: cumulative counts using the same precedence as file rows.
+ * - ThreadFileChangeEntry/getThreadFileChangeEntries: per-file change kind and counts for summaries.
  * - getStitchedNativeRowChange: one row input from stitched native pieces: accumulated counts and hunks for applied runs, attempt count and latest attempt for failure runs, failure-only evidence.
  */
 "use client";
@@ -33,7 +34,9 @@ import { ThreadEntryMotion } from "./thread-scroll-viewport-context";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadDurationText from "./ThreadDurationText";
 import { formatToolCallOutput } from "./format-thread-tool-call";
-import { stitchFileOperationRows, type StitchedNativeFilePiece, type StitchedNativeFileRow } from "./thread-file-change-stitching";
+import {
+  stitchFileOperationRows, type StitchedCanonicalFileRow, type StitchedNativeFilePiece, type StitchedNativeFileRow,
+} from "./thread-file-change-stitching";
 
 type FileChangeItem = WorkbenchFileChangeItem;
 type NativeFileItem = NativeFileOperationItem;
@@ -58,6 +61,29 @@ export function getThreadFileChangeTotals(items: readonly FileOperationItem[]) {
     }
     return total;
   }, { additions: 0, deletions: 0 });
+}
+
+export interface ThreadFileChangeEntry {
+  additions: number;
+  deletions: number;
+  kind: FileUpdateChange["kind"]["type"];
+  path: string;
+}
+
+/** One entry per changed file per operation, counted with the same precedence as file rows; failed operations change nothing. */
+export function getThreadFileChangeEntries(items: readonly FileOperationItem[]): ThreadFileChangeEntry[] {
+  return items.flatMap(item => {
+    if (item.type !== "fileChange") {
+      if (getNativeFileOperationOutcome(item) === "failed") return [];
+      return getNativeFileChanges(item).map(({ change }) => ({ ...countsOf(parseFileChangeDiff(change)), kind: change.kind.type, path: change.path }));
+    }
+    if (item.status === "failed" || item.status === "declined") return [];
+    return item.changes.map(change => ({ ...getFileChangeCounts(item, change), kind: change.kind.type, path: change.path }));
+  });
+}
+
+function countsOf({ additions, deletions }: { additions: number; deletions: number }) {
+  return { additions, deletions };
 }
 
 function getFileChangeCounts(item: FileChangeItem, change: FileUpdateChange) {
@@ -548,6 +574,16 @@ function getNativePieceLabel({ entry, item }: StitchedNativeFilePiece) {
   });
 }
 
+function mergeParsedDiffs(diffs: ParsedUnifiedDiff[]): ParsedUnifiedDiff {
+  return diffs.length === 1 ? diffs[0]! : {
+    additions: diffs.reduce((total, part) => total + part.additions, 0),
+    binary: diffs.some(part => part.binary),
+    deletions: diffs.reduce((total, part) => total + part.deletions, 0),
+    headers: diffs[0]!.headers,
+    hunks: diffs.flatMap(part => part.hunks),
+  };
+}
+
 /**
  * One row for back-to-back pieces, keyed by the first piece so it grows in place.
  * Applied runs accumulate counts and hunks in order; failure runs count attempts and show only the latest attempted diff.
@@ -559,13 +595,7 @@ export function getStitchedNativeRowChange({ pieces }: StitchedNativeFileRow): T
   const latestAttempt = [...pieces].reverse().find(piece => piece.entry.change.diff) ?? pieces.at(-1)!;
   const shown: StitchedNativeFileRow["pieces"] = getNativeFileOperationOutcome(anchor.item) === "failed" ? [latestAttempt] : pieces;
   const diffs = shown.map(piece => parseFileChangeDiff(piece.entry.change));
-  const diff: ParsedUnifiedDiff = diffs.length === 1 ? diffs[0]! : {
-    additions: diffs.reduce((total, part) => total + part.additions, 0),
-    binary: diffs.some(part => part.binary),
-    deletions: diffs.reduce((total, part) => total + part.deletions, 0),
-    headers: diffs[0]!.headers,
-    hunks: diffs.flatMap(part => part.hunks),
-  };
+  const diff = mergeParsedDiffs(diffs);
   const summaryTotals = shown.reduce((total, piece, index) => {
     const counts = piece.entry.summaryTotals ?? diffs[index]!;
     return { additions: total.additions + counts.additions, deletions: total.deletions + counts.deletions };
@@ -587,6 +617,26 @@ export function getStitchedNativeRowChange({ pieces }: StitchedNativeFileRow): T
     sourceItemId: anchor.entry.sourceItemId,
     staticMarker: true,
     summaryTotals,
+  };
+}
+
+/** One row for back-to-back applied changes of one kind on one file, keyed by the first so it grows in place. */
+function getStitchedCanonicalRowChange({ pieces }: StitchedCanonicalFileRow): ThreadFileChangeListChange {
+  const [{ change, item, sourceChangeIndex }] = pieces;
+  const analysis = item.status !== "completed" && item.workbenchFailureKind !== "unclaimed" ? change.workbenchAnalysis : undefined;
+  return {
+    change,
+    danger: analysis ? analysis.outcome !== "present" && analysis.outcome !== "copied" : item.status === "failed" || item.status === "declined",
+    detailsAvailable: item.status === "completed" || Boolean(analysis),
+    diff: pieces.length > 1 ? mergeParsedDiffs(pieces.map(piece => parseFileChangeDiff(piece.change))) : undefined,
+    presentationLabel: getFileChangeLifecycleLabel(change, item, analysis),
+    sourceChangeIndex,
+    sourceItemId: item.id,
+    staticMarker: true,
+    summaryTotals: pieces.reduce((total, piece) => {
+      const counts = getFileChangeCounts(piece.item, piece.change);
+      return { additions: total.additions + counts.additions, deletions: total.deletions + counts.deletions };
+    }, { additions: 0, deletions: 0 }),
   };
 }
 
@@ -644,19 +694,7 @@ export default function ThreadFileChangeItem ({
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
             animateEntries={animateEntries}
-            changes={item.changes.map((change, sourceChangeIndex) => {
-              const analysis = item.status !== "completed" && item.workbenchFailureKind !== "unclaimed" ? change.workbenchAnalysis : undefined;
-              return {
-                change,
-                danger: analysis ? analysis.outcome !== "present" && analysis.outcome !== "copied" : item.status === "failed" || item.status === "declined",
-                detailsAvailable: item.status === "completed" || Boolean(analysis),
-                presentationLabel: getFileChangeLifecycleLabel(change, item, analysis),
-                sourceChangeIndex,
-                sourceItemId: item.id,
-                staticMarker: true,
-                summaryTotals: getFileChangeCounts(item, change),
-              };
-            })}
+            changes={group.rows.map(getStitchedCanonicalRowChange)}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}

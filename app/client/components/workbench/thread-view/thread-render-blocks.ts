@@ -1,18 +1,17 @@
 /*
  * Exports:
- * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds: shared render-plan shapes.
+ * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds/ActivitySegment: shared render-plan shapes.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
  * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
- * - buildRenderableBlocks: group visible provider items, preserve wait folds, then give qualifying subagent coordination one outer render block.
+ * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context), preserve wait folds, then give qualifying subagent coordination one outer render block.
  * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
  * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
  * - isHiddenCommandExecution/hasReasoningSteps: shared visibility decisions.
  * - CommandSequenceRenderSegment/buildCommandSequenceRenderSegments: final command presentation groups.
  * - isBrowseCommandItem: identify commands rendered separately as Browse requests.
- * - getWorkedBlockRows: split independently rendered work rows and identify protected content.
  * - getRenderableBlockItems/getRenderableBlockKey: identify grouped render rows.
- * - reuseRenderableBlocks/hasSameBlockTimeline: retain unchanged rows across SQL item arrivals.
+ * - reuseRenderableBlocks/hasSameBlockTimeline: retain unchanged rows across transcript item arrivals.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -77,7 +76,16 @@ export interface IncomingAgentMessageRun {
   messages: [WorkbenchAgentMessage, ...WorkbenchAgentMessage[]];
 }
 export type AgentCommentaryItem = Extract<ThreadItem, { type: "agentMessage" }>;
+type FileOperationBlockItem = Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" | "mcpToolCall" }>;
+/** One group inside an activity run: a reasoning step, consecutive plain commands, consecutive file changes, or web searches. */
+export type ActivitySegment =
+  | { kind: "reasoning"; item: Extract<ThreadItem, { type: "reasoning" }> }
+  | { kind: "commands"; items: CommandSequenceItem[] }
+  | { kind: "files"; items: FileOperationBlockItem[] }
+  | { kind: "webSearch"; items: Extract<ThreadItem, { type: "webSearch" }>[] };
 export type ThreadRenderableBlock =
+  /** Consecutive work (reasoning, plain commands, file changes, searches) shown as one summary that expands into its steps. */
+  | { kind: "activityRun"; items: ThreadItem[]; segments: ActivitySegment[] }
   | { kind: "agentMessageSequence"; items: IncomingAgentMessageItem[]; state: "delivered" | "held" }
   /** Consecutive non-final agent messages, which share copy runs. */
   | { kind: "agentCommentarySequence"; items: AgentCommentaryItem[] }
@@ -98,7 +106,7 @@ export type ThreadRenderableBlock =
     waits: SubagentWaitItem[];
   }
   | { kind: "commandSequence"; items: CommandSequenceItem[] }
-  | { kind: "fileChangeSequence"; items: Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" | "mcpToolCall" }>[] }
+  | { kind: "fileChangeSequence"; items: FileOperationBlockItem[] }
   | { kind: "reasoningSequence"; items: Extract<ThreadItem, { type: "reasoning" }>[] }
   | { kind: "userMessageSequence"; items: UserMessageItem[]; state: WorkbenchInputState["status"] }
   | { kind: "webSearchSequence"; items: Extract<ThreadItem, { type: "webSearch" }>[] }
@@ -152,6 +160,11 @@ export function hasSameBlockTimeline(
     const after = findWorkbenchThreadItemTimelineEntry(item.id, right);
     return before === after || areDeeplyEqual(before, after);
   });
+}
+
+function isPatchRecoveryOutput(item: Extract<ThreadItem, { type: "functionCallOutput" }>) {
+  const output = readWorkbenchToolOutput(item);
+  return output?.namespace === "workbench" && output.name === "patch_recovery";
 }
 
 export function isHiddenCommandExecution(command: string) {
@@ -443,6 +456,8 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
   for (const item of items) {
     if (item.type === "plan") continue;
     if (hidden.itemIds?.has(item.id)) continue;
+    // Patch recovery context is for the agent; the user already sees the failed patch it explains.
+    if (item.type === "functionCallOutput" && isPatchRecoveryOutput(item)) continue;
     if (isAlreadyMatchingTaskTitle(item, fallbackCwd)) continue;
     if (item.type === "userMessage" && !unwrapWorkbenchSteerDisplayInput(item.content).length) continue;
     const text = item.type === "agentMessage" ? item.text
@@ -646,56 +661,3 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
   return segments;
 }
 
-export function getWorkedBlockRows(block: ThreadRenderableBlock, context: CommandContext = {}): Array<{ block: ThreadRenderableBlock; eligible: boolean }> {
-  if (block.kind !== "commandSequence") {
-    // Exchanges hold delivered messages, which never hide inside a worked summary.
-    if (block.kind === "userMessageSequence" || block.kind === "agentMessageSequence" || block.kind === "agentCommentarySequence"
-      || block.kind === "subagentWaitExchange" || block.kind === "subagentCoordination") {
-      return [{ block, eligible: false }];
-    }
-    if (block.kind === "item" && block.item.type === "functionCallOutput") {
-      const output = readWorkbenchToolOutput(block.item);
-      if (output?.namespace === "workbench" && output.name === "patch_recovery") return [];
-      return [{ block, eligible: Boolean(output && !(output.namespace === "workbench" && output.name === "agent_message")) }];
-    }
-    // Narrative and unclassified interaction payloads are boundaries, never hidden by inference.
-    const eligible = block.kind !== "item" || (block.item.type === "mcpToolCall" && (() => {
-      const route = getWorkbenchMcpCommandRoute({ argumentsValue: block.item.arguments, server: block.item.server, tool: block.item.tool });
-      if (route?.kind !== "specialized") return false;
-      if (route.operation.kind === "gitArc") return route.operation.operation.action !== "propose";
-      return route.operation.kind === "gitArcWait" || route.operation.kind === "threadRecall"
-        || (route.operation.kind === "subagent" && route.operation.operation.action !== "create");
-    })());
-    return [{ block, eligible }];
-  }
-  const segments = buildCommandSequenceRenderSegments({ items: block.items, ...context });
-  const standalone = segments.some(segment => segment.kind !== "commands");
-  if (!standalone) {
-    if (block.items.length > 1 && block.items.every(item => isBrowseCommandItem({ item, ...context }))) {
-      return block.items.map(item => ({ block: { kind: "commandSequence", items: [item] }, eligible: true }));
-    }
-    return [{ block, eligible: true }];
-  }
-  return segments.flatMap<{ block: ThreadRenderableBlock; eligible: boolean }>(segment => {
-    if (segment.kind === "approval") return [{ block: { kind: "commandSequence" as const, items: segment.items }, eligible: true }];
-    if (segment.kind === "commands") {
-      return segment.items.length > 1 && segment.items.every(item => isBrowseCommandItem({ item, ...context }))
-        ? segment.items.map(item => ({ block: { kind: "commandSequence" as const, items: [item] }, eligible: true }))
-        : [{ block: { kind: "commandSequence" as const, items: segment.items }, eligible: true }];
-    }
-    if (segment.kind === "subagentWait") {
-      return [{ block: { kind: "commandSequence" as const, items: segment.group.entries.map(entry => entry.item) }, eligible: true }];
-    }
-    const display = segment.kind === "subagent" || segment.kind === "ownRow"
-      ? getThreadCommandDisplay({ command: segment.item.command, commandActions: segment.item.commandActions, cwd: segment.item.cwd, shell: segment.item.shell, ...context })
-      : null;
-    const subagent = segment.kind === "subagent" && display ? parseWorkbenchSubagentCommand(display.unwrappedCommand, segment.item.commandActions) : null;
-    return [{
-      block: { kind: "commandSequence" as const, items: [segment.item] },
-      eligible: (segment.kind === "gitArc" && segment.action !== "propose") || segment.kind === "threadContext"
-        || Boolean(subagent && subagent.action !== "create")
-        // Arc waits are routine work like other arc actions; todo, feedback and vis rows stay visible.
-        || (segment.kind === "ownRow" && isGitArcWaitMatcherClaim(display?.claimedBy)),
-    }];
-  });
-}

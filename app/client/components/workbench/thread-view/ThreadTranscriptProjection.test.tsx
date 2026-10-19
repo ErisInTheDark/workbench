@@ -21,6 +21,7 @@ import type {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
+import { ThreadTestOpenActivityRuns } from "./thread-view-test-render";
 import ThreadUserImage from "./ThreadUserImage";
 import { WorkbenchDaemonAssetOriginContext, getWorkbenchTranscriptAssetUrl } from "../WorkbenchWorkspaceContext";
 
@@ -63,7 +64,11 @@ function renderItems(
   items: ThreadItem[],
   hiddenReasoningStep: ThreadReasoningStepReference | null = null,
   durableItemCount = items.length,
-  { status = "completed", liveTurnId = null }: { status?: WorkbenchProjectedTranscriptTurn["status"]; liveTurnId?: string | null } = {},
+  { status = "completed", liveTurnId = null, openActivityRunIds = [] }: {
+    status?: WorkbenchProjectedTranscriptTurn["status"];
+    liveTurnId?: string | null;
+    openActivityRunIds?: readonly string[];
+  } = {},
 ) {
   const turns = [{ ...turn("turn", 0, items), status }];
   const projection: WorkbenchTranscriptProjection = {
@@ -97,6 +102,7 @@ function renderItems(
   };
   return renderToStaticMarkup(
     <WorkbenchDaemonAssetOriginContext.Provider value={{ kind: "source", daemonId: assetDaemonId }}>
+    <ThreadTestOpenActivityRuns runIds={openActivityRunIds}>
     <ThreadTranscriptProjection
       canLoadPreviousTurn={false}
       hiddenReasoningStep={hiddenReasoningStep}
@@ -112,6 +118,7 @@ function renderItems(
       subagents={[]}
       workspaceRoots={[]}
     />
+    </ThreadTestOpenActivityRuns>
     </WorkbenchDaemonAssetOriginContext.Provider>,
   );
 }
@@ -320,21 +327,23 @@ test("SQLite projection preserves canonical order with initially closed Browse d
   assert.equal((html.match(/data-thread-history-turn-id="turn-two"/gu) ?? []).length, 1);
 });
 
-test("SQLite normal projection keeps commands closed and opens latest reasoning", () => {
+test("SQLite normal projection keeps command runs closed and opens latest reasoning within its run", () => {
   const commandHtml = renderItems([
     command("one", "alpha --one"),
     command("two", "beta --two"),
   ], null, 1);
   const commandText = commandHtml.replace(/<[^>]+>/gu, "");
-  assert.match(commandText, /Ran 2 commands/u);
-  assert.doesNotMatch(commandHtml, /<details[^>]*\bopen=/u);
+  assert.match(commandText, /2ran/u);
+  assert.match(commandHtml, /aria-expanded="false"/u);
+  assert.doesNotMatch(commandText, /alpha --one/u);
 
+  const openRun = { openActivityRunIds: ["reasoning"] };
   const detailedHtml = renderItems([{
     content: [],
     id: "reasoning",
     summary: ["Careful title\nUseful description."],
     type: "reasoning",
-  }]);
+  }], null, 1, openRun);
   assert.equal((detailedHtml.match(/Careful title/gu) ?? []).length, 1);
   assert.match(detailedHtml, /<details[^>]*\bopen=/u);
   assert.match(detailedHtml, /<details/u);
@@ -344,7 +353,7 @@ test("SQLite normal projection keeps commands closed and opens latest reasoning"
     id: "reasoning",
     summary: ["Static title"],
     type: "reasoning",
-  }]);
+  }], null, 1, openRun);
   assert.match(staticHtml, /Reasoned:\s*<\/span><span[^>]*>Static title/u);
   assert.doesNotMatch(staticHtml, /<details/u);
 });
@@ -368,7 +377,7 @@ test("SQLite normal projection removes only the newest live reasoning section", 
     itemId: "reasoning",
     sectionIndex: 1,
     source: "summary",
-  });
+  }, 1, { openActivityRunIds: ["reasoning"] });
 
   assert.match(html, /Earlier title/u);
   assert.match(html, /<details[^>]*\bopen=/u);

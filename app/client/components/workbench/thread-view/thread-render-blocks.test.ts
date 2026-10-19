@@ -13,10 +13,9 @@ import {
   createWorkbenchUnfinishedTurnInput,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import {
-  buildCommandSequenceRenderSegments, buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, groupIncomingAgentMessageRuns,
+  buildCommandSequenceRenderSegments, buildRenderableBlocks, getRenderableBlockItems, groupIncomingAgentMessageRuns,
   reuseRenderableBlocks, hasSameBlockTimeline, isHiddenCommandExecution, type CommandItem,
 } from "./thread-render-blocks";
-import { partitionWorkedRows } from "./thread-worked-run";
 
 function command(id: string, text = "pwd"): CommandItem {
   return { id, type: "commandExecution", command: text, commandActions: [], cwd: "C:/repo", durationMs: 1,
@@ -47,7 +46,6 @@ function user(id: string): Extract<ThreadItem, { type: "userMessage" }> {
 function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted") {
   return withWorkbenchInputState(user(id), { kind: "steer", status });
 }
-const rows = (items: ThreadItem[]) => buildRenderableBlocks(items).flatMap(block => getWorkedBlockRows(block));
 
 test("hidden Workbench transport creates no render block without hiding ordinary tag mentions", () => {
   const activated = createWorkbenchActivatedSkillsInput('<skill filename="example">Follow the workflow.</skill>');
@@ -124,8 +122,6 @@ test("provider-native read, search, and list calls join adjacent commands", () =
     ["item", ["mystery"]],
     ["commandSequence", ["two"]],
   ]);
-  assert.deepEqual(rows([native("only", "claude", "Read", { file_path: "src/a.ts" })]).map(row => row.eligible), [true],
-    "native reads collapse with worked runs like ordinary commands");
 });
 
 test("captured children compact only their exact execute wrapper without deleting its evidence", () => {
@@ -245,7 +241,6 @@ test("settled MCP waits ping-ponging with delivered messages fold into one excha
   assert.ok(exchange.kind === "subagentWaitExchange");
   assert.deepEqual(exchange.targets.map(target => target.value), ["Rose", "Iris", "Daisy"]);
   assert.deepEqual(exchange.messages.map(item => item.id), ["m1", "m2", "m3"]);
-  assert.deepEqual(getWorkedBlockRows(exchange).map(row => row.eligible), [false], "exchanged messages never hide in worked runs");
 });
 
 test("CLI waits fold only from blocks that are nothing but waits, and held messages never join an exchange", () => {
@@ -287,7 +282,6 @@ test("two-way messaging gets priority over existing wait exchanges and absorbs a
     ["item", ["outgoing-iris"]],
     ["item", ["live"]],
   ]);
-  assert.deepEqual(getWorkedBlockRows(coordination).map(row => row.eligible), [false]);
 });
 
 test("three one-way coordination items fold while shorter and held-message runs keep their render paths", () => {
@@ -403,49 +397,6 @@ test("ordinary messages and non-message items remain steer grouping boundaries",
   )), ["before", "initial", "after-a", ["boundary"], "after-b"]);
 });
 
-test("merged commands and reasoning count once each and hidden calls count zero", () => {
-  const items: ThreadItem[] = [
-    command("one"), command("two"),
-    { type: "reasoning", id: "reason-a", summary: ["one"], content: [] },
-    { type: "reasoning", id: "reason-b", summary: ["two"], content: [] },
-    mcp("hidden", "request_user_input", {}),
-    command("three"), command("four"),
-  ];
-  assert.equal(rows(items).length, 3);
-  assert.deepEqual(partitionWorkedRows(rows(items)).map(group => group.length), [3]);
-});
-
-test("standalone Git rows count separately while CLI task actions split runs", () => {
-  const result = rows([
-    command("one"), command("two"),
-    command("git", "wb git arc scope"),
-    command("title", 'wb task set --title "new title"'),
-    command("status", "wb task completed"),
-    command("three"),
-  ]);
-  assert.equal(result.length, 5);
-  assert.deepEqual(result.map(row => row.eligible), [true, true, false, false, true]);
-  assert.deepEqual(partitionWorkedRows(result).map(group => group.length), [2, 1, 1, 1]);
-});
-
-test("proposal rows remain visible boundaries while other Git arc work stays collapsible", () => {
-  assert.deepEqual(
-    rows([command("proposal-cli", 'wb git arc propose --title "Keep this visible"')]).map(row => row.eligible),
-    [false],
-  );
-  assert.deepEqual(
-    rows([mcp("proposal-mcp", "git_arc_propose", { title: "Keep this visible" })]).map(row => row.eligible),
-    [false],
-  );
-  assert.deepEqual(
-    rows([
-      command("scope-cli", "wb git arc scope"),
-      mcp("status-mcp", "git_arc_status", {}),
-    ]).map(row => row.eligible),
-    [true, true],
-  );
-});
-
 test("failed CLI task status calls keep their dedicated route and failure output", () => {
   for (const status of ["completed", "blocked"]) {
     const item = {
@@ -458,17 +409,6 @@ test("failed CLI task status calls keep their dedicated route and failure output
     assert.ok(segments[0] && "item" in segments[0]);
     assert.equal(segments[0].item, item);
   }
-});
-
-test("MCP task actions and outgoing thread messages remain boundaries", () => {
-  const result = rows([
-    command("before"),
-    mcp("title", "task_set", { title: "new" }),
-    mcp("status", "task_completed", {}),
-    mcp("global-message", "message", { threadId: "review-target", message: "hello" }),
-    command("after"),
-  ]);
-  assert.deepEqual(result.map(row => row.eligible), [true, false, false, false, true]);
 });
 
 test("already-matching task title sets stay in canonical items but leave no render block", () => {
@@ -484,18 +424,6 @@ test("already-matching task title sets stay in canonical items but leave no rend
   assert.deepEqual(rendered.flatMap(getRenderableBlockItems).map(item => item.id), [
     "before", "after", "cli-change", "mcp-change",
   ]);
-});
-
-test("conversation and unclassified interaction rows break work runs", () => {
-  const items: ThreadItem[] = [
-    { type: "userMessage", id: "user", clientId: null, content: [{ type: "text", text: "hello", text_elements: [] }] },
-    { type: "agentMessage", id: "assistant", text: "reply", phase: "commentary", memoryCitation: null, delivery: null, questions: null },
-    { type: "dynamicToolCall", id: "question", namespace: null, tool: "request_user_input", arguments: {},
-      contentItems: [], durationMs: null, status: "completed", success: true },
-  ];
-  for (const item of items) {
-    assert.deepEqual(rows([command("before"), item, command("after")]).map(row => row.eligible), [true, false, true]);
-  }
 });
 
 test("consecutive non-final agent messages share one commentary block until another row intervenes", () => {
@@ -524,43 +452,9 @@ test("every CLI command with a dedicated renderer stays visible", () => {
   }
 });
 
-test("dedicated rows no group label could name stand alone, while named vis checks still group", () => {
-  const result = rows([
-    command("before"),
-    command("todo", "wb todo --required -- fix it"),
-    command("start", "wb vis start mockups/a.tsx"),
-    command("feedback", 'wb feedback --channel wb --category waste --title "Noise" -- report'),
-    command("shot", "wb vis screenshot mockups/a.tsx"),
-    command("after"),
-    mcp("todo-mcp", "todo", { text: "from mcp" }),
-    command("wait", "wb git arc wait"),
-  ]);
-  assert.deepEqual(result.map(({ block, eligible }) => [getRenderableBlockItems(block).map(({ id }) => id), eligible]), [
-    [["before"], true],
-    [["todo"], false],
-    [["start"], false],
-    [["feedback"], false],
-    [["shot", "after"], true],
-    [["todo-mcp"], false],
-    [["wait"], true],
-  ]);
-});
-
 test("native plan items are excluded from render blocks", () => {
   const plan: ThreadItem = { type: "plan", id: "native-plan", text: "unsupported" };
   assert.deepEqual(buildRenderableBlocks([plan]), []);
-});
-
-test("subagent creation and incoming native messages cannot enter worked groups", () => {
-  const items: ThreadItem[] = [
-    command("create-cli", 'wb subagent create --profile luna --name luna --title task --message hello'),
-    command("global-message-cli", 'wb message --thread review-target --message hello'),
-    mcp("create-mcp", "subagent_create", { profileId: "luna", name: "luna", title: "task", message: "hello" }),
-    { id: "incoming", type: "functionCallOutput", namespace: "workbench", name: "agent_message", output: "incomplete message envelope" },
-  ];
-  for (const item of items) {
-    assert.deepEqual(rows([command("before"), item, command("after")]).map(row => row.eligible), [true, false, true]);
-  }
 });
 
 test("successful subagent creation contributes to a qualifying coordination run", () => {
