@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadMcpToolCallItem: render user-controlled MCP details with summary metadata, approval glyph, results, and errors; structured details replace the raw invocation unless the call failed.
+ * - default ThreadMcpToolCallItem: one MCP call as a step row (approval glyph, summary, trailing outcome and duration) opening onto results and errors; structured details replace the raw invocation unless the call failed.
  */
 "use client";
 
@@ -14,8 +14,9 @@ import {
   type WorkbenchCommandRoute,
 } from "../../../workbench/thread/thread-command-matchers";
 import ThreadDurationText from "./ThreadDurationText";
-import Disclosure from "../../ui/Disclosure";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadSummaryText from "./ThreadSummaryText";
+import { getCommandIcon } from "./thread-activity-chips";
 import { ThreadHydratedToolCallDetails } from "./ThreadToolCallDetails";
 import { formatMcpToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
@@ -58,63 +59,32 @@ export default function ThreadMcpToolCallItem ({
   projectId?: string | null;
   route: WorkbenchCommandRoute | null;
 }) {
-  const metaParts = [];
   const commandDisplay = getWorkbenchCommandRouteSummaryDisplay(route);
   const outcome: ThreadCommandExecutionOutcome = item.status === "inProgress"
     ? "inProgress"
     : item.status === "failed" || Boolean(item.error) ? "failed" : "completed";
   const outcomeDisplay = commandDisplay ? getThreadCommandOutcomeDisplay(commandDisplay, outcome) : null;
-
-  // A live call already reads as ongoing in its summary; only settled non-success outcomes need naming.
-  if (item.status !== "completed" && item.status !== "inProgress") {
-    metaParts.push(
-      <ThreadSummaryText
-        key={`${item.id}:status`}
-        text={humanizeThreadLabel(item.status)}
-      />,
-    );
-  }
-
-  if (durationMs !== null) {
-    metaParts.push(
-      <ThreadDurationText
-        key={`${item.id}:duration`}
-        durationMs={durationMs}
-      />,
-    );
-  }
+  const Icon = getCommandIcon(outcomeDisplay?.summaryStats);
 
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 space-y-3 pl-6"
-      defaultOpen={false}
-      summary={(
-        <>
-          {outcomeDisplay ? (
-            <ThreadCommandSummary approval={approval} display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
-          ) : (
-            <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.45rem]">
-              {approval ? <ThreadApprovalGlyph state={approval} /> : null}
-              <ThreadSummaryText text="MCP" />
-              <code className={INLINE_CODE_CLASS}>{item.server}</code>
-              <ThreadSummaryText text="/" />
-              <code className={INLINE_CODE_CLASS}>{item.tool}</code>
-            </span>
-          )}
-          {metaParts.length ? (
-            <span className="ml-2 text-[0.78em] text-fg/muted">
-              {metaParts.map((part, index) => (
-                <span key={`${item.id}:meta:${index}`}>
-                  {index ? <span className="text-fg/muted"> | </span> : null}
-                  {part}
-                </span>
-              ))}
-            </span>
-          ) : null}
-        </>
+    <ThreadStepRow
+      icon={<Icon size={16} />}
+      meta={[
+        // A live call already reads as ongoing in its summary; only settled non-success outcomes need naming.
+        item.status !== "completed" && item.status !== "inProgress" ? <ThreadSummaryText text={humanizeThreadLabel(item.status)} /> : null,
+        durationMs !== null ? <ThreadDurationText durationMs={durationMs} /> : null,
+      ]}
+      summary={outcomeDisplay ? (
+        <ThreadCommandSummary approval={approval} display={outcomeDisplay} line projectFilePaths={projectFilePaths} projectId={projectId} />
+      ) : (
+        <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.45rem] overflow-hidden">
+          {approval ? <ThreadApprovalGlyph state={approval} /> : null}
+          <ThreadSummaryText text="MCP" />
+          <code className={INLINE_CODE_CLASS}>{item.server}</code>
+          <ThreadSummaryText text="/" />
+          <code className={INLINE_CODE_CLASS}>{item.tool}</code>
+        </span>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       renderContent={() => (
       <>
         {item.mcpAppResourceUri ? (

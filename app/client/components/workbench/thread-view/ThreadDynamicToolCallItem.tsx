@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadDynamicToolCallItem: render generic tool calls, Workbench questionnaire history and MCP tool enable decisions.
+ * - default ThreadDynamicToolCallItem: render generic tool calls as step rows, Workbench questionnaire history and MCP tool enable decisions.
  */
 "use client";
 
@@ -27,8 +27,11 @@ import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { ThreadHydratedToolCallDetails } from "./ThreadToolCallDetails";
+import { getCommandIcon } from "./thread-activity-chips";
+import { CodeIcon } from "../workbench-icons";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import { getNativeToolDisplay, isNativeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadCommandSummary } from "./thread-view-primitives";
@@ -328,28 +331,12 @@ function ThreadQuestionnaireHistorySummary ({
   );
 }
 
-function buildMetaParts (item: DynamicToolCallItem) {
-  const metaParts: ReactNode[] = [];
-
-  if (item.status !== "completed") {
-    metaParts.push(
-      <ThreadSummaryText
-        key={`${item.id}:status`}
-        text={humanizeThreadLabel(item.status)}
-      />,
-    );
-  }
-
-  if (item.durationMs !== null) {
-    metaParts.push(
-      <ThreadDurationText
-        key={`${item.id}:duration`}
-        durationMs={item.durationMs}
-      />,
-    );
-  }
-
-  return metaParts;
+function buildMetaParts (item: DynamicToolCallItem): ReactNode[] {
+  return [
+    item.status !== "completed" ? <ThreadSummaryText text={humanizeThreadLabel(item.status)} /> : null,
+    item.durationMs !== null ? <ThreadDurationText durationMs={item.durationMs} /> : null,
+    item.resultExpiredAt ? "Result expired after 1 day." : null,
+  ];
 }
 
 function ThreadQuestionnaireToolCallItem ({
@@ -448,35 +435,19 @@ function ThreadGenericDynamicToolCallItem ({
   const showCodeDetails = paneCodeDetails ?? readGlobalWorkbenchSettings(state.records).threadCodeDetails;
   if (hasCapturedChildren && !showCodeDetails && outcome !== "failed") return null;
 
+  const Icon = hasCapturedChildren ? CodeIcon : getCommandIcon(outcomeDisplay?.summaryStats);
+
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 space-y-3 pl-6"
-      summary={(
-        <>
-          {hasCapturedChildren ? <ThreadSummaryText text="Code details" />
-            : outcomeDisplay ? <ThreadCommandSummary display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
-            : <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.45rem]">
-            <ThreadSummaryText text="Tool" />
-            {item.namespace ? <code className={INLINE_CODE_CLASS}>{item.namespace}</code> : null}
-            <code className={INLINE_CODE_CLASS}>{item.tool}</code>
-          </span>}
-          {metaParts.length ? (
-            <span className="ml-2 text-[0.78em] text-fg/muted">
-              {metaParts.map((part, index) => (
-                <span key={`${item.id}:meta:${index}`}>
-                  {index ? <span className="text-fg/muted"> | </span> : null}
-                  {part}
-                </span>
-              ))}
-            </span>
-          ) : null}
-          {item.resultExpiredAt ? (
-            <span className="ml-2 text-[0.78em] text-fg/muted">Result expired after 1 day.</span>
-          ) : null}
-        </>
-      )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+    <ThreadStepRow
+      icon={<Icon size={16} />}
+      meta={metaParts}
+      summary={hasCapturedChildren ? <ThreadSummaryText text="Code details" />
+        : outcomeDisplay ? <ThreadCommandSummary display={outcomeDisplay} line projectFilePaths={projectFilePaths} projectId={projectId} />
+        : <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.45rem] overflow-hidden">
+          <ThreadSummaryText text="Tool" />
+          {item.namespace ? <code className={INLINE_CODE_CLASS}>{item.namespace}</code> : null}
+          <code className={INLINE_CODE_CLASS}>{item.tool}</code>
+        </span>}
       renderContent={() => <ThreadHydratedToolCallDetails
         invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
         item={item}

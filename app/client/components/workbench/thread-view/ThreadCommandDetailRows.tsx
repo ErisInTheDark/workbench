@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default ThreadCommandDetailRows: render the shared matcher detail rows, nested or as full command rows with an icon each; rows marked default-open show their content.
+ * - default ThreadCommandDetailRows: render the shared matcher detail rows, nested or as full step rows with an icon each (answers and scripts open beneath); rows marked default-open show their content.
  */
 "use client";
 import type { ReactNode } from "react";
+import ThreadStepRow from "./ThreadStepRow";
 import type { ThreadCommandDetailRow, ThreadCommandDetailTarget } from "../../../workbench/thread/thread-command-matchers";
 import { createEmptyCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
@@ -25,15 +26,16 @@ function formatThreadDetailUrlLabel(url: string) {
   } catch { return truncateThreadText(url, 96); }
 }
 
-function ThreadCommandDetailTargetView({ target }: { target: ThreadCommandDetailTarget }) {
+function ThreadCommandDetailTargetView({ line, target }: { line: boolean; target: ThreadCommandDetailTarget }) {
+  const fit = line ? "truncate" : "break-all";
   if (target.kind === "url") return (
-    <a className="min-w-0 break-all text-accent underline-offset-3 hover:underline focus-visible:underline focus-visible:outline-none"
+    <a className={`min-w-0 ${fit} text-accent underline-offset-3 hover:underline focus-visible:underline focus-visible:outline-none`}
       href={target.text} rel="noreferrer" target="_blank" title={target.text}>{formatThreadDetailUrlLabel(target.text)}</a>
   );
   if (target.kind === "code") return (
     <code className={`${THREAD_DETAIL_INLINE_CODE_CLASS} inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom`} title={target.text}>{target.text}</code>
   );
-  return <span className="min-w-0 break-words font-medium text-text">{target.text}</span>;
+  return <span className={`min-w-0 ${line ? "truncate" : "break-words"} font-medium text-text`}>{target.text}</span>;
 }
 
 function ThreadCommandDetailMeta({ row }: { row: ThreadCommandDetailRow }) {
@@ -52,19 +54,24 @@ function ThreadCommandDetailMeta({ row }: { row: ThreadCommandDetailRow }) {
   );
 }
 
-function ThreadStructuredCommandDetailRow({ hideSharedContext, projectFilePaths, projectId, row }: {
-  hideSharedContext: boolean; projectFilePaths?: readonly string[]; projectId?: string | null; row: ThreadCommandDetailRow;
+function ThreadStructuredCommandDetailRow({ hideSharedContext, line = false, projectFilePaths, projectId, row }: {
+  hideSharedContext: boolean; line?: boolean; projectFilePaths?: readonly string[]; projectId?: string | null; row: ThreadCommandDetailRow;
 }) {
   if (!row.label && !row.target) return <ThreadCommandSummary display={{
     claimedBy: "command-detail-row", omitFromDisplay: false, ongoingSummaryParts: row.summaryParts,
     ongoingSummaryText: "", shell: null, showShell: false, summaryKind: "matched",
     summaryParts: row.summaryParts, summaryText: "",
     summaryStats: createEmptyCommandSummaryStats(),
-  }} projectFilePaths={projectFilePaths} projectId={projectId} />;
+  }} line={line} projectFilePaths={projectFilePaths} projectId={projectId} />;
   return (
-    <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-x-2 gap-y-1 align-bottom">
+    <span
+      className={`
+        inline-flex min-w-0 max-w-full items-baseline gap-x-2 gap-y-1 align-bottom
+        ${line ? "flex-nowrap overflow-hidden" : "flex-wrap"}
+      `}
+    >
       {row.label ? <span className="shrink-0 text-fg/muted">{row.label}</span> : null}
-      {row.target ? <ThreadCommandDetailTargetView target={row.target} /> : null}
+      {row.target ? <ThreadCommandDetailTargetView line={line} target={row.target} /> : null}
       {row.contextText && !hideSharedContext ? <span className="min-w-0 text-fg/muted">in <span className="font-medium text-text">{row.contextText}</span></span> : null}
       <ThreadCommandDetailMeta row={row} />
     </span>
@@ -84,11 +91,11 @@ function ThreadCommandDetailResultBlock({ row }: { row: ThreadCommandDetailRow }
   </div>;
 }
 
-function ThreadCommandDetailImageBlock({ row }: { row: ThreadCommandDetailRow }) {
+function ThreadCommandDetailImageBlock({ indent = true, row }: { indent?: boolean; row: ThreadCommandDetailRow }) {
   const imageUrls = [...(row.imageUrl ? [row.imageUrl] : []), ...(row.imageUrls ?? [])]
     .filter((imageUrl, index, values) => imageUrl && values.indexOf(imageUrl) === index);
   if (!imageUrls.length) return null;
-  return <div className="max-w-[28rem] space-y-2 pl-6 pt-1">
+  return <div className={`max-w-[28rem] space-y-2 ${indent ? "pl-6 pt-1" : ""}`}>
     {imageUrls.map((imageUrl, index) => <ThreadUserImage alt={`${row.label ?? "Browse"} screenshot`}
       className="max-w-[28rem]" key={`${row.id}:image:${index}:${imageUrl}`} src={imageUrl} />)}
   </div>;
@@ -107,27 +114,74 @@ function getDetailRowSummary(row: ThreadCommandDetailRow): ThreadCommandDetailRo
   };
 }
 
-/** `icon` presents rows as full command rows (command sizing, the icon leading each summary) instead of nested detail rows. */
+/** Page scripts show their code beneath the row; their summary only names the step. */
+function isScriptStep(row: ThreadCommandDetailRow) {
+  return (row.action === "eval" || row.action === "init-js") && row.target?.kind === "code";
+}
+
+/** A step row's line: label and target, with a failure still readable inline; answers and scripts open beneath it. */
+function getStepLine(row: ThreadCommandDetailRow): ThreadCommandDetailRow {
+  const opensResult = row.detailKind === "result";
+  return {
+    ...row,
+    detailKind: opensResult ? undefined : row.detailKind,
+    detailLabel: opensResult ? null : row.detailLabel,
+    detailText: opensResult ? null : row.detailText,
+    durationMs: null,
+    target: isScriptStep(row) || (row.label === "Wait" && row.durationMs !== null) ? null : row.target,
+  };
+}
+
+function ThreadStepDetail({ row }: { row: ThreadCommandDetailRow }) {
+  const result = row.detailKind === "result" && row.detailText?.trim() ? row.detailText : undefined;
+  const script = isScriptStep(row) ? row.target?.text ?? "" : null;
+  return <>
+    {script !== null ? <ThreadCodeDisplay header={<ThreadCommandHeader command={script} surface="framed" />}
+      output={result} preview previewHeight="10rem" variant="plain" />
+      : result ? <ThreadCodeDisplay output={result} preview previewHeight="10rem" variant="plain" /> : null}
+    <ThreadCommandDetailImageBlock indent={false} row={row} />
+  </>;
+}
+
+/** Each row a full step row: its icon, one line, its duration trailing. */
+function ThreadCommandStepRows({ icon, rows, projectFilePaths, projectId }: {
+  icon: (row: ThreadCommandDetailRow) => ReactNode;
+  rows: ThreadCommandDetailRow[]; projectFilePaths?: readonly string[]; projectId?: string | null;
+}) {
+  return <div>
+    {rows.map(row => {
+      const hasDetail = isScriptStep(row) || Boolean(row.detailKind === "result" && row.detailText?.trim())
+        || Boolean(row.imageUrl || row.imageUrls?.length);
+      const summary = <ThreadStructuredCommandDetailRow hideSharedContext={false} line projectFilePaths={projectFilePaths} projectId={projectId} row={getStepLine(row)} />;
+      const meta = [typeof row.durationMs === "number" ? <ThreadDurationText durationMs={row.durationMs} /> : null];
+      return <ThreadMeasuredContent key={row.id}>
+        {hasDetail ? <ThreadStepRow defaultOpen={row.defaultOpen ?? false} icon={icon(row)} meta={meta} summary={summary}>
+          <ThreadStepDetail row={row} />
+        </ThreadStepRow> : <ThreadStepRow icon={icon(row)} meta={meta} summary={summary} />}
+      </ThreadMeasuredContent>;
+    })}
+  </div>;
+}
+
+/** `icon` presents rows as full step rows instead of nested detail rows. */
 export default function ThreadCommandDetailRows({ icon, rows, projectFilePaths, projectId }: {
   icon?: (row: ThreadCommandDetailRow) => ReactNode;
   rows: ThreadCommandDetailRow[]; projectFilePaths?: readonly string[]; projectId?: string | null;
 }) {
   if (!rows.length) return null;
+  if (icon) return <ThreadCommandStepRows icon={icon} projectFilePaths={projectFilePaths} projectId={projectId} rows={rows} />;
   const contexts = Array.from(new Set(rows.map(row => row.contextText?.trim()).filter(Boolean)));
   const hideSharedContext = contexts.length === 1 && rows.length > 1;
-  const rowClassName = icon ? "py-2" : "py-1";
-  const summaryClassName = icon ? "text-[0.92em] leading-[1.6]" : "text-[0.9em] leading-[1.55]";
-  return <div className={icon ? "" : "space-y-0.5"}>
+  return <div className="space-y-0.5">
     {rows.map(row => {
-      const details = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />;
-      const summary = icon ? <span className="inline-flex min-w-0 max-w-full items-center gap-2">{icon(row)}{details}</span> : details;
+      const summary = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />;
       const hasExpandableContent = shouldRenderFramedDetailTarget(row) || Boolean(row.imageUrl || row.imageUrls?.length);
       return <ThreadMeasuredContent key={row.id}><div className="space-y-1">
-        {hasExpandableContent ? <Disclosure className={rowClassName} contentClassName="space-y-1" defaultOpen={row.defaultOpen ?? false}
-          leading={icon ? undefined : renderCommandDetailStateIcon(row)} leadingClassName={getCommandDetailStateMarkerClassName(row)}
-          leadingLabel={getCommandDetailStateLabel(row)} summary={summary} summaryClassName={summaryClassName}>
+        {hasExpandableContent ? <Disclosure className="py-1" contentClassName="space-y-1" defaultOpen={row.defaultOpen ?? false}
+          leading={renderCommandDetailStateIcon(row)} leadingClassName={getCommandDetailStateMarkerClassName(row)}
+          leadingLabel={getCommandDetailStateLabel(row)} summary={summary} summaryClassName="text-[0.9em] leading-[1.55]">
           <ThreadCommandDetailResultBlock row={row} /><ThreadCommandDetailImageBlock row={row} />
-        </Disclosure> : <DisclosureStaticRow className={rowClassName} summary={summary} summaryClassName={summaryClassName} />}
+        </Disclosure> : <DisclosureStaticRow className="py-1" summary={summary} summaryClassName="text-[0.9em] leading-[1.55]" />}
       </div></ThreadMeasuredContent>;
     })}
   </div>;

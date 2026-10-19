@@ -2,6 +2,7 @@
  * Exports:
  * - ActivityChip: one counted kind of work in an activity run summary, with change totals for file chips.
  * - CommandChipContext: matcher context for summarising commands.
+ * - getCommandIcon: one command step row's kind icon, from the same categories as the chips.
  * - getCommandBlockItems: command items in the shape the command matchers summarise.
  * - getCommandItemDisplay: one command's matcher display.
  * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then its matched command categories, with Browse screenshots beside browser steps.
@@ -59,6 +60,11 @@ const COMMAND_CHIPS: ReadonlyArray<{ Icon: ComponentType<IconProps>; key: string
   { Icon: BookSearchIcon, key: "web", stats: ["webRequests"], verb: "web" },
   { Icon: TerminalIcon, key: "ran", stats: ["otherCommands"], verb: "ran" },
 ];
+
+/** A command step row's kind icon: its first counted category, else a terminal. */
+export function getCommandIcon(stats: ThreadCommandSummaryStats | null | undefined): ComponentType<IconProps> {
+  return (stats && COMMAND_CHIPS.find(chip => chip.stats.some(stat => stats[stat] > 0))?.Icon) || TerminalIcon;
+}
 
 /** One command's matcher display, or null when no matcher describes it. */
 export function getCommandItemDisplay(item: CommandSequenceItem, context: CommandChipContext): ThreadCommandSummaryDisplay | null {

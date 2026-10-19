@@ -26,7 +26,6 @@ const ACTION_ICONS: Readonly<Record<string, ComponentType<IconProps>>> = {
   is: SearchIcon,
   key: KeyboardIcon,
   mouse: MousePointerIcon,
-  mouseClick: MousePointerIcon,
   open: AppWindowIcon,
   reload: RefreshCwIcon,
   screenshot: ImageIcon,
@@ -34,14 +33,15 @@ const ACTION_ICONS: Readonly<Record<string, ComponentType<IconProps>>> = {
   select: ListIcon,
   snapshot: EyeIcon,
   stop: SquareIcon,
+  touch: UnfoldVerticalIcon,
   type: KeyboardIcon,
   viewport: RulerIcon,
   wait: ClockIcon,
 };
 
 export default function ThreadBrowseStepIcon({ row }: { row: ThreadCommandDetailRow }) {
-  if (row.state === "inProgress") return <LoaderIcon className="shrink-0" size={14} />;
-  if (row.state === "failed") return <WarningIcon className="shrink-0 text-danger" size={14} />;
+  if (row.state === "inProgress") return <LoaderIcon className="shrink-0" />;
+  if (row.state === "failed") return <WarningIcon className="shrink-0 text-danger" size={16} />;
   const Icon = (row.action && ACTION_ICONS[row.action]) || AppWindowIcon;
-  return <Icon className={`shrink-0 ${row.state === "queued" ? "opacity-50" : ""}`} size={14} />;
+  return <Icon className={`shrink-0 ${row.state === "queued" ? "opacity-50" : ""}`} size={16} />;
 }

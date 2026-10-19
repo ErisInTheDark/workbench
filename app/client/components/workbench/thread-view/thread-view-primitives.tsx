@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadTextBlock: render wrapped plain thread text with optional monospace styling.
  * - ThreadApprovalGlyph: shield marking a tool's approval request or outcome.
- * - ThreadCommandSummary: render the compact command summary label used in thread turns, led by any approval glyph.
+ * - ThreadCommandSummary: render the compact command summary label used in thread turns, led by any approval glyph; `line` fits one step-row line.
  */
 "use client";
 
@@ -154,10 +154,13 @@ function splitCommandSummaryStages (parts: ThreadCommandDisplayPart[]) {
 
 function ThreadCommandStageParts ({
   parts,
+  plainCode,
   projectFilePaths,
   projectId,
 }: {
   parts: ThreadCommandDisplayPart[];
+  /** Code reads as plain monospace text instead of a chip, as an unmatched command's own text does. */
+  plainCode: boolean;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
 }) {
@@ -187,7 +190,9 @@ function ThreadCommandStageParts ({
           <ThreadCommandPattern key={`pattern:${part.pattern}:${index}`} pattern={part.pattern} syntax={part.syntax} />
         ) : (
           <span key={`text:${index}`} className="contents">
-            {part.variant === "code" ? (
+            {part.variant === "code" && plainCode ? (
+              <span className="min-w-0 truncate font-mono text-[0.92em] text-text" title={part.text}>{part.text}</span>
+            ) : part.variant === "code" ? (
               <ThreadInlineCode
                 className={part.clamp ? "inline-block shrink-1 min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom" : ""}
                 title={part.clamp ? part.text : undefined}
@@ -224,32 +229,42 @@ export function ThreadApprovalGlyph ({ state }: { state: ThreadItemApprovalState
   );
 }
 
+/** `line` fits the summary on one clipped step-row line: no shell label, and an unmatched command reads as its own text. */
 export function ThreadCommandSummary ({
   approval = null,
   display,
+  line = false,
   projectFilePaths,
   projectId,
 }: {
   approval?: ThreadItemApprovalState | null;
   display: ThreadCommandSummaryDisplay;
+  line?: boolean;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
 }) {
   const stages = splitCommandSummaryStages(display.summaryParts);
+  const plainCode = line && display.summaryKind === "raw";
+  const wrap = line ? "flex-nowrap overflow-hidden" : "flex-wrap";
 
   return (
-    <span className="inline-flex max-w-[calc(100%-0.6rem)] min-w-0 flex-wrap items-center gap-x-[0.45rem] gap-y-[0.3rem] align-bottom">
+    <span
+      className={`
+        inline-flex min-w-0 items-center gap-x-[0.45rem] gap-y-[0.3rem] align-bottom
+        ${line ? "max-w-full" : "max-w-[calc(100%-0.6rem)]"} ${wrap}
+      `}
+    >
       {approval ? <ThreadApprovalGlyph state={approval} /> : null}
-      {display.showShell && display.shell ? (
+      {!line && display.showShell && display.shell ? (
         <span className="shrink-0 font-mono text-[0.78em] leading-[1.6] text-fg/muted">
           {display.shell}:
         </span>
       ) : null}
-      <span className="inline-flex min-w-0 flex-wrap items-center gap-x-[0.45rem] gap-y-[0.3rem]">
+      <span className={`inline-flex min-w-0 items-center gap-x-[0.45rem] gap-y-[0.3rem] ${wrap}`}>
         {stages.map((stage, index) => (
           index === 0 ? (
             <span key={`stage:${index}`} className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
-              <ThreadCommandStageParts parts={stage} projectFilePaths={projectFilePaths} projectId={projectId} />
+              <ThreadCommandStageParts parts={stage} plainCode={plainCode} projectFilePaths={projectFilePaths} projectId={projectId} />
             </span>
           ) : (
             <span
@@ -258,7 +273,7 @@ export function ThreadCommandSummary ({
             >
               <ArrowRightIcon className="shrink-0 opacity-30" size={22} />
               <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
-                <ThreadCommandStageParts parts={stage} projectFilePaths={projectFilePaths} projectId={projectId} />
+                <ThreadCommandStageParts parts={stage} plainCode={plainCode} projectFilePaths={projectFilePaths} projectId={projectId} />
               </span>
             </span>
           )

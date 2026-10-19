@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows, growing back-to-back edits of one kind or identical native failed attempts on one file into one row.
+ * - default ThreadFileChangeItem: render adjacent native and canonical file operations as step rows, growing back-to-back edits of one kind or identical native failed attempts on one file into one row.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes, marking binary diffs without previews.
  * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
@@ -11,7 +11,7 @@
  */
 "use client";
 
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
@@ -26,9 +26,10 @@ import {
 } from "workbench-shared/workbench/thread/unified-diff";
 import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
-import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon } from "../workbench-icons";
+import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon, LoaderIcon, type IconProps } from "../workbench-icons";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
+import ThreadStepRow from "./ThreadStepRow";
 import { getThreadFileChangeMotionIdentity } from "./ThreadEntryMotionController";
 import { ThreadEntryMotion } from "./thread-scroll-viewport-context";
 import ThreadSummaryText from "./ThreadSummaryText";
@@ -132,7 +133,7 @@ export interface ThreadFileChangeListChange {
 interface FileChangePresentation {
   completedLabel: string;
   failureVerb: string;
-  icon: ReactNode;
+  Icon: ComponentType<IconProps>;
   inProgressLabel: string;
 }
 
@@ -182,14 +183,14 @@ function getFileChangePresentation (change: FileUpdateChange): FileChangePresent
       return {
         completedLabel: "Created",
         failureVerb: "create",
-        icon: <FileAddIcon size={20} />,
+        Icon: FileAddIcon,
         inProgressLabel: "Creating",
       };
     case "delete":
       return {
         completedLabel: "Deleted",
         failureVerb: "delete",
-        icon: <FileDeleteIcon size={20} />,
+        Icon: FileDeleteIcon,
         inProgressLabel: "Deleting",
       };
     case "update":
@@ -197,13 +198,13 @@ function getFileChangePresentation (change: FileUpdateChange): FileChangePresent
         ? {
           completedLabel: "Moved",
           failureVerb: "move",
-          icon: <FileMoveIcon size={20} />,
+          Icon: FileMoveIcon,
           inProgressLabel: "Moving",
         }
         : {
           completedLabel: "Edited",
           failureVerb: "edit",
-          icon: <FileUpdateIcon size={20} />,
+          Icon: FileUpdateIcon,
           inProgressLabel: "Editing",
         };
     default:
@@ -328,11 +329,14 @@ function ThreadFileChangeDetails ({
   );
 }
 
+/** `icon` leads the summary with the change's kind; step rows show it in their own icon slot instead. */
 function ThreadFileChangeSummary ({
+  icon = true,
   parsedChange,
   projectFilePaths,
   projectId,
 }: {
+  icon?: boolean;
   parsedChange: ParsedFileChange;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -344,9 +348,11 @@ function ThreadFileChangeSummary ({
       className="inline-flex min-w-0 max-w-full items-baseline gap-1"
       data-thread-file-change-row-mode={parsedChange.detailsAvailable ? "disclosure" : parsedChange.staticMarker ? "static" : "plain"}
     >
-      <span className={`inline-flex shrink-0 self-center -mt-0.5 ${parsedChange.danger ? "text-danger" : "text-fg/muted"}`} aria-hidden="true">
-        {presentation.icon}
-      </span>
+      {icon ? (
+        <span className={`inline-flex shrink-0 self-center -mt-0.5 ${parsedChange.danger ? "text-danger" : "text-fg/muted"}`} aria-hidden="true">
+          <presentation.Icon size={20} />
+        </span>
+      ) : null}
       <span className={parsedChange.danger ? "text-danger" : undefined}>
         <ThreadSummaryText text={parsedChange.presentationLabel ?? presentation.completedLabel} />
       </span>
@@ -400,6 +406,7 @@ export function ThreadFileChangeList ({
   );
 }
 
+/** `steps` draws each change as a work step row (kind icon, one line, tap for the diff), as the transcript's file steps do. */
 function ThreadFileChangeRows ({
   animateEntries = false,
   changes,
@@ -407,6 +414,7 @@ function ThreadFileChangeRows ({
   projectFilePaths,
   projectId,
   projectRootPath,
+  steps = false,
   workspaceRoots,
 }: {
   animateEntries?: boolean;
@@ -415,6 +423,7 @@ function ThreadFileChangeRows ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  steps?: boolean;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const parsedChanges: ParsedFileChange[] = changes.map((entry, index) => {
@@ -451,6 +460,25 @@ function ThreadFileChangeRows ({
       label={content}
       onChange={selection.onChange}
     /> : content;
+    if (steps) {
+      const presentation = getFileChangePresentation(change.change);
+      const stepSummary = <ThreadFileChangeSummary icon={false} parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />;
+      const iconClassName = change.danger ? "text-danger" : undefined;
+      return (
+        <ThreadEntryMotion enabled={animateEntries} identity={getThreadFileChangeMotionIdentity(change.sourceItemId, change.sourceChangeIndex)} key={key}>
+          {(animate) => (
+            <div className={animate ? `block ${enterMotionClassName}` : undefined}>
+              {change.detailsAvailable ? (
+                <ThreadStepRow icon={<presentation.Icon size={16} />} iconClassName={iconClassName} summary={stepSummary}>
+                  {changes[index].showDiff !== false ? <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} /> : null}
+                  {changes[index].details}
+                </ThreadStepRow>
+              ) : <ThreadStepRow icon={<presentation.Icon size={16} />} iconClassName={iconClassName} summary={stepSummary} />}
+            </div>
+          )}
+        </ThreadEntryMotion>
+      );
+    }
     return (
       <ThreadEntryMotion enabled={animateEntries} identity={getThreadFileChangeMotionIdentity(change.sourceItemId, change.sourceChangeIndex)} key={key}>
         {(animate) => change.detailsAvailable ? (
@@ -525,11 +553,10 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
   const danger = item.status === "failed" || item.status === "declined";
   return (
     <div data-thread-file-change-outcome={item.status}>
-      <DisclosureStaticRow
-        className="!py-0.5"
-        markerClassName={danger ? "text-danger" : undefined}
-        summary={<ThreadSummaryText text={label} />}
-        summaryClassName={`text-[0.92em] leading-[1.6] ${danger ? "text-danger" : "text-fg/muted"}`}
+      <ThreadStepRow
+        icon={item.status === "inProgress" ? <LoaderIcon /> : <FileUpdateIcon size={16} />}
+        iconClassName={danger ? "text-danger" : undefined}
+        summary={<span className={danger ? "text-danger" : undefined}><ThreadSummaryText text={label} /></span>}
       />
     </div>
   );
@@ -670,7 +697,7 @@ export default function ThreadFileChangeItem ({
                   animateEntries={animateEntries}
                   changes={rows.map(getStitchedNativeRowChange)}
                   projectFilePaths={projectFilePaths} projectId={projectId}
-                  projectRootPath={projectRootPath} workspaceRoots={workspaceRoots}
+                  projectRootPath={projectRootPath} steps workspaceRoots={workspaceRoots}
                 />
               </div>
             );
@@ -679,13 +706,13 @@ export default function ThreadFileChangeItem ({
           if (outcome === "inProgress") return null;
           const label = <ThreadSummaryText text={outcome === "failed" ? "Failed file operation" : "File operation completed"} />;
           const evidence = getNativeFileEvidence([item]);
+          const icon = <FileUpdateIcon size={16} />;
+          const iconClassName = outcome === "failed" ? "text-danger" : undefined;
           return (
             <div className="space-y-0.5" key={item.id}>
               {evidence ? (
-                <Disclosure summary={label}><NativeFileEvidence evidence={evidence} /></Disclosure>
-              ) : (
-                <DisclosureStaticRow className="!py-0.5" summary={label} summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted" />
-              )}
+                <ThreadStepRow icon={icon} iconClassName={iconClassName} summary={label}><NativeFileEvidence evidence={evidence} /></ThreadStepRow>
+              ) : <ThreadStepRow icon={icon} iconClassName={iconClassName} summary={label} />}
             </div>
           );
         }
@@ -698,6 +725,7 @@ export default function ThreadFileChangeItem ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            steps
             workspaceRoots={workspaceRoots}
           />
           {item.workbenchRecovery?.state === "failed" ? (

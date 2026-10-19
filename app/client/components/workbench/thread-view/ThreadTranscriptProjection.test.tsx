@@ -320,7 +320,8 @@ test("SQLite projection preserves canonical order with initially closed Browse d
 
   const firstIndex = html.indexOf("First SQLite item");
   const lastIndex = html.indexOf("Last SQLite item");
-  const browseIndex = html.indexOf("Attached to turn two");
+  // The recorded snapshot step renders in turn two; its answer opens beneath the row.
+  const browseIndex = html.indexOf(">Snapshot<");
   assert.notEqual(firstIndex, -1);
   assert.notEqual(browseIndex, -1);
   assert.notEqual(lastIndex, -1);

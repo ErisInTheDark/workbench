@@ -25,6 +25,7 @@ import {
 import { VirtualRepoWarmRequestSchema } from "workbench-shared/workbench/repo/virtual-repo-contract";
 import { mcpToolLabel } from "../../mcp-tool-label";
 
+import { readBrowseAction } from "./browse-actions";
 import { CommandMatcher } from "./core";
 import {
   createEmptyCommandSummaryStats,
@@ -404,33 +405,6 @@ function readFeedbackOperation(args: Record<string, JsonValue | undefined>): Wor
   };
 }
 
-function formatBrowseActionLabel(action: string) {
-  const labels: Record<string, string> = {
-    cleanup: "Clean up",
-    click: "Click",
-    doctor: "Diagnostics",
-    eval: "Evaluate",
-    fill: "Fill",
-    forget: "Forget persistent profile",
-    get: "Read",
-    highlight: "Highlight",
-    is: "Check",
-    key: "Press key",
-    open: "Open",
-    refs: "Refs",
-    reload: "Reload",
-    screenshot: "Screenshot",
-    select: "Select",
-    snapshot: "Snapshot",
-    status: "Status",
-    stop: "Stop",
-    type: "Type",
-    viewport: "Viewport",
-    wait: "Wait",
-  };
-  return labels[action] ?? action.replace(/[-_]+/gu, " ").replace(/^./u, (character) => character.toUpperCase());
-}
-
 /** BrowseMD runs page JavaScript from a fenced `js` or `init-js` block; its body is the step's target. */
 function readBrowseScriptFence(command: string) {
   const fence = /^```(init-js|js)[^\n]*\n([\s\S]*?)\n?```\s*$/u.exec(command.trim());
@@ -440,7 +414,7 @@ function readBrowseScriptFence(command: string) {
 function buildBrowseDetailRow(command: string, index: number): ThreadCommandDetailRow {
   const script = readBrowseScriptFence(command);
   if (script) {
-    const label = script.action === "eval" ? "Evaluate" : "Install page script";
+    const { label } = readBrowseAction(script.action);
     return { action: script.action, id: `browse-command-${index}`, label, summaryParts: [CommandMatcher.Text(label)], target: { kind: "code", text: script.body } };
   }
   const tokens = tokenizeCommand(command) ?? [command];
@@ -449,7 +423,7 @@ function buildBrowseDetailRow(command: string, index: number): ThreadCommandDeta
   const targetText = ["open", "click", "fill", "get", "is", "highlight", "select", "eval", "wait"].includes(action)
     ? args.filter((value) => !value.startsWith("--"))[0] ?? null
     : ["mouse", "move"].includes(action) ? args.join(" ") || null : null;
-  const label = formatBrowseActionLabel(action);
+  const { label } = readBrowseAction(action);
   return {
     action,
     id: `browse-command-${index}`,
@@ -498,7 +472,7 @@ function renderBrowse(name: WorkbenchCommandPresentationName, args: { [key: stri
   }
   if (name === "browse_raw") {
     const rawAction = readString(args.rawAction) ?? "raw";
-    const actionLabel = formatBrowseActionLabel(rawAction).toLowerCase();
+    const actionLabel = readBrowseAction(rawAction).label.toLowerCase();
     const summaryParts = actionTarget("Browse: ", actionLabel);
     const ongoingParts = actionTarget("Browsing: running ", actionLabel);
     appendBrowseSession(summaryParts, session);

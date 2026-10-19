@@ -18,19 +18,11 @@ import {
   type ThreadCommandDetailRow,
   type ThreadCommandSummaryDisplay,
 } from "../../../workbench/thread/thread-command-matchers";
+import { readBrowseAction } from "../../../workbench/thread/command-matchers/browse-actions";
 import { formatToolCallOutput } from "./format-thread-tool-call";
 import type { CommandSequenceItem } from "./thread-render-blocks";
 
 export type BrowseOutcome = "completed" | "failed" | "inProgress";
-
-function formatEntryActionLabel(action: string) {
-  return action
-    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
-    .replace(/[-_]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .replace(/^./u, (value) => value.toUpperCase()) || "BrowseMD";
-}
 
 function isEntryDetailATarget(entry: WorkbenchBrowseResultEntry) {
   return entry.detailKind === "text"
@@ -84,10 +76,10 @@ function getEntryRows(entries: readonly WorkbenchBrowseResultEntry[]): ThreadCom
   return [...entries]
     .sort((left, right) => left.actionIndex - right.actionIndex || left.recordedAt - right.recordedAt)
     .map((entry) => {
-      const label = formatEntryActionLabel(entry.action);
+      const { action, label } = readBrowseAction(entry.action);
       const detailIsTarget = isEntryDetailATarget(entry);
       return {
-        action: entry.action,
+        action,
         detailKind: entry.detailKind ?? undefined,
         detailLabel: entry.detailLabel ?? null,
         detailText: detailIsTarget ? null : entry.detailText ?? null,

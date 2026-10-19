@@ -176,7 +176,8 @@ import { getUserMessageCopyMarkdown } from "./bubble-copy";
 import ThreadBubbleCopyButton, { threadBubbleControlClassName } from "./ThreadBubbleCopyButton";
 import ThreadSteerDecoration from "./ThreadSteerDecoration";
 import ThreadItemActionsContext from "./ThreadItemActionsContext";
-import { RefreshCwIcon, StopIcon, XIcon } from "../workbench-icons";
+import { CheckIcon, LoaderIcon, RefreshCwIcon, StopIcon, TerminalIcon, XIcon } from "../workbench-icons";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadCommentaryActionRow from "./ThreadCommentaryActionRow";
 import { ThreadMarkdownSectionActionsProvider } from "./ThreadMarkdownSectionActions";
@@ -1286,13 +1287,10 @@ function ThreadReasoningSequence ({
     <span> steps</span>
   </>);
 
+  const thinking = isMostRecent && Boolean(presentationSource);
+  const icon = thinking ? <LoaderIcon /> : <CheckIcon size={16} />;
   if (onlyStep && steps.length === 1 && !onlyStep.body) {
-    return (
-      <DisclosureStaticRow
-        summary={summary}
-        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      />
-    );
+    return <ThreadStepRow icon={icon} summary={<span className="truncate">{summary}</span>} />;
   }
 
   const content = onlyStep && steps.length === 1 ? (
@@ -1331,15 +1329,9 @@ function ThreadReasoningSequence ({
   );
 
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 space-y-4 pl-6"
-      defaultOpen={isMostRecent}
-      summary={summary}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    >
+    <ThreadStepRow defaultOpen={isMostRecent} icon={icon} summary={<span className="truncate">{summary}</span>}>
       {content}
-    </Disclosure>
+    </ThreadStepRow>
   );
 }
 
@@ -1595,15 +1587,10 @@ function ThreadCommandExecutionDetails ({
   const approval = useThreadItemApproval(item.id);
   if (item.resultExpiredAt) {
     return (
-      <Disclosure
-        className="py-2"
-        summary={(
-          <>
-            <ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
-            <span className="ml-2 text-[0.78em] text-fg/muted">Result expired after 1 day.</span>
-          </>
-        )}
-        renderContent={() => null}
+      <ThreadStepRow
+        icon={<TerminalIcon size={16} />}
+        meta={["Result expired after 1 day."]}
+        summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} line projectFilePaths={projectFilePaths} projectId={projectId} />}
       />
     );
   }
@@ -1890,25 +1877,10 @@ function ThreadCommandExecutionDetails ({
       />
     );
   }
-  const metaParts = [];
-
-  if (commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0) {
-    metaParts.push(
-      <ThreadSummaryText
-        key={`${item.id}:exit`}
-        text={`exit ${item.exitCode}`}
-      />,
-    );
-  }
-
-  if (visibleDurationMs !== null && visibleDurationMs !== undefined) {
-    metaParts.push(
-      <ThreadDurationText
-        key={`${item.id}:duration`}
-        durationMs={visibleDurationMs}
-      />,
-    );
-  }
+  const metaParts = [
+    commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0 ? <ThreadSummaryText text={`exit ${item.exitCode}`} /> : null,
+    visibleDurationMs !== null && visibleDurationMs !== undefined ? <ThreadDurationText durationMs={visibleDurationMs} /> : null,
+  ];
 
   const commandDisplayView = (
     <ThreadCommandDisplay
@@ -1921,16 +1893,7 @@ function ThreadCommandExecutionDetails ({
       browse={isBrowseCommand && (commandOutcome === "failed" || !commandDetailRows.length)}
       projectFilePaths={projectFilePaths}
       projectId={projectId}
-      meta={metaParts.length ? (
-            <span className="ml-2 text-[0.78em] text-fg/muted">
-              {metaParts.map((part, index) => (
-                <span key={`${item.id}:meta:${index}`}>
-                  {index ? <span className="text-fg/muted"> | </span> : null}
-                  {part}
-                </span>
-              ))}
-            </span>
-          ) : null}
+      meta={metaParts}
     >
         {isBrowseCommand || shouldHideCommandOutput ? undefined : checkpointCompareChanges && commandOutcome === "completed" ? (
           <ThreadCheckpointCompareItem

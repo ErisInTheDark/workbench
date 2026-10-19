@@ -58,8 +58,14 @@ test("conversation and lifecycle rows break runs and keep their own blocks", () 
     [command("boundary", "wb todo --required -- fix it"), "commandSequence"],
     [command("boundary", "wb vis start mockups/a.tsx"), "commandSequence"],
     [command("boundary", "wb subagent create --profile luna --name luna --title task --message hello"), "commandSequence"],
+    [command("boundary", "wb task blocked"), "commandSequence"],
     [mcp("boundary", "task_set", { title: "new" }), "item"],
+    [mcp("boundary", "task_completed", {}), "item"],
+    [mcp("boundary", "task_blocked", {}), "item"],
     [mcp("boundary", "git_arc_propose", { title: "Keep this visible" }), "item"],
+    [mcp("boundary", "git_arc_status", {}), "item"],
+    [mcp("boundary", "todo", { text: "Fix it — later" }), "item"],
+    [mcp("boundary", "feedback", { category: "bug", channel: "wb", report: "r", title: "t" }), "item"],
   ];
   for (const [boundary, kind] of boundaries) {
     assert.deepEqual(shape([command("before"), boundary, command("after")]), [

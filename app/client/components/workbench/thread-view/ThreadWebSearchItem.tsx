@@ -1,16 +1,17 @@
 /*
  * Exports:
- * - ThreadWebSearchSequence: render grouped adjacent web search actions.
+ * - ThreadWebSearchSequence: adjacent web search actions, one step row each.
  * - ThreadWebSearchOutput: optional enriched search result data.
  * - ThreadWebSearchActionRow: render one search action summary.
- * - default ThreadWebSearchItem: render user-controlled web search history details.
+ * - default ThreadWebSearchItem: one web search action as a step row opening onto its details.
  */
 "use client";
 
 import type { ReactNode } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
+import { BookSearchIcon } from "../workbench-icons";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { truncateThreadText } from "./thread-view-formatters";
 import { isNonEmptyString, isThreadWebSearchPlaceholder } from "./thread-web-search-state";
@@ -410,52 +411,6 @@ function ThreadWebSearchDetails ({
   );
 }
 
-function getWebSearchSequenceSummary(items: WebSearchItem[]): ReactNode {
-  if (items.length === 1) {
-    return getWebSearchSummary(items[0]);
-  }
-
-  const openPageItems = items.filter((item) => item.action?.type === "openPage" && isNonEmptyString(item.action.url));
-  if (openPageItems.length === items.length) {
-    return (
-      <>
-        <span>Opened </span>
-        <span className="font-medium text-text">{items.length}</span>
-        <span> pages</span>
-      </>
-    );
-  }
-
-  const searchQueries = uniqueNonEmptyStrings(items.flatMap((item) => getSearchQueries(item)));
-  const searchItems = items.filter((item) => item.action?.type === "search");
-  if (searchQueries.length && openPageItems.length) {
-    return (
-      <>
-        <span>Searched web and opened </span>
-        <span className="font-medium text-text">{openPageItems.length}</span>
-        <span>{openPageItems.length === 1 ? " page" : " pages"}</span>
-      </>
-    );
-  }
-
-  if (searchItems.length === items.length && searchQueries.length) {
-    return (
-      <>
-        <span>Searched web: </span>
-        <span className="font-medium text-text">{searchQueries.length === 1 ? truncateThreadText(searchQueries[0], 96) : `${searchQueries.length} queries`}</span>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <span>Used web: </span>
-      <span className="font-medium text-text">{items.length}</span>
-      <span> actions</span>
-    </>
-  );
-}
-
 export function ThreadWebSearchSequence ({
   items,
 }: {
@@ -466,28 +421,7 @@ export function ThreadWebSearchSequence ({
     return null;
   }
 
-  if (visibleItems.length === 1) {
-    return <ThreadWebSearchItem item={visibleItems[0]} />;
-  }
-
-  return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 space-y-1 pl-6"
-      summary={getWebSearchSequenceSummary(visibleItems)}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    >
-      <div className="space-y-1">
-        {visibleItems.map((item) => (
-          <DisclosureStaticRow
-            key={item.id}
-            summary={<ThreadWebSearchActionRow item={item} />}
-            summaryClassName="text-[0.92em] leading-[1.6]"
-          />
-        ))}
-      </div>
-    </Disclosure>
-  );
+  return <>{visibleItems.map((item) => <ThreadWebSearchItem item={item} key={item.id} />)}</>;
 }
 
 export default function ThreadWebSearchItem ({
@@ -504,14 +438,8 @@ export default function ThreadWebSearchItem ({
   const shouldOpen = !item.action || item.action.type === "other";
 
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 space-y-3 pl-6"
-      defaultOpen={shouldOpen}
-      summary={getWebSearchSummary(item)}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    >
+    <ThreadStepRow defaultOpen={shouldOpen} icon={<BookSearchIcon size={16} />} summary={<span className="truncate">{getWebSearchSummary(item)}</span>}>
       <ThreadWebSearchDetails item={item} output={output} />
-    </Disclosure>
+    </ThreadStepRow>
   );
 }

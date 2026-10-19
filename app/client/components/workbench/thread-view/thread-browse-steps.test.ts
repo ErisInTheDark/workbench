@@ -70,6 +70,15 @@ test("recorded results fill steps by action index, and alone still describe the 
   assert.deepEqual([...getBrowseScreenshotUrls([], recorded)], ["/asset/recorded.png", "/asset/auto.png"]);
 });
 
+test("recorded steps take the same action and name as the BrowseMD steps they ran", () => {
+  const recorded = (actionIndex: number, action: string): WorkbenchBrowseResultEntry => ({
+    action, actionIndex, assetUrl: null, commandItemId: "browse", detailText: null, durationMs: 5, entryKey: `e${actionIndex}`,
+    recordedAt: actionIndex, session: "lab", state: "completed", threadId: "thread", turnId: "turn",
+  });
+  const rows = getBrowseSteps({ entries: [recorded(0, "initScript"), recorded(1, "eval"), recorded(2, "mouseClick")], outcome: "completed", output: null, rows: [] });
+  assert.deepEqual(rows.map(row => [row.action, row.label]), [["init-js", "Install page script"], ["eval", "Evaluate"], ["mouse", "Mouse click"]]);
+});
+
 test("fenced page scripts read as an evaluate step naming the script's first line", () => {
   const display = getWorkbenchMcpCommandDisplay({
     argumentsValue: { commands: ["```js\nreturn document.title;\nconsole.log(1);\n```"], session: "lab" },
