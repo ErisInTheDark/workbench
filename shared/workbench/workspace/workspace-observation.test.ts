@@ -93,6 +93,28 @@ test("a git arc change on a summarised thread ships only the changed claims and 
   assert.deepEqual(applyObservationDelta(before, delta, shape), after);
 });
 
+test("a draft edit ships that draft's changed fields, not the whole presentation", () => {
+  const shape = workspaceObservationShape("presentation");
+  const draft = (id: string, prompt: string, revision: number) => ({
+    id, logicalProjectId: "00000000-0000-4000-8000-0000000000aa", target: location, prompt,
+    selection: { kind: "custom", settings: { harness: "codex", model: "", agentPath: null,
+      agentSource: null, reasoningEffort: null, serviceTier: null } }, updatedAt: revision, revision, phase: "unsent",
+    pinned: false, snoozed: false, launchId: null, acceptedThreadId: null, attachments: [],
+  });
+  const presentation = (prompt: string, revision: number) => WorkspaceObservationSchema.parse({
+    kind: "presentation", subscriptionId, generation: 1, revision: 1, phase: "current", failure: null,
+    data: { revision, daemons: [{ id: location.daemonId, hostname: "host" }], projects: [], locations: [], defaults: [],
+      drafts: [draft("00000000-0000-4000-8000-0000000000d1", prompt, revision),
+        draft("00000000-0000-4000-8000-0000000000d2", "an untouched draft", 1)],
+      folders: [], members: [], divergences: [], sourceMappings: [] },
+  });
+  const before = presentation("typing", 2);
+  const after = presentation("typing more", 3);
+  const delta = diffObservationValue(before, after, shape)!;
+  assert.ok(!JSON.stringify(delta).includes("an untouched draft"), JSON.stringify(delta).slice(0, 300));
+  assert.deepEqual(applyObservationDelta(before, delta, shape), after);
+});
+
 test("a resolved questionnaire ships its one history row, not the whole history", () => {
   const history = (count: number) => Array.from({ length: count }, (_, index) => ({
     itemId: null, requestKey: `request-${index}`, turnId: "turn", threadId, resolvedAt: index,

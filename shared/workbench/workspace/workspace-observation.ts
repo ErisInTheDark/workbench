@@ -672,6 +672,7 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
     }) } };
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject), runtime: runtimeShape } };
     case "appState": return { schema, fields: { data: appStateShape() } };
+    case "presentation": return { schema, fields: { data: presentationShape } };
     case "projectTree": return { schema, fields: { data: projectTreeShape } };
     case "projectFile": return { schema, fields: { data: observationShape.object({ schema: ProjectFileSnapshotSchema }) } };
     case "threadVis": return { schema, fields: { data: visThreadShape } };
@@ -691,6 +692,31 @@ const peerCommitsShape = observationShape.object({
 const visThreadShape = observationShape.object({
   schema: VisThreadSchema,
   fields: { sessions: observationShape.keyed((session: VisLiveSession) => session.sessionId, VisThreadSchema.shape.sessions.element) },
+});
+
+// A draft keystroke or one layout move ships that item, not the whole presentation.
+type LocationTarget = { target: { daemonId: string; projectId: string } };
+type SourceItem = { daemonId: string; sourceKind: string; sourceId: string };
+const locationKey = (item: LocationTarget) => `${item.target.daemonId}/${item.target.projectId}`;
+const logicalLocationKey = (item: LocationTarget & { logicalProjectId: string }) => `${item.logicalProjectId}/${locationKey(item)}`;
+const sourceKey = (item: SourceItem) => `${item.daemonId}/${item.sourceKind}/${item.sourceId}`;
+const byId = (item: { id: string }) => item.id;
+const presentationFields = PresentationSnapshotSchema.shape;
+const presentationShape = observationShape.object({
+  schema: PresentationSnapshotSchema,
+  fields: {
+    daemons: observationShape.keyed(byId, presentationFields.daemons.element),
+    projects: observationShape.keyed(byId, presentationFields.projects.element),
+    locations: observationShape.keyed(locationKey, presentationFields.locations.element),
+    defaults: observationShape.keyed(locationKey, presentationFields.defaults.element),
+    recentLaunches: observationShape.keyed(logicalLocationKey, presentationFields.recentLaunches.unwrap().element),
+    drafts: observationShape.keyed(byId, presentationFields.drafts.element),
+    folders: observationShape.keyed(byId, presentationFields.folders.element),
+    members: observationShape.keyed(byId, presentationFields.members.element),
+    divergences: observationShape.keyed(sourceKey, presentationFields.divergences.element),
+    sourceMappings: observationShape.keyed(sourceKey, presentationFields.sourceMappings.element),
+    hiddenLocations: observationShape.keyed(logicalLocationKey, presentationFields.hiddenLocations.unwrap().element),
+  },
 });
 
 /** App state rows key by their table's primary key, so one draft or preference write ships one row. */
