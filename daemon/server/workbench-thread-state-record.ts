@@ -4,7 +4,7 @@
  * - StoredWorkbenchThreadStateRecordConformance: repaired record or validation failure.
  * - parseWorkbenchThreadStateEntry/safeParseWorkbenchThreadStateEntry: validate persisted and mutated entries.
  * - conformStoredWorkbenchThreadStateRecord: repair a stored record while preserving valid facts.
- * - projectWorkbenchThreadStateEntry: derive the public sidebar projection.
+ * - projectWorkbenchThreadStateEntry: derive the public sidebar projection, reused per unchanged entry.
  */
 import { z } from "zod";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -255,10 +255,21 @@ export function conformStoredWorkbenchThreadStateRecord(
   };
 }
 
+/** Entries are replaced, never edited, so each one's validated projection is reused until it is replaced. */
+const projections = new WeakMap<WorkbenchThreadStateEntry, WorkbenchThreadSidebarEntry>();
+
 export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntry): WorkbenchThreadSidebarEntry | null {
   if (entry.entryKind === "draft") return entry;
   // Provider omission cannot hide Workbench-owned top-level records.
   if (entry.entryKind === "subagent" && !entry.providerObserved) return null;
+  const held = projections.get(entry);
+  if (held) return held;
+  const projected = projectRecord(entry);
+  projections.set(entry, projected);
+  return projected;
+}
+
+function projectRecord(entry: WorkbenchThreadStateRecord): WorkbenchThreadSidebarEntry {
   const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil, ...projected } = entry;
   // The recorded explicit title owns display; the stored title is only the provider display label.
   const displayTitle = currentThreadTitleName(titleHistory ?? []) ?? entry.title;
