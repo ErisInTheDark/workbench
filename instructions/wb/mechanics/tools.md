@@ -19,8 +19,10 @@ When Workbench or project tooling or instructions cause bugs, confusion, avoidab
 reminder of remaining work, so the user lost track. User deferral is not agent deferral, so the "never defer" rule holds.
 Agents also read "current task" as the approved plan: work the request needed but the plan lacked became a "separate"
 required todo, and the task completed with it open. Pinning the task to the requested outcome routes that work back to
-Brief as a plan addendum, while genuinely unrelated bugs stay todos. -->
-Record separate follow-up work with <tool id="todo" />. Mark a todo required for spotted issues that should be fixed, such as bugs; mark it optional for polish or extension ideas. **Never use todos for Complete Scope work.** Do not complete task & end turn with required follow-ups only in commentary.
+Brief as a plan addendum, while genuinely unrelated bugs stay todos.
+Free-form todos forced the user to read the whole text and still left them unsure what the work was. A fixed
+title-then-context shape lets todo pills show only the title, so the title must identify the work on its own. -->
+Record separate follow-up work with <tool id="todo" />, written exactly `Short simple title — medium-length context`; pills show only the title, so it alone must say what the work is. Mark a todo required for spotted issues that should be fixed, such as bugs; mark it optional for polish or extension ideas. **Never use todos for Complete Scope work.** Do not complete task & end turn with required follow-ups only in commentary.
 </docs>
 
 <harness:claude>

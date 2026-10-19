@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default ThreadTodoPill: one todo as a toned pill, `#id` once known and a required mark, whose tooltip shows the full todo.
+ * - default ThreadTodoPill: one todo as a toned pill labelled by its title (else first line), `#id` once known and a required mark, whose tooltip shows the full todo.
  */
 "use client";
 
+import { workbenchThreadTodoTitle } from "workbench-shared/workbench/thread/thread-todo";
 import WorkbenchPill from "../WorkbenchPill";
 import MarkdownRender from "../../ui/MarkdownRender";
 import { AsteriskIcon, ClipboardListIcon } from "../workbench-icons";
@@ -20,7 +21,7 @@ export default function ThreadTodoPill({ id, onRemove, removeLabel, required, te
   /** Absent for a removal, which knows only the id. */
   text?: string;
 }) {
-  const firstLine = text?.split("\n")[0]!.replace(/[*_`~]+/gu, "") ?? "";
+  const label = text ? (workbenchThreadTodoTitle(text) ?? text.split("\n")[0]!).replace(/[*_`~]+/gu, "") : "";
   return (
     <WorkbenchPill
       className={TONE}
@@ -33,7 +34,7 @@ export default function ThreadTodoPill({ id, onRemove, removeLabel, required, te
         </div>
       ) : undefined}
     >
-      {[id === undefined ? null : `#${id}`, firstLine].filter(Boolean).join(" ")}
+      {[id === undefined ? null : `#${id}`, label].filter(Boolean).join(" ")}
     </WorkbenchPill>
   );
 }

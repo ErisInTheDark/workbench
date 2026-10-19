@@ -19,7 +19,7 @@ export const WorkbenchTodoRequestSchema = z.discriminatedUnion("action", [
 ]);
 
 const todoInput = z.object({
-  text: WorkbenchThreadTodoTextSchema.optional().describe("Todo text. Omit to list this thread's todos instead."),
+  text: WorkbenchThreadTodoTextSchema.optional().describe("Todo as `Short simple title — medium-length context`. Omit to list this thread's todos instead."),
   required: z.boolean().optional().describe("Mark the todo required; defaults to optional."),
 }).strict();
 
