@@ -15,11 +15,14 @@ import OpenCodeCompanionToolsController, { type CompanionToolClient } from "./Op
 import OpenCodePatchStreamController from "./OpenCodePatchStreamController";
 import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
 import OpenCodeStreamCutController from "./OpenCodeStreamCutController";
-import { OPENCODE_COMMENTARY_HINT, registerOpenCodeCommentaryTool } from "./open-code-commentary-tool";
+import {
+  OPENCODE_COMMENTARY_FINISHING_HINT, OPENCODE_COMMENTARY_HINT, registerOpenCodeCommentaryTool,
+} from "./open-code-commentary-tool";
 import providerAccountFingerprint from "../../provider-account-fingerprint";
 import {
   isOpenCodeWorkbenchToolName,
   OPENCODE_COMMENTARY_TOOL_NAME,
+  OPENCODE_TASK_STATUS_TOOLS,
   openCodeWorkbenchRpc,
   OpenCodeGoQuotaSchema,
   type OpenCodeGoQuotaResult,
@@ -204,7 +207,19 @@ export function createOpenCodeWorkbenchPlugin(
     setup: async context => {
       const isManagedSession = options.isManagedSession ?? (async sessionID =>
         isManagedMetadata((await context.session.get({ sessionID })).metadata));
-      const tools = new OpenCodeCompanionToolsController({ ...options, isManagedSession });
+      const cuts = new OpenCodeStreamCutController({
+        isManagedSession,
+        hint: async (sessionID, taskStatusSet) => {
+          const text = taskStatusSet ? OPENCODE_COMMENTARY_FINISHING_HINT : OPENCODE_COMMENTARY_HINT;
+          await context.session.synthetic({ sessionID, text, delivery: "steer" });
+        },
+        warn: message => console.warn(`[workbench-opencode-cut] ${message}`),
+      });
+      const tools = new OpenCodeCompanionToolsController({
+        ...options,
+        isManagedSession,
+        succeeded: (sessionID, name) => { if (OPENCODE_TASK_STATUS_TOOLS.has(name)) cuts.taskStatusSet(sessionID); },
+      });
       await tools.load().catch(async error => {
         try { await tools.dispose(); }
         catch (cleanup) { throw new AggregateError([error, cleanup], "Workbench catalogue loading and cleanup failed."); }
@@ -230,13 +245,6 @@ export function createOpenCodeWorkbenchPlugin(
         isNewWrite: (sessionID, file) => files.isNewWrite(sessionID, file),
         emit: observation => rpc.events.emit("patchPreview", observation),
         warn: message => console.warn(`[workbench-opencode-preview] ${message}`),
-      });
-      const cuts = new OpenCodeStreamCutController({
-        isManagedSession,
-        hint: async sessionID => {
-          await context.session.synthetic({ sessionID, text: OPENCODE_COMMENTARY_HINT, delivery: "steer" });
-        },
-        warn: message => console.warn(`[workbench-opencode-cut] ${message}`),
       });
       const sessionLifetime = new AbortController();
       const sessionEvents = (async () => {
@@ -281,7 +289,7 @@ export function createOpenCodeWorkbenchPlugin(
         context.session.hook("experimental.ws.receive", input => patches.websocketReceive(input)),
         context.tool.transform(editor => {
           tools.register(editor);
-          registerOpenCodeCommentaryTool(editor);
+          registerOpenCodeCommentaryTool(editor, sessionID => cuts.hasTaskStatus(sessionID));
         }),
         context.permission.hook("evaluate", async input => {
           if (input.action !== "edit") return;
@@ -321,7 +329,7 @@ export function createOpenCodeWorkbenchPlugin(
           }
         }),
         context.tool.hook("execute.before", async input => {
-          cuts.toolCalled(input.sessionID);
+          cuts.toolCalled(input.sessionID, input.tool);
           const managed = await isManagedSession(input.sessionID);
           if (MANAGED_DISABLED_NATIVE_TOOLS.has(input.tool) && managed) {
             throw new Error(`Native OpenCode tool ${input.tool} is unavailable in a managed Workbench session.`);

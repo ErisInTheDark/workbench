@@ -16,7 +16,7 @@ Keep commentary quality high. Spend time reasoning to ensure your commentary wil
 - This tool is the ONLY way to communicate with the user; plain text output is discarded, never shown
 - Send every ack, progress update, plan, brief, and review through this tool in markdown format
 - Batch it with other tool calls in the same response; it returns immediately
-- End turns with an empty final
+- End turns with an empty reply: no text and no tool calls
 </harness:opencode>
 
 ### ALL markdown, UNIVERSAL rule

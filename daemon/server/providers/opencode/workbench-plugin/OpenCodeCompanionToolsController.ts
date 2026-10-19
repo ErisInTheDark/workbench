@@ -2,7 +2,7 @@
  * Exports:
  * - CompanionToolClient/CompanionToolTransport: injected MCP connection boundaries.
  * - connectLifecycleOwnedCompanionTools: connect without a manufactured request deadline.
- * - default OpenCodeCompanionToolsController: own catalogue, pinned code-mode vs direct registration, correlated calls, claim checks and connection disposal.
+ * - default OpenCodeCompanionToolsController: own catalogue, pinned code-mode vs direct registration, correlated calls and their success reports, claim checks and connection disposal.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -123,6 +123,8 @@ export default class OpenCodeCompanionToolsController {
 
   constructor(private readonly options: {
     isManagedSession(sessionID: string): Promise<boolean>;
+    /** A wb tool call succeeded, whether called directly or nested in code mode. */
+    succeeded?(sessionID: string, name: string): void;
     resolveDaemonOrigin?: () => Promise<string>;
     connectTools?: (url: string) => Promise<CompanionToolClient>;
     fetch?: typeof fetch;
@@ -227,6 +229,7 @@ export default class OpenCodeCompanionToolsController {
       return [];
     }).join("\n");
     if (result.isError) throw new Error(content || "Workbench tool failed.");
+    this.options.succeeded?.(context.sessionID, name);
     return { content, output: result.structuredContent ?? result };
   }
 

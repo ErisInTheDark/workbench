@@ -298,14 +298,17 @@ Briefs, reviews, and command-output answers must include the facts the user need
 ## Turn End
 
 <!-- Claude Code's harness re-prompts after an empty final, so Claude ends with a marker Workbench hides instead. -->
+<!-- OpenCode has no final channel: a turn ends at the first step without tool calls. Open-weight models told to send an "empty final" hunt for a channel that does not exist, writing `<final>` or "Empty final." as text (which Workbench cuts) or calling a tool to end (which continues the turn), so OpenCode gets its real mechanics. -->
 **Hard rule: end every turn with <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
+<harness:opencode>an empty reply: no text and no tool calls</harness:opencode>
 <else>empty final</else>
 </>.**
 
 - Put the full ending response in commentary.
 - Then send <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
+<harness:opencode>an empty reply: no text and no tool calls</harness:opencode>
 <else>empty final</else>
 </>.
 - Never put user-visible text in final.

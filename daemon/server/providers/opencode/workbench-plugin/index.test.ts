@@ -1,4 +1,4 @@
-/* No production exports. Tests protect native admission, preview visibility and companion lifecycle. */
+/* No production exports. Tests protect native admission, preview visibility, turn-end guidance and companion lifecycle. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs/promises";
@@ -7,17 +7,29 @@ import path from "node:path";
 import type { Result } from "@opencode/plugin/promise/tool";
 import { createOpenCodeWorkbenchPlugin, MANAGED_DISABLED_NATIVE_TOOLS, readOpenCodeGoQuota, resolveOpenCodeGoCredential } from "./index";
 import { OPENCODE_COMMENTARY_TOOL_NAME } from "../opencode-workbench-rpc";
+import {
+  OPENCODE_COMMENTARY_FINISHING_HINT, OPENCODE_COMMENTARY_HINT, openCodeCommentaryResult,
+} from "./open-code-commentary-tool";
 
 async function* lifecycleEvents({ signal }: { signal: AbortSignal }) {
   if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
 }
 
-async function fixture(options: { fail?: string; claim?: () => Response; cwd?: string } = {}) {
+interface FixtureTool {
+  name: string;
+  execute(input: unknown, context: { sessionID: string; id: string; messageID: string }): Promise<{ content?: unknown }>;
+}
+
+async function fixture(options: {
+  fail?: string; claim?: () => Response; cwd?: string; catalogue?: string[]; toolFails?: boolean;
+} = {}) {
   const hooks = new Map<string, (input: never) => Promise<void>>();
   const registered: string[] = [];
   const disposed: string[] = [];
   const observations: { kind?: string; files?: { path: string }[] }[] = [];
   const checks: URLSearchParams[] = [];
+  const tools = new Map<string, FixtureTool>();
+  const synthetic: string[] = [];
   let closed = 0;
   const register = async (name: string, callback?: (input: never) => Promise<void>) => {
     if (name === options.fail) throw new Error("registration failed");
@@ -29,8 +41,10 @@ async function fixture(options: { fail?: string; claim?: () => Response; cwd?: s
     isManagedSession: async session => session === "managed",
     resolveDaemonOrigin: async () => "http://127.0.0.1:43001",
     connectTools: async () => ({
-      listTools: async () => ({ tools: [] }),
-      callTool: async () => ({ content: [] }),
+      listTools: async () => ({ tools: (options.catalogue ?? []).map(name => ({ name, inputSchema: { type: "object" as const } })) }),
+      callTool: async () => options.toolFails
+        ? { content: [{ type: "text" as const, text: "refused" }], isError: true }
+        : { content: [] },
       close: async () => { closed++; },
     }),
     fetch: async (_url, init) => {
@@ -46,11 +60,18 @@ async function fixture(options: { fail?: string; claim?: () => Response; cwd?: s
     session: {
       get: async () => ({ location: { directory: options.cwd ?? "C:/repo" } }),
       hook: register,
+      synthetic: async ({ text }: { text: string }) => { synthetic.push(text); },
     },
-    tool: { hook: register, transform: async () => register("tools") },
+    tool: {
+      hook: register,
+      transform: async (edit: (editor: { add(tool: FixtureTool): void }) => void) => {
+        edit({ add: tool => { tools.set(tool.name, tool); } });
+        return register("tools");
+      },
+    },
     permission: { hook: register },
   } as never);
-  return { setup, hooks, registered, disposed, observations, checks, closed: () => closed };
+  return { setup, hooks, registered, disposed, observations, checks, tools, synthetic, closed: () => closed };
 }
 
 test("companion hooks attach write evidence to the native result without replacing the native tool", async () => {
@@ -201,6 +222,44 @@ test("patch targets appear while both response and arguments are unfinished and 
     await reader.cancel();
     assert.equal(cancelled, true);
     assert.equal(owner.observations.at(-1)?.kind, "withdraw");
+  } finally { if (typeof cleanup === "function") await cleanup(); }
+});
+
+test("a successful task status call turns commentary results and bare-text hints into empty-reply turn-end guidance", async () => {
+  const bareText = async (owner: Awaited<ReturnType<typeof fixture>>) => {
+    const frame = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
+    const input = { sessionID: "managed", kind: "primary", model: { providerID: "opencode-go", modelID: "test" },
+      request: new Request("https://example.test/v1/chat/completions"),
+      response: new Response(new TextEncoder().encode(
+        frame({ id: "c", object: "chat.completion.chunk", model: "m", choices: [{ index: 0, delta: { role: "assistant" } }] })
+        + frame({ choices: [{ index: 0, delta: { content: "Done." } }] }),
+      ), { headers: { "content-type": "text/event-stream" } }),
+    };
+    await owner.hooks.get("http.response")!(input as never);
+    assert.doesNotMatch(await input.response.text(), /Done\./u);
+  };
+  const call = { sessionID: "managed", id: "call", messageID: "message" };
+  const failing = await fixture({ catalogue: ["task_completed"], toolFails: true });
+  const failingCleanup = await failing.setup();
+  try {
+    await assert.rejects(failing.tools.get("task_completed")!.execute({}, call), /refused/u);
+    assert.equal((await failing.tools.get(OPENCODE_COMMENTARY_TOOL_NAME)!.execute({ text: "x" }, call)).content,
+      openCodeCommentaryResult(false), "a failed status call changes nothing");
+  } finally { if (typeof failingCleanup === "function") await failingCleanup(); }
+
+  const owner = await fixture({ catalogue: ["task_completed", "git_arc_status"] });
+  const cleanup = await owner.setup();
+  try {
+    const commentary = owner.tools.get(OPENCODE_COMMENTARY_TOOL_NAME)!;
+    await bareText(owner);
+    await owner.tools.get("git_arc_status")!.execute({}, call);
+    assert.equal((await commentary.execute({ text: "x" }, call)).content, openCodeCommentaryResult(false));
+    await owner.tools.get("task_completed")!.execute({}, call);
+    assert.equal((await commentary.execute({ text: "x" }, call)).content, openCodeCommentaryResult(true));
+    assert.equal((await commentary.execute({ text: "x" }, { ...call, sessionID: "other" })).content,
+      openCodeCommentaryResult(false), "status belongs to the session that set it");
+    await bareText(owner);
+    assert.deepEqual(owner.synthetic, [OPENCODE_COMMENTARY_HINT, OPENCODE_COMMENTARY_FINISHING_HINT]);
   } finally { if (typeof cleanup === "function") await cleanup(); }
 });
 

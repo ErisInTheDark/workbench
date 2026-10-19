@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - default OpenCodeStreamCutController: end managed model responses early, at open reasoning for a pending steer, or before bare text so the agent retries through the commentary tool.
+ * - default OpenCodeStreamCutController: end managed model responses early, at open reasoning for a pending steer, or before bare text so the agent retries through the commentary tool; tracks whether each execution set its task status.
  */
 import type { SessionHttpResponse } from "@opencode/plugin/promise/session";
 import OpenCodeSseTap, { type OpenCodeSseTapDecision } from "./OpenCodeSseTap";
 import { openCodeStreamCutTracker, type OpenCodeStreamCutTracker } from "./open-code-stream-cut";
+import { OPENCODE_COMMENTARY_TOOL_NAME } from "../opencode-workbench-rpc";
 
-/** Consecutive bare-text cuts without a tool call before bare text is kept, so a model that ignores hints still ends. */
+/** Consecutive bare-text cuts without a work tool call before bare text is kept, so a model that ignores hints still ends. */
 const BARE_TEXT_CUT_LIMIT = 3;
 
 interface LiveResponse {
@@ -28,15 +29,17 @@ export default class OpenCodeStreamCutController {
   private readonly pending = new Map<string, Set<string>>();
   /** Steers that already cut once; a missed delivery event must not chop every later response. */
   private readonly served = new Map<string, Set<string>>();
-  /** Bare-text cuts per session since its last tool call. */
+  /** Bare-text cuts per session since its last work tool call. */
   private readonly strikes = new Map<string, number>();
+  /** Sessions whose current execution set its task completed or blocked, so ending the turn is legal. */
+  private readonly taskStatus = new Set<string>();
   private readonly live = new Map<string, Set<LiveResponse>>();
   private disposed = false;
 
   constructor(private readonly options: {
     isManagedSession(sessionID: string): Promise<boolean>;
-    /** Admit the hidden steer that tells the agent its bare text was discarded. */
-    hint(sessionID: string): Promise<void>;
+    /** Admit the hidden steer that tells the agent its bare text was discarded and how to proceed. */
+    hint(sessionID: string, taskStatusSet: boolean): Promise<void>;
     warn(message: string): void;
   }) {}
 
@@ -79,16 +82,29 @@ export default class OpenCodeStreamCutController {
     this.served.get(sessionID)?.delete(inboxID);
   }
 
-  /** The agent called a tool, so it is using tools again and later bare text is cut again. */
-  toolCalled(sessionID: string) {
-    this.strikes.delete(sessionID);
+  /**
+   * The agent called a work tool, so later bare text is cut again. Commentary is what the hint asks for, so it must
+   * not disarm the limit a model answering in text relies on to end.
+   */
+  toolCalled(sessionID: string, tool: string) {
+    if (tool !== OPENCODE_COMMENTARY_TOOL_NAME) this.strikes.delete(sessionID);
   }
 
-  /** The session's execution ended; nothing it admitted can still be pending. */
+  /** The agent set its task completed or blocked during the current execution. */
+  taskStatusSet(sessionID: string) {
+    if (!this.disposed) this.taskStatus.add(sessionID);
+  }
+
+  hasTaskStatus(sessionID: string) {
+    return this.taskStatus.has(sessionID);
+  }
+
+  /** The session's execution ended; nothing it admitted can still be pending, and the next turn sets status anew. */
   settleSession(sessionID: string) {
     this.pending.delete(sessionID);
     this.served.delete(sessionID);
     this.strikes.delete(sessionID);
+    this.taskStatus.delete(sessionID);
   }
 
   /** Stop cutting. Live responses keep forwarding their native bytes untouched. */
@@ -97,6 +113,7 @@ export default class OpenCodeStreamCutController {
     this.pending.clear();
     this.served.clear();
     this.strikes.clear();
+    this.taskStatus.clear();
   }
 
   private observe(response: LiveResponse, data: string): OpenCodeSseTapDecision {
@@ -139,16 +156,16 @@ export default class OpenCodeStreamCutController {
     const strikes = (this.strikes.get(response.sessionID) ?? 0) + 1;
     this.strikes.set(response.sessionID, strikes);
     try {
-      await this.options.hint(response.sessionID);
+      await this.options.hint(response.sessionID, this.taskStatus.has(response.sessionID));
     } catch {
       this.strikes.set(response.sessionID, BARE_TEXT_CUT_LIMIT);
-      this.options.warn("OpenCode commentary hint could not be admitted; bare text is kept until the next tool call.");
+      this.options.warn("OpenCode commentary hint could not be admitted; bare text is kept until the next work tool call.");
       response.bareText = false;
       response.cutting = false;
       return;
     }
     if (strikes >= BARE_TEXT_CUT_LIMIT) {
-      this.options.warn(`OpenCode agent answered in bare text ${strikes} times in a row; bare text is kept until its next tool call.`);
+      this.options.warn(`OpenCode agent answered in bare text ${strikes} times in a row; bare text is kept until its next work tool call.`);
     }
     await this.cut(response, tap, tracker);
   }

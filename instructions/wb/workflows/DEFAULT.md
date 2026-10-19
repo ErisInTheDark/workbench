@@ -252,6 +252,7 @@ Review follows completion gate: summarize/propose. No inspection, implementation
 </>
 - After proposal, unchanged review, or parent handoff, send <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
+<harness:opencode>an empty reply: no text and no tool calls</harness:opencode>
 <else>empty final</else>
 </> to end the turn.
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SessionHttpResponse } from "@opencode/plugin/promise/session";
 import OpenCodeStreamCutController from "./OpenCodeStreamCutController";
+import { OPENCODE_COMMENTARY_TOOL_NAME } from "../opencode-workbench-rpc";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -45,12 +46,13 @@ function provider(sessionID = "managed") {
 function controller(options: { managed?: boolean; hint?: () => Promise<void> } = {}) {
   const warnings: string[] = [];
   const hints: string[] = [];
+  const statuses: boolean[] = [];
   const owner = new OpenCodeStreamCutController({
     isManagedSession: async () => options.managed ?? true,
-    hint: async sessionID => { hints.push(sessionID); await options.hint?.(); },
+    hint: async (sessionID, taskStatusSet) => { hints.push(sessionID); statuses.push(taskStatusSet); await options.hint?.(); },
     warn: message => warnings.push(message),
   });
-  return { owner, warnings, hints };
+  return { owner, warnings, hints, statuses };
 }
 
 async function bareTextResponse(owner: OpenCodeStreamCutController) {
@@ -177,16 +179,29 @@ test("whitespace text is held, then released unchanged with the next frame", asy
   assert.deepEqual(hints, []);
 });
 
-test("repeated bare text stops being cut until the agent calls a tool", async () => {
+test("repeated bare text stops being cut until the agent calls a work tool, even if it obeys each hint", async () => {
   const { owner, hints, warnings } = controller();
   for (let attempt = 0; attempt < 3; attempt++) {
     assert.doesNotMatch((await bareTextResponse(owner)).output!, /working/u);
+    owner.toolCalled("managed", OPENCODE_COMMENTARY_TOOL_NAME);
   }
   assert.equal(warnings.length, 1, "reaching the limit is reported once");
-  assert.match((await bareTextResponse(owner)).output!, /working/u, "the next bare text is kept");
-  owner.toolCalled("managed");
-  assert.doesNotMatch((await bareTextResponse(owner)).output!, /working/u, "a tool call restores the cut");
+  assert.match((await bareTextResponse(owner)).output!, /working/u, "the next bare text is kept so the turn can end");
+  owner.toolCalled("managed", "wbex_shell");
+  assert.doesNotMatch((await bareTextResponse(owner)).output!, /working/u, "a work tool call restores the cut");
   assert.equal(hints.length, 4);
+});
+
+test("hints report whether the current execution set its task status", async () => {
+  const { owner, statuses } = controller();
+  await bareTextResponse(owner);
+  owner.taskStatusSet("managed");
+  assert.equal(owner.hasTaskStatus("managed"), true);
+  await bareTextResponse(owner);
+  owner.settleSession("managed");
+  assert.equal(owner.hasTaskStatus("managed"), false, "the next execution must set its status again");
+  await bareTextResponse(owner);
+  assert.deepEqual(statuses, [false, true, false]);
 });
 
 test("a failed hint keeps the bare text instead of ending the response silently", async () => {
