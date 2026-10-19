@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadTranscriptProjection: render canonical SQLite transcript items through the established UI.
+ * - default ThreadTranscriptProjection: render canonical SQLite transcript turns through the one turn renderer, providing the transcript scope its items read.
  */
 "use client";
 
@@ -18,10 +18,11 @@ import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import { TranscriptScopeContext, type TranscriptScope } from "../use-transcript";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
-import { ThreadTranscriptItemsDetails } from "./thread-view-items";
+import ThreadTurnItems from "./transcript/ThreadTurnItems";
 
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 
@@ -98,9 +99,26 @@ export default function ThreadTranscriptProjection({
     () => mergeAdjacentTurnSegments(projection.display.segments),
     [projection.display.segments],
   );
+  const threadId = projection.thread.id;
+  const threadCwdPath = projection.thread.projectRoot;
+  const scope = useMemo<TranscriptScope>(() => ({
+    inlineMentionSources: inlineMentionSources ?? null,
+    knownSkills,
+    projectFilePaths,
+    projectId,
+    projectRootPath,
+    relatedThreadsById,
+    subagents,
+    threadCwdPath,
+    threadId,
+    workspaceRoots,
+  }), [
+    inlineMentionSources, knownSkills, projectFilePaths, projectId, projectRootPath, relatedThreadsById, subagents,
+    threadCwdPath, threadId, workspaceRoots,
+  ]);
 
   return (
-    <>
+    <TranscriptScopeContext.Provider value={scope}>
       {canLoadPreviousTurn ? (
         <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
       ) : null}
@@ -130,33 +148,23 @@ export default function ThreadTranscriptProjection({
                 ? `${hideTopBorder ? "" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"} py-3`
                 : "pb-3"}
               >
-                <ThreadTranscriptItemsDetails
-                  initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
+                <ThreadTurnItems
                   browseResultEntries={browseResultEntries}
                   hiddenReasoningStep={hiddenReasoningStep}
-                  inlineMentionSources={inlineMentionSources}
+                  initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
                   items={segment.items}
                   itemTimeline={turn.itemTimeline}
-                  knownSkills={knownSkills}
-                  projectFilePaths={projectFilePaths}
-                  projectId={projectId}
-                  projectRootPath={projectRootPath}
                   presentationSource={turn.id === liveTurnId ? presentationSource : null}
-                  relatedThreadsById={relatedThreadsById}
-                  subagents={subagents}
-                  threadCwdPath={projection.thread.projectRoot}
-                  threadId={projection.thread.id}
                   turnCompletedAt={turn.completedAt}
                   turnId={turn.id}
                   turnStartedAt={turn.startedAt}
                   turnStatus={displayStatus(turn)}
-                  workspaceRoots={workspaceRoots}
                 />
               </section>
             </ThreadMeasuredContent>
           </Fragment>
         );
       })}
-    </>
+    </TranscriptScopeContext.Provider>
   );
 }

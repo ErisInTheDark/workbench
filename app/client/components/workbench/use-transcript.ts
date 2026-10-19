@@ -1,15 +1,24 @@
 /*
  * Exports:
  * - TranscriptBodiesContext: the nearest rendered transcript's deferred tool output owner; absent where bodies arrive eagerly.
- * - useTranscript: transcript reads of a leased thread store. Members: `turns/approvals` read its transcript slices;
- *   `presentedText` subscribes to one exact streaming text field; `item` hydrates one deferred tool item's output.
+ * - TranscriptScope/TranscriptScopeContext: the thread a rendered transcript shows, with the project and workspace facts its items link against.
+ * - TranscriptTurnScope/TranscriptTurnContext: the turn a transcript renderer is inside.
+ * - useTranscript: the nearest rendered transcript's scope. Members: `turn` its current turn; `markdownProps` its MarkdownRender link props;
+ *   `turns/approvals` read a leased store's transcript slices; `presentedText` subscribes to one exact streaming text field;
+ *   `item` hydrates one deferred tool item's output.
  */
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
+import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
+import type { InlineMentionHighlightSources } from "../../workbench/thread/inline-mention-highlights";
 import type ThreadStore from "../../workbench/thread/ThreadStore";
-import { EMPTY_THREAD_STORE_STATE, type ThreadSliceName, type ThreadStoreState } from "../../workbench/thread/ThreadStore";
+import {
+  EMPTY_THREAD_STORE_STATE, type RelatedThread, type ThreadSliceName, type ThreadStoreState,
+} from "../../workbench/thread/ThreadStore";
 import type ThreadTranscriptBodies from "../../workbench/transcript/ThreadTranscriptBodies";
 import type { ThreadTranscriptBodyState } from "../../workbench/transcript/ThreadTranscriptBodies";
 import type {
@@ -20,6 +29,33 @@ import WorkbenchClientContext from "./workbench-client-context";
 
 export const TranscriptBodiesContext = createContext<ThreadTranscriptBodies | null>(null);
 
+export interface TranscriptScope {
+  inlineMentionSources: InlineMentionHighlightSources | null;
+  knownSkills: WorkbenchSkillSummary[];
+  projectFilePaths?: readonly string[];
+  projectId: string | null;
+  projectRootPath?: string;
+  relatedThreadsById: Readonly<Record<string, RelatedThread | undefined>>;
+  subagents: readonly WorkbenchSubagentSummary[];
+  /** The thread's working directory, which relative paths in its items resolve against. */
+  threadCwdPath?: string;
+  threadId: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}
+
+export interface TranscriptTurnScope {
+  browseResultEntries: readonly WorkbenchBrowseResultEntry[];
+  completedAt: number | null;
+  id: string;
+  /** Live text presentation for the turn the thread is working on; settled turns show canonical text. */
+  presentationSource: ThreadTextPresentationSource | null;
+  startedAt: number | null;
+  status: Turn["status"];
+}
+
+export const TranscriptScopeContext = createContext<TranscriptScope | null>(null);
+export const TranscriptTurnContext = createContext<TranscriptTurnScope | null>(null);
+
 const EMPTY_SUBSCRIBE = (_listener: () => void) => () => {};
 const READY: ThreadTranscriptBodyState = { status: "idle" };
 
@@ -29,9 +65,30 @@ function useSlice<Name extends ThreadSliceName>(store: ThreadStore | null, name:
   return useSyncExternalStore(subscribe, read, read);
 }
 
-export function useTranscript() {
-  return useContext(TranscriptBodiesContext);
+export function useTranscript(): TranscriptScope {
+  const scope = useContext(TranscriptScopeContext);
+  if (!scope) throw new Error("useTranscript needs a rendered transcript (TranscriptScopeContext).");
+  return scope;
 }
+
+useTranscript.turn = function useTranscriptTurn(): TranscriptTurnScope {
+  const turn = useContext(TranscriptTurnContext);
+  if (!turn) throw new Error("useTranscript.turn needs a transcript turn (TranscriptTurnContext).");
+  return turn;
+};
+
+/** MarkdownRender's link and mention props for the nearest transcript. */
+useTranscript.markdownProps = function useTranscriptMarkdownProps() {
+  const scope = useTranscript();
+  return useMemo(() => ({
+    inlineMentionSources: scope.inlineMentionSources,
+    projectFilePaths: scope.projectFilePaths,
+    projectId: scope.projectId,
+    projectRootPath: scope.projectRootPath,
+    threadCwdPath: scope.threadCwdPath,
+    workspaceRoots: scope.workspaceRoots,
+  }), [scope]);
+};
 
 useTranscript.turns = function useTranscriptTurns(store: ThreadStore | null) { return useSlice(store, "turns"); };
 useTranscript.approvals = function useTranscriptApprovals(store: ThreadStore | null) { return useSlice(store, "approvals"); };

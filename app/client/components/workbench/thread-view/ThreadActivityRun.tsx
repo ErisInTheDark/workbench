@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { getThreadItemTimelineDurationMs, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -20,6 +20,7 @@ import ThreadDurationText from "./ThreadDurationText";
 import ThreadInlineCode from "./ThreadInlineCode";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import useThreadActivityRun from "./use-thread-activity-run";
+import { useTranscript } from "../use-transcript";
 
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 type FileItem = Extract<ActivitySegment, { kind: "files" }>["items"][number];
@@ -113,19 +114,20 @@ function segmentItems(segment: ActivitySegment): ThreadItem[] {
 
 export default function ThreadActivityRun({
   block,
-  context,
   isMostRecent,
   itemTimeline,
   renderers,
   turnLive,
 }: {
   block: Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
-  context: CommandChipContext & { projectFilePaths?: readonly string[]; projectId?: string | null };
   isMostRecent: boolean;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   renderers: ThreadActivityRunRenderers;
   turnLive: boolean;
 }) {
+  const transcript = useTranscript();
+  const browseResultEntries = useTranscript.turn().browseResultEntries;
+  const context = useMemo<CommandChipContext>(() => ({ ...transcript, browseResultEntries }), [browseResultEntries, transcript]);
   const run = useThreadActivityRun(block.items[0]?.id ?? "");
   const lastItem = block.items.at(-1);
   // Reasoning has no lifecycle of its own; it is current while nothing has followed it in a live turn.

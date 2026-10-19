@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect event-time selection in the thread renderer.
+ * No production exports. Tests protect event-time selection in the turn renderer.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -10,8 +10,7 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchProjectedInteractionItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { ThreadTranscriptItemsDetails } from "./thread-view-items";
-import ThreadTestTurn from "./thread-view-test-render";
+import ThreadTestTurn from "../thread-view-test-render";
 
 const user = (id: string): Extract<ThreadItem, { type: "userMessage" }> => ({
   clientId: null, content: [{ text: id, text_elements: [], type: "text" }], id, type: "userMessage",
@@ -22,6 +21,9 @@ const timing = (itemId: string, firstSeenAt: number, completedAt: number | null 
 const timestamps = (html: string) => [...html.matchAll(/<time\b[^>]*dateTime="([^"]+)"/gu)].map((match) => match[1]);
 const iso = (ms: number) => new Date(ms).toISOString();
 const renderedText = (html: string) => html.replace(/<[^>]+>/gu, "");
+const settledTurn = (items: ThreadItem[]): Turn => ({
+  completedAt: 10, durationMs: null, error: null, id: "turn", items, itemsView: "full", startedAt: 1, status: "completed",
+});
 
 for (const status of ["inProgress", "completed"] as const) {
   test(`merged steers use only the final event time in ${status} turns`, () => {
@@ -51,9 +53,8 @@ test("only the initial message falls back to turn start when item timing is miss
 });
 
 test("a later transcript segment cannot borrow the initial message timestamp", () => {
-  const html = renderToStaticMarkup(createElement(ThreadTranscriptItemsDetails, {
-    items: [user("later")], initialUserItemId: "initial",
-    threadId: "thread", turnId: "turn", turnCompletedAt: 10, turnStartedAt: 1, turnStatus: "completed",
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
+    initialUserItemId: "initial", threadId: "thread", turn: settledTurn([user("later")]),
   }));
   assert.deepEqual(timestamps(html), []);
 });
@@ -67,9 +68,8 @@ test("relational questionnaire answers use resolution rather than request time",
     },
     response: { answers: { choice: { answers: ["answer"] } } }, state: "answered", type: "questionnaire",
   };
-  const html = renderToStaticMarkup(createElement(ThreadTranscriptItemsDetails, {
-    items: [item], itemTimeline: [timing(item.id, 1_000, 9_000)],
-    threadId: "thread", turnId: "turn", turnCompletedAt: 10, turnStartedAt: 1, turnStatus: "completed",
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
+    items: [item], itemTimeline: [timing(item.id, 1_000, 9_000)], threadId: "thread", turn: settledTurn([]),
   }));
   assert.ok(timestamps(html).length > 0);
   assert.ok(timestamps(html).every((value) => value === iso(item.resolvedAt)));
@@ -82,9 +82,8 @@ test("Workbench questionnaire tools use completion time and unanswered requests 
     durationMs: null, id: "question-tool", namespace: "workbench", status: "completed",
     success: true, tool: "workbench_request_user_input", type: "dynamicToolCall",
   };
-  const render = (question: typeof item) => renderToStaticMarkup(createElement(ThreadTranscriptItemsDetails, {
-    items: [question], itemTimeline: [timing(item.id, 1_000, 8_000)],
-    threadId: "thread", turnId: "turn", turnCompletedAt: 10, turnStartedAt: 1, turnStatus: "completed",
+  const render = (question: typeof item) => renderToStaticMarkup(createElement(ThreadTestTurn, {
+    itemTimeline: [timing(item.id, 1_000, 8_000)], threadId: "thread", turn: settledTurn([question]),
   }));
   assert.ok(timestamps(render(item)).length > 0);
   assert.ok(timestamps(render(item)).every((value) => value === iso(8_000)));
@@ -94,9 +93,8 @@ test("Workbench questionnaire tools use completion time and unanswered requests 
 });
 
 test("invalid item timing is not presented as a real timestamp", () => {
-  const html = renderToStaticMarkup(createElement(ThreadTranscriptItemsDetails, {
-    items: [user("invalid")], itemTimeline: [timing("invalid", NaN)],
-    threadId: "thread", turnId: "turn", turnCompletedAt: 10, turnStartedAt: 1, turnStatus: "completed",
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
+    initialUserItemId: null, itemTimeline: [timing("invalid", NaN)], threadId: "thread", turn: settledTurn([user("invalid")]),
   }));
   assert.deepEqual(timestamps(html), []);
 });
@@ -104,57 +102,19 @@ test("invalid item timing is not presented as a real timestamp", () => {
 test("active command families derive a live duration from canonical item timing", () => {
   const startedAt = Date.now() - 65_000;
   const items: ThreadItem[] = [{
-    aggregatedOutput: null,
-    command: "echo shell",
-    commandActions: [],
-    cwd: "C:/project",
-    durationMs: null,
-    exitCode: null,
-    id: "shell",
-    pluginId: null,
-    processId: null,
-    scriptPath: null,
-    source: "agent",
-    status: "inProgress",
-    type: "commandExecution",
+    aggregatedOutput: null, command: "echo shell", commandActions: [], cwd: "C:/project", durationMs: null, exitCode: null,
+    id: "shell", pluginId: null, processId: null, scriptPath: null, source: "agent", status: "inProgress", type: "commandExecution",
   }, {
-    appContext: null,
-    arguments: {},
-    durationMs: null,
-    error: null,
-    id: "mcp",
-    pluginId: null,
-    readOnlyHint: null,
-    result: null,
-    server: "custom",
-    status: "inProgress",
-    tool: "inspect",
-    type: "mcpToolCall",
+    appContext: null, arguments: {}, durationMs: null, error: null, id: "mcp", pluginId: null, readOnlyHint: null,
+    result: null, server: "custom", status: "inProgress", tool: "inspect", type: "mcpToolCall",
   }, {
-    arguments: {},
-    contentItems: null,
-    durationMs: null,
-    id: "dynamic",
-    namespace: "provider",
-    status: "inProgress",
-    success: null,
-    tool: "inspect",
-    type: "dynamicToolCall",
+    arguments: {}, contentItems: null, durationMs: null, id: "dynamic", namespace: "provider", status: "inProgress",
+    success: null, tool: "inspect", type: "dynamicToolCall",
   }];
-  const html = renderToStaticMarkup(createElement(ThreadTranscriptItemsDetails, {
-    itemTimeline: items.map(item => ({
-      completedAt: null,
-      firstSeenAt: startedAt,
-      itemId: item.id,
-      lastSeenAt: startedAt,
-      startedAt,
-    })),
-    items,
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
+    itemTimeline: items.map(item => ({ completedAt: null, firstSeenAt: startedAt, itemId: item.id, lastSeenAt: startedAt, startedAt })),
     threadId: "thread",
-    turnCompletedAt: null,
-    turnId: "turn",
-    turnStartedAt: startedAt / 1_000,
-    turnStatus: "inProgress",
+    turn: { completedAt: null, durationMs: null, error: null, id: "turn", items, itemsView: "full", startedAt: startedAt / 1_000, status: "inProgress" },
   }));
 
   assert.equal((renderedText(html).match(/1m/gu) ?? []).length, 3);

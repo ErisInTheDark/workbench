@@ -1,0 +1,406 @@
+/*
+ * Exports:
+ * - default ThreadCommandExecutionDetails: one shell command through its dedicated renderer (feedback, todo, vis, git arc,
+ *   subagent, message) or as a step row opening onto its output, Browse steps and checkpoint changes.
+ */
+"use client";
+
+import { useContext, useMemo } from "react";
+
+import { parseGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
+import {
+  getGitArcMatcherAction,
+  getThreadCommandDisplay,
+  getThreadCommandExecutionOutcome,
+  getThreadCommandOutcomeDisplay,
+  isBrowseCommandMatcherClaim,
+  isGitArcWaitMatcherClaim,
+  isGitCheckpointCompareMatcherClaim,
+  isGitCheckpointDiffMatcherClaim,
+  parseGitArcCommand,
+  parseGitArcReceipt,
+  parseGitArcWaitRef,
+  parseGitCheckpointCompareOutput,
+  parseGitCheckpointDiffArtifactId,
+  parseGitCheckpointDiffOutput,
+  parseWorkbenchFeedbackCommand,
+  parseWorkbenchFeedbackId,
+  parseWorkbenchMessageCommand,
+  parseWorkbenchSubagentCommand,
+  parseWorkbenchTodoCommand,
+  parseWorkbenchVisCommand,
+} from "../../../../workbench/thread/thread-command-matchers";
+import { useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
+import { resolveWorkbenchSubagentCommandTargets } from "../../../../workbench/thread/thread-subagents";
+import MarkdownRender from "../../../ui/MarkdownRender";
+import { TerminalIcon } from "../../workbench-icons";
+import { useTranscript } from "../../use-transcript";
+import ThreadAgentMessageBody from "../ThreadAgentMessageBody";
+import ThreadSentAgentMessageItem from "../ThreadAgentMessageItem";
+import ThreadBubbleCopyButton from "../ThreadBubbleCopyButton";
+import ThreadCheckpointCompareItem from "../ThreadCheckpointCompareItem";
+import ThreadCheckpointDiffItem from "../ThreadCheckpointDiffItem";
+import ThreadCodeDisplay, { ThreadCommandHeader } from "../ThreadCodeDisplay";
+import ThreadCommandDisplay from "../ThreadCommandDisplay";
+import ThreadDurationText from "../ThreadDurationText";
+import ThreadFeedbackCommandItem from "../ThreadFeedbackCommandItem";
+import { createThreadGitArcCompareSummaryRows, createThreadGitArcDiffSummaryRows } from "../ThreadGitArcCollapsedSummary";
+import ThreadGitArcItem from "../ThreadGitArcItem";
+import ThreadGitArcProposalItem from "../ThreadGitArcProposalItem";
+import ThreadGitArcWaitItem from "../ThreadGitArcWaitItem";
+import ThreadStepRow from "../ThreadStepRow";
+import ThreadSubagentCreateItem from "../ThreadSubagentCreateItem";
+import ThreadSubagentTargetActionItem from "../ThreadSubagentTargetActionItem";
+import ThreadSubagentWaitItem from "../ThreadSubagentWaitItem";
+import ThreadSummaryText from "../ThreadSummaryText";
+import ThreadTodoCommandItem from "../ThreadTodoCommandItem";
+import ThreadVisCommandItem from "../ThreadVisCommandItem";
+import { getBrowseItemSteps } from "../thread-browse-steps";
+import { readThreadGitArcProposalTranscriptItem } from "../thread-git-arc-presentation";
+import type { CommandItem } from "../thread-render-blocks";
+import type { ThreadSubagentWaitTiming } from "../thread-subagent-wait-groups";
+import { ThreadCommandSummary } from "../thread-view-primitives";
+import { useThreadItemLiveDuration } from "../use-thread-live-duration";
+import { ThreadShellStopAction } from "./ThreadItemActionControls";
+import { SubagentActivitySlot } from "./subagent-activity-slot";
+
+type ThreadCommandDisplayValue = ReturnType<typeof getThreadCommandDisplay>;
+
+const gitCheckpointPresentationByItem = new WeakMap<CommandItem, {
+  artifactId: ReturnType<typeof parseGitCheckpointDiffArtifactId>;
+  claimedBy: ThreadCommandDisplayValue["claimedBy"];
+  compareChanges: ReturnType<typeof parseGitCheckpointCompareOutput> | null;
+  diffChanges: ReturnType<typeof parseGitCheckpointDiffOutput> | null;
+  output: string;
+  summaryRows: ReturnType<typeof createThreadGitArcCompareSummaryRows>;
+}>();
+
+function readGitCheckpointPresentation(item: CommandItem, claimedBy: ThreadCommandDisplayValue["claimedBy"]) {
+  const cached = gitCheckpointPresentationByItem.get(item);
+  const output = item.aggregatedOutput ?? "";
+  if (cached?.claimedBy === claimedBy && cached.output === output) return cached;
+  const compareChanges = isGitCheckpointCompareMatcherClaim(claimedBy) ? parseGitCheckpointCompareOutput(output) : null;
+  const diffChanges = isGitCheckpointDiffMatcherClaim(claimedBy) ? parseGitCheckpointDiffOutput(output) : null;
+  const presentation = {
+    artifactId: isGitCheckpointDiffMatcherClaim(claimedBy) ? parseGitCheckpointDiffArtifactId(output) : null,
+    compareChanges,
+    diffChanges,
+    summaryRows: compareChanges?.length
+      ? createThreadGitArcCompareSummaryRows(compareChanges)
+      : diffChanges?.length ? createThreadGitArcDiffSummaryRows(diffChanges) : [],
+    claimedBy,
+    output,
+  };
+  gitCheckpointPresentationByItem.set(item, presentation);
+  return presentation;
+}
+
+export default function ThreadCommandExecutionDetails ({
+  activeStartedAtMs,
+  item,
+  subagentWaitTiming,
+  unwrapSubagentCreate = false,
+}: {
+  activeStartedAtMs?: number | null;
+  item: CommandItem;
+  subagentWaitTiming?: ThreadSubagentWaitTiming;
+  unwrapSubagentCreate?: boolean;
+}) {
+  const transcript = useTranscript();
+  const turn = useTranscript.turn();
+  const markdownProps = useTranscript.markdownProps();
+  const SubagentActivity = useContext(SubagentActivitySlot);
+  const linkProps = {
+    projectFilePaths: transcript.projectFilePaths,
+    projectId: transcript.projectId,
+    projectRootPath: transcript.projectRootPath,
+    workspaceRoots: transcript.workspaceRoots,
+  };
+  const commandDisplay = useMemo(() => getThreadCommandDisplay({
+    command: item.command,
+    commandActions: item.commandActions,
+    cwd: item.cwd,
+    knownSkills: transcript.knownSkills,
+    projectRootPath: transcript.projectRootPath,
+    shell: item.shell,
+    workspaceRoots: transcript.workspaceRoots,
+  }), [item.command, item.commandActions, item.cwd, item.shell, transcript.knownSkills, transcript.projectRootPath, transcript.workspaceRoots]);
+  const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+  const visibleDurationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
+  const outcomeCommandDisplay = useMemo(() => {
+    const display = commandDisplay.summaryParts.length || !item.resultExpiredAt ? commandDisplay : {
+      ...commandDisplay,
+      ongoingSummaryParts: [
+        { text: "Running ", type: "text" as const },
+        { clamp: true, text: commandDisplay.unwrappedCommand, type: "text" as const, variant: "code" as const },
+      ],
+      ongoingSummaryText: `Running ${commandDisplay.unwrappedCommand}`,
+      summaryKind: "raw" as const,
+      summaryParts: [{ clamp: true, text: commandDisplay.unwrappedCommand, type: "text" as const, variant: "code" as const }],
+      summaryText: commandDisplay.unwrappedCommand,
+    };
+    return getThreadCommandOutcomeDisplay(display, commandOutcome);
+  }, [commandDisplay, commandOutcome, item.resultExpiredAt]);
+  const approval = useThreadItemApproval(item.id);
+  const browseResultEntries = turn.browseResultEntries;
+  const commandDetailRows = useMemo(
+    () => getBrowseItemSteps(item, commandDisplay, browseResultEntries) ?? commandDisplay.detailRows ?? [],
+    [browseResultEntries, commandDisplay, item],
+  );
+  if (item.resultExpiredAt) {
+    return (
+      <ThreadStepRow
+        icon={<TerminalIcon size={16} />}
+        meta={["Result expired after 1 day."]}
+        summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} line projectFilePaths={transcript.projectFilePaths} projectId={transcript.projectId} />}
+      />
+    );
+  }
+  const messageCommand = parseWorkbenchMessageCommand(commandDisplay.unwrappedCommand, item.commandActions);
+  const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
+  const resolvedSubagentTargets = subagentCommand ? resolveWorkbenchSubagentCommandTargets(transcript.subagents, subagentCommand.targets) : [];
+  const {
+    artifactId: checkpointDiffArtifactId,
+    compareChanges: checkpointCompareChanges,
+    diffChanges: checkpointDiffChanges,
+    summaryRows: checkpointSummaryRows,
+  } = readGitCheckpointPresentation(item, commandDisplay.claimedBy);
+  const gitArcProposal = readThreadGitArcProposalTranscriptItem(item, commandDisplay);
+  const gitArcReceipt = gitArcProposal?.receipt ?? parseGitArcReceipt(item.aggregatedOutput ?? "");
+  const gitArcAction = getGitArcMatcherAction(commandDisplay.claimedBy);
+  const gitArcCommandIntent = gitArcAction
+    ? parseGitArcCommand(commandDisplay.unwrappedCommand) ?? {
+      action: gitArcAction,
+      intentName: gitArcReceipt?.intentName ?? null,
+      paths: gitArcReceipt?.selectedPaths ?? [],
+      proposalId: gitArcReceipt?.proposalId ?? null,
+      ref: gitArcReceipt?.ref ?? null,
+    }
+    : null;
+  const isBrowseCommand = isBrowseCommandMatcherClaim(commandDisplay.claimedBy);
+  const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
+    && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
+  const shouldHideCommandOutput = commandDisplay.hideCommandOutput
+    && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
+  const failureOutput = commandOutcome === "failed" || commandOutcome === "declined" || commandOutcome === "timedOut"
+    ? item.aggregatedOutput
+    : null;
+  const feedbackCommand = parseWorkbenchFeedbackCommand(commandDisplay.unwrappedCommand);
+  if (feedbackCommand && (commandOutcome === "completed" || commandOutcome === "inProgress")) {
+    return (
+      <ThreadFeedbackCommandItem
+        durationMs={visibleDurationMs ?? null}
+        feedbackId={parseWorkbenchFeedbackId(item.aggregatedOutput ?? "")}
+        operation={feedbackCommand}
+        outcome={commandOutcome}
+        projectId={transcript.projectId}
+        threadId={transcript.threadId}
+      />
+    );
+  }
+  const todoCommand = parseWorkbenchTodoCommand(commandDisplay.unwrappedCommand);
+  if (todoCommand) {
+    return (
+      <ThreadTodoCommandItem
+        durationMs={visibleDurationMs ?? null}
+        operation={todoCommand}
+        outcome={commandOutcome === "inProgress" ? "inProgress" : commandOutcome === "completed" ? "completed" : "failed"}
+        output={item.aggregatedOutput ?? ""}
+      />
+    );
+  }
+  if (isGitArcWaitMatcherClaim(commandDisplay.claimedBy)) {
+    return (
+      <ThreadGitArcWaitItem
+        {...linkProps}
+        durationMs={visibleDurationMs ?? null}
+        failureReason={commandOutcome === "completed" || commandOutcome === "inProgress" ? null : item.aggregatedOutput}
+        outcome={commandOutcome}
+        planRef={parseGitArcWaitRef(commandDisplay.unwrappedCommand)}
+        receipt={gitArcReceipt}
+        threadId={transcript.threadId}
+      />
+    );
+  }
+  const visCommand = parseWorkbenchVisCommand(commandDisplay.unwrappedCommand);
+  if (visCommand) {
+    return (
+      <ThreadVisCommandItem
+        durationMs={visibleDurationMs ?? null}
+        operation={visCommand}
+        outcome={commandOutcome === "inProgress" ? "inProgress" : commandOutcome === "completed" ? "completed" : "failed"}
+        output={item.aggregatedOutput ?? ""}
+        threadId={transcript.threadId}
+      />
+    );
+  }
+  if (gitArcAction === "propose") {
+    return (
+      <ThreadGitArcProposalItem
+        {...linkProps}
+        durationMs={visibleDurationMs ?? null}
+        failureReason={failureOutput}
+        intent={gitArcProposal?.intent ?? null}
+        outcome={commandOutcome}
+        proposalId={gitArcProposal?.proposalId ?? null}
+        sourceItemId={item.id}
+      />
+    );
+  }
+  const checkpointDiff = shouldRenderCheckpointDiff ? (
+    <ThreadCheckpointDiffItem
+      {...linkProps}
+      cwd={item.cwd}
+      output={item.aggregatedOutput ?? ""}
+      sourceItemId={item.id}
+      threadId={transcript.threadId}
+    />
+  ) : null;
+  if (gitArcCommandIntent && gitArcCommandIntent.action !== "propose") {
+    return (
+      <ThreadGitArcItem
+        {...linkProps}
+        commandIntent={gitArcCommandIntent}
+        statusOutput={gitArcCommandIntent.action === "status" ? item.aggregatedOutput ?? "" : undefined}
+        durationMs={visibleDurationMs ?? null}
+        editResult={gitArcCommandIntent.action === "edit" ? parseGitArcEditText(item.aggregatedOutput ?? "") : null}
+        failureReason={failureOutput}
+        operationDetails={checkpointCompareChanges?.length
+          ? <ThreadCheckpointCompareItem {...linkProps} changes={checkpointCompareChanges} />
+          : checkpointDiff}
+        operationSummaryRows={checkpointSummaryRows}
+        outcome={commandOutcome}
+        receipt={gitArcReceipt}
+      />
+    );
+  }
+  if (subagentCommand?.action === "wait" && resolvedSubagentTargets.length) {
+    return (
+      <ThreadSubagentWaitItem
+        activeStartedAtMs={subagentWaitTiming?.activeStartedAtMs}
+        disclosureContent={commandOutcome === "completed"
+          ? item.aggregatedOutput?.trim()
+            ? <MarkdownRender {...markdownProps} markdown={item.aggregatedOutput.trim()} threadCwdPath={item.cwd} />
+            : undefined
+          : commandOutcome === "inProgress" ? undefined : (
+            <ThreadCodeDisplay
+              header={<ThreadCommandHeader command={item.command} surface="framed" />}
+              output={item.aggregatedOutput?.trim() || undefined}
+              preview
+              variant="plain"
+            />
+          )}
+        durationMs={subagentWaitTiming ? subagentWaitTiming.durationMs : visibleDurationMs}
+        entries={resolvedSubagentTargets.map((target) => {
+          const childThread = target.threadId ? transcript.relatedThreadsById[target.threadId] : undefined;
+          return {
+            content: target.threadId ? <SubagentActivity fallbackThread={childThread} subagent={target.subagent} /> : undefined,
+            fallbackName: target.fallbackName,
+            subagent: target.subagent,
+            targetKey: target.targetKey,
+            thread: childThread,
+          };
+        })}
+        exitCode={item.exitCode}
+        outcome={commandOutcome}
+      />
+    );
+  }
+  if (
+    subagentCommand?.action === "create"
+    && subagentCommand.message
+    && subagentCommand.name
+    && subagentCommand.profileId
+    && subagentCommand.title
+    && (item.status === "inProgress" || item.status === "completed")
+    && (item.exitCode === null || item.exitCode === 0)
+  ) {
+    const createdThreadId = item.status === "completed" ? item.aggregatedOutput?.trim() || null : null;
+    const createdTarget = resolveWorkbenchSubagentCommandTargets(transcript.subagents, [{
+      kind: createdThreadId ? "id" : "name",
+      value: createdThreadId ?? subagentCommand.name,
+    }])[0] ?? null;
+    return (
+      <ThreadSubagentCreateItem
+        active={item.status === "inProgress"}
+        fallbackName={subagentCommand.name}
+        profileId={subagentCommand.profileId}
+        fallbackTitle={subagentCommand.title}
+        subagent={createdTarget?.subagent}
+        unwrapped={unwrapSubagentCreate}
+      >
+        <ThreadAgentMessageBody
+          {...markdownProps}
+          parts={[{ markdown: subagentCommand.message, userVisibleSimpleVersion: subagentCommand.userVisibleSimpleVersion }]}
+          threadCwdPath={item.cwd}
+        />
+      </ThreadSubagentCreateItem>
+    );
+  }
+  if (messageCommand && (item.status === "inProgress" || item.status === "completed") && (item.exitCode === null || item.exitCode === 0)) {
+    const descriptor = messageCommand.target.kind === "parent" || !messageCommand.target.value
+      ? null
+      : { kind: messageCommand.target.kind === "name" ? "name" as const : "id" as const, value: messageCommand.target.value };
+    const target = descriptor ? resolveWorkbenchSubagentCommandTargets(transcript.subagents, [descriptor])[0] ?? null : null;
+    return (
+      <ThreadSentAgentMessageItem
+        fallbackName={messageCommand.target.kind === "parent" ? "parent" : target?.fallbackName ?? messageCommand.target.value}
+        subagent={target?.subagent}
+        target={messageCommand.target.kind === "parent"
+          ? { relation: "parent", threadId: transcript.threadId }
+          : target?.threadId ? { relation: "self", threadId: target.threadId } : null}
+        thread={target?.threadId ? transcript.relatedThreadsById[target.threadId] : undefined}
+      >
+        <MarkdownRender {...markdownProps} markdown={messageCommand.message} threadCwdPath={item.cwd} />
+      </ThreadSentAgentMessageItem>
+    );
+  }
+  if (
+    (subagentCommand?.action === "settle" || subagentCommand?.action === "stop")
+    && resolvedSubagentTargets.length
+    && (item.status === "inProgress" || item.status === "completed")
+    && (item.exitCode === null || item.exitCode === 0)
+  ) {
+    return (
+      <ThreadSubagentTargetActionItem
+        action={subagentCommand.action}
+        active={item.status === "inProgress"}
+        entries={resolvedSubagentTargets.map((target) => ({
+          fallbackName: target.fallbackName,
+          subagent: target.subagent,
+          targetKey: target.targetKey,
+          thread: target.threadId ? transcript.relatedThreadsById[target.threadId] : undefined,
+        }))}
+      />
+    );
+  }
+
+  const commandDisplayView = (
+    <ThreadCommandDisplay
+      approval={approval}
+      browse={isBrowseCommand && (commandOutcome === "failed" || !commandDetailRows.length)}
+      command={item.command}
+      detailRows={commandDetailRows}
+      display={commandDisplay}
+      meta={[
+        commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0 ? <ThreadSummaryText text={`exit ${item.exitCode}`} /> : null,
+        visibleDurationMs !== null && visibleDurationMs !== undefined ? <ThreadDurationText durationMs={visibleDurationMs} /> : null,
+      ]}
+      output={item.aggregatedOutput}
+      projectFilePaths={transcript.projectFilePaths}
+      projectId={transcript.projectId}
+      summaryDisplay={outcomeCommandDisplay}
+    >
+      {isBrowseCommand || shouldHideCommandOutput ? undefined
+        : checkpointCompareChanges && commandOutcome === "completed" ? <ThreadCheckpointCompareItem {...linkProps} changes={checkpointCompareChanges} />
+          : checkpointDiff ?? undefined}
+    </ThreadCommandDisplay>
+  );
+  if (!item.workbenchShell || item.status !== "inProgress") return commandDisplayView;
+  return (
+    <div className="group/thread-bubble relative">
+      {commandDisplayView}
+      <ThreadBubbleCopyButton actions={<ThreadShellStopAction itemId={item.id} />} markdown="" side="right" touchVisible />
+    </div>
+  );
+}

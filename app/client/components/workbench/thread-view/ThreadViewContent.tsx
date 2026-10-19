@@ -64,7 +64,7 @@ import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext
 import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalReviewerReady } from "../WorkbenchApprovalModeMenu";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
-import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./transcript/ThreadTurnLoadStates";
 import getThreadGitArcProposalPresentation, { getThreadGitArcWork } from "./thread-git-arc-presentation";
 import { ThreadStoreGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import ThreadAgentTabs from "./ThreadAgentTabs";
