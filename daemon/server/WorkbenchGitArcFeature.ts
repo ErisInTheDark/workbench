@@ -1042,7 +1042,7 @@ export default class WorkbenchGitArcFeature {
       case "arcAdd": return Response.json(await this.controller.addToArc({ ...common, paths: input.paths }));
       case "arcAdopt": return Response.json(await this.controller.adoptIntoArc({ ...common, paths: input.paths }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
-      case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown }));
+      case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown, paths: input.paths }));
       case "arcStack": return Response.json(await this.controller.stackArc({ ...common, title: input.title }));
       case "arcUnstack": return Response.json(await this.controller.unstackArc(common));
       case "arcStash": return Response.json(await this.controller.stashArc(common));

@@ -171,7 +171,7 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
     lines.push(
       "These dirty paths remain claimed:",
       ...claimedPaths.map(escapeGitArcValue),
-      "Set disown to also release dirty claims.",
+      "Set disown, optionally with paths, to release dirty claims.",
     );
   }
   return {

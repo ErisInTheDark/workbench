@@ -1029,6 +1029,9 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   const disown = await parseWorkbenchAgentCliCommand(["git", "arc", "release", "--disown"], gitOptions);
   assert.equal(disown.kind, "request");
   assert.deepEqual(disown.request.body, { ...release.request.body, disown: true });
+  const selectedDisown = await parseWorkbenchAgentCliCommand(["git", "arc", "release", "--disown", "--", "api:src/one.ts"], gitOptions);
+  assert.equal(selectedDisown.kind, "request");
+  assert.deepEqual(selectedDisown.request.body, { ...release.request.body, disown: true, paths: ["api:src/one.ts"] });
   const transfer = await parseWorkbenchAgentCliCommand([
     "git", "arc", "release", "--to-subagent", "mira", "--", "api:src/one.ts",
   ], gitOptions);
@@ -1856,7 +1859,7 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   }, { action: "arcRelease", disown: false });
   assert.match(
     partialReleaseResponse.stdout,
-    /These dirty paths remain claimed:\nsrc\/dirty\.ts\n"odd\\nname\.ts"\nSet disown to also release dirty claims\./u,
+    /These dirty paths remain claimed:\nsrc\/dirty\.ts\n"odd\\nname\.ts"\nSet disown/u,
   );
   assert.deepEqual(parseGitArcReceipt(partialReleaseResponse.stdout)?.removedClaims, ["src/clean.ts"]);
   assert.equal(parseGitArcReceipt(partialReleaseResponse.stdout)?.plannedPathCount, undefined);

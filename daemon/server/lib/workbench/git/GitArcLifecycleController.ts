@@ -27,7 +27,7 @@ interface Identity {
 
 type ClaimChangeRequest =
   | { kind: "add"; paths: string[] }
-  | { kind: "claims"; changes: GitArcClaimChanges };
+  | { kind: "claims"; changes: GitArcClaimChanges; disown?: boolean };
 
 function claimSetDifference(left: readonly string[], right: readonly string[]) {
   const rightPaths = new Set(right);
@@ -84,9 +84,10 @@ export default class GitArcLifecycleController {
     return await this.transition(input);
   }
 
-  async claims(input: Identity & GitArcClaimChanges) {
+  /** `disown` lets removals release dirty claims; pure sealed-layer content still rejects. */
+  async claims({ disown, ...input }: Identity & GitArcClaimChanges & { disown?: boolean }) {
     if (input.inherit !== true) throw new GitArcRejectionError({ reason: "inheritanceRequired" }, "Active claim edits require inherit: true.");
-    return await this.transition(input, { kind: "claims", changes: input });
+    return await this.transition(input, { kind: "claims", changes: input, disown });
   }
 
   async add(input: Identity & { paths: string[] }) {
@@ -199,9 +200,12 @@ export default class GitArcLifecycleController {
       const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
       const tipDirty = movement.tip?.pending && exposed.length
         ? await repository.listWorktreeChangedPaths(await stack.sealedTree(head, movement.tip.commit), exposed) : exposed;
-      if (tipDirty.length) throw new GitCheckpointDirtyPathsError(tipDirty, "Removed claims");
-      if (exposed.length) {
-        throw new GitArcRejectionError({ reason: "sealedStackContent", paths: exposed }, `Removed claims hold pending stack-layer content: ${exposed.join(", ")}. Keep them until the layer commits, or ask the coordinating thread to move them with a selected adopt.`);
+      const disown = request?.kind === "claims" && request.disown === true;
+      if (tipDirty.length && !disown) throw new GitCheckpointDirtyPathsError(tipDirty, "Removed claims");
+      const tipDirtySet = new Set(tipDirty);
+      const sealedOnly = exposed.filter((candidate) => !tipDirtySet.has(candidate));
+      if (sealedOnly.length) {
+        throw new GitArcRejectionError({ reason: "sealedStackContent", paths: sealedOnly }, `Removed claims hold pending stack-layer content: ${sealedOnly.join(", ")}. Keep them until the layer commits, or ask the coordinating thread to move them with a selected adopt.`);
       }
       const adopted = new GitArcPathSet(adoptions.paths);
       const owned = new GitArcPathSet(guards);

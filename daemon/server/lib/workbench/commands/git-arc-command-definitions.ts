@@ -215,20 +215,20 @@ const editRevert = editStep("revert", "Undo the applied session while keeping la
 const editEnd = editStep("end", "Keep the applied session's changes (or discard a preview) and drop the session.", { destructive: true });
 
 const release = defineWorkbenchAgentCommand({
-  description: "Release clean claims, or transfer selected live claims and/or saved stash atomically to an owned subagent without changing workspace content.",
+  description: "Release clean claims, disown all or selected dirty claims, or transfer selected live claims and/or saved stash atomically to an owned subagent without changing workspace content.",
   effects: { destructive: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "release"],
-  usage: "wb git arc release [--disown] | wb git arc release --to-subagent <name> [--transfer-stash|--leave-stash] [-- <claim-path>...]",
+  usage: "wb git arc release [--disown [-- <claim-path>...]] | wb git arc release --to-subagent <name> [--transfer-stash|--leave-stash] [-- <claim-path>...]",
   inputSchema: z.object({
     disown: z.boolean().default(false).describe("Release ownership of dirty claims without changing their workspace or Git content."),
     toSubagent: requiredText.optional().describe("Owned unsettled subagent receiving selected live claims."),
-    paths: paths.default([]),
+    paths: paths.default([]).describe("Selected live claims to transfer, or with disown to release; omit with disown to release every claim."),
     transferStash: z.boolean().optional().describe("Required when saved stash exists: true transfers it; false leaves it."),
   }).strict().superRefine((input, context) => {
     if (input.toSubagent && ((!input.paths.length && input.transferStash !== true) || input.disown)
-      || !input.toSubagent && (input.paths.length || input.transferStash !== undefined)) {
-      context.addIssue({ code: "custom", message: "A subagent transfer requires paths or transferStash: true and cannot use disown; ordinary release accepts neither." });
+      || !input.toSubagent && (input.paths.length && !input.disown || input.transferStash !== undefined)) {
+      context.addIssue({ code: "custom", message: "A subagent transfer requires paths or transferStash: true and cannot use disown; disown accepts paths; ordinary release accepts neither." });
     }
   }),
   parseCliArgs(args) {
@@ -252,7 +252,7 @@ const release = defineWorkbenchAgentCommand({
         }
         : { action: "arcRelease" as const }),
       ...baseBody(callerHarness, callerThreadId, cwd),
-      ...(!input.toSubagent ? { disown: input.disown } : {}),
+      ...(!input.toSubagent ? { disown: input.disown, ...(input.paths.length ? { paths: input.paths } : {}) } : {}),
     }, "git-arc-release");
   },
 });

@@ -1,4 +1,4 @@
-/* Exports: none. Shared-state batteries protect ownership, diagnostics, read purity, acceptance, and atomic publication with real Git. */
+/* Exports: none. Shared-state batteries protect ownership, diagnostics, read purity, acceptance, selected disown, and atomic publication with real Git. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -14,7 +14,7 @@ import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
 import GitArcRegistry, { GitArcCollisionError } from "./GitArcRegistry";
 import GitCheckpointStore, { GitCheckpointMissingObjectError } from "./GitCheckpointStore";
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
-import { CONTROLLER_OPERATIONS_FIXTURE, type ControllerFixtureState } from "./GitArcControllerTestFixtures";
+import { CONTROLLER_BASE_FIXTURE, CONTROLLER_OPERATIONS_FIXTURE, type ControllerFixtureState } from "./GitArcControllerTestFixtures";
 import { proposalMessage } from "workbench-shared/workbench/git/git-arc-storage";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
@@ -1489,6 +1489,43 @@ controllerTest("remote", "published amend targets become fresh commits; unavaila
   assert.equal(stored.mode, "commit");
   assert.equal(stored.amendTargetSha, null);
   await checkRemoteFailures(fixture);
+});
+
+async function startDirtyPair(context: TestContext) {
+  const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const controller = new WorkbenchGitCheckpointController();
+  const identity = { cwd: fixture.root, threadId: "disown-thread" };
+  await controller.createAndStartPlan({ ...identity, intentName: "change both files", paths: ["one.txt", "two.txt"] });
+  await fs.writeFile(path.join(fixture.root, "one.txt"), "one dirty\n");
+  await fs.writeFile(path.join(fixture.root, "two.txt"), "two dirty\n");
+  return { controller, identity };
+}
+
+test("selected disown releases only named dirty claims from an active arc", async (context) => {
+  const { controller, identity } = await startDirtyPair(context);
+  await assert.rejects(controller.releaseArc({ ...identity, disown: false, paths: ["one.txt"] }), /requires disown/u);
+  await assert.rejects(controller.releaseArc({ ...identity, disown: true, paths: ["missing.txt"] }), /live claim/u);
+  const released = await controller.releaseArc({ ...identity, disown: true, paths: ["one.txt"] });
+  assert.deepEqual(released.releasedClaims, ["one.txt"]);
+  const status = await controller.readStatus(identity);
+  assert.deepEqual(status.dirtyClaims, ["two.txt"]);
+  assert.deepEqual(status.cleanClaims, []);
+  assert.equal(await fs.readFile(path.join(identity.cwd, "one.txt"), "utf8"), "one dirty\n");
+  const last = await controller.releaseArc({ ...identity, disown: true, paths: ["two.txt"] });
+  assert.deepEqual(last.releasedClaims, ["two.txt"]);
+  assert.equal(last.phase, "resolved");
+});
+
+test("selected disown narrows the retained claims beneath an inactive plan", async (context) => {
+  const { controller, identity } = await startDirtyPair(context);
+  await controller.editPlanClaims({ ...identity, inherit: true, addPaths: [], removePaths: [], adoptPaths: [] });
+  const released = await controller.releaseArc({ ...identity, disown: true, paths: ["one.txt"] });
+  assert.deepEqual(released.releasedClaims, ["one.txt"]);
+  const scope = await controller.readScope(identity);
+  assert.equal(scope?.phase, "plan");
+  assert.deepEqual(scope?.plannedPaths, ["one.txt", "two.txt"]);
+  assert.deepEqual(scope?.claimedPaths, ["two.txt"]);
 });
 
 const controllerCaseGroups: Array<{

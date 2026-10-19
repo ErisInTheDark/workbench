@@ -397,6 +397,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ], nested: true }],
   ["WorkbenchGitCheckpointController.test.ts", { fixtures: [
     demand(CONTROLLER_OPERATIONS_FIXTURE, 1),
+    demand(CONTROLLER_BASE_FIXTURE, 2),
   ], nested: true }],
 ]);
 

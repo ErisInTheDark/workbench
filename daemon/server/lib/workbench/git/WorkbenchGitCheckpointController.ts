@@ -700,43 +700,24 @@ export default class WorkbenchGitCheckpointController {
     });
   }
 
-  async releaseArc({ cwd, disown, harness: rawHarness, threadId }: ControllerInput & { disown: boolean }): Promise<GitArcReleaseResult> {
+  /** Releases clean claims; `disown` releases every claim, or only the selected `paths`, dirty or clean. */
+  async releaseArc({
+    cwd, disown, harness: rawHarness, paths = [], threadId,
+  }: ControllerInput & { disown: boolean; paths?: string[] }): Promise<GitArcReleaseResult> {
     return await GitObjectReadSession.run(async () => {
+      if (paths.length && !disown) {
+        throw new Error("Selected release requires disown. Transfer selected claims to a subagent instead.");
+      }
       const releasable = await this.requireReleasableArc({ cwd, harness: rawHarness, threadId });
       const ownership = await new GitArcClaimOwnershipController(
         releasable.repository,
         this.resolveThreadIdentity,
       ).project(releasable.active);
+      if (paths.length) return await this.disownSelectedClaims({ ...releasable, threadId }, ownership, paths);
       if (disown && ownership.baselineClaims.length) {
-        const releasedEntry = releasable.active.phase === "plan" && releasable.active.retainedArc
-          ? {
-            ...releasable.active,
-            retainedArc: {
-              ...releasable.active.retainedArc,
-              activeClaimedPaths: [],
-              claimedPaths: ownership.baselineClaims,
-            },
-          }
-          : {
-            ...releasable.active,
-            activeClaimedPaths: [],
-            claimedPaths: ownership.baselineClaims,
-          };
-        const registryMutation = await releasable.registry.prepareSet(
-          releasedEntry,
-          releasable.active.checkpointCommit,
-        );
-        await releasable.repository.updateRefs(registryMutation.updates);
-        return {
-          checkpointCommit: releasable.checkpoint.checkpointCommit,
-          checkpointRef: releasable.checkpoint.checkpointRef,
-          intentName: releasable.lifecycle.intentName ?? null,
-          kind: "arc",
-          phase: releasable.active.phase === "plan" ? "plan" : "active",
-          releasedClaims: ownership.activeClaims,
-          repoRoot: releasable.repository.root,
-          scopePaths: [],
-        };
+        return await this.releaseRetainedClaims(releasable, {
+          baselineClaims: ownership.baselineClaims, keptActive: [], releasedClaims: ownership.activeClaims,
+        });
       }
       if (disown) return await this.finishArcRelease({ ...releasable, threadId });
       const { cleanClaims, dirtyClaims } = await this.partitionArcReleaseClaims(
@@ -782,28 +763,65 @@ export default class WorkbenchGitCheckpointController {
         });
         return { ...result, kind: "arc", releasedClaims: removedClaims };
       }
-      const retainedArc = releasable.active.retainedArc;
-      if (!retainedArc) throw new Error("The inactive Git arc plan does not retain an active arc.");
-      const registryMutation = await releasable.registry.prepareSet({
-        ...releasable.active,
-        retainedArc: {
-          ...retainedArc,
-          activeClaimedPaths: dirtyClaims,
-          claimedPaths: [...new Set([...dirtyClaims, ...ownership.baselineClaims])].sort(),
-        },
-      }, releasable.active.checkpointCommit);
-      await releasable.repository.updateRefs(registryMutation.updates);
-      return {
-        checkpointCommit: releasable.checkpoint.checkpointCommit,
-        checkpointRef: releasable.checkpoint.checkpointRef,
-        intentName: releasable.lifecycle.intentName ?? null,
-        kind: "arc",
-        phase: "plan",
-        releasedClaims: cleanClaims,
-        repoRoot: releasable.repository.root,
-        scopePaths: dirtyClaims,
-      };
+      return await this.releaseRetainedClaims(releasable, {
+        baselineClaims: ownership.baselineClaims, keptActive: dirtyClaims, releasedClaims: cleanClaims,
+      });
     });
+  }
+
+  private async disownSelectedClaims(
+    releasable: Awaited<ReturnType<WorkbenchGitCheckpointController["requireReleasableArc"]>> & { threadId: string },
+    ownership: { activeClaims: string[]; baselineClaims: string[] },
+    paths: string[],
+  ): Promise<GitArcReleaseResult> {
+    const selected = releasable.repository.normalizePaths(paths);
+    const selectedSet = new Set(selected);
+    const activeSet = new Set(ownership.activeClaims);
+    if (selectedSet.size !== paths.length || selected.some(value => !activeSet.has(value))) {
+      throw new Error("Every selected path must be a distinct live claim owned by this thread.");
+    }
+    if (releasable.active.phase !== "plan") {
+      const { kind: _kind, removedClaims, ...result } = await this.lifecycle.claims({
+        cwd: releasable.repository.root,
+        disown: true,
+        harness: releasable.harness,
+        inherit: true,
+        removePaths: selected,
+        threadId: releasable.threadId,
+      });
+      return { ...result, kind: "arc", releasedClaims: removedClaims };
+    }
+    const keptActive = ownership.activeClaims.filter(value => !selectedSet.has(value));
+    if (!keptActive.length && !ownership.baselineClaims.length) return await this.finishArcRelease(releasable);
+    return await this.releaseRetainedClaims(releasable, {
+      baselineClaims: ownership.baselineClaims, keptActive, releasedClaims: selected,
+    });
+  }
+
+  /** Rewrites live ownership in place, keeping `keptActive` plus baseline guards; inactive plans edit their retained arc. */
+  private async releaseRetainedClaims(
+    { active, checkpoint, lifecycle, registry, repository }: Awaited<ReturnType<WorkbenchGitCheckpointController["requireReleasableArc"]>>,
+    { baselineClaims, keptActive, releasedClaims }: { baselineClaims: string[]; keptActive: string[]; releasedClaims: string[] },
+  ): Promise<GitArcReleaseResult> {
+    const claims = {
+      activeClaimedPaths: keptActive,
+      claimedPaths: [...new Set([...keptActive, ...baselineClaims])].sort(),
+    };
+    const releasedEntry = active.phase === "plan" && active.retainedArc
+      ? { ...active, retainedArc: { ...active.retainedArc, ...claims } }
+      : { ...active, ...claims };
+    const registryMutation = await registry.prepareSet(releasedEntry, active.checkpointCommit);
+    await repository.updateRefs(registryMutation.updates);
+    return {
+      checkpointCommit: checkpoint.checkpointCommit,
+      checkpointRef: checkpoint.checkpointRef,
+      intentName: lifecycle.intentName ?? null,
+      kind: "arc",
+      phase: active.phase === "plan" ? "plan" : "active",
+      releasedClaims,
+      repoRoot: repository.root,
+      scopePaths: keptActive,
+    };
   }
 
   async pruneThreadHistory({

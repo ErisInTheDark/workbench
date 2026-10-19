@@ -201,6 +201,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("arcRelease"),
     disown: z.boolean().default(false),
+    paths: optionalCheckpointPaths.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({ action: z.literal("arcStash"), ...checkpointBaseRequest }).strict(),

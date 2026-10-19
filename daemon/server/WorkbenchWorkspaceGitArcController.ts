@@ -928,15 +928,20 @@ export default class WorkbenchWorkspaceGitArcController {
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "arcRelease" }>,
   ) {
+    const selectedPaths = request.paths?.length
+      ? new Map(this.groupRootPaths(project, members, request.paths, []).map(group => [group.member.repoRoot, group.paths]))
+      : null;
     const lifecycle = await this.findLifecycleStateInMembers(project, members, request.harness, request.threadId);
     const claimedRepoRoots = new Set(lifecycle?.members
       .filter(({ claimedPaths }) => claimedPaths.length > 0)
       .map(({ repoRoot }) => repoRoot));
-    const selected = members.filter((member) => claimedRepoRoots.has(member.repoRoot));
+    const selected = members.filter((member) => selectedPaths
+      ? selectedPaths.has(member.repoRoot) : claimedRepoRoots.has(member.repoRoot));
     const values = await this.runMembers(
       selected,
       async (member) => await this.local.releaseArc({
-        cwd: member.repoRoot, disown: request.disown, harness: request.harness, threadId: request.threadId,
+        cwd: member.repoRoot, disown: request.disown, harness: request.harness,
+        paths: selectedPaths?.get(member.repoRoot) ?? [], threadId: request.threadId,
       }),
       request.disown ? undefined : async (member) => await this.local.assertArcReleasable({
         cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,

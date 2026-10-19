@@ -117,7 +117,7 @@ follow-up scope:
 
 <docs tools="git_arc_release">
 ### release or hand off claims
-- Ordinary release keeps dirty claims; `disown: true` releases dirty ownership only on explicit user direction. Neither changes workspace or Git content.
+- Ordinary release keeps dirty claims; `disown: true` releases dirty ownership, all or selected `paths`, only on explicit user direction. Neither changes workspace or Git content.
 - <tool id="git_arc_release" /> releases clean claims, or transfers selected live claims and/or saved stash to an owned subagent. Stash transfer rejects recipients with saved work or recipient-owned pending stack layers; inherited layers may hold it but still block unstash and stacking.
 </docs>
 <docs tools="git_arc_claims git_plan_claims">

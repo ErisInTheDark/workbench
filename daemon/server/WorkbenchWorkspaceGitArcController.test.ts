@@ -437,10 +437,12 @@ class FakeLocalGitArcController {
     };
   }
 
-  async releaseArc(input: { cwd: string; disown: boolean }) {
+  async releaseArc(input: { cwd: string; disown: boolean; paths?: string[] }) {
     const state = this.states.get(input.cwd);
     if (!state) throw new Error("This thread does not own any live Git arc claims.");
-    const retainedClaims = input.disown || !this.dirtyRoots.has(input.cwd) ? [] : state.claimedPaths;
+    const selected = input.paths?.map(value => path.relative(input.cwd, value).replaceAll("\\", "/"));
+    const retainedClaims = selected?.length ? state.claimedPaths.filter(claim => !selected.includes(claim))
+      : input.disown || !this.dirtyRoots.has(input.cwd) ? [] : state.claimedPaths;
     const releasedClaims = state.claimedPaths.filter(path => !retainedClaims.includes(path));
     if (retainedClaims.length) this.states.set(input.cwd, { ...state, claimedPaths: retainedClaims });
     else this.states.delete(input.cwd);
@@ -896,6 +898,37 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   assert.deepEqual(released.releasedClaims, ["web:two.txt"]);
   assert.equal(await controller.findLifecycleState(project, "codex", identity.threadId), null);
   assert.equal(await controller.hasLiveClaims(project, "codex", identity.threadId), false);
+});
+
+test("selected disown releases only the named root's dirty claims", async () => {
+  const apiRoot = "C:/workspace/api";
+  const webRoot = "C:/workspace/web";
+  const project = createWorkspace(apiRoot, webRoot);
+  const local = new FakeLocalGitArcController();
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+  );
+  const identity = { cwd: apiRoot, harness: "codex" as const, threadId: "workspace-thread" };
+  const plan = await controller.execute(project, {
+    action: "plan", adoptPaths: [], intentDescription: "Change both projects.", intentName: "multi-project change", paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["one.txt"], rootId: "api" },
+      { adoptPaths: [], paths: ["two.txt"], rootId: "web" },
+    ],
+    ...identity,
+  }) as unknown as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  await controller.execute(project, {
+    action: "arcStart", refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })), ...identity,
+  });
+  local.dirtyRoots.add(apiRoot);
+  local.dirtyRoots.add(webRoot);
+  const released = await controller.execute(project, {
+    action: "arcRelease", disown: true, paths: ["web:two.txt"], ...identity,
+  }) as { releasedClaims: string[] };
+  assert.deepEqual(released.releasedClaims, ["web:two.txt"]);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", identity.threadId))?.claimedPaths, ["api:one.txt"]);
 });
 
 test("workspace diff uses one packed page budget and reports dirt from every repository", async () => {
