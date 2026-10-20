@@ -22,7 +22,10 @@ export function formatRateLimitIdentity(
     ? limitName.trim()
     : null;
   const meaningfulId = limitId.trim() && !duplicatesProvider(limitId) ? limitId.trim() : null;
-  return meaningfulName ? `${providerName} · ${meaningfulName}` : meaningfulId ? `${providerName} · ${meaningfulId}` : providerName;
+  const name = meaningfulName ?? meaningfulId;
+  if (!name) return providerName;
+  const namesProvider = new RegExp(`^${provider}\\b`, "i").test(name);
+  return namesProvider ? name : `${providerName} · ${name}`;
 }
 export function formatRateLimitWindowLabel(durationMinutes: number | null, fallback: string) {
   if (durationMinutes === null) return fallback;

@@ -17,4 +17,6 @@ test("rate-limit identity suppresses duplicate provider names", () => {
   assert.equal(formatRateLimitIdentity("codex", "codex", null), "Codex");
   assert.equal(formatRateLimitIdentity("codex", "codex", "codex"), "Codex");
   assert.equal(formatRateLimitIdentity("codex", "account", "Team quota"), "Codex · Team quota");
+  assert.equal(formatRateLimitIdentity("opencode", "opencode-go", "OpenCode Go"), "OpenCode Go");
+  assert.equal(formatRateLimitIdentity("codex", "account", "Codexy quota"), "Codex · Codexy quota");
 });

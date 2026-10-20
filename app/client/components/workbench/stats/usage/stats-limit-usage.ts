@@ -24,6 +24,8 @@ const FINE_STEPS_MS = [1, 2, 3, 4, 6, 12, 24].map((hours) => hours * HOUR_MS);
 const MAX_FINE_BUCKETS = 720;
 /** How far back one reported climb in use can spread. */
 const SPREAD_CAP_MS = 3 * HOUR_MS;
+/** Lagging readings dip a few points at most; a spent plan reset drops far more without moving the reset time. */
+const EARLY_RESET_DROP = 20;
 
 export interface StatsLimitBuckets {
   startedAt: number;
@@ -70,8 +72,8 @@ interface Climb {
 /**
  * Readings come from several processes and can lag: stale lower values flap in, and an old window keeps being reported
  * after an early reset. Within one window use only ever climbs, so a window is followed by its reset time and its highest
- * reading; older windows and lower readings are stale. Each climb is spread back to the previous climb, since use is
- * reported in whole steps that accrued over that time.
+ * reading; older windows and slightly lower readings are stale, while a large drop is a reset spent early. Each climb is
+ * spread back to the previous climb, since use is reported in whole steps that accrued over that time.
  */
 function followWindow(samples: readonly Sample[], kind: WindowKind, onClimb?: (climb: Climb) => void) {
   let state: FollowedWindow | null = null;
@@ -91,7 +93,8 @@ function followWindow(samples: readonly Sample[], kind: WindowKind, onClimb?: (c
     const tolerance = Math.min(HOUR_MS, durationMs / 10);
     const known = reading.resetsAt !== null && state.resetsAt !== null;
     if (known && reading.resetsAt! < state.resetsAt! - tolerance) continue;
-    const renewed = known ? reading.resetsAt! > state.resetsAt! + tolerance : reading.usedPercent < state.usedPercent / 2;
+    const dropped = reading.usedPercent < state.usedPercent / 2 && state.usedPercent - reading.usedPercent >= EARLY_RESET_DROP;
+    const renewed = (known && reading.resetsAt! > state.resetsAt! + tolerance) || dropped;
     if (renewed) {
       const startedAt = reading.resetsAt !== null && durationMs ? reading.resetsAt - durationMs : state.seenAt;
       climb(reading.usedPercent, Math.max(startedAt, state.seenAt, at - SPREAD_CAP_MS), at);

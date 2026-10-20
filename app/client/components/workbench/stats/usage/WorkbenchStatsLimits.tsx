@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsLimits: a wrapping row of limit cards, one per account, showing what is left per window against even
+ * - default WorkbenchStatsLimits: an even grid of limit cards, one per account, showing what is left per window against even
  *   rationing, with the longest window's use over time folded into a history sparkline.
  */
 import { useState } from "react";
@@ -23,6 +23,8 @@ import WorkbenchStatsLimitMeter from "./WorkbenchStatsLimitMeter";
 
 type Limit = WorkbenchStatsSectionData<"limits">["rateLimits"][number];
 const WINDOW_FALLBACK = { primary: "Primary", secondary: "Secondary", tertiary: "Tertiary" } as const;
+/** Equal columns wide enough for an account's title, whatever lands in each row. */
+const cardGridClassName = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] gap-x-8 gap-y-5";
 
 /** Only the newest sample decides which windows exist; where each stands ignores stale readings from lagging sources. */
 function currentWindows(limit: Limit) {
@@ -58,7 +60,7 @@ function LimitCard({ limit, name, now, resolution }: {
   const peak = Math.max(0, ...used.map((value) => value ?? 0));
   const masked = name !== null && name.short !== name.full;
   return (
-    <div className="min-w-0 flex-[1_1_15rem] space-y-2 sm:max-w-[24rem]">
+    <div className="min-w-0 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <h3 className="m-0 flex min-w-0 items-center gap-1 text-[0.84rem] font-semibold text-text">
           <span className="truncate">
@@ -115,9 +117,9 @@ export default function WorkbenchStatsLimits() {
         {pending ? <StatsLoading /> : null}
       </div>
       {!data ? (
-        <div className="flex flex-wrap gap-x-8 gap-y-5">
+        <div className={cardGridClassName}>
           {[0, 1].map((index) => (
-            <div className="min-w-0 flex-[1_1_15rem] space-y-2.5 sm:max-w-[24rem]" key={index}>
+            <div className="min-w-0 space-y-2.5" key={index}>
               <Skeleton className="h-4 w-32" />
               <Skeleton className="h-3 w-full" />
               <Skeleton className="h-1.5 w-full rounded-full" />
@@ -129,7 +131,11 @@ export default function WorkbenchStatsLimits() {
       ) : !limits.length ? (
         <p className={`m-0 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No limit readings yet. They appear after a provider reports its plan usage.</p>
       ) : (
-        <div className={`flex flex-wrap gap-x-8 gap-y-5 ${statsRevealClassName} ${statsReloadingClassName(pending)}`}>
+        <div className={`
+          ${cardGridClassName}
+          ${statsRevealClassName}
+          ${statsReloadingClassName(pending)}
+        `}>
           {limits.map((limit, index) => (
             <LimitCard
               key={`${limit.harness}:${limit.account?.key ?? `unknown-${index}`}:${limit.limitId}`}

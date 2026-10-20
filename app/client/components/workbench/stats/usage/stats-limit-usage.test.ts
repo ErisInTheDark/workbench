@@ -34,6 +34,13 @@ test("lagging lower readings within a window neither count nor let their recover
   assert.equal(currentLimitWindow(samples, "primary")?.usedPercent, 41);
 });
 
+test("a large drop within the same window is an early reset, and use since then counts", () => {
+  // The reset time stays put when a plan reset is spent mid-week.
+  const samples = [sample(0.5 * hour, 98), sample(2.5 * hour, 0), sample(3.5 * hour, 28)];
+  assert.deepEqual(round(limitUsageByBucket(samples, "primary", hours)), [0, 0, 14, 14, 0, 0]);
+  assert.equal(currentLimitWindow(samples, "primary")?.usedPercent, 28);
+});
+
 test("a climb spreads back to the previous climb, never more than three hours", () => {
   // Steady work reported in whole steps: 1% at 2h after the last step at 0h spreads over both hours.
   assert.deepEqual(round(limitUsageByBucket([sample(0, 10), sample(hour, 10), sample(2 * hour, 11)], "primary", hours)), [0.5, 0.5, 0, 0, 0, 0]);
