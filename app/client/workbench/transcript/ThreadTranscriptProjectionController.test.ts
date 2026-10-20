@@ -814,6 +814,39 @@ test("incremental SQL never reconciles provider-live state and text does not rep
   }
 });
 
+test("a message's first text publishes a fresh item, so renderers that skipped it while empty pick it up", async () => {
+  const states: ThreadTranscriptProjectionState[] = [];
+  let receive!: (update: TranscriptStreamUpdate) => void;
+  const controller = new ThreadTranscriptProjectionController({
+    available: true, turnLimit: 4,
+    onStateChange: state => states.push(state),
+    transcripts: { unsubscribe: async () => {}, subscribe: async (_params, _snapshot, stream) => { receive = stream!; } },
+  });
+  try {
+    controller.select({ thread: thread("thread") });
+    await flush();
+    const baseline = streamBaseline("thread");
+    if (baseline.kind === "structure") {
+      const [message] = baseline.snapshot.rows.threadItemAssistantMessages;
+      baseline.snapshot.rows.threadItemAssistantMessages = [{ ...message!, text: "" }];
+    }
+    receive(baseline);
+    const items = () => {
+      const state = states.at(-1);
+      return state && "projection" in state ? state.projection?.turns[0]?.items : undefined;
+    };
+    const before = items();
+    receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: baselineItemId,
+      field: "agentMessageText", index: null, append: true, text: "first words" });
+    const after = items();
+    assert.notEqual(after, before, "the turn's items must change identity when a message gets its first text");
+    const message = after?.find(item => item.id === baselineItemId);
+    assert.equal(message?.type === "agentMessage" ? message.text : null, "first words");
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("an initial same-thread snapshot remains usable while its replacement window loads", async () => {
   const states: ThreadTranscriptProjectionState[] = [];
   const pending: Array<{ publish: (snapshot: WorkbenchTranscriptSnapshot | null) => void; finish: () => void }> = [];

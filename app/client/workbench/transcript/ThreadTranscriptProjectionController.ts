@@ -463,6 +463,26 @@ export default class ThreadTranscriptProjectionController {
     return projection;
   }
 
+  /** Swap one item for a replacement on every published path; a subscriber's previous snapshot is never mutated. */
+  #replaceItem(generation: number, turnId: string, item: WorkbenchProjectedTranscriptItem) {
+    const projection = this.#projection?.value;
+    if (!projection) return;
+    this.#streamItems.set(item.id, { turnId, item });
+    this.#projection = { generation, value: {
+      ...projection,
+      turns: projection.turns.map(existing => existing.id === turnId
+        ? { ...existing, items: existing.items.map(previous => previous.id === item.id ? item : previous) }
+        : existing),
+      display: {
+        orderedItems: projection.display.orderedItems.map(previous => previous.itemId === item.id
+          ? { ...previous, payload: item } : previous),
+        segments: projection.display.segments.map(segment => segment.items.some(previous => previous.id === item.id)
+          ? { ...segment, items: segment.items.map(previous => previous.id === item.id ? item : previous) }
+          : segment),
+      },
+    } };
+  }
+
   #publishProjection(status: "loading" | "ready" = "ready") {
     let projection: WorkbenchTranscriptProjection | null;
     try {
@@ -603,23 +623,7 @@ export default class ThreadTranscriptProjectionController {
         changes: update.changes,
       };
       this.#patchPreview = canonical ? null : { turnId: update.turnId, item };
-      if (canonical) {
-        this.#streamItems.set(update.itemId, { turnId: update.turnId, item });
-        // All published paths must point at the replacement, never mutate a subscriber's old snapshot.
-        this.#projection = { generation, value: {
-          ...projection,
-          turns: projection.turns.map(existing => existing === turn
-            ? { ...turn, items: turn.items.map(previous => previous.id === item.id ? item : previous) }
-            : existing),
-          display: {
-            orderedItems: projection.display.orderedItems.map(previous => previous.itemId === item.id
-              ? { ...previous, payload: item } : previous),
-            segments: projection.display.segments.map(segment => segment.items.some(previous => previous.id === item.id)
-              ? { ...segment, items: segment.items.map(previous => previous.id === item.id ? item : previous) }
-              : segment),
-          },
-        } };
-      }
+      if (canonical) this.#replaceItem(generation, update.turnId, item);
       this.#publishProjection();
       return;
     }
@@ -633,8 +637,13 @@ export default class ThreadTranscriptProjectionController {
       const text = writeTranscriptText(item, update);
       if (!isThreadItemVisible(this.#selection!.thread.harness, item)) return;
       this.#onText(update, text);
-      // The first nonempty field creates a rendering leaf; subsequent text only updates that leaf.
-      if (!previous.trim() && text.trim()) this.#publishProjection();
+      // The first nonempty field creates a rendering leaf: renderers skipped the empty item, so it must arrive as a new
+      // item they rebuild for. Subsequent text only updates that leaf.
+      if (!previous.trim() && text.trim()) {
+        const entry = this.#streamItems.get(update.itemId)!;
+        this.#replaceItem(generation, entry.turnId, structuredClone(item));
+        this.#publishProjection();
+      }
       return;
     }
     try {
