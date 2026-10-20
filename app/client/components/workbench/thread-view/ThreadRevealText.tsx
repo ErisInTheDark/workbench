@@ -2,7 +2,7 @@
  * Exports:
  * - default ThreadRevealText: fade one run of newly streamed text in with the style's text motion, continuing from when it first appeared.
  * - ThreadRevealBlock: play the style's block motion on a framed block that first appeared in streamed text.
- * - ThreadEntryAnimation: play the style's item motion on a newly arrived thread item.
+ * - ThreadEntryAnimation: play the style's item motion on a newly arrived thread item or row.
  * - ThreadStreamCaret: the typewriter caret riding the end of streaming text.
  */
 "use client";
@@ -44,11 +44,21 @@ export function ThreadRevealBlock ({ children, startedAt }: { children: ReactNod
   return <div data-thread-reveal-block="true" ref={ref}>{children}</div>;
 }
 
-/** `play` is read once at mount, so the wrapper never changes shape and its children never remount. */
-export function ThreadEntryAnimation ({ children, play }: { children: ReactNode; play: boolean }) {
+/**
+ * `play` is read once at mount, so the wrapper never changes shape and its children never remount.
+ * `inline` renders a span, for rows that appear inside phrasing content such as a button.
+ */
+export function ThreadEntryAnimation ({ children, className = "block", inline = false, play }: {
+  children: ReactNode;
+  className?: string;
+  inline?: boolean;
+  play: boolean;
+}) {
   const motion = useContext(ThreadAnimationStyleContext).item;
-  const ref = usePlayOnMount<HTMLDivElement>(play ? motion : null, null);
-  return <div className="block" ref={ref}>{children}</div>;
+  const ref = usePlayOnMount<HTMLDivElement & HTMLSpanElement>(play ? motion : null, null);
+  return inline
+    ? <span className={className} ref={ref}>{children}</span>
+    : <div className={className} ref={ref}>{children}</div>;
 }
 
 export function ThreadStreamCaret () {

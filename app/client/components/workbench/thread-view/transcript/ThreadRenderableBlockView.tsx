@@ -70,6 +70,7 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
   const project = useProject.contextual();
   return (
     <ThreadActivityRun
+      animateEntries={animateEntries}
       block={block}
       isMostRecent={isMostRecent}
       itemTimeline={itemTimeline}

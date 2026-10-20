@@ -19,6 +19,7 @@ import type { ActivitySegment, CommandSequenceItem, ThreadRenderableBlock } from
 import { getThreadFileChangeEntries, ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadInlineCode from "./ThreadInlineCode";
+import { ThreadEntryAnimation } from "./ThreadRevealText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import useThreadActivityRun from "./use-thread-activity-run";
 import { getActivitySegmentItems } from "./thread-activity-runs";
@@ -113,12 +114,15 @@ function StatusContent({ context, item }: { context: CommandChipContext; item: T
 }
 
 export default function ThreadActivityRun({
+  animateEntries,
   block,
   isMostRecent,
   itemTimeline,
   renderers,
   turnLive,
 }: {
+  /** The turn plays entry motion: a status row that appears under the summary animates in like a new block. */
+  animateEntries: boolean;
   block: Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
   isMostRecent: boolean;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
@@ -192,10 +196,14 @@ export default function ThreadActivityRun({
           />
         </span>
         {chips.length && status ? (
-          <span className="-mt-1 flex h-7 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap pb-0.5 text-[1.05em] font-medium">
+          <ThreadEntryAnimation
+            className="-mt-1 flex h-7 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap pb-0.5 text-[1.05em] font-medium"
+            inline
+            play={animateEntries}
+          >
             <LoaderIcon className="shrink-0" />
             <span className="min-w-0 truncate">{status}</span>
-          </span>
+          </ThreadEntryAnimation>
         ) : null}
       </button>
       {run.open ? <div className="px-3 pt-1.5">{steps}</div> : null}

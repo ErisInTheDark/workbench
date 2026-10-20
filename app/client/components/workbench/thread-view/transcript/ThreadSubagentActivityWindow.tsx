@@ -23,7 +23,7 @@ import { getRenderableBlockKey, type ThreadRenderableBlock } from "../thread-ren
 import ThreadRenderableBlockView from "./ThreadRenderableBlockView";
 import { ThreadContentLoadingSkeleton } from "./ThreadTurnLoadStates";
 import type { SubagentActivityProps } from "./subagent-activity-slot";
-import { buildTranscriptEntries, useStableRenderableBlocks } from "./transcript-blocks";
+import { buildTranscriptEntries, getMostRecentDeliveredIndex, useStableRenderableBlocks } from "./transcript-blocks";
 
 /** Enough recent context to follow a working child; older turn content stays one tab-click away. */
 const SUBAGENT_ACTIVITY_WINDOW_BLOCKS = 24;
@@ -105,16 +105,17 @@ function ThreadSubagentActivityTail ({ thread }: { thread: RelatedThread | undef
   }
 
   const finalAgentMessageId = getFinalAgentMessageId(currentTurn);
+  const mostRecentIndex = getMostRecentDeliveredIndex(blocks.map(block => ({ block, kind: "block" as const })));
   return (
     <TranscriptScopeContext.Provider value={scope}>
       <TranscriptTurnContext.Provider value={turnScope}>
         <div className="flex flex-col gap-1">
-          {blocks.map((block) => (
+          {blocks.map((block, index) => (
             <ThreadRenderableBlockView
               animateEntries={false}
               block={block}
               finalAgentMessageId={finalAgentMessageId}
-              isMostRecentBlock={block === blocks.at(-1)}
+              isMostRecentBlock={index === mostRecentIndex}
               key={getRenderableBlockKey(block)}
               primaryUserBlock={null}
             />

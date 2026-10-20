@@ -99,6 +99,20 @@ test("invalid item timing is not presented as a real timestamp", () => {
   assert.deepEqual(timestamps(html), []);
 });
 
+test("a pending steer is not delivered yet, so the run before it stays the live one", () => {
+  const ran = (id: string): ThreadItem => ({
+    aggregatedOutput: "", command: `echo ${id}`, commandActions: [], cwd: "C:/project", durationMs: 5, exitCode: 0,
+    id, pluginId: null, processId: null, scriptPath: null, source: "agent", status: "completed", type: "commandExecution",
+  });
+  const render = (items: ThreadItem[]) => renderedText(renderToStaticMarkup(createElement(ThreadTestTurn, {
+    threadId: "thread",
+    turn: { completedAt: null, durationMs: null, error: null, id: "turn", items, itemsView: "full", startedAt: 1, status: "inProgress" },
+  })));
+  const work = [user("initial"), ran("one"), ran("two")];
+  assert.match(render(work), /Thinking/u);
+  assert.match(render([...work, withWorkbenchInputState(user("steer"), { kind: "steer", status: "pending" })]), /Thinking/u);
+});
+
 test("active command families derive a live duration from canonical item timing", () => {
   const startedAt = Date.now() - 65_000;
   const items: ThreadItem[] = [{

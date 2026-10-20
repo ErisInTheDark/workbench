@@ -4,6 +4,7 @@
  * - buildTranscriptEntries: the one pipeline from turn items to entries: renderable blocks folded into activity runs.
  * - withInteractionTimeline: a turn's item timeline with relational questionnaire and approval resolution times.
  * - useStableRenderableBlocks: keep unchanged blocks' identities across renders so memoised block views skip them.
+ * - getMostRecentDeliveredIndex: the newest entry actually in the turn, skipping trailing undelivered steers and held messages.
  * - getActiveItemStartedAtMs: when a running item started, from its timeline entry.
  */
 import { useEffect, useMemo, useRef } from "react";
@@ -25,7 +26,8 @@ import { buildActivityRuns } from "../thread-activity-runs";
 import { getBrowseScreenshotUrls } from "../thread-browse-steps";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
 import {
-  buildRenderableBlocks, getRenderableBlockItems, getRenderableBlockKey, reuseRenderableBlocks, type ThreadRenderableBlock,
+  buildRenderableBlocks, getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, reuseRenderableBlocks,
+  type ThreadRenderableBlock,
 } from "../thread-render-blocks";
 
 export type TranscriptEntry =
@@ -127,6 +129,12 @@ export function useStableRenderableBlocks(blocks: ThreadRenderableBlock[], mode:
   }, [stableEntries]);
 
   return useMemo(() => stableEntries.map(entry => entry.block), [stableEntries]);
+}
+
+/** Undelivered steers and held messages are not in the turn yet, so the newest delivered entry stays the most recent. */
+export function getMostRecentDeliveredIndex(entries: readonly TranscriptEntry[]) {
+  return entries.findLastIndex(entry => entry.kind === "generic"
+    || !getRenderableBlockItems(entry.block).every(item => item.type === "userMessage" && getUserMessageDeliveryState(item)));
 }
 
 export function getActiveItemStartedAtMs(

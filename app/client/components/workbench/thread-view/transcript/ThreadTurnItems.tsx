@@ -28,7 +28,9 @@ import { ThreadEntryMotion } from "../thread-scroll-viewport-context";
 import ThreadRenderableBlockView from "./ThreadRenderableBlockView";
 import ThreadSubagentActivityWindow from "./ThreadSubagentActivityWindow";
 import { SubagentActivitySlot } from "./subagent-activity-slot";
-import { buildTranscriptEntries, useStableRenderableBlocks, withInteractionTimeline, type TranscriptEntry } from "./transcript-blocks";
+import {
+  buildTranscriptEntries, getMostRecentDeliveredIndex, useStableRenderableBlocks, withInteractionTimeline, type TranscriptEntry,
+} from "./transcript-blocks";
 
 const NO_BROWSE_RESULTS: readonly WorkbenchBrowseResultEntry[] = [];
 
@@ -104,6 +106,7 @@ export default memo(function ThreadTurnItems({
     entry.kind === "block" && entry.block.kind === "item" && entry.block.item.id === initialUserItemId ? [entry.block] : []
   )).at(0) ?? null;
   const finalAgentMessageId = items.findLast((item) => item.type === "agentMessage" && item.phase === "final_answer")?.id ?? null;
+  const mostRecentIndex = getMostRecentDeliveredIndex(stableEntries);
   const renderEntry = (entry: TranscriptEntry, index: number) => {
     const firstItem = entry.kind === "block" ? getRenderableBlockItems(entry.block)[0] : null;
     const identity = entry.kind === "generic"
@@ -129,7 +132,7 @@ export default memo(function ThreadTurnItems({
                 animateEntries={animateEntries}
                 block={entry.block}
                 finalAgentMessageId={finalAgentMessageId}
-                isMostRecentBlock={index === stableEntries.length - 1}
+                isMostRecentBlock={index === mostRecentIndex}
                 itemTimeline={renderItemTimeline}
                 primaryUserBlock={primaryUserBlock}
               />
