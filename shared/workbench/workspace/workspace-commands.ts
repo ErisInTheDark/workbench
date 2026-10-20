@@ -97,9 +97,8 @@ export type WorkspaceCommandResult<Method extends WorkspaceCommandMethod> = Work
 
 const threadMutationMethods = [
   "workbench/thread-state/title/set", "workbench/thread-state/title/dismiss",
-  "workbench/thread-state/pin/set", "workbench/thread-state/snooze/set", "workbench/thread-state/snooze/until",
+  "workbench/thread-state/pin/set",
   "workbench/thread-state/settle", "workbench/thread-state/restore", "workbench/thread-state/status/set",
-  "workbench/thread-state/questionnaire/snooze",
   "workbench/thread-state/archive/set",
 ] as const;
 export type WorkspaceThreadMutation = Extract<WorkbenchThreadStateRequest, { method: typeof threadMutationMethods[number] }>;
@@ -119,7 +118,8 @@ export const WorkspaceThreadActionSchema = z.object({
     z.object({ kind: z.literal("priority"), priority: z.enum(["pinned", "main", "snoozed"]) }).strict(),
     z.object({ kind: z.literal("snoozeUntil"), targetThreadId: z.uuid() }).strict(),
     z.object({ kind: z.literal("pin"), pinned: z.boolean() }).strict(),
-    z.object({ kind: z.literal("snooze"), snoozed: z.boolean() }).strict(),
+    /** `requestKey` snoozes a waiting questionnaire, which interrupts its turn first. */
+    z.object({ kind: z.literal("snooze"), snoozed: z.boolean(), requestKey: z.string().min(1).optional() }).strict(),
     z.object({ kind: z.literal("archive"), archived: z.boolean() }).strict(),
     z.object({ kind: z.literal("status"), status: z.enum(["needsAttention", "completed", "stopped"]) }).strict(),
     z.object({ kind: z.literal("restore") }).strict(),

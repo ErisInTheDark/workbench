@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - threadStateRequests: database requests for relational thread state (project and global documents, records, drafts, profiles, layouts,
- *   archive and snooze facts, Git commits) and subagent relationships; each runs in its own transaction.
+ *   archive facts, Git commits) and subagent relationships; each runs in its own transaction.
  */
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -65,9 +65,6 @@ export const threadStateRequests = {
   }),
   readThreadStateActivity: defineDatabaseRequest({
     ...stateRead, run: (context, projectId: ProjectId) => inTransaction(context, state => state.readProjectActivity(projectId)),
-  }),
-  readThreadStateSnoozeSources: defineDatabaseRequest({
-    ...stateRead, run: (context, targetThreadId: WorkbenchThreadId) => inTransaction(context, state => state.readSnoozeSources(targetThreadId)),
   }),
   readThreadStateArchiveEligible: defineDatabaseRequest({
     ...stateRead, run: (context, activeBefore: number) => inTransaction(context, state => state.readArchiveEligible(activeBefore)),

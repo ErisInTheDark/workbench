@@ -43,7 +43,7 @@ test("consumer objects retain thread facts, title replacement and project isolat
       entryKind: "thread", identity: { harness: "codex", threadId: identity.threadId }, title: identity.projectId,
       activityAt: 1, metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "completed", reason: "userCompleted", settled: false },
-      gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null, snoozedUntil: null,
+      gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null,
     }));
     for (const [index, record] of records.entries()) {
       await store.writeProject(identities[index]!.projectId, { version: 4, records: [record], drafts: [] },
@@ -92,7 +92,7 @@ test("same-tick title renames keep recency order across cold reopen", async () =
       entryKind: "thread", identity: { harness: "codex", threadId: identity!.threadId }, title: "zeta",
       activityAt: 1, metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "completed", reason: "userCompleted", settled: false },
-      gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null, snoozedUntil: null,
+      gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null,
     };
     let history = recordThreadTitle([], "", "alpha", 10);
     history = recordThreadTitle(history, "alpha", "zeta", 10);

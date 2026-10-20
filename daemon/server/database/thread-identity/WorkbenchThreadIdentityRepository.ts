@@ -506,8 +506,6 @@ export default class WorkbenchThreadIdentityRepository {
         ["workbench_subagent_thread_states", "thread_id"],
         ["workbench_subagent_thread_states", "parent_thread_id"],
         ["workbench_thread_retention", "thread_id"],
-        ["workbench_thread_snooze_dependencies", "source_thread_id"],
-        ["workbench_thread_snooze_dependencies", "target_thread_id"],
         ["workbench_thread_profiles", "thread_id"],
         ["workbench_thread_questionnaires", "thread_id"],
         ["workbench_subagent_parents", "parent_thread_id"],

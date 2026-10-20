@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default AppWorkspaceNode: own cross-daemon connections, queries, draft launch, peer Git sync and presentation import.
+ * - default AppWorkspaceNode: own cross-daemon connections, queries, draft launch, thread snooze, peer Git sync and presentation import.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
@@ -11,6 +11,7 @@ import WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
 import WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import WorkbenchGitPeerRelay from "../workspace/WorkbenchGitPeerRelay";
 import WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController";
+import WorkbenchThreadSnoozeController from "../state/WorkbenchThreadSnoozeController";
 import type { AppProcessContext } from "./app-process-context";
 import type { AppRuntimeObjects } from "./app-runtime-objects";
 import AppHttpNode from "./AppHttpNode";
@@ -36,6 +37,9 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     });
     const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn, canProject: canAdmit });
     const workspaceThreads = new WorkbenchWorkspaceThreads({ sources, presentation, warn, canProject: canAdmit });
+    const threadSnoozes = new WorkbenchThreadSnoozeController({
+      sources, presentation, threads: workspaceThreads, warn, canProject: canAdmit,
+    });
     const workspaceDrafts = new WorkbenchWorkspaceDrafts({
       sources, presentation, warn, canAdmit, origin: () => context.appPort.current?.()?.appOrigin ?? null,
     });
@@ -49,6 +53,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       gitPeerRelay.dispose();
       const importing = presentationImport.close();
       const launching = workspaceDrafts.dispose();
+      threadSnoozes.dispose();
       workspaceThreads.dispose();
       workspace.dispose();
       // Retire transport before draining accepted work. Uncertain launches retain
@@ -68,14 +73,18 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
           admitting = true;
           workspace.resumeProjection();
           workspaceThreads.resumeProjection();
+          threadSnoozes.resumeProjection();
           presentationImport.resumeAdmission();
         },
         commit: dispose,
       }),
-      registrations: { sources, socketTraffic, workspace, workspaceThreads, workspaceDrafts, gitPeers: peerSync, presentationImport },
+      registrations: {
+        sources, socketTraffic, workspace, workspaceThreads, threadSnoozes, workspaceDrafts, gitPeers: peerSync, presentationImport,
+      },
       start: () => {
         workspace.start();
         workspaceThreads.start();
+        threadSnoozes.start();
         presentationImport.start();
         workspaceDrafts.start();
         sources.start();
@@ -85,7 +94,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   },
   description: "Reload app-owned daemon connections, workspace queries and semantic operations.",
   lifecycle: "handoff",
-  provides: ["sources", "socketTraffic", "workspace", "workspaceThreads", "workspaceDrafts", "gitPeers", "presentationImport"],
+  provides: ["sources", "socketTraffic", "workspace", "workspaceThreads", "threadSnoozes", "workspaceDrafts", "gitPeers", "presentationImport"],
   requires: ["network", "presentation", "logger"],
   safeAll: false,
   scope: "client:workspace",

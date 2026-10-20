@@ -108,8 +108,8 @@ test("archive listing, filtering and coverage follow sidebar placement rather th
       (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
       VALUES ('wb-one', 'topLevel', 'codex', 'one', 1, 1);
       INSERT INTO workbench_top_level_thread_states
-      (thread_id, thread_kind, archived, pinned, snoozed)
-      VALUES ('wb-one', 'topLevel', 0, 0, 0)`);
+      (thread_id, thread_kind, archived, pinned)
+      VALUES ('wb-one', 'topLevel', 0, 0)`);
     const visible = read({ action: "threads", queries: [], archived: false });
     assert.deepEqual(visible.rows.map(row => row.threadId), ["wb-one"]);
     assert.equal(visible.rows[0]?.counts.archived, 0);

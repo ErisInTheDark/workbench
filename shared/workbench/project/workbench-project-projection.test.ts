@@ -109,7 +109,7 @@ test("remote identity has one row, collisions show hosts, and unavailable locati
     [first, source("desktop-thread", 1)],
     [second, source("laptop-thread", 2)],
   ]), snapshot);
-  assert.equal(summaries.get(remoteId)?.counts.working, 3);
+  assert.equal(summaries.get(remoteId)?.counts.working, 2);
   assert.deepEqual(summaries.get(remoteId)?.unsettledThreads.map(item => [
     item.location.daemonId, item.entry.identity.threadId,
   ]), [[second, "laptop-thread"], [first, "desktop-thread"]]);
@@ -433,6 +433,47 @@ test("one logical project includes thread rows from both daemon folders", () => 
   ]);
 });
 
+test("app snoozes place and count rows on any daemon, waiting on targets elsewhere", () => {
+  const target = { identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("target") },
+    projectId: concrete, title: "Target" };
+  const snapshot: PresentationSnapshot = {
+    revision: 1,
+    daemons: [{ id: first, hostname: "desktop" }, { id: second, hostname: "laptop" }],
+    projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "repo" }],
+    locations: [first, second].map(daemonId => ({
+      target: { daemonId, projectId: concrete }, logicalProjectId: remoteId,
+      identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "C:/repo",
+    })),
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+    threadSnoozes: ["waiting", "attention"].map(id => ({
+      threadId: WorkbenchThreadIdSchema.parse(id), basis: { lifecycleKind: "completed" as const, turnId: null, questionnaireKey: null },
+      targets: id === "waiting" ? [target] : [],
+    })),
+  };
+  const entry = (id: string, status: "completed" | "needsAttentionActive") => ({
+    activityAt: 1, status, title: id, identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse(id) },
+  });
+  const project = projectLogicalProjects(snapshot, new Map())[0]!;
+  const summary = projectLogicalSummaries([project], new Map([
+    [first, { projects: [{ projectId: concrete, revision: 1, lastThreadUpdateAt: 1,
+      counts: { completed: 1, needsAttention: 0, needsAttentionActive: 1, proposedCommit: 0, stopped: 0, working: 0 },
+      pinnedThreads: [], unsettledThreads: [entry("waiting", "completed"), entry("attention", "needsAttentionActive")] }] }],
+  ]), snapshot).get(remoteId)!;
+  assert.deepEqual([summary.counts.completed, summary.counts.needsAttention, summary.counts.needsAttentionActive], [0, 1, 0]);
+
+  const rows = projectLogicalThreadRows([project], new Map([[first, { projects: [{ projectId: concrete, entries: [{
+    entryKind: "thread" as const, title: "waiting", activityAt: 1,
+    identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("waiting") },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false },
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+  }] }] }]]), snapshot, new Set());
+  const waiting = rows[0]!.entry;
+  assert.ok(waiting.entryKind === "thread");
+  assert.equal(waiting.metadata.snoozed, true);
+  assert.equal(waiting.waitingFor, "other");
+  assert.deepEqual(waiting.waitingOnThreads, [target]);
+});
+
 test("an in-flight launch's draft holds its new thread's slot until accepted; an orphaned reservation is a plain draft", () => {
   const launchId = "dc085242-b595-4a51-9bd0-099013ead304";
   const orphanLaunchId = "dc085242-b595-4a51-9bd0-099013ead305";
@@ -497,6 +538,8 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
       updatedAt: 2, revision: 1, phase: "unsent", pinned: false, snoozed: false,
       launchId: null, acceptedThreadId: null, attachments: [],
     }], folders: [], members: [], divergences: [], sourceMappings: [],
+    threadSnoozes: [{ threadId: WorkbenchThreadIdSchema.parse("snoozed"), targets: [],
+      basis: { lifecycleKind: "needsAttention", turnId: null, questionnaireKey: null } }],
   };
   const completed: WorkbenchThreadLifecycle = { kind: "completed", reason: "providerInactive", settled: false };
   const attention: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
@@ -506,12 +549,12 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
   };
   const thread = (
     id: string, activityAt: number, lifecycle: WorkbenchThreadLifecycle,
-    options: { claimed?: boolean; pinned?: boolean; snoozed?: boolean } = {},
+    options: { claimed?: boolean; pinned?: boolean } = {},
   ): WorkbenchThreadSidebarEntry => ({
     entryKind: "thread", title: id, activityAt,
     identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse(id) },
     lifecycle,
-    metadata: { archived: false, pinned: options.pinned ?? false, snoozed: options.snoozed ?? false },
+    metadata: { archived: false, pinned: options.pinned ?? false, snoozed: false },
     ...(options.claimed ? { gitArc: {
       checkpointCommit: "a".repeat(40), claimedPaths: ["src/file.ts"], intentDescription: "",
       intentName: id, phase: "active" as const, proposals: [], updatedAt: "2026-08-25T00:00:00.000Z",
@@ -527,7 +570,7 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
     [second, { projects: [{ projectId: concrete, revision: 1, error: null, freshness: "fresh", entries: [
       thread("complete", 9, completed),
       thread("working", 4, working),
-      thread("snoozed", 10, attention, { snoozed: true }),
+      thread("snoozed", 10, attention),
     ] }] }],
   ]);
   const rows = projectLogicalThreadRows(projectLogicalProjects(snapshot, new Map()), sources, snapshot, new Set());

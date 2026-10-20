@@ -11,7 +11,7 @@
  * - WorkbenchThreadReconcileResultSchema/WorkbenchThreadReconcileResult: recorded recovery outcome, never native content.
  * - WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED/WorkbenchTranscriptRecoveryRequiredError: a valid requested window needs explicit reconciliation.
  * - WorkbenchThreadStopSchema/WorkbenchThreadStop: user stop of a live turn and its seen questionnaire.
- * - WorkbenchThreadInterruptSchema/WorkbenchThreadInterrupt: interrupt that snoozes and keeps a questionnaire.
+ * - WorkbenchThreadInterruptSchema/WorkbenchThreadInterrupt: interrupt that keeps a questionnaire waiting.
  * - WorkbenchThreadSteerTargetSchema/WorkbenchThreadSteerTarget: one held steer to resend or dismiss.
  * - WorkbenchThreadShellTargetSchema/WorkbenchThreadShellTarget: one running wb shell item for the user to stop.
  * - WorkbenchThreadHistoryReadSchema: thread history read, optionally narrowed to some turns.
@@ -118,7 +118,7 @@ export const WorkbenchThreadStopSchema = WorkbenchThreadTargetSchema.extend({
   requestKey: z.string().min(1).optional(),
 });
 export type WorkbenchThreadStop = z.infer<typeof WorkbenchThreadStopSchema>;
-/** Interrupt the turn holding this questionnaire and snooze the thread, keeping the questionnaire. */
+/** Interrupt the turn holding this questionnaire, keeping the questionnaire; the app snoozes the thread itself. */
 export const WorkbenchThreadInterruptSchema = WorkbenchThreadTargetSchema.extend({
   requestKey: z.string().min(1),
 });

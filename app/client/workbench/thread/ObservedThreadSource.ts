@@ -57,12 +57,8 @@ export interface ObservedThreadSourcePorts {
   compareGitArcClaims?: (input: { cwd: string; harness: WorkbenchHarness; threadId: string }) => Promise<{ changeCount: number; hasUncommittedChanges: boolean }>;
   /** Fires when observed Git arc reads may be stale, such as when the window regains focus. */
   subscribeGitArcProposalRefresh?: (listener: () => void) => () => void;
-  updateThreadStateWithAcceptance: (request: {
-    projectId: ReturnType<typeof ProjectIdSchema.parse>; identity: ThreadEntry["identity"];
-  } & (
-    | { method: "workbench/thread-state/questionnaire/snooze"; requestKey: string }
-    | { method: "workbench/thread-state/snooze/set"; snoozed: true }
-  )) => Promise<boolean>;
+  /** App-owned snooze; `requestKey` interrupts that questionnaire's turn first, keeping the questionnaire. */
+  snoozeThread: (threadId: string, requestKey?: string) => Promise<boolean>;
   reportError: (message: string) => void;
   /** Saved composer attachments are app URLs; the daemon needs the image itself. */
   resolveAttachmentUrl: (url: string) => Promise<string>;
@@ -371,11 +367,7 @@ export default function createObservedThreadSource(
       },
       async snooze(requestKey) {
         const entry = requireEntry();
-        const accepted = await ports.updateThreadStateWithAcceptance({
-          projectId: ProjectIdSchema.parse(ports.projectId), identity: entry.identity,
-          ...(requestKey ? { method: "workbench/thread-state/questionnaire/snooze" as const, requestKey }
-            : { method: "workbench/thread-state/snooze/set" as const, snoozed: true as const }),
-        });
+        const accepted = await ports.snoozeThread(entry.identity.threadId, requestKey || undefined);
         if (!accepted) throw new Error("The thread changed before it could be snoozed.");
       },
       // Settings are owned by the composer profile selection, which persists to the thread entry.

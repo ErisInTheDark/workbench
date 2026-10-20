@@ -1251,17 +1251,15 @@ test("failed retroactive archival preserves the visible thread and its settled f
   } finally { await controller.dispose(); }
 });
 
-test("plain questionnaire snooze retains input through interruption for codex and claude", async context => {
+test("questionnaire hold retains input through interruption for codex and claude", async context => {
   const question = {
     itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: null,
     request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [
       { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
     ] },
   };
-  for (const [harness, route] of [
-    ["codex", "snooze"], ["claude", "snooze"], ["codex", "priority"], ["claude", "priority"],
-  ] as const) {
-    await context.test(`${harness}:${route}`, async () => {
+  for (const harness of ["codex", "claude"] as const) {
+    await context.test(harness, async () => {
       const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
         activityAt: 1, entryKind: "thread", title: "Task", identity: { harness, threadId: fixtureThreadIds["snooze-question"] },
         metadata: { archived: false, pinned: false, snoozed: false },
@@ -1284,20 +1282,18 @@ test("plain questionnaire snooze retains input through interruption for codex an
       try {
         await controller.readProject(fixtureProjectIds["project"]);
         await controller.refresh(fixtureProjectIds["project"]);
-        const response = await controller.handleRequest("observer", route === "priority" ? {
-          method: "workbench/thread-state/priority/set", projectId: fixtureProjectIds.project,
-          sourceKey: `${harness}:${provider.identity.threadId}`, priority: "snoozed",
-        } : {
-          method: "workbench/thread-state/snooze/set", projectId: fixtureProjectIds.project,
-          identity: provider.identity, snoozed: true,
+        const hold = (requestKey: string) => controller.handleRequest("observer", {
+          method: "workbench/thread-state/questionnaire/hold", projectId: fixtureProjectIds.project,
+          identity: provider.identity, requestKey,
         });
-        assert.equal(response.error, undefined);
+        assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await hold("other")).result).accepted, false);
+        assert.equal(interrupts, 0);
+        assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await hold(question.requestKey)).result).accepted, true);
         assert.equal(interrupts, 1);
         const read = async () => (await controller.getSnapshot(fixtureProjectIds.project)).entries
           .find(entry => entry.entryKind === "thread" && entry.identity.threadId === provider.identity.threadId);
         let entry = await read();
         assert.ok(entry?.entryKind === "thread");
-        assert.equal(entry.metadata.snoozed, true);
         assert.equal(entry.lifecycle.kind, "needsAttention");
         assert.deepEqual(entry.pendingQuestionnaire, question);
         await controller.applyLifecycle(fixtureProjectIds.project, harness, provider.identity.threadId, {
@@ -1313,79 +1309,10 @@ test("plain questionnaire snooze retains input through interruption for codex an
         entry = await read();
         assert.ok(entry?.entryKind === "thread");
         assert.equal(entry.lifecycle.kind, "stopped");
-        assert.equal(entry.metadata.snoozed, false);
         assert.equal(entry.pendingQuestionnaire, null);
       } finally { await controller.dispose(); }
     });
   }
-});
-
-test("snooze uses current collision claims and wakes on task outcome or new claims", async () => {
-  const source = pinnedRecord("thread", "Source");
-  const claimed: WorkbenchGitArcLifecycleState = {
-    checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
-    intentDescription: "", phase: "active", proposals: [], updatedAt: "now",
-  };
-  let arc: WorkbenchGitArcLifecycleState | null = claimed;
-  let interrupts = 0;
-  const controller = new WorkbenchThreadStateController({
-    storageRoot: "snooze-claims", threadStateStore: new MemoryThreadStatePersistence(),
-    getProjectCatalog: projectCatalog, reconcileProject: async () => [],
-    resolveGitArc: async () => arc,
-    interruptQuestionnaire: async () => { interrupts++; arc = claimed; return true; },
-  });
-  const snooze = (snoozed = true) => controller.handleRequest("observer", {
-    method: "workbench/thread-state/snooze/set", projectId: fixtureProjectIds.project,
-    identity: source.identity, snoozed,
-  });
-  const read = async () => {
-    const entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, source.identity.threadId);
-    assert.ok(entry?.entryKind === "thread");
-    return entry;
-  };
-  try {
-    await controller.ensureProviderEntry(fixtureProjectIds.project, source);
-    for (const request of [
-      { method: "workbench/thread-state/snooze/set", identity: source.identity, snoozed: true },
-      { method: "workbench/thread-state/priority/set", sourceKey: "codex:thread", priority: "snoozed" },
-    ] as const) {
-      const result = await controller.handleRequest("observer", { ...request, projectId: fixtureProjectIds.project });
-      assert.equal(WorkbenchThreadStateMutationResultSchema.parse(result.result).accepted, false);
-    }
-    await controller.acceptAdmission(fixtureProjectIds.project, "codex", source.identity.threadId,
-      { kind: "started", turnId: fixtureTurnIds.turn });
-    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, true);
-    assert.equal((await read()).lifecycle.kind, "working");
-    await controller.setAgentStatus(fixtureProjectIds.project, source.identity.threadId, "completed");
-    assert.equal((await read()).metadata.snoozed, true);
-    assert.equal((await read()).lifecycle.kind, "working");
-    await controller.applyLifecycle(fixtureProjectIds.project, "codex", source.identity.threadId,
-      { kind: "turnCompleted", status: "completed", turnId: fixtureTurnIds.turn });
-    assert.equal((await read()).lifecycle.kind, "completed");
-    assert.equal((await read()).metadata.snoozed, false);
-    arc = null;
-    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, true);
-    arc = claimed;
-    await controller.refreshGitArcState(fixtureProjectIds.project, "codex", source.identity.threadId);
-    assert.equal((await read()).metadata.snoozed, false);
-    arc = { ...claimed, phase: "stashed", claimedPaths: [], stashedPaths: ["saved.ts"] };
-    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, true);
-    await snooze(false);
-    const question = {
-      itemId: null, requestKey: "question", turnId: fixtureTurnIds.turn,
-      request: { id: "question", title: "Choose", summary: "", submitLabel: "Submit",
-        questions: [{ id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false }] },
-    };
-    await controller.setPendingQuestionnaire(fixtureProjectIds.project, source.identity.threadId, question);
-    arc = claimed;
-    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, false);
-    assert.equal(interrupts, 0);
-    arc = null;
-    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, false);
-    assert.equal(interrupts, 1);
-    assert.equal((await read()).metadata.snoozed, false);
-    assert.equal((await read()).pendingQuestionnaire?.requestKey, question.requestKey);
-  } finally { await controller.dispose(); }
 });
 
 test("stop marks a working thread stopped without waiting for its interrupt event", async () => {
@@ -1407,16 +1334,6 @@ test("stop marks a working thread stopped without waiting for its interrupt even
   try {
     await controller.readProject(fixtureProjectIds["project"]);
     await controller.refresh(fixtureProjectIds["project"]);
-    const directSnooze = await controller.handleRequest("observer", {
-      method: "workbench/thread-state/snooze/set", projectId: fixtureProjectIds.project,
-      identity: working.identity, snoozed: true,
-    });
-    assert.equal(WorkbenchThreadStateMutationResultSchema.parse(directSnooze.result).accepted, true);
-    const dependentSnooze = await controller.handleRequest("observer", {
-      method: "workbench/thread-state/snooze/until", projectId: fixtureProjectIds.project,
-      identity: working.identity, target: { identity: target.identity, projectId: fixtureProjectIds.project },
-    });
-    assert.equal(WorkbenchThreadStateMutationResultSchema.parse(dependentSnooze.result).accepted, false);
     const response = await controller.handleRequest("observer", {
       method: "workbench/thread-state/stop", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: working.identity,
     });
@@ -1596,7 +1513,7 @@ test("a failed priority write restores the loaded project state", async () => {
     drafts: [],
     records: [{
       ...pinnedRecord("thread", "Thread"),
-      metadata: { archived: false, pinned: false, snoozed: true },
+      metadata: { archived: false, pinned: false, snoozed: false },
     }],
     version: 3,
   });
@@ -1622,7 +1539,7 @@ test("a failed priority write restores the loaded project state", async () => {
     /Project persistence unavailable/u,
   );
   const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
-  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: false, snoozed: true });
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: false, snoozed: false });
   await controller.dispose();
   await temporary.dispose();
 });
@@ -1873,16 +1790,16 @@ test("a subagent observation includes its root without granting authority throug
 
   await controller.handleRequest("owner-loader", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
-    method: "workbench/thread-state/snooze/set",
+    method: "workbench/thread-state/pin/set",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-    snoozed: true,
+    pinned: false,
   });
-  const snoozed = await controller.readWorkspaceThread({
+  const unpinned = await controller.readWorkspaceThread({
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
     subscriptionId: "bb7efb3d-4670-4198-a8ab-8926782c4ed3",
     target: { kind: "provider", harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
   });
-  assert.ok(snoozed.entries.some(entry => entry.entryKind === "thread" && entry.metadata.snoozed));
+  assert.ok(unpinned.entries.some(entry => entry.entryKind === "thread" && !entry.metadata.pinned));
   const foreign = await controller.handleRequest("viewer", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
     method: "workbench/thread-state/title/set",
@@ -3132,7 +3049,7 @@ test("provider admission keeps a first-message display fallback separate from ex
   }
 });
 
-test("successful user input wakes snoozed threads without changing questionnaire turn order", async () => {
+test("successful user input keeps pins and questionnaire turn order", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-user-input-wake-");
   const root = temporary.path;
   let discovered = false;
@@ -3142,7 +3059,7 @@ test("successful user input wakes snoozed threads without changing questionnaire
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureThreadIds["accepted"] },
     lifecycle: { agent: { agentStatus: "working", turnId: fixtureTurnIds["old-turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
-    metadata: { archived: false, pinned: true, snoozed: true },
+    metadata: { archived: false, pinned: true, snoozed: false },
     orderAt: 10,
     title: "Accepted",
   };
@@ -3151,7 +3068,7 @@ test("successful user input wakes snoozed threads without changing questionnaire
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureThreadIds["pending"] },
     lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: fixtureTurnIds["pending-turn"] },
-    metadata: { archived: false, pinned: false, snoozed: true },
+    metadata: { archived: false, pinned: false, snoozed: false },
     orderAt: 20,
     title: "Pending",
   };
@@ -3168,19 +3085,17 @@ test("successful user input wakes snoozed threads without changing questionnaire
     storageRoot: root,
   });
   await controller.readProject(fixtureProjectIds["project"]);
-  await waitFor(() => discovered, "Snoozed threads were not discovered.");
+  await waitFor(() => discovered, "Threads were not discovered.");
 
   await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.accepted,
     { kind: "started", turnId: fixtureTurnIds["new-turn"] }, "Accepted");
   let entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "accepted");
-  assert.equal(entry?.entryKind === "thread" ? entry.metadata.snoozed : null, false);
   assert.equal(entry?.entryKind === "thread" ? entry.metadata.pinned : null, true);
   assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 30);
 
   now = 40;
   await controller.observeLifecycle("codex", fixtureThreadIds["pending"], { kind: "inputResolved", requestKey: "request" });
   entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "pending");
-  assert.equal(entry?.entryKind === "thread" ? entry.metadata.snoozed : null, false);
   assert.equal(entry?.entryKind === "thread" ? entry.lifecycle.kind : null, "working");
   assert.equal(entry?.activityAt, 20, "resolving input is a lifecycle transition, not a thread item");
   assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 20);
@@ -3643,81 +3558,6 @@ test("proper questionnaires and late-response history survive controller restart
   await temporary.dispose();
 });
 
-test("wake waits for every unsnoozed row to become settlement-ready, then wakes only the highest projected root snoozed thread", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-one-wake-");
-  const root = temporary.path;
-  const snoozed = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
-    activityAt: orderAt,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: true },
-    orderAt,
-    title: threadId,
-  });
-  const providerEntries: WorkbenchThreadSidebarEntry[] = [
-    snoozed("a", 3), snoozed("b", 2), snoozed("c", 9),
-    {
-      activityAt: 4, createdAt: 4, cwd: root, directSubagentIndex: 0, entryKind: "subagent",
-      identity: { harness: "codex", threadId: fixtureThreadIds["child"] },
-      lifecycle: { agent: { agentStatus: "working", turnId: fixtureTurnIds["child-turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
-      name: "child", parentThreadId: fixtureThreadIds["parent"], pinned: false, profileId: "default", profileName: "Default",
-      projectId: fixtureProjectIds["project"], title: "child", updatedAt: 4,
-    },
-    {
-      activityAt: 5,
-      entryKind: "thread",
-      identity: { harness: "codex", threadId: fixtureThreadIds["attention"] },
-      lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-      metadata: { archived: false, pinned: false, snoozed: false },
-      title: "attention",
-    },
-  ];
-  const createController = () => new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
-    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      await acceptProviderSnapshot("codex", providerEntries, { complete: true });
-      return [];
-    },
-    storageRoot: root,
-  });
-  const folderId = "00000000-0000-4000-8000-000000000042";
-  await seedProjectState(root, "project", {
-    version: 4, records: providerEntries, drafts: [],
-    displayOrder: { folders: [{ folderId, section: "snoozed", threadKeys: ["codex:c"], title: "Keep asleep" }] },
-  });
-  const controller = createController();
-  await controller.readProject(fixtureProjectIds["project"]);
-  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).entries.length === providerEntries.length, "Threads were not discovered.");
-  const afterReorder = await readProjectState<{ displayOrder?: unknown }>(root, "project");
-  assert.ok(afterReorder.displayOrder);
-  await controller.observeLifecycle("codex", fixtureThreadIds["child"], { kind: "turnCompleted", status: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("child-turn") });
-  const blockedSnoozeState = new Map((await controller.getSnapshot(fixtureProjectIds["project"])).entries.flatMap((entry) => entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []));
-  assert.equal(blockedSnoozeState.get(fixtureThreadIds["a"]), true);
-  assert.equal(blockedSnoozeState.get(fixtureThreadIds["b"]), true);
-  assert.equal(blockedSnoozeState.get(fixtureThreadIds["c"]), true);
-  await controller.observeLifecycle("codex", fixtureThreadIds["attention"], { kind: "userCompleted" });
-  const snoozeState = new Map((await controller.getSnapshot(fixtureProjectIds["project"])).entries.flatMap((entry) => entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []));
-  assert.equal(snoozeState.get(fixtureThreadIds["c"]), true);
-  assert.equal(snoozeState.get(fixtureThreadIds["a"]), false);
-  assert.equal(snoozeState.get(fixtureThreadIds["b"]), true);
-  const afterWake = await readProjectState<{ displayOrder?: { folders?: Array<{ threadKeys: string[] }> } }>(root, "project");
-  assert.deepEqual(afterWake.displayOrder?.folders?.[0]?.threadKeys, ["codex:c"]);
-  await controller.dispose();
-
-  const reopened = createController();
-  await reopened.readProject(fixtureProjectIds["project"]);
-  await waitFor(async () => (await reopened.getSnapshot(fixtureProjectIds["project"])).entries.length === providerEntries.length, "Reopened threads were not discovered.");
-  const reopenedSnapshot = await reopened.getSnapshot(fixtureProjectIds["project"]);
-  const reopenedSnoozeState = new Map(reopenedSnapshot.entries.flatMap((entry) => entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []));
-  assert.equal(reopenedSnoozeState.get(fixtureThreadIds["c"]), true);
-  assert.equal(reopenedSnoozeState.get(fixtureThreadIds["a"]), false);
-  assert.equal(reopenedSnoozeState.get(fixtureThreadIds["b"]), true);
-  assert.deepEqual(reopenedSnapshot.displayOrder.folders?.[0]?.threadKeys, ["codex:c"]);
-  await reopened.dispose();
-  await temporary.dispose();
-});
-
 test("retained legacy folders reconcile members that leave their section", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-folders-");
   const root = temporary.path;
@@ -4109,477 +3949,6 @@ test("profile persistence failure after native acceptance retains success and ex
   assert.deepEqual(await controller.readComposerProfileTarget(slot), original);
 });
 
-test("priority transitions retain pins while snoozed and clear both when returning to main", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-drag-priority-");
-  const root = temporary.path;
-  const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 2,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: fixtureThreadIds["source"] },
-    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    title: "Source",
-  };
-  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    ...source,
-    activityAt: 1,
-    identity: { harness: "codex", threadId: fixtureThreadIds["target"] },
-    metadata: { archived: false, pinned: false, snoozed: true },
-    title: "Target",
-  };
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
-    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      await acceptProviderSnapshot("codex", [source, target], { complete: true });
-      return [];
-    },
-    storageRoot: root,
-  });
-  await controller.readProject(fixtureProjectIds["project"]);
-  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).freshness === "fresh", "Project did not reconcile.");
-
-  const crossPriorityMove = await controller.handleRequest("observer", {
-    method: "workbench/thread-state/priority/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    priority: "snoozed",
-    sourceKey: "codex:source",
-  });
-  assert.equal("result" in crossPriorityMove && (crossPriorityMove.result as { accepted?: boolean }).accepted, true);
-  let snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
-  let moved = snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
-  assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: false, snoozed: true });
-  assert.deepEqual(projectWorkbenchThreadDisplaySection(snapshot.entries, snapshot.displayOrder, "snoozed").flatMap((item) => (
-    item.itemKind === "thread"
-      ? [item.entry.entryKind === "draft" ? item.entry.draft.draftId : item.entry.identity.threadId]
-      : item.entries.map((entry) => entry.entryKind === "draft" ? entry.draft.draftId : entry.identity.threadId)
-  )), ["source", "target"]);
-
-  await controller.handleRequest("observer", {
-    method: "workbench/thread-state/priority/set",
-    priority: "pinned",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    sourceKey: "codex:source",
-  });
-  moved = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
-  assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: true, snoozed: false });
-
-  const snoozed = await controller.handleRequest("observer", {
-    method: "workbench/thread-state/priority/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    priority: "snoozed",
-    sourceKey: "codex:source",
-  });
-  assert.equal("result" in snoozed && (snoozed.result as { accepted?: boolean }).accepted, true);
-  snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
-  moved = snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
-  assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: true, snoozed: true });
-
-  await controller.handleRequest("observer", {
-    method: "workbench/thread-state/priority/set",
-    priority: "main",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    sourceKey: "codex:source",
-  });
-  moved = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
-  assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: false, snoozed: false });
-  await controller.dispose();
-  await temporary.dispose();
-});
-
-test("claimed sources retain cross-project dependent snooze until completion and the final target claim", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-");
-  const root = temporary.path;
-  const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 2,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: fixtureThreadIds["source"] },
-    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    title: "Source",
-  };
-  const claimedArc = {
-    checkpointCommit: "a".repeat(40),
-    claimedPaths: ["owned.ts"],
-    intentDescription: "",
-    intentName: "target work",
-    phase: "active" as const,
-    proposals: [],
-    updatedAt: "2026-09-04T00:00:00.000Z",
-  };
-  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    ...source,
-    activityAt: 1,
-    gitArc: claimedArc,
-    identity: { harness: "codex", threadId: fixtureThreadIds["target"] },
-    title: "Target",
-  };
-  let targetArc: typeof claimedArc | null = claimedArc;
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
-      rootPath: "C:/projects",
-    }),
-    reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
-      await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
-      await acceptGitArcSnapshot({
-        arcs: projectId === "alpha"
-          ? [{ harness: "codex", state: claimedArc, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source") }]
-          : targetArc ? [{ harness: "codex", state: targetArc, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target") }] : [],
-        plans: [],
-      });
-      return [];
-    },
-    resolveGitArc: async (_projectId, _harness, threadId) => threadId === "target" ? targetArc : claimedArc,
-    storageRoot: root,
-  });
-  await Promise.all([controller.readProject(fixtureProjectIds.alpha), controller.readProject(fixtureProjectIds.beta)]);
-  await waitFor(async () => (
-    (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness === "fresh"
-    && (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh"
-  ), "Projects did not reconcile.");
-  const toggleWait = () => controller.handleRequest("observer", {
-    identity: source.identity,
-    method: "workbench/thread-state/snooze/until",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    target: { identity: target.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") },
-  });
-  const result = await toggleWait();
-  assert.equal(WorkbenchThreadStateMutationResultSchema.parse(result.result).accepted, true);
-  await controller.refreshGitArcState(fixtureProjectIds.alpha, "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source"));
-  const readSource = async () => {
-    const entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.alpha, source.identity.threadId);
-    assert.ok(entry?.entryKind === "thread");
-    return entry;
-  };
-  assert.equal((await readSource()).metadata.snoozed, true);
-  assert.deepEqual((await readSource()).gitArc?.claimedPaths, claimedArc.claimedPaths);
-  await toggleWait();
-  assert.equal((await readSource()).metadata.snoozed, false);
-  assert.equal((await readSource()).snoozedUntil, null);
-  await toggleWait();
-  assert.equal((await readSource()).metadata.snoozed, true);
-  await controller.observeLifecycle("codex", fixtureThreadIds["target"], { kind: "userCompleted" });
-  let sourceEntry = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find((entry) => entry.entryKind === "thread");
-  assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, true);
-  const stored = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
-  assert.deepEqual(stored.records[0]?.snoozedUntil, { targets: [{
-    identity: target.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), title: target.title,
-  }] });
-
-  targetArc = null;
-  await controller.refreshGitArcState(fixtureProjectIds["beta"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target"));
-  sourceEntry = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find((entry) => entry.entryKind === "thread");
-  assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, false);
-  assert.deepEqual((await readSource()).gitArc?.claimedPaths, claimedArc.claimedPaths);
-  const storedAfterWake = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
-  assert.equal(storedAfterWake.records[0]?.snoozedUntil, null);
-  await controller.dispose();
-  await temporary.dispose();
-});
-
-test("dependent snooze also wakes when claims leave before manual completion", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-claims-first-");
-  const root = temporary.path;
-  const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 2,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: fixtureThreadIds["source"] },
-    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    title: "Source",
-  };
-  const claimedArc = {
-    checkpointCommit: "a".repeat(40),
-    claimedPaths: ["owned.ts"],
-    intentDescription: "",
-    intentName: "target work",
-    phase: "active" as const,
-    proposals: [],
-    updatedAt: "2026-09-04T00:00:00.000Z",
-  };
-  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    ...source,
-    activityAt: 1,
-    gitArc: claimedArc,
-    identity: { harness: "codex", threadId: fixtureThreadIds["target"] },
-    title: "Target",
-  };
-  let targetArc: typeof claimedArc | null = claimedArc;
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
-      rootPath: "C:/projects",
-    }),
-    reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
-      await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
-      await acceptGitArcSnapshot({
-        arcs: projectId === "beta" && targetArc ? [{ harness: "codex", state: targetArc, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target") }] : [],
-        plans: [],
-      });
-      return [];
-    },
-    resolveGitArc: async (_projectId, _harness, threadId) => threadId === "target" ? targetArc : null,
-    storageRoot: root,
-  });
-  await Promise.all([controller.readProject(fixtureProjectIds.alpha), controller.readProject(fixtureProjectIds.beta)]);
-  await waitFor(async () => (
-    (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness === "fresh"
-    && (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh"
-  ), "Projects did not reconcile.");
-  await controller.handleRequest("observer", {
-    identity: source.identity,
-    method: "workbench/thread-state/snooze/until",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    target: { identity: target.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") },
-  });
-
-  targetArc = null;
-  await controller.refreshGitArcState(fixtureProjectIds["beta"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target"));
-  let sourceEntry = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find((entry) => entry.entryKind === "thread");
-  assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, true);
-
-  await controller.handleRequest("observer", {
-    identity: target.identity,
-    method: "workbench/thread-state/status/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
-    status: "completed",
-  });
-  sourceEntry = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find((entry) => entry.entryKind === "thread");
-  assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, false);
-  const stored = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
-  assert.equal(stored.records[0]?.snoozedUntil, null);
-  await controller.dispose();
-  await temporary.dispose();
-});
-
-test("dependent snooze keeps multiple targets, survives missing targets, and clears manually", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-clearing-");
-  const root = temporary.path;
-  const thread = (
-    threadId: string,
-    metadata: { archived: false; pinned: false; snoozed: boolean },
-    lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["lifecycle"],
-    activityAt: number,
-  ): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
-    activityAt,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
-    lifecycle,
-    metadata,
-    title: threadId,
-  });
-  const source = thread("source", { archived: false, pinned: false, snoozed: false }, { kind: "completed", reason: "providerInactive", settled: false }, 4);
-  const ordinary = thread("ordinary", { archived: false, pinned: false, snoozed: true }, { kind: "completed", reason: "providerInactive", settled: false }, 3);
-  const active = thread("active", { archived: false, pinned: false, snoozed: false }, {
-    agent: { agentStatus: "working", turnId: fixtureTurnIds["active-turn"] },
-    kind: "working",
-    reason: "acceptedIntent",
-    settled: false,
-  }, 5);
-  const targetA = thread("target-a", { archived: false, pinned: false, snoozed: false }, { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 2);
-  const targetB = thread("target-b", { archived: false, pinned: false, snoozed: false }, { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 1);
-  let betaEntries = [targetA, targetB];
-  const publications: WorkbenchThreadSidebarSnapshot[] = [];
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
-      rootPath: "C:/projects",
-    }),
-    onProject: snapshot => { publications.push(snapshot); },
-    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
-      await acceptProviderSnapshot("codex", projectId === "alpha" ? [source, ordinary, active] : betaEntries, { complete: true });
-      return [];
-    },
-    storageRoot: root,
-  });
-  await Promise.all([controller.readProject(fixtureProjectIds.alpha), controller.readProject(fixtureProjectIds.beta)]);
-  await waitFor(async () => (
-    (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness === "fresh"
-    && (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh"
-  ), "Projects did not reconcile.");
-
-  for (const target of [targetA, targetB]) {
-    await controller.handleRequest("observer", {
-      identity: source.identity,
-      method: "workbench/thread-state/snooze/until",
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-      target: { identity: target.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") },
-    });
-  }
-  let stored = await readProjectState<{ records: Array<{ identity: { threadId: string }; snoozedUntil?: unknown }> }>(root, "alpha");
-  assert.deepEqual(
-    stored.records.find(({ identity }) => identity.threadId === "source")?.snoozedUntil,
-    { targets: [targetA, targetB].map(target => ({
-      identity: target.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), title: target.title,
-    })) },
-  );
-  const waitingEntry = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find(
-    entry => entry.entryKind === "thread" && entry.identity.threadId === source.identity.threadId,
-  );
-  assert.equal(waitingEntry?.entryKind === "thread" ? waitingEntry.waitingFor : null, "other");
-  assert.deepEqual(waitingEntry?.entryKind === "thread"
-    ? waitingEntry.waitingOnThreads?.map(wait => wait.identity.threadId) : null,
-  [targetA.identity.threadId, targetB.identity.threadId]);
-  const observeSource = async () => {
-    const response = await controller.readWorkspaceThread({
-      projectId: fixtureProjectIds["alpha"],
-      subscriptionId: crypto.randomUUID(),
-      target: { harness: "codex", kind: "provider", threadId: source.identity.threadId },
-    });
-    return response.entries[0];
-  };
-  const newObservation = await observeSource();
-  assert.equal(newObservation?.entryKind === "thread" ? newObservation.waitingOnThreads?.length : null, 2);
-  await controller.handleRequest("observer", {
-    identity: source.identity,
-    method: "workbench/thread-state/snooze/until",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    target: { identity: targetB.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") },
-  });
-  stored = await readProjectState<{ records: Array<{ identity: { threadId: string }; snoozedUntil?: unknown }> }>(root, "alpha");
-  assert.deepEqual(stored.records.find(({ identity }) => identity.threadId === "source")?.snoozedUntil, {
-    targets: [{ identity: targetA.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), title: targetA.title }],
-  });
-  const newPublishedSource = publications.findLast(publication => publication.projectId === fixtureProjectIds.alpha)
-    ?.entries.find(entry => entry.entryKind === "thread" && entry.identity.threadId === source.identity.threadId);
-  assert.equal(newPublishedSource?.entryKind === "thread" ? newPublishedSource.waitingOnThreads?.length : null, 1);
-  await controller.handleRequest("observer", {
-    identity: source.identity,
-    method: "workbench/thread-state/snooze/until",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    target: { identity: targetB.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") },
-  });
-  await controller.handleRequest("observer", {
-    identity: targetA.identity,
-    method: "workbench/thread-state/status/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
-    status: "completed",
-  });
-  stored = await readProjectState<{ records: Array<{ identity: { threadId: string }; snoozedUntil?: unknown }> }>(root, "alpha");
-  assert.deepEqual(stored.records.find(({ identity }) => identity.threadId === "source")?.snoozedUntil, {
-    targets: [{ identity: targetB.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), title: targetB.title }],
-  });
-  const partiallyWaiting = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find(
-    entry => entry.entryKind === "thread" && entry.identity.threadId === source.identity.threadId,
-  );
-  assert.equal(partiallyWaiting?.entryKind === "thread" ? partiallyWaiting.metadata.snoozed : null, true);
-  assert.deepEqual(partiallyWaiting?.entryKind === "thread"
-    ? partiallyWaiting.waitingOnThreads?.map(wait => wait.identity.threadId) : null,
-  [targetB.identity.threadId]);
-
-  betaEntries = [];
-  await controller.refresh(fixtureProjectIds["beta"]);
-  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh", "Target removal did not reconcile.");
-  await controller.observeLifecycle("codex", fixtureThreadIds["active"], { kind: "userCompleted" });
-  const snoozeState = new Map((await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.flatMap((entry) => (
-    entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []
-  )));
-  assert.equal(snoozeState.get(fixtureThreadIds["source"]), true);
-  assert.equal(snoozeState.get(fixtureThreadIds["ordinary"]), false);
-
-  await controller.handleRequest("observer", {
-    identity: source.identity,
-    method: "workbench/thread-state/snooze/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    snoozed: false,
-  });
-  stored = await readProjectState<{ records: Array<{ identity: { threadId: string }; snoozedUntil?: unknown }> }>(root, "alpha");
-  assert.equal(stored.records.find(({ identity }) => identity.threadId === "source")?.snoozedUntil, null);
-  const concurrentTargets = ["concurrent-a", "concurrent-b"].map(threadId => thread(
-    threadId, { archived: false, pinned: false, snoozed: false },
-    { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 6,
-  ));
-  betaEntries = concurrentTargets;
-  await controller.refresh(fixtureProjectIds["beta"]);
-  for (const target of concurrentTargets) {
-    await controller.handleRequest("observer", {
-      identity: source.identity, method: "workbench/thread-state/snooze/until",
-      projectId: fixtureProjectIds["alpha"],
-      target: { identity: target.identity, projectId: fixtureProjectIds["beta"] },
-    });
-  }
-  await Promise.all(concurrentTargets.map(target => controller.handleRequest("observer", {
-    identity: target.identity, method: "workbench/thread-state/status/set",
-    projectId: fixtureProjectIds["beta"], status: "completed",
-  })));
-  const afterBoth = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find(
-    entry => entry.entryKind === "thread" && entry.identity.threadId === source.identity.threadId,
-  );
-  assert.equal(afterBoth?.entryKind === "thread" ? afterBoth.metadata.snoozed : null, false);
-  assert.deepEqual(afterBoth?.entryKind === "thread" ? afterBoth.waitingOnThreads : null, []);
-  await controller.dispose();
-  await temporary.dispose();
-});
-
-test("restart reevaluates a persisted dependency when its ready target loaded first", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-restart-");
-  const root = temporary.path;
-  const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 2,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: fixtureThreadIds["source"] },
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: true },
-    title: "Source",
-  };
-  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    ...source,
-    activityAt: 1,
-    identity: { harness: "codex", threadId: fixtureThreadIds["target"] },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    title: "Target",
-  };
-  const persistence = testPersistence(root);
-  await persistence.writeProject("alpha", {
-    drafts: [],
-    records: [{ ...source, snoozedUntil: { identity: target.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") } }],
-    version: 4,
-  });
-  await persistence.writeProject("beta", { drafts: [], records: [target], version: 4 });
-  let releaseSourceRead = () => undefined;
-  const sourceReadGate = new Promise<void>((resolve) => { releaseSourceRead = resolve; });
-  const gatedPersistence: WorkbenchThreadStatePersistence = {
-    readNavigationSummary: projectId => persistence.readNavigationSummary(projectId),
-    writeChanges: (projectId, changes) => persistence.writeChanges(projectId, changes),
-    readNextArchiveEligibility: () => persistence.readNextArchiveEligibility(),
-    readArchiveEligible: before => persistence.readArchiveEligible(before),
-    readGlobal: async (id) => await persistence.readGlobal(id),
-    readTitleHistories: async (projectId) => await persistence.readTitleHistories(projectId),
-    readGitCommits: async (threadIds) => await persistence.readGitCommits(threadIds),
-    recordGitCommitTimes: async (threadId, times) => await persistence.recordGitCommitTimes(threadId, times),
-    readProject: async (projectId) => {
-      if (projectId === "alpha") await sourceReadGate;
-      return await persistence.readProject(projectId);
-    },
-    writeGlobal: async (id, document) => await persistence.writeGlobal(id, document),
-    writeProject: async (projectId, document, titleHistories) => await persistence.writeProject(projectId, document, titleHistories),
-  };
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("beta", "C:/projects/beta"), projectOption("alpha", "C:/projects/alpha")],
-      rootPath: "C:/projects",
-    }),
-    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
-      await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
-      return [];
-    },
-    storageRoot: root,
-    threadStateStore: gatedPersistence,
-  });
-  const opening = Promise.all([controller.readProject(fixtureProjectIds.beta), controller.readProject(fixtureProjectIds.alpha)]);
-  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh", "Target did not reconcile first.");
-  releaseSourceRead();
-  await opening;
-  await waitFor(async () => {
-    const entry = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find((candidate) => candidate.entryKind === "thread");
-    return entry?.entryKind === "thread" && !entry.metadata.snoozed;
-  }, "Persisted dependency did not wake after its source project loaded.");
-  const stored = await persistence.readProject("alpha") as { records: Array<{ snoozedUntil?: unknown }> };
-  assert.equal(stored.records[0]?.snoozedUntil, null);
-  await controller.dispose();
-  await temporary.dispose();
-});
-
 test("provider completion auto-completes subagents while top-level turns still need an explicit status", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-lifecycle-");
   const root = temporary.path;
@@ -4681,7 +4050,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureThreadIds["terminal"] },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
-    metadata: { archived: false, pinned: true, snoozed: true },
+    metadata: { archived: false, pinned: true, snoozed: false },
     title: "Terminal",
   };
   const pending: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {

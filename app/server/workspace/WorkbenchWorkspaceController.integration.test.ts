@@ -22,6 +22,7 @@ import WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
+import WorkbenchThreadSnoozeController from "../state/WorkbenchThreadSnoozeController";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 
@@ -327,6 +328,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   });
   const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn: message => warnings.push(message) });
   const threads = new WorkbenchWorkspaceThreads({ sources, presentation, warn: message => warnings.push(message) });
+  const threadSnoozes = new WorkbenchThreadSnoozeController({ sources, presentation, threads, warn: message => warnings.push(message) });
   const network = {
     getFacts: () => ({ phase: "pending" as const, failure: null, snapshot: null }),
     ingress: () => ({ deviceNodeId: null, manageApp: true, manageNetwork: true, trustHost: false }),
@@ -337,7 +339,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   const routes = new WorkbenchNetworkRoutes(network);
   const appSockets = new WorkbenchAppEventSocketController({
     logger: new WorkbenchProcessLogger({ color: false, writeOutput: () => {}, writeError: line => warnings.push(line) }),
-    network, routes, sources, workspace, workspaceThreads: threads, presentation,
+    network, routes, sources, workspace, workspaceThreads: threads, threadSnoozes, presentation,
     runtime: { read: () => ({ frontendGeneration: null, reloadDirt: { dirtyScopes: [], pendingScopes: [], error: null } }),
       subscribe: () => () => {} },
     state: {
@@ -356,7 +358,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   context.after(async () => {
     for (const client of clients) { client.workspace.dispose(); client.rpc.dispose(); }
     appSockets.close(); routes.close();
-    threads.dispose(); workspace.dispose(); sources.dispose(); presentation.close();
+    threadSnoozes.dispose(); threads.dispose(); workspace.dispose(); sources.dispose(); presentation.close();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await repository.close(); await temporary.dispose();

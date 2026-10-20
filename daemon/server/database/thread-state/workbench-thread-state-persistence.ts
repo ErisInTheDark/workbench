@@ -65,7 +65,6 @@ export type WorkbenchThreadRecordQuery =
 export interface WorkbenchThreadStatePersistence {
   readRecords(query: WorkbenchThreadRecordQuery): Promise<WorkbenchThreadStateRecord[]>;
   readProjectActivity(projectId: ProjectId): Promise<number | null>;
-  readSnoozeSources(targetThreadId: WorkbenchThreadId): Promise<Array<{ projectId: ProjectId; threadId: WorkbenchThreadId }>>;
   readDrafts(projectId: ProjectId): Promise<WorkbenchStoredThreadDraft[]>;
   readProjectProfile(projectId: ProjectId): Promise<WorkbenchComposerProfileSelectionState | null>;
   readLayout(owner: WorkbenchThreadLayoutOwner): Promise<{ revision: number; displayOrder: ThreadDisplayLayout } | null>;

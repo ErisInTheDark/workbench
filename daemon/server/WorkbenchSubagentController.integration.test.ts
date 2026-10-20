@@ -201,7 +201,7 @@ test("older children remain listable and name-addressable before settled history
       ...record, entryKind: "subagent", identity: { harness: record.harness, threadId: record.threadId },
       activityAt: 1, pinned: false, lifecycle: { kind: "completed", reason: "agentCompleted", settled, agent: { agentStatus: "completed" } },
       profile: null, providerObserved: true, settledAt: settled ? 2 : null,
-      gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      gitHistoryCleanedAt: null, mcpGeneration: null,
     };
     fixture.database.admitRecord(state);
     fixture.database.repository.writeRecords([state]);

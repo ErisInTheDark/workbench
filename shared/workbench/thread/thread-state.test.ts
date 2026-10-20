@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import { countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { projectSidebarRow } from "./thread-sidebar-row";
 
@@ -181,23 +181,6 @@ test("settlement is available only for unsettled terminal rows without Git block
   assert.equal(isWorkbenchThreadSettlementAvailable({ ...completed, lifecycle: { ...completed.lifecycle, settled: true } }), false);
   assert.equal(isWorkbenchThreadSettlementAvailable({ ...completed, gitArc: activeArc }), false);
   assert.equal(isWorkbenchThreadSettlementAvailable({ ...completed, gitArc: { ...activeArc, claimedPaths: [], phase: "resolved", proposals: [{ proposalId: "proposal", status: "proposed" as const }] } }), true);
-
-  const snoozed = { ...completed, metadata: { ...completed.metadata, snoozed: true } };
-  const settled = { ...completed, lifecycle: { ...completed.lifecycle, settled: true } };
-  const draft: WorkbenchThreadSidebarEntry = {
-    activityAt: 2,
-    draft: {
-      attachments: [], clientUpdatedAt: 2, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 2,
-      draftId: fixtureIdentityValues.DraftId["draft"], profileId: null, projectId: fixtureIdentityValues.ProjectId["project"], prompt: "Draft", updatedAt: 2,
-    },
-    entryKind: "draft",
-    metadata: { archived: false, pinned: false, snoozed: false },
-    title: "Draft",
-  };
-  assert.equal(areAllUnsnoozedThreadEntriesSettlementReady([completed, snoozed, settled]), true);
-  assert.equal(areAllUnsnoozedThreadEntriesSettlementReady([{ ...completed, lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false } }, snoozed]), false);
-  assert.equal(areAllUnsnoozedThreadEntriesSettlementReady([{ ...completed, gitArc: activeArc }, snoozed]), false);
-  assert.equal(areAllUnsnoozedThreadEntriesSettlementReady([draft, snoozed]), false);
 });
 
 test("project placement includes settled work and drafts until they are archived", () => {
@@ -318,33 +301,14 @@ test("legacy draft settings conform from reload-compatible flattened fields", ()
   });
 });
 
-test("priority and dependent-snooze requests reject invalid intent", () => {
-  const identity = { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source") };
-  const target = { identity: { harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target") }, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") };
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    method: "workbench/thread-state/priority/set",
-    priority: "main",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    sourceKey: "codex:source",
-  }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    identity,
-    method: "workbench/thread-state/snooze/until",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    target,
-  }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    method: "workbench/thread-state/priority/set",
-    priority: "settled",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    sourceKey: "codex:source",
-  }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    identity,
-    method: "workbench/thread-state/snooze/until",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    target: { ...target, extra: true },
-  }).success, false);
+test("daemon priority requests place threads in pinned or main only, since snooze is app-owned", () => {
+  const request = (priority: string) => WorkbenchThreadStateRequestSchema.safeParse({
+    method: "workbench/thread-state/priority/set", priority,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), sourceKey: "codex:source",
+  }).success;
+  assert.equal(request("main"), true);
+  assert.equal(request("snoozed"), false);
+  assert.equal(request("settled"), false);
 });
 
 test("durable questionnaire state accepts proper questions and rejects approvals", () => {

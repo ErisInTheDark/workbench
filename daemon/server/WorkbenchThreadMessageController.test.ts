@@ -255,7 +255,7 @@ async function questionnaireFixture(childHarness: WorkbenchHarness, options: {
     name: "luna", parentThreadId: identitySchemas.WorkbenchThreadIdSchema.parse("reviewer"), pinned: false,
     profileId: "profile", profileName: "reviewer", projectId, title: "child", updatedAt: 2,
     pendingQuestionnaire: question, gitHistoryCleanedAt: null, mcpGeneration: null, profile: null,
-    providerObserved: true, settledAt: null, snoozedUntil: null,
+    providerObserved: true, settledAt: null,
   };
   const database = createThreadStateTestDatabase();
   await database.seedProject(projectId, { version: 4, records: [record], drafts: [] });

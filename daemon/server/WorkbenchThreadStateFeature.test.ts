@@ -23,7 +23,7 @@ const canonicalFixtureLookup = {
   knownTurn: (reference: fixtureIdentitySchemas.TurnReference) => ({ turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(reference) }),
 };
 const storedRecordDefaults = {
-  gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, settledAt: null, snoozedUntil: null,
+  gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, settledAt: null,
 };
 const mapProviderTurnStartedNotification = (notification: JsonRpcNotification) => mapTurnStarted(notification, canonicalFixtureLookup);
 const mapProviderLifecycleNotification = (notification: JsonRpcNotification) => mapLifecycle(notification, canonicalFixtureLookup);
@@ -195,12 +195,12 @@ test("project reads reject unknown owners before loading or writing state", asyn
     await feature.controller.ensureProviderEntry(projectId, {
       ...sidebar, lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     });
-    const snoozed = await feature.controller.handleRequest("observer", {
-      method: "workbench/thread-state/snooze/set", projectId, identity: sidebar.identity, snoozed: true,
+    const pinned = await feature.controller.handleRequest("observer", {
+      method: "workbench/thread-state/pin/set", projectId, identity: sidebar.identity, pinned: true,
     });
-    assert.equal(snoozed.error, undefined);
+    assert.equal(pinned.error, undefined);
     const saved = await feature.controller.getCanonicalThreadEntry(projectId, sidebar.identity.threadId);
-    assert.ok(saved?.entryKind === "thread" && saved.metadata.snoozed);
+    assert.ok(saved?.entryKind === "thread" && saved.metadata.pinned);
     const before = database.sqlite.prepare("SELECT * FROM workbench_sidebar_project_layouts").all();
     database.operations.length = 0;
     for (const id of ["remote:/example.test/project", "remote://example.test/unregistered"]) {
@@ -407,9 +407,9 @@ test("failed interruption cannot mark the thread complete or discard its questio
   } finally { await h.feature.dispose(); }
 });
 
-test("composer snooze preserves provider questionnaires and fences failures or raced answers", async context => {
+test("questionnaire hold preserves provider questionnaires and fences failures or raced answers", async context => {
   const harness = "codex";
-  for (const outcome of ["snooze", "fail", "answer"] as const) {
+  for (const outcome of ["hold", "fail", "answer"] as const) {
     await context.test(outcome, async () => {
       const h = await questionnaireHarness(harness);
       try {
@@ -417,21 +417,20 @@ test("composer snooze preserves provider questionnaires and fences failures or r
         if (outcome === "answer" && harness === "codex") h.state.beforeRelease = async () => {
           await h.feature.controller.observeLifecycle(harness, fixtureIdentityValues.WorkbenchThreadId["thread"], { kind: "inputResolved", requestKey: h.questionnaire.requestKey });
         };
-        const snooze = h.feature.controller.handleRequest("observer", {
-          method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentityValues.ProjectId.project,
+        const hold = h.feature.controller.handleRequest("observer", {
+          method: "workbench/thread-state/questionnaire/hold", projectId: fixtureIdentityValues.ProjectId.project,
           identity: { harness, threadId: "thread" }, requestKey: h.questionnaire.requestKey,
         });
-        if (outcome === "fail") await assert.rejects(snooze, /interrupt failed/u);
+        if (outcome === "fail") await assert.rejects(hold, /interrupt failed/u);
         else {
-          const response = await snooze;
+          const response = await hold;
           assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, outcome !== "answer" || harness !== "codex");
         }
         const entry = await h.read();
         assert.ok(entry?.entryKind === "thread");
         const answered = outcome === "answer" && harness === "codex";
-        assert.equal(entry.metadata.snoozed, outcome !== "fail" && !answered);
         if (!answered) assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
-        if (outcome === "snooze") {
+        if (outcome === "hold") {
           assert.equal(entry.lifecycle.kind, "needsAttention");
           assert.equal(entry.lifecycle.reason, "pendingInput");
           assert.equal(entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"
@@ -439,7 +438,6 @@ test("composer snooze preserves provider questionnaires and fences failures or r
           await h.feature.controller.observeLifecycle(harness, fixtureIdentityValues.WorkbenchThreadId["thread"], { kind: "acceptedIntent", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("resumed") });
           const resumed = await h.read();
           assert.ok(resumed?.entryKind === "thread");
-          assert.equal(resumed.metadata.snoozed, false);
           assert.equal(resumed.lifecycle.kind, "working");
           assert.equal(resumed.pendingQuestionnaire, null);
         }
@@ -448,18 +446,17 @@ test("composer snooze preserves provider questionnaires and fences failures or r
   }
 });
 
-test("a retained questionnaire can be snoozed after its thread was marked complete", async () => {
+test("a retained questionnaire can be held after its thread was marked complete", async () => {
   const h = await questionnaireHarness();
   try {
     await h.complete();
     const response = await h.feature.controller.handleRequest("observer", {
-      method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentityValues.ProjectId.project,
+      method: "workbench/thread-state/questionnaire/hold", projectId: fixtureIdentityValues.ProjectId.project,
       identity: h.provider.identity, requestKey: h.questionnaire.requestKey,
     });
     assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
     const entry = await h.read();
     assert.ok(entry?.entryKind === "thread");
-    assert.equal(entry.metadata.snoozed, true);
     assert.equal(entry.lifecycle.kind, "needsAttention");
     assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
   } finally { await h.feature.dispose(); }
@@ -794,7 +791,7 @@ test("creation installs captured settings before first admission and refreshes o
   }
 });
 
-test("accepted newer work drops an unchanged questionnaire before snooze can act", async () => {
+test("accepted newer work drops an unchanged questionnaire before a hold can act", async () => {
   const h = await questionnaireHarness();
   try {
     await h.feature.controller.observeLifecycle("codex", h.provider.identity.threadId, {
@@ -802,13 +799,12 @@ test("accepted newer work drops an unchanged questionnaire before snooze can act
     });
     h.state.turn = { id: "native:new-turn", status: "inProgress", items: [] };
     const result = await h.feature.controller.handleRequest("observer", {
-      method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentityValues.ProjectId.project,
+      method: "workbench/thread-state/questionnaire/hold", projectId: fixtureIdentityValues.ProjectId.project,
       identity: h.provider.identity, requestKey: h.questionnaire.requestKey,
     });
     assert.equal("result" in result && (result.result as { accepted: boolean }).accepted, false);
     const entry = await h.read();
     assert.ok(entry?.entryKind === "thread");
-    assert.equal(entry.metadata.snoozed, false);
     assert.equal(entry.lifecycle.kind, "working");
     assert.equal(entry.pendingQuestionnaire, null);
   } finally { await h.feature.dispose(); }

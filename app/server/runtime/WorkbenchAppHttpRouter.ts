@@ -19,6 +19,7 @@ import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
 import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
+import type WorkbenchThreadSnoozeController from "../state/WorkbenchThreadSnoozeController";
 import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
 import type WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import WorkbenchWorkspaceAssetRoutes from "../workspace/WorkbenchWorkspaceAssetRoutes";
@@ -120,6 +121,7 @@ export default class WorkbenchAppHttpRouter {
     socketTraffic?: Pick<WebSocketTrafficBuffer, "record">;
     workspace?: WorkbenchWorkspaceController;
     workspaceThreads?: WorkbenchWorkspaceThreads;
+    threadSnoozes?: WorkbenchThreadSnoozeController;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
     gitPeers?: WorkbenchGitPeerSync;
     presentationImport?: WorkbenchPresentationImportController;
@@ -178,7 +180,8 @@ export default class WorkbenchAppHttpRouter {
           state: options.state, runtime: options.runtime,
           settings: this.settingsRoutes, port: this.portRoutes,
           sources: options.sources, workspace: options.workspace,
-          workspaceThreads: options.workspaceThreads, workspaceDrafts: options.workspaceDrafts,
+          workspaceThreads: options.workspaceThreads, threadSnoozes: options.threadSnoozes,
+          workspaceDrafts: options.workspaceDrafts,
           gitPeers: options.gitPeers, traffic: options.socketTraffic,
         }) : null;
     this.staticRequests = new StaticHttpRequestController({

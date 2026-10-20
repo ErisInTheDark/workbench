@@ -1339,7 +1339,7 @@ export type WorkbenchThreadIntent =
   | { kind: "priority"; priority: "pinned" | "main" | "snoozed" }
   | { kind: "snoozeUntil"; targetThreadId: WorkbenchThreadId }
   | { kind: "pin"; pinned: boolean }
-  | { kind: "snooze"; snoozed: boolean }
+  | { kind: "snooze"; snoozed: boolean; requestKey?: string }
   | { kind: "archive"; archived: boolean }
   | { kind: "status"; status: "needsAttention" | "completed" | "stopped" }
   | { kind: "restore" | "settle" | "stop" };

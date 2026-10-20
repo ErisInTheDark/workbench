@@ -35,7 +35,7 @@
  * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity.
  * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: current thread-family snapshots and daemon-owned mutations.
- * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness.
+ * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable: identify Git blockers and terminal settlement.
  * - WorkbenchThreadSettlementHold/getWorkbenchThreadSettlementHold: thread-owned settlement blockers (required todos, unhandled addressed feedback) and reading them from summary facts.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries/hasUnarchivedSidebarWork: classify project placement and ordered thread sections.
  * - WorkbenchThreadClaimIntersections/getWorkbenchThreadClaimIntersections/createWorkbenchThreadClaimIntersectionSelector: derive and identity-stabilize sibling intersections for plan or stashed claims.
@@ -743,20 +743,16 @@ const ProjectRequestBase = z.object({ projectId: ProjectIdSchema }).strict();
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/set"), title: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/dismiss"), title: z.string().trim().min(1) }),
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/priority/set"), priority: WorkbenchThreadPrioritySchema, sourceKey: z.string().min(1).brand<"ThreadDisplayKey">() }),
+  /** Snooze is app-owned, so daemons only place threads in pinned or main. */
+  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/priority/set"), priority: z.enum(["pinned", "main"]), sourceKey: z.string().min(1).brand<"ThreadDisplayKey">() }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/pin/set"), pinned: z.boolean() }),
-  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/snooze/set"), snoozed: z.boolean() }),
-  ProjectRequestBase.extend({
-    identity: ThreadIdentitySchema,
-    method: z.literal("workbench/thread-state/snooze/until"),
-    target: z.object({ identity: ThreadIdentitySchema, projectId: ProjectIdSchema }).strict(),
-  }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/settle") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/restore") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/status/set"), status: z.enum(["needsAttention", "completed", "stopped"]) }),
   /** Mark stopped and dismiss the pending questionnaire, which must be the one `requestKey` names. */
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/stop"), requestKey: z.string().min(1).optional() }),
-  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/snooze"), requestKey: z.string().min(1) }),
+  /** Interrupt the turn holding this questionnaire and keep waiting on it. */
+  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/hold"), requestKey: z.string().min(1) }),
   ProjectRequestBase.extend({ entry: WorkbenchQuestionnaireHistoryEntrySchema, identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/resolve") }),
   ProjectRequestBase.extend({ archived: z.boolean(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/archive/set") }),
 ]);
@@ -832,12 +828,6 @@ export function isWorkbenchThreadSettlementAvailable(entry: SidebarRow, facts: S
     && !getWorkbenchThreadSettlementHold(facts);
 }
 
-export function areAllUnsnoozedThreadEntriesSettlementReady(entries: readonly SidebarRow[]) {
-  return entries.every((entry) => {
-    const group = getThreadSidebarGroup(entry);
-    return group === "hidden" || group === "archived" || group === "snoozed" || group === "settled" || isWorkbenchThreadSettlementAvailable(entry);
-  });
-}
 
 export function groupWorkbenchThreadSidebarEntries<Entry extends SidebarRow>(entries: readonly Entry[]) {
   const visibleEntries = entries.filter((entry): entry is Exclude<Entry, { entryKind: "subagent" }> =>

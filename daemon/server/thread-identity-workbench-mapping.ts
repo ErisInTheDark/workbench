@@ -182,12 +182,6 @@ export async function mapWorkbenchThreadStateRequest(owners: NativeTranscriptIde
       ...("turnId" in request ? { turnId: turn?.turnId ?? request.turnId } : {}),
     } as WorkbenchThreadStateRequest;
   }
-  if (request.method === "workbench/thread-state/snooze/until") {
-    const thread = await resolveNativeReference(owners, request.target.identity, request.target.projectId);
-    result = { ...result, target: { ...request.target,
-      identity: { ...request.target.identity, threadId: thread.threadId },
-    } } as WorkbenchThreadStateRequest;
-  }
   if (request.method === "workbench/thread-state/priority/set") {
     result = { ...request, sourceKey: await mapThreadDisplayKey(owners, request.sourceKey, projectId) as typeof request.sourceKey };
   }

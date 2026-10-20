@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchPresentationRepositoryOptions: durable shared-presentation database path.
- * - default WorkbenchPresentationRepository: own project, draft, layout and import transactions, projecting compact launch
+ * - default WorkbenchPresentationRepository: own project, draft, layout, thread-snooze and import transactions, projecting compact launch
  *   history and one shared frozen snapshot per revision; folder registration merges projects whose folders all re-keyed
  *   into their successor identity.
  */
@@ -21,6 +21,7 @@ import {
 } from "workbench-shared/state/workbench-presentation-state";
 import { presentationSchema, type PresentationRows } from "workbench-shared/state/workbench-presentation-schema";
 import type { PresentationImportSource } from "workbench-shared/state/workbench-presentation-import";
+import { ThreadSnoozeSchema } from "workbench-shared/workbench/thread/thread-snooze";
 import releases from "workbench-shared/state/workbench-presentation-releases";
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import { isDaemonOwnedProject } from "workbench-shared/workbench/project/workbench-project-projection";
@@ -217,7 +218,23 @@ export default class WorkbenchPresentationRepository {
         logicalProjectId: row.logical_project_id,
         target: { daemonId: row.daemon_id, projectId: row.project_id },
       })),
+      threadSnoozes: this.readThreadSnoozes(db),
     });
+  }
+
+  private readThreadSnoozes(db: Database.Database) {
+    const snoozes = db.prepare("SELECT * FROM presentation_thread_snoozes ORDER BY thread_id")
+      .all() as PresentationRows["threadSnoozes"][];
+    const targets = Map.groupBy(db.prepare("SELECT * FROM presentation_thread_snooze_targets ORDER BY source_thread_id, target_thread_id")
+      .all() as PresentationRows["threadSnoozeTargets"][], row => row.source_thread_id);
+    return snoozes.map(row => ThreadSnoozeSchema.parse({
+      threadId: row.thread_id,
+      basis: { lifecycleKind: row.basis_lifecycle_kind, turnId: row.basis_turn_id, questionnaireKey: row.basis_questionnaire_key },
+      targets: (targets.get(row.thread_id) ?? []).map(target => ({
+        identity: { harness: target.target_harness, threadId: target.target_thread_id },
+        projectId: target.target_project_id, title: target.title,
+      })),
+    }));
   }
 
   mutate(value: PresentationMutation) {
@@ -249,6 +266,7 @@ export default class WorkbenchPresentationRepository {
       case "deleteDraft": this.deleteDraft(mutation); break;
       case "setDraftPriority": this.setDraftPriority(mutation); break;
       case "setLocationsHidden": this.setLocationsHidden(mutation); break;
+      case "setThreadSnoozes": this.setThreadSnoozes(mutation); break;
       case "deleteAttachment": this.deleteAttachment(mutation); break;
       case "reserveLaunch": this.reserveLaunch(mutation); break;
       case "completeLaunch": this.completeLaunch(mutation); break;
@@ -582,6 +600,32 @@ export default class WorkbenchPresentationRepository {
     this.requireDatabase().prepare(`
       UPDATE presentation_drafts SET pinned = ?, snoozed = ?, revision = ? WHERE id = ?
     `).run(input.pinned ? 1 : 0, input.snoozed ? 1 : 0, this.nextRevision(), input.draftId);
+  }
+
+  private setThreadSnoozes(input: Extract<PresentationMutation, { kind: "setThreadSnoozes" }>) {
+    const db = this.requireDatabase();
+    const current = new Map(this.readThreadSnoozes(db).map(snooze => [snooze.threadId, snooze]));
+    const put = input.put.filter(snooze => !areDeeplyEqual(current.get(snooze.threadId), snooze));
+    const wake = input.wake.filter(threadId => current.has(threadId) && !input.put.some(snooze => snooze.threadId === threadId));
+    if (!put.length && !wake.length) return;
+    const remove = db.prepare("DELETE FROM presentation_thread_snoozes WHERE thread_id = ?");
+    const insert = db.prepare(`
+      INSERT INTO presentation_thread_snoozes(thread_id, basis_lifecycle_kind, basis_turn_id, basis_questionnaire_key)
+      VALUES (?, ?, ?, ?)
+    `);
+    const insertTarget = db.prepare(`
+      INSERT INTO presentation_thread_snooze_targets(source_thread_id, target_thread_id, target_harness, target_project_id, title)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const threadId of wake) remove.run(threadId);
+    for (const snooze of put) {
+      remove.run(snooze.threadId);
+      insert.run(snooze.threadId, snooze.basis.lifecycleKind, snooze.basis.turnId, snooze.basis.questionnaireKey);
+      for (const target of snooze.targets) {
+        insertTarget.run(snooze.threadId, target.identity.threadId, target.identity.harness, target.projectId, target.title);
+      }
+    }
+    this.nextRevision();
   }
 
   /**

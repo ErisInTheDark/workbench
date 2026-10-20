@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - presentationTables/PresentationRows: typed app-wide project, draft, layout and hidden-folder storage.
+ * - presentationTables/PresentationRows: typed app-wide project, draft, layout, hidden-folder and thread-snooze storage.
  * - presentationSchema: protected relational history for the shared presentation database.
  */
 import {
@@ -282,6 +282,33 @@ const hiddenLocations = defineTableHistory({
   versions: [tableVersion({ schemaVersion: releases.hiddenLocations.version, table: hiddenLocationTable,
     migration: createTable(hiddenLocationTable) })],
 });
+function snoozeTable<Table extends TableDefinition>(table: Table) {
+  return defineTableHistory({
+    current: table,
+    versions: [tableVersion({ schemaVersion: releases.threadSnoozes.version, table, migration: createTable(table) })],
+  });
+}
+// Keyed by thread UUID alone: snoozes and their targets may live on any daemon.
+const threadSnoozes = snoozeTable(defineTable("presentation_thread_snoozes", {
+  thread_id: text().primaryKey(),
+  basis_lifecycle_kind: enumText("working", "needsAttention", "completed", "stopped").notNull(),
+  basis_turn_id: text(),
+  basis_questionnaire_key: text(),
+}));
+const threadSnoozeTargets = snoozeTable(defineTable("presentation_thread_snooze_targets", {
+  source_thread_id: text().notNull(),
+  target_thread_id: text().notNull(),
+  target_harness: text().notNull(),
+  target_project_id: text().notNull(),
+  title: text().notNull(),
+}, table => ({
+  constraints: [
+    primaryKey([table.source_thread_id, table.target_thread_id]),
+    foreignKey([table.source_thread_id], {
+      table: "presentation_thread_snoozes", columns: ["thread_id"], onDelete: "CASCADE",
+    }),
+  ],
+})));
 const divergences = initial(defineTable("presentation_source_divergences", {
   daemon_id: text().notNull().references("presentation_daemons", "id"),
   source_kind: enumText("draft", "layout").notNull(),
@@ -298,12 +325,13 @@ export const presentationTables = Object.freeze({
   folders: folders.current, members: members.current,
   receipts: receipts.current, mappings: mappings.current, importAttachments: importAttachments.current,
   divergences: divergences.current, hiddenLocations: hiddenLocations.current,
+  threadSnoozes: threadSnoozes.current, threadSnoozeTargets: threadSnoozeTargets.current,
 });
 export type PresentationRows = { [Name in keyof typeof presentationTables]: SelectRow<(typeof presentationTables)[Name]> };
 export const presentationSchema = defineWorkbenchDatabaseSchema({
   subsystems: [defineSubsystemHistory([
     metadata, daemons, projects, locations, defaults, drafts, attachments, attachmentChunks,
     references, feedbackReferences, folders, members, receipts, mappings, importAttachments, divergences,
-    hiddenLocations,
+    hiddenLocations, threadSnoozes, threadSnoozeTargets,
   ])],
 });

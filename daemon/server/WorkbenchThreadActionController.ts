@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project, virtual-steer and transcript owners.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze, virtual-steer routing, compaction-queue adoption and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire hold, virtual-steer routing, compaction-queue adoption and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -203,7 +203,7 @@ export default class WorkbenchThreadActionController {
     },
     "thread/stop": (input, connectionId) => this.stop(input, connectionId),
     "thread/interrupt": async (input, connectionId) => {
-      await this.snoozeQuestionnaire(await this.target(input.threadId), input.requestKey, connectionId ?? "");
+      await this.holdQuestionnaire(await this.target(input.threadId), input.requestKey, connectionId ?? "");
       return { ok: true };
     },
     "thread/goal/set": async input => ({ goal: await this.owners.goals.set(input.threadId, input.objective) }),
@@ -366,10 +366,10 @@ export default class WorkbenchThreadActionController {
     });
   }
 
-  /** Interrupt the questionnaire's turn and snooze the thread, keeping the questionnaire. */
-  private async snoozeQuestionnaire(target: ActionTarget, requestKey: string, connectionId: string) {
-    await this.mutateState(connectionId, "snoozed", {
-      method: "workbench/thread-state/questionnaire/snooze", ...stateTarget(target), requestKey,
+  /** Interrupt the questionnaire's turn, keeping the questionnaire waiting; the app snoozes the thread itself. */
+  private async holdQuestionnaire(target: ActionTarget, requestKey: string, connectionId: string) {
+    await this.mutateState(connectionId, "held", {
+      method: "workbench/thread-state/questionnaire/hold", ...stateTarget(target), requestKey,
     });
   }
 

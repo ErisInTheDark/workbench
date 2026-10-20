@@ -20,8 +20,8 @@ function seed(database: Database.Database, threadId: string, settledAt: number |
     (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
     VALUES (?, 'topLevel', 'codex', 'thread', 1, 1)`).run(threadId);
   database.prepare(`INSERT INTO workbench_top_level_thread_states
-    (thread_id, thread_kind, archived, pinned, snoozed)
-    VALUES (?, 'topLevel', 0, 0, 0)`).run(threadId);
+    (thread_id, thread_kind, archived, pinned)
+    VALUES (?, 'topLevel', 0, 0)`).run(threadId);
   database.prepare("INSERT INTO workbench_thread_retention(thread_id, settled_at) VALUES (?, ?)").run(threadId, settledAt);
 }
 

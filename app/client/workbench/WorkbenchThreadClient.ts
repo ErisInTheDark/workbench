@@ -53,7 +53,7 @@ export interface WorkbenchThreadClientOptions {
   /** The daemon folder this renderer serves; requests and limits are scoped to its daemon. */
   location?: ProjectLocationReference;
   observeProviderEvents?: boolean;
-  updateThreadStateWithAcceptance?: WorkbenchControls["updateThreadStateWithAcceptance"];
+  snoozeThread?: (threadId: string, requestKey?: string) => Promise<boolean>;
   onStatusMessage?: (message: string) => void;
   /** Turns a saved composer attachment URL back into the image the daemon reads. */
   resolveAttachmentUrl?: (url: string) => Promise<string>;
@@ -437,9 +437,9 @@ function WorkbenchThreadClient(
             window.addEventListener("focus", listener);
             return () => window.removeEventListener("focus", listener);
           },
-          updateThreadStateWithAcceptance: request => {
-            if (!options.updateThreadStateWithAcceptance) throw new Error("Thread state mutations are not connected.");
-            return options.updateThreadStateWithAcceptance(request);
+          snoozeThread: (threadId, requestKey) => {
+            if (!options.snoozeThread) throw new Error("Thread snooze is not connected.");
+            return options.snoozeThread(threadId, requestKey);
           },
           reportError: message => options.onStatusMessage?.(message),
           resolveAttachmentUrl: async url => await options.resolveAttachmentUrl?.(url) ?? url,

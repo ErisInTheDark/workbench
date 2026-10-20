@@ -1116,7 +1116,7 @@ async function checkInvalidThreadState(controller: WorkbenchDatabaseController) 
       title: "not committed", activityAt: 1, providerObserved: true,
       metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-      profile: null, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      profile: null, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
     }] }));
     assert.equal(controller.state, "ready");
     assert.doesNotThrow(() => controller.assertReady());

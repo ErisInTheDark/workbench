@@ -1,7 +1,7 @@
 - User-facing sidebar threads and subagent threads have separate state semantics. Never infer subagent changes from sidebar thread requests. Plan subagent changes separately and obtain explicit user agreement.
 - Stop is only ever requested by user or parent agent. Interrupt is everything else.
 - A provider turn failure is a thread error: `needsAttention/providerFailed` holds its message until any continuation replaces the lifecycle. Never auto-continue it.
-- Snoozing working sidebar threads preserves their turn; leaving working wakes them. Non-working sidebar threads cannot stay ordinarily snoozed while holding editable claims or sealed-proposal guards; dependent snooze may retain both until its targets clear. Questionnaire snooze interrupts and retains the question; live approvals cannot be snoozed. Stop dismisses pending input and wakes the thread.
+- Snooze is app-owned; daemons never store or decide it. Snoozing working sidebar threads preserves their turn; leaving working wakes them. Non-working sidebar threads cannot stay ordinarily snoozed while holding editable claims or sealed-proposal guards; dependent snooze may retain both until its targets clear. Questionnaire snooze interrupts and retains the question; live approvals cannot be snoozed. Stop dismisses pending input and wakes the thread.
 - Agent status does not end an active sidebar turn. Apply completed/blocked on matching successful turn completion; stop, failure and pending input take precedence. Subagent semantics remain separate.
 - Accepted provider intent wakes the thread, drops any held questionnaire, and marks the accepted turn working.
 - ID-addressed agent messages wait behind the target's pending questionnaire. Relationship-addressed parent messages may settle a child questionnaire.
@@ -12,5 +12,5 @@
 - Unpinned settled sidebar threads archive 14 days after the later of their last thread item or settling, including existing records.
 - Transcript payload retention uses the current settlement generation. Restoring or re-settling starts a new generation; old tombstones never suppress new turns.
 - Thread activity time advances only when the canonical transcript admits a new thread item, to that item's observed time. Providers and lifecycle transitions never set it.
-- A dependent-snooze source owns its target set. Target readiness removes one membership. Only an empty set wakes the source.
+- A dependent-snooze source owns its target set; targets may live on any daemon. Target readiness removes one membership. Only an empty set wakes the source. Unreachable targets keep waiting.
 - A thread has one live turn: admitting a turn settles earlier unsettled turns, and their undelivered agent-message steers resend into the new turn.

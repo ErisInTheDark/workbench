@@ -32,7 +32,7 @@ function fixture(
 ) {
   const proposalReads: Array<{ cwd: string; proposalId: string }> = [];
   const stops: object[] = [];
-  const mutations: Array<Parameters<ObservedThreadSourcePorts["updateThreadStateWithAcceptance"]>[0]> = [];
+  const mutations: Array<{ threadId: string; requestKey?: string }> = [];
   let acceptMutation = true;
   const selections: Array<{ thread: ThreadTranscriptLocalThread; turnLimit?: number }> = [];
   const historyDemands: number[] = [];
@@ -80,8 +80,8 @@ function fixture(
     readRateLimits: () => null,
     watchRateLimits: () => {},
     subscribeRateLimits: () => () => {},
-    updateThreadStateWithAcceptance: async (request: Parameters<ObservedThreadSourcePorts["updateThreadStateWithAcceptance"]>[0]) => {
-      mutations.push(request);
+    snoozeThread: async (snoozedThreadId: string, requestKey?: string) => {
+      mutations.push({ threadId: snoozedThreadId, ...(requestKey ? { requestKey } : {}) });
       return acceptMutation;
     },
     reportError: () => {},
@@ -113,10 +113,7 @@ test("snooze routes ordinary work and request-fenced questions without changing 
     assert.equal(f.published.summary?.head?.status, "active");
     await f.source.actions.snooze();
     await f.source.actions.snooze("question");
-    assert.deepEqual(f.mutations, [
-      { projectId: "project", identity: { harness: "codex", threadId }, method: "workbench/thread-state/snooze/set", snoozed: true },
-      { projectId: "project", identity: { harness: "codex", threadId }, method: "workbench/thread-state/questionnaire/snooze", requestKey: "question" },
-    ]);
+    assert.deepEqual(f.mutations, [{ threadId }, { threadId, requestKey: "question" }]);
     assert.equal(f.published.summary?.head?.status, "active");
     assert.deepEqual(f.stops, []);
     f.rejectMutations();

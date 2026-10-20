@@ -15,7 +15,7 @@
 | arc edit session | Per-thread previewable, revertible batch of ordered moves/regex replacements run via `wb git arc edit`; claims Git-visible touched files in the active arc; stored at the thread's `edit-session` ref |
 | thread attention | Amber when unsnoozed; purple when snoozed. Existing snooze wake rules apply. |
 | thread display order | Durable manual ordering for pinned, snoozed, and settled sidebar sections. Main remains automatically ordered by claims, lifecycle, and activity. |
-| dependent snooze | Durable thread state containing one or more target threads. Each target clears only after completion with no live Git claims. The source wakes when none remain. |
+| dependent snooze | App-owned thread state containing one or more target threads on any daemon. Each target clears only after completion with no live Git claims. The source wakes when none remain. |
 | profile | Composer settings plus optional stored-profile id. Saved settings provide a fallback, not a frozen composer preview |
 | stored profile | Named reusable settings. Linked composers and new turns resolve its current definition |
 | profile ribbon | The composer controls immediately to the left of the send button, regardless of their visual treatment |

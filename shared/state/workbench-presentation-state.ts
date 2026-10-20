@@ -2,13 +2,14 @@
  * Exports:
  * - PresentationDraftReferenceSchema/PresentationDraftReference: a composer reference a new-thread draft keeps.
  * - PresentationDraftInputSchema/PresentationDraftInput: app-owned unsent content and one concrete target.
- * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents, incl. hiding project folders.
- * - PresentationSnapshotSchema/PresentationSnapshot: app drafts, layout, hidden folders and compact accepted-launch history.
+ * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents, incl. hiding project folders and thread snoozes.
+ * - PresentationSnapshotSchema/PresentationSnapshot: app drafts, layout, hidden folders, thread snoozes and compact accepted-launch history.
  * - WorkbenchPresentationRevisionEventSchema: compact app presentation change notice.
  * - WorkbenchPresentationImportStatusSchema/WorkbenchPresentationImportStatus: bounded server import progress.
  */
 import { z } from "zod";
-import { DaemonIdSchema, LogicalProjectIdSchema } from "../workbench/identity.ts";
+import { DaemonIdSchema, LogicalProjectIdSchema, WorkbenchThreadIdSchema } from "../workbench/identity.ts";
+import { ThreadSnoozeSchema } from "../workbench/thread/thread-snooze.ts";
 import { ProjectLocationReferenceSchema, WorkbenchProjectLocationsPayloadSchema } from "../workbench/project/project-location.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../workbench/thread/thread-state.ts";
 import { ComposerReferenceSchema } from "../workbench/thread/composer-reference.ts";
@@ -109,6 +110,8 @@ export const PresentationSnapshotSchema = z.object({
   hiddenLocations: z.array(z.object({
     logicalProjectId: LogicalProjectIdSchema, target: ProjectLocationReferenceSchema,
   }).strict()).optional(),
+  /** App-owned thread snoozes; daemons never decide snooze placement. */
+  threadSnoozes: z.array(ThreadSnoozeSchema).optional(),
 }).strict();
 export type PresentationSnapshot = z.infer<typeof PresentationSnapshotSchema>;
 export const PresentationMutationSchema = z.discriminatedUnion("kind", [
@@ -147,6 +150,11 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
    * its content already lives on (a launched thread or an identical draft).
    */
   z.object({ kind: z.literal("releaseLaunch"), draftId: uuid, launchId: uuid, discard: z.literal(true).optional() }).strict(),
+  /** Replace these threads' snoozes whole, and wake (delete) the listed ones. */
+  z.object({
+    kind: z.literal("setThreadSnoozes"),
+    put: z.array(ThreadSnoozeSchema).max(500), wake: z.array(WorkbenchThreadIdSchema).max(500),
+  }).strict(),
   layoutInput.extend({ kind: z.literal("saveLayout"), expectedRevision: revision }).strict(),
   z.object({
     kind: z.literal("saveLayouts"), expectedRevision: revision,

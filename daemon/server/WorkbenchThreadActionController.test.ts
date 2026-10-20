@@ -371,11 +371,11 @@ test("stop without a questionnaire still marks the thread stopped after interrup
   assert.equal("requestKey" in f.mutations[0], false);
 });
 
-test("interrupt snoozes the questionnaire it names without stopping the thread", async () => {
+test("interrupt holds the questionnaire it names without stopping the thread", async () => {
   const f = fixture();
   await f.controller.handle("thread/interrupt", { threadId: "wb-thread", requestKey: "held-question" });
   assert.deepEqual(f.stops, []);
-  assert.deepEqual(f.mutations.map(mutation => "method" in mutation ? mutation.method : null), ["workbench/thread-state/questionnaire/snooze"]);
+  assert.deepEqual(f.mutations.map(mutation => "method" in mutation ? mutation.method : null), ["workbench/thread-state/questionnaire/hold"]);
 });
 
 function agentStopFixture(turnStatus: "inProgress" | "interrupted") {

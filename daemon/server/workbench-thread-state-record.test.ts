@@ -27,27 +27,17 @@ const entry = {
 };
 
 test("internal MCP freshness and Git retention timing never leak into the sidebar projection", () => {
-  const snoozedUntil = {
-    identity: { harness: "opencode" as const, threadId: "target" },
-    projectId: "other-project",
-  };
-  const record = parseWorkbenchThreadStateEntry({ ...entry, gitHistoryCleanedAt: 456, mcpGeneration: "epoch:2", providerObserved: true, settledAt: 123, snoozedUntil });
+  const record = parseWorkbenchThreadStateEntry({ ...entry, gitHistoryCleanedAt: 456, mcpGeneration: "epoch:2", providerObserved: true, settledAt: 123 });
   assert.equal(record.entryKind === "thread" ? record.gitHistoryCleanedAt : null, 456);
   assert.equal(record.entryKind === "thread" ? record.mcpGeneration : null, "epoch:2");
   assert.equal(record.entryKind === "thread" ? record.settledAt : null, 123);
-  assert.deepEqual(record.entryKind === "thread" ? record.snoozedUntil : null, {
-    targets: [{ ...snoozedUntil, title: "target" }],
-  });
-  assert.deepEqual(projectWorkbenchThreadStateEntry(record), {
-    ...entry, previousTitles: [], waitingOnThreads: [{ ...snoozedUntil, title: "target" }],
-  });
+  assert.deepEqual(projectWorkbenchThreadStateEntry(record), { ...entry, previousTitles: [], waitingOnThreads: [] });
 });
 
 test("provider omission preserves saved top-level visibility and placement", () => {
   for (const metadata of [
     { archived: false, pinned: false, snoozed: false },
     { archived: false, pinned: true, snoozed: false },
-    { archived: false, pinned: false, snoozed: true },
     { archived: true, pinned: false, snoozed: false },
   ]) {
     const record = parseWorkbenchThreadStateEntry({ ...entry, metadata, providerObserved: false });
@@ -61,78 +51,6 @@ test("provider omission preserves saved top-level visibility and placement", () 
     lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
   });
   assert.ok(projectWorkbenchThreadStateEntry(settled));
-});
-
-test("dependent snooze survives collision claims while ordinary inactive snooze wakes", () => {
-  const lifecycle = {
-    agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") },
-    kind: "working" as const,
-    reason: "acceptedIntent" as const,
-    settled: false,
-  };
-  const snoozedUntil = {
-    targets: [{
-      identity: { harness: "codex" as const, threadId: "target" },
-      projectId: fixtureIdentityValues.ProjectId.project,
-      title: "Target",
-    }],
-  };
-  const working = parseWorkbenchThreadStateEntry({
-    ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: true }, snoozedUntil,
-  });
-  assert.ok(working.entryKind === "thread");
-  assert.equal(working.metadata.snoozed, true);
-  assert.deepEqual(working.snoozedUntil, snoozedUntil);
-
-  const inactive = parseWorkbenchThreadStateEntry({
-    ...entry, metadata: { ...entry.metadata, snoozed: true }, snoozedUntil,
-  });
-  assert.ok(inactive.entryKind === "thread");
-  assert.equal(inactive.metadata.snoozed, true);
-  assert.deepEqual(inactive.snoozedUntil, snoozedUntil);
-  const claimed = parseWorkbenchThreadStateEntry({
-    ...inactive,
-    gitArc: { checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
-      intentDescription: "", phase: "active", proposals: [], updatedAt: "now" },
-  });
-  assert.ok(claimed.entryKind === "thread");
-  assert.equal(claimed.metadata.snoozed, true);
-  assert.deepEqual(claimed.snoozedUntil, snoozedUntil);
-  const ordinary = parseWorkbenchThreadStateEntry({ ...claimed, snoozedUntil: null });
-  assert.ok(ordinary.entryKind === "thread");
-  assert.equal(ordinary.metadata.snoozed, false);
-  assert.equal(ordinary.snoozedUntil, null);
-});
-
-test("stored claim snooze preserves dependent waits and repairs ordinary snooze", () => {
-  const gitArc = { checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
-    intentDescription: "", phase: "active", proposals: [], updatedAt: "now" };
-  const conformed = conformStoredWorkbenchThreadStateRecord({
-    ...entry,
-    gitArc,
-    metadata: { ...entry.metadata, snoozed: true },
-    snoozedUntil: {
-      targets: [{
-        identity: { harness: "codex", threadId: "target" },
-        projectId: fixtureIdentityValues.ProjectId.project,
-        title: "Target",
-      }],
-    },
-  }, fixtureIdentityValues.ProjectId.project);
-  assert.equal(conformed.success, true);
-  if (!conformed.success || conformed.data.entryKind !== "thread") return;
-  assert.equal(conformed.data.metadata.snoozed, true);
-  assert.equal(conformed.data.snoozedUntil?.targets[0]?.identity.threadId, "target");
-  assert.deepEqual(conformed.repairedPaths, []);
-
-  const withoutDeadline = conformStoredWorkbenchThreadStateRecord({
-    ...entry,
-    gitArc,
-    metadata: { ...entry.metadata, snoozed: true },
-  }, fixtureIdentityValues.ProjectId.project);
-  assert.equal(withoutDeadline.success, true);
-  if (!withoutDeadline.success) return;
-  assert.deepEqual(withoutDeadline.repairedPaths, [["metadata", "snoozed"]]);
 });
 
 test("subagent visibility still requires provider observation", () => {
@@ -196,35 +114,4 @@ test("stored-record conformance repairs malformed lifecycle to a non-terminal st
 test("stored-record conformance rejects a record whose identity cannot be recovered", () => {
   const conformed = conformStoredWorkbenchThreadStateRecord({ ...entry, identity: { harness: "codex" } }, fixtureIdentityValues.ProjectId["project"]);
   assert.equal(conformed.success, false);
-});
-
-test("stored dependent snooze defaults safely and repairs malformed targets", () => {
-  const plain = conformStoredWorkbenchThreadStateRecord(entry, fixtureIdentityValues.ProjectId["project"]);
-  assert.equal(plain.success, true);
-  if (!plain.success) return;
-  assert.equal(plain.data.snoozedUntil, null);
-
-  const malformed = conformStoredWorkbenchThreadStateRecord({
-    ...entry,
-    snoozedUntil: { identity: { harness: "future", threadId: "" }, projectId: "" },
-  }, fixtureIdentityValues.ProjectId["project"]);
-  assert.equal(malformed.success, true);
-  if (!malformed.success) return;
-  assert.equal(malformed.data.snoozedUntil, null);
-});
-
-test("stored dependent snooze repairs legacy targets into one deduplicated set", () => {
-  const target = {
-    identity: { harness: "codex", threadId: "target" },
-    projectId: "project",
-  };
-  const conformed = conformStoredWorkbenchThreadStateRecord({
-    ...entry,
-    snoozedUntil: { targets: [target, target, { ...target, identity: { harness: "codex", threadId: "" } }] },
-  }, fixtureIdentityValues.ProjectId["project"]);
-  assert.equal(conformed.success, true);
-  if (!conformed.success) return;
-  assert.deepEqual(conformed.data.snoozedUntil, { targets: [{ ...target, title: "target" }] });
-  const projected = projectWorkbenchThreadStateEntry(conformed.data);
-  assert.equal(projected?.entryKind === "thread" && "snoozedUntil" in projected, false);
 });

@@ -61,7 +61,7 @@ test("mutations and questionnaires retain canonical identity and reject foreign 
       entryKind: "thread" as const, identity: { harness: "codex" as const, threadId: thread.threadId },
       activityAt: 1, title: "Thread", metadata: { archived: false as const, pinned: false, snoozed: false },
       lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
-      profile: null, mcpGeneration: null, snoozedUntil: null, settledAt: null, gitHistoryCleanedAt: null,
+      profile: null, mcpGeneration: null, settledAt: null, gitHistoryCleanedAt: null,
       providerObserved: true,
     };
     const questionnaireState = {
@@ -113,13 +113,11 @@ test("mutations and questionnaires retain canonical identity and reject foreign 
     assert.ok(items.findItemIdForSource(child.threadId, { turnId: childTurn, reference: "item-123", kind: "stable" }));
     assert.equal(items.findItemIdForSource(child.threadId, { turnId: childTurn, reference: "item-123", kind: "provisional" }), undefined);
     const childRequest = await mapWorkbenchThreadStateRequest(owners, {
-      method: "workbench/thread-state/snooze/until", projectId: fixtureIdentityValues.ProjectId["project"],
-      identity: { harness: "opencode", threadId: child.threadId },
-      target: { projectId: thread.projectId, identity: { harness: "codex", threadId: thread.threadId } },
+      method: "workbench/thread-state/pin/set", projectId: fixtureIdentityValues.ProjectId["project"],
+      identity: { harness: "opencode", threadId: child.threadId }, pinned: true,
     });
-    assert.ok(childRequest.method === "workbench/thread-state/snooze/until");
+    assert.ok(childRequest.method === "workbench/thread-state/pin/set");
     assert.equal(childRequest.identity.threadId, child.threadId);
-    assert.equal(childRequest.target.identity.threadId, thread.threadId);
     for (const identity of [request.identity, childRequest.identity]) {
       const aliased = await mapWorkbenchThreadStateRequest(owners, {
         method: "workbench/thread-state/pin/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"),

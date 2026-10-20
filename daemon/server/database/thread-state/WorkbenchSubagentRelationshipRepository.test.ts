@@ -80,7 +80,7 @@ test("settled names can be reserved again without losing history or accepting li
       ...active, entryKind: "subagent", identity: { harness: active.harness, threadId: childThreadId },
       activityAt: 1, pinned: false, lifecycle: { kind: "completed", reason: "agentCompleted", settled, agent: { agentStatus: "completed" } },
       profile: null, providerObserved: true, settledAt: settled ? 2 : null, gitHistoryCleanedAt: null,
-      mcpGeneration: null, snoozedUntil: null,
+      mcpGeneration: null,
     }]);
     writeState(false);
     assert.throws(reserveAgain, /already in use/);

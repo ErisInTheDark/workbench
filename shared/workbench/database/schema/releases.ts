@@ -101,6 +101,7 @@ const databaseReleases = Object.freeze({
   feedbackResolution: release(91, "a59d6eaa28301dad6cd5ecad79330a5e3d905fd8e755743171e771f2bd513255"),
   mcpAuthorizations: release(92, "706fd7221abea7f7d353efd63950d586c17d2a348e7186ecb3b4020ef64294d5"),
   mcpDownloads: release(93, "7aaade4d4cd868b088180b792921733aa522e3d0f12328808ff470ed9a637d6a"),
+  appOwnedSnooze: release(94, "07c60c461826b00059f819acf0a687b14f8f4e20a6be1e9b1bf01a5924c139f8"),
 });
 
 export default databaseReleases;

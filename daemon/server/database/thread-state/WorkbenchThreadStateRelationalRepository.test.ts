@@ -56,7 +56,7 @@ test("agent completion intent round-trips without completing working or pending-
           entryKind: "thread", identity: { harness: "codex", threadId }, title: "Intent", activityAt: 1,
           lifecycle, metadata: { archived: false, pinned: false, snoozed: false },
           profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null,
-          mcpGeneration: null, snoozedUntil: null,
+          mcpGeneration: null,
         }]);
         assert.deepEqual(repository.readProject(testProjectIds.project).records[0]?.lifecycle, lifecycle);
       }
@@ -76,7 +76,7 @@ test("navigation summaries preserve lifecycle counts and pinned title projection
         ? { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working" }, settled: false }
         : { kind: "stopped", reason: "userMarkedStopped", settled: false },
       metadata: { archived: false, pinned: index === 0, snoozed: false },
-      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
       titleHistory: [{ title: `Renamed ${index}`, usedAt: 20 }, { title: `Previous ${index}`, usedAt: 10 }],
     }));
     repository.writeRecords(records);
@@ -123,7 +123,7 @@ test("working recovery selection includes only unsettled threads from its provid
         ? { kind: "completed" as const, reason: "userCompleted" as const, settled: true }
         : { kind: "working" as const, reason: "acceptedIntent" as const, agent: { agentStatus: "working" as const }, settled: false },
       metadata: { archived: false, pinned: false, snoozed: false },
-      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
     })));
     assert.deepEqual(
       new Set(repository.readRecords({ selection: "working", harness: "opencode" }).map(record => record.identity.threadId)),
@@ -144,7 +144,7 @@ test("full hydration query growth is per batch rather than per thread", () => {
       entryKind: "thread", identity: { harness: "codex", threadId }, title: "Stored thread", activityAt: 1,
       lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: false },
       metadata: { archived: false, pinned: false, snoozed: false },
-      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
     })));
     queries = 0;
     repository.readRecords({ selection: "threads", threadIds: ids.slice(0, 1) });
@@ -260,7 +260,7 @@ test("current lifecycle storage permits thread-owned turnless states", () => {
       entryKind: "thread", identity: { harness: "codex", threadId }, title: "Keep this title", activityAt: 7,
       lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working" }, settled: false },
       metadata: { archived: false, pinned: true, snoozed: false },
-      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
     };
     const selection = { selection: "threads" as const, threadIds: [threadId] };
     for (const lifecycle of [
@@ -308,7 +308,7 @@ test("relational batches roll back invalid references and preserve valid draft p
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       metadata: { archived: false, pinned: true, snoozed: false },
       profile: { kind: "custom", settings: draft.composerSettings },
-      providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
     };
     assert.throws(() => repository.commit({
       records: [record], deletedDraftIds: [draft.draftId],
@@ -356,7 +356,7 @@ test("the git startup cache retains compact summaries while live stack facts nev
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       metadata: { archived: false, pinned: false, snoozed: false },
       providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
-      profile: null, snoozedUntil: null, titleHistory: [{ title, usedAt: 1 }],
+      profile: null, titleHistory: [{ title, usedAt: 1 }],
       gitArc: {
         acceptance: { landingId: "proposal", queuedIds: [] },
         checkpointCommit: "a".repeat(40), claimedPaths: ["one.ts"], intentDescription: "", intentName: "arc", phase: "active",
@@ -403,7 +403,7 @@ test("permanent commit history is promoted on write but only read per thread, ne
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       metadata: { archived: false, pinned: false, snoozed: false },
       providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
-      profile: null, snoozedUntil: null, titleHistory: [{ title, usedAt: 1 }],
+      profile: null, titleHistory: [{ title, usedAt: 1 }],
       gitArc: {
         checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "arc", phase: "resolved",
         proposals: [{
@@ -442,7 +442,7 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       metadata: { archived: false, pinned: false, snoozed: false },
       providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
-      profile: null, snoozedUntil: null, titleHistory: [{ title, usedAt: 1 }],
+      profile: null, titleHistory: [{ title, usedAt: 1 }],
       gitArcPlan: {
         checkpointCommit: "a".repeat(40), intentName: "retained", intentDescription: "",
         scopePaths: ["path.ts"], updatedAt: "retained timestamp",
@@ -452,12 +452,6 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     const second = record(secondId!, "second");
     const third = record(thirdId!, "third");
     second.titleHistory = [{ title: "Renamed second", usedAt: 2 }];
-    const retainedAddress = fixtureIdentitySchemas.ProjectIdSchema.parse("old-project");
-    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run(retainedAddress, fixtureIdentityValues.ProjectId.project);
-    first.snoozedUntil = { targets: [
-      { projectId: retainedAddress, identity: second.identity, title: second.title },
-      { projectId: retainedAddress, identity: third.identity, title: third.title },
-    ] };
     const repository = new WorkbenchThreadStateRelationalRepository(database);
     repository.writeRecords([first, second, third]);
     database.exec(`
@@ -472,17 +466,6 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     const loaded = repository.readRecords({ selection: "threads", threadIds: [firstId!] })[0]!;
     assert.equal(loaded.title, "updated");
     assert.deepEqual(loaded.gitArcPlan, first.gitArcPlan);
-    assert.deepEqual(new Set(loaded.snoozedUntil?.targets.map(target => target.identity.threadId)),
-      new Set([second.identity.threadId, third.identity.threadId]));
-    assert.deepEqual(new Set(loaded.snoozedUntil?.targets.map(target => target.title)),
-      new Set(["Renamed second", third.title]));
-    assert.deepEqual(repository.readSnoozeSources(third.identity.threadId), [{
-      projectId: fixtureIdentityValues.ProjectId.project, threadId: first.identity.threadId,
-    }]);
-    repository.commit({ projectId: fixtureIdentityValues.ProjectId.project, records: [{
-      ...first, title: "updated", snoozedUntil: { targets: [first.snoozedUntil!.targets[0]!] },
-    }] });
-    assert.equal(repository.readSnoozeSources(third.identity.threadId).length, 0);
     assert.deepEqual(loaded.titleHistory, first.titleHistory);
     assert.throws(() => repository.writeRecords([
       { ...first, title: "rolled back" }, { ...second, title: "reject" },
@@ -511,7 +494,7 @@ test("a thread error persists with its failed turn and disappears when the lifec
     const record = (lifecycle: WorkbenchThreadLifecycle): WorkbenchThreadStateRecord => ({
       entryKind: "thread", identity: { harness: "codex", threadId: threadId! }, title: "Failed", activityAt: 1, lifecycle,
       metadata: { archived: false, pinned: false, snoozed: false },
-      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
     });
     const failed: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "Model at capacity." };
     repository.writeRecords([record(failed)]);
@@ -558,8 +541,8 @@ test("live reads retain parent-status inputs without decoding settled history", 
         `).run(threadId, live);
       } else {
         database.prepare(`
-          INSERT INTO workbench_top_level_thread_states(thread_id, thread_kind, archived, pinned, snoozed)
-          VALUES (?, 'topLevel', ?, ?, 0)
+          INSERT INTO workbench_top_level_thread_states(thread_id, thread_kind, archived, pinned)
+          VALUES (?, 'topLevel', ?, ?)
         `).run(threadId, Number(threadId === archived), Number(threadId === pinned));
       }
     }

@@ -36,10 +36,6 @@ type SqlValue = string | number | null;
 type SqlRow = Record<string, SqlValue>;
 type ProfileRow = ReturnType<typeof profileRow> & { thread_id: string };
 type TitleRow = { thread_id: string; title: string; used_at: number };
-type DependencyRow = {
-  source_thread_id: string; thread_id: WorkbenchThreadId; harness_id: WorkbenchHarness;
-  project_id: ProjectId; title: string;
-};
 
 interface ThreadStateRow {
   thread_id: WorkbenchThreadId;
@@ -51,7 +47,6 @@ interface ThreadStateRow {
   project_id: ProjectId;
   archived: 0 | 1 | null;
   pinned: 0 | 1 | null;
-  snoozed: 0 | 1 | null;
   order_at: number | null;
   parent_thread_id: WorkbenchThreadId | null;
   cwd: string | null;
@@ -75,7 +70,7 @@ interface ThreadStateRow {
 }
 
 const SELECT_THREAD_STATES = `
-  SELECT state.*, thread.project_id, top.archived, top.pinned, top.snoozed, top.order_at,
+  SELECT state.*, thread.project_id, top.archived, top.pinned, top.order_at,
     child.parent_thread_id, child.cwd, child.name, child.profile_id, child.profile_name,
     child.direct_subagent_index, child.created_at, child.updated_at, child.pinned AS child_pinned,
     lifecycle.lifecycle_kind, lifecycle.reason, lifecycle.settled, lifecycle.turn_id,
@@ -533,15 +528,6 @@ export default class WorkbenchThreadStateRelationalRepository {
       new Set(proposed.map(row => row.thread_id)));
   }
 
-  readSnoozeSources(targetThreadId: WorkbenchThreadId): Array<{ projectId: ProjectId; threadId: WorkbenchThreadId }> {
-    return this.database.prepare(`
-      SELECT thread.project_id AS projectId, dependency.source_thread_id AS threadId
-      FROM workbench_thread_snooze_dependencies dependency
-      JOIN workbench_threads thread ON thread.id = dependency.source_thread_id
-      WHERE dependency.target_thread_id = ?
-    `).all(targetThreadId) as Array<{ projectId: ProjectId; threadId: WorkbenchThreadId }>;
-  }
-
   readNextArchiveEligibility(): number | null {
     const row = this.database.prepare(`
       SELECT MIN(MAX(state.activity_at, COALESCE(retention.settled_at, 0))) AS activity_at FROM workbench_thread_states state
@@ -591,7 +577,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     if (record.entryKind === "thread") {
       this.writeDomainFact("workbench_top_level_thread_states", ["thread_id"], {
         thread_id: threadId, thread_kind: threadKind, archived: Number(record.metadata.archived),
-        pinned: Number(record.metadata.pinned), snoozed: Number(record.metadata.snoozed), order_at: record.orderAt ?? null,
+        pinned: Number(record.metadata.pinned), order_at: record.orderAt ?? null,
       });
     } else {
       const owner = this.database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?")
@@ -634,31 +620,6 @@ export default class WorkbenchThreadStateRelationalRepository {
       });
     } else {
       this.database.prepare("DELETE FROM workbench_thread_profiles WHERE thread_id = ?").run(threadId);
-    }
-    const targetIds = new Set<string>();
-    for (const wait of record.snoozedUntil?.targets ?? []) {
-      const target = this.database.prepare(`
-        SELECT thread.project_id, state.harness_id FROM workbench_threads thread
-        JOIN workbench_thread_states state ON state.thread_id = thread.id WHERE thread.id = ?
-      `).get(wait.identity.threadId) as { project_id: string; harness_id: string } | undefined;
-      if (!target || target.project_id !== this.projects.resolveStoredReference(wait.projectId) || target.harness_id !== wait.identity.harness
-        || wait.identity.threadId === threadId || targetIds.has(wait.identity.threadId)) {
-        throw new Error("Snooze dependency does not match its canonical thread.");
-      }
-      targetIds.add(wait.identity.threadId);
-    }
-    const priorTargets = this.database.prepare("SELECT target_thread_id FROM workbench_thread_snooze_dependencies WHERE source_thread_id = ?")
-      .all(threadId) as Array<{ target_thread_id: string }>;
-    for (const { target_thread_id } of priorTargets) {
-      if (!targetIds.has(target_thread_id)) this.database.prepare(
-        "DELETE FROM workbench_thread_snooze_dependencies WHERE source_thread_id = ? AND target_thread_id = ?",
-      ).run(threadId, target_thread_id);
-    }
-    const priorIds = new Set(priorTargets.map(row => row.target_thread_id));
-    for (const targetId of targetIds) {
-      if (!priorIds.has(targetId)) this.database.prepare(
-        "INSERT INTO workbench_thread_snooze_dependencies(source_thread_id, target_thread_id) VALUES (?, ?)",
-      ).run(threadId, targetId);
     }
     const observations = {
       ...(record.gitArc === undefined ? {} : { gitArc: record.gitArc }),
@@ -715,27 +676,14 @@ export default class WorkbenchThreadStateRelationalRepository {
           OR history.title = (SELECT latest.title FROM workbench_thread_title_history latest
             WHERE latest.thread_id = history.thread_id ORDER BY latest.used_at DESC, latest.title LIMIT 1)
         )` : ""} ORDER BY history.used_at DESC, history.title`).all(...ids) as TitleRow[];
-      const dependencies = this.database.prepare(`
-        SELECT dependency.source_thread_id, target.thread_id, target.harness_id,
-          COALESCE((SELECT history.title FROM workbench_thread_title_history history
-            WHERE history.thread_id = target.thread_id ORDER BY history.used_at DESC, history.title LIMIT 1), target.title) AS title,
-          thread.project_id
-        FROM workbench_thread_snooze_dependencies dependency
-        JOIN workbench_thread_states target ON target.thread_id = dependency.target_thread_id
-        JOIN workbench_threads thread ON thread.id = target.thread_id
-        WHERE dependency.source_thread_id IN (${placeholders})
-        ORDER BY dependency.target_thread_id
-      `).all(...ids) as DependencyRow[];
       const profilesByThread = new Map(profiles.map(profile => [profile.thread_id, profile]));
       const titlesByThread = Map.groupBy(titles, title => title.thread_id);
-      const dependenciesByThread = Map.groupBy(dependencies, dependency => dependency.source_thread_id);
-      const detailedIds = navigationOnly ? batch.filter(row => row.pinned && !row.archived && !row.snoozed).map(row => row.thread_id) : ids;
+      const detailedIds = navigationOnly ? batch.filter(row => row.pinned && !row.archived).map(row => row.thread_id) : ids;
       const questionnaires = this.questionnaires.readMany(detailedIds, navigationOnly);
       const git = this.git.readMany(detailedIds);
       for (const row of batch) result.push(this.decodeThreadState(row, {
         profile: profilesByThread.get(row.thread_id),
         titles: titlesByThread.get(row.thread_id) ?? [],
-        dependencies: dependenciesByThread.get(row.thread_id) ?? [],
         questionnaires: questionnaires.get(row.thread_id) ?? { pending: null, history: [] },
         git: git.get(row.thread_id) ?? {},
       }));
@@ -746,7 +694,6 @@ export default class WorkbenchThreadStateRelationalRepository {
   private decodeThreadState(row: ThreadStateRow, related: {
     profile: ProfileRow | undefined;
     titles: readonly TitleRow[];
-    dependencies: readonly DependencyRow[];
     questionnaires: ReturnType<WorkbenchThreadStateQuestionnaireRepository["read"]>;
     git: ReturnType<WorkbenchThreadStateGitRepository["read"]>;
   }): WorkbenchThreadStateRecord {
@@ -759,27 +706,23 @@ export default class WorkbenchThreadStateRelationalRepository {
       ...(row.request_key === null ? {} : { requestKey: row.request_key }),
       ...(row.error_text === null ? {} : { error: row.error_text }),
     });
-    const { profile, questionnaires, titles, dependencies } = related;
+    const { profile, questionnaires, titles } = related;
     const common = {
       identity: { harness: row.harness_id, threadId: row.thread_id }, title: row.title,
       activityAt: row.activity_at, lifecycle, providerObserved: Boolean(row.provider_observed),
       settledAt: row.settled_at, gitHistoryCleanedAt: row.git_history_cleaned_at, mcpGeneration: row.mcp_generation,
       titleHistory: titles.map((title) => ({ title: title.title, usedAt: title.used_at })),
       profile: profile ? decodeProfileRow(profile) : null,
-      snoozedUntil: dependencies.length ? { targets: dependencies.map(dependency => ({
-        identity: { harness: dependency.harness_id, threadId: dependency.thread_id },
-        projectId: dependency.project_id, title: dependency.title,
-      })) } : null,
       pendingQuestionnaire: questionnaires.pending, questionnaireHistory: questionnaires.history,
       ...related.git,
     };
     if (row.thread_kind === "topLevel") {
-      if (row.archived === null || row.pinned === null || row.snoozed === null) throw new Error("Top-level thread metadata is incomplete.");
+      if (row.archived === null || row.pinned === null) throw new Error("Top-level thread metadata is incomplete.");
       return {
         ...common, entryKind: "thread", ...(row.order_at === null ? {} : { orderAt: row.order_at }),
         metadata: row.archived
           ? { archived: true, pinned: false, snoozed: false }
-          : { archived: false, pinned: Boolean(row.pinned), snoozed: Boolean(row.snoozed) },
+          : { archived: false, pinned: Boolean(row.pinned), snoozed: false },
       };
     }
     if (row.parent_thread_id === null || row.cwd === null || row.name === null || row.profile_id === null

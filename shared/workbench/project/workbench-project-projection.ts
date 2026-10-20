@@ -37,6 +37,7 @@ import {
   type WorkbenchHomeThreadDisplayItem, type WorkbenchHomeThreadDisplayOrder,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { sidebarRowKey, type WorkbenchThreadSidebarRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
+import { ThreadSnooze } from "workbench-shared/workbench/thread/thread-snooze";
 import type {
   WorkspaceThreadMember, WorkspaceThreadPlacementItem, WorkspaceThreadRows,
 } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -186,13 +187,15 @@ export function projectLogicalThreadRows(
   const launching = (draft: PresentationSnapshot["drafts"][number]) => draft.phase === "submitting" && inFlight.has(draft.id);
   // A launching draft stands in for the thread its launch created until the launch is accepted.
   const launchingIds = new Set(listedDrafts.flatMap(draft => launching(draft) && draft.launchId ? [draft.launchId] : []));
+  const snoozes = ThreadSnooze.byThread(presentation.threadSnoozes);
   const materialized = projects.flatMap(project => projectDisplayLocations(project).flatMap(location =>
     (sources.get(location.target.daemonId)?.projects.find(sidebar =>
       sidebar.projectId === location.target.projectId)?.entries ?? [])
       .filter(entry => entry.entryKind !== "draft" && !(entry.entryKind === "thread" && entry.launchId && launchingIds.has(entry.launchId)))
       .map(entry => ({
         logicalProjectId: project.id, location: location.target,
-        hostname: location.hostname, rootPath: location.rootPath, entry,
+        hostname: location.hostname, rootPath: location.rootPath,
+        entry: entry.entryKind === "thread" ? ThreadSnooze.apply(entry, snoozes.get(entry.identity.threadId)) : entry,
         ...(location.observedOnly ? { observedOnly: true } : {}),
       })),
   ));
@@ -363,9 +366,10 @@ export function preferredSelectedLaunchTarget(
 export function projectLogicalSummaries(
   projects: readonly WorkbenchLogicalProject[],
   sources: ReadonlyMap<DaemonId, WorkbenchProjectThreadSummaries>,
-  presentation: Pick<PresentationSnapshot, "drafts">,
+  presentation: Pick<PresentationSnapshot, "drafts" | "threadSnoozes">,
 ): Map<LogicalProjectId, LogicalProjectSummary> {
   const result = new Map<LogicalProjectId, LogicalProjectSummary>();
+  const snoozes = ThreadSnooze.byThread(presentation.threadSnoozes);
   for (const project of projects) {
     const counts: WorkbenchProjectThreadSummaryCounts = {
       completed: 0, needsAttention: 0, needsAttentionActive: 0,
@@ -379,19 +383,20 @@ export function projectLogicalSummaries(
         item => item.projectId === location.target.projectId,
       );
       if (!summary) continue;
-      counts.completed += summary.counts.completed;
-      counts.needsAttention += summary.counts.needsAttention;
-      counts.needsAttentionActive += summary.counts.needsAttentionActive;
-      counts.proposedCommit += summary.counts.proposedCommit;
-      counts.stopped += summary.counts.stopped;
-      counts.waiting = (counts.waiting ?? 0) + (summary.counts.waiting ?? 0);
-      counts.working += summary.counts.working;
       if (summary.lastThreadUpdateAt !== null) {
         lastThreadUpdateAt = Math.max(lastThreadUpdateAt ?? 0, summary.lastThreadUpdateAt);
       }
-      pinnedThreads.push(...summary.pinnedThreads.filter(entry => entry.entryKind !== "draft")
+      pinnedThreads.push(...summary.pinnedThreads.filter(entry => entry.entryKind !== "draft"
+        && !snoozes.has(entry.identity.threadId))
         .map(entry => ({ location: location.target, entry })));
-      unsettledThreads.push(...summary.unsettledThreads.map(entry => ({ location: location.target, entry })));
+      // Snoozed threads only count while they need attention, and then never as active attention.
+      for (const entry of summary.unsettledThreads) {
+        const status = !snoozes.has(entry.identity.threadId) ? entry.status
+          : entry.status === "needsAttention" || entry.status === "needsAttentionActive" ? "needsAttention" : null;
+        if (!status) continue;
+        counts[status] = (counts[status] ?? 0) + 1;
+        unsettledThreads.push({ location: location.target, entry: status === entry.status ? entry : { ...entry, status } });
+      }
     }
     for (const draft of presentation.drafts) {
       if (draft.logicalProjectId !== project.id || draft.phase !== "unsent" || !draft.pinned || draft.snoozed

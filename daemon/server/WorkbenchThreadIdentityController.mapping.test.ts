@@ -188,7 +188,7 @@ test("questionnaire ports retain WB identities through resolve, publication, cle
   assert.ok(entry.entryKind === "thread");
   const storedEntry = {
     ...entry, providerObserved: true, mcpGeneration: null,
-    profile: null, settledAt: null, gitHistoryCleanedAt: null, snoozedUntil: null,
+    profile: null, settledAt: null, gitHistoryCleanedAt: null,
   };
   new WorkbenchThreadStateRelationalRepository(database).writeRecords([{ ...storedEntry, pendingQuestionnaire: null }]);
   const questionnaires = new WorkbenchThreadStateQuestionnaireRepository(database);

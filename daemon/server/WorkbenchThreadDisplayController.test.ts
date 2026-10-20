@@ -7,10 +7,7 @@ import test from "node:test";
 
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadDraftSchema } from "workbench-shared/workbench/thread/thread-state";
-import WorkbenchThreadDisplayController, {
-  setWorkbenchThreadEntryDisplaySection,
-  setWorkbenchThreadEntryPriority,
-} from "./WorkbenchThreadDisplayController";
+import WorkbenchThreadDisplayController, { setWorkbenchThreadEntryPriority } from "./WorkbenchThreadDisplayController";
 import { projectWorkbenchThreadDraft } from "./WorkbenchThreadDraftStore";
 import { parseWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 
@@ -33,56 +30,20 @@ const entry = projectWorkbenchThreadDraft(WorkbenchThreadDraftSchema.parse({
   updatedAt: 1,
 }));
 
-test("display owner applies priority semantics and rejects settled draft placement", () => {
-  const pinned = setWorkbenchThreadEntryPriority(entry, "pinned");
-  const snoozed = setWorkbenchThreadEntryPriority(entry, "snoozed");
-  assert.ok(pinned?.entryKind === "draft");
-  assert.ok(snoozed?.entryKind === "draft");
-  assert.deepEqual(pinned.metadata, {
-    archived: false,
-    pinned: true,
-    snoozed: false,
-  });
-  assert.deepEqual(snoozed.metadata, {
-    archived: false,
-    pinned: false,
-    snoozed: true,
-  });
-  assert.equal(setWorkbenchThreadEntryDisplaySection(entry, "settled"), null);
-});
-
-test("display priority snoozes working threads but rejects idle claims and live approvals", () => {
-  const providerEntry = parseWorkbenchThreadStateEntry({
+test("display priority pins or unpins unsettled threads and drafts but never settled ones", () => {
+  const metadata = (next: ReturnType<typeof setWorkbenchThreadEntryPriority>) =>
+    next && next.entryKind !== "subagent" ? next.metadata : null;
+  assert.deepEqual(metadata(setWorkbenchThreadEntryPriority(entry, "pinned")), { archived: false, pinned: true, snoozed: false });
+  const providerEntry = (settled: boolean) => parseWorkbenchThreadStateEntry({
     activityAt: 1,
     entryKind: "thread",
     identity: { harness: "codex", threadId: "thread" },
-    lifecycle: {
-      agent: { agentStatus: "working", turnId: "turn" },
-      kind: "working",
-      reason: "acceptedIntent",
-      settled: false,
-    },
-    metadata: { archived: false, pinned: false, snoozed: false },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled },
+    metadata: { archived: false, pinned: true, snoozed: false },
     title: "Thread",
   });
-  assert.ok(providerEntry.entryKind === "thread");
-  if (providerEntry.entryKind !== "thread") return;
-  assert.ok(setWorkbenchThreadEntryPriority(providerEntry, "snoozed"));
-  assert.ok(setWorkbenchThreadEntryPriority(providerEntry, "pinned"));
-  assert.ok(setWorkbenchThreadEntryPriority({
-    ...providerEntry,
-    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-  }, "snoozed"));
-  assert.equal(setWorkbenchThreadEntryPriority({
-    ...providerEntry,
-    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "approval", settled: false },
-  }, "snoozed"), null);
-  assert.equal(setWorkbenchThreadEntryPriority({
-    ...providerEntry,
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    gitArc: { checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
-      intentDescription: "", phase: "active", proposals: [], updatedAt: "now" },
-  }, "snoozed"), null);
+  assert.deepEqual(metadata(setWorkbenchThreadEntryPriority(providerEntry(false), "main")), { archived: false, pinned: false, snoozed: false });
+  assert.equal(setWorkbenchThreadEntryPriority(providerEntry(true), "main"), null);
 });
 
 test("display owner clone can replace order without changing its source", () => {

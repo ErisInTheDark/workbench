@@ -41,7 +41,6 @@ import {
   getThreadDisplayThreadKey,
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
-  findWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
   isWorkbenchThreadDisplayOrderEmpty,
   normalizeWorkbenchThreadDisplayOrder,
@@ -51,17 +50,14 @@ import {
   type WorkbenchThreadDisplayOrder,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import {
-  areAllUnsnoozedThreadEntriesSettlementReady,
   createWorkbenchProjectThreadSummary,
   WorkbenchComposerProfileSelectionSchema,
-  WorkbenchHarnessSchema,
   WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadStateRequestSchema,
   gitArcPreventsThreadSettlement,
   getWorkbenchLifecycleTurnId,
   getThreadSidebarGroup,
   isWorkbenchThreadStatusProviderOwned,
-  isWorkbenchThreadSnoozeAvailable,
   isWorkbenchSidebarThreadCompletionAvailable,
   reduceWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
@@ -103,7 +99,6 @@ import {
   safeParseWorkbenchThreadStateEntry,
   type WorkbenchThreadStateEntry,
   type WorkbenchThreadStateRecord,
-  type WorkbenchThreadSnoozeTarget,
 } from "./workbench-thread-state-record";
 
 // workbenchTitle is recorded only for workbench-owned relationships; provider inputs stay display labels.
@@ -158,15 +153,6 @@ function reconcileProviderLifecycle(
     return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
   }
   return providerEntry.lifecycle;
-}
-
-function sameThreadTarget(
-  leftProjectId: string,
-  left: { harness: WorkbenchHarnessId; threadId: string },
-  rightProjectId: string,
-  right: { harness: WorkbenchHarnessId; threadId: string },
-) {
-  return leftProjectId === rightProjectId && left.harness === right.harness && left.threadId === right.threadId;
 }
 
 export interface WorkbenchThreadStateControllerOptions {
@@ -531,7 +517,6 @@ export default class WorkbenchThreadStateController {
         }
       }
       case "workbench/thread-state/priority/set": return { result: await this.mutatePriority(request) };
-      case "workbench/thread-state/snooze/until": return { result: await this.mutateDependentSnooze(request) };
       default: return { result: await this.mutateThread(request) };
     }
   }
@@ -557,7 +542,7 @@ export default class WorkbenchThreadStateController {
       const archive = this.archives.isDue(loaded && entry.settledAt === null ? { ...timed, settledAt: null } : timed);
       if (entry.settledAt === settledAt && entry.gitHistoryCleanedAt === gitHistoryCleanedAt && !archive) continue;
       state.entries.set(key, archive && timed.entryKind === "thread"
-        ? { ...timed, metadata: { archived: true, pinned: false, snoozed: false }, snoozedUntil: null }
+        ? { ...timed, metadata: { archived: true, pinned: false, snoozed: false } }
         : timed);
       changed = true;
     }
@@ -641,9 +626,6 @@ export default class WorkbenchThreadStateController {
 
   private canonicalRequest(request: WorkbenchThreadStateRequest): WorkbenchThreadStateRequest {
     if ("projectId" in request) request = { ...request, projectId: this.canonicalProjectId(request.projectId) };
-    if (request.method === "workbench/thread-state/snooze/until") {
-      return { ...request, target: { ...request.target, projectId: this.canonicalProjectId(ProjectIdSchema.parse(request.target.projectId)) } };
-    }
     return request;
   }
 
@@ -884,7 +866,6 @@ export default class WorkbenchThreadStateController {
     const key = `${harness}:${threadId}`;
     const result = await this.enqueue(`${projectId}:thread:${key}`, async () => {
       const beforePublication = new Map(state.entries);
-      const wakeReadyBefore = areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state));
       if (!state.entries.has(key) && providerEntry?.entryKind === "thread" && entryKey(providerEntry) === key) {
         const { workbenchTitle, ...sidebarEntry } = providerEntry;
         state.entries.set(key, parseWorkbenchThreadStateEntry({
@@ -918,11 +899,6 @@ export default class WorkbenchThreadStateController {
       const lifecycle = heldQuestionnaire && (retainedQuestionnaire || recoverableLifecycle)
         ? this.waitOnQuestionnaire(existing.lifecycle, heldQuestionnaire)
         : reducedLifecycle;
-      const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && (
-        event.kind === "acceptedIntent"
-        || event.kind === "inputResolved"
-        || (existing.lifecycle.kind === "working" && (lifecycle.kind === "needsAttention" || lifecycle.kind === "completed" || lifecycle.kind === "stopped"))
-      );
       const shouldClearQuestionnaire = questionnaireMutation?.kind === "clear"
         && existing.pendingQuestionnaire?.requestKey === questionnaireMutation.requestKey;
       const shouldSetQuestionnaire = questionnaireMutation?.kind === "set"
@@ -933,7 +909,6 @@ export default class WorkbenchThreadStateController {
       if (
         event.kind !== "acceptedIntent"
         && areDeeplyEqual(existing.lifecycle, lifecycle)
-        && !shouldUnsnooze
         && !shouldClearQuestionnaire
         && !shouldSetQuestionnaire
       ) return existing;
@@ -945,11 +920,7 @@ export default class WorkbenchThreadStateController {
           ...existing,
           lifecycle,
           ...(event.kind === "acceptedIntent" && !existing.profile ? { profile: profile ?? null } : {}),
-          metadata: existing.metadata.archived
-            ? { archived: true as const, pinned: false as const, snoozed: false as const }
-            : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
           ...(event.kind === "acceptedIntent" ? { orderAt: providerEntry?.entryKind === "thread" ? providerEntry.orderAt ?? turnOrderAt : turnOrderAt } : {}),
-          snoozedUntil: shouldUnsnooze ? null : existing.snoozedUntil,
           ...(event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? {
             title: resolveWorkbenchThreadTitle({ id: threadId, name: existing.title, preview: providerEntry.title }),
           } : {}),
@@ -965,25 +936,6 @@ export default class WorkbenchThreadStateController {
       });
       if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
       state.entries.set(key, parsedNext);
-      if (!wakeReadyBefore && areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state))) {
-        const snapshot = this.snapshot(projectId, state);
-        const highestSnoozed = snapshot.entries.find((candidate) => (
-          getThreadSidebarGroup(candidate) === "snoozed"
-          && candidate.entryKind === "thread" && candidate.lifecycle.kind !== "working"
-          && !findWorkbenchThreadFolder(snapshot.displayOrder, getWorkbenchThreadDisplayKey(candidate))
-          && (() => {
-            const record = state.entries.get(getWorkbenchThreadDisplayKey(candidate));
-            return record?.entryKind === "thread" && !record.snoozedUntil;
-          })()
-        ));
-        if (highestSnoozed) {
-          const candidateKey = getWorkbenchThreadDisplayKey(highestSnoozed);
-          const candidate = state.entries.get(candidateKey);
-          if (candidate && candidate.entryKind !== "subagent" && !candidate.metadata.archived && candidate.metadata.snoozed) {
-            state.entries.set(candidateKey, parseWorkbenchThreadStateEntry({ ...candidate, metadata: { ...candidate.metadata, snoozed: false } }));
-          }
-        }
-      }
       await this.persist(projectId, state, [
         ...this.changedEntryKeys(beforePublication, state),
         ...(promotedDraftId ? [getThreadDisplayDraftKey(promotedDraftId)] : []),
@@ -995,7 +947,6 @@ export default class WorkbenchThreadStateController {
       }
       return parsedNext;
     });
-    await this.reevaluateDependentSnoozes(projectId, key);
     return result;
   }
 
@@ -1457,7 +1408,6 @@ export default class WorkbenchThreadStateController {
       this.publish(projectId, state, next);
       return next;
     });
-    await this.reevaluateDependentSnoozes(projectId, key);
     return result;
   }
 
@@ -1784,10 +1734,7 @@ export default class WorkbenchThreadStateController {
       const projected = projectWorkbenchThreadStateEntry(entry);
       if (!projected || projected.entryKind === "draft") return projected ? [projected] : [];
       const waitingFor = this.waitingByThreadKey.get(entryKey(projected));
-      return [{
-        ...projected,
-        ...(waitingFor || (entry.entryKind === "thread" && entry.snoozedUntil) ? { waitingFor: waitingFor ?? "other" } : {}),
-      }];
+      return [waitingFor ? { ...projected, waitingFor } : projected];
     });
     return sortThreadSidebarEntries(entries).filter((entry) => getThreadSidebarGroup(entry) !== "hidden");
   }
@@ -1876,9 +1823,6 @@ export default class WorkbenchThreadStateController {
           ? failureMessages.join("; ").slice(0, 500)
           : null;
         state.freshness = failureMessages.length ? "partial" : "fresh";
-        if (state.freshness === "fresh") {
-          await this.reevaluateAllDependentSnoozes();
-        }
         this.publish(projectId, state);
       } catch (error) {
         if (generation !== state.generation || abort.signal.aborted) return;
@@ -1965,14 +1909,13 @@ export default class WorkbenchThreadStateController {
           pinned: existing.entryKind === "subagent" ? existing.pinned : existing.metadata.pinned,
           providerObserved: true,
           settledAt: adopted ? null : existing.settledAt,
-          snoozedUntil: existing.snoozedUntil,
           ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), workbenchTitle);
         continue;
       }
       const metadata = existing?.entryKind === "thread" && existing.metadata.archived
         ? { archived: true as const, pinned: false as const, snoozed: false as const }
-        : { archived: false as const, pinned: existing?.entryKind === "thread" ? existing.metadata.pinned : providerEntry.metadata.pinned, snoozed: existing?.entryKind === "thread" ? existing.metadata.snoozed : providerEntry.metadata.snoozed };
+        : { archived: false as const, pinned: existing?.entryKind === "thread" ? existing.metadata.pinned : providerEntry.metadata.pinned, snoozed: false };
       const lifecycle = providerLifecycle(key, providerEntry, existing);
       const launchId = providerEntry.launchId ?? (existing?.entryKind === "thread" ? existing.launchId : undefined);
       install(key, parseWorkbenchThreadStateEntry(existing ? {
@@ -1989,7 +1932,6 @@ export default class WorkbenchThreadStateController {
         ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
         providerObserved: true,
         settledAt: existing.settledAt,
-        snoozedUntil: existing.snoozedUntil,
         ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         title: providerEntry.title === "New thread" ? existing.title : providerEntry.title,
       } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), workbenchTitle);
@@ -2047,13 +1989,6 @@ export default class WorkbenchThreadStateController {
     request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" }>,
   ) {
     const state = await this.getProject(request.projectId);
-    const candidate = state.entries.get(request.sourceKey);
-    if (request.priority === "snoozed" && candidate?.entryKind === "thread") {
-      return await this.mutateThread({
-        method: "workbench/thread-state/snooze/set", projectId: request.projectId,
-        identity: candidate.identity, snoozed: true,
-      });
-    }
     return await this.enqueue(`${request.projectId}:thread:${request.sourceKey}`, async () => {
       const entry = state.entries.get(request.sourceKey);
       if (!entry) return { accepted: false, revision: state.revision };
@@ -2068,156 +2003,17 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async mutateDependentSnooze(
-    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/snooze/until" }>,
-  ) {
-    if (sameThreadTarget(request.projectId, request.identity, request.target.projectId, request.target.identity)) {
-      const state = await this.getProject(request.projectId);
-      return { accepted: false, revision: state.revision };
-    }
-    const [sourceState, targetState] = await Promise.all([
-      this.getProject(request.projectId),
-      this.getProject(request.target.projectId),
-    ]);
-    const sourceKey = `${request.identity.harness}:${request.identity.threadId}`;
-    const targetKey = `${request.target.identity.harness}:${request.target.identity.threadId}`;
-    return await this.enqueue(`${request.projectId}:thread:${sourceKey}`, async () => {
-      let source = sourceState.entries.get(sourceKey);
-      if (source) source = await this.refreshSnoozeClaims(request.projectId, source);
-      const target = targetState.entries.get(targetKey);
-      if (
-        !source
-        || source.entryKind !== "thread"
-        || source.metadata.archived
-        || source.lifecycle.settled
-        || isWorkbenchThreadStatusProviderOwned(source.lifecycle)
-        || !target
-        || target.entryKind !== "thread"
-        || target.metadata.archived
-      ) return { accepted: false, revision: sourceState.revision };
-      const currentTargets = source.snoozedUntil?.targets ?? [];
-      const existingIndex = currentTargets.findIndex(wait => sameThreadTarget(
-        wait.projectId, wait.identity, request.target.projectId, request.target.identity,
-      ));
-      const ready = existingIndex < 0 && this.isDependentSnoozeTargetReady(request.target.projectId, targetKey);
-      const targets = existingIndex >= 0
-        ? currentTargets.filter((_, index) => index !== existingIndex)
-        : ready ? currentTargets
-          : [...currentTargets, {
-            ...request.target, title: currentThreadTitleName(target.titleHistory ?? []) ?? target.title,
-          } satisfies WorkbenchThreadSnoozeTarget];
-      const next = parseWorkbenchThreadStateEntry({
-        ...source,
-        metadata: { ...source.metadata, snoozed: targets.length > 0 },
-        snoozedUntil: targets.length ? { targets } : null,
-      });
-      if (next.entryKind !== "thread") return { accepted: false, revision: sourceState.revision };
-      if (areDeeplyEqual(source, next)) return { accepted: true, revision: sourceState.revision };
-      sourceState.entries.set(sourceKey, next);
-      sourceState.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(sourceState), sourceState.displayOrder);
-      await this.persist(request.projectId, sourceState, [sourceKey], { layout: true });
-      this.publish(request.projectId, sourceState, next);
-      return { accepted: true, revision: sourceState.revision };
-    });
-  }
-
-  private isDependentSnoozeTargetReady(projectId: ProjectId, targetKey: string) {
-    const state = this.projects.get(projectId);
-    const target = state?.entries.get(targetKey);
-    return Boolean(
-      state?.freshness === "fresh"
-      && target?.entryKind === "thread"
-      && target.lifecycle.kind === "completed"
-      && !(target.gitArc?.claimedPaths.length),
-    );
-  }
-
-  private async reevaluateDependentSnoozes(projectId: ProjectId, targetKey: string) {
-    if (!this.isDependentSnoozeTargetReady(projectId, targetKey)) return;
-    const [harness, ...threadIdParts] = targetKey.split(":");
-    const threadId = threadIdParts.join(":");
-    if (!WorkbenchHarnessSchema.safeParse(harness).success || !threadId) return;
-    const candidates = [...this.projects.entries()].flatMap(([sourceProjectId, state]) => (
-      [...state.entries.entries()].flatMap(([sourceKey, entry]) => (
-        entry.entryKind === "thread"
-        && entry.snoozedUntil?.targets.some(wait => sameThreadTarget(
-          wait.projectId, wait.identity, projectId, { harness: harness as WorkbenchHarnessId, threadId },
-        ))
-          ? [{ sourceKey, sourceProjectId, state }]
-          : []
-      ))
-    ));
-    await Promise.all(candidates.map(async ({ sourceKey, sourceProjectId, state }) => await this.enqueue(
-      `${sourceProjectId}:thread:${sourceKey}`,
-      async () => {
-        const current = state.entries.get(sourceKey);
-        if (
-          current?.entryKind !== "thread"
-          || !current.snoozedUntil?.targets.some(wait => sameThreadTarget(
-            wait.projectId, wait.identity, projectId, { harness: harness as WorkbenchHarnessId, threadId },
-          ))
-          || !this.isDependentSnoozeTargetReady(projectId, targetKey)
-        ) return;
-        const targets = current.snoozedUntil.targets.filter(wait => !sameThreadTarget(
-          wait.projectId, wait.identity, projectId, { harness: harness as WorkbenchHarnessId, threadId },
-        ));
-        const next = parseWorkbenchThreadStateEntry({
-          ...current,
-          metadata: { ...current.metadata, snoozed: targets.length > 0 },
-          snoozedUntil: targets.length ? { targets } : null,
-        });
-        if (next.entryKind !== "thread") return;
-        state.entries.set(sourceKey, next);
-        state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
-        await this.persist(sourceProjectId, state, [sourceKey], { layout: true });
-        this.publish(sourceProjectId, state, next);
-      },
-    )));
-  }
-
-  private async reevaluateAllDependentSnoozes() {
-    const targets = new Map<string, { projectId: ProjectId; targetKey: string }>();
-    for (const state of this.projects.values()) {
-      for (const entry of state.entries.values()) {
-        if (entry.entryKind !== "thread") continue;
-        for (const target of entry.snoozedUntil?.targets ?? []) {
-          const targetKey = `${target.identity.harness}:${target.identity.threadId}`;
-          targets.set(`${target.projectId}\0${targetKey}`, { projectId: target.projectId, targetKey });
-        }
-      }
-    }
-    await Promise.all([...targets.values()].map(({ projectId, targetKey }) => (
-      this.reevaluateDependentSnoozes(projectId, targetKey)
-    )));
-  }
-
-  private async refreshSnoozeClaims(projectId: ProjectId, entry: WorkbenchThreadStateEntry) {
-    if (entry.entryKind !== "thread" || entry.lifecycle.kind === "working") return entry;
-    return await this.options.runGitArcReadTransition(projectId, async () =>
-      await this.refreshGitArcState(projectId, entry.identity.harness, entry.identity.threadId) ?? entry);
-  }
-
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" | "workbench/thread-state/snooze/until" }>) {
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" }>) {
     const state = await this.getProject(request.projectId);
     const key = getThreadDisplayThreadKey(request.identity.harness, request.identity.threadId);
-    let candidate = state.entries.get(key);
-    const snoozingQuestionnaire = request.method === "workbench/thread-state/questionnaire/snooze";
-    const plainQuestionnaireSnooze = request.method === "workbench/thread-state/snooze/set" && request.snoozed;
-    const snoozing = snoozingQuestionnaire || plainQuestionnaireSnooze;
-    if (snoozing && candidate?.entryKind === "thread" && candidate.pendingQuestionnaire) {
-      candidate = await this.refreshSnoozeClaims(request.projectId, candidate);
-      if (!isWorkbenchThreadSnoozeAvailable(candidate)) return { accepted: false, revision: state.revision };
-    }
-    const snoozeQuestionnaire = (snoozingQuestionnaire || plainQuestionnaireSnooze) && candidate?.entryKind === "thread"
-      && !candidate.metadata.archived
-      && candidate.pendingQuestionnaire
-      && (snoozingQuestionnaire
-        ? candidate.pendingQuestionnaire.requestKey === request.requestKey
-        : candidate.lifecycle.kind === "needsAttention"
-          && candidate.lifecycle.reason === "pendingInput"
-          && candidate.lifecycle.requestKey === candidate.pendingQuestionnaire.requestKey)
+    const candidate = state.entries.get(key);
+    const heldQuestionnaire = request.method === "workbench/thread-state/questionnaire/hold"
+      && candidate?.entryKind === "thread" && !candidate.metadata.archived
+      && candidate.pendingQuestionnaire?.requestKey === request.requestKey
       ? candidate.pendingQuestionnaire : null;
-    if (snoozingQuestionnaire && !snoozeQuestionnaire) return { accepted: false, revision: state.revision };
+    if (request.method === "workbench/thread-state/questionnaire/hold" && !heldQuestionnaire) {
+      return { accepted: false, revision: state.revision };
+    }
     const completionQuestionnaire = request.method === "workbench/thread-state/status/set"
       && request.status === "completed" && candidate
       && isWorkbenchSidebarThreadCompletionAvailable(candidate)
@@ -2226,7 +2022,7 @@ export default class WorkbenchThreadStateController {
       : null;
     // Provider I/O must not hold the mutation queue: its interruption notification
     // uses that same queue. Revalidate the captured question after the await.
-    const interruptedQuestionnaire = snoozeQuestionnaire ?? completionQuestionnaire;
+    const interruptedQuestionnaire = heldQuestionnaire ?? completionQuestionnaire;
     if (interruptedQuestionnaire) {
       this.assertActive();
       if (!this.options.interruptQuestionnaire) throw new Error("Questionnaire interruption is unavailable.");
@@ -2236,8 +2032,7 @@ export default class WorkbenchThreadStateController {
     }
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
       const beforePublication = new Map(state.entries);
-      let entry = state.entries.get(key);
-      if (snoozing && entry) entry = await this.refreshSnoozeClaims(request.projectId, entry);
+      const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
       if (interruptedQuestionnaire && (
         entry.entryKind !== "thread" || entry.metadata.archived
@@ -2256,12 +2051,6 @@ export default class WorkbenchThreadStateController {
       )) {
         return { accepted: false, revision: state.revision };
       }
-      if (
-        snoozing && (!isWorkbenchThreadSnoozeAvailable(entry)
-          || (entry.pendingQuestionnaire && !snoozeQuestionnaire))
-      ) {
-        return { accepted: false, revision: state.revision };
-      }
       const canSettle = entry.lifecycle.kind === "completed"
         || entry.lifecycle.kind === "stopped"
         || (entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle));
@@ -2276,34 +2065,25 @@ export default class WorkbenchThreadStateController {
         return { accepted: false, revision: state.revision };
       }
       let next = entry;
-      if (snoozeQuestionnaire && entry.entryKind === "thread") {
+      if (heldQuestionnaire && entry.entryKind === "thread") {
         next = {
           ...entry,
-          lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: snoozeQuestionnaire.requestKey, settled: false },
-          metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: true },
-          snoozedUntil: null,
+          lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: heldQuestionnaire.requestKey, settled: false },
         };
       }
       if (request.method === "workbench/thread-state/pin/set") next = entry.entryKind === "subagent"
         ? { ...entry, pinned: request.pinned }
         : entry.metadata.archived
           ? entry
-          : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: entry.metadata.snoozed } };
-      if (!snoozeQuestionnaire && entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed }, snoozedUntil: null };
+          : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: false } };
       if (request.method === "workbench/thread-state/settle") {
         const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle", entryKind: entry.entryKind });
-        next = entry.entryKind === "subagent"
-          ? { ...entry, lifecycle, pinned: false }
-          : { ...entry, lifecycle, metadata: entry.metadata.archived ? entry.metadata : { ...entry.metadata, snoozed: false }, snoozedUntil: null };
+        next = entry.entryKind === "subagent" ? { ...entry, lifecycle, pinned: false } : { ...entry, lifecycle };
       }
       if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = {
         ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }),
-        ...(entry.entryKind === "thread" ? {
-          snoozedUntil: null,
-          ...(entry.metadata.archived ? { metadata: { archived: false as const, pinned: false, snoozed: false } } : {}),
-          ...(!entry.metadata.archived && entry.snoozedUntil
-            ? { metadata: { ...entry.metadata, snoozed: false } } : {}),
-        } : {}),
+        ...(entry.entryKind === "thread" && entry.metadata.archived
+          ? { metadata: { archived: false as const, pinned: false, snoozed: false } } : {}),
       };
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/status/set" && entry.lifecycle.kind !== request.status) {
         // Questionnaire completion has stopped its owning turn. Do not retain
@@ -2316,9 +2096,9 @@ export default class WorkbenchThreadStateController {
               ? { kind: "userStopped" }
               : { kind: "userCompleted" },
         );
-        next = { ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: false }, snoozedUntil: null };
+        next = { ...entry, lifecycle };
       }
-      if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false }, snoozedUntil: null };
+      if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: { archived: request.archived, pinned: false, snoozed: false } };
       if (request.method === "workbench/thread-state/stop") {
         // The caller must have seen the questionnaire it dismisses, including seeing none.
         if (entry.pendingQuestionnaire && entry.pendingQuestionnaire.requestKey !== request.requestKey) {
@@ -2329,10 +2109,7 @@ export default class WorkbenchThreadStateController {
         if (entry.pendingQuestionnaire || !finished) {
           // Stop owns this lifecycle; dropping the agent marker keeps late provider events from reopening it.
           const lifecycle = reduceWorkbenchThreadLifecycle(null, { kind: "userStopped" });
-          next = entry.entryKind === "thread" ? {
-            ...entry, pendingQuestionnaire: null, lifecycle,
-            metadata: { ...entry.metadata, snoozed: false }, snoozedUntil: null,
-          } : { ...entry, pendingQuestionnaire: null, lifecycle };
+          next = { ...entry, pendingQuestionnaire: null, lifecycle };
         }
       }
       if (request.method === "workbench/thread-state/questionnaire/resolve") {
@@ -2356,11 +2133,9 @@ export default class WorkbenchThreadStateController {
       await this.persist(request.projectId, state, [key]); this.publish(request.projectId, state, state.entries.get(key));
       return { accepted: true, revision: state.revision };
     });
-    const result = request.method === "workbench/thread-state/settle"
+    return request.method === "workbench/thread-state/settle"
       ? await this.options.runGitArcReadTransition(request.projectId, mutate)
       : await mutate();
-    await this.reevaluateDependentSnoozes(request.projectId, key);
-    return result;
   }
 
   private changedEntryKeys(previous: ReadonlyMap<string, WorkbenchThreadStateEntry>, state: ProjectState) {

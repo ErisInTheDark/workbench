@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, projected once per burst of answers, project selections and rows, and folder peer sync) and publication fences.
+ * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, projected once per burst of answers, project selections and rows, and folder peer sync) and publication fences; thread rows carry the app's snoozes.
  */
 import {
   RETARGETABLE_QUERY_KINDS, WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, applyThreadSummariesPatch,
@@ -26,6 +26,8 @@ import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type { WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import type WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
+import type WorkbenchThreadSnoozeController from "../state/WorkbenchThreadSnoozeController";
+import { ThreadSnooze } from "workbench-shared/workbench/thread/thread-snooze";
 import type WorkbenchGitPeerSync from "./WorkbenchGitPeerSync";
 import type WorkbenchWorkspaceDrafts from "./WorkbenchWorkspaceDrafts";
 import { z } from "zod";
@@ -129,6 +131,7 @@ export default class WorkbenchWorkspaceRequestController {
     workspace: WorkbenchWorkspaceController;
     sources: WorkbenchDaemonSources;
     threads: WorkbenchWorkspaceThreads;
+    snoozes: Pick<WorkbenchThreadSnoozeController, "read" | "subscribe" | "snooze" | "toggleTarget">;
     presentation: Pick<WorkbenchPresentationController, "read" | "subscribe" | "mutate">;
     /** Draft launches in flight, whose reservations stand in for their thread rows. */
     launches?: Pick<WorkbenchWorkspaceDrafts, "inFlight" | "subscribe">;
@@ -194,15 +197,9 @@ export default class WorkbenchWorkspaceRequestController {
             expectedRevision: draft.revision, pinned: section === "pinned", snoozed: section === "snoozed" }).revision;
         } else {
           const threadId = source.entry.identity.threadId;
-          const expectedRevision = snapshot.revision;
           changePriority = async () => {
-            await this.options.threads.withThread(threadId, async (daemon, owner) => {
-              const accepted = WorkbenchThreadStateMutationResultSchema.parse(await daemon.request(
-                "workbench/thread-state/priority/set", { projectId: owner.location.projectId,
-                  sourceKey: `${owner.identity.harness}:${owner.identity.threadId}`, priority: section }));
-              if (!accepted.accepted) throw new Error("The daemon rejected the priority change.");
-            }, this.cancellation.signal);
-            return expectedRevision;
+            if (!await this.setThreadPriority(threadId, section)) throw new Error("The thread rejected the priority change.");
+            return this.options.presentation.read().revision;
           };
         }
         rows = rows.map(row => row !== source || row.entry.entryKind === "subagent" ? row : {
@@ -259,23 +256,16 @@ export default class WorkbenchWorkspaceRequestController {
     const request = WorkspaceThreadMutationSchema.parse(input);
     return this.options.threads.withThread(request.identity.threadId, async (source, owner) => {
       const { method, ...params } = request;
-      const resolved = { ...params, projectId: owner.location.projectId,
-        identity: { threadId: owner.identity.threadId, harness: owner.identity.harness } };
-      if (request.method === "workbench/thread-state/snooze/until") {
-        return this.options.threads.withThread(request.target.identity.threadId, (targetSource, targetOwner) => {
-          if (targetSource !== source) throw new Error("Dependent snooze requires threads on the same daemon.");
-          return source.request<Json>(method, { ...resolved,
-            target: { projectId: targetOwner.location.projectId, identity: {
-              threadId: targetOwner.identity.threadId, harness: targetOwner.identity.harness,
-            } } });
-        }, this.cancellation.signal);
-      }
-      return source.request<Json>(method, resolved);
+      return source.request<Json>(method, { ...params, projectId: owner.location.projectId,
+        identity: { threadId: owner.identity.threadId, harness: owner.identity.harness } });
     }, this.cancellation.signal);
   }
 
   async threadAction(input: z.infer<typeof WorkspaceThreadActionSchema>): Promise<WorkspaceThreadActionResult> {
     const { threadId, intent } = WorkspaceThreadActionSchema.parse(input);
+    if (intent.kind === "priority") return { accepted: await this.setThreadPriority(threadId, intent.priority) };
+    if (intent.kind === "snooze") return { accepted: await this.options.snoozes.snooze(threadId, intent.snoozed, intent.requestKey) };
+    if (intent.kind === "snoozeUntil") return { accepted: await this.options.snoozes.toggleTarget(threadId, intent.targetThreadId) };
     return this.options.threads.withThread(threadId, async (source, owner) => {
       const projectId = owner.location.projectId;
       const identity = { harness: owner.identity.harness, threadId: owner.identity.threadId };
@@ -287,28 +277,24 @@ export default class WorkbenchWorkspaceRequestController {
         });
         return { accepted: true };
       }
-      const mutate = async (method: string, params: object) =>
-        WorkbenchThreadStateMutationResultSchema.parse(await source.request<Json>(method, params));
-      if (intent.kind === "priority") return mutate("workbench/thread-state/priority/set", {
-        projectId, priority: intent.priority,
-        sourceKey: getThreadDisplayThreadKey(identity.harness, identity.threadId),
-      });
-      if (intent.kind === "snoozeUntil") return this.options.threads.withThread(intent.targetThreadId,
-        (targetSource, target) => {
-          if (source !== targetSource) throw new Error("Dependent snooze requires threads on the same daemon.");
-          return mutate("workbench/thread-state/snooze/until", {
-            projectId, identity, target: { projectId: target.location.projectId,
-              identity: { harness: target.identity.harness, threadId: target.identity.threadId } },
-          });
-        }, this.cancellation.signal);
       const mutation = intent.kind === "pin" ? { method: "workbench/thread-state/pin/set", pinned: intent.pinned }
-        : intent.kind === "snooze" ? { method: "workbench/thread-state/snooze/set", snoozed: intent.snoozed }
-          : intent.kind === "archive" ? { method: "workbench/thread-state/archive/set", archived: intent.archived }
-            : intent.kind === "status" ? { method: "workbench/thread-state/status/set", status: intent.status }
-              : { method: intent.kind === "restore" ? "workbench/thread-state/restore" : "workbench/thread-state/settle" };
+        : intent.kind === "archive" ? { method: "workbench/thread-state/archive/set", archived: intent.archived }
+          : intent.kind === "status" ? { method: "workbench/thread-state/status/set", status: intent.status }
+            : { method: intent.kind === "restore" ? "workbench/thread-state/restore" : "workbench/thread-state/settle" };
       const { method, ...params } = mutation;
-      return mutate(method, { ...params, projectId, identity });
+      return WorkbenchThreadStateMutationResultSchema.parse(await source.request<Json>(method, { ...params, projectId, identity }));
     }, this.cancellation.signal);
+  }
+
+  /** Snooze is app-owned; pinned and main are the daemon's, and leaving snoozed for either wakes the thread. */
+  private async setThreadPriority(threadId: string, priority: "pinned" | "main" | "snoozed") {
+    if (priority === "snoozed") return await this.options.snoozes.snooze(threadId, true);
+    const accepted = await this.options.threads.withThread(threadId, async (source, owner) =>
+      WorkbenchThreadStateMutationResultSchema.parse(await source.request<Json>("workbench/thread-state/priority/set", {
+        projectId: owner.location.projectId, priority,
+        sourceKey: getThreadDisplayThreadKey(owner.identity.harness, owner.identity.threadId),
+      })).accepted, this.cancellation.signal);
+    return accepted && await this.options.snoozes.snooze(threadId, false);
   }
 
   async transcript(input: z.infer<typeof WorkspaceTranscriptRequestSchema>) {
@@ -661,6 +647,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "threadOwner":
         interest.owner = this.options.threads.observe(request.query.threadId, refresh);
         interest.stop.push(this.options.sources.subscribe(refresh));
+        if (request.query.kind === "thread") interest.stop.push(this.options.snoozes.subscribe(refresh));
         break;
       case "threadVis":
       case "visSnapshot":
@@ -672,7 +659,8 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh));
         break;
       case "threadSummaries":
-        interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh));
+        interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh),
+          this.options.snoozes.subscribe(refresh));
         break;
     }
     try { this.refresh(interest); }
@@ -959,8 +947,11 @@ export default class WorkbenchWorkspaceRequestController {
         }
         const fact = interest.thread?.observation.getSnapshot();
         const value = fact?.value?.kind === "thread" ? fact.value : null;
+        const snoozes = this.options.snoozes.read();
+        const data = value?.data ? { ...value.data, entries: value.data.entries.map(entry => entry.entryKind === "thread"
+          ? ThreadSnooze.apply(entry, snoozes.get(entry.identity.threadId)) : entry) } : null;
         this.update(interest, { kind: "thread", owner, phase: fact?.phase ?? phase, failure: fact?.failure ?? failure,
-          data: value?.data ?? null, runtime: value?.runtime ?? {} });
+          data, runtime: value?.runtime ?? {} });
       }
     }
   }
@@ -1183,6 +1174,7 @@ export default class WorkbenchWorkspaceRequestController {
     const logicalProjectId = (daemonId: DaemonId, projectId: ProjectId) => (presentation ??= this.options.presentation.read())
       .locations.find(item => item.target.daemonId === daemonId && item.target.projectId === projectId)?.logicalProjectId ?? null;
     const data: WorkspaceThreadSummaries = {};
+    const snoozes = this.options.snoozes.read();
     for (const threadId of requested) {
       const claims = answers.flatMap(answer => {
         const located = answer.summaries[threadId];
@@ -1193,7 +1185,9 @@ export default class WorkbenchWorkspaceRequestController {
         data[threadId] = null;
       } else if (claims[0]) {
         const { daemonId, located: { projectId, summary } } = claims[0];
-        data[threadId] = { location: { daemonId, projectId }, logicalProjectId: logicalProjectId(daemonId, projectId), summary };
+        const row = ThreadSnooze.apply(summary.row, snoozes.get(threadId));
+        data[threadId] = { location: { daemonId, projectId }, logicalProjectId: logicalProjectId(daemonId, projectId),
+          summary: row === summary.row ? summary : { ...summary, row } };
       } else if (answers.length && answers.every(answer => answer.settled && threadId in answer.summaries)) {
         data[threadId] = null;
       }
@@ -1228,13 +1222,15 @@ export default class WorkbenchWorkspaceRequestController {
     const inFlight = this.options.launches?.inFlight() ?? new Set<string>();
     const rows: WorkbenchProjectedThreadRow[] = projectLogicalThreadRows(workspace.projects, sidebars, presentation, inFlight)
       .filter(row => targets.get(row.location.daemonId)?.has(row.location.projectId));
+    const snoozes = ThreadSnooze.byThread(presentation.threadSnoozes);
     for (const project of workspace.observedProjects) for (const location of project.locations) {
       if (!targets.get(location.location.daemonId)?.has(location.location.projectId)) continue;
       const sidebar = sidebars.get(location.location.daemonId)?.projects.find(item => item.projectId === location.location.projectId);
       for (const entry of sidebar?.entries ?? []) {
         if (entry.entryKind !== "draft") rows.push({
-          logicalProjectId: null, location: location.location, hostname: location.hostname,
-          rootPath: location.project.rootPath, entry, observedOnly: true,
+          logicalProjectId: null, location: location.location, hostname: location.hostname, rootPath: location.project.rootPath,
+          entry: entry.entryKind === "thread" ? ThreadSnooze.apply(entry, snoozes.get(entry.identity.threadId)) : entry,
+          observedOnly: true,
         });
       }
     }

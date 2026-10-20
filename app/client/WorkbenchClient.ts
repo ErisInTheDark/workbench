@@ -243,7 +243,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         projectRootPathFor: (projectId: string) =>
           threadProject({ daemonId: location.daemonId, projectId: ProjectIdSchema.parse(projectId) })?.rootPath || null,
       } : {}),
-      updateThreadStateWithAcceptance: request => mutateThread(request),
+      snoozeThread: (threadId, requestKey) => threadAction(WorkbenchThreadIdSchema.parse(threadId),
+        { kind: "snooze", snoozed: true, ...(requestKey ? { requestKey } : {}) }),
       onStatusMessage: message => warn(message),
       ...(state ? { resolveAttachmentUrl: (url: string) => state.resolveDraftAttachmentUrl(url) } : {}),
     });

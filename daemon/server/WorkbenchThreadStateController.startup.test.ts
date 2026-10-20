@@ -52,7 +52,7 @@ test("cold relational startup preserves canonical entries and layout across reop
   const storedRecord = record({
     entryKind: "thread", identity: { harness: "codex", threadId },
     title: "Saved", activityAt: 2,
-    metadata: { archived: false, pinned: true, snoozed: true },
+    metadata: { archived: false, pinned: true, snoozed: false },
     lifecycle: { kind: "working", reason: "acceptedIntent", settled: false,
       agent: { agentStatus: "completed", turnId } },
   });
@@ -70,7 +70,7 @@ test("cold relational startup preserves canonical entries and layout across reop
     assert.ok(entry.entryKind === "thread");
     assert.equal(entry.identity.threadId, threadId);
     assert.equal(entry.lifecycle.kind, "working");
-    assert.equal(entry.metadata.snoozed, true);
+    assert.equal(entry.metadata.pinned, true);
     assert.ok("agent" in entry.lifecycle && entry.lifecycle.agent && "turnId" in entry.lifecycle.agent);
     assert.equal(entry.lifecycle.agent.turnId, turnId);
     assert.deepEqual(sqlite.prepare("SELECT COUNT(*) AS count FROM thread_items").get(), { count: 0 });
@@ -83,28 +83,6 @@ test("cold relational startup preserves canonical entries and layout across reop
   } finally {
     await current.dispose();
   }
-});
-
-test("cold serving wakes stored non-working claim holders without provider reads", async () => {
-  const database = createThreadStateTestDatabase();
-  const threadId = "43596355-c379-497b-b1e0-2f2619c977a1";
-  database.admitThread(fixtureIdentityValues.ProjectId.project, threadId);
-  const stored = record({
-    entryKind: "thread", identity: { harness: "codex", threadId }, title: "Claimed", activityAt: 2,
-    metadata: { archived: false, pinned: false, snoozed: false },
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    gitArc: { checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
-      intentDescription: "", phase: "active", proposals: [], updatedAt: "now" },
-  });
-  assert.ok(stored.entryKind === "thread" && !stored.metadata.archived);
-  await database.commitThreadState({ records: [{ ...stored, metadata: { archived: false, pinned: false, snoozed: true } }] });
-  const current = controller(database);
-  try {
-    const opened = await current.readProject(fixtureIdentityValues.ProjectId.project);
-    const entry = opened.entries.find(candidate => candidate.entryKind === "thread");
-    assert.ok(entry?.entryKind === "thread");
-    assert.equal(entry.metadata.snoozed, false);
-  } finally { await current.dispose(); }
 });
 
 test("complete cold serving isolates projects and retains settled cross-harness children", async () => {

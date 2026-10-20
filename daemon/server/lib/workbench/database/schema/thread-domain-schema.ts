@@ -89,7 +89,7 @@ export function defineThreadDomainSchema(schemaVersion: number) {
     indexes: [index("workbench_thread_states_activity_idx", [table.activity_at, table.thread_id])],
   })));
 
-  const topLevel = install(defineTable("workbench_top_level_thread_states", {
+  const topLevelV1 = defineTable("workbench_top_level_thread_states", {
     thread_id: text().primaryKey(),
     thread_kind: enumText("topLevel").notNull(),
     archived: booleanInteger().notNull(),
@@ -106,7 +106,30 @@ export function defineThreadDomainSchema(schemaVersion: number) {
     indexes: [index("workbench_top_level_thread_states_visibility_idx", [
       table.archived, table.pinned, table.snoozed, table.thread_id,
     ])],
-  })));
+  }));
+  // Snooze moved to app presentation state; existing daemon snoozes are dropped and those threads wake once.
+  const topLevelV2 = evolveTable(topLevelV1, {
+    drop: ["snoozed"],
+    extras: table => ({
+      constraints: [
+        foreignKey([table.thread_id, table.thread_kind], {
+          table: "workbench_thread_states", columns: ["thread_id", "thread_kind"], onDelete: "CASCADE",
+        }),
+        check(sql`${table.archived} = ${literal(0)} OR ${table.pinned} = ${literal(0)}`),
+      ],
+      indexes: [index("workbench_top_level_thread_states_visibility_idx", [table.archived, table.pinned, table.thread_id])],
+    }),
+  });
+  const topLevel = defineTableHistory({
+    current: topLevelV2,
+    versions: [
+      tableVersion({ schemaVersion, table: topLevelV1, migration: createTable(topLevelV1) }),
+      tableVersion({
+        schemaVersion: databaseReleases.appOwnedSnooze.version, table: topLevelV2,
+        migration: rebuildTable({ from: topLevelV1, to: topLevelV2 }),
+      }),
+    ],
+  });
 
   const subagents = install(defineTable("workbench_subagent_thread_states", {
     thread_id: text().primaryKey(),
@@ -288,6 +311,7 @@ export function defineThreadDomainSchema(schemaVersion: number) {
   const profileHistories = new Set<unknown>([profiles, projectProfiles]);
   const finalHistories = new Map(Object.entries(histories).map(([name, history]) => {
     if (history === importReceipt) return [name, retireTableHistory(history, databaseReleases.retireLegacyImportReceipts.version)];
+    if (history === snoozeDependencies) return [name, retireTableHistory(history, databaseReleases.appOwnedSnooze.version)];
     if (history === relationships) return [name, releaseSettledNames(ownProjectReferences(relationships))];
     const owned = "project_id" in history.current.columns ? ownProjectReferences<TableDefinition>(history) : history;
     return [name, profileHistories.has(history) ? addApprovalMode(owned) : owned];
@@ -295,7 +319,7 @@ export function defineThreadDomainSchema(schemaVersion: number) {
   return {
     tables: {
       states: states.current, topLevel: topLevel.current, subagents: subagents.current,
-      retention: retention.current, snoozeDependencies: snoozeDependencies.current,
+      retention: retention.current,
       profiles: finalHistories.get("profiles")!.current, projectProfiles: finalHistories.get("projectProfiles")!.current,
       drafts: drafts.current, attachments: attachments.current, parents: parents.current,
       relationships: finalHistories.get("relationships")!.current, relationshipMetadata: relationshipMetadata.current,

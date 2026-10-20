@@ -1,14 +1,13 @@
 /*
  * Exports:
- * - WorkbenchThreadSnoozeTarget/WorkbenchThreadStateRecord/WorkbenchThreadStateEntry: internal thread and dependent-snooze shapes.
+ * - WorkbenchThreadStateRecord/WorkbenchThreadStateEntry: internal thread shapes; snooze is app-owned, so records are never snoozed.
  * - StoredWorkbenchThreadStateRecordConformance: repaired record or validation failure.
  * - parseWorkbenchThreadStateEntry/safeParseWorkbenchThreadStateEntry: validate persisted and mutated entries.
  * - conformStoredWorkbenchThreadStateRecord: repair a stored record while preserving valid facts.
  * - projectWorkbenchThreadStateEntry: derive the public sidebar projection, reused per unchanged entry.
  */
 import { z } from "zod";
-import type { WorkbenchHarness } from "workbench-shared/types";
-import { ProjectIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { WorkbenchThreadIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import { currentThreadTitleName, previousThreadTitles, WorkbenchThreadTitleHistoryEntrySchema, type WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
@@ -32,18 +31,9 @@ export type WorkbenchThreadStateRecord = WorkbenchProviderThreadEntry & {
   profile: WorkbenchComposerProfileSelectionState | null;
   providerObserved: boolean;
   settledAt: number | null;
-  snoozedUntil: { targets: WorkbenchThreadSnoozeTarget[] } | null;
 };
 
 export type WorkbenchThreadStateEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> | WorkbenchThreadStateRecord;
-export interface WorkbenchThreadSnoozeTarget {
-  identity: {
-    harness: WorkbenchHarness;
-    threadId: WorkbenchThreadId;
-  };
-  projectId: ProjectId;
-  title: string;
-}
 
 export type StoredWorkbenchThreadStateRecordConformance =
   | { data: WorkbenchThreadStateRecord; repairedPaths: PropertyKey[][]; success: true }
@@ -53,29 +43,6 @@ const ThreadIdentitySchema = z.object({
   harness: WorkbenchHarnessSchema,
   threadId: WorkbenchThreadIdSchema,
 }).strip();
-const WorkbenchThreadSnoozeTargetSchema = z.object({
-  identity: ThreadIdentitySchema,
-  projectId: ProjectIdSchema,
-  title: z.string(),
-}).strict();
-
-function dependentSnooze(value: Record<string, unknown>): { targets: WorkbenchThreadSnoozeTarget[] } | null {
-  const stored = recordValue(value.snoozedUntil);
-  const candidates = Array.isArray(stored.targets) ? stored.targets
-    : value.snoozedUntil ? [value.snoozedUntil] : [];
-  const targets = new Map<string, WorkbenchThreadSnoozeTarget>();
-  for (const candidate of candidates) {
-    const raw = recordValue(candidate);
-    const identity = recordValue(raw.identity);
-    const parsed = WorkbenchThreadSnoozeTargetSchema.safeParse({
-      ...raw, title: raw.title ?? identity.threadId,
-    });
-    if (!parsed.success) continue;
-    const target = parsed.data;
-    targets.set(`${target.projectId}\0${target.identity.harness}\0${target.identity.threadId}`, target);
-  }
-  return targets.size ? { targets: [...targets.values()] } : null;
-}
 
 const StoredRecordLocatorSchema = z.discriminatedUnion("entryKind", [
   z.object({
@@ -114,11 +81,13 @@ function defaultThreadMetadata(value: unknown): Extract<WorkbenchThreadSidebarEn
   const metadata = recordValue(value);
   return metadata.archived === true
     ? { archived: true, pinned: false, snoozed: false }
-    : {
-      archived: false,
-      pinned: metadata.pinned === true,
-      snoozed: metadata.snoozed === true,
-    };
+    : { archived: false, pinned: metadata.pinned === true, snoozed: false };
+}
+
+/** Snooze is app-owned; a record carrying an older daemon's flag drops it. */
+function unsnoozed<Entry extends WorkbenchProviderThreadEntry>(record: Entry): Entry {
+  return record.entryKind === "thread" && record.metadata.snoozed
+    ? { ...record, metadata: { archived: false, pinned: record.metadata.pinned, snoozed: false } } : record;
 }
 
 function storedRecordDefaults(
@@ -159,7 +128,7 @@ function storedRecordDefaults(
 
 function internalFields(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null, snoozedUntil: null };
+    return { gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null };
   }
   const record = value as Record<string, unknown>;
   const profile = WorkbenchComposerProfileSelectionSchema.safeParse(record.profile);
@@ -177,18 +146,6 @@ function internalFields(value: unknown) {
     settledAt: typeof record.settledAt === "number" && Number.isFinite(record.settledAt) && record.settledAt >= 0
       ? Math.trunc(record.settledAt)
       : null,
-    snoozedUntil: dependentSnooze(record),
-  };
-}
-
-function repairClaimedSnooze(record: WorkbenchThreadStateRecord): WorkbenchThreadStateRecord {
-  if (record.entryKind !== "thread" || record.lifecycle.kind === "working"
-    || record.snoozedUntil?.targets.length
-    || !record.metadata.snoozed || !record.gitArc?.claimedPaths.length) return record;
-  return {
-    ...record,
-    metadata: { archived: false, pinned: record.metadata.pinned, snoozed: false },
-    snoozedUntil: null,
   };
 }
 
@@ -203,7 +160,7 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   if (parsed.data.entryKind === "draft") return { data: parsed.data, success: true };
   if (parsed.data.entryKind === "thread") {
     const { previousTitles: _previousTitles, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...persistent } = parsed.data;
-    return { data: repairClaimedSnooze({ ...persistent, ...internalFields(value) }), success: true };
+    return { data: { ...unsnoozed(persistent), ...internalFields(value) }, success: true };
   }
   const { previousTitles: _previousTitles, waitingFor: _waitingFor, ...persistent } = parsed.data;
   return { data: { ...persistent, ...internalFields(value) }, success: true };
@@ -240,17 +197,10 @@ export function conformStoredWorkbenchThreadStateRecord(
   const gitArc = persistent.gitArc?.acceptance
     ? (({ acceptance: _acceptance, ...arc }) => arc)(persistent.gitArc)
     : persistent.gitArc;
-  const record = { ...persistent, ...(gitArc !== undefined ? { gitArc } : {}), ...internalFields(value) };
-  const repaired = repairClaimedSnooze(record);
-  const repairedClaimedSnooze = repaired !== record;
+  const record = unsnoozed({ ...persistent, ...(gitArc !== undefined ? { gitArc } : {}) });
   return {
-    data: repaired,
-    repairedPaths: [
-      ...conformed.repairedPaths,
-      ...(repairedClaimedSnooze
-        ? [["metadata", "snoozed"], ...(record.snoozedUntil ? [["snoozedUntil"]] : [])]
-        : []),
-    ],
+    data: { ...record, ...internalFields(value) },
+    repairedPaths: conformed.repairedPaths,
     success: true,
   };
 }
@@ -270,12 +220,11 @@ export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntr
 }
 
 function projectRecord(entry: WorkbenchThreadStateRecord): WorkbenchThreadSidebarEntry {
-  const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil, ...projected } = entry;
+  const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, ...projected } = entry;
   // The recorded explicit title owns display; the stored title is only the provider display label.
   const displayTitle = currentThreadTitleName(titleHistory ?? []) ?? entry.title;
   return WorkbenchThreadSidebarEntrySchema.parse({
     ...projected, title: displayTitle, ...(entry.profile ? { profile: entry.profile } : {}),
     previousTitles: previousThreadTitles(titleHistory ?? [], displayTitle),
-    ...(entry.entryKind === "thread" ? { waitingOnThreads: snoozedUntil?.targets ?? [] } : {}),
   });
 }
