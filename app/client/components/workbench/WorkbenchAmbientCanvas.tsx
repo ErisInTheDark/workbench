@@ -71,6 +71,9 @@ export function getAmbientCanvasVariant(theme: WorkbenchTheme): WorkbenchAmbient
   return theme === "magical-girl" || theme === "winter" ? theme : null;
 }
 
+/** Theme colours are computed styles; reading them every frame forces a style recalc, so they refresh at this pace. */
+const COLOR_REFRESH_MS = 500;
+
 function getParticleCount(width: number, height: number, preset: AmbientPreset, density: AmbientDensity) {
   const count = Math.floor((width * height * density.countScale) / preset.countDivisor);
   return Math.min(density.maxCount ?? preset.maxCount, Math.max(density.minCount ?? preset.minCount, count));
@@ -135,7 +138,6 @@ function getParticleFrame(particle: Particle, timestamp: number, height: number,
 function drawSparkle(context: CanvasRenderingContext2D, color: string, frame: { opacity: number; x: number; y: number }, baseRadius: number) {
   const radius = baseRadius * (0.76 + frame.opacity * 0.75);
 
-  context.save();
   context.globalAlpha = frame.opacity;
   context.strokeStyle = color;
   context.lineWidth = 1.1;
@@ -150,11 +152,9 @@ function drawSparkle(context: CanvasRenderingContext2D, color: string, frame: { 
   context.arc(frame.x, frame.y, radius * 0.62, 0, Math.PI * 2);
   context.fillStyle = color;
   context.fill();
-  context.restore();
 }
 
 function drawSnow(context: CanvasRenderingContext2D, color: string, frame: { opacity: number; x: number; y: number }, radius: number) {
-  context.save();
   context.globalAlpha = frame.opacity;
   context.fillStyle = color;
   context.beginPath();
@@ -164,7 +164,6 @@ function drawSnow(context: CanvasRenderingContext2D, color: string, frame: { opa
   context.beginPath();
   context.arc(frame.x, frame.y, radius * 2.2, 0, Math.PI * 2);
   context.fill();
-  context.restore();
 }
 
 export default function WorkbenchAmbientCanvas({
@@ -191,6 +190,7 @@ export default function WorkbenchAmbientCanvas({
     let animationFrameId = 0;
     let particles: Particle[] = [];
     let colors = readCanvasColors(canvas, variant);
+    let colorsReadAt = window.performance.now();
     let width = 0;
     let height = 0;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -204,6 +204,7 @@ export default function WorkbenchAmbientCanvas({
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       colors = readCanvasColors(canvas, variant);
       const now = window.performance.now();
+      colorsReadAt = now;
       particles = Array.from({ length: getParticleCount(width, height, preset, density) }, () => (
         createParticle(width, height, colors.length, now, true, variant)
       ));
@@ -212,9 +213,13 @@ export default function WorkbenchAmbientCanvas({
     const renderFrame = (timestamp: number) => {
       animationFrameId = 0;
       context.clearRect(0, 0, width, height);
-      colors = readCanvasColors(canvas, variant);
+      if (timestamp - colorsReadAt >= COLOR_REFRESH_MS) {
+        colors = readCanvasColors(canvas, variant);
+        colorsReadAt = timestamp;
+      }
+      const moving = !reducedMotion.matches;
       for (let index = 0; index < particles.length; index += 1) {
-        if (!reducedMotion.matches && timestamp - particles[index]!.bornAt > particles[index]!.duration) {
+        if (moving && timestamp - particles[index]!.bornAt > particles[index]!.duration) {
           particles[index] = createParticle(width, height, colors.length, timestamp, false, variant);
         }
         const particle = particles[index]!;
@@ -224,7 +229,7 @@ export default function WorkbenchAmbientCanvas({
         else drawSparkle(context, color, frame, particle.radius);
       }
 
-      if (!reducedMotion.matches) {
+      if (moving) {
         animationFrameId = window.requestAnimationFrame(renderFrame);
       }
     };
