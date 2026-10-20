@@ -31,6 +31,8 @@
     margin: 0;
     color: var(--text);
     font-family: var(--font-sans);
+    /* Equal-width digits everywhere, so ticking counts and durations hold still in fonts with proportional figures. */
+    font-variant-numeric: tabular-nums;
   }
 
   @supports not (overflow: clip) {
