@@ -13,7 +13,6 @@ import {
   type ThreadCommandExecutionOutcome,
   type WorkbenchCommandRoute,
 } from "../../../workbench/thread/thread-command-matchers";
-import ThreadDurationText from "./ThreadDurationText";
 import ThreadStepRow from "./ThreadStepRow";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { getCommandIcon } from "./thread-activity-chips";
@@ -67,9 +66,9 @@ export default function ThreadMcpToolCallItem ({
       icon={<Icon size={16} />}
       meta={[
         // A live call already reads as ongoing in its summary; only settled non-success outcomes need naming.
-        item.status !== "completed" && item.status !== "inProgress" ? <ThreadSummaryText text={humanizeThreadLabel(item.status)} /> : null,
-        durationMs !== null ? <ThreadDurationText durationMs={durationMs} /> : null,
+        item.status !== "completed" && item.status !== "inProgress" ? <ThreadSummaryText key="status" text={humanizeThreadLabel(item.status)} /> : null,
       ]}
+      progress={{ durationMs, state: outcome }}
       summary={outcomeDisplay ? (
         <ThreadCommandSummary approval={approval} display={outcomeDisplay} line />
       ) : (

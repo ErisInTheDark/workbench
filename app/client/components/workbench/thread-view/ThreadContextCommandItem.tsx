@@ -28,13 +28,11 @@ import {
   BookSearchDashedIcon,
   BookSearchIcon,
 } from "../workbench-icons";
-import ThreadDurationText from "./ThreadDurationText";
 import ThreadStepRow from "./ThreadStepRow";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRecallOutput from "./ThreadRecallOutput";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { ThreadCommandSummary } from "./thread-view-primitives";
-import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 
 export interface ThreadContextCommandSource {
   cwd: string;
@@ -74,7 +72,6 @@ export default function ThreadContextCommandItem ({
   renderRecord: (record: WorkbenchThreadRecallOutputRecord, index: number) => ReactNode;
 }) {
   const project = useProject.contextual();
-  const visibleDurationMs = useThreadItemLiveDuration(source.durationMs, activeStartedAtMs);
   const markdown = source.output.trim();
   const outputSummary = summarizeWorkbenchThreadRecallOutput(markdown);
   const summaryDisplay = getThreadCommandOutcomeDisplay(
@@ -96,8 +93,8 @@ export default function ThreadContextCommandItem ({
       meta={[
         source.outcome === "failed" && source.exitCode !== null && source.exitCode !== 0
           ? <ThreadSummaryText key="exit" text={`exit ${source.exitCode}`} /> : null,
-        visibleDurationMs === null || visibleDurationMs === undefined ? null : <ThreadDurationText durationMs={visibleDurationMs} key="duration" />,
       ]}
+      progress={{ durationMs: source.durationMs, startedAtMs: activeStartedAtMs, state: source.outcome }}
       summary={<ThreadCommandSummary display={summaryDisplay} />}
     >
       <ThreadPreviewFrame

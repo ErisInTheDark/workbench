@@ -1,21 +1,24 @@
 /*
  * Exports:
- * - default ThreadSubagentCoordinationItem: render one qualifying subagent coordination disclosure.
+ * - default ThreadSubagentCoordinationItem: one subagent coordination exchange as a step line naming its participants,
+ *   opening onto the exchange.
  */
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
-import Disclosure from "../../ui/Disclosure";
 import { BotIcon } from "../workbench-icons";
-import ThreadDurationText from "./ThreadDurationText";
-import { useThreadLiveDuration } from "./use-thread-live-duration";
+import { ThreadInlineList } from "./ThreadAgentNameList";
+import ThreadStepRow from "./ThreadStepRow";
+import { stepLabel, stepLabels } from "./thread-step";
+
+const LABELS = stepLabels("Coordinating with", "Coordinated with", "Failed coordinating with");
 
 export default function ThreadSubagentCoordinationItem({
   active = false,
-  activeStartedAtMs,
+  activeStartedAtMs = null,
   children,
-  durationMs,
+  durationMs = null,
   participants,
 }: {
   active?: boolean;
@@ -24,37 +27,17 @@ export default function ThreadSubagentCoordinationItem({
   durationMs?: number | null;
   participants: Array<{ key: string; label: ReactNode }>;
 }) {
-  const visibleDurationMs = useThreadLiveDuration(durationMs, activeStartedAtMs);
+  const state = active ? "inProgress" : "completed";
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-1"
-      hideChevron
+    <ThreadStepRow
+      bodyInset={false}
+      icon={<BotIcon size={16} />}
       keepMounted
-      leading={<BotIcon size={16} />}
-      summary={(
-        <span>
-          {active ? "Coordinating with " : "Coordinated with "}
-          {participants.length ? participants.map((participant, index) => (
-            <Fragment key={participant.key}>
-              {index === 0
-                ? null
-                : index === participants.length - 1
-                  ? participants.length === 2 ? " and " : ", and "
-                  : ", "}
-              {participant.label}
-            </Fragment>
-          )) : "subagents"}
-          {visibleDurationMs !== null && visibleDurationMs !== undefined ? (
-            <span className="ml-2 text-[0.84em] text-fg/muted">
-              <ThreadDurationText durationMs={visibleDurationMs} />
-            </span>
-          ) : null}
-        </span>
-      )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+      label={stepLabel(LABELS, state)}
+      progress={{ durationMs, startedAtMs: activeStartedAtMs, state }}
+      subject={participants.length ? <ThreadInlineList items={participants} /> : "subagents"}
     >
       {children}
-    </Disclosure>
+    </ThreadStepRow>
   );
 }

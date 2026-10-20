@@ -66,15 +66,15 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
       isMostRecent={isMostRecent}
       itemTimeline={itemTimeline}
       renderers={{
-        code: (item) => <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />,
-        commands: (items) => items.map((item) => {
+        code: ({ item }) => <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />,
+        commands: ({ items }) => items.map((item) => {
           const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, { ...project?.matcherContext, cwd: project?.cwd }), turn.browseResultEntries);
           return browseSteps
             ? <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id} rows={browseSteps} />
             : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;
         }),
-        files: (items) => <ThreadFileChangeItem animateEntries={animateEntries} items={items} />,
-        reasoning: (item, isLastSegment) => (
+        files: ({ items }) => <ThreadFileChangeItem animateEntries={animateEntries} items={items} />,
+        reasoning: ({ item }, isLastSegment) => (
           <ThreadReasoningSequence block={{ items: [item], kind: "reasoningSequence" }} isMostRecent={isMostRecent && isLastSegment} />
         ),
         sleep: ({ durationMs, item }) => (
@@ -85,7 +85,7 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
             turnStatus={turn.status}
           />
         ),
-        webSearch: (items) => <ThreadWebSearchSequence items={items} />,
+        webSearch: ({ items }) => <ThreadWebSearchSequence items={items} />,
       }}
       turnLive={turn.status === "inProgress"}
     />

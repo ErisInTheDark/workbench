@@ -11,7 +11,8 @@ import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { getSubagentSummary } from "../../../workbench/thread/thread-subagents";
 import ThreadAgentScreenshotItem from "./ThreadAgentScreenshotItem";
-import Disclosure from "../../ui/Disclosure";
+import { FileTextIcon } from "../workbench-icons";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadIncomingAgentMessageItem from "./ThreadIncomingAgentMessageItem";
 import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadUserImage from "./ThreadUserImage";
@@ -37,17 +38,13 @@ export default function ThreadToolOutputItem({
   }
   const parts = typeof item.output === "string" ? [{ type: "input_text" as const, text: item.output }] : item.output;
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 space-y-2 pl-6"
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      summary={<>
-        <span>Context: </span>
-        <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{[item.namespace, item.name].filter(Boolean).join(".")}</span>
-      </>}
+    <ThreadStepRow
+      icon={<FileTextIcon size={16} />}
+      label="Context:"
       renderContent={() => parts.map((part, index) => part.type === "input_text"
         ? <MarkdownRender {...markdownProps} key={index} markdown={part.text} />
         : <ThreadUserImage key={index} alt="Tool output image" src={part.image_url} />)}
+      subject={[item.namespace, item.name].filter(Boolean).join(".")}
     />
   );
 }

@@ -2,3 +2,4 @@
 - Route shells may pass display state such as layout and navigation. They must not change thread actions, lifecycle, questionnaire, or Git arc behaviour.
 - Shared thread state is consumed through domain hooks, not drilled through display props or presentation context.
 - Streaming transcript text updates only the affected React leaf after item creation; structural and failure changes publish immediately.
+- Transcript steps draw their line through `ThreadStepRow` (or `ThreadCard`): tense from `stepLabels`, timing through `progress`. Run membership and grouping live in `RUN_SEGMENT_KINDS`.

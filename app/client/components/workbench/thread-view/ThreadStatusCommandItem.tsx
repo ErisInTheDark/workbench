@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - ThreadStatusCommandItem: render managed task status updates and actionable rejection reasons.
+ * - ThreadStatusCommandItem: a managed task status update as a step line in its status tone; a failure opens on its reason.
  */
 import { useContext } from "react";
 
@@ -8,6 +8,11 @@ import type { ThreadCommandExecutionOutcome, WorkbenchTaskStatusCommand } from "
 import { getNeedsAttentionThreadStatusTone, getWorkbenchThreadStatusClassName } from "../workbench-thread-status-colors";
 import { CompletedThreadIcon, NeedsAttentionThreadIcon, WarningIcon } from "../workbench-icons";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
+import ThreadStepRow from "./ThreadStepRow";
+import { isFailedStep, stepLabel, stepLabels } from "./thread-step";
+
+const COMPLETE_LABELS = stepLabels("Completing task", "Task completed", "Failed to complete task");
+const BLOCK_LABELS = stepLabels("Blocking task", "Task blocked", "Failed to block task");
 
 export default function ThreadStatusCommandItem({
   failureText,
@@ -20,15 +25,8 @@ export default function ThreadStatusCommandItem({
 }) {
   const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
   const completed = status === "completed";
-  const failed = outcome !== "completed" && outcome !== "inProgress";
+  const failed = isFailedStep(outcome);
   const Icon = failed ? WarningIcon : completed ? CompletedThreadIcon : NeedsAttentionThreadIcon;
-  const label = outcome === "completed"
-    ? completed ? "Task completed" : "Task blocked"
-    : outcome === "inProgress"
-      ? completed ? "Completing task" : "Blocking task"
-      : outcome === "timedOut" ? "Task status update timed out"
-        : outcome === "declined" ? "Task status update declined"
-          : completed ? "Could not complete task" : "Could not block task";
   const statusTone = completed
     ? "completed"
     : getNeedsAttentionThreadStatusTone(gitArcPresentation?.hasActiveGitArc === true);
@@ -36,12 +34,16 @@ export default function ThreadStatusCommandItem({
   const detail = failed ? failureText?.trim() : null;
 
   return (
-    <div className={`py-1.5 text-[0.92em] leading-[1.6] ${colorClassName}`} data-role="thread-status-command" data-thread-status-tone={failed ? "failed" : statusTone}>
-      <div className="flex items-center gap-2">
-        <Icon className="shrink-0" size={16} />
-        <span className="font-semibold">{label}</span>
-      </div>
-      {detail ? <p className="m-0 whitespace-pre-wrap pl-6 text-[0.86em] leading-[1.5]">{detail}</p> : null}
+    <div data-role="thread-status-command" data-thread-status-tone={failed ? "failed" : statusTone}>
+      <ThreadStepRow
+        defaultOpen={Boolean(detail)}
+        icon={<Icon size={16} />}
+        iconClassName={colorClassName}
+        progress={{ state: outcome }}
+        summary={<span className={`font-semibold ${colorClassName}`}>{stepLabel(completed ? COMPLETE_LABELS : BLOCK_LABELS, outcome)}</span>}
+      >
+        {detail ? <p className="m-0 whitespace-pre-wrap text-[0.86em] leading-[1.5] text-danger">{detail}</p> : null}
+      </ThreadStepRow>
     </div>
   );
 }

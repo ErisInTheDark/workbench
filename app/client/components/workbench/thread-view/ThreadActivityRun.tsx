@@ -11,12 +11,12 @@ import { getThreadItemTimelineDurationMs, type WorkbenchThreadItemTimelineEntry 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { LoaderIcon } from "../workbench-icons";
-import { getNativeFileChanges, isNativeFileOperation } from "../../../workbench/thread/thread-command-matchers";
+import { isNativeFileOperation } from "../../../workbench/thread/thread-command-matchers";
 import { parseSleepCommandMs } from "../../../workbench/thread/command-matchers/sleep-command";
 import { matchThreadGenericItem } from "../../../workbench/thread/thread-generic-item-matchers";
 import { getActivityChips, getCommandItemDisplay, type ActivityChip, type CommandChipContext } from "./thread-activity-chips";
 import { describeBrowseStep, getBrowseItemSteps, getCurrentBrowseStep } from "./thread-browse-steps";
-import type { ActivitySegment, CommandSequenceItem, ThreadRenderableBlock } from "./thread-render-blocks";
+import type { ActivitySegment, ThreadRenderableBlock } from "./thread-render-blocks";
 import { getThreadFileChangeEntries, ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ProjectFilePath from "../ProjectFilePath";
@@ -24,27 +24,24 @@ import { ThreadRowChromeContext } from "./thread-row-chrome";
 import { ThreadEntryAnimation } from "./ThreadRevealText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import useThreadActivityRun from "./use-thread-activity-run";
-import { getActivitySegmentItems } from "./thread-activity-runs";
+import {
+  getActivityRunPresentation, getActivitySegmentItems, getSettledActivitySegments, RUN_SEGMENT_KINDS,
+} from "./thread-activity-runs";
 import { useProject } from "../use-projects";
 import { useTranscript } from "../use-transcript";
 
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
-type FileItem = Extract<ActivitySegment, { kind: "files" }>["items"][number];
 const REASONING_SWAP_MS = 800;
 const FILE_VERBS = { add: "Creating", delete: "Deleting", update: "Editing" } as const;
 
-/** Each group's existing renderer draws its steps; the run owns only summary, status and layout. */
-export interface ThreadActivityRunRenderers {
-  code: (item: Extract<ActivitySegment, { kind: "code" }>["item"]) => ReactNode;
-  commands: (items: CommandSequenceItem[], isLastSegment: boolean) => ReactNode;
-  files: (items: FileItem[]) => ReactNode;
-  reasoning: (item: ReasoningItem, isLastSegment: boolean) => ReactNode;
-  sleep: (segment: Extract<ActivitySegment, { kind: "sleep" }>) => ReactNode;
-  webSearch: (items: Extract<ActivitySegment, { kind: "webSearch" }>["items"]) => ReactNode;
-}
+/** Each segment kind's existing renderer draws its steps; the run owns only summary, status and layout. */
+export type ThreadActivityRunRenderers = {
+  readonly [Kind in ActivitySegment["kind"]]: (segment: Extract<ActivitySegment, { kind: Kind }>, isLastSegment: boolean) => ReactNode;
+};
 
-function isRunning(item: ThreadItem) {
-  return "status" in item && item.status === "inProgress";
+function renderSegment(renderers: ThreadActivityRunRenderers, segment: ActivitySegment, isLast: boolean) {
+  // The renderer table is keyed by kind, so each renderer receives its own segment type.
+  return (renderers[segment.kind] as (segment: ActivitySegment, isLast: boolean) => ReactNode)(segment, isLast);
 }
 
 function firstSentence(text: string) {
@@ -69,38 +66,6 @@ function useThrottledSentence(sentence: string) {
     return () => window.clearTimeout(timer);
   }, [sentence, shown]);
   return shown;
-}
-
-const UNTINTED: ReadonlySet<ActivitySegment["kind"]> = new Set(["reasoning", "sleep"]);
-
-/** The run's steps without the ones still running. */
-function settledSegments(segments: readonly ActivitySegment[]): ActivitySegment[] {
-  return segments.flatMap((segment): ActivitySegment[] => {
-    switch (segment.kind) {
-      case "commands": {
-        const items = segment.items.filter(item => !isRunning(item));
-        return items.length ? [{ ...segment, items }] : [];
-      }
-      case "files": {
-        const items = segment.items.filter(item => !isRunning(item));
-        return items.length ? [{ ...segment, items }] : [];
-      }
-      case "webSearch": {
-        const items = segment.items.filter(item => !isRunning(item));
-        return items.length ? [{ ...segment, items }] : [];
-      }
-      default: return isRunning(segment.item) ? [] : [segment];
-    }
-  });
-}
-
-/** File operations on one path stitch into one row (a retried edit is one step), so files count by path. */
-function countVisibleSteps(segments: readonly ActivitySegment[]) {
-  return segments.reduce((count, segment) => count + (segment.kind === "files"
-    ? new Set(segment.items.flatMap(item => item.type === "fileChange"
-      ? item.changes.map(change => change.path)
-      : getNativeFileChanges(item).map(({ change }) => change.path))).size
-    : getActivitySegmentItems(segment).length), 0);
 }
 
 function ChipRow({ chips }: { chips: ActivityChip[] }) {
@@ -179,9 +144,10 @@ export default function ThreadActivityRun({
   const run = useThreadActivityRun(block.items[0]?.id ?? "");
   const lastItem = block.items.at(-1);
   // Reasoning has no lifecycle of its own; it is current while nothing has followed it in a live turn.
-  const current = lastItem && (isRunning(lastItem) || (lastItem.type === "reasoning" && turnLive && isMostRecent)) ? lastItem : null;
+  const running = lastItem && "status" in lastItem && lastItem.status === "inProgress";
+  const current = lastItem && (running || (lastItem.type === "reasoning" && turnLive && isMostRecent)) ? lastItem : null;
   // The summary counts what has happened; a step still running shows as the status line instead.
-  const chips = getActivityChips(settledSegments(block.segments), context);
+  const chips = getActivityChips(getSettledActivitySegments(block.segments), context);
   const settledDurationMs = getThreadItemTimelineDurationMs(block.items.map(item => item.id), itemTimeline);
   const startedAtMs = block.items.flatMap(item => {
     const entry = itemTimeline?.find(candidate => candidate.itemId === item.id);
@@ -196,30 +162,18 @@ export default function ThreadActivityRun({
     : live ? <span className={shimmerTextClassName}>Thinking</span> : null;
   const steps = block.segments.map((segment, index) => {
     const previous = block.segments[index - 1];
-    // Adjacent action groups sit tight; untinted steps (reasoning, sleeps) get breathing room either side.
-    const gap = !previous ? "" : !UNTINTED.has(segment.kind) && !UNTINTED.has(previous.kind) ? "mt-0.5" : "mt-2";
-    const key = getActivitySegmentItems(segment)[0]?.id ?? index;
-    const last = index === block.segments.length - 1;
-    switch (segment.kind) {
-      case "reasoning": return <div className={gap} key={key}>{renderers.reasoning(segment.item, last)}</div>;
-      case "commands": return (
-        <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>
-          <ThreadRowChromeContext.Provider value="step">{renderers.commands(segment.items, last)}</ThreadRowChromeContext.Provider>
-        </div>
-      );
-      case "code": return <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>{renderers.code(segment.item)}</div>;
-      case "files": return <div className={gap} key={key}>{renderers.files(segment.items)}</div>;
-      case "sleep": return <div className={gap} key={key}>{renderers.sleep(segment)}</div>;
-      case "webSearch": return <div className={gap} key={key}>{renderers.webSearch(segment.items)}</div>;
-    }
+    const kind = RUN_SEGMENT_KINDS[segment.kind];
+    // Adjacent action groups sit tight; prose-like steps get breathing room either side.
+    const gap = !previous ? "" : !kind.prose && !RUN_SEGMENT_KINDS[previous.kind].prose ? "mt-0.5" : "mt-2";
+    const content = renderSegment(renderers, segment, index === block.segments.length - 1);
+    return (
+      <div className={kind.tinted ? `rounded-lg bg-fg/4 px-3 ${gap}` : gap} key={getActivitySegmentItems(segment)[0]?.id ?? index}>
+        {kind.tinted ? <ThreadRowChromeContext.Provider value="step">{content}</ThreadRowChromeContext.Provider> : content}
+      </div>
+    );
   });
 
-  // A run that settled holding one step is just that step; the card only earns its place summarising several.
-  // A lone sleep is its own live countdown, so it shows bare even while it runs.
-  const lone = countVisibleSteps(block.segments) === 1;
-  if (lone && (!live || block.segments[0]?.kind === "sleep")) {
-    return <div className="my-1.5">{steps}</div>;
-  }
+  if (getActivityRunPresentation(block.segments, live) === "bare") return <div className="my-1.5">{steps}</div>;
 
   return (
     <div className="my-1.5" data-thread-activity-run="true">

@@ -6,24 +6,22 @@
 
 import { useId, useState, type ReactNode } from "react";
 
-import type { WorkbenchSubagentSummary } from "workbench-shared/types";
-import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import type { ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 
 import ThreadAgentName from "./ThreadAgentName";
+import ThreadAgentNameList, { type ThreadAgentNameListEntry } from "./ThreadAgentNameList";
 import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import { GitArcWaitIcon } from "../workbench-icons";
+import { stepLabel, stepLabels } from "./thread-step";
 
-interface ThreadSubagentWaitEntry {
+const WAIT_LABELS = stepLabels("Waiting for", "Waited for", "Failed waiting for");
+
+interface ThreadSubagentWaitEntry extends ThreadAgentNameListEntry {
   content?: ReactNode;
-  fallbackName?: string | null;
-  subagent?: WorkbenchSubagentSummary | null;
-  targetKey: string;
-  thread?: RelatedThread | null;
 }
 
 export default function ThreadSubagentWaitItem ({
@@ -54,24 +52,8 @@ export default function ThreadSubagentWaitItem ({
   const tabbed = multiplexed && active && !disclosureContent;
   const namedSummary = (
     <span className={tabbed ? "[details[open]>summary_&]:hidden" : undefined}>
-      {outcome === "inProgress" ? "Waiting for "
-        : outcome === "timedOut" ? "Timed out waiting for "
-        : outcome === "failed" ? "Failed waiting for "
-        : outcome === "declined" ? "Declined waiting for "
-        : "Waited for "}
-      {entries.map((entry, index) => (
-        <span key={`${entry.targetKey}:${index}`}>
-          {index === 0
-            ? null
-            : index === entries.length - 1
-              ? entries.length === 2 ? " and " : ", and "
-              : ", "}
-          <ThreadAgentName
-            subagent={entry.subagent}
-            thread={entry.thread ?? (entry.fallbackName ? { agentNickname: entry.fallbackName, agentRole: null } : null)}
-          />
-        </span>
-      ))}
+      {stepLabel(WAIT_LABELS, outcome)}{" "}
+      <ThreadAgentNameList entries={entries} />
     </span>
   );
   const summary = (

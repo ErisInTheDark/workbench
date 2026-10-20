@@ -9,9 +9,9 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type { WorkbenchProjectedGenericItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { matchThreadGenericItem } from "../../../workbench/thread/thread-generic-item-matchers";
-import Disclosure from "../../ui/Disclosure";
+import { CodeIcon } from "../workbench-icons";
 import ThreadSleepItem from "./ThreadSleepItem";
-import ThreadSummaryText from "./ThreadSummaryText";
+import ThreadStepRow from "./ThreadStepRow";
 import { ThreadVisSnapshotRow } from "./ThreadVisCommandItem";
 
 export default function ThreadGenericItem({
@@ -36,15 +36,13 @@ export default function ThreadGenericItem({
       return <ThreadVisSnapshotRow durationMs={null} path={match.path} sessionId={match.sessionId} snapshotKind="end" threadId={threadId} />;
   }
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
-      summary={<ThreadSummaryText text="generic thread item" />}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+    <ThreadStepRow
+      icon={<CodeIcon size={16} />}
+      label={source.nativeType}
       renderContent={() => (
-      <pre className="m-0 max-w-full overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
-        {JSON.stringify(source.safeValue, null, 2)}
-      </pre>
+        <pre className="m-0 max-w-full overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
+          {JSON.stringify(source.safeValue, null, 2)}
+        </pre>
       )}
     />
   );

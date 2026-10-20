@@ -16,15 +16,15 @@ import { parseGitArcStatus, type GitArcStatusPresentation } from "workbench-shar
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import type { GitArcEditStep } from "../../../workbench/thread/command-matchers/workbench-command-rendering";
 import type { ThreadClaimMarker } from "./ThreadClaimedFileList";
+import { stepLabel, stepLabels, type StepLabels, type StepState } from "./thread-step";
 import {
   createThreadGitArcEditSummaryRows,
   createThreadGitArcStatusCounts,
   type ThreadGitArcCollapsedSummaryContent,
 } from "./ThreadGitArcCollapsedSummary";
 
-export type GitArcCardState = "completed" | "failed" | "inProgress" | "interrupted" | "timedOut";
-type Phase = Exclude<GitArcCardState, "interrupted">;
-type Labels = Record<Phase, string>;
+/** Declined Git arc calls read as failures: the arc did not change. */
+export type GitArcCardState = Exclude<StepState, "declined">;
 
 /**
  * How a card draws outside a run: one line opening into its flat body, or a line that also previews its result while
@@ -75,45 +75,43 @@ export interface GitArcCard {
   conflictedPaths: readonly string[];
 }
 
-const labels = (completed: string, failed: string, inProgress: string, timedOut: string): Labels => ({ completed, failed, inProgress, timedOut });
-
-const ACTION_LABELS: Record<GitArcCommandAction, Labels> = {
-  adopt: labels("Adopted claims", "Failed to adopt claims", "Adopting claims", "Timed out adopting claims"),
-  claims: labels("Updated claims", "Failed to update claims", "Updating claims", "Timed out updating claims"),
-  compare: labels("Compared", "Failed to compare", "Comparing", "Timed out comparing"),
-  continue: labels("Continued", "Failed to continue", "Continuing", "Timed out continuing"),
-  diff: labels("Diffed", "Failed to diff", "Diffing", "Timed out diffing"),
-  edit: labels("Edited", "Failed to edit", "Editing", "Timed out editing"),
-  plan: labels("Planned", "Failed to plan", "Planning", "Timed out planning"),
-  planStart: labels("Started", "Failed to create and start", "Creating and starting", "Timed out creating and starting"),
-  propose: labels("Proposed", "Failed to propose", "Proposing", "Timed out proposing"),
-  release: labels("Released", "Failed to release", "Releasing", "Timed out releasing"),
-  rescind: labels("Rescinded", "Failed to rescind", "Rescinding", "Timed out rescinding"),
-  restore: labels("Restored", "Failed to restore", "Restoring", "Timed out restoring"),
-  scope: labels("Read scope", "Failed to read scope", "Reading scope", "Timed out reading scope"),
-  stack: labels("Stacked", "Failed to stack", "Stacking", "Timed out stacking"),
-  start: labels("Started", "Failed to start", "Starting", "Timed out starting"),
-  stash: labels("Stashed", "Failed to stash", "Stashing", "Timed out stashing"),
-  status: labels("Status", "Failed to read status", "Reading status", "Timed out reading status"),
-  unknown: labels("Ran unrecognised action on", "Failed to run action on", "Running action on", "Timed out running action on"),
-  unstack: labels("Unstacked", "Failed to unstack", "Unstacking", "Timed out unstacking"),
-  unstash: labels("Unstashed", "Failed to unstash", "Unstashing", "Timed out unstashing"),
+const ACTION_LABELS: Record<GitArcCommandAction, StepLabels> = {
+  adopt: stepLabels("Adopting claims", "Adopted claims", "Failed to adopt claims"),
+  claims: stepLabels("Updating claims", "Updated claims", "Failed to update claims"),
+  compare: stepLabels("Comparing", "Compared", "Failed to compare"),
+  continue: stepLabels("Continuing", "Continued", "Failed to continue"),
+  diff: stepLabels("Diffing", "Diffed", "Failed to diff"),
+  edit: stepLabels("Editing", "Edited", "Failed to edit"),
+  plan: stepLabels("Planning", "Planned", "Failed to plan"),
+  planStart: stepLabels("Creating and starting", "Started", "Failed to create and start"),
+  propose: stepLabels("Proposing", "Proposed", "Failed to propose"),
+  release: stepLabels("Releasing", "Released", "Failed to release"),
+  rescind: stepLabels("Rescinding", "Rescinded", "Failed to rescind"),
+  restore: stepLabels("Restoring", "Restored", "Failed to restore"),
+  scope: stepLabels("Reading scope", "Read scope", "Failed to read scope"),
+  stack: stepLabels("Stacking", "Stacked", "Failed to stack"),
+  start: stepLabels("Starting", "Started", "Failed to start"),
+  stash: stepLabels("Stashing", "Stashed", "Failed to stash"),
+  status: stepLabels("Reading status", "Status", "Failed to read status"),
+  unknown: stepLabels("Running action on", "Ran unrecognised action on", "Failed to run action on"),
+  unstack: stepLabels("Unstacking", "Unstacked", "Failed to unstack"),
+  unstash: stepLabels("Unstashing", "Unstashed", "Failed to unstash"),
 };
 
-const EDIT_STEP_LABELS: Record<GitArcEditStep, Labels> = {
-  apply: labels("Applied edit", "Failed to apply edit", "Applying edit", "Timed out applying edit"),
-  end: labels("Ended edit", "Failed to end edit", "Ending edit", "Timed out ending edit"),
-  revert: labels("Reverted edit", "Failed to revert edit", "Reverting edit", "Timed out reverting edit"),
-  start: labels("Previewed edit", "Failed to preview edit", "Previewing edit", "Timed out previewing edit"),
-  view: labels("Viewed edit", "Failed to view edit", "Viewing edit", "Timed out viewing edit"),
+const EDIT_STEP_LABELS: Record<GitArcEditStep, StepLabels> = {
+  apply: stepLabels("Applying edit", "Applied edit", "Failed to apply edit"),
+  end: stepLabels("Ending edit", "Ended edit", "Failed to end edit"),
+  revert: stepLabels("Reverting edit", "Reverted edit", "Failed to revert edit"),
+  start: stepLabels("Previewing edit", "Previewed edit", "Failed to preview edit"),
+  view: stepLabels("Viewing edit", "Viewed edit", "Failed to view edit"),
 };
 
-const TRANSFER_LABELS = labels("Transferred claims to", "Failed to transfer claims to", "Transferring claims to", "Timed out transferring claims to");
-const DISOWN_LABELS = labels("Disowned", "Failed to disown", "Disowning", "Timed out disowning");
-const PLAN_AND_ADOPT_LABELS = labels("Planned and adopted changes", "Failed to plan and adopt changes", "Planning and adopting changes", "Timed out planning and adopting changes");
-const ADOPT_INTO_PLAN_LABELS = labels("Adopted changes into plan", "Failed to adopt changes", "Adopting changes into plan", "Timed out adopting changes");
-const START_WITH_ADOPTED_LABELS = labels("Started with adopted changes", "Failed to adopt changes and start", "Adopting changes and starting", "Timed out adopting changes and starting");
-const ADOPT_AND_START_LABELS = labels("Adopted changes and started", "Failed to adopt and start", "Adopting changes and starting", "Timed out adopting changes and starting");
+const TRANSFER_LABELS = stepLabels("Transferring claims to", "Transferred claims to", "Failed to transfer claims to");
+const DISOWN_LABELS = stepLabels("Disowning", "Disowned", "Failed to disown");
+const PLAN_AND_ADOPT_LABELS = stepLabels("Planning and adopting changes", "Planned and adopted changes", "Failed to plan and adopt changes");
+const ADOPT_INTO_PLAN_LABELS = stepLabels("Adopting changes into plan", "Adopted changes into plan", "Failed to adopt changes");
+const START_WITH_ADOPTED_LABELS = stepLabels("Adopting changes and starting", "Started with adopted changes", "Failed to adopt changes and start");
+const ADOPT_AND_START_LABELS = stepLabels("Adopting changes and starting", "Adopted changes and started", "Failed to adopt and start");
 
 const CARD_STYLES: Record<GitArcCommandAction, Exclude<GitArcCardStyle, "step">> = {
   adopt: "card", claims: "card", compare: "card", continue: "card", diff: "card", edit: "cardPreview", plan: "card",
@@ -140,11 +138,12 @@ const SCOPE_UPDATES: ReadonlySet<GitArcCommandAction> = new Set(["claims", "plan
 /** Actions that claim files, so a failure names the files it could not claim. */
 const CLAIMING: ReadonlySet<GitArcCommandAction> = new Set(["claims", "continue", "plan", "planStart", "start"]);
 
-function phase(outcome: ThreadCommandExecutionOutcome): Phase {
+function cardState(outcome: ThreadCommandExecutionOutcome, interrupted: boolean): GitArcCardState {
+  if (interrupted) return "interrupted";
   return outcome === "completed" || outcome === "inProgress" || outcome === "timedOut" ? outcome : "failed";
 }
 
-function labelsFor(intent: GitArcCommandIntent, adoptOnly: boolean, adoptWithSelected: boolean): Labels {
+function labelsFor(intent: GitArcCommandIntent, adoptOnly: boolean, adoptWithSelected: boolean): StepLabels {
   if (intent.action === "edit" && intent.editStep) return EDIT_STEP_LABELS[intent.editStep];
   if (intent.action === "release" && intent.toSubagent) return TRANSFER_LABELS;
   if (intent.action === "release" && intent.disown) return DISOWN_LABELS;
@@ -223,7 +222,7 @@ export function buildGitArcCard(input: {
 }): GitArcCard {
   const { editResult, intent, receipt } = input;
   const { action } = intent;
-  const state: GitArcCardState = input.interruptedBySteer ? "interrupted" : phase(input.outcome);
+  const state = cardState(input.outcome, input.interruptedBySteer);
   const failed = state === "failed" || state === "timedOut";
 
   const failure = input.interruptedBySteer ? null : input.typedFailure
@@ -233,7 +232,7 @@ export function buildGitArcCard(input: {
   const adoptPaths = intent.adoptPaths ?? [];
   const selected = receipt?.selectedPaths ?? intent.paths;
   const ordinarySelected = selected.filter(path => !adoptPaths.includes(path));
-  const phaseLabels = labelsFor(intent, adoptPaths.length > 0 && !ordinarySelected.length, adoptPaths.length > 0 && ordinarySelected.length > 0);
+  const stateLabels = labelsFor(intent, adoptPaths.length > 0 && !ordinarySelected.length, adoptPaths.length > 0 && ordinarySelected.length > 0);
 
   const stackAction = action === "stack" || action === "unstack";
   const plannedRef = failure?.code === "planDrift" ? failure.planRef : intent.ref;
@@ -312,7 +311,7 @@ export function buildGitArcCard(input: {
     action,
     state,
     style,
-    label: state === "interrupted" ? "Interrupted by your steer" : phaseLabels[state],
+    label: stepLabel(stateLabels, state),
     transferTarget: transfer,
     subject: action === "rescind" || action === "status" || action === "scope" || releasedCount !== null ? null : subjectName,
     releasedCount,

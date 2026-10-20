@@ -6,7 +6,9 @@ import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
-import { buildActivityRuns, getActivitySegmentItems } from "./thread-activity-runs";
+import {
+  buildActivityRuns, getActivityRunPresentation, getActivitySegmentItems, getSettledActivitySegments,
+} from "./thread-activity-runs";
 import { buildRenderableBlocks, getRenderableBlockItems, type CommandItem, type ThreadRenderableBlock } from "./thread-render-blocks";
 
 function command(id: string, text = "pwd"): CommandItem {
@@ -124,6 +126,31 @@ test("sleeps join runs as their own untinted steps, splitting the command group 
   assert.deepEqual(shape([command("before"), command("nap", "Start-Sleep -Seconds 120"), command("after")]), [
     ["run", [["commands", ["before"]], ["sleep", ["nap"]], ["commands", ["after"]]]],
   ]);
+});
+
+/** The one run the items build. */
+function runOf(items: ThreadItem[]) {
+  const run = buildActivityRuns(buildRenderableBlocks(items)).find(block => block.kind === "activityRun");
+  if (run?.kind !== "activityRun") throw new Error("Expected one activity run.");
+  return run;
+}
+const running = (id: string, text: string): ThreadItem => ({ ...command(id, text), durationMs: null, exitCode: null, status: "inProgress" });
+const failedEdit = (id: string): ThreadItem => ({ id, type: "dynamicToolCall", namespace: "claude", tool: "Edit",
+  arguments: { file_path: "C:/repo/a.ts" }, status: "failed", success: false, contentItems: null, durationMs: 1 });
+
+test("a run is a card summarising several steps, and otherwise its one step", () => {
+  assert.equal(getActivityRunPresentation(runOf([reasoning("lone")]).segments, false), "bare");
+  assert.equal(getActivityRunPresentation(runOf([reasoning("first"), command("run")]).segments, false), "card");
+  // Retries of one file stitch into one row, so they are one step.
+  assert.equal(getActivityRunPresentation(runOf([failedEdit("one"), failedEdit("two"), failedEdit("three")]).segments, false), "bare");
+  // A live run keeps its card so its status row never jumps, except a lone sleep, which is its own countdown.
+  assert.equal(getActivityRunPresentation(runOf([reasoning("thinking")]).segments, true), "card");
+  assert.equal(getActivityRunPresentation(runOf([running("nap", "Start-Sleep -Seconds 120")]).segments, true), "bare");
+});
+
+test("a run's summary counts only finished steps", () => {
+  const settled = getSettledActivitySegments(runOf([command("done"), running("busy", "node build.js")]).segments);
+  assert.deepEqual(settled.flatMap(segment => getActivitySegmentItems(segment).map(item => item.id)), ["done"]);
 });
 
 test("reasoning with nothing to show adds no step, and a run of only that renders nothing", () => {

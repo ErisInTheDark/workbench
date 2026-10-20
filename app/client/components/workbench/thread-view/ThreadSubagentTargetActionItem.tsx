@@ -1,23 +1,19 @@
 /*
  * Exports:
- * - default ThreadSubagentTargetActionItem: render active or successful stop/settle commands with one or many durable person
- *   identities. Keywords: workbench, thread, subagent, stop, settle, target, identity.
+ * - default ThreadSubagentTargetActionItem: an active or successful stop/settle command as one step line naming its
+ *   subagents in their identity colours. Keywords: workbench, thread, subagent, stop, settle, target, identity.
  */
 "use client";
 
-import type { WorkbenchSubagentSummary } from "workbench-shared/types";
-import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
-
-import ThreadAgentName from "./ThreadAgentName";
-import Disclosure from "../../ui/Disclosure";
 import { BotIcon } from "../workbench-icons";
+import ThreadAgentNameList, { type ThreadAgentNameListEntry } from "./ThreadAgentNameList";
+import ThreadStepRow from "./ThreadStepRow";
+import { stepLabel, stepLabels } from "./thread-step";
 
-interface ThreadSubagentTargetActionEntry {
-  fallbackName?: string | null;
-  subagent?: WorkbenchSubagentSummary | null;
-  targetKey: string;
-  thread?: RelatedThread | null;
-}
+const LABELS = {
+  settle: stepLabels("Settling", "Settled", "Failed to settle"),
+  stop: stepLabels("Stopping", "Stopped", "Failed to stop"),
+} as const;
 
 export default function ThreadSubagentTargetActionItem ({
   action,
@@ -26,39 +22,15 @@ export default function ThreadSubagentTargetActionItem ({
 }: {
   action: "settle" | "stop";
   active: boolean;
-  entries: ThreadSubagentTargetActionEntry[];
+  entries: readonly ThreadAgentNameListEntry[];
 }) {
-  const verb = action === "settle"
-    ? active ? "Settling " : "Settled "
-    : active ? "Stopping " : "Stopped ";
-  const summary = (
-    <span>
-      {verb}
-      {entries.map((entry, index) => (
-        <span key={`${entry.targetKey}:${index}`}>
-          {index === 0
-            ? null
-            : index === entries.length - 1
-              ? entries.length === 2 ? " and " : ", and "
-              : ", "}
-          <ThreadAgentName
-            subagent={entry.subagent}
-            thread={entry.thread ?? (entry.fallbackName ? { agentNickname: entry.fallbackName, agentRole: null } : null)}
-          />
-        </span>
-      ))}
-    </span>
-  );
+  const state = active ? "inProgress" : "completed";
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
-      hideChevron
-      leading={<BotIcon size={16} />}
-      summary={summary}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    >
-      <></>
-    </Disclosure>
+    <ThreadStepRow
+      icon={<BotIcon size={16} />}
+      label={stepLabel(LABELS[action], state)}
+      progress={{ state }}
+      subject={<ThreadAgentNameList entries={entries} />}
+    />
   );
 }

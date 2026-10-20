@@ -2,11 +2,15 @@
  * Exports:
  * - buildActivityRuns: fold consecutive reasoning, plain commands (Browse included), sleeps, file changes, web searches and
  *   code-mode executions into activity runs; screenshot steers a Browse step already shows fold away; every other block stays a boundary.
+ * - RUN_SEGMENT_KINDS: every run step kind's merge, prose and tint rules, in one table.
+ * - getSettledActivitySegments: a run's steps without the running ones, for its summary.
+ * - getActivityRunPresentation: whether a run shows as a card or as its one step.
  * - getActivitySegmentItems: the items one run segment shows.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getAgentScreenshotSteerImages, isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { matchThreadGenericItem } from "../../../workbench/thread/thread-generic-item-matchers";
+import { getNativeFileChanges } from "../../../workbench/thread/thread-command-matchers";
 import {
   buildCommandSequenceRenderSegments,
   isRunStepSegment,
@@ -75,12 +79,59 @@ function toPieces(block: ThreadRenderableBlock, context: CommandContext): Piece[
 }
 
 function isRunPiece(piece: Piece): piece is ActivitySegment | HiddenMember {
-  return piece.kind === "reasoning" || piece.kind === "code" || piece.kind === "commands" || piece.kind === "files"
-    || piece.kind === "sleep" || piece.kind === "webSearch" || piece.kind === "hidden";
+  return piece.kind === "hidden" || Object.hasOwn(RUN_SEGMENT_KINDS, piece.kind);
+}
+
+/**
+ * Every run step kind in one place. `merges`: adjacent pieces of the kind share one segment (commands one group, file
+ * changes one list, searches one row). `tinted`: the segment sits in a tinted group whose rows are steps. `prose`: it
+ * reads like the agent's own words (reasoning, sleeps), so it gets breathing room where action groups sit tight.
+ * A new kind adds its entry here and its renderer in the run.
+ */
+export const RUN_SEGMENT_KINDS: {
+  readonly [Kind in ActivitySegment["kind"]]: { readonly merges: boolean; readonly prose: boolean; readonly tinted: boolean };
+} = {
+  code: { merges: false, prose: false, tinted: true },
+  commands: { merges: true, prose: false, tinted: true },
+  files: { merges: true, prose: false, tinted: false },
+  reasoning: { merges: false, prose: true, tinted: false },
+  sleep: { merges: false, prose: true, tinted: false },
+  webSearch: { merges: true, prose: false, tinted: false },
+};
+
+function isRunning(item: ThreadItem) {
+  return "status" in item && item.status === "inProgress";
+}
+
+/** The run's steps without the ones still running, for a summary that counts only what has happened. */
+export function getSettledActivitySegments(segments: readonly ActivitySegment[]): ActivitySegment[] {
+  return segments.flatMap((segment): ActivitySegment[] => {
+    if (!("items" in segment)) return isRunning(segment.item) ? [] : [segment];
+    const items = segment.items.filter(item => !isRunning(item));
+    return items.length ? [{ ...segment, items } as ActivitySegment] : [];
+  });
+}
+
+/** File operations on one path stitch into one row (a retried edit is one step), so files count by path. */
+function countVisibleSteps(segments: readonly ActivitySegment[]) {
+  return segments.reduce((count, segment) => count + (segment.kind === "files"
+    ? new Set(segment.items.flatMap(item => item.type === "fileChange"
+      ? item.changes.map(change => change.path)
+      : getNativeFileChanges(item).map(({ change }) => change.path))).size
+    : getActivitySegmentItems(segment).length), 0);
+}
+
+/**
+ * A run is a card summarising several steps. Settled with one step it is just that step; a lone sleep is its own live
+ * countdown, so it shows bare even while it runs.
+ */
+export function getActivityRunPresentation(segments: readonly ActivitySegment[], live: boolean): "bare" | "card" {
+  if (countVisibleSteps(segments) !== 1) return "card";
+  return !live || segments[0]?.kind === "sleep" ? "bare" : "card";
 }
 
 export function getActivitySegmentItems(segment: ActivitySegment): ThreadItem[] {
-  return segment.kind === "reasoning" || segment.kind === "code" || segment.kind === "sleep" ? [segment.item] : segment.items;
+  return "items" in segment ? segment.items : [segment.item];
 }
 
 export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], context: CommandContext = {}): ThreadRenderableBlock[] {
@@ -108,22 +159,16 @@ export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], cont
   return result.filter(block => block.kind !== "activityRun" || block.segments.length > 0);
 }
 
-/** Adjacent commands share one group, adjacent file changes one list, adjacent searches one row; reasoning and code steps stay apart. */
+type ListSegment = Extract<ActivitySegment, { items: readonly unknown[] }>;
+
 function appendToPrevious(previous: ActivitySegment | undefined, piece: ActivitySegment) {
-  if (previous?.kind === "commands" && piece.kind === "commands") previous.items.push(...piece.items);
-  else if (previous?.kind === "files" && piece.kind === "files") previous.items.push(...piece.items);
-  else if (previous?.kind === "webSearch" && piece.kind === "webSearch") previous.items.push(...piece.items);
-  else return false;
+  if (!previous || previous.kind !== piece.kind || !RUN_SEGMENT_KINDS[piece.kind].merges || !("items" in previous) || !("items" in piece)) return false;
+  // Same kind, so the item lists hold the same item type.
+  (previous.items as ListSegment["items"][number][]).push(...piece.items);
   return true;
 }
 
+/** Runs own their segments' lists, so merging never mutates a block's. */
 function copySegment(segment: ActivitySegment): ActivitySegment {
-  switch (segment.kind) {
-    case "reasoning":
-    case "code":
-    case "sleep": return segment;
-    case "commands": return { items: [...segment.items], kind: "commands" };
-    case "files": return { items: [...segment.items], kind: "files" };
-    case "webSearch": return { items: [...segment.items], kind: "webSearch" };
-  }
+  return "items" in segment ? { ...segment, items: [...segment.items] } as ActivitySegment : segment;
 }

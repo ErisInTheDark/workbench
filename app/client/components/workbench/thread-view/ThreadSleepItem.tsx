@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadSleepItem: render a sleep countdown using existing item lifecycle timing.
+ * - default ThreadSleepItem: a sleep as one step line counting down using existing item lifecycle timing.
  */
 "use client";
 
@@ -9,8 +9,10 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { getSleepDisplay } from "../../../workbench/thread/generic-item-matchers/sleep";
 import { SnoozedThreadIcon } from "../workbench-icons";
-import { DisclosureStaticRow } from "../../ui/Disclosure";
-import ThreadSummaryText from "./ThreadSummaryText";
+import ThreadStepRow from "./ThreadStepRow";
+import { stepLabel, stepLabels } from "./thread-step";
+
+const LABELS = stepLabels("Sleeping for", "Slept for", "Failed to sleep for");
 
 export default function ThreadSleepItem({
   durationMs,
@@ -38,10 +40,10 @@ export default function ThreadSleepItem({
   }, [display.ticking, startedAt]);
 
   return (
-    <DisclosureStaticRow
-      marker={<SnoozedThreadIcon size={16} />}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      summary={<ThreadSummaryText text={`${display.completed ? "Slept" : "Sleeping"} for ${display.seconds}s`} />}
+    <ThreadStepRow
+      icon={<SnoozedThreadIcon size={16} />}
+      label={stepLabel(LABELS, display.completed ? "completed" : "inProgress")}
+      subject={`${display.seconds}s`}
     />
   );
 }

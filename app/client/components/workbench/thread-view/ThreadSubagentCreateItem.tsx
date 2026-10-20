@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadSubagentCreateItem: render subagent creation as a standalone disclosure or, inside a coordination
- *   exchange, a first message to the new subagent.
+ * - default ThreadSubagentCreateItem: subagent creation as a step line opening onto its instructions or, inside a
+ *   coordination exchange, a first message to the new subagent.
  */
 "use client";
 
@@ -11,10 +11,13 @@ import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 
 import WorkbenchComposerProfileContext from "../WorkbenchComposerProfileContext";
 import ThreadAgentName from "./ThreadAgentName";
-import Disclosure from "../../ui/Disclosure";
 import { BotIcon } from "../workbench-icons";
 import { ThreadAgentMessageBubble } from "./ThreadAgentMessageItem";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
+import { stepLabel, stepLabels } from "./thread-step";
+
+const LABELS = stepLabels("Creating", "Created", "Failed to create");
 
 export default function ThreadSubagentCreateItem ({
   active,
@@ -39,17 +42,8 @@ export default function ThreadSubagentCreateItem ({
     ?? composerProfileContext?.snapshot.profiles.find((profile) => profile.id === profileId)?.name
     ?? null;
   const title = subagent?.title ?? fallbackTitle;
-  const summary = (
-    <span>
-      {active ? "Creating " : "Created "}
-      <ThreadAgentName
-        subagent={subagent}
-        thread={{ agentNickname: name, agentRole: null }}
-      />
-      {profileName ? <span> ({profileName})</span> : null}
-      {title ? <span> — {title}</span> : null}
-    </span>
-  );
+  const state = active ? "inProgress" : "completed";
+  const label = stepLabel(LABELS, state);
 
   // Inside a coordination exchange a creation is the first message to that subagent, so it reads like the others.
   if (unwrapped) {
@@ -61,7 +55,7 @@ export default function ThreadSubagentCreateItem ({
             {profileName || title ? <span className="font-normal">{[profileName, title].filter(Boolean).join(" — ")}</span> : null}
           </>
         )}
-        verb={active ? "Creating" : "Created"}
+        verb={label}
       >
         {children}
       </ThreadAgentMessageBubble>
@@ -69,16 +63,20 @@ export default function ThreadSubagentCreateItem ({
   }
 
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
+    <ThreadStepRow
       defaultOpen={active}
-      hideChevron
-      leading={<BotIcon size={16} />}
-      summary={summary}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+      icon={<BotIcon size={16} />}
+      label={label}
+      progress={{ state }}
+      subject={(
+        <span className="min-w-0 truncate">
+          <ThreadAgentName subagent={subagent} thread={{ agentNickname: name, agentRole: null }} />
+          {profileName ? <span> ({profileName})</span> : null}
+          {title ? <span> — {title}</span> : null}
+        </span>
+      )}
     >
       <ThreadSubagentUserMessage>{children}</ThreadSubagentUserMessage>
-    </Disclosure>
+    </ThreadStepRow>
   );
 }

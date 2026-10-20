@@ -12,7 +12,7 @@ import { ObservedThreadGitArcIntersectionCard } from "./ThreadGitArcIntersection
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import WorkbenchClientContext from "../workbench-client-context";
-import { GitArcWaitIcon, LoaderIcon } from "../workbench-icons";
+import { GitArcWaitIcon } from "../workbench-icons";
 import ThreadCard from "./ThreadCard";
 
 type GitArcItemProps = ComponentProps<typeof ThreadGitArcItem>;
@@ -57,8 +57,8 @@ export default function ThreadGitArcWaitItem({
     <ThreadCard
       defaultOpen
       icon={<GitArcWaitIcon size={16} />}
-      meta={[<LoaderIcon key="running" size={14} />]}
-      summary={<span>Waiting for Git arc claims</span>}
+      label="Waiting for Git arc claims"
+      progress={{ durationMs, state: "inProgress" }}
     >
       <ObservedThreadGitArcIntersectionCard chrome="flush" harness={gitArcPresentation.harness} mode="wait" threadId={threadId} />
     </ThreadCard>

@@ -19,10 +19,10 @@ import {
   shouldUseWorkbenchMcpSpecializedRenderer,
 } from "../../../../workbench/thread/thread-command-matchers";
 import { ThreadItemApprovalsContext, useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
-import Disclosure from "../../../ui/Disclosure";
+import ThreadStepRow from "../ThreadStepRow";
 import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
-import { getCommandBlockItems } from "../thread-activity-chips";
+import { getCommandBlockItems, getCommandIcon } from "../thread-activity-chips";
 import ThreadCommandDetailRows from "../ThreadCommandDetailRows";
 import ThreadContextCommandItem from "../ThreadContextCommandItem";
 import ThreadDynamicToolCallItem from "../ThreadDynamicToolCallItem";
@@ -122,13 +122,9 @@ function ThreadRegularCommandSequence ({
 
   if (items.length === 1) return <ThreadRegularCommandItem item={items[0]} itemTimeline={itemTimeline} />;
   if (!commandBlockDisplay) return null;
+  const Icon = getCommandIcon(commandBlockDisplay.summaryStats);
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 space-y-1 pl-6"
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      summary={<ThreadCommandSummary display={commandBlockDisplay} />}
-    >
+    <ThreadStepRow icon={<Icon size={16} />} summary={<ThreadCommandSummary display={commandBlockDisplay} />}>
       {items.map((item) => (
         <ThreadRegularCommandItem
           item={item}
@@ -136,7 +132,7 @@ function ThreadRegularCommandSequence ({
           key={item.id}
         />
       ))}
-    </Disclosure>
+    </ThreadStepRow>
   );
 }
 

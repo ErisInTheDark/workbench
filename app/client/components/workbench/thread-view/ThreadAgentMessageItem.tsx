@@ -18,11 +18,13 @@ import { isProjectDirectoryPath } from "../../../workbench/project/project-file-
 
 import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
-import { BotIcon, EllipsisIcon, LoaderIcon, SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
-import ThreadDurationText from "./ThreadDurationText";
+import { BotIcon, EllipsisIcon, SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
 import ThreadAgentName from "./ThreadAgentName";
-import Disclosure from "../../ui/Disclosure";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
+import { stepLabel, stepLabels } from "./thread-step";
+
+const MESSAGE_LABELS = stepLabels("Messaging", "Messaged", "Failed to message");
 
 interface ThreadAgentMessageTargetProps {
   fallbackName?: string | null;
@@ -134,22 +136,15 @@ export default function ThreadAgentMessageItem ({
   durationMs?: number | null;
   sending?: boolean;
 }) {
+  const state = sending ? "inProgress" : "completed";
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
-      hideChevron
-      leading={sending ? <LoaderIcon size={16} /> : <BotIcon size={16} />}
-      summary={(
-        <span className="inline-flex flex-wrap items-center gap-x-1.5">
-          <span>{sending ? "Messaging" : "Messaged"}</span>
-          <ThreadAgentMessageTarget {...targetProps} />
-          {durationMs === null ? null : <ThreadDurationText className="text-[0.84em]" durationMs={durationMs} />}
-        </span>
-      )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+    <ThreadStepRow
+      icon={<BotIcon size={16} />}
+      label={stepLabel(MESSAGE_LABELS, state)}
+      progress={{ durationMs, state }}
+      subject={<ThreadAgentMessageTarget {...targetProps} />}
     >
       <ThreadAgentMessageBubble>{children}</ThreadAgentMessageBubble>
-    </Disclosure>
+    </ThreadStepRow>
   );
 }

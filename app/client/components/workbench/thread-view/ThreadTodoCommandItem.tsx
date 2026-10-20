@@ -10,19 +10,20 @@ import { useContext, useState } from "react";
 
 import { workbenchThreadTodoTitle } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkbenchTodoOperation } from "../../../workbench/thread/thread-command-matchers";
-import { AsteriskIcon, ClipboardListIcon, LoaderIcon } from "../workbench-icons";
+import { AsteriskIcon, ClipboardListIcon } from "../workbench-icons";
 import ThreadCard from "./ThreadCard";
-import ThreadDurationText from "./ThreadDurationText";
 import { ThreadTodoRow } from "./ThreadTodoPanel";
 import { ThreadTodoControlsContext } from "./thread-todo-controls";
+import { isFailedStep, stepLabel, stepLabels } from "./thread-step";
 
 type Outcome = "completed" | "failed" | "inProgress";
 
-const VERBS: Record<WorkbenchTodoOperation["action"], Record<Outcome, string>> = {
-  add: { inProgress: "Adding todo", failed: "Could not add todo", completed: "" },
-  list: { inProgress: "Listing todos", failed: "Could not list todos", completed: "Listed todos" },
-  remove: { inProgress: "Removing", failed: "Could not remove", completed: "Removed" },
-};
+/** An added todo's line is its #id and title, so its done label is empty. */
+const LABELS = {
+  add: stepLabels("Adding todo", "", "Failed to add todo"),
+  list: stepLabels("Listing todos", "Listed todos", "Failed to list todos"),
+  remove: stepLabels("Removing", "Removed", "Failed to remove"),
+} as const;
 
 /** `wb todo` acknowledges an add with `Added todo 3 (required).` */
 function readAddedTodoId(output: string) {
@@ -52,7 +53,7 @@ export default function ThreadTodoCommandItem({ durationMs, operation, outcome, 
   output: string;
 }) {
   const addedId = operation.action === "add" && outcome === "completed" ? readAddedTodoId(output) : undefined;
-  const verb = VERBS[operation.action][outcome];
+  const verb = stepLabel(LABELS[operation.action], outcome);
   const subject = operation.action === "add" ? workbenchThreadTodoTitle(operation.text) ?? operation.text.split("\n")[0]
     : operation.action === "remove" ? operation.ids.map(id => `#${id}`).join(", ") : null;
   const failure = outcome === "failed" ? output.trim().slice(0, 500) : "";
@@ -65,18 +66,15 @@ export default function ThreadTodoCommandItem({ durationMs, operation, outcome, 
     <ThreadCard
       bodyInset={addedId === undefined}
       icon={<ClipboardListIcon size={16} />}
-      iconClassName={outcome === "failed" ? "text-danger" : undefined}
-      meta={[
-        operation.action === "add" && operation.required ? <AsteriskIcon aria-label="required" key="required" size={14} /> : null,
-        outcome === "inProgress" ? <LoaderIcon key="running" size={14} />
-          : durationMs === null ? null : <ThreadDurationText durationMs={durationMs} key="duration" />,
-      ]}
-      summary={(
-        <span className="flex min-w-0 items-center gap-1.5">
-          {verb ? <span className={`shrink-0 ${outcome === "failed" ? "text-danger" : ""}`}>{verb}</span> : null}
+      iconClassName={isFailedStep(outcome) ? "text-danger" : undefined}
+      label={verb}
+      meta={[operation.action === "add" && operation.required ? <AsteriskIcon aria-label="required" key="required" size={14} /> : null]}
+      progress={{ durationMs, state: outcome }}
+      subject={(
+        <>
           {addedId !== undefined ? <span className="shrink-0 text-[0.86em] font-semibold tabular-nums">#{addedId}</span> : null}
           {subject ? <span className="min-w-0 truncate font-medium text-text">{subject}</span> : null}
-        </span>
+        </>
       )}
     >
       {body}

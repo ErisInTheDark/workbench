@@ -26,9 +26,9 @@ import {
 import WorkbenchStatsFeedbackTag from "../stats/workspaces/WorkbenchStatsFeedbackTag";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
-import { BinIcon, BotIcon, CheckIcon, LoaderIcon, MegaphoneIcon, Undo2Icon } from "../workbench-icons";
+import { BinIcon, BotIcon, CheckIcon, MegaphoneIcon, Undo2Icon } from "../workbench-icons";
+import { stepLabel, stepLabels } from "./thread-step";
 import ThreadCard from "./ThreadCard";
-import ThreadDurationText from "./ThreadDurationText";
 
 const DELETE_HOLD_MS = 1_000;
 
@@ -44,23 +44,7 @@ function useStoredReport({ feedbackId, threadId }: ReportSource) {
   return useStats.feedbackReport(feedbackId === null ? null : { feedbackId, threadId });
 }
 
-function Title({ operation, source }: { operation: WorkbenchFeedbackOperation; source: ReportSource }) {
-  const report = useStoredReport(source);
-  return <span className="min-w-0 truncate font-semibold text-text">{report?.status === "ready" ? report.item.title : operation.title}</span>;
-}
-
-/** Importance once the stored report loads, then progress, dot-separated like any step meta. */
-function Meta({ durationMs, outcome, source }: { durationMs: number | null; outcome: "completed" | "inProgress"; source: ReportSource }) {
-  const report = useStoredReport(source);
-  const progress = outcome === "inProgress" ? <LoaderIcon size={14} /> : durationMs === null ? null : <ThreadDurationText durationMs={durationMs} />;
-  return (
-    <span className="flex items-center gap-1.5">
-      {report?.status === "ready" ? <WorkbenchFeedbackImportance item={report.item} /> : null}
-      {report?.status === "ready" && progress ? <span aria-hidden="true">·</span> : null}
-      {progress}
-    </span>
-  );
-}
+const LABELS = stepLabels("Reporting", "Reported", "Failed to report");
 
 /** The stats view's actions for one report, in its order. */
 function ReportActions({ modelName, projectId, report }: { modelName: string | null; projectId: string | null; report: Ready }) {
@@ -204,18 +188,21 @@ export default function ThreadFeedbackCommandItem({
   threadId: string;
 }) {
   const source = { feedbackId, threadId };
+  const report = useStoredReport(source);
+  const stored = report?.status === "ready" ? report.item : null;
   return (
     <ThreadCard
       defaultOpen={defaultOpen}
       icon={<MegaphoneIcon size={16} />}
       iconClassName={FEEDBACK_TEXT_TONE_CLASS_NAME}
-      meta={[<Meta durationMs={durationMs} key="meta" outcome={outcome} source={source} />]}
-      summary={(
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="shrink-0">{outcome === "inProgress" ? "Reporting" : "Reported"}</span>
+      label={stepLabel(LABELS, outcome)}
+      meta={[stored ? <WorkbenchFeedbackImportance item={stored} key="importance" /> : null]}
+      progress={{ durationMs, state: outcome }}
+      subject={(
+        <>
           <WorkbenchStatsFeedbackTag category={operation.category} size="compact" />
-          <Title operation={operation} source={source} />
-        </span>
+          <span className="min-w-0 truncate font-semibold text-text">{stored?.title ?? operation.title}</span>
+        </>
       )}
     >
       <ReportContent operation={operation} outcome={outcome} projectId={projectId} source={source} />

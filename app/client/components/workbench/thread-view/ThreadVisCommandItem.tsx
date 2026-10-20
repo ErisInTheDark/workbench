@@ -13,9 +13,9 @@ import { parseVisScreenshotImage, parseVisSessionResult } from "workbench-shared
 import type { WorkbenchVisOperation } from "../../../workbench/thread/thread-command-matchers";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
-import { LoaderIcon, WallpaperIcon } from "../workbench-icons";
-import ThreadDurationText from "./ThreadDurationText";
+import { WallpaperIcon } from "../workbench-icons";
 import ThreadStepRow from "./ThreadStepRow";
+import { isFailedStep, stepLabel, stepLabels, type StepLabels, type StepState } from "./thread-step";
 import ThreadUserImage from "./ThreadUserImage";
 import ThreadVisFrame from "./ThreadVisFrame";
 
@@ -42,36 +42,31 @@ function VisSnapshotContent({ sessionId, snapshotKind, threadId }: { sessionId: 
   );
 }
 
-const VERBS: Record<WorkbenchVisOperation["action"], Record<"completed" | "failed" | "inProgress", string>> = {
-  start: { inProgress: "Starting vis on", failed: "Could not start vis on", completed: "Started vis on" },
-  end: { inProgress: "Ending vis on", failed: "Could not end vis on", completed: "Ended vis on" },
-  read: { inProgress: "Reading answers from", failed: "Could not read answers from", completed: "Read answers from" },
-  snapshot: { inProgress: "Checking vis structure", failed: "Could not check vis structure", completed: "Checked vis structure" },
-  screenshot: { inProgress: "Checking vis appearance", failed: "Could not check vis appearance", completed: "Checked vis appearance" },
+const LABELS: Record<WorkbenchVisOperation["action"], StepLabels> = {
+  start: stepLabels("Starting vis on", "Started vis on", "Failed to start vis on"),
+  end: stepLabels("Ending vis on", "Ended vis on", "Failed to end vis on"),
+  read: stepLabels("Reading answers from", "Read answers from", "Failed to read answers from"),
+  snapshot: stepLabels("Checking vis structure", "Checked vis structure", "Failed to check vis structure"),
+  screenshot: stepLabels("Checking vis appearance", "Checked vis appearance", "Failed to check vis appearance"),
 };
 
 /** One vis step: the vis glyph (as the status row shows live vis), what happened to which file, then progress. */
-function VisStep({ children, durationMs, failed = false, path, renderContent, running = false, verb }: {
+function VisStep({ action, children, durationMs, path, renderContent, state }: {
+  action: WorkbenchVisOperation["action"];
   children?: ReactNode;
   durationMs: number | null;
-  failed?: boolean;
   path: string;
   renderContent?: () => ReactNode;
-  running?: boolean;
-  verb: string;
+  state: StepState;
 }) {
   return (
     <ThreadStepRow
       icon={<WallpaperIcon size={16} />}
-      iconClassName={failed ? "text-danger" : undefined}
-      meta={[running ? <LoaderIcon key="running" size={14} /> : durationMs === null ? null : <ThreadDurationText durationMs={durationMs} key="duration" />]}
+      iconClassName={isFailedStep(state) ? "text-danger" : undefined}
+      label={stepLabel(LABELS[action], state)}
+      progress={{ durationMs, state }}
       renderContent={renderContent}
-      summary={(
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className={`shrink-0 ${failed ? "text-danger" : ""}`}>{verb}</span>
-          <span className="min-w-0 truncate font-mono text-[0.92em] text-text">{path}</span>
-        </span>
-      )}
+      subject={<span className="min-w-0 truncate font-mono text-[0.92em] text-text">{path}</span>}
     >
       {children}
     </ThreadStepRow>
@@ -88,10 +83,11 @@ export function ThreadVisSnapshotRow({ durationMs, path, sessionId, snapshotKind
 }) {
   return (
     <VisStep
+      action={snapshotKind}
       durationMs={durationMs}
       path={path}
       renderContent={() => <VisSnapshotContent sessionId={sessionId} snapshotKind={snapshotKind} threadId={threadId} />}
-      verb={VERBS[snapshotKind].completed}
+      state="completed"
     />
   );
 }
@@ -105,7 +101,7 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
   threadId: string;
 }) {
   const result = parseVisSessionResult(output);
-  const step = { durationMs, path: operation.path, running: outcome === "inProgress", verb: VERBS[operation.action][outcome] };
+  const step = { action: operation.action, durationMs, path: operation.path, state: outcome };
   const screenshot = operation.action === "screenshot" && outcome === "completed" ? parseVisScreenshotImage(output) : null;
   if (screenshot) return <VisStep {...step} renderContent={() => <ThreadUserImage alt={`Screenshot of ${operation.path}`} src={screenshot} />} />;
   if ((operation.action === "read" || operation.action === "snapshot") && outcome === "completed") {
@@ -113,8 +109,8 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
   }
   if (outcome === "failed") {
     return output.trim()
-      ? <VisStep {...step} failed><p className="m-0 text-[0.86em] text-fg/muted">{output.trim().slice(0, 500)}</p></VisStep>
-      : <VisStep {...step} failed />;
+      ? <VisStep {...step}><p className="m-0 text-[0.86em] text-fg/muted">{output.trim().slice(0, 500)}</p></VisStep>
+      : <VisStep {...step} />;
   }
   if (!result || outcome !== "completed") return <VisStep {...step} />;
   return <ThreadVisSnapshotRow durationMs={durationMs} path={operation.path} sessionId={result.sessionId} snapshotKind={result.kind} threadId={threadId} />;
