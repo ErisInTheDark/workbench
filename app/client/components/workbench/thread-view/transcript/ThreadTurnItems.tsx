@@ -2,7 +2,8 @@
  * Exports:
  * - default ThreadTurnItems: the one transcript renderer for a turn's items: provides the turn scope, folds items into
  *   blocks and activity runs, and windows them with stable content keys so history landing above never remounts rows;
- *   a running turn's typewriter caret waits below its last item for the next one.
+ *   a running turn's typewriter caret waits below its last item for the next one; a retried arc start slides up into its
+ *   failed attempts as they merge.
  */
 "use client";
 
@@ -24,6 +25,7 @@ import { ThreadEntryAnimation, ThreadStreamCaretSlot } from "../ThreadRevealText
 import ThreadStableChunkIdentities from "../ThreadStableChunkIdentities";
 import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
+import { readGitArcStartAttempt } from "../thread-git-arc-retries";
 import { getRenderableBlockItems } from "../thread-render-blocks";
 import { THREAD_WINDOW_CHUNK_SIZE } from "../thread-progressive-window-policy";
 import { ThreadEntryMotion } from "../thread-scroll-viewport-context";
@@ -115,6 +117,10 @@ export default memo(function ThreadTurnItems({
     const identity = entry.kind === "generic"
       ? `item:${entry.item.id}`
       : firstItem ? getThreadEntryMotionIdentity(firstItem) : `empty:${turnId}:${index}`;
+    // A start may later merge into a retry, which then slides up from where that start sat.
+    const trackAs = animateEntries && entry.kind === "block" && firstItem && readGitArcStartAttempt(entry.block) ? identity : null;
+    const absorbed = entry.kind === "block" && entry.block.kind === "gitArcRetry" ? getRenderableBlockItems(entry.block.success)[0] : null;
+    const slideFrom = absorbed ? getThreadEntryMotionIdentity(absorbed) : null;
     return (
       <ThreadEntryMotion
         enabled={animateEntries && !(entry.kind === "block" && entry.block.kind === "fileChangeSequence")}
@@ -122,7 +128,7 @@ export default memo(function ThreadTurnItems({
         key={entryKeys[index]}
       >
         {(animate) => (
-          <ThreadEntryAnimation play={animate}>
+          <ThreadEntryAnimation play={animate} slideFrom={slideFrom} trackAs={trackAs}>
             {entry.kind === "generic" ? (
               <ThreadGenericItem
                 item={entry.item}

@@ -2,6 +2,8 @@
  * Exports:
  * - default ThreadActivityRun: one run of consecutive work as a tinted summary (finished steps as counted chips, live duration,
  *   current step) that expands into its steps; a settled run holding one step, or a lone sleep, shows that step alone.
+ * - ThreadActivitySteps: a run's steps laid out as the run lays them out, for other hosts of run segments.
+ * - ThreadActivityRunRenderers: each step kind's renderer.
  */
 "use client";
 
@@ -119,6 +121,24 @@ function StatusContent({ context, item }: { context: CommandChipContext; item: T
   return <span className={shimmerTextClassName}>{text || "Working"}</span>;
 }
 
+/** Run steps in order: action groups tinted as steps, prose-like steps (reasoning, sleeps) bare with room around them. */
+export function ThreadActivitySteps({ renderers, segments }: {
+  renderers: ThreadActivityRunRenderers;
+  segments: readonly ActivitySegment[];
+}) {
+  return segments.map((segment, index) => {
+    const previous = segments[index - 1];
+    const kind = RUN_SEGMENT_KINDS[segment.kind];
+    const gap = !previous ? "" : !kind.prose && !RUN_SEGMENT_KINDS[previous.kind].prose ? "mt-0.5" : "mt-2";
+    const content = renderSegment(renderers, segment, index === segments.length - 1);
+    return (
+      <div className={kind.tinted ? `rounded-lg bg-fg/4 px-3 ${gap}` : gap} key={getActivitySegmentItems(segment)[0]?.id ?? index}>
+        {kind.tinted ? <ThreadRowChromeContext.Provider value="step">{content}</ThreadRowChromeContext.Provider> : content}
+      </div>
+    );
+  });
+}
+
 export default function ThreadActivityRun({
   animateEntries,
   block,
@@ -160,18 +180,7 @@ export default function ThreadActivityRun({
   const status = current
     ? <StatusContent context={context} item={current} />
     : live ? <span className={shimmerTextClassName}>Thinking</span> : null;
-  const steps = block.segments.map((segment, index) => {
-    const previous = block.segments[index - 1];
-    const kind = RUN_SEGMENT_KINDS[segment.kind];
-    // Adjacent action groups sit tight; prose-like steps get breathing room either side.
-    const gap = !previous ? "" : !kind.prose && !RUN_SEGMENT_KINDS[previous.kind].prose ? "mt-0.5" : "mt-2";
-    const content = renderSegment(renderers, segment, index === block.segments.length - 1);
-    return (
-      <div className={kind.tinted ? `rounded-lg bg-fg/4 px-3 ${gap}` : gap} key={getActivitySegmentItems(segment)[0]?.id ?? index}>
-        {kind.tinted ? <ThreadRowChromeContext.Provider value="step">{content}</ThreadRowChromeContext.Provider> : content}
-      </div>
-    );
-  });
+  const steps = <ThreadActivitySteps renderers={renderers} segments={block.segments} />;
 
   if (getActivityRunPresentation(block.segments, live) === "bare") return <div className="my-1.5">{steps}</div>;
 
@@ -194,7 +203,7 @@ export default function ThreadActivityRun({
         </span>
         {chips.length && status ? (
           <ThreadEntryAnimation
-            className="-mt-1 flex h-7 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap pb-0.5 text-[1.05em] font-medium"
+            className="-mt-1 flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap pb-2 text-[1.05em] leading-[1.6] font-medium"
             inline
             play={animateEntries}
           >

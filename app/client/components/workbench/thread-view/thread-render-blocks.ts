@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds/ActivitySegment: shared render-plan shapes.
+ * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds/ActivitySegment: shared render-plan shapes,
+ *   including the retried Git arc start that thread-git-arc-retries folds.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
  * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
  * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context), preserve wait folds, then give qualifying subagent coordination one outer render block.
@@ -102,6 +103,11 @@ export type ActivitySegment =
 export type ThreadRenderableBlock =
   /** Consecutive work (reasoning, plain commands, file changes, searches) shown as one summary that expands into its steps. */
   | { kind: "activityRun"; items: ThreadItem[]; segments: ActivitySegment[] }
+  /**
+   * A Git arc start that failed, then succeeded after the work between: the successful start's card, opening onto how it
+   * got there (failed attempts and absorbed work as run steps).
+   */
+  | { failedAttempts: number; history: ActivitySegment[]; items: ThreadItem[]; kind: "gitArcRetry"; success: ThreadRenderableBlock }
   | { kind: "agentMessageSequence"; items: IncomingAgentMessageItem[]; state: "delivered" | "held" }
   /** Consecutive non-final agent messages, which share copy runs. */
   | { kind: "agentCommentarySequence"; items: AgentCommentaryItem[] }

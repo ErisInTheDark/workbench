@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default ThreadRenderableBlockView: one renderable block through its renderer: activity runs (their steps through the
- *   command, file, reasoning and web-search renderers), messages, coordination and single items. Memoised per block and timeline.
+ *   command, file, reasoning and web-search renderers), retried arc starts (their history through the same renderers),
+ *   messages, coordination and single items. Memoised per block and timeline.
  */
 "use client";
 
@@ -11,7 +12,8 @@ import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineE
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
-import ThreadActivityRun from "../ThreadActivityRun";
+import ThreadActivityRun, { ThreadActivitySteps, type ThreadActivityRunRenderers } from "../ThreadActivityRun";
+import ThreadGitArcHistoryContext, { type ThreadGitArcHistory } from "../ThreadGitArcHistoryContext";
 import ThreadBrowseStepIcon from "../ThreadBrowseStepIcon";
 import ThreadCommandDetailRows from "../ThreadCommandDetailRows";
 import ThreadContextCompactionItem from "../ThreadContextCompactionItem";
@@ -36,6 +38,7 @@ import { getActiveItemStartedAtMs } from "./transcript-blocks";
 type Timeline = readonly WorkbenchThreadItemTimelineEntry[] | undefined;
 type ActivityRunBlock = Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
 type ItemBlock = Extract<ThreadRenderableBlock, { kind: "item" }>;
+type GitArcRetryBlock = Extract<ThreadRenderableBlock, { kind: "gitArcRetry" }>;
 
 interface BlockViewProps {
   animateEntries: boolean;
@@ -50,7 +53,34 @@ function timestampSeconds(timestampMs: number | null | undefined) {
   return timestampMs === undefined || timestampMs === null ? null : timestampMs / 1_000;
 }
 
-/** A run's steps through each group's renderer; Browse calls lift into one row per step. */
+/** Each run step kind through its group's renderer; Browse calls lift into one row per step. */
+function useActivityRunRenderers(animateEntries: boolean, isMostRecent: boolean, itemTimeline: Timeline): ThreadActivityRunRenderers {
+  const turn = useTranscript.turn();
+  const project = useProject.contextual();
+  return {
+    code: ({ item }) => <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />,
+    commands: ({ items }) => items.map((item) => {
+      const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, { ...project?.matcherContext, cwd: project?.cwd }), turn.browseResultEntries);
+      return browseSteps
+        ? <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id} rows={browseSteps} />
+        : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;
+    }),
+    files: ({ items }) => <ThreadFileChangeItem animateEntries={animateEntries} items={items} />,
+    reasoning: ({ item }, isLastSegment) => (
+      <ThreadReasoningSequence block={{ items: [item], kind: "reasoningSequence" }} isMostRecent={isMostRecent && isLastSegment} />
+    ),
+    sleep: ({ durationMs, item }) => (
+      <ThreadSleepItem
+        durationMs={durationMs}
+        ended={item.type === "commandExecution" && item.status !== "inProgress"}
+        timeline={findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline)}
+        turnStatus={turn.status}
+      />
+    ),
+    webSearch: ({ items }) => <ThreadWebSearchSequence items={items} />,
+  };
+}
+
 function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimeline }: {
   animateEntries: boolean;
   block: ActivityRunBlock;
@@ -58,37 +88,34 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
   itemTimeline: Timeline;
 }) {
   const turn = useTranscript.turn();
-  const project = useProject.contextual();
   return (
     <ThreadActivityRun
       animateEntries={animateEntries}
       block={block}
       isMostRecent={isMostRecent}
       itemTimeline={itemTimeline}
-      renderers={{
-        code: ({ item }) => <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />,
-        commands: ({ items }) => items.map((item) => {
-          const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, { ...project?.matcherContext, cwd: project?.cwd }), turn.browseResultEntries);
-          return browseSteps
-            ? <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id} rows={browseSteps} />
-            : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;
-        }),
-        files: ({ items }) => <ThreadFileChangeItem animateEntries={animateEntries} items={items} />,
-        reasoning: ({ item }, isLastSegment) => (
-          <ThreadReasoningSequence block={{ items: [item], kind: "reasoningSequence" }} isMostRecent={isMostRecent && isLastSegment} />
-        ),
-        sleep: ({ durationMs, item }) => (
-          <ThreadSleepItem
-            durationMs={durationMs}
-            ended={item.type === "commandExecution" && item.status !== "inProgress"}
-            timeline={findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline)}
-            turnStatus={turn.status}
-          />
-        ),
-        webSearch: ({ items }) => <ThreadWebSearchSequence items={items} />,
-      }}
+      renderers={useActivityRunRenderers(animateEntries, isMostRecent, itemTimeline)}
       turnLive={turn.status === "inProgress"}
     />
+  );
+}
+
+/** The successful start, drawn as it always is, whose card opens onto the failed attempts and steps before it. */
+function ThreadGitArcRetryBlock({ block, ...props }: Omit<BlockViewProps, "block"> & { block: GitArcRetryBlock }) {
+  const renderers = useActivityRunRenderers(props.animateEntries, false, props.itemTimeline);
+  const history: ThreadGitArcHistory = {
+    // The failed attempts inside are arc cards too; they must not open onto this history again.
+    content: (
+      <ThreadGitArcHistoryContext.Provider value={null}>
+        <ThreadActivitySteps renderers={renderers} segments={block.history} />
+      </ThreadGitArcHistoryContext.Provider>
+    ),
+    failedAttempts: block.failedAttempts,
+  };
+  return (
+    <ThreadGitArcHistoryContext.Provider value={history}>
+      <ThreadRenderableBlockViewComponent {...props} block={block.success} />
+    </ThreadGitArcHistoryContext.Provider>
   );
 }
 
@@ -193,6 +220,17 @@ function ThreadRenderableBlockViewComponent ({
   switch (block.kind) {
     case "activityRun":
       return <ThreadActivityRunBlock animateEntries={animateEntries} block={block} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} />;
+    case "gitArcRetry":
+      return (
+        <ThreadGitArcRetryBlock
+          animateEntries={animateEntries}
+          block={block}
+          finalAgentMessageId={finalAgentMessageId}
+          isMostRecentBlock={isMostRecentBlock}
+          itemTimeline={itemTimeline}
+          primaryUserBlock={primaryUserBlock}
+        />
+      );
     case "subagentCoordination":
       return <ThreadSubagentCoordination block={block} itemTimeline={itemTimeline} />;
     case "agentMessageSequence":

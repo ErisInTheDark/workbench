@@ -1,5 +1,6 @@
 /*
- * No production exports. Tests protect one-time thread entry motion across initial render and remounts.
+ * No production exports. Tests protect one-time thread entry motion across initial render and remounts, and finding a
+ * mounted entry for an entry absorbing it.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -58,6 +59,23 @@ for (const inputKind of ["initial message", "steer"] as const) {
     assert.equal(controller.shouldAnimate(canonicalIdentity), false);
   });
 }
+
+test("an absorbing entry finds a tracked entry where it is now, and nothing once it unmounted", () => {
+  const controller = new ThreadEntryMotionController();
+  let top = 480;
+  const element = { getBoundingClientRect: () => ({ top }) as DOMRect };
+  const untrack = controller.track("item:started", element);
+  assert.equal(controller.topOf("item:started"), 480);
+  top = 300;
+  assert.equal(controller.topOf("item:started"), 300);
+  // A remount tracks its new element before the old one's cleanup runs; that cleanup must not drop the new one.
+  const remounted = { getBoundingClientRect: () => ({ top: 90 }) as DOMRect };
+  const untrackRemount = controller.track("item:started", remounted);
+  untrack();
+  assert.equal(controller.topOf("item:started"), 90);
+  untrackRemount();
+  assert.equal(controller.topOf("item:started"), null);
+});
 
 test("file rows seed independently and a later row remains eligible", () => {
   const item: ThreadItem = {

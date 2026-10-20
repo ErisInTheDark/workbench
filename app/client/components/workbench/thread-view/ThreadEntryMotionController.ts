@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadEntryMotionController: remember thread-owned logical entries across presentation remounts, admitting
- *   history that lands above seen entries without motion.
+ *   history that lands above seen entries without motion, and find entries an absorbing entry may slide from.
  * - getThreadEntryMotionIdentity: preserve user-input identity across optimistic and canonical item ids.
  * - getThreadFileChangeMotionIdentity: identify one streamed row within a file-change item.
  * - getThreadEntryMotionIdentities: enumerate one item's block and nested row motion identities.
@@ -37,8 +37,11 @@ export function getProjectedEntryMotionIdentities(item: WorkbenchProjectedTransc
     : getThreadEntryMotionIdentities(item);
 }
 
+type TrackedElement = Pick<Element, "getBoundingClientRect">;
+
 export default class ThreadEntryMotionController {
   private readonly seen: Set<string>;
+  private readonly tracked = new Map<string, TrackedElement>();
 
   constructor(initialIdentities: Iterable<string> = []) {
     this.seen = new Set(initialIdentities);
@@ -66,5 +69,19 @@ export default class ThreadEntryMotionController {
 
   commit(identity: string) {
     this.seen.add(identity);
+  }
+
+  /** Keep a mounted entry findable while it could be absorbed; returns its untrack. */
+  track(identity: string, element: TrackedElement) {
+    this.tracked.set(identity, element);
+    return () => { if (this.tracked.get(identity) === element) this.tracked.delete(identity); };
+  }
+
+  /**
+   * Where a tracked entry is now. An absorbing entry asks while it renders, before the commit removes what it absorbs
+   * and everything below shifts up.
+   */
+  topOf(identity: string) {
+    return this.tracked.get(identity)?.getBoundingClientRect().top ?? null;
   }
 }

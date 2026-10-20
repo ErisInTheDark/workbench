@@ -6,6 +6,7 @@
  * - getSettledActivitySegments: a run's steps without the running ones, for its summary.
  * - getActivityRunPresentation: whether a run shows as a card or as its one step.
  * - getActivitySegmentItems: the items one run segment shows.
+ * - pushActivitySegment: add one step to a segment list under the kind's merge rule.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getAgentScreenshotSteerImages, isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
@@ -152,7 +153,7 @@ export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], cont
       run.items.push(piece.item);
       continue;
     }
-    if (!appendToPrevious(run.segments.at(-1), piece)) run.segments.push(copySegment(piece));
+    pushActivitySegment(run.segments, piece);
     run.items.push(...getActivitySegmentItems(piece));
   }
   // A run holding only hidden members has nothing to show.
@@ -160,6 +161,11 @@ export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], cont
 }
 
 type ListSegment = Extract<ActivitySegment, { items: readonly unknown[] }>;
+
+/** Add one step, joining the last segment when its kind merges; the segments own their lists. */
+export function pushActivitySegment(segments: ActivitySegment[], segment: ActivitySegment) {
+  if (!appendToPrevious(segments.at(-1), segment)) segments.push(copySegment(segment));
+}
 
 function appendToPrevious(previous: ActivitySegment | undefined, piece: ActivitySegment) {
   if (!previous || previous.kind !== piece.kind || !RUN_SEGMENT_KINDS[piece.kind].merges || !("items" in previous) || !("items" in piece)) return false;

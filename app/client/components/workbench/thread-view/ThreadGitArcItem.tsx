@@ -1,14 +1,14 @@
 /*
  * Exports:
  * - default ThreadGitArcItem: one Git arc call (lifecycle, edit session, status or recovery) as a one-line card that opens
- *   into its flat body, previewing its result while closed where that matters; inside a run's command group, arc reads
- *   are steps instead.
+ *   into its flat body, previewing its result while closed where that matters, and saying why it failed on its line; in
+ *   step chrome it is a step instead. A retried start's card opens onto how it got there first.
  */
 "use client";
 
 import { useContext, type ReactNode } from "react";
 
-import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
+import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
@@ -24,6 +24,7 @@ import ThreadGitArcCardBody from "./ThreadGitArcCardBody";
 import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 import ThreadGitArcCollapsedSummary, { ThreadGitArcStatusCounts } from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
+import ThreadGitArcHistoryContext from "./ThreadGitArcHistoryContext";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadStepRow from "./ThreadStepRow";
 import { buildGitArcCard, type GitArcCard } from "./thread-git-arc-card";
@@ -51,6 +52,10 @@ function Subject({ card }: { card: GitArcCard }) {
         <span className="shrink-0"><b className="font-semibold text-text">{card.releasedCount}</b> {card.releasedCount === 1 ? "claim" : "claims"}</span>
       ) : card.subject ? <span className="min-w-0 truncate font-medium text-text">{card.subject}</span> : null}
       {card.statusCounts ? <span className="ml-1.5 min-w-0"><ThreadGitArcStatusCounts counts={card.statusCounts} /></span> : null}
+      {/* The closed line says why it failed; opened, the failure panel says it in full. A preview already shows it. */}
+      {card.failure && card.style !== "cardPreview" ? (
+        <span className="min-w-0 truncate text-danger [details[open]>summary_&]:hidden">{describeGitArcFailure(card.failure).message}</span>
+      ) : null}
     </>
   );
 }
@@ -91,6 +96,7 @@ export default function ThreadGitArcItem ({
   typedFailure?: GitArcFailure | null;
 }) {
   const presentation = useContext(ThreadGitArcPresentationContext);
+  const history = useContext(ThreadGitArcHistoryContext);
   const asRunStep = useContext(ThreadRowChromeContext) === "step";
   const card = buildGitArcCard({
     asRunStep, currentPlan: presentation?.gitArcPlan ?? null, editResult, failureReason, intent: commandIntent, interruptedBySteer,
@@ -103,6 +109,7 @@ export default function ThreadGitArcItem ({
     iconLabel: card.iconLabel,
     label: card.label,
     meta: [
+      history ? <span key="attempts">{history.failedAttempts} failed {history.failedAttempts === 1 ? "attempt" : "attempts"}</span> : null,
       card.stackedProposalCount !== null ? <span key="proposals">{card.stackedProposalCount} {card.stackedProposalCount === 1 ? "proposal" : "proposals"}</span> : null,
       editResult ? <ThreadFileChangeTotals additions={editResult.additions} deletions={editResult.deletions} key="totals" />
         : operationSummaryRows.length ? (
@@ -112,7 +119,12 @@ export default function ThreadGitArcItem ({
     progress: { durationMs, state: card.state, waited: durationPresentation === "waited" },
     subject: <Subject card={card} />,
   };
-  const body = <ThreadGitArcCardBody card={card} editResult={editResult} operationDetails={operationDetails} statusIncomplete={statusIncomplete} statusOutput={statusOutput} />;
+  const body = (
+    <>
+      {history ? <div>{history.content}</div> : null}
+      <ThreadGitArcCardBody card={card} editResult={editResult} operationDetails={operationDetails} statusIncomplete={statusIncomplete} statusOutput={statusOutput} />
+    </>
+  );
   if (card.style === "step") {
     return <div data-thread-git-arc-card={card.action}><ThreadStepRow {...line}>{body}</ThreadStepRow></div>;
   }

@@ -28,7 +28,7 @@ export type GitArcCardState = Exclude<StepState, "declined">;
 
 /**
  * How a card draws outside a run: one line opening into its flat body, or a line that also previews its result while
- * closed. Inside a run's command group, arc reads are `step`s instead.
+ * closed. In step chrome it is a `step` instead.
  */
 export type GitArcCardStyle = "card" | "cardPreview" | "step";
 
@@ -119,9 +119,6 @@ const CARD_STYLES: Record<GitArcCommandAction, Exclude<GitArcCardStyle, "step">>
   stack: "card", start: "card", stash: "card", status: "card", unknown: "card", unstack: "card", unstash: "card",
 };
 
-/** Arc reads and plans that sit inside a run's command group as steps of the surrounding work. */
-const RUN_STEPS: ReadonlySet<GitArcCommandAction> = new Set(["claims", "compare", "continue", "diff", "plan"]);
-
 const FAILURE_ACTIONS: Record<Exclude<GitArcCommandAction, "edit">, GitArcFailureAction> = {
   adopt: "arcAdoptSource", claims: "arcClaims", compare: "compare", continue: "arcContinue", diff: "diff", plan: "planClaims",
   planStart: "planStart", propose: "proposalCreate", release: "arcRelease", rescind: "proposalRescind", restore: "restore",
@@ -205,7 +202,7 @@ function primaryPaths(intent: GitArcCommandIntent, receipt: GitArcReceipt | null
 }
 
 export function buildGitArcCard(input: {
-  /** Inside a run's command group, arc reads become steps. */
+  /** In step chrome (a run's command group, a retry's history) every call is a step; which calls get there is the host's rule. */
   asRunStep: boolean;
   /** The thread's current plan, which names a start that did not say which plan it started. */
   currentPlan: { checkpointCommit: string; intentName: string } | null;
@@ -294,7 +291,7 @@ export function buildGitArcCard(input: {
     [receipt?.adoptedPathCount, "adopted", adoptedMarker],
   ] as const).flatMap(([count, noun, marker]) => count === undefined ? [] : [{ label: `${count} ${noun} ${count === 1 ? "file" : "files"}`, marker }]);
 
-  const style: GitArcCardStyle = input.asRunStep && RUN_STEPS.has(action) ? "step" : CARD_STYLES[action];
+  const style: GitArcCardStyle = input.asRunStep ? "step" : CARD_STYLES[action];
   // Only preview cards keep a result visible while closed: edited files, or the first file list.
   const editRows = editResult ? createThreadGitArcEditSummaryRows(editResult.files) : [];
   const first = pathGroups[0];

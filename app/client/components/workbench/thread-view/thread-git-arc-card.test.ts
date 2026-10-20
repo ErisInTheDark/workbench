@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect the Git arc card model: how each call presents (card, preview card or run step),
+ * No production exports. Tests protect the Git arc card model: how each call presents (card, preview card or step),
  * what it keeps in view while closed, which cards open by themselves, and what its body lists.
  */
 import assert from "node:assert/strict";
@@ -27,12 +27,10 @@ function card(action: GitArcCommandAction, values: Partial<CardInput> = {}) {
   });
 }
 
-test("arc reads and plans are steps inside a run; lifecycle changes stay cards there", () => {
-  for (const action of ["claims", "compare", "continue", "diff", "plan"] as const) {
+test("any call in step chrome is a step, so a retry's failed start reads as one of its steps", () => {
+  for (const action of ["diff", "start", "restore", "propose"] as const) {
     assert.equal(card(action, { asRunStep: true }).style, "step", action);
-  }
-  for (const action of ["propose", "stack", "start", "release"] as const) {
-    assert.notEqual(card(action, { asRunStep: true }).style, "step", action);
+    assert.notEqual(card(action).style, "step", action);
   }
 });
 
