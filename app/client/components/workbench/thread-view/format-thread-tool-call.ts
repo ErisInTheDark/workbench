@@ -5,6 +5,7 @@
  * - formatToolCallOutput: prefer captured text while preserving structured tool output as readable JSON. Keywords: tool call, output, text, JSON.
  */
 import type { JsonValue, DynamicToolCallOutputContentItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { readMcpTextContent } from "../../../workbench/thread/command-matchers/workbench-mcp";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 
@@ -73,16 +74,6 @@ export function formatDynamicToolInvocation({
     ? propertyAccess(namespaceValue, tool)
     : IDENTIFIER_PATTERN.test(tool) ? tool : propertyAccess("tools", tool);
   return formatInvocation(callable, argumentsValue);
-}
-
-function readMcpTextContent(value: JsonValue) {
-  return value !== null
-    && typeof value === "object"
-    && !Array.isArray(value)
-    && value.type === "text"
-    && typeof value.text === "string"
-    ? value.text
-    : null;
 }
 
 function formatStructuredOutput(value: JsonValue | readonly JsonValue[] | null | undefined) {

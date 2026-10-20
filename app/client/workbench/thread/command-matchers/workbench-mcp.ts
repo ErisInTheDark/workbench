@@ -2,7 +2,9 @@
  * Exports:
  * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route wb calls, including deferred tools run through `mcp_call`, and retain dedicated Git, title, and status failure presentation.
  * - getWorkbenchMcpCommandDisplay: match simple wb calls to shared summary presentation.
- * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive ordinary command presentation from wb shell evidence.
+ * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive ordinary command presentation from wb shell evidence,
+ *   including failures whose reason is only result text.
+ * - readMcpTextContent: one MCP result content part's text.
  * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes.
  */
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -39,6 +41,17 @@ function isWorkbenchMcpServer(server: string) {
   return server === "wb" || server === "wbex";
 }
 
+/** One MCP result content part's text, or null when the part is not text. */
+export function readMcpTextContent(value: JsonValue) {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && value.type === "text"
+    && typeof value.text === "string"
+    ? value.text
+    : null;
+}
+
 function inferWorkbenchShellFromCwd(cwd: string): CommandShell {
   if (/^(?:[A-Za-z]:[\\/]|\\\\)/u.test(cwd)) return "pwsh";
   if (cwd.startsWith("/")) return "shell";
@@ -53,13 +66,11 @@ export function getWorkbenchMcpShellCommandItem(
   const input = WorkbenchShellInputSchema.safeParse(item.arguments);
   if (!input.success) return null;
   const result = WorkbenchShellResultSchema.safeParse(item.result?.structuredContent);
-  if (
-    !result.success
-    && item.status !== "inProgress"
-    && !(item.status === "failed" && item.error?.message)
-  ) {
-    return null;
-  }
+  // A failure says why in its error, or (when the user stopped it) as plain result text.
+  const failureText = item.status === "failed"
+    ? item.error?.message || item.result?.content.flatMap(part => readMcpTextContent(part) ?? []).join("\n") || null
+    : null;
+  if (!result.success && item.status !== "inProgress" && !failureText) return null;
   const requestedCwd = input.data.workdir;
   const cwd = result.success
     ? result.data.cwd
@@ -70,7 +81,7 @@ export function getWorkbenchMcpShellCommandItem(
   return {
     aggregatedOutput: result.success
       ? getWorkbenchShellAggregatedOutput(result.data)
-      : item.error?.message ?? null,
+      : failureText,
     command: input.data.command,
     commandActions: [],
     cwd,

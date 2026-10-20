@@ -624,6 +624,16 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
   assert.equal(failed.status, "failed");
   assert.equal(failed.aggregatedOutput, "Sandbox launcher failed.");
 
+  // A call the user stopped fails with its reason as plain result text and no error.
+  const stopped = getWorkbenchMcpShellCommandItem(shellMcpItem({
+    error: null,
+    result: { _meta: null, content: [{ type: "text", text: "The user stopped this command after 54s." }], structuredContent: null },
+    status: "failed",
+  }), PROJECT_ROOT);
+  assert.ok(stopped);
+  assert.equal(stopped.status, "failed");
+  assert.equal(stopped.aggregatedOutput, "The user stopped this command after 54s.");
+
   assert.equal(getWorkbenchMcpShellCommandItem(shellMcpItem({
     result: {
       _meta: null,
