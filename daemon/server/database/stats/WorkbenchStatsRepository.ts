@@ -180,7 +180,7 @@ export default class WorkbenchStatsRepository {
           const feedback = new WorkbenchFeedbackRepository(this.database);
           return {
             feedback: request.feedbackId
-              ? feedback.report(request.feedbackId)
+              ? feedback.report(request.feedbackId, workbenchProjectId)
               : feedback.summary(request.projectIds, period.startedAt, period.endedAt, workbenchProjectId, now),
             generatedAt: now, section: "feedback",
           };

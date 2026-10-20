@@ -127,7 +127,7 @@ export default class WorkbenchFeedbackRepository {
       ownership: this.#ownership({ projectIds, startedAt, endedAt }),
       resolved: resolved.map((row) => details.get(row.id)!),
       total: rows.length,
-      workbenchProjectId: workbenchProjectId ? new WorkbenchProjectRepository(this.database).resolveStoredReference(workbenchProjectId) : null,
+      workbenchProjectId: this.#workbenchOwner(workbenchProjectId),
     };
   }
 
@@ -148,14 +148,19 @@ export default class WorkbenchFeedbackRepository {
   }
 
   /** The stats section narrowed to one report by id, whatever its scope, age or resolution; empty once deleted. */
-  report(id: number): WorkbenchStatsFeedback {
+  report(id: number, workbenchProjectId: string | null = null): WorkbenchStatsFeedback {
     const row = this.database.prepare(`
       SELECT id, channel, category, model, reasoning_effort, created_at, resolved_at FROM workbench_agent_feedback WHERE id = ?
     `).get(id) as StoredScoreRow | undefined;
     const item = row ? this.#details([scoreRow(row)]).get(id) : undefined;
+    const owner = this.#workbenchOwner(workbenchProjectId);
     return item
-      ? { counts: [{ category: item.category, count: 1 }], items: [item], ownership: [], resolved: [], total: 1, workbenchProjectId: null }
-      : { counts: [], items: [], ownership: [], resolved: [], total: 0, workbenchProjectId: null };
+      ? { counts: [{ category: item.category, count: 1 }], items: [item], ownership: [], resolved: [], total: 1, workbenchProjectId: owner }
+      : { counts: [], items: [], ownership: [], resolved: [], total: 0, workbenchProjectId: owner };
+  }
+
+  #workbenchOwner(workbenchProjectId: string | null) {
+    return workbenchProjectId ? new WorkbenchProjectRepository(this.database).resolveStoredReference(workbenchProjectId) : null;
   }
 
   /** Importance depends on the maintained trust registry, so it is computed on read rather than stored. */

@@ -61,14 +61,15 @@ test("schema migration gives retained feedback a reload-compatible placeholder t
 test("one report reads by id exactly as the stats summary lists it, whatever its age, and not once deleted", () => {
   const { database, repository } = setup();
   try {
-    const { id } = repository.record(report({ channel: "project" }), now - 400 * day);
-    repository.record(report({ channel: "project", category: "bug" }), now - day);
-    const listed = repository.summary(null, 0, now + day).items.find((item) => item.id === id);
-    assert.deepEqual(repository.report(id), {
-      counts: [{ category: "waste", count: 1 }], items: [listed], ownership: [], resolved: [], total: 1, workbenchProjectId: null,
+    const workbench = testProjectIds.project;
+    const { id } = repository.record(report({ projectId: testProjectIds.other }), now - 400 * day);
+    repository.record(report({ category: "bug" }), now - day);
+    const listed = repository.summary(null, 0, now + day, workbench).items.find((item) => item.id === id);
+    assert.deepEqual(repository.report(id, workbench), {
+      counts: [{ category: "waste", count: 1 }], items: [listed], ownership: [], resolved: [], total: 1, workbenchProjectId: workbench,
     });
     repository.delete([id]);
-    assert.deepEqual(repository.report(id), { counts: [], items: [], ownership: [], resolved: [], total: 0, workbenchProjectId: null });
+    assert.deepEqual(repository.report(id, workbench), { counts: [], items: [], ownership: [], resolved: [], total: 0, workbenchProjectId: workbench });
   } finally {
     database.close();
   }
