@@ -2,7 +2,6 @@
  * Exports:
  * - threadAttentionLabels/threadAttentionLabel: questionnaire labels from sidebar rows, for every thread or one.
  * - isThreadStatusActive/isThreadStatusWaitingOnUserInput: read a runtime thread status's active and waiting flags.
- * - threadLifecycleSignal: whether any sidebar thread needs attention, is working, or all are idle.
  */
 import type { WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchProjectThreadRowSidebars } from "workbench-shared/workbench/thread/thread-sidebar-row";
@@ -43,11 +42,4 @@ export function isThreadStatusWaitingOnUserInput(status: string) {
   if (!status.startsWith("active:")) return false;
   const [, activeFlags = ""] = status.split(":", 2);
   return activeFlags.split(",").includes("waitingOnUserInput");
-}
-
-export function threadLifecycleSignal(sidebars: WorkbenchProjectThreadRowSidebars) {
-  const entries = sidebars.projects.flatMap(({ entries: projectEntries }) => projectEntries);
-  if (entries.some(entry => entry.entryKind !== "draft" && entry.lifecycle.kind === "needsAttention")) return "needsAttention" as const;
-  if (entries.some(entry => entry.entryKind !== "draft" && entry.lifecycle.kind === "working")) return "working" as const;
-  return "idle" as const;
 }

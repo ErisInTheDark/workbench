@@ -127,7 +127,6 @@ import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
 import { workbenchRouteViews } from "./workbench/route-views/workbench-route-views";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import { useWorkbenchSidebarPreferences } from "./workbench/workbench-sidebar-preferences-context";
-import WorkbenchTabIcon from "./workbench/WorkbenchTabIcon";
 import WorkbenchSidebarPane from "./workbench/WorkbenchSidebarPane";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
 import { WorkbenchDaemonAssetOriginContext, WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "./workbench/WorkbenchWorkspaceContext";
@@ -1066,7 +1065,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           {ambientCanvasVariant ? <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10">
             <WorkbenchAmbientCanvas className="opacity-70" variant={ambientCanvasVariant} />
           </div> : null}
-          <WorkbenchTabIcon />
           <WorkbenchSearchDialog />
           {!isMobile ? (
             <IconButton
