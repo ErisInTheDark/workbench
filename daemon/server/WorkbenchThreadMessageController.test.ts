@@ -83,7 +83,6 @@ function fixture({
   deliveryGate,
   metadataOnly = false,
   onDelivery,
-  onQueuedStateRead,
   questionnaires,
   questionnaireState,
   rejectDelivery = false,
@@ -98,7 +97,6 @@ function fixture({
   deliveryGate?: Promise<void>;
   metadataOnly?: boolean;
   onDelivery?: () => void | Promise<void>;
-  onQueuedStateRead?: () => void;
   questionnaires?: WorkbenchQuestionnaireController;
   questionnaireState?: WorkbenchThreadStateController;
   rejectDelivery?: boolean;
@@ -172,7 +170,6 @@ function fixture({
     threadId: identitySchemas.WorkbenchThreadIdSchema.parse(threadId),
   });
   const canonicalId = (threadId: string) => threadId.startsWith("native-") ? threadId.slice("native-".length) : threadId;
-  let threadStateSubscribed = false;
   const controller = new WorkbenchThreadMessageController({
     identities: {
       resolve: async ({ threadId }) => {
@@ -199,32 +196,20 @@ function fixture({
       root: { id: "root", name: "repo", root: cwd ?? "", rootPath: cwd ?? "" },
     }),
     threadState: {
-      getEntry: async (selected, selectedHarness, threadId) => {
-        const entry = questionnaireState
-          ? await questionnaireState.getThreadEntry(selected, selectedHarness, threadId)
-          : (
-            selected === relationship.projectId && threadId === relationship.threadId
-          ) ? {
-            activityAt: 2, createdAt: 1, cwd: childCwd, directSubagentIndex: 0, entryKind: "subagent" as const,
-            identity: { harness: childHarness, threadId: relationship.threadId },
-            lifecycle: { agent: { agentStatus: "working" as const }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
-            name: relationship.name, parentThreadId: relationship.parentThreadId, pinned: childPinned,
-            profileId: relationship.profileId, profileName: relationship.profileName, projectId: relationship.projectId, title: relationship.title, updatedAt: 2,
-          } : null;
-        if (threadStateSubscribed) onQueuedStateRead?.();
-        return entry;
-      },
+      getEntry: async (selected, selectedHarness, threadId) => questionnaireState
+        ? await questionnaireState.getThreadEntry(selected, selectedHarness, threadId)
+        : (
+          selected === relationship.projectId && threadId === relationship.threadId
+        ) ? {
+          activityAt: 2, createdAt: 1, cwd: childCwd, directSubagentIndex: 0, entryKind: "subagent" as const,
+          identity: { harness: childHarness, threadId: relationship.threadId },
+          lifecycle: { agent: { agentStatus: "working" as const }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
+          name: relationship.name, parentThreadId: relationship.parentThreadId, pinned: childPinned,
+          profileId: relationship.profileId, profileName: relationship.profileName, projectId: relationship.projectId, title: relationship.title, updatedAt: 2,
+        } : null,
       resolvePendingQuestionnaire: questionnaireState
         ? questionnaireState.resolvePendingQuestionnaire.bind(questionnaireState)
         : (async () => null) satisfies WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"],
-      subscribe: listener => {
-        threadStateSubscribed = true;
-        const unsubscribe = questionnaireState?.subscribe(listener) ?? (() => {});
-        return () => {
-          threadStateSubscribed = false;
-          unsubscribe();
-        };
-      },
     },
   }, waitHandoff);
   return { calls, controller };
@@ -232,7 +217,6 @@ function fixture({
 
 async function questionnaireFixture(childHarness: WorkbenchHarness, options: {
   detached?: boolean;
-  onQueuedStateRead?: () => void;
   rejectDelivery?: boolean;
   replaceOnAnswer?: boolean;
   replaceDuringMessage?: boolean;
@@ -327,12 +311,11 @@ async function questionnaireFixture(childHarness: WorkbenchHarness, options: {
   }
   const messaging = fixture({
     activeChild: !options.detached, childHarness, metadataOnly: true, questionnaires, questionnaireState: state,
-    onQueuedStateRead: options.onQueuedStateRead,
     rejectDelivery: options.rejectDelivery,
     onDelivery: options.replaceDuringMessage ? replace : undefined,
   });
   return {
-    ...messaging, answer, question, replace, replacement, state,
+    ...messaging, answer, question, replacement,
     read,
     async dispose() {
       await messaging.controller.dispose();
@@ -378,57 +361,18 @@ for (const childHarness of installedProviderKeys) {
   });
 }
 
-test("ID-addressed messages wait through replacement questionnaires before one delivery", async () => {
-  let reads = 0;
-  let firstRead!: () => void;
-  let replacementRead!: () => void;
-  const firstReadObserved = new Promise<void>(resolve => { firstRead = resolve; });
-  const replacementReadObserved = new Promise<void>(resolve => { replacementRead = resolve; });
-  const h = await questionnaireFixture("codex", {
-    onQueuedStateRead: () => {
-      reads += 1;
-      if (reads === 1) firstRead();
-      if (reads === 2) replacementRead();
-    },
-  });
+test("ID-addressed messages are admitted as steers without settling a pending questionnaire", async () => {
+  const h = await questionnaireFixture("codex");
   try {
-    const delivery = h.controller.send({
+    await h.controller.send({
       callerThreadId: "reviewer", cwd: "C:/repo", message: "Peer note.",
       userVisibleSimpleVersion: "Peer note.", threadId: "child",
     });
-    await firstReadObserved;
-    assert.equal(h.calls.some(call => call.method === "messageAgent"), false);
-    assert.equal((await h.read())?.pendingQuestionnaire?.requestKey, h.question.requestKey);
-    assert.equal((await h.read())?.questionnaireHistory?.length ?? 0, 0);
-
-    await h.replace();
-    await replacementReadObserved;
-    await h.state.clearPendingQuestionnaire(projectId, identitySchemas.WorkbenchThreadIdSchema.parse("child"), h.question.requestKey, true);
-    assert.equal((await h.read())?.pendingQuestionnaire?.requestKey, h.replacement.requestKey);
-    assert.equal(h.calls.some(call => call.method === "messageAgent"), false);
-
-    await h.state.clearPendingQuestionnaire(projectId, identitySchemas.WorkbenchThreadIdSchema.parse("child"), h.replacement.requestKey, true);
-    await delivery;
-    assert.equal(h.calls.filter(call => call.method === "messageAgent").length, 1);
     const admitted = h.calls.find(call => call.method === "messageAgent")?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
     assert.equal(admitted.message.senderName, "review cancellation");
+    assert.equal((await h.read())?.pendingQuestionnaire?.requestKey, h.question.requestKey);
     assert.equal((await h.read())?.questionnaireHistory?.length ?? 0, 0);
-  } finally { await h.dispose(); }
-});
-
-test("runtime drain rejects an ID-addressed message waiting behind a questionnaire", async () => {
-  let observed!: () => void;
-  const queuedRead = new Promise<void>(resolve => { observed = resolve; });
-  const h = await questionnaireFixture("codex", { onQueuedStateRead: observed });
-  try {
-    const delivery = h.controller.send({
-      callerThreadId: "reviewer", cwd: "C:/repo", message: "Peer note.",
-      userVisibleSimpleVersion: "Peer note.", threadId: "child",
-    });
-    await queuedRead;
-    h.controller.beginRuntimeDrain();
-    await assert.rejects(delivery, /draining for runtime reload/u);
-    assert.equal(h.calls.some(call => call.method === "messageAgent"), false);
+    assert.equal(h.calls.some(call => call.method === "recordQuestionnaire"), false);
   } finally { await h.dispose(); }
 });
 

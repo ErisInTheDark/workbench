@@ -4,7 +4,7 @@
 - Snooze is app-owned; daemons never store or decide it. Snoozing working sidebar threads preserves their turn; leaving working wakes them. Non-working sidebar threads cannot stay ordinarily snoozed while holding editable claims or sealed-proposal guards; dependent snooze may retain both until its targets clear. Questionnaire snooze interrupts and retains the question; live approvals cannot be snoozed. Stop dismisses pending input and wakes the thread.
 - Agent status does not end an active sidebar turn. Apply completed/blocked on matching successful turn completion; stop, failure and pending input take precedence. Subagent semantics remain separate.
 - Accepted provider intent wakes the thread, drops any held questionnaire, and marks the accepted turn working.
-- ID-addressed agent messages wait behind the target's pending questionnaire. Relationship-addressed parent messages may settle a child questionnaire.
+- Relationship-addressed parent messages may settle a child questionnaire.
 - Provider list snapshots seed unknown rows only; a lifecycle with a known turn changes through that turn's events. Snapshots may end only turnless provider-owned lifecycles.
 - Settled and archived are placement, not status. Preserve lifecycle presentation.
 - Live claims, required todos and addressed feedback hold settlement; addressed feedback releases only when resolved or detached.

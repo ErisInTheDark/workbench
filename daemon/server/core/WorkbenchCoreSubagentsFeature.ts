@@ -106,7 +106,6 @@ export default class WorkbenchCoreSubagentsFeature {
       threadState: {
         getEntry: async (projectId, harness, threadId) => await threadState.controller.getThreadEntry(projectId, harness, threadId),
         resolvePendingQuestionnaire: (input, deliver) => threadState.controller.resolvePendingQuestionnaire(input, deliver),
-        subscribe: listener => threadState.controller.subscribe(listener),
       },
     }, ports.messageWaitHandoff);
     // Its lifecycle listener registers here, after thread state and before any subagent wait subscribes at request time.
