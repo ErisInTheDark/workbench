@@ -260,6 +260,15 @@ test("settled MCP waits ping-ponging with delivered messages fold into one excha
   assert.deepEqual(exchange.messages.map(item => item.id), ["m1", "m2", "m3"]);
 });
 
+test("settling a subagent after waiting on its reply completes one coordination, CLI or MCP", () => {
+  assert.deepEqual(buildRenderableBlocks([
+    mcpWait("wait", ["Burdock"]), note("reply", "Burdock"), mcp("settle", "subagent_settle", { names: ["Burdock"] }),
+  ]).map(blockShape), [["subagentCoordination", ["wait", "reply", "settle"]]]);
+  assert.deepEqual(buildRenderableBlocks([
+    mcpWait("wait", ["Burdock"]), note("reply", "Burdock"), command("stop", "wb subagent stop --name Burdock"),
+  ]).map(blockShape), [["subagentCoordination", ["wait", "reply", "stop"]]]);
+});
+
 test("CLI waits fold only from blocks that are nothing but waits, and held messages never join an exchange", () => {
   const cliWait = (id: string, names: string[]) => command(id, `wb subagent wait ${names.map(name => `--name ${name}`).join(" ")}`);
   const folded = buildRenderableBlocks([cliWait("c1", ["Rose"]), note("m1", "Rose"), cliWait("c2", ["Rose", "Iris"]), note("m2", "Iris")]);

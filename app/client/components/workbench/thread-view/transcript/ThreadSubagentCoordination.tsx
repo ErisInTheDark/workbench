@@ -33,6 +33,7 @@ import {
   groupThreadSubagentCoordinationConversation,
   readThreadSubagentCoordinationClaimAction,
   readThreadSubagentCoordinationCreate,
+  readThreadSubagentCoordinationTargetAction,
   readThreadSubagentCoordinationOutgoingMessage,
   readThreadSubagentCoordinationWait,
   type ThreadSubagentCoordinationTarget,
@@ -136,9 +137,9 @@ function getCoordinationParticipants(items: readonly ThreadItem[], transcript: T
       add({ fallbackName: create.name, kind: "name", value: create.name });
       continue;
     }
-    const wait = readThreadSubagentCoordinationWait(item);
-    if (wait) {
-      for (const target of wait.targets) add({ fallbackName: target.value, kind: target.kind, value: target.value });
+    const targeted = readThreadSubagentCoordinationWait(item) ?? readThreadSubagentCoordinationTargetAction(item);
+    if (targeted) {
+      for (const target of targeted.targets) add({ fallbackName: target.value, kind: target.kind, value: target.value });
       continue;
     }
     const incoming = readWorkbenchAgentMessageItem(item);
@@ -266,7 +267,7 @@ export default function ThreadSubagentCoordination({
             />
           );
         }
-        if (run.kind === "queueCheck") {
+        if (run.kind === "queueCheck" || run.kind === "targetAction") {
           return <ThreadRegularCommandItem item={run.items[0]} itemTimeline={itemTimeline} key={run.items[0].id} />;
         }
         return <ThreadCoordinationOutgoingChannel items={run.items} key={run.items[0]!.id} target={run.target} />;

@@ -12,7 +12,8 @@
  * - reconcileWorkbenchSubagentPage: reconcile paged children with retained summaries.
  * - getSubagentSummary: find a child by thread ID.
  * - getWorkbenchSubagentCommandTargetKey: key an ID/name selector.
- * - resolveWorkbenchSubagentCommandTargets: resolve selectors without guessing reused names; running commands' names resolve to their unsettled holder.
+ * - resolveWorkbenchSubagentCommandTargets: resolve selectors; a reused name resolves to its unsettled holder for running
+ *   commands, else to its newest namesake; ties stay unresolved.
  * - getSubagentHarness: resolve a child's harness with a fallback.
  * - filterSubagentsByParentThreadId: select a parent's children.
  * - filterSubagentThreadSummaries: exclude child IDs from thread summaries.
@@ -170,6 +171,13 @@ export function getWorkbenchSubagentCommandTargetKey(target: WorkbenchSubagentCo
     : `id:${target.value}`;
 }
 
+/** A reused name shows as its newest namesake; a tie between namesakes stays unresolved rather than guessed. */
+function latestHolder(namesakes: readonly WorkbenchSubagentSummary[]) {
+  const newest = Math.max(...namesakes.map(subagent => subagent.createdAt));
+  const holders = namesakes.filter(subagent => subagent.createdAt === newest);
+  return holders.length === 1 ? holders[0]! : null;
+}
+
 export function resolveWorkbenchSubagentCommandTargets(
   subagents: readonly WorkbenchSubagentSummary[],
   targets: readonly WorkbenchSubagentCommandTarget[],
@@ -181,7 +189,7 @@ export function resolveWorkbenchSubagentCommandTargets(
       : subagents.filter((subagent) => subagent.name.localeCompare(target.value, undefined, { sensitivity: "accent" }) === 0);
     // Settled subagents release their names, so a running command's name means its one unsettled holder.
     const holders = live && matches.length > 1 ? matches.filter(subagent => !subagent.lifecycle?.settled) : matches;
-    const subagent = holders.length === 1 ? holders[0]! : null;
+    const subagent = holders.length === 1 ? holders[0]! : latestHolder(holders);
     return {
       fallbackName: target.kind === "name" ? target.value : null,
       subagent,

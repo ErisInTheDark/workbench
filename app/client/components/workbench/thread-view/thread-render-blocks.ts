@@ -55,6 +55,7 @@ import {
   findThreadSubagentCoordinationSpans,
   readThreadSubagentCoordinationClaimAction,
   readThreadSubagentCoordinationCreate,
+  readThreadSubagentCoordinationTargetAction,
   readThreadSubagentCoordinationOutgoingMessage,
   readThreadSubagentCoordinationQueueCheck,
   readThreadSubagentCoordinationWait,
@@ -398,15 +399,18 @@ function getCoordinationBlockRole(block: ThreadRenderableBlock): ThreadSubagentC
     if (segment?.kind === "gitArc") return readThreadSubagentCoordinationClaimAction(segment.item)
       ? { incoming: false, itemCount: 1, outgoing: false }
       : null;
-    if (segment?.kind === "subagent") return readThreadSubagentCoordinationCreate(segment.item)
-      ? { incoming: false, itemCount: 1, outgoing: false }
-      : null;
+    if (segment?.kind === "subagent") {
+      return readThreadSubagentCoordinationCreate(segment.item) || readThreadSubagentCoordinationTargetAction(segment.item)
+        ? { incoming: false, itemCount: 1, outgoing: false }
+        : null;
+    }
     return null;
   }
   if (block.kind !== "item") return null;
   if (readThreadSubagentCoordinationOutgoingMessage(block.item)) return { incoming: false, itemCount: 1, outgoing: true };
   if (readThreadSubagentCoordinationClaimAction(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
   if (readThreadSubagentCoordinationCreate(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
+  if (readThreadSubagentCoordinationTargetAction(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
   if (readThreadSubagentCoordinationQueueCheck(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
   return readThreadSubagentCoordinationWait(block.item)
     ? { incoming: false, itemCount: 1, outgoing: false }

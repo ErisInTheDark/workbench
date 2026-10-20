@@ -95,6 +95,14 @@ test("resolves command selectors without guessing reused subagent names", () => 
   assert.equal(getWorkbenchSubagentCommandTargetKey({ kind: "id", value: "Case-Sensitive" }), "id:Case-Sensitive");
 });
 
+test("a settled command's reused name shows as its newest namesake", () => {
+  const first = { ...subagent, createdAt: 10, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("first-mimi") };
+  const second = { ...subagent, createdAt: 50, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("second-mimi") };
+  const name = [{ kind: "name" as const, value: "Mimi" }];
+  assert.equal(resolveWorkbenchSubagentCommandTargets([second, first], name)[0]?.subagent, second);
+  assert.equal(resolveWorkbenchSubagentCommandTargets([first, second], name)[0]?.subagent, second);
+});
+
 test("filters durable summaries to direct children without changing their order", () => {
   const earlierChild = { ...subagent, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("earlier-child") };
   const siblingChild = { ...subagent, parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other-parent"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("sibling-child") };
