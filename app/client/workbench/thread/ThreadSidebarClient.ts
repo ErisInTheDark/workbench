@@ -13,7 +13,7 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkbenchProjectedThreadRow } from "workbench-shared/workbench/project/workbench-project-projection";
 import type {
-  WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft,
+  WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchProjectThreadSummaries,
 } from "workbench-shared/workbench/thread/thread-state";
 import type {
   WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
@@ -63,11 +63,6 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   getProjectThreadSummaries = () => this.summaries;
   getHomeThreadDisplayOrder = () => this.home;
   getHomeThreadDisplayOrderSupported = () => false;
-  getDraft = (projectId: ProjectId, draftId: DraftId): WorkbenchThreadDraft | null => {
-    const entry = this.getProjectSnapshot(projectId)?.entries.find(item =>
-      item.entryKind === "draft" && item.draft.draftId === draftId);
-    return entry?.entryKind === "draft" ? entry.draft : null;
-  };
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };

@@ -190,7 +190,7 @@ import type { DaemonReloadResponse, DaemonReloadScope } from "./workbench/daemon
 import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, WorkbenchReloadDirtScope as SharedWorkbenchReloadDirtScope, WorkbenchReloadResponse, WorkbenchReloadScope } from "./reload/workbench-reload.ts";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex.ts";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline.ts";
-import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
+import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
 import type {
   WorkbenchProjectThreadRowSidebars, WorkbenchThreadSidebarRow, WorkbenchThreadSidebarRowSnapshot,
 } from "./workbench/thread/thread-sidebar-row.ts";
@@ -1320,7 +1320,6 @@ export interface WorkbenchThreadListingStructure {
 }
 
 export interface WorkbenchThreadSidebarStore {
-  getDraft?: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft | null;
   getListing?: () => WorkbenchThreadListing;
   getListingStructure?: () => WorkbenchThreadListingStructure;
   subscribeListing?: (listener: () => void) => () => void;
@@ -1371,7 +1370,6 @@ export interface WorkbenchControls {
   createThreadDraftAt: (location: ProjectLocationReference, harness: WorkbenchHarness,
     options?: { select?: boolean; threadId?: DraftId }) => ThreadPayload<DraftId>;
   continueThreadCreation: (draftId: DraftId, nextDraftId: DraftId) => WorkbenchRoute | null;
-  getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   daemonRuntime: WorkbenchDaemonRuntimeStore;
   refreshProjectCatalog: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;

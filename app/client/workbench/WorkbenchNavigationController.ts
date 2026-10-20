@@ -1,35 +1,26 @@
 /*
  * Exports:
- * - WorkbenchNavigationSnapshot: active route, generation, failure, and pinned draft projection.
+ * - WorkbenchNavigationSnapshot: active route, generation and failure.
  * - WorkbenchNavigationPorts: cancellable view application without connection orchestration.
  * - default WorkbenchNavigationController: own route intent and supersession.
  */
 
 import type { WorkbenchRouteLoadResult } from "workbench-shared/types";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   isSameWorkbenchRoute,
   type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
-import type {
-  WorkbenchThreadDraft,
-} from "workbench-shared/workbench/thread/thread-state";
 
 export interface WorkbenchNavigationSnapshot {
   error: string | null;
   generation: number;
   phase: "idle" | "loading" | "ready" | "failed";
   route: WorkbenchRoute;
-  selectedPinnedThreadDraft: WorkbenchThreadDraft | null;
 }
 
 export interface WorkbenchNavigationPorts {
   load(route: WorkbenchRoute, context: { isCurrent(): boolean; signal: AbortSignal }): Promise<WorkbenchRouteLoadResult>;
-}
-
-function cloneDraft(draft: WorkbenchThreadDraft) {
-  return structuredClone(draft);
 }
 
 export default class WorkbenchNavigationController {
@@ -44,7 +35,6 @@ export default class WorkbenchNavigationController {
       generation: 0,
       phase: "idle",
       route: initialRoute,
-      selectedPinnedThreadDraft: null,
     };
   }
 
@@ -85,8 +75,7 @@ export default class WorkbenchNavigationController {
     let result: WorkbenchRouteLoadResult = { ok: false };
     const generation = this.snapshot.generation + 1;
     this.publish({
-      ...this.snapshot, error: null, generation, phase: "loading",
-      route, selectedPinnedThreadDraft: null,
+      ...this.snapshot, error: null, generation, phase: "loading", route,
     });
     try {
       result = await this.ports.load(route, {
@@ -104,41 +93,6 @@ export default class WorkbenchNavigationController {
       });
     }
     return result;
-  }
-
-  clearPinnedDraft(projectId: string, draftId: string) {
-    const selected = this.snapshot.selectedPinnedThreadDraft;
-    if (selected?.projectId !== projectId || selected.draftId !== draftId) return;
-    this.publish({ ...this.snapshot, selectedPinnedThreadDraft: null });
-  }
-
-  selectDraft(draft: WorkbenchThreadDraft | null) {
-    this.publish({ ...this.snapshot, selectedPinnedThreadDraft: draft ? cloneDraft(draft) : null });
-  }
-
-  updatePinnedDraft(draft: WorkbenchThreadDraft) {
-    const selected = this.snapshot.selectedPinnedThreadDraft;
-    if (selected?.projectId !== draft.projectId || selected.draftId !== draft.draftId) return;
-    this.publish({ ...this.snapshot, selectedPinnedThreadDraft: cloneDraft(draft) });
-  }
-
-  movePinnedDraft(sourceProjectId: string, destinationProjectId: string, draftId: string) {
-    const selected = this.snapshot.selectedPinnedThreadDraft;
-    if (selected?.projectId !== sourceProjectId || selected.draftId !== draftId) return;
-    this.publish({
-      ...this.snapshot,
-      selectedPinnedThreadDraft: {
-        ...selected,
-        projectId: ProjectIdSchema.parse(destinationProjectId),
-      },
-    });
-  }
-
-  readPinnedDraft(read: (projectId: string, draftId: string) => WorkbenchThreadDraft | null) {
-    const selected = this.snapshot.selectedPinnedThreadDraft;
-    if (!selected) return null;
-    const draft = read(selected.projectId, selected.draftId);
-    return draft ? cloneDraft(draft) : null;
   }
 
   dispose() {

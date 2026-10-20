@@ -886,8 +886,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       createDraft(location, draft.harness, { threadId: nextDraftId });
       return withProjectSelection(nextRoute, route.selectedProjectIds);
     },
-    getSelectedThreadDraft: () => navigation.readPinnedDraft((projectId, draftId) =>
-      sidebar.getDraft(ProjectIdSchema.parse(projectId), DraftIdSchema.parse(draftId))),
     sendThreadMessage: async (thread, input, options = {}) => {
       if (!thread.isDraft) throw new Error("Existing threads send through their thread store.");
       const saved = presentation.draft(thread.id);
