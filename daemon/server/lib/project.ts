@@ -970,59 +970,45 @@ export async function buildProjectTree(rootDir: string): Promise<TreeNode[]> {
     createProjectGitignoreMatcher(rootDir),
     listGitTrackedFiles(rootDir),
   ]);
-  return await readProjectTreeLevel(rootDir, rootDir, shouldIgnorePath, trackedPaths);
+  return await readProjectTreeLevel(rootDir, "", shouldIgnorePath, trackedPaths);
 }
 
+/** One shared collator: `localeCompare` with options builds a new one per comparison. */
+const treeEntryOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 async function readProjectTreeLevel(
-  rootDir: string,
   currentDir: string,
+  relativeDir: string,
   shouldIgnorePath: (relativePath: string) => boolean,
   trackedPaths: ReadonlySet<string>,
 ): Promise<TreeNode[]> {
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const visibleEntries = entries
     .filter((entry) => !ignoredNames.has(entry.name))
-    .sort((left, right) => {
-      const leftRank = left.isDirectory() ? 0 : 1;
-      const rightRank = right.isDirectory() ? 0 : 1;
+    .sort((left, right) => (left.isDirectory() ? 0 : 1) - (right.isDirectory() ? 0 : 1)
+      || treeEntryOrder.compare(left.name, right.name));
 
-      if (leftRank !== rightRank) {
-        return leftRank - rightRank;
-      }
-
-      return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
-    });
-
-  const children: TreeNode[] = [];
-
-  for (const entry of visibleEntries) {
-    const absolutePath = path.join(currentDir, entry.name);
-    const relativePath = normalizeRelativePath(path.relative(rootDir, absolutePath));
-
+  // Sibling directories read concurrently; mapping keeps their sorted order.
+  const children = await Promise.all(visibleEntries.map(async (entry): Promise<TreeNode | null> => {
+    const relativePath = normalizeRelativePath(relativeDir ? `${relativeDir}/${entry.name}` : entry.name);
     if (entry.isDirectory()) {
-      if (shouldIgnorePath(relativePath)) {
-        continue;
-      }
-
-      children.push({
+      if (shouldIgnorePath(relativePath)) return null;
+      return {
         type: "directory",
         name: entry.name,
         path: relativePath,
-        children: await readProjectTreeLevel(rootDir, absolutePath, shouldIgnorePath, trackedPaths),
-      });
-      continue;
+        children: await readProjectTreeLevel(path.join(currentDir, entry.name), relativePath, shouldIgnorePath, trackedPaths),
+      };
     }
-
-    children.push({
+    return {
       ...(shouldIgnorePath(relativePath) ? { isIgnored: true } : {}),
       ...(trackedPaths.has(relativePath) ? {} : { isUntracked: true }),
       type: "file",
       name: entry.name,
       path: relativePath,
-    });
-  }
-
-  return children;
+    };
+  }));
+  return children.filter((child): child is TreeNode => child !== null);
 }
 
 function qualifyTreeNodePaths(root: ResolvedProjectRoot, nodes: TreeNode[]): TreeNode[] {
