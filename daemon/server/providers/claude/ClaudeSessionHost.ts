@@ -8,8 +8,8 @@
  * - ClaudeSessionHandlers: bridge-generation collaborators that native hooks reach through the host.
  * - ClaudeSessionLaunch: one live process launch request.
  * - ClaudeProcessSession: one live Claude Code process, its input queue, buffered output, and config view.
- * - default ClaudeSessionHost: own live Claude Code processes, their commentary nudge, hooks and commentary server across bridge reloads,
- *   routing hook collaborators to the attached bridge.
+ * - default ClaudeSessionHost: own live Claude Code processes, their commentary nudge, hooks, tool batch declarations and commentary
+ *   server across bridge reloads, routing hook collaborators to the attached bridge.
  */
 import {
   query, type Options, type Query, type SDKMessage, type SDKUserMessage, type SpawnOptions,
@@ -20,7 +20,8 @@ import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbe
 import ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import ClaudeConfigView from "./ClaudeConfigView";
 import { CLAUDE_COMMENTARY_SERVER_NAME, createClaudeCommentaryServer } from "./claude-commentary-tool";
-import { createClaudeSessionHooks } from "./claude-session-hooks";
+import { claudeToolResults, claudeToolUseIds, createClaudeSessionHooks } from "./claude-session-hooks";
+import type { WorkbenchAgentMcpRequestRegistry } from "../../workbench-agent-mcp-request-registry";
 
 export class ClaudePromptQueue implements AsyncIterable<SDKUserMessage> {
   private readonly values: SDKUserMessage[] = [];
@@ -83,6 +84,8 @@ export const ENDED_CLAUDE_SESSION: ClaudeSession = {
 export interface ClaudeSessionHandlers {
   checkFileClaims(request: { cwd: string; threadId: WorkbenchThreadId; paths: string[] }): Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   recordNativeToolDenial(turnId: WorkbenchTurnId, toolUseId: string): void;
+  /** The thread's provider tool batch, which orders serial wb shells and skips calls after a failure. */
+  toolBatch: Pick<WorkbenchAgentMcpRequestRegistry, "awaitBatchTurn" | "declareToolBatch" | "endToolBatch" | "settleToolUse">;
 }
 
 export interface ClaudeSessionLaunch {
@@ -260,6 +263,24 @@ export default class ClaudeSessionHost {
   ) {
     const queue = new ClaudePromptQueue();
     const nudge = new ClaudeCommentaryNudge();
+    const batchCall = (operation: (batch: ClaudeSessionHandlers["toolBatch"]) => void) => {
+      void this.call(async handlers => operation(handlers.toolBatch)).catch((error: unknown) => {
+        console.warn("[claude] tool batch update was not recorded", error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+      });
+    };
+    // Claude yields a message before running its calls, and each call's result as it ends: the batch's one source of
+    // order and outcomes, covering failures Claude raises without running a hook.
+    const observe = (message: SDKMessage) => {
+      nudge.observe(message);
+      if (message.type === "assistant" && !message.parent_tool_use_id) {
+        const keys = claudeToolUseIds(message.message.content);
+        if (keys.length) batchCall(batch => batch.declareToolBatch(threadId, message.message.id, keys));
+      } else if (message.type === "user" && !message.parent_tool_use_id && !("isReplay" in message && message.isReplay)) {
+        for (const { key, failed } of claudeToolResults(message.message.content)) batchCall(batch => batch.settleToolUse(key, failed));
+      } else if (message.type === "result") {
+        batchCall(batch => batch.endToolBatch(threadId));
+      }
+    };
     let exit: Promise<void> | null = null;
     let stderr = "";
     let session: ClaudeProcessSession;
@@ -277,6 +298,14 @@ export default class ClaudeSessionHost {
                   error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
               });
             },
+            batch: {
+              // The wait runs outside `call`, so a bridge reload never waits on it. A hook follows its observed
+              // message, so a call it finds undeclared belongs to no batch.
+              turn: async (toolUseId, toolName, signal) => (
+                await this.call(async handlers => handlers.toolBatch)
+              ).awaitBatchTurn(toolUseId, signal, toolName, 0),
+              end: () => batchCall(batch => batch.endToolBatch(threadId)),
+            },
           }),
           mcpServers: { ...sdkOptions.mcpServers, [CLAUDE_COMMENTARY_SERVER_NAME]: createClaudeCommentaryServer() },
           spawnClaudeCodeProcess: options => spawnTrackedClaude(options, value => { exit = value; }),
@@ -290,7 +319,7 @@ export default class ClaudeSessionHost {
           if (this.sessions.get(scope) === session) this.sessions.delete(scope);
           await view?.dispose();
         },
-      }, message => nudge.observe(message));
+      }, observe);
     } catch (error) {
       await view?.dispose();
       throw error;

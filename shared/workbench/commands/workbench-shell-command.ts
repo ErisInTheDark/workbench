@@ -4,6 +4,7 @@
  * - WorkbenchShellSchema/WorkbenchShell: define the shell families selected by the sandboxed shell owner.
  * - WorkbenchShellInputSchema/WorkbenchShellInput: define the sandbox-only MCP shell request.
  * - WorkbenchEscalatingShellInputSchema/WorkbenchEscalatingShellInput: shell request for providers whose escalation goes through Workbench approval.
+ * - WorkbenchParallelShellInputFields/getWorkbenchShellInputSchema: the opt-in `parallel` field, and one provider's accepted shell input.
  * - WorkbenchShellResultSchema/WorkbenchShellResult: define resolved command output, queue wait and shell evidence shared by the daemon and transcript renderer.
  * - getWorkbenchShellAggregatedOutput: combine stdout and stderr with one boundary rule. */
 import { z } from "zod";
@@ -28,6 +29,17 @@ export const WorkbenchEscalatingShellInputSchema = WorkbenchShellInputSchema.ext
 });
 
 export type WorkbenchEscalatingShellInput = z.infer<typeof WorkbenchEscalatingShellInputSchema>;
+
+/** Added to the shell input only for providers that run marked shells in parallel. */
+export const WorkbenchParallelShellInputFields = {
+  parallel: z.boolean().optional().describe("Start at once alongside other calls in this batch. Omit when this command depends on an earlier call: unmarked shells run in batch order after earlier shells finish, and are skipped if an earlier call failed."),
+};
+
+/** The shell input a provider accepts, from its escalation and parallel support. */
+export function getWorkbenchShellInputSchema({ escalation, parallel }: { escalation: boolean; parallel: boolean }) {
+  const base = escalation ? WorkbenchEscalatingShellInputSchema : WorkbenchShellInputSchema;
+  return parallel ? base.extend(WorkbenchParallelShellInputFields) : base;
+}
 
 export const WorkbenchShellResultSchema = z.object({
   cwd: z.string().min(1),

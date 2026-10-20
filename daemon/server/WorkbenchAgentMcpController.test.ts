@@ -1480,6 +1480,84 @@ test("a user-stopped shell answers only the stop sentence, found through its Cod
   assert.deepEqual(errors, [], "an expected stop is not logged as a failure");
 });
 
+test("parallel shells are offered only to a provider that names its calls and an ingress that orders the rest", async () => {
+  const describe = (namesCalls: boolean) => new WorkbenchAgentMcpController({
+    tools: () => ({
+      caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
+      describe: async () => ({
+        experimental: {}, shellDescription: "test", shellEscalation: true, ...(namesCalls ? { toolUseIdMeta: "key" } : {}),
+      }),
+      patchClaims: async () => "",
+    }),
+    daemonOrigin: "http://127.0.0.1:4500", requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+  });
+  const shellOf = async (namesCalls: boolean, batchTurns?: boolean) => {
+    const scope = { clientScope: "client", projectLocal: false, provider: "claude", subagent: false };
+    const listed = await describe(namesCalls).describe(scope, new AbortController().signal, { batchTurns });
+    const shell = listed.tools.find(tool => tool.name === "shell")!;
+    return { parallel: "parallel" in (shell.inputSchema.properties ?? {}), readOnly: shell.annotations?.readOnlyHint };
+  };
+  assert.deepEqual(await shellOf(true, true), { parallel: true, readOnly: true });
+  assert.deepEqual(await shellOf(true), { parallel: false, readOnly: false }, "an ingress that cannot order shells keeps them serial");
+  assert.deepEqual(await shellOf(false, true), { parallel: false, readOnly: false });
+});
+
+test("serial shells and mutating wb tools wait their batch turn before they are recorded, and are skipped after a failure", async () => {
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const started: string[] = [];
+  const executed: string[] = [];
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "claude", threadId, cwd: "C:/workspace" }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false, toolUseIdMeta: "key" }),
+    patchClaims: async () => "",
+    prepareShell: async () => preparedShell("C:/workspace"),
+    transcript: {
+      start: async input => {
+        started.push(input.tool);
+        return { threadId, turnId: "turn", itemId: `item-${started.length}`, sourceId: "s", parentId: "s", tool: input.tool, arguments: {}, startedAt: 0 } as WorkbenchToolTranscriptReference;
+      },
+      finish: async () => undefined,
+    },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", requestRegistry,
+    executeCommand: async request => { executed.push(request.path); return new Response("ok"); },
+    executeShell: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+  });
+  const scope = { clientScope: "client", projectLocal: false, provider: "claude", subagent: false };
+  const shellCall = (key: string, args: object, extra: object = {}) => controller.call(scope, {
+    arguments: { command: "work", ...args }, detachableShell: true, batchTurns: true, meta: { key },
+    name: "shell", requestId: key, signal: new AbortController().signal, ...extra,
+  });
+  assert.deepEqual(await shellCall("build", {}), { kind: "batchTurn", key: "build", toolName: "shell" });
+  assert.deepEqual(started, [], "nothing is recorded or approved before the shell's turn");
+  assert.equal((await shellCall("sleep", { parallel: true })).kind, "detached", "a parallel shell starts at once");
+  assert.deepEqual(started, ["shell"]);
+  assert.equal((await shellCall("unordered", {}, { batchTurns: false })).kind, "detached",
+    "an ingress that cannot wait never gets a turn step");
+
+  const skipped = await shellCall("test", {}, { batchTurn: "skipped" });
+  assert.ok(skipped.kind === "result");
+  assert.equal(skipped.result.isError, true);
+  assert.match(responseText(skipped.result), /^Skipped: an earlier call in this batch failed/u);
+  assert.deepEqual(started, ["shell", "shell", "shell"], "the skipped shell still shows as a failed row");
+
+  const titleCall = (extra: object = {}) => controller.call(scope, {
+    arguments: { title: "renamed" }, batchTurns: true, meta: { key: "title" }, name: "task_set", requestId: "title",
+    signal: new AbortController().signal, ...extra,
+  });
+  assert.deepEqual(await titleCall(), { kind: "batchTurn", key: "title", toolName: "task_set" });
+  const title = await titleCall({ batchTurn: "skipped" });
+  assert.ok(title.kind === "result");
+  assert.match(responseText(title.result), /^Skipped: an earlier call in this batch failed/u);
+  assert.deepEqual(executed, [], "a mutating wb tool after a failure never runs");
+  const readOnly = await controller.call(scope, {
+    arguments: {}, batchTurns: true, meta: { key: "get" }, name: "task_get", requestId: "get", signal: new AbortController().signal,
+  });
+  assert.equal(readOnly.kind, "result", "read-only wb tools never wait");
+});
+
 test("a steer interrupting a queued expensive shell answers only that the command never started", async () => {
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
   const errors: string[] = [];

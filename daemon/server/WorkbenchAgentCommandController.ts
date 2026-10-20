@@ -265,6 +265,7 @@ export default class WorkbenchAgentCommandController {
       const caller = callerThreadId && this.direct.resolveCaller ? await this.direct.resolveCaller(callerThreadId, cwd, callerHarness) : null;
       const parsed = await parseWorkbenchAgentCliCommand(argv, {
         allowStoreRead: form.get("dangerouslyAccessEnvVars") === "1",
+        managedScript: form.get("managedScript") === "1",
         callerHarness: caller?.harness ?? callerHarness,
         callerThreadId: caller?.threadId ?? callerThreadId,
         cwd,

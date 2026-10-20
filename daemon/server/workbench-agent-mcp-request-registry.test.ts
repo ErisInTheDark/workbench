@@ -123,12 +123,28 @@ test("steers interrupt a shell only while it waits in the expensive queue", () =
   assert.equal(registry.interruptThreadWaits(threadId), 0, "an unqueued or admitted shell is real work, never a wait");
   queued.shellQueue!.queued(10);
   assert.deepEqual(waits.at(-1), ["shell"], "a queued shell shows as a thread wait");
-  assert.equal(registry.interruptThreadWaits(threadId), 1);
-  assert.equal(isWorkbenchAgentMcpSteerInterruption(queued.signal.reason), true);
+  assert.equal(registry.interruptThreadWaits(threadId), 0, "the agent reads a steer only after its running shell, so the queue is held");
+  assert.equal(queued.signal.aborted, false);
+  running.unregister();
+  assert.equal(isWorkbenchAgentMcpSteerInterruption(queued.signal.reason), true, "the held steer lands once nothing else runs");
   assert.equal(running.signal.aborted, false);
   queued.unregister();
-  running.unregister();
   assert.deepEqual(waits.at(-1), []);
+
+  const alone = registry.register("client-1", 4, { owner, toolName: "shell", shellItem: { threadId, references: ["alone"] } });
+  alone.shellQueue!.queued(12);
+  assert.equal(registry.interruptThreadWaits(threadId), 1, "with nothing running, a steer interrupts at once");
+  alone.unregister();
+
+  const sibling = registry.register("client-1", 5, { owner, toolName: "shell", shellItem: { threadId, references: ["sibling"] } });
+  const held = registry.register("client-1", 6, { owner, toolName: "shell", shellItem: { threadId, references: ["held"] } });
+  held.shellQueue!.queued(14);
+  registry.declareToolBatch(threadId, "message", ["sibling", "held"]);
+  registry.interruptThreadWaits(threadId);
+  registry.endToolBatch(threadId);
+  sibling.unregister();
+  assert.equal(held.signal.aborted, false, "a held steer ends with its batch, where the agent reads it");
+  held.unregister();
 
   const late = registry.register("client-1", 3, { owner, toolName: "shell", shellItem: { references: ["late"] } });
   late.shellQueue!.queued(20);
@@ -137,6 +153,97 @@ test("steers interrupt a shell only while it waits in the expensive queue", () =
   late.setWorkbenchThreadId(threadId);
   assert.equal(late.signal.aborted, false, "a deferred steer never reaches a shell admitted since");
   late.unregister();
+  stop();
+});
+
+const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+
+function track<T>(promise: Promise<T>) {
+  const state: { value?: T } = {};
+  void promise.then(value => { state.value = value; });
+  return state;
+}
+
+test("a serial call waits for every earlier call of its batch to report, then runs or is skipped after a failure", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const signal = new AbortController().signal;
+  const early = track(registry.awaitBatchTurn("build", signal));
+  await settle();
+  assert.equal(early.value, undefined, "a call whose batch is not declared yet waits for it");
+  registry.declareToolBatch(threadId, "message-1", ["read", "build"]);
+  registry.declareToolBatch(threadId, "message-1", ["edit", "test"]);
+  await settle();
+  assert.equal(early.value, undefined, "an earlier native read must report first");
+  registry.settleToolUse("read", false);
+  await settle();
+  assert.equal(early.value, "ready");
+  const test = track(registry.awaitBatchTurn("test", signal));
+  registry.settleToolUse("build", false);
+  await settle();
+  assert.equal(test.value, undefined, "a later part of the same message extends its batch");
+  registry.settleToolUse("edit", true);
+  await settle();
+  assert.equal(test.value, "skipped", "a failure reported late still skips the call waiting behind it");
+});
+
+test("a batch an older generation stored in another shape never breaks a lookup, and a declaration replaces it", async () => {
+  const registry = getProcessWorkbenchAgentMcpRequestRegistry();
+  const state = Reflect.get(globalThis, Symbol.for("workbench.agentMcpRequestRegistry.v2")) as { toolBatches: Map<string, unknown> };
+  const staleThreadId = WorkbenchThreadIdSchema.parse(`stale-${process.pid}`);
+  const threadId = WorkbenchThreadIdSchema.parse(`current-${process.pid}`);
+  state.toolBatches.set(staleThreadId, { id: "old", entries: [{ key: "old-call", shell: true, parallel: false }] });
+  try {
+    const signal = new AbortController().signal;
+    registry.settleToolUse("old-call", true);
+    assert.equal(await registry.awaitBatchTurn("old-call", signal, "Edit", 0), "ready", "an unreadable batch holds nothing");
+    registry.declareToolBatch(threadId, "message", ["a", "b"]);
+    registry.settleToolUse("a", true);
+    assert.equal(await registry.awaitBatchTurn("b", signal, "Edit", 0), "skipped", "other threads' stale batches never hide this one");
+    registry.declareToolBatch(staleThreadId, "new", ["c"]);
+    assert.equal(await registry.awaitBatchTurn("c", signal, "Edit", 0), "ready");
+  } finally {
+    registry.endToolBatch(staleThreadId);
+    registry.endToolBatch(threadId);
+  }
+});
+
+test("a batch's end, its replacement, a steer or the caller release a waiting call, and another thread never holds it", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const otherThreadId = WorkbenchThreadIdSchema.parse("other-thread");
+  const signal = new AbortController().signal;
+  const waits: string[][] = [];
+  const stop = registry.subscribeThreadWaits(state => { if (state.threadId === threadId) waits.push(state.toolNames); });
+  registry.declareToolBatch(otherThreadId, "other", ["other-build", "other-test"]);
+  registry.declareToolBatch(threadId, "message-1", ["a", "b"]);
+  const ended = track(registry.awaitBatchTurn("b", signal));
+  await settle();
+  assert.deepEqual(waits.at(-1), ["shell"], "a waiting shell is a thread wait");
+  assert.equal(registry.interruptThreadWaits(otherThreadId), 0, "another thread's steer reaches nothing here");
+  registry.endToolBatch(threadId);
+  await settle();
+  assert.equal(ended.value, "ready");
+  assert.deepEqual(waits.at(-1), []);
+
+  registry.declareToolBatch(threadId, "message-2", ["c", "d"]);
+  const replaced = track(registry.awaitBatchTurn("d", signal));
+  await settle();
+  registry.declareToolBatch(threadId, "message-3", ["e"]);
+  await settle();
+  assert.equal(replaced.value, "ready");
+
+  registry.declareToolBatch(threadId, "message-4", ["f", "g"]);
+  const steered = track(registry.awaitBatchTurn("g", signal));
+  await settle();
+  assert.equal(registry.interruptThreadWaits(threadId, "agent message", ["message_wait"]), 1);
+  await settle();
+  assert.equal(steered.value, "interrupted");
+
+  const caller = new AbortController();
+  const cancelled = registry.awaitBatchTurn("other-test", caller.signal);
+  caller.abort(new Error("caller cancelled"));
+  await assert.rejects(cancelled, /caller cancelled/u);
   stop();
 });
 

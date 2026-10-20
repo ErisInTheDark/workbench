@@ -3,7 +3,7 @@
  * - WorkbenchAgentCliRequest/WorkbenchAgentCliResponseKind/WorkbenchAgentCliParseResult: normalised CLI contracts.
  * - WorkbenchAgentCliCommandDescriptor/listWorkbenchAgentCliCommandDescriptors: canonical command metadata.
  * - WORKBENCH_AGENT_CLI_HELP: agent-facing command reference.
- * - parseWorkbenchAgentCliCommand: adapt CLI arguments into the typed command registry.
+ * - parseWorkbenchAgentCliCommand: adapt CLI arguments into the typed command registry, sending MCP-only agents to their tools.
  */
 import path from "node:path";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
@@ -15,11 +15,12 @@ import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/dae
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
 import {
   getWorkbenchAgentCommandToolName,
+  isWorkbenchAgentCommandOnMcp,
   type WorkbenchAgentCommandDefinition,
   type WorkbenchAgentCommandRequest,
   type WorkbenchAgentCommandResponseKind,
 } from "../commands/workbench-agent-command-definition";
-import { isWorkbenchCommandVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import { isWorkbenchAgentCliOpenTo, isWorkbenchCommandVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
 
 export type WorkbenchAgentCliRequest = WorkbenchAgentCommandRequest;
 export type WorkbenchAgentCliResponseKind = WorkbenchAgentCommandResponseKind;
@@ -347,7 +348,10 @@ export async function parseWorkbenchAgentCliCommand(
     subagent = false,
     virtualRepos = false,
     allowStoreRead = false,
+    managedScript = false,
   }: {
+    /** Project tooling run by an agent declared itself with `THIS_IS_A_MANAGED_SCRIPT=1`; scripts cannot call MCP. */
+    managedScript?: boolean;
     callerHarness?: string;
     callerThreadId?: string | null;
     cwd?: string;
@@ -395,6 +399,18 @@ export async function parseWorkbenchAgentCliCommand(
       return { error: formatGitArcFailureReceipt(failure), kind: "error" };
     }
     return { error: `Unsupported wb command: ${workbenchArgs.join(" ")}\nRun ${help} for available commands.`, kind: "error" };
+  }
+  if (
+    callerThreadId !== null && !managedScript
+    && !isWorkbenchAgentCliOpenTo(callerHarness, { onMcp: isWorkbenchAgentCommandOnMcp(matched.definition) })
+  ) {
+    const tool = getWorkbenchAgentCommandToolName(matched.definition);
+    const route = matched.definition.mcpDeferred ? `mcp_call with server wb and tool ${tool}` : `the ${tool} tool`;
+    return {
+      error: `Managed ${callerHarness} agents use the wb MCP server, not the wb CLI: call ${route}. `
+        + "Project scripts that run wb set THIS_IS_A_MANAGED_SCRIPT=1.",
+      kind: "error",
+    };
   }
   try {
     return {

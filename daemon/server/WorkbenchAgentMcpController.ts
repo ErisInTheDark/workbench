@@ -24,6 +24,7 @@ import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-a
 import { formatWorkbenchToolSection } from "./mcp-servers/mcp-tool-search";
 import {
   getWorkbenchAgentCommandToolName,
+  isWorkbenchAgentCommandOnMcp,
   type WorkbenchAgentCommandDefinition,
   type WorkbenchAgentCommandRequest,
 } from "./lib/workbench/commands/workbench-agent-command-definition";
@@ -36,9 +37,8 @@ import {
 import type { WorkbenchProviderCaller } from "./provider-execution";
 import {
   getWorkbenchShellAggregatedOutput,
+  getWorkbenchShellInputSchema,
   WORKBENCH_SHELL_MCP_TOOL_NAME,
-  WorkbenchEscalatingShellInputSchema,
-  WorkbenchShellInputSchema,
   WorkbenchShellResultSchema,
   type WorkbenchEscalatingShellInput,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
@@ -57,6 +57,7 @@ import {
   serveWorkbenchMcpHttpRequest,
   type WorkbenchMcpCallOutcome,
   type WorkbenchMcpDetachedCall,
+  type WorkbenchMcpIngressCapabilities,
   type WorkbenchMcpScope,
   type WorkbenchMcpToolCall,
   type WorkbenchMcpToolGeneration,
@@ -68,12 +69,26 @@ const LEGACY_MCP_CLIENT_SCOPE = "legacy";
 const EMPTY_OBJECT_JSON_SCHEMA = { type: "object" as const, properties: {} };
 const STEER_INTERRUPTION_TEXT = "Wait interrupted: a new message arrived for this thread. Read it, then call this tool again if you still need to wait.";
 const QUEUED_SHELL_STEER_INTERRUPTION_TEXT = "Queued command interrupted before it started: a new message arrived for this thread. Read it, then call shell again if it still needs to run.";
+const SKIPPED_AFTER_FAILURE_TEXT = "Skipped: an earlier call in this batch failed. Read its result, then call this again if it still applies.";
+const BATCH_TURN_INTERRUPTION_TEXT = "Interrupted before it started: a new message arrived for this thread. Read it, then call this again if it still applies.";
 const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 type WorkbenchAgentMcpRequestId = number | string;
 type WorkbenchAgentMcpRegisteredCommand = {
   registration: ReturnType<WorkbenchAgentMcpRequestRegistry["register"]>;
   signal: AbortSignal;
 };
+
+/** Parallel shells need a provider that names its calls and an ingress that keeps unmarked ones in batch order. */
+function offersParallelShells(description: { toolUseIdMeta?: string }, batchTurns: boolean | undefined) {
+  return Boolean(description.toolUseIdMeta) && batchTurns === true;
+}
+
+/** The provider's name for this call within its tool batch, when calls can wait their batch turn. */
+function readToolUseKey(description: { toolUseIdMeta?: string }, call: WorkbenchMcpToolCall) {
+  if (!offersParallelShells(description, call.batchTurns)) return null;
+  const key = call.meta?.[description.toolUseIdMeta!];
+  return typeof key === "string" && key ? key : null;
+}
 
 export interface WorkbenchAgentMcpControllerOptions {
   isSubagentCaller?: (caller: WorkbenchProviderCaller) => Promise<boolean>;
@@ -276,7 +291,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         subagent: scope.subagent,
       })) continue;
       if (definition.managedThreadRootOnly && !scope.projectLocal) continue;
-      if (definition.mcpDeferred && definition.hideFromRootHelp) continue;
+      if (!isWorkbenchAgentCommandOnMcp(definition)) continue;
       if (names.has(name)) throw new Error(`Duplicate Workbench MCP tool name: ${name}`);
       names.add(name);
       (definition.mcpDeferred ? deferred : direct).set(name, definition);
@@ -299,15 +314,17 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     };
   }
 
-  async describe(scope: WorkbenchMcpScope, signal: AbortSignal) {
+  async describe(scope: WorkbenchMcpScope, signal: AbortSignal, ingress?: WorkbenchMcpIngressCapabilities) {
     const description = await this.tools(scope.provider).describe();
     signal.throwIfAborted();
-    const shellInputSchema = description.shellEscalation ? WorkbenchEscalatingShellInputSchema : WorkbenchShellInputSchema;
+    const parallel = offersParallelShells(description, ingress?.batchTurns);
+    const shellInputSchema = getWorkbenchShellInputSchema({ escalation: description.shellEscalation, parallel });
     const tools: Tool[] = [{
       name: WORKBENCH_SHELL_MCP_TOOL_NAME,
       description: description.shellDescription,
       inputSchema: toolJsonSchema(shellInputSchema, "input") as Tool["inputSchema"],
-      annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: false, readOnlyHint: false },
+      // Clients overlap only read-only tools; ordered shell turns keep unmarked shells serial regardless.
+      annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: false, readOnlyHint: parallel },
       outputSchema: toolJsonSchema(WorkbenchShellResultSchema, "output") as Tool["outputSchema"],
       _meta: CODE_MODE_META,
     }];
@@ -319,10 +336,19 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     const tools = this.tools(scope.provider);
     try {
       if (call.name === WORKBENCH_SHELL_MCP_TOOL_NAME) {
-        const { shellEscalation } = await tools.describe();
-        const shellInputSchema = shellEscalation ? WorkbenchEscalatingShellInputSchema : WorkbenchShellInputSchema;
-        const input = shellInputSchema.parse(await validateToolInput(shellInputSchema, call.arguments, call.name));
-        return await this.callShell(scope, call, input, tools, shellEscalation);
+        const description = await tools.describe();
+        const parallel = offersParallelShells(description, call.batchTurns);
+        const toolUseKey = readToolUseKey(description, call);
+        const shellInputSchema = getWorkbenchShellInputSchema({ escalation: description.shellEscalation, parallel });
+        const input: WorkbenchEscalatingShellInput & { parallel?: boolean } = shellInputSchema.parse(
+          await validateToolInput(shellInputSchema, call.arguments, call.name),
+        );
+        // A serial shell waits for its batch's earlier calls before anything about it is recorded or approved.
+        if (parallel && toolUseKey && input.parallel !== true) {
+          const turn = await this.batchTurn(scope, call, tools, toolUseKey, call.name, input);
+          if (turn) return turn;
+        }
+        return await this.callShell(scope, call, input, tools, description.shellEscalation);
       }
       const { deferred, direct } = this.visibleCommands(scope);
       const definition = direct.get(call.name);
@@ -351,6 +377,12 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       const target = definition === MCP_CALL_COMMAND && workbenchServer
         ? await this.deferredTarget(deferred, routing)
         : { definition, input };
+      // The provider's call id orders this call in its tool batch; the provider reports each call's result there.
+      const toolUseKey = call.batchTurns && !target.definition.effects.readOnly ? readToolUseKey(await tools.describe(), call) : null;
+      if (toolUseKey) {
+        const turn = await this.batchTurn(scope, call, tools, toolUseKey, getWorkbenchAgentCommandToolName(target.definition), input);
+        if (turn) return turn;
+      }
       if (target.definition.mcpRuntimeDrainPolicy === "preserve-across-reload") {
         return await this.detachTool(target.definition, target.input, call, scope.clientScope, tools, transcript);
       }
@@ -361,6 +393,20 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     } catch (error) {
       return { kind: "result", result: toolError(error) };
     }
+  }
+
+  /** Null once the call's batch turn is ready; otherwise the wait step, or the skipped or interrupted result. */
+  private async batchTurn(
+    scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, tools: WorkbenchProviderTools, key: string, toolName: string, input: object,
+  ): Promise<WorkbenchMcpToolStep | null> {
+    if (!call.batchTurn) return { kind: "batchTurn", key, toolName };
+    if (call.batchTurn === "ready") return null;
+    const text = call.batchTurn === "skipped" ? SKIPPED_AFTER_FAILURE_TEXT : BATCH_TURN_INTERRUPTION_TEXT;
+    return {
+      kind: "result",
+      result: await this.observeTool(call.name, input, call.meta, scope.clientScope, call.signal, tools,
+        async () => ({ content: [{ type: "text", text }], isError: true })),
+    };
   }
 
   private async deferredTarget(
@@ -598,7 +644,9 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
 
   /** The exact tool list a root Workbench-project thread on this provider is served, for prompt-cost accounting. */
   async listToolSpecs(provider: string, signal: AbortSignal = new AbortController().signal) {
-    return (await this.describe({ clientScope: LEGACY_MCP_CLIENT_SCOPE, projectLocal: true, provider, subagent: false }, signal)).tools;
+    return (await this.describe(
+      { clientScope: LEGACY_MCP_CLIENT_SCOPE, projectLocal: true, provider, subagent: false }, signal, { batchTurns: true },
+    )).tools;
   }
 
   listInstructionTools(): WorkbenchInstructionTool[] {

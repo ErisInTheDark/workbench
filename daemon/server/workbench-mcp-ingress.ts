@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchMcpScope: plain per-request client, provider and catalogue selection.
- * - WorkbenchMcpToolCall/WorkbenchMcpDetachedCall/WorkbenchMcpToolStep/WorkbenchMcpCallOutcome: step contracts between ingress and generation, for detached commands and shells.
+ * - WorkbenchMcpToolCall/WorkbenchMcpDetachedCall/WorkbenchMcpToolStep/WorkbenchMcpCallOutcome: step contracts between ingress and generation, for detached commands, shells and serial batch turns.
+ * - WorkbenchMcpIngressCapabilities: what this ingress supports, passed to each generation's describe.
  * - WorkbenchMcpToolGeneration: the current MCP generation's short describe, call and finish steps.
  * - scheduleWorkbenchMcpProgress: request-owned 60s progress keepalive.
  * - keepWorkbenchMcpCallAlive: pulse a call's request-owned progress until stopped, logging failed pulses.
@@ -23,7 +24,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import type { WorkbenchAgentCommandRequest } from "./lib/workbench/commands/workbench-agent-command-definition";
-import type { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import type { WorkbenchAgentBatchTurn, WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import type { WorkbenchPreparedShell, WorkbenchShellRun, WorkbenchShellRunResult } from "./provider-execution";
 import type { WorkbenchCommandQueueTicket } from "./WorkbenchCommandCapacity";
 
@@ -42,6 +43,10 @@ export interface WorkbenchMcpToolCall {
   arguments: Record<string, unknown> | undefined;
   /** Set by ingress that runs detached shells; a generation newer than its ingress runs them inline otherwise. */
   detachableShell?: boolean;
+  /** Set by ingress that waits out `batchTurn` steps; without it a generation never orders calls. */
+  batchTurns?: boolean;
+  /** How this call's batch turn ended, on the call the ingress repeats after waiting it out. */
+  batchTurn?: WorkbenchAgentBatchTurn;
   meta: Record<string, unknown> | undefined;
   name: string;
   requestId: WorkbenchMcpRequestId;
@@ -72,12 +77,21 @@ export type WorkbenchMcpDetachedCall = {
 
 export type WorkbenchMcpToolStep =
   | { kind: "result"; result: CallToolResult }
-  | { kind: "detached"; call: WorkbenchMcpDetachedCall };
+  | { kind: "detached"; call: WorkbenchMcpDetachedCall }
+  /** A serial call must wait for the earlier calls of its batch before anything about it is recorded. */
+  | { kind: "batchTurn"; key: string; toolName: string };
+
+/** What this ingress can do, so a newer generation offers only behaviour its ingress supports. */
+export interface WorkbenchMcpIngressCapabilities {
+  batchTurns?: boolean;
+}
 
 export type WorkbenchMcpCallOutcome = { response: Response } | { shellResult: WorkbenchShellRunResult } | { error: unknown };
 
 export interface WorkbenchMcpToolGeneration {
-  describe(scope: WorkbenchMcpScope, signal: AbortSignal): Promise<{ experimental: Record<string, object>; tools: Tool[] }>;
+  describe(
+    scope: WorkbenchMcpScope, signal: AbortSignal, ingress?: WorkbenchMcpIngressCapabilities,
+  ): Promise<{ experimental: Record<string, object>; tools: Tool[] }>;
   call(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall): Promise<WorkbenchMcpToolStep>;
   finish(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome): Promise<CallToolResult>;
 }
@@ -183,7 +197,7 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
     close();
   });
   try {
-    const description = await (await registry.awaitToolGeneration(requestAbort.signal)).describe(scope, requestAbort.signal);
+    const description = await (await registry.awaitToolGeneration(requestAbort.signal)).describe(scope, requestAbort.signal, { batchTurns: true });
     requestAbort.signal.throwIfAborted();
     server = new Server({ name: "wb", version: "1.0.0" }, {
       capabilities: { experimental: description.experimental, tools: { listChanged: true } },
@@ -198,6 +212,7 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
       return await callTool(options, {
         arguments: message.params.arguments,
         detachableShell: true,
+        batchTurns: true,
         meta: extra._meta,
         name: message.params.name,
         requestId: extra.requestId,
@@ -231,7 +246,16 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
 
 async function callTool(options: WorkbenchMcpIngressOptions, call: WorkbenchMcpToolCall): Promise<CallToolResult> {
   const { logError, registry, scope } = options;
-  const step = await (await registry.awaitToolGeneration(call.signal)).call(scope, call);
+  let step = await (await registry.awaitToolGeneration(call.signal)).call(scope, call);
+  // The turn wait holds no generation; whichever is current when it ends takes the call from there.
+  while (step.kind === "batchTurn") {
+    // The caller sees no output while an earlier call runs, so progress keeps its request from idling out.
+    const stopWaiting = keepWorkbenchMcpCallAlive(call, call.signal, logError);
+    let batchTurn: WorkbenchAgentBatchTurn;
+    try { batchTurn = await registry.awaitBatchTurn(step.key, call.signal, step.toolName); }
+    finally { stopWaiting?.(); }
+    step = await (await registry.awaitToolGeneration(call.signal)).call(scope, { ...call, batchTurn });
+  }
   if (step.kind === "result") return step.result;
   const detached = step.call;
   const stopProgress = detached.keepalive

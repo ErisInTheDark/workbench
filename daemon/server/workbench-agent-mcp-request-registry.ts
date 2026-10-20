@@ -3,7 +3,9 @@
  * - WorkbenchAgentMcpPendingRequest: describe one active request for runtime-drain diagnostics.
  * - WorkbenchAgentMcpThreadWaitState: describe active waits owned by one Workbench thread.
  * - WorkbenchAgentMcpShellQueueEntry: one live shell's expensive-queue timing and the transcript references naming it.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, user shell stops and queue skips, wait and shell-queue observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
+ * - WorkbenchAgentBatchTurn: how a serial call's turn in its provider tool batch ended.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, user shell stops and queue skips, provider tool batches and serial call
+ *   turns, wait and shell-queue observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
  * - isWorkbenchAgentMcpUserStop: identify a user's stop of one shell command across module generations.
@@ -85,8 +87,46 @@ interface WorkbenchAgentMcpRequestRegistryState {
   exitHookInstalled: boolean;
   threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState | WorkbenchAgentMcpLegacyThreadWaitState) => void>;
   shellQueueListeners: Set<(threadId: WorkbenchThreadId) => void>;
+  /** Each thread's current provider tool batch, in the order the model issued its calls. */
+  toolBatches: Map<WorkbenchThreadId, WorkbenchAgentToolBatch>;
+  batchTurnWaiters: Set<WorkbenchAgentBatchTurnWaiter>;
+  /** Steers that arrived while the thread still ran a call; they interrupt its queued waits once that ends. */
+  heldSteers: Map<WorkbenchThreadId, WorkbenchAgentHeldSteer>;
   ownerStates: WeakMap<WorkbenchAgentMcpRuntimeOwner, WorkbenchAgentMcpRuntimeOwnerState>;
   requestsByClient: Map<WorkbenchAgentMcpClientScope, Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>>;
+}
+
+/** `skipped`: an earlier call in the batch failed. `interrupted`: a steer arrived first. */
+export type WorkbenchAgentBatchTurn = "ready" | "skipped" | "interrupted";
+
+interface WorkbenchAgentToolBatch {
+  /** The provider message that issued the calls; later parts of the same message extend the batch. */
+  id: string;
+  /** The provider's call ids, in issue order; MCP requests carry the same ids. */
+  keys: string[];
+  failed: Set<string>;
+  settled: Set<string>;
+}
+
+interface WorkbenchAgentHeldSteer {
+  reason: string;
+  excludedToolNames: string[];
+}
+
+/** Process state outlives module generations: a held steer another generation stored in another shape is none. */
+function readHeldSteer(stored: WorkbenchAgentHeldSteer | undefined) {
+  return stored && typeof stored.reason === "string" && Array.isArray(stored.excludedToolNames) ? stored : null;
+}
+
+function isQueuedShell(entry: WorkbenchAgentMcpRequestEntry) {
+  return entry.shellQueue !== undefined && entry.shellQueue.admittedAt === null;
+}
+
+interface WorkbenchAgentBatchTurnWaiter {
+  threadId: WorkbenchThreadId | null;
+  toolName: string;
+  wake(): void;
+  interrupt(): void;
 }
 
 interface WorkbenchAgentMcpRequestRegistrationOptions {
@@ -122,6 +162,8 @@ interface WorkbenchAgentMcpLegacyThreadWaitState {
 }
 
 const PROCESS_REGISTRY_KEY = Symbol.for("workbench.agentMcpRequestRegistry.v2");
+/** A provider declares a batch as its message streams, which may trail the call's own request only briefly. */
+const UNDECLARED_BATCH_GRACE_MS = 5_000;
 const STEER_INTERRUPTION_KEY = Symbol.for("workbench.agentMcpSteerInterruption.v1");
 
 function createWorkbenchAgentMcpSteerInterruption(reason: string) {
@@ -151,6 +193,9 @@ function createState(): WorkbenchAgentMcpRequestRegistryState {
     exitHookInstalled: false,
     threadWaitListeners: new Set(),
     shellQueueListeners: new Set(),
+    toolBatches: new Map(),
+    batchTurnWaiters: new Set(),
+    heldSteers: new Map(),
     ownerStates: new WeakMap(),
     requestsByClient: new Map(),
   };
@@ -173,6 +218,9 @@ function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: stri
   state.requestsByClient.clear();
   state.threadWaitListeners.clear();
   state.shellQueueListeners.clear();
+  state.toolBatches.clear();
+  state.heldSteers.clear();
+  for (const waiter of [...state.batchTurnWaiters]) waiter.wake();
   state.ownerStates = new WeakMap();
 }
 
@@ -190,6 +238,9 @@ function getProcessState() {
   state.shellRunnerWaiters ??= new Set();
   state.threadWaitListeners ??= new Set();
   state.shellQueueListeners ??= new Set();
+  state.toolBatches ??= new Map();
+  state.batchTurnWaiters ??= new Set();
+  state.heldSteers ??= new Map();
   if (!state.exitHookInstalled) {
     state.exitHookInstalled = true;
     process.once("exit", () => disposeState(state, "Workbench daemon is shutting down."));
@@ -260,6 +311,7 @@ export class WorkbenchAgentMcpRequestRegistry {
         }
         if (entry.steerInterruptible && entry.workbenchThreadId) this.notifyThreadWaits(entry.workbenchThreadId);
         if (entry.shellQueue && entry.workbenchThreadId) this.notifyShellQueue(entry.workbenchThreadId);
+        if (entry.workbenchThreadId) this.releaseHeldSteer(entry.workbenchThreadId);
       },
     };
   }
@@ -425,6 +477,9 @@ export class WorkbenchAgentMcpRequestRegistry {
         toolNamesByThreadId.set(entry.workbenchThreadId, toolNames);
       }
     }
+    for (const { threadId, toolName } of this.state.batchTurnWaiters) {
+      if (threadId) toolNamesByThreadId.set(threadId, (toolNamesByThreadId.get(threadId) ?? new Set<string>()).add(toolName));
+    }
     return [...toolNamesByThreadId]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([threadId, toolNames]) => ({
@@ -437,6 +492,97 @@ export class WorkbenchAgentMcpRequestRegistry {
   private notifyThreadWaits(threadId: WorkbenchThreadId) {
     const state = this.threadWaitState(threadId);
     for (const listener of this.state.threadWaitListeners) listener(state);
+  }
+
+  /**
+   * Record the calls one provider message issued, in order, before any of them runs. A message delivered in parts
+   * extends its batch; another message replaces it, releasing anything still waiting on the old one.
+   */
+  declareToolBatch(threadId: WorkbenchThreadId, id: string, keys: readonly string[]) {
+    const current = this.readToolBatch(this.state.toolBatches.get(threadId));
+    if (current?.id === id) {
+      current.keys.push(...keys.filter(key => !current.keys.includes(key)));
+    } else {
+      this.state.toolBatches.set(threadId, { id, keys: [...keys], failed: new Set(), settled: new Set() });
+    }
+    this.wakeBatchTurns();
+  }
+
+  /** The provider reported a batch call's result; a failure skips the serial calls after it. */
+  settleToolUse(key: string, failed: boolean) {
+    const found = this.findToolBatch(key);
+    if (!found) return;
+    found.batch.settled.add(key);
+    if (failed) found.batch.failed.add(key);
+    this.wakeBatchTurns();
+  }
+
+  /** The provider resolved every call of the thread's batch, or its turn ended; nothing waits on it any more. */
+  endToolBatch(threadId: WorkbenchThreadId) {
+    // The agent reads any held steer with the batch's results.
+    this.state.heldSteers.delete(threadId);
+    if (this.state.toolBatches.delete(threadId)) this.wakeBatchTurns();
+  }
+
+  /**
+   * A serial call's long wait for its turn: every earlier call of its batch reported its result. Results arrive on
+   * the provider's own stream, so waiting, not a point check, is what sees a failure that raced the call here. Waiting
+   * covers a batch not yet declared; once its batch ends or is replaced the call runs, so no other thread or batch
+   * can hold it, and earlier calls never wait on later ones.
+   */
+  async awaitBatchTurn(
+    key: string, signal: AbortSignal, toolName = "shell", undeclaredGraceMs = UNDECLARED_BATCH_GRACE_MS,
+  ): Promise<WorkbenchAgentBatchTurn> {
+    let declared = false;
+    // A call never declared, such as one the provider issued outside any observed message, must not wait forever.
+    const grace = undeclaredGraceMs > 0 ? AbortSignal.timeout(undeclaredGraceMs) : null;
+    for (;;) {
+      signal.throwIfAborted();
+      if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
+      const found = this.findToolBatch(key);
+      if (!found && (declared || !grace || grace.aborted)) return "ready";
+      if (found) {
+        declared = true;
+        const earlier = found.batch.keys.slice(0, found.index);
+        if (earlier.some(earlierKey => found.batch.failed.has(earlierKey))) return "skipped";
+        if (earlier.every(earlierKey => found.batch.settled.has(earlierKey))) return "ready";
+      }
+      const threadId = found?.threadId ?? null;
+      const interrupted = await new Promise<boolean>(resolve => {
+        const finish = (value: boolean) => {
+          this.state.batchTurnWaiters.delete(waiter);
+          signal.removeEventListener("abort", abort);
+          grace?.removeEventListener("abort", abort);
+          if (threadId) this.notifyThreadWaits(threadId);
+          resolve(value);
+        };
+        const abort = () => finish(false);
+        const waiter: WorkbenchAgentBatchTurnWaiter = { threadId, toolName, wake: () => finish(false), interrupt: () => finish(true) };
+        this.state.batchTurnWaiters.add(waiter);
+        signal.addEventListener("abort", abort, { once: true });
+        if (!found) grace?.addEventListener("abort", abort, { once: true });
+        if (threadId) this.notifyThreadWaits(threadId);
+      });
+      if (interrupted) return "interrupted";
+    }
+  }
+
+  private findToolBatch(key: string) {
+    for (const [threadId, stored] of this.state.toolBatches) {
+      const batch = this.readToolBatch(stored);
+      const index = batch?.keys.indexOf(key) ?? -1;
+      if (batch && index >= 0) return { batch, index, threadId };
+    }
+    return null;
+  }
+
+  /** Process state outlives module generations: a batch another generation stored in another shape is no batch. */
+  private readToolBatch(stored: WorkbenchAgentToolBatch | undefined) {
+    return stored && Array.isArray(stored.keys) && stored.failed instanceof Set && stored.settled instanceof Set ? stored : null;
+  }
+
+  private wakeBatchTurns() {
+    for (const waiter of [...this.state.batchTurnWaiters]) waiter.wake();
   }
 
   /** Every live shell of `threadId` that has waited in the expensive queue, oldest first. */
@@ -471,6 +617,9 @@ export class WorkbenchAgentMcpRequestRegistry {
       for (const entry of requests.values()) {
         if (entry.steerInterruptible && entry.workbenchThreadId === threadId) toolNames.add(entry.toolName);
       }
+    }
+    for (const waiter of this.state.batchTurnWaiters) {
+      if (waiter.threadId === threadId) toolNames.add(waiter.toolName);
     }
     return {
       identityKind: "workbench",
@@ -567,11 +716,59 @@ export class WorkbenchAgentMcpRequestRegistry {
           (entry.deferredSteerInterruptions ??= new Map()).set(workbenchThreadId, interruption);
           continue;
         }
+        if (isQueuedShell(entry)) continue;
         entry.controller.abort(interruption);
         interrupted += 1;
       }
     }
-    return interrupted;
+    if (this.hasRunningCall(workbenchThreadId)) {
+      // The agent reads the steer only once its running calls end, so interrupting queued work now gains nothing.
+      if (this.queuedWaits(workbenchThreadId, reason, excludedToolNames).length) {
+        this.state.heldSteers.set(workbenchThreadId, { reason, excludedToolNames: [...excludedToolNames] });
+      }
+      return interrupted;
+    }
+    return interrupted + this.interruptQueuedWaits(workbenchThreadId, reason, excludedToolNames);
+  }
+
+  /** A queued shell or batch-turn wait of the thread, which a steer interrupts once nothing else of its thread runs. */
+  private queuedWaits(threadId: WorkbenchThreadId, reason: string, excludedToolNames: readonly string[]) {
+    const waits: Array<() => void> = [];
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (entry.workbenchThreadId !== threadId || !isQueuedShell(entry) || entry.controller.signal.aborted) continue;
+        if (excludedToolNames.includes(entry.toolName)) continue;
+        waits.push(() => entry.controller.abort(createWorkbenchAgentMcpSteerInterruption(reason)));
+      }
+    }
+    for (const waiter of this.state.batchTurnWaiters) {
+      if (waiter.threadId === threadId && !excludedToolNames.includes(waiter.toolName)) waits.push(() => waiter.interrupt());
+    }
+    return waits;
+  }
+
+  private interruptQueuedWaits(threadId: WorkbenchThreadId, reason: string, excludedToolNames: readonly string[]) {
+    const waits = this.queuedWaits(threadId, reason, excludedToolNames);
+    for (const interrupt of waits) interrupt();
+    return waits.length;
+  }
+
+  /** Whether a call of the thread is doing work a steer never interrupts, such as an admitted shell. */
+  private hasRunningCall(threadId: WorkbenchThreadId) {
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (entry.workbenchThreadId === threadId && !entry.steerInterruptible && !entry.controller.signal.aborted) return true;
+      }
+    }
+    return false;
+  }
+
+  /** A held steer takes effect once the thread's last running call ends. */
+  private releaseHeldSteer(threadId: WorkbenchThreadId) {
+    const held = readHeldSteer(this.state.heldSteers.get(threadId));
+    if (!held || this.hasRunningCall(threadId)) return;
+    this.state.heldSteers.delete(threadId);
+    this.interruptQueuedWaits(threadId, held.reason, held.excludedToolNames);
   }
 
   listRuntimeDrainPending(owner: WorkbenchAgentMcpRuntimeOwner): WorkbenchAgentMcpPendingRequest[] {

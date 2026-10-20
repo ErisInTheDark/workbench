@@ -8,6 +8,7 @@
  * - WorkbenchLocalCapability: a local capability setting a command can require.
  * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary.
  * - getWorkbenchAgentCommandToolName: canonical MCP command name.
+ * - isWorkbenchAgentCommandOnMcp: whether the wb MCP server offers a command at all.
  * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request construction.
  * - createWorkbenchAgentMcpRuntimeReloadInterruption: private reload re-entry signal.
  * - isWorkbenchAgentMcpRuntimeReloadInterruption: recognise cross-generation reload re-entry.
@@ -192,6 +193,11 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
 
 export function getWorkbenchAgentCommandToolName(definition: Pick<WorkbenchAgentCommandDefinition, "words">) {
   return definition.words.join("_");
+}
+
+/** Whether the wb MCP server offers this command, directly or through `mcp_call`; deferred commands hidden from help are CLI-only. */
+export function isWorkbenchAgentCommandOnMcp(definition: Pick<WorkbenchAgentCommandDefinition, "hideFromRootHelp" | "mcpDeferred">) {
+  return !(definition.mcpDeferred && definition.hideFromRootHelp);
 }
 
 export function postWorkbenchAgentCommand(

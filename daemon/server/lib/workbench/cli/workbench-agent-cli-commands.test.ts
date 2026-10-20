@@ -384,11 +384,26 @@ test("CLI help and dispatch enforce every command audience", async () => {
     if (parsed.kind === "error") assert.match(parsed.error, /Unsupported wb command/u);
   }
   assert.equal((await parseWorkbenchAgentCliCommand(
-    ["rm", "claimed.txt"], { callerHarness: "claude", callerThreadId: "thread", cwd: "C:/workspace" },
-  )).kind, "request");
-  assert.equal((await parseWorkbenchAgentCliCommand(
     ["thread", "compact", "--summary", "handoff"], { callerHarness: "opencode", callerThreadId: "thread", cwd: "C:/workspace" },
   )).kind, "request");
+});
+
+test("managed Claude agents are sent to the wb MCP server for every command it offers", async () => {
+  const claude = { callerHarness: "claude", callerThreadId: "thread", cwd: "C:/workspace" };
+  const direct = await parseWorkbenchAgentCliCommand(["git", "arc", "status"], claude);
+  assert.equal(direct.kind, "error");
+  if (direct.kind === "error") assert.match(direct.error, /wb MCP server, not the wb CLI: call the git_arc_status tool/u);
+  const deferred = await parseWorkbenchAgentCliCommand(["git", "arc", "edit", "view"], claude);
+  assert.equal(deferred.kind, "error");
+  if (deferred.kind === "error") assert.match(deferred.error, /call mcp_call with server wb and tool git_arc_edit_view/u);
+  const userCli = await parseWorkbenchAgentCliCommand(["git", "arc", "status"], { ...claude, callerThreadId: null });
+  assert.doesNotMatch(userCli.kind === "error" ? userCli.error : "", /wb MCP server/u, "the user's own CLI is not an agent");
+  assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "status"], { ...claude, callerHarness: "codex" })).kind, "request");
+  assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "status"], { ...claude, managedScript: true })).kind, "request",
+    "project scripts cannot call MCP, so they declare themselves");
+  assert.equal((await parseWorkbenchAgentCliCommand(["debug", "socket"], {
+    ...claude, cwd: "C:/workbench", projectRoot: "C:/workbench",
+  })).kind, "request", "CLI-only commands stay on the CLI");
 });
 
 test("cross-project feedback reads need the wb channel and are documented only at the Workbench root", async () => {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ClaudeBridgeNode: own reloadable Claude turn logic, managed prompt and activated-skill builds, input-time agent context, lifecycle publication, native edit claim gating, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
+ * - default ClaudeBridgeNode: own reloadable Claude turn logic, managed prompt and activated-skill builds, input-time agent context, lifecycle publication, native edit claim gating, tool batch ordering, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
  */
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import ReloadableNode from "../../ReloadableNode";
@@ -16,6 +16,7 @@ import ClaudeConfigurationController from "./ClaudeConfigurationController";
 import ClaudeProviderNode from "./ClaudeProviderNode";
 import ClaudeThreadOperations, { type ClaudeInstructionInput, type ClaudeTurnHandoff } from "./ClaudeThreadOperations";
 import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "../../workbench-agent-mcp-request-registry";
 
 interface ClaudeBridgeHandoff {
   turns: ClaudeTurnHandoff[];
@@ -87,6 +88,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       detachHooks = sessions.attach({
         checkFileClaims: ({ cwd, threadId, paths }) => gitArc.checkActiveClaimPaths(cwd, "claude", threadId, paths),
         recordNativeToolDenial: (turnId, toolUseId) => transcript.recordNativeToolDenial(turnId, toolUseId),
+        toolBatch: getProcessWorkbenchAgentMcpRequestRegistry(),
       });
     };
     const releaseHooks = async () => {

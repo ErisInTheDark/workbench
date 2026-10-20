@@ -153,6 +153,7 @@ func dispatch(origin string, cwd string, args []string, hook bool) int {
 	form.Set("callerHarness", firstNonEmpty(os.Getenv("WORKBENCH_HARNESS"), "codex"))
 	form.Set("workbenchOrigin", origin)
 	form.Set("dangerouslyAccessEnvVars", os.Getenv("DANGEROUSLY_ACCESS_ENV_VARS"))
+	form.Set("managedScript", os.Getenv("THIS_IS_A_MANAGED_SCRIPT"))
 	for _, argument := range args {
 		form.Add("arg", argument)
 	}

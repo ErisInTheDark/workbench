@@ -1,19 +1,28 @@
-/* No production exports. Tests protect compact recall directive injection, commentary hint delivery, and the Claude Edit/Write claim gate. */
+/* No production exports. Tests protect compact recall directive injection, commentary hint delivery, the Claude Edit/Write claim gate, and tool batch failure skipping. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import ClaudeCommentaryNudge, { CLAUDE_COMMENTARY_HINT } from "./ClaudeCommentaryNudge";
 import { CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
-import { createClaudeSessionHooks, type ClaudeFileClaimCheck } from "./claude-session-hooks";
+import type { WorkbenchAgentBatchTurn } from "../../workbench-agent-mcp-request-registry";
+import {
+  claudeToolResults, claudeToolUseIds, createClaudeSessionHooks, type ClaudeFileClaimCheck, type ClaudeToolBatchPort,
+} from "./claude-session-hooks";
 
 const cwd = path.resolve("/repo");
 
-function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit") {
+function recordingBatch(turn: WorkbenchAgentBatchTurn = "ready") {
+  let ended = 0;
+  const batch: ClaudeToolBatchPort = { turn: async () => turn, end: () => { ended += 1; } };
+  return { batch, ended: () => ended };
+}
+
+function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit", batch = recordingBatch()) {
   const denied: string[] = [];
   const checked: string[][] = [];
   const hooks = createClaudeSessionHooks({
-    cwd, onDenied: id => denied.push(id), nudge: new ClaudeCommentaryNudge(),
+    cwd, onDenied: id => denied.push(id), nudge: new ClaudeCommentaryNudge(), batch: batch.batch,
     check: async paths => { checked.push(paths); return check(paths); },
   });
   const hook = hooks.PreToolUse[0]!.hooks[0]!;
@@ -30,7 +39,7 @@ const decision = (result: unknown) =>
 test("plain assistant text reaches Claude as hint context after its tool batch and at a prose stop", async () => {
   const nudge = new ClaudeCommentaryNudge();
   const hooks = createClaudeSessionHooks({
-    cwd, onDenied: () => undefined, nudge,
+    cwd, onDenied: () => undefined, nudge, batch: recordingBatch().batch,
     check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
   });
   const base = { session_id: "session", transcript_path: "", cwd };
@@ -54,7 +63,7 @@ test("plain assistant text reaches Claude as hint context after its tool batch a
 
 test("only native compaction injects the recall directive", async () => {
   const hooks = createClaudeSessionHooks({
-    cwd, onDenied: () => undefined, nudge: new ClaudeCommentaryNudge(),
+    cwd, onDenied: () => undefined, nudge: new ClaudeCommentaryNudge(), batch: recordingBatch().batch,
     check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
   });
   const hook = hooks.SessionStart[0]!.hooks[0]!;
@@ -87,6 +96,42 @@ test("an unclaimed path is denied and reported for transcript presentation", asy
   const { result, denied } = await run(async () => ({ allowed: false, pendingProposals: [], uncoveredPaths: [target] }), { file_path: target }, "Write");
   assert.equal(decision(result), "deny");
   assert.deepEqual(denied, ["tool-1"]);
+});
+
+test("an edit whose batch turn was skipped or interrupted is denied without a claim check", async () => {
+  for (const turn of ["skipped", "interrupted"] as const) {
+    const { result, checked } = await run(
+      async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }), { file_path: "a.ts" }, "Edit", recordingBatch(turn),
+    );
+    assert.equal(decision(result), "deny");
+    assert.deepEqual(checked, []);
+  }
+});
+
+test("a resolved batch ends", async () => {
+  const batch = recordingBatch();
+  const hooks = createClaudeSessionHooks({
+    cwd, onDenied: () => undefined, nudge: new ClaudeCommentaryNudge(), batch: batch.batch,
+    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
+  });
+  await hooks.PostToolBatch[0]!.hooks[0]!(
+    { session_id: "session", transcript_path: "", cwd, hook_event_name: "PostToolBatch", tool_calls: [] } as never,
+    undefined, { signal: new AbortController().signal });
+  assert.equal(batch.ended(), 1);
+});
+
+test("a message's call ids keep their order, and every result block reports its call's outcome", () => {
+  assert.deepEqual(claudeToolUseIds([
+    { type: "text", text: "checking", citations: null },
+    { type: "tool_use", id: "edit", name: "Edit", input: {} },
+    { type: "tool_use", id: "build", name: "mcp__wb__shell", input: {} },
+  ] as never), ["edit", "build"]);
+  assert.deepEqual(claudeToolResults([
+    { type: "tool_result", tool_use_id: "edit", is_error: true, content: "String to replace not found in file." },
+    { type: "tool_result", tool_use_id: "build", content: "ok" },
+    { type: "text", text: "steer" },
+  ] as never), [{ key: "edit", failed: true }, { key: "build", failed: false }]);
+  assert.deepEqual(claudeToolResults("plain prompt"), []);
 });
 
 test("a pending proposal's file is denied without the unclaimed transcript marker", async () => {

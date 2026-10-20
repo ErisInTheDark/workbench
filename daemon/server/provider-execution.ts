@@ -102,6 +102,12 @@ export interface WorkbenchProviderTools {
     shellDescription: string;
     /** Workbench hosts the shell tool, escalating through Workbench approval; the provider supplies `caller` and `prepareExecution`. */
     shellEscalation: boolean;
+    /**
+     * The request `_meta` key under which the provider names each call, matching the ids its tool batches declare.
+     * Naming calls orders them, so it also offers `parallel` shells: the shell is advertised read-only, the only way
+     * the client overlaps calls, which grants nothing since Workbench still admits every command.
+     */
+    toolUseIdMeta?: string;
   }>;
   caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
   /** Prepare the provider-native shell, required only when `describe().shellEscalation` is false. */
