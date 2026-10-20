@@ -60,6 +60,12 @@ test("explains unquoted pipes inside arguments", async () => {
   assert.match(payload.error, /Unsupported BrowseMD command "B\/"\..*quote arguments containing \|/u);
 });
 
+test("puts each batched command's output on its own lines", async () => {
+  const payload = await runCommands(["help type", "help screenshot"]);
+  assert.equal(payload.ok, true);
+  assert.deepEqual(payload.stdout.split("\n").map(line => line.split(" ")[0]), ["type", "screenshot", ""]);
+});
+
 test("keeps command-array identity and prior help output when a later command fails", async () => {
   const handler = createHandler();
   const response = await handler.handle(Buffer.from(JSON.stringify({

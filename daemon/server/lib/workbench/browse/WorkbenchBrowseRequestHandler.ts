@@ -788,7 +788,7 @@ async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionConte
       }
       setBrowseMarkdownVariable(context.variables, assignment.name, result.stdout);
     } else if (!result.outputRedirected) {
-      stdout += result.stdout;
+      stdout += result.stdout && !result.stdout.endsWith("\n") ? `${result.stdout}\n` : result.stdout;
     }
   }
   return {
