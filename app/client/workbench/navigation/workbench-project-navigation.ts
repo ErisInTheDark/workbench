@@ -18,6 +18,9 @@ import {
 
 export default class WorkbenchProjectNavigation {
   private readonly addressOwners = new Map<string, Set<WorkbenchLogicalProject>>();
+  /** Derived with `addressOwners`: every sidebar link reads them, and they change only on `update`. */
+  private readonly logicalById = new Map<string, WorkbenchLogicalProject>();
+  private readonly canonicalAddresses = new Map<WorkbenchLogicalProject, string>();
   private folders: readonly ProjectFolderOption[] = [];
   private attached: { daemonId: ProjectLocationReference["daemonId"]; hostname: string } | null = null;
   private revision = 0;
@@ -50,7 +53,6 @@ export default class WorkbenchProjectNavigation {
     this.projects = projects;
     this.aliases = aliases;
     this.logicalProjects = logicalProjects;
-    this.addressOwners.clear();
     this.rebuildAddressOwners();
     this.revision += 1;
     for (const listener of this.listeners) listener();
@@ -64,6 +66,9 @@ export default class WorkbenchProjectNavigation {
   };
 
   private rebuildAddressOwners() {
+    this.addressOwners.clear();
+    this.logicalById.clear();
+    this.canonicalAddresses.clear();
     this.folders = projectFolderOptions(this.logicalProjects, this.projects, this.attached);
     const add = (address: string, project: WorkbenchLogicalProject) => {
       if (!address) return;
@@ -72,6 +77,7 @@ export default class WorkbenchProjectNavigation {
       this.addressOwners.set(address, owners);
     };
     for (const project of this.logicalProjects) {
+      this.logicalById.set(project.id, project);
       add(project.id, project);
       add(project.matchKey, project);
       for (const address of this.remoteAddresses(project)) add(address, project);
@@ -263,8 +269,8 @@ export default class WorkbenchProjectNavigation {
     if (resolved.view === "invalid" || resolved.view === "mosaic") return undefined;
     if (resolved.logical) {
       const logical = resolved.logical;
-      const selected = this.logicalProjects.find(project => project.id === logical.projectId);
-      let owner = this.logicalProjects.find(project => project.id === logical.threadOwnerProjectId);
+      const selected = logical.projectId ? this.logicalById.get(logical.projectId) : undefined;
+      let owner = logical.threadOwnerProjectId ? this.logicalById.get(logical.threadOwnerProjectId) : undefined;
       if (resolved.view === "thread" && !owner
         && (resolved.threadTarget?.kind === "provider" || resolved.threadTarget?.kind === "subagent")) {
         const id = resolved.threadTarget.kind === "subagent"
@@ -278,8 +284,7 @@ export default class WorkbenchProjectNavigation {
       if (resolved.view === "thread" && !owner) return undefined;
       if (logical.projectId && !selected) return undefined;
       const selectedAddresses = resolved.selectedProjectIds?.map(id => {
-        const project = this.logicalProjects.find(candidate => candidate.id === id)
-          ?? this.logicalForAddress(id);
+        const project = this.logicalById.get(id) ?? this.logicalForAddress(id);
         if (project === "ambiguous") return undefined;
         return project ? this.canonicalAddress(project) : undefined;
       }) ?? null;
@@ -346,6 +351,12 @@ export default class WorkbenchProjectNavigation {
   }
 
   private canonicalAddress(project: WorkbenchLogicalProject) {
+    let address = this.canonicalAddresses.get(project);
+    if (address === undefined) this.canonicalAddresses.set(project, address = this.findCanonicalAddress(project));
+    return address;
+  }
+
+  private findCanonicalAddress(project: WorkbenchLogicalProject) {
     const candidates = isDaemonProject(project.matchKey)
       ? [project.storedLabel ?? project.label, project.id]
       : project.matchKey.startsWith("remote://")
