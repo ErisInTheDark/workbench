@@ -8,7 +8,6 @@
 "use client";
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
-import { readComposerReferenceMessage, type ComposerReference } from "workbench-shared/workbench/thread/composer-reference";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import {
@@ -29,7 +28,7 @@ import ThreadMessageTimestamp from "../ThreadMessageTimestamp";
 import ThreadSteerDecoration from "../ThreadSteerDecoration";
 import ThreadUserImage from "../ThreadUserImage";
 import { getUserMessageDeliveryState } from "../thread-render-blocks";
-import { splitUserMessageBubbles } from "../user-message-bubbles";
+import { layoutUserMessageBubbles } from "../user-message-bubbles";
 import { UndeliveredSteerActions } from "./ThreadItemActionControls";
 
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
@@ -65,17 +64,6 @@ function ThreadUserInputLine ({ input }: { input: UserInput }) {
     default:
       return null;
   }
-}
-
-/** References lead a message's first text part; the rest of that part is the user's own words. */
-function splitLeadingComposerReferences(content: UserInput[]): { content: UserInput[]; references: ComposerReference[] } {
-  const [first, ...rest] = content;
-  const read = first?.type === "text" ? readComposerReferenceMessage(first.text) : null;
-  if (!first || first.type !== "text" || !read) return { content, references: [] };
-  return {
-    content: read.message ? [{ ...first, text: read.message, text_elements: [] }, ...rest] : rest,
-    references: read.references,
-  };
 }
 
 export default function ThreadUserMessageItem ({
@@ -115,16 +103,15 @@ export default function ThreadUserMessageItem ({
 
   const steerState = getUserMessageDeliveryState(item);
   const isPendingInitial = isUndeliveredInitialOptimisticInputItem(item);
-  const { content: displayContent, references } = splitLeadingComposerReferences(unwrapWorkbenchSteerDisplayInput(item.content));
   // `=====` lines split one stored message into several bubbles; the agent still receives the whole message.
-  const bubbles = splitUserMessageBubbles(displayContent);
-  if (!bubbles.length && !references.length) return null;
+  const { bubbles, references } = layoutUserMessageBubbles(unwrapWorkbenchSteerDisplayInput(item.content));
+  if (!bubbles.length) return null;
   return (
     <section
       className="flex flex-col items-end gap-2 py-3"
       data-thread-user-message-state={isPendingInitial ? "pending-initial" : steerState ? `${steerState}-steer` : undefined}
     >
-      {(bubbles.length ? bubbles : [[]]).map((bubble, bubbleIndex) => (
+      {bubbles.map((bubble, bubbleIndex) => (
         <div className="group/thread-bubble relative w-fit max-w-[min(100%,42rem)]" key={`${item.id}:bubble:${bubbleIndex}`}>
           <ThreadSteerDecoration className="space-y-2 text-left" state={isPendingInitial ? "pending" : steerState}>
             {/* References lead the first bubble like its opening paragraph. */}
