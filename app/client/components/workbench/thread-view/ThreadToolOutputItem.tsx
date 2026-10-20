@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadToolOutputItem: render supported output bodies with their existing semantic surfaces; transcript-hidden screenshots render nothing.
+ * - default ThreadToolOutputItem: render supported output bodies with their existing semantic surfaces. Transcript-hidden
+ *   screenshots never reach it; the block pipeline drops them.
  */
 "use client";
 
@@ -8,7 +9,6 @@ import type { ComponentProps, ReactNode } from "react";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
-import { isHiddenAgentScreenshotContent } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { getSubagentSummary } from "../../../workbench/thread/thread-subagents";
 import ThreadAgentScreenshotItem from "./ThreadAgentScreenshotItem";
 import Disclosure from "../../ui/Disclosure";
@@ -32,7 +32,6 @@ export default function ThreadToolOutputItem({
     return <ThreadIncomingAgentMessageItem {...markdownProps} messages={[message]} subagent={getSubagentSummary(subagents, message.senderThreadId)} timestamp={timestamp} />;
   }
   if (item.namespace === "workbench" && item.name === "screenshot" && Array.isArray(item.output)) {
-    if (isHiddenAgentScreenshotContent(item.output)) return null;
     const images = item.output.flatMap((part) => part.type === "input_image" ? [part.image_url] : []);
     if (images.length) return <ThreadAgentScreenshotItem images={images} timestamp={timestamp} />;
   }

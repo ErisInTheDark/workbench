@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import {
@@ -46,6 +47,22 @@ function user(id: string): Extract<ThreadItem, { type: "userMessage" }> {
 function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted") {
   return withWorkbenchInputState(user(id), { kind: "steer", status });
 }
+
+test("transcript-hidden screenshots create no block, so the work around them stays together", () => {
+  const image = { type: "image" as const, url: "/api/transcript-assets/thread/shot.png" };
+  const screenshotSteer = (id: string, hidden: boolean): ThreadItem => ({
+    clientId: null, content: [{ text: createAgentScreenshotSteerText({ hidden }), text_elements: [], type: "text" }, image],
+    id, type: "userMessage",
+  });
+  const screenshotOutput: ThreadItem = {
+    id: "shot-output", name: "screenshot", namespace: "workbench", type: "functionCallOutput",
+    output: [{ text: createAgentScreenshotSteerText({ hidden: true }), type: "input_text" }, { image_url: image.url, type: "input_image" }],
+  } as ThreadItem;
+  const kinds = (items: ThreadItem[]) => buildRenderableBlocks(items).map(block => block.kind);
+  assert.deepEqual(kinds([command("one"), screenshotSteer("hidden", true), command("two")]), ["commandSequence"]);
+  assert.deepEqual(kinds([command("one"), screenshotOutput, command("two")]), ["commandSequence"]);
+  assert.deepEqual(kinds([command("one"), screenshotSteer("shown", false), command("two")]), ["commandSequence", "item", "commandSequence"]);
+});
 
 test("hidden Workbench transport creates no render block without hiding ordinary tag mentions", () => {
   const activated = createWorkbenchActivatedSkillsInput('<skill filename="example">Follow the workflow.</skill>');

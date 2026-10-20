@@ -25,7 +25,7 @@ import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/t
 import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { readComposerReferenceMessage } from "workbench-shared/workbench/thread/composer-reference";
-import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
+import { isAgentScreenshotSteerUserMessage, isHiddenAgentScreenshotContent } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
@@ -168,6 +168,14 @@ export function hasSameBlockTimeline(
 function isPatchRecoveryOutput(item: Extract<ThreadItem, { type: "functionCallOutput" }>) {
   const output = readWorkbenchToolOutput(item);
   return output?.namespace === "workbench" && output.name === "patch_recovery";
+}
+
+function isTranscriptHiddenScreenshot(item: ThreadItem) {
+  if (item.type === "userMessage") return isAgentScreenshotSteerUserMessage(item) && isHiddenAgentScreenshotContent(item.content);
+  if (item.type !== "functionCallOutput") return false;
+  const output = readWorkbenchToolOutput(item);
+  return output?.namespace === "workbench" && output.name === "screenshot" && Array.isArray(output.output)
+    && isHiddenAgentScreenshotContent(output.output);
 }
 
 export function isHiddenCommandExecution(command: string) {
@@ -461,6 +469,8 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (hidden.itemIds?.has(item.id)) continue;
     // Patch recovery context is for the agent; the user already sees the failed patch it explains.
     if (item.type === "functionCallOutput" && isPatchRecoveryOutput(item)) continue;
+    // Screenshots the agent sent itself are for the agent; they never render, so they never split the work around them.
+    if (isTranscriptHiddenScreenshot(item)) continue;
     if (isAlreadyMatchingTaskTitle(item, fallbackCwd)) continue;
     if (item.type === "userMessage" && !unwrapWorkbenchSteerDisplayInput(item.content).length) continue;
     const text = item.type === "agentMessage" ? item.text
