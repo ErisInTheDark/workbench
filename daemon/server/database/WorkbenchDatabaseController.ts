@@ -90,6 +90,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
   readonly #pending = new Map<number, PendingRequest>();
   /** Writer calls in flight, in posting order; a slow one names the work queued ahead of it. */
   readonly #writerQueue = new Map<number, { ahead: string; name: string; postedAt: number }>();
+  #writerSettledAt = Number.NEGATIVE_INFINITY;
   // Thread-state reads retain write-before-read ordering across the writer and reader pool.
   #threadStateWrite: Promise<void> = Promise.resolve();
   #nextRequestId = 1;
@@ -471,16 +472,23 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       .map(([name, count]) => `${name}x${count}`).join(", ")}`;
   }
 
-  /** Writes share one worker, so a caller that waited (a steer's admission write) is named with what held it. */
+  /**
+   * Writes share one worker, so a caller that waited (a steer's admission write) is named with what held it. The writer runs
+   * calls one at a time in order, so a call's own run began when it was posted or when the call before it settled.
+   */
   #reportSlowWriterCall(id: number) {
     const call = this.#writerQueue.get(id);
     if (!call) return;
     this.#writerQueue.delete(id);
-    const elapsedMs = performance.now() - call.postedAt;
+    const settledAt = performance.now();
+    const ranMs = settledAt - Math.max(call.postedAt, this.#writerSettledAt);
+    this.#writerSettledAt = settledAt;
+    const elapsedMs = settledAt - call.postedAt;
     if (elapsedMs < SLOW_WRITER_CALL_MS) return;
+    const ran = `ran ${(ranMs / 1_000).toFixed(1)}s`;
     this.#report({
       source: "database", operation: `writer ${call.name}`, phase: "completed", level: "warn",
-      detail: call.ahead ? `queued behind ${call.ahead}` : "nothing queued ahead", elapsedMs, progress: null,
+      detail: call.ahead ? `${ran}, queued behind ${call.ahead}` : `${ran}, nothing queued ahead`, elapsedMs, progress: null,
     });
   }
 
