@@ -112,13 +112,6 @@
   contain-intrinsic-size: auto 2.75rem;
 }
 
-/* Like `space-y-*`, but children that render nothing take no spacing, so no margin is left at an edge to get trapped by a `flow-root` parent. */
-@utility space-y-rendered-* {
-  & > :not(:empty) ~ :not(:empty) {
-    margin-block-start: calc(var(--spacing) * --value(integer));
-  }
-}
-
 @utility bg-checkerboard {
   background-image: conic-gradient(color-mix(in srgb, currentColor 12%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 12%, transparent) 0 75%, transparent 0);
   background-size: 20px 20px;

@@ -158,9 +158,7 @@ export default memo(function ThreadTurnItems({
         key,
         content: (
           <ThreadMeasuredContent key={key} visibilityRange="approaching" windowed>
-            <div className="space-y-rendered-2">
-              {stableEntries.slice(chunk.start, chunk.end).map((entry, index) => renderEntry(entry, chunk.start + index))}
-            </div>
+            {stableEntries.slice(chunk.start, chunk.end).map((entry, index) => renderEntry(entry, chunk.start + index))}
           </ThreadMeasuredContent>
         ),
       };
