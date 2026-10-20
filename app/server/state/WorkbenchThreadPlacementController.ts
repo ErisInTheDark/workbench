@@ -84,7 +84,7 @@ export default class WorkbenchThreadPlacementController {
     return true;
   }
 
-  /** A pending questionnaire's turn is interrupted first; the questionnaire stays and its leaving wakes the thread. */
+  /** A live questionnaire's turn is interrupted first; the questionnaire stays and its leaving wakes the thread. */
   async snooze(threadId: string, snoozed: boolean, requestKey?: string) {
     const id = WorkbenchThreadIdSchema.parse(threadId);
     if (!snoozed) {
@@ -95,10 +95,13 @@ export default class WorkbenchThreadPlacementController {
     if (row?.entryKind !== "thread" || !isWorkbenchThreadSnoozeAvailable(row)) return false;
     const question = row.pendingQuestionnaire?.requestKey ?? null;
     if (requestKey && requestKey !== question) return false;
-    // Without a named questionnaire, only one the thread is plainly waiting on may be snoozed.
-    if (question && !requestKey && !(row.lifecycle.kind === "needsAttention" && row.lifecycle.reason === "pendingInput"
-      && row.lifecycle.requestKey === question)) return false;
-    if (question) await this.options.threads.withThread(id, async source => {
+    const { lifecycle } = row;
+    const awaitedKey = lifecycle.kind === "needsAttention" && lifecycle.reason === "pendingInput" ? lifecycle.requestKey : null;
+    // A held questionnaire outlived its interrupted turn, so there is nothing left to interrupt.
+    const held = lifecycle.kind !== "working" && awaitedKey === null;
+    // Without a named questionnaire, only a held one or one the thread is plainly waiting on may be snoozed.
+    if (question && !requestKey && !held && awaitedKey !== question) return false;
+    if (question && !held) await this.options.threads.withThread(id, async source => {
       await source.daemon.threads.interrupt({ threadId: id, requestKey: question });
     }, this.cancellation.signal);
     this.writeSnoozes([{ threadId: id, basis: ThreadSnooze.capture(row, question), targets: [] }], []);

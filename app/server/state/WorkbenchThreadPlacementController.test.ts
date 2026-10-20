@@ -164,6 +164,25 @@ test("questionnaire snooze interrupts its turn before recording, then wakes only
   assert.equal(f.controller.read().snoozes.has(threadId), false);
 });
 
+test("a held questionnaire with no turn snoozes from the sidebar without interrupting", async context => {
+  const desktop = daemon("desktop");
+  const threadId = randomUUID();
+  const question = { itemId: null, requestKey: "q", turnId: null, request: {
+    id: "q", title: "Choose", summary: "", submitLabel: "Send",
+    questions: [{ id: "c", header: "c", question: "Go?", options: [], allowOther: true, isSecret: false }],
+  } };
+  const idle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+  desktop.put(row(threadId, idle, { pendingQuestionnaire: question }));
+  const f = await fixture(context, [desktop]);
+
+  assert.equal(await f.controller.snooze(threadId, true), true);
+  assert.deepEqual(desktop.interrupts, []);
+  assert.equal(f.controller.read().snoozes.get(threadId)?.basis.questionnaireKey, "q");
+
+  desktop.put(row(threadId, idle));
+  assert.equal(f.controller.read().snoozes.has(threadId), false);
+});
+
 test("a pin on another daemon's thread feeds its watched row, survives settling and drops on archive", async context => {
   const desktop = daemon("desktop");
   const remote = daemon("remote");
