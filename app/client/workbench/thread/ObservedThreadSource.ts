@@ -30,6 +30,7 @@ import { createThreadTurnsSlice, type ThreadHead, type ThreadStoreSource, type T
 import { HISTORY_TRANSCRIPT_ITEM_CREDIT } from "../../components/workbench/thread-view/thread-progressive-window-policy";
 
 type ObservedTarget = Exclude<WorkbenchThreadRouteTarget, { kind: "new" | "draft" }>;
+const NO_SHELL_OUTPUT: NonNullable<ThreadRuntime["shellOutput"]> = [];
 type ThreadEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
 
 export interface ObservedThreadSourcePorts {
@@ -258,6 +259,7 @@ export default function createObservedThreadSource(
       turns: createThreadTurnsSlice(transcriptState, Boolean(current?.hasPreviousTurns), entry?.lifecycle.kind === "working"),
       questionnaire: { pending: pendingQuestionnaire },
       approvals: { entries: current?.approvalEntries ?? [] },
+      shellOutput: { entries: runtime[threadId]?.shellOutput ?? NO_SHELL_OUTPUT },
     });
   }
 

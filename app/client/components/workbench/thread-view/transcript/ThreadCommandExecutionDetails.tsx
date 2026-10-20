@@ -31,7 +31,9 @@ import {
   parseWorkbenchVisCommand,
 } from "../../../../workbench/thread/thread-command-matchers";
 import { useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
-import { getShellQueueTiming, useThreadItemShellQueue } from "../../../../workbench/thread/thread-item-shell-queue";
+import {
+  getShellQueueTiming, useThreadItemShellOutput, useThreadItemShellQueue,
+} from "../../../../workbench/thread/thread-item-shell-queue";
 import { resolveWorkbenchSubagentCommandTargets } from "../../../../workbench/thread/thread-subagents";
 import MarkdownRender from "../../../ui/MarkdownRender";
 import { TerminalIcon } from "../../workbench-icons";
@@ -117,6 +119,9 @@ export default function ThreadCommandExecutionDetails ({
   const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
   const shellQueue = useThreadItemShellQueue(item.id);
   const liveShellQueue = item.status === "inProgress" ? shellQueue : null;
+  // A running wb shell shows its newest output until its finished item brings all of it.
+  const shellOutput = useThreadItemShellOutput(item.id);
+  const shownOutput = item.aggregatedOutput || (item.status === "inProgress" ? shellOutput : null);
   const queueTiming = getShellQueueTiming({
     activeStartedAtMs, durationMs: item.durationMs, live: liveShellQueue, queuedMs: item.queuedMs,
   });
@@ -383,7 +388,7 @@ export default function ThreadCommandExecutionDetails ({
           : null,
         visibleDurationMs !== null && visibleDurationMs !== undefined ? <ThreadDurationText durationMs={visibleDurationMs} /> : null,
       ]}
-      output={item.aggregatedOutput}
+      output={shownOutput}
       summaryDisplay={outcomeCommandDisplay}
     >
       {isBrowseCommand || shouldHideCommandOutput ? undefined

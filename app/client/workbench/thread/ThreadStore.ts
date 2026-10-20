@@ -2,7 +2,8 @@
  * Exports:
  * - ThreadHead: the metadata every thread consumer reads (identity, settings, usage, status), without turn content.
  * - RelatedThread: a child or linked thread for renderers: head plus turns when loaded.
- * - ThreadSummarySlice/ThreadTurnsSlice/ThreadQuestionnaireSlice/ThreadApprovalsSlice: one thread's independently subscribed slices.
+ * - ThreadSummarySlice/ThreadTurnsSlice/ThreadQuestionnaireSlice/ThreadApprovalsSlice/ThreadShellOutputSlice: one thread's
+ *   independently subscribed slices.
  * - createThreadTurnsSlice: build a turns slice whose provider-item turns are derived once per projection.
  * - ThreadStoreState/ThreadSliceName: all slices and their keys.
  * - ThreadStoreActions: id-based thread actions.
@@ -25,7 +26,7 @@ import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thr
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type {
-  WorkbenchShellQueueEntry, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget,
+  WorkbenchShellOutputEntry, WorkbenchShellQueueEntry, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DraftId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -123,11 +124,17 @@ export interface ThreadApprovalsSlice {
   entries: readonly WorkbenchApprovalOutcomeEntry[];
 }
 
+/** Running wb shells' newest output; its own slice so a chatty command wakes only its rows, never the summary. */
+export interface ThreadShellOutputSlice {
+  entries: readonly WorkbenchShellOutputEntry[];
+}
+
 export interface ThreadStoreState {
   summary: ThreadSummarySlice;
   turns: ThreadTurnsSlice;
   questionnaire: ThreadQuestionnaireSlice;
   approvals: ThreadApprovalsSlice;
+  shellOutput: ThreadShellOutputSlice;
 }
 export type ThreadSliceName = keyof ThreadStoreState;
 
@@ -191,10 +198,11 @@ export const EMPTY_THREAD_STORE_STATE: ThreadStoreState = {
   turns: { transcript: { status: "idle" }, turns: NO_TURNS, canLoadOlder: false, liveTurnId: null },
   questionnaire: { pending: null },
   approvals: { entries: [] },
+  shellOutput: { entries: [] },
 };
 
 function sameSlice(name: ThreadSliceName, left: object, right: object) {
-  if (name === "summary" || name === "questionnaire") return areDeeplyEqual(left, right);
+  if (name === "summary" || name === "questionnaire" || name === "shellOutput") return areDeeplyEqual(left, right);
   // Turn content is large and streamed; sources keep references stable until something changes.
   const leftValues = left as Record<string, unknown>;
   const rightValues = right as Record<string, unknown>;

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - CodexExecServerOptions: inject the owned process launch, retirement, termination-grace and Linux relay boundaries.
+ * - CodexExecOutputListener: sees each captured output chunk of a running command as it arrives.
  * - CodexExecRootEvent: a command's sandboxed root process appeared, or the command settled.
  * - default CodexExecServer: retain one pinned native sandbox executor, isolate commands, stop them through the
  *   executor (an acknowledged terminate ends a command), replace a failed executor process on the next command
@@ -76,6 +77,9 @@ export interface CodexExecServerOptions {
   relayBroker?: Pick<SandboxRelayBroker, "admit">;
 }
 
+/** One captured output chunk of a running command, in arrival order. */
+export type CodexExecOutputListener = (stream: "stdout" | "stderr", chunk: Buffer) => void;
+
 export type CodexExecRootEvent =
   /** `startedAt` is the root's start time in Windows FILETIME ticks, as text. */
   | { kind: "root"; processId: string; pid: number; startedAt: string }
@@ -92,6 +96,8 @@ interface Command {
   markerScan: Buffer | null;
   /** Whether `process/start` was sent, so the executor can address this command. */
   addressable: boolean;
+  /** Sees each captured chunk as it arrives; the result still carries the whole capture. */
+  onOutput?: CodexExecOutputListener;
   resolve: (result: CodexExecResult) => void;
   reject: (error: Error) => void;
 }
@@ -185,7 +191,10 @@ export default class CodexExecServer {
     const accepted = chunk.subarray(0, Math.max(0, OUTPUT_BYTES - command.bytes));
     command.bytes += accepted.byteLength;
     command.truncated ||= accepted.byteLength < chunk.byteLength;
-    if (accepted.byteLength) (stream === "stderr" ? command.stderr : command.stdout).push(accepted);
+    if (!accepted.byteLength) return;
+    (stream === "stderr" ? command.stderr : command.stdout).push(accepted);
+    try { command.onOutput?.(stream, accepted); }
+    catch (error) { this.reportError(`Command output listener failed: ${String(error).slice(0, 300)}`); }
   }
 
   private receive(session: Session, line: string) {
@@ -299,15 +308,15 @@ export default class CodexExecServer {
     return session;
   }
 
-  execute(request: CodexExecRequest, callerSignal: AbortSignal): Promise<CodexExecResult> {
-    const execution = this.run(request, callerSignal);
+  execute(request: CodexExecRequest, callerSignal: AbortSignal, onOutput?: CodexExecOutputListener): Promise<CodexExecResult> {
+    const execution = this.run(request, callerSignal, onOutput);
     const tracked = execution.then(() => undefined, () => undefined);
     this.executions.add(tracked);
     void tracked.finally(() => this.executions.delete(tracked));
     return execution;
   }
 
-  private async run(request: CodexExecRequest, callerSignal: AbortSignal): Promise<CodexExecResult> {
+  private async run(request: CodexExecRequest, callerSignal: AbortSignal, onOutput?: CodexExecOutputListener): Promise<CodexExecResult> {
     const signal = AbortSignal.any([callerSignal, this.admission.signal]);
     signal.throwIfAborted();
     const session = this.start();
@@ -328,7 +337,7 @@ export default class CodexExecServer {
     });
     const command: Command = {
       stdout: [], stderr: [], bytes: 0, truncated: false, completion, markerScan: Buffer.alloc(0), addressable: false,
-      resolve: resolveCommand, reject: rejectCommand,
+      ...(onOutput ? { onOutput } : {}), resolve: resolveCommand, reject: rejectCommand,
     };
     session.commands.set(processId, command);
     // A transport failure can settle completion before process/start responds.

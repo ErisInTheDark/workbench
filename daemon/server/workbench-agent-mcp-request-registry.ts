@@ -3,9 +3,10 @@
  * - WorkbenchAgentMcpPendingRequest: describe one active request for runtime-drain diagnostics.
  * - WorkbenchAgentMcpThreadWaitState: describe active waits owned by one Workbench thread.
  * - WorkbenchAgentMcpShellQueueEntry: one live shell's expensive-queue timing and the transcript references naming it.
+ * - WorkbenchAgentMcpShellOutputEntry: one live shell's newest output and the transcript references naming it.
  * - WorkbenchAgentBatchTurn: how a serial call's turn in its provider tool batch ended.
  * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, user shell stops and queue skips, provider tool batches and serial call
- *   turns, wait and shell-queue observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
+ *   turns, wait, shell-queue and windowed live shell output observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
  * - isWorkbenchAgentMcpUserStop: identify a user's stop of one shell command across module generations.
@@ -25,7 +26,8 @@ import {
 } from "./lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchMcpToolGeneration } from "./workbench-mcp-ingress";
 import type { WorkbenchShellRun, WorkbenchShellRunResult } from "./provider-execution";
-import type { WorkbenchCommandQueueTicket } from "./WorkbenchCommandCapacity";
+import { StringDecoder } from "node:string_decoder";
+import type { WorkbenchShellObserver } from "./WorkbenchShellRunner";
 
 type WorkbenchAgentMcpRequestId = number | string;
 type WorkbenchAgentMcpClientScope = string;
@@ -52,6 +54,8 @@ interface WorkbenchAgentMcpRequestEntry {
   shellItemReferences?: readonly string[];
   /** Set once the shell waits for an expensive slot; kept after admission so the run timer starts there. */
   shellQueue?: { admittedAt: number | null; queuedAt: number; skip: AbortController };
+  /** The newest output of the running shell, decoded across chunk boundaries; set once it prints. */
+  shellOutput?: { decoders: Record<"stdout" | "stderr", StringDecoder>; tail: string };
   startedAt: number;
   /** Fixed for long waits; a shell is interruptible only while it waits in the expensive queue. */
   steerInterruptible?: boolean;
@@ -72,7 +76,7 @@ interface WorkbenchAgentMcpToolGenerationSlot {
 }
 
 type WorkbenchAgentMcpShellRunner = (
-  run: WorkbenchShellRun, signal: AbortSignal, ticket?: WorkbenchCommandQueueTicket,
+  run: WorkbenchShellRun, signal: AbortSignal, observer?: WorkbenchShellObserver,
 ) => Promise<WorkbenchShellRunResult>;
 
 interface WorkbenchAgentMcpRequestRegistryState {
@@ -87,6 +91,9 @@ interface WorkbenchAgentMcpRequestRegistryState {
   exitHookInstalled: boolean;
   threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState | WorkbenchAgentMcpLegacyThreadWaitState) => void>;
   shellQueueListeners: Set<(threadId: WorkbenchThreadId) => void>;
+  shellOutputListeners: Set<(threadId: WorkbenchThreadId) => void>;
+  /** At most one pending output notification per thread; a burst of chunks publishes once per window. */
+  shellOutputPublications: Map<WorkbenchThreadId, () => void>;
   /** Each thread's current provider tool batch, in the order the model issued its calls. */
   toolBatches: Map<WorkbenchThreadId, WorkbenchAgentToolBatch>;
   batchTurnWaiters: Set<WorkbenchAgentBatchTurnWaiter>;
@@ -156,12 +163,21 @@ export interface WorkbenchAgentMcpShellQueueEntry {
   queuedAt: number;
 }
 
+export interface WorkbenchAgentMcpShellOutputEntry {
+  itemReferences: string[];
+  tail: string;
+}
+
 interface WorkbenchAgentMcpLegacyThreadWaitState {
   threadId: string;
   toolNames: string[];
 }
 
 const PROCESS_REGISTRY_KEY = Symbol.for("workbench.agentMcpRequestRegistry.v2");
+/** A running shell row shows this much of its newest output; its completed item carries all of it. */
+const SHELL_OUTPUT_TAIL_CHARS = 16_384;
+/** Live output publishes at most this often per thread, so a chatty command cannot flood thread observers. */
+const SHELL_OUTPUT_PUBLISH_MS = 250;
 /** A provider declares a batch as its message streams, which may trail the call's own request only briefly. */
 const UNDECLARED_BATCH_GRACE_MS = 5_000;
 const STEER_INTERRUPTION_KEY = Symbol.for("workbench.agentMcpSteerInterruption.v1");
@@ -193,6 +209,8 @@ function createState(): WorkbenchAgentMcpRequestRegistryState {
     exitHookInstalled: false,
     threadWaitListeners: new Set(),
     shellQueueListeners: new Set(),
+    shellOutputListeners: new Set(),
+    shellOutputPublications: new Map(),
     toolBatches: new Map(),
     batchTurnWaiters: new Set(),
     heldSteers: new Map(),
@@ -218,6 +236,9 @@ function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: stri
   state.requestsByClient.clear();
   state.threadWaitListeners.clear();
   state.shellQueueListeners.clear();
+  state.shellOutputListeners.clear();
+  for (const cancel of state.shellOutputPublications.values()) cancel();
+  state.shellOutputPublications.clear();
   state.toolBatches.clear();
   state.heldSteers.clear();
   for (const waiter of [...state.batchTurnWaiters]) waiter.wake();
@@ -238,6 +259,8 @@ function getProcessState() {
   state.shellRunnerWaiters ??= new Set();
   state.threadWaitListeners ??= new Set();
   state.shellQueueListeners ??= new Set();
+  state.shellOutputListeners ??= new Set();
+  state.shellOutputPublications ??= new Map();
   state.toolBatches ??= new Map();
   state.batchTurnWaiters ??= new Set();
   state.heldSteers ??= new Map();
@@ -256,6 +279,10 @@ export class WorkbenchAgentMcpRequestRegistry {
   constructor(
     private readonly state = createState(),
     private readonly now: () => number = Date.now,
+    private readonly schedule: (publish: () => void, delayMs: number) => () => void = (publish, delayMs) => {
+      const timer = setTimeout(publish, delayMs);
+      return () => clearTimeout(timer);
+    },
   ) {}
 
   register(
@@ -300,6 +327,7 @@ export class WorkbenchAgentMcpRequestRegistry {
         }
         if (entry.steerInterruptible && !entry.controller.signal.aborted) this.notifyThreadWaits(workbenchThreadId);
         if (entry.shellQueue) this.notifyShellQueue(workbenchThreadId);
+        if (entry.shellOutput) this.scheduleShellOutput(workbenchThreadId);
       },
       ...(options.shellItem ? { shellQueue: this.shellQueueTicket(entry) } : {}),
       signal: entry.controller.signal,
@@ -311,13 +339,18 @@ export class WorkbenchAgentMcpRequestRegistry {
         }
         if (entry.steerInterruptible && entry.workbenchThreadId) this.notifyThreadWaits(entry.workbenchThreadId);
         if (entry.shellQueue && entry.workbenchThreadId) this.notifyShellQueue(entry.workbenchThreadId);
+        // The finished item carries the whole output; its live tail leaves now rather than one window later.
+        if (entry.shellOutput && entry.workbenchThreadId) this.publishShellOutput(entry.workbenchThreadId);
         if (entry.workbenchThreadId) this.releaseHeldSteer(entry.workbenchThreadId);
       },
     };
   }
 
-  /** Records a shell's expensive-queue wait; while it waits, the shell is a long wait that steers interrupt. */
-  private shellQueueTicket(entry: WorkbenchAgentMcpRequestEntry): WorkbenchCommandQueueTicket {
+  /**
+   * Records a shell's expensive-queue wait, while which the shell is a long wait that steers interrupt, and keeps the
+   * newest output it prints for its running row.
+   */
+  private shellQueueTicket(entry: WorkbenchAgentMcpRequestEntry): WorkbenchShellObserver {
     const skip = new AbortController();
     const changed = () => {
       if (!entry.workbenchThreadId) return;
@@ -336,7 +369,29 @@ export class WorkbenchAgentMcpRequestRegistry {
         changed();
       },
       skip: skip.signal,
+      output: (stream, chunk) => {
+        entry.shellOutput ??= { decoders: { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") }, tail: "" };
+        const text = entry.shellOutput.decoders[stream].write(chunk);
+        if (!text) return;
+        entry.shellOutput.tail = (entry.shellOutput.tail + text).slice(-SHELL_OUTPUT_TAIL_CHARS);
+        if (entry.workbenchThreadId) this.scheduleShellOutput(entry.workbenchThreadId);
+      },
     };
+  }
+
+  private scheduleShellOutput(threadId: WorkbenchThreadId) {
+    if (this.state.shellOutputPublications.has(threadId)) return;
+    this.state.shellOutputPublications.set(threadId, this.schedule(() => {
+      this.state.shellOutputPublications.delete(threadId);
+      this.notifyShellOutput(threadId);
+    }, SHELL_OUTPUT_PUBLISH_MS));
+  }
+
+  /** Publishes now, replacing any pending windowed publication. */
+  private publishShellOutput(threadId: WorkbenchThreadId) {
+    this.state.shellOutputPublications.get(threadId)?.();
+    this.state.shellOutputPublications.delete(threadId);
+    this.notifyShellOutput(threadId);
   }
 
   activateCommandExecutor(owner: object, execute: WorkbenchAgentMcpCommandExecutor) {
@@ -384,8 +439,8 @@ export class WorkbenchAgentMcpRequestRegistry {
   }
 
   /** Runs a prepared shell through the exec node, waiting through its reload gap; only the caller's signal cancels. */
-  async executeShell(run: WorkbenchShellRun, signal: AbortSignal, ticket?: WorkbenchCommandQueueTicket) {
-    return await (await this.awaitSlot(() => this.state.shellRunner, this.state.shellRunnerWaiters, signal)).run(run, signal, ticket);
+  async executeShell(run: WorkbenchShellRun, signal: AbortSignal, observer?: WorkbenchShellObserver) {
+    return await (await this.awaitSlot(() => this.state.shellRunner, this.state.shellRunnerWaiters, signal)).run(run, signal, observer);
   }
 
   private async awaitSlot<T>(read: () => T | null, waiters: Set<() => void>, signal?: AbortSignal): Promise<T> {
@@ -609,6 +664,28 @@ export class WorkbenchAgentMcpRequestRegistry {
 
   private notifyShellQueue(threadId: WorkbenchThreadId) {
     for (const listener of this.state.shellQueueListeners) listener(threadId);
+  }
+
+  /** The newest output of every live shell of `threadId` that has printed. */
+  readShellOutput(threadId: WorkbenchThreadId): WorkbenchAgentMcpShellOutputEntry[] {
+    const output: WorkbenchAgentMcpShellOutputEntry[] = [];
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (!entry.shellOutput?.tail || entry.workbenchThreadId !== threadId) continue;
+        output.push({ itemReferences: [...entry.shellItemReferences ?? []], tail: entry.shellOutput.tail });
+      }
+    }
+    return output;
+  }
+
+  /** Calls `listener` with a thread whose live shell output changed; read it with `readShellOutput`. */
+  subscribeShellOutput(listener: (threadId: WorkbenchThreadId) => void) {
+    this.state.shellOutputListeners.add(listener);
+    return () => { this.state.shellOutputListeners.delete(listener); };
+  }
+
+  private notifyShellOutput(threadId: WorkbenchThreadId) {
+    for (const listener of this.state.shellOutputListeners) listener(threadId);
   }
 
   private threadWaitState(threadId: WorkbenchThreadId): WorkbenchAgentMcpThreadWaitState {

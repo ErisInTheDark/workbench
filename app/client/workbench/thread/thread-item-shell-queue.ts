@@ -3,10 +3,12 @@
  * - ThreadItemShellQueue: one live wb shell's expensive-queue timing.
  * - deriveThreadItemShellQueue: index one thread's live shell queue by every reference naming each shell item.
  * - ThreadItemShellQueueContext/useThreadItemShellQueue: thread-scoped lookup for command rows.
+ * - ThreadShellOutputStoreContext/useThreadItemShellOutput: a running shell row's newest output from its thread store.
  * - ThreadShellDurationSource/getShellQueueTiming: split a shell's duration into its queue wait and its run, live or recorded.
  */
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
 import type { WorkbenchShellQueueEntry } from "workbench-shared/workbench/thread/thread-state";
+import type ThreadStore from "./ThreadStore";
 
 export type ThreadItemShellQueue = Pick<WorkbenchShellQueueEntry, "admittedAt" | "queuedAt">;
 
@@ -29,6 +31,19 @@ export const ThreadItemShellQueueContext = createContext<ReadonlyMap<string, Thr
 
 export function useThreadItemShellQueue(itemId: string): ThreadItemShellQueue | null {
   return useContext(ThreadItemShellQueueContext).get(itemId) ?? null;
+}
+
+/** The store whose transcript the rows render; its shell output slice feeds running rows. */
+export const ThreadShellOutputStoreContext = createContext<ThreadStore | null>(null);
+const noSubscription = () => () => {};
+
+/** A running shell's newest output, or null; only rows of shells that print re-render as it grows. */
+export function useThreadItemShellOutput(itemId: string): string | null {
+  const store = useContext(ThreadShellOutputStoreContext);
+  const subscribe = useCallback((listener: () => void) => store?.subscribe("shellOutput", listener) ?? (() => {}), [store]);
+  const read = useCallback(() => store?.getSlice("shellOutput").entries
+    .find(entry => entry.itemReferences.includes(itemId))?.tail ?? null, [itemId, store]);
+  return useSyncExternalStore(store ? subscribe : noSubscription, read, read);
 }
 
 /**

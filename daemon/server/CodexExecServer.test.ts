@@ -173,12 +173,14 @@ test("retirement still ends the executor when it never acknowledges termination"
   assert.equal(f.retired(), 1);
 });
 
-test("a command's root marker is stripped from its output and reported until it settles", async t => {
+test("a command's root marker is stripped from its output, live and final, and reported until it settles", async t => {
   const f = fixture();
   t.after(() => f.owner.dispose());
   const events: string[] = [];
+  const live: string[] = [];
   f.owner.onRoot(event => events.push(event.kind === "root" ? `root ${event.pid} ${event.startedAt}` : "settled"));
-  const command = f.owner.execute(f.request, new AbortController().signal);
+  const command = f.owner.execute(f.request, new AbortController().signal,
+    (stream, chunk) => live.push(`${stream}:${chunk.toString("utf8")}`));
   const start = await f.next("process/start");
   f.reply(start.id, { processId: start.params.processId });
   const stderr = (text: string) => f.event("process/output", start.params.processId, { stream: "stderr", chunk: Buffer.from(text).toString("base64") });
@@ -186,6 +188,7 @@ test("a command's root marker is stripped from its output and reported until it 
   stderr(" 133-->\r\nreal error");
   f.finish(start.params.processId, "out");
   assert.deepEqual(await command, { exitCode: 0, stdout: "out", stderr: "real error" });
+  assert.deepEqual(live, ["stderr:real error", "stdout:out"], "running output never shows the marker");
   assert.deepEqual(events, ["root 42 133", "settled"]);
 });
 

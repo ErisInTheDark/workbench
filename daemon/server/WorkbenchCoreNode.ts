@@ -125,7 +125,7 @@ function createWorkbenchCoreFeature(
     shells: getProcessWorkbenchAgentMcpRequestRegistry(),
     warn: logThreadStateWarning,
   });
-  let stopShellQueueObservation: (() => void) | null = null;
+  let stopShellObservation: (() => void) | null = null;
   const { admission, autoCompact, compaction, contextRollover: threadContextRollover, continuations, turnLiveness, turnSettlement } = turns;
   const { transcriptReader, transcriptReconciliation } = turns;
   const facts = new WorkbenchThreadFactsFeature({
@@ -382,7 +382,7 @@ function createWorkbenchCoreFeature(
     }),
     afterCommit: () => {
       approvals.activate();
-      stopShellQueueObservation ??= turns.observeShellQueue();
+      stopShellObservation ??= turns.observeShells();
       if (coldStart) void turnSettlement.startColdSweep();
       void compaction.retireStrandedBefore(generationStartedAt);
       if (!initialCatalog) return;
@@ -407,8 +407,8 @@ function createWorkbenchCoreFeature(
       subagents.beginRuntimeDrain();
     },
     dispose: async (reportPhase = () => undefined) => {
-      stopShellQueueObservation?.();
-      stopShellQueueObservation = null;
+      stopShellObservation?.();
+      stopShellObservation = null;
       facts.stopObserving();
       unsubscribeAutoCompactSettled();
       unsubscribeTurnStarted();

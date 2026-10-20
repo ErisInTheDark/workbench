@@ -1,10 +1,12 @@
 /*
  * Exports:
- * - default executeApprovedCommand: own one explicitly approved unsandboxed process and its retirement.
+ * - default executeApprovedCommand: own one explicitly approved unsandboxed process and its retirement, handing each
+ *   captured output chunk to an optional listener as it arrives.
  */
 import { spawn } from "node:child_process";
 import type { WorkbenchAdmittedExecution } from "./provider-execution";
 import { killProcessTreeAsync, lowerAgentProcessPriority } from "./process-helpers";
+import type { CodexExecOutputListener } from "./CodexExecServer";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 
@@ -12,6 +14,7 @@ export default async function executeApprovedCommand(
   request: WorkbenchAdmittedExecution,
   signal: AbortSignal,
   environment: NodeJS.ProcessEnv = process.env,
+  onOutput?: CodexExecOutputListener,
 ) {
   if (request.permissions.mode !== "approved-unrestricted") {
     throw new Error("Direct process execution requires an approved Workbench command.");
@@ -37,14 +40,16 @@ export default async function executeApprovedCommand(
   let closed = false;
   let abortReason: Error | null = null;
   let retirement: Promise<void> | null = null;
-  const capture = (target: Buffer[]) => (chunk: Buffer) => {
+  const capture = (stream: "stdout" | "stderr", target: Buffer[]) => (chunk: Buffer) => {
     const accepted = chunk.subarray(0, Math.max(0, MAX_OUTPUT_BYTES - bytes));
     bytes += accepted.byteLength;
     truncated ||= accepted.byteLength < chunk.byteLength;
-    if (accepted.byteLength) target.push(accepted);
+    if (!accepted.byteLength) return;
+    target.push(accepted);
+    onOutput?.(stream, accepted);
   };
-  child.stdout.on("data", capture(stdout));
-  child.stderr.on("data", capture(stderr));
+  child.stdout.on("data", capture("stdout", stdout));
+  child.stderr.on("data", capture("stderr", stderr));
   const retire = (reason: Error) => {
     abortReason ??= reason;
     if (!closed && !retirement) retirement = killProcessTreeAsync(child.pid);

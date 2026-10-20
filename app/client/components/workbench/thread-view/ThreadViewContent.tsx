@@ -26,7 +26,9 @@ import resolveThreadComposerProfileSlot from "../../../workbench/thread/thread-c
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { ThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
 import { deriveThreadItemApprovals, ThreadItemApprovalsContext } from "../../../workbench/thread/thread-item-approvals";
-import { deriveThreadItemShellQueue, ThreadItemShellQueueContext } from "../../../workbench/thread/thread-item-shell-queue";
+import {
+  deriveThreadItemShellQueue, ThreadItemShellQueueContext, ThreadShellOutputStoreContext,
+} from "../../../workbench/thread/thread-item-shell-queue";
 import ThreadItemActionsContext, { type ThreadItemActions } from "./ThreadItemActionsContext";
 import type {
   WorkbenchGitArcLifecycleState,
@@ -879,6 +881,7 @@ export default memo(function ThreadViewContent ({
                   <TranscriptBodiesContext.Provider value={active.store?.transcriptBodies ?? null}>
                   <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
                   <ThreadItemShellQueueContext.Provider value={activeItemShellQueue}>
+                  <ThreadShellOutputStoreContext.Provider value={active.store}>
                   <ThreadItemActionsContext.Provider value={activeItemActions}>
                   <ThreadTodoControlsContext.Provider value={active.entry && !isDraftThreadView ? todoControls : null}>
                   <WorkbenchFeedbackAddressingContext.Provider value={feedbackAddressing}>
@@ -898,6 +901,7 @@ export default memo(function ThreadViewContent ({
                   </WorkbenchFeedbackAddressingContext.Provider>
                   </ThreadTodoControlsContext.Provider>
                   </ThreadItemActionsContext.Provider>
+                  </ThreadShellOutputStoreContext.Provider>
                   </ThreadItemShellQueueContext.Provider>
                   </ThreadItemApprovalsContext.Provider>
                   </TranscriptBodiesContext.Provider>

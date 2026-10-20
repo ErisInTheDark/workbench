@@ -110,6 +110,42 @@ test("a shell's queue wait is published by thread, and only a still-queued shell
   assert.equal(registry.register("client-1", 3, registrationOptions(owner)).shellQueue, undefined, "only shells get a queue ticket");
 });
 
+test("a running shell's output publishes as one windowed tail per thread, intact across split characters", () => {
+  const pending: Array<{ publish: () => void; cancelled: boolean }> = [];
+  const registry = new WorkbenchAgentMcpRequestRegistry(undefined, Date.now, publish => {
+    const timer = { publish, cancelled: false };
+    pending.push(timer);
+    return () => { timer.cancelled = true; };
+  });
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const published: string[] = [];
+  const stop = registry.subscribeShellOutput(changed => published.push(registry.readShellOutput(changed)[0]?.tail ?? "<none>"));
+  const shell = registry.register("client-1", 1, { owner, toolName: "shell", shellItem: { threadId, references: ["item-1"] } });
+  const output = shell.shellQueue!.output!;
+  const heart = Buffer.from("♡", "utf8");
+  try {
+    output("stdout", Buffer.from("Selected 3 tests\n"));
+    output("stdout", heart.subarray(0, 1));
+    output("stdout", Buffer.concat([heart.subarray(1), Buffer.from("\n")]));
+    output("stderr", Buffer.from("warn\n"));
+    assert.equal(pending.length, 1, "a burst arms one publication for the thread");
+    assert.deepEqual(published, []);
+    pending[0]!.publish();
+    assert.deepEqual(published, ["Selected 3 tests\n♡\nwarn\n"]);
+    output("stdout", Buffer.from("x".repeat(20_000)));
+    pending[1]!.publish();
+    assert.equal(published.at(-1)!.length, 16_384, "the tail keeps only the newest output");
+    output("stdout", Buffer.from("last line\n"));
+  } finally {
+    shell.unregister();
+    stop();
+  }
+  assert.equal(pending[2]!.cancelled, true, "a finished shell publishes now instead of one window later");
+  assert.equal(published.at(-1), "<none>", "and its tail leaves with it");
+  assert.equal(published.length, 3);
+});
+
 test("steers interrupt a shell only while it waits in the expensive queue", () => {
   const registry = new WorkbenchAgentMcpRequestRegistry();
   const owner = {};
