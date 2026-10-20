@@ -247,6 +247,8 @@ export default function ThreadWorkbenchCommandItem({
       }])[0] ?? null;
     return (
       <ThreadAgentMessageItem
+        durationMs={visibleDurationMs ?? null}
+        sending={outcome === "inProgress"}
         fallbackName={target.kind === "parent" ? "parent" : resolved?.fallbackName ?? target.value}
         subagent={resolved?.subagent}
         target={target.kind === "parent"

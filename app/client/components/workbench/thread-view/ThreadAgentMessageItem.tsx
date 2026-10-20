@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadAgentMessageItem: render a sent cross-thread message as a disclosure naming the target thread button, with a left-aligned user-style bubble.
+ * - default ThreadAgentMessageItem: render a cross-thread message as a disclosure naming the target thread button (in progress with a
+ *   live duration while it delivers, then how long it took), with a left-aligned user-style bubble.
  * - ThreadAgentMessageTarget: render a sent message's resolved destination name or thread link.
  * - ThreadAgentMessageBubble: render only the sent-message bubble, optionally with destination attribution.
  * - ThreadAgentMessageClaimAction: render a compact expandable release/adopt paragraph in a sent-message bubble.
@@ -17,7 +18,8 @@ import { isProjectDirectoryPath } from "../../../workbench/project/project-file-
 
 import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
-import { BotIcon, EllipsisIcon, SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
+import { BotIcon, EllipsisIcon, LoaderIcon, SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
+import ThreadDurationText from "./ThreadDurationText";
 import ThreadAgentName from "./ThreadAgentName";
 import Disclosure from "../../ui/Disclosure";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
@@ -123,20 +125,26 @@ export function ThreadAgentMessageClaimAction({
 
 export default function ThreadAgentMessageItem ({
   children,
+  durationMs = null,
+  sending = false,
   ...targetProps
 }: ThreadAgentMessageTargetProps & {
   children: ReactNode;
+  /** How long delivery has taken, live while it is still sending. */
+  durationMs?: number | null;
+  sending?: boolean;
 }) {
   return (
     <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       hideChevron
-      leading={<BotIcon size={16} />}
+      leading={sending ? <LoaderIcon size={16} /> : <BotIcon size={16} />}
       summary={(
         <span className="inline-flex flex-wrap items-center gap-x-1.5">
-          <span>Messaged</span>
+          <span>{sending ? "Messaging" : "Messaged"}</span>
           <ThreadAgentMessageTarget {...targetProps} />
+          {durationMs === null ? null : <ThreadDurationText className="text-[0.84em]" durationMs={durationMs} />}
         </span>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"

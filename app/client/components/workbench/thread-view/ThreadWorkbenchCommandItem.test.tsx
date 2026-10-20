@@ -686,3 +686,11 @@ test("global MCP messages use the agent message renderer", () => {
 
   assert.match(threadHtml, /review-target/u);
 });
+
+test("a message still being delivered reads as in progress, then as sent with how long it took", () => {
+  const sending = { ...makeItem("message", { message: "review feedback", threadId: "review-target" }, ""), durationMs: null, status: "inProgress" as const };
+  assert.match(renderSpecialized(sending).replace(/<[^>]*>/gu, ""), /Messaging/u);
+  const sent = renderSpecialized(makeItem("message", { message: "review feedback", threadId: "review-target" }, "")).replace(/<[^>]*>/gu, "");
+  assert.match(sent, /Messaged/u);
+  assert.match(sent, /12ms/u);
+});
