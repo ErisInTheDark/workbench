@@ -50,8 +50,12 @@ export interface GitArcCard {
   /** What happened, such as "Planned"; a transfer's target subagent follows it separately. */
   label: string;
   transferTarget: string | null;
-  /** The plan, proposal or layer it happened to; reads of the whole arc name none. */
+  /** The plan, proposal or layer it happened to; reads of the whole arc and counted releases name none. */
   subject: string | null;
+  /** How many claims a completed plain release let go; its body lists them. */
+  releasedCount: number | null;
+  /** A status read's counts, shown on its line whatever the agent asked to expand. */
+  statusCounts: ReturnType<typeof createThreadGitArcStatusCounts> | null;
   /** Names the leading glyph for assistive technology. */
   iconLabel: string;
   failure: GitArcFailure | null;
@@ -90,7 +94,7 @@ const ACTION_LABELS: Record<GitArcCommandAction, Labels> = {
   stack: labels("Stacked", "Failed to stack", "Stacking", "Timed out stacking"),
   start: labels("Started", "Failed to start", "Starting", "Timed out starting"),
   stash: labels("Stashed", "Failed to stash", "Stashing", "Timed out stashing"),
-  status: labels("Read status", "Failed to read status", "Reading status", "Timed out reading status"),
+  status: labels("Status", "Failed to read status", "Reading status", "Timed out reading status"),
   unknown: labels("Ran unrecognised action on", "Failed to run action on", "Running action on", "Timed out running action on"),
   unstack: labels("Unstacked", "Failed to unstack", "Unstacking", "Timed out unstacking"),
   unstash: labels("Unstashed", "Failed to unstash", "Unstashing", "Timed out unstashing"),
@@ -114,11 +118,11 @@ const ADOPT_AND_START_LABELS = labels("Adopted changes and started", "Failed to 
 const CARD_STYLES: Record<GitArcCommandAction, Exclude<GitArcCardStyle, "step">> = {
   adopt: "card", claims: "card", compare: "card", continue: "card", diff: "card", edit: "cardPreview", plan: "card",
   planStart: "card", propose: "card", release: "card", rescind: "card", restore: "cardPreview", scope: "cardPreview",
-  stack: "card", start: "card", stash: "card", status: "cardPreview", unknown: "card", unstack: "card", unstash: "card",
+  stack: "card", start: "card", stash: "card", status: "card", unknown: "card", unstack: "card", unstash: "card",
 };
 
-/** Arc reads that sit inside a run's command group as steps of the surrounding work. */
-const RUN_STEPS: ReadonlySet<GitArcCommandAction> = new Set(["claims", "compare", "continue", "diff"]);
+/** Arc reads and plans that sit inside a run's command group as steps of the surrounding work. */
+const RUN_STEPS: ReadonlySet<GitArcCommandAction> = new Set(["claims", "compare", "continue", "diff", "plan"]);
 
 const FAILURE_ACTIONS: Record<Exclude<GitArcCommandAction, "edit">, GitArcFailureAction> = {
   adopt: "arcAdoptSource", claims: "arcClaims", compare: "compare", continue: "arcContinue", diff: "diff", plan: "planClaims",
@@ -190,7 +194,8 @@ function primaryPaths(intent: GitArcCommandIntent, receipt: GitArcReceipt | null
     case "plan":
     case "planStart":
       return intent.adoptPaths?.length ? ordinarySelected : receipt?.claimedPaths.length ? receipt.claimedPaths : selected;
-    case "release":
+    // A release names what it actually let go; the request only names what it asked for.
+    case "release": return receipt?.removedClaims?.length ? receipt.removedClaims : selected;
     case "restore": return selected;
     case "stash": return receipt?.stashedPaths ?? [];
     case "unstash": return receipt?.claimedPaths ?? [];
@@ -291,16 +296,17 @@ export function buildGitArcCard(input: {
   ] as const).flatMap(([count, noun, marker]) => count === undefined ? [] : [{ label: `${count} ${noun} ${count === 1 ? "file" : "files"}`, marker }]);
 
   const style: GitArcCardStyle = input.asRunStep && RUN_STEPS.has(action) ? "step" : CARD_STYLES[action];
-  // Only preview cards keep a result visible while closed: status counts, edited files, or the first file list.
+  // Only preview cards keep a result visible while closed: edited files, or the first file list.
   const editRows = editResult ? createThreadGitArcEditSummaryRows(editResult.files) : [];
   const first = pathGroups[0];
   const preview: ThreadGitArcCollapsedSummaryContent | null = style !== "cardPreview" ? null
-    : status ? { counts: createThreadGitArcStatusCounts(status), kind: "status" }
-      : editRows.length ? { changes: editRows, kind: "files" }
-        : first ? { kind: "claims", label: first.label, marker: first.marker, paths: [...first.paths], totalCount: first.paths.length }
-          : counts.length ? { kind: "counts", rows: counts } : null;
+    : editRows.length ? { changes: editRows, kind: "files" }
+      : first ? { kind: "claims", label: first.label, marker: first.marker, paths: [...first.paths], totalCount: first.paths.length }
+        : counts.length ? { kind: "counts", rows: counts } : null;
 
   const transfer = action === "release" && intent.toSubagent ? intent.toSubagent : null;
+  // A plain release or disown is about how many claims it let go, not which plan they belonged to.
+  const releasedCount = action === "release" && !transfer && state === "completed" && primary.length ? primary.length : null;
   const adoptFromSubagent = action === "adopt" && Boolean(intent.source?.name || intent.source?.threadId);
   return {
     action,
@@ -308,7 +314,9 @@ export function buildGitArcCard(input: {
     style,
     label: state === "interrupted" ? "Interrupted by your steer" : phaseLabels[state],
     transferTarget: transfer,
-    subject: action === "rescind" || action === "status" || action === "scope" ? null : subjectName,
+    subject: action === "rescind" || action === "status" || action === "scope" || releasedCount !== null ? null : subjectName,
+    releasedCount,
+    statusCounts: status ? createThreadGitArcStatusCounts(status) : null,
     iconLabel: transfer ? "release claims to subagent" : adoptFromSubagent ? "adopt claims from subagent" : `${action} git arc`,
     failure,
     defaultOpen: Boolean(receipt?.conflictedPaths?.length || editResult?.conflictedPaths.length) || action === "unknown",

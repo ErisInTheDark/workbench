@@ -104,10 +104,11 @@ test("conversation and lifecycle rows break runs and keep their own blocks", () 
   }
 });
 
-test("arc reads, vis, recall and queue checks are steps inside the surrounding command group, while proposals stay cards", () => {
+test("arc reads, plans, vis, recall and queue checks are steps inside the surrounding command group, while proposals stay cards", () => {
   const steps = [
     command("before"),
     command("compare-cli", "wb git arc compare"), mcp("diff-mcp", "git_arc_diff", {}), mcp("claims-mcp", "git_arc_claims", { inherit: true, addPaths: ["a.ts"] }),
+    command("plan-cli", "wb git plan claims -m intent -- a.ts"), mcp("plan-mcp", "git_plan_claims", { intentName: "intent", addPaths: ["a.ts"] }),
     command("continue-cli", "wb git arc continue"),
     command("vis-cli", "wb vis start mockups/a.tsx"),
     command("recall-cli", "wb thread recall"), mcp("recall-mcp", "thread_recall", {}),

@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - default ThreadGitArcCollapsedSummary: compose established result rows beneath a closed Git arc card.
- * - ThreadGitArcCollapsedSummaryContent: typed file, claim, count or status-count preview content.
+ * - ThreadGitArcCollapsedSummaryContent: typed file, claim or count preview content.
  * - createThreadGitArcStatusCounts: a status read compressed to one count per non-empty group.
+ * - ThreadGitArcStatusCounts: those counts as one inline run, for a status card's line.
  * - createThreadGitArcCompareSummaryRows/createThreadGitArcDiffSummaryRows/createThreadGitArcEditSummaryRows: normalise parsed operation changes for file-row presentation.
  */
 import type { ReactNode } from "react";
@@ -23,9 +24,22 @@ import ThreadSummaryText from "./ThreadSummaryText";
 export type ThreadGitArcCollapsedSummaryContent =
   | { changes: ThreadFileChangeListChange[]; kind: "files" }
   | { kind: "claims"; label: string; marker: ThreadClaimMarker; paths: string[]; totalCount: number }
-  | { kind: "counts"; rows: Array<{ label: string; marker: ThreadClaimMarker }> }
-  /** Everything a status read knows, compressed to one line of counts whatever the agent asked to expand. */
-  | { kind: "status"; counts: Array<{ count: number; icon: ReactNode; label: string }> };
+  | { kind: "counts"; rows: Array<{ label: string; marker: ThreadClaimMarker }> };
+
+/** Everything a status read knows as one inline run of counts, for its card's line. */
+export function ThreadGitArcStatusCounts({ counts }: { counts: ReturnType<typeof createThreadGitArcStatusCounts> }) {
+  if (!counts.length) return <span className="truncate">nothing claimed, pending or dirty</span>;
+  return (
+    <span className="inline-flex min-w-0 items-center gap-3.5 overflow-hidden whitespace-nowrap">
+      {counts.map(entry => (
+        <span className="inline-flex items-center gap-1" key={entry.label}>
+          <span aria-hidden="true" className="inline-flex [&_svg]:size-3.5">{entry.icon}</span>
+          <b className="font-semibold text-text">{entry.count}</b>{entry.label}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 const count = (value: number | readonly unknown[] | undefined) => typeof value === "number" ? value : value?.length ?? 0;
 
@@ -104,21 +118,6 @@ export default function ThreadGitArcCollapsedSummary ({
 }: {
   content: ThreadGitArcCollapsedSummaryContent;
 }) {
-  if (content.kind === "status") {
-    return (
-      <div
-        className="flex flex-wrap items-center gap-x-3.5 gap-y-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] py-2 text-[0.86em] text-fg/muted"
-        data-thread-git-arc-collapsed-summary="true"
-      >
-        {content.counts.length ? content.counts.map(entry => (
-          <span className="inline-flex items-center gap-1" key={entry.label}>
-            <span aria-hidden="true" className="inline-flex [&_svg]:size-3.5">{entry.icon}</span>
-            <b className="font-semibold text-text">{entry.count}</b>{entry.label}
-          </span>
-        )) : <span>Nothing claimed, pending or dirty</span>}
-      </div>
-    );
-  }
   const totalCount = content.kind === "files" ? content.changes.length
     : content.kind === "claims" ? content.totalCount : content.rows.length;
   const remainingCount = totalCount - Math.min(totalCount, 2);

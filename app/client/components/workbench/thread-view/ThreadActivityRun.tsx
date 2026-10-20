@@ -10,7 +10,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getThreadItemTimelineDurationMs, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
-import ChevronIcon from "../ChevronIcon";
 import { LoaderIcon } from "../workbench-icons";
 import { getNativeFileChanges, isNativeFileOperation } from "../../../workbench/thread/thread-command-matchers";
 import { getActivityChips, getCommandItemDisplay, type ActivityChip, type CommandChipContext } from "./thread-activity-chips";
@@ -196,7 +195,7 @@ export default function ThreadActivityRun({
         onClick={run.toggle}
         type="button"
       >
-        <span className="flex h-8 min-w-0 items-center gap-2">
+        <span className="flex min-w-0 items-center gap-2 py-2 leading-[1.6]">
           <span className="min-w-0 flex-1 overflow-hidden">
             {chips.length ? <ChipRow chips={chips} /> : status
               ? <span className="flex min-w-0 items-center gap-2 font-medium"><LoaderIcon className="shrink-0" />{status}</span>
@@ -204,13 +203,6 @@ export default function ThreadActivityRun({
               : <span>{block.segments.every(segment => segment.kind === "reasoning") ? "Reasoned" : "Worked"}</span>}
           </span>
           {durationMs ? <ThreadDurationText className="shrink-0" durationMs={durationMs} /> : null}
-          <ChevronIcon
-            className={`
-              shrink-0 opacity-60 transition-transform
-              ${run.open ? "" : "-rotate-90"}
-            `}
-            size={16}
-          />
         </span>
         {chips.length && status ? (
           <ThreadEntryAnimation

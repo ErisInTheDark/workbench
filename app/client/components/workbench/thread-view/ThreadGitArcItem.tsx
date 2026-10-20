@@ -23,7 +23,7 @@ import ThreadDurationText from "./ThreadDurationText";
 import { ThreadFileChangeTotals, type ThreadFileChangeListChange } from "./ThreadFileChangeItem";
 import ThreadGitArcCardBody from "./ThreadGitArcCardBody";
 import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
-import ThreadGitArcCollapsedSummary from "./ThreadGitArcCollapsedSummary";
+import ThreadGitArcCollapsedSummary, { ThreadGitArcStatusCounts } from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadStepRow from "./ThreadStepRow";
@@ -49,7 +49,10 @@ function Line({ card }: { card: GitArcCard }) {
           subagent={transcript?.subagents.find(({ name }) => name.localeCompare(target, undefined, { sensitivity: "accent" }) === 0)}
           thread={{ agentNickname: target }}
         />
+      ) : card.releasedCount !== null ? (
+        <span className="shrink-0"><b className="font-semibold text-text">{card.releasedCount}</b> {card.releasedCount === 1 ? "claim" : "claims"}</span>
       ) : card.subject ? <span className="min-w-0 truncate font-medium text-text">{card.subject}</span> : null}
+      {card.statusCounts ? <span className="ml-1.5 min-w-0"><ThreadGitArcStatusCounts counts={card.statusCounts} /></span> : null}
     </span>
   );
 }

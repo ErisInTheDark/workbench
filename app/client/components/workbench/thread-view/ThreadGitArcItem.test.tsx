@@ -74,16 +74,26 @@ test("only unknown actions and conflicts open by themselves", () => {
   assert.match(body, /src\/conflict\.ts/u);
 });
 
-test("status cards keep every relevant count in view while closed, whatever the agent asked to expand", () => {
+const summaryText = (html: string) => (/<summary[^>]*>([\s\S]*?)<\/summary>/u.exec(html)?.[1] ?? "")
+  .replace(/<[^>]*>/gu, " ").replace(/\s+/gu, " ");
+
+test("status cards keep every relevant count on their one line, whatever the agent asked to expand", () => {
   const html = render(props("status", {
     statusFacts: { cleanClaims: 8, dirtyClaims: ["src/dirty.ts"], unclaimedDirt: ["src/stray.ts", "src/other.ts"] },
   }));
-  const text = html.replace(/<[^>]*>/gu, " ").replace(/\s+/gu, " ");
+  const line = summaryText(html);
   assert.ok(!isOpen(html));
-  assert.match(text, /1 dirty/u);
-  assert.match(text, /8 clean/u);
-  assert.match(text, /2 unclaimed dirt/u);
-  assert.doesNotMatch(text, /src\/dirty\.ts/u);
+  assert.match(line, /1 dirty/u);
+  assert.match(line, /8 clean/u);
+  assert.match(line, /2 unclaimed dirt/u);
+  assert.doesNotMatch(html, /src\/dirty\.ts|data-thread-git-arc-collapsed-summary/u);
+});
+
+test("released cards count the claims they released on the line and open onto exactly those paths", () => {
+  const released = props("release", { receipt: receipt("release", { removedClaims: ["src/one.ts", "src/two.ts", "src/three.ts"] }) });
+  assert.match(summaryText(render(released)), /Released 3 claims/u);
+  const body = renderBody(released);
+  for (const name of ["one", "two", "three"]) assert.match(body, new RegExp(`src/${name}\\.ts`, "u"));
 });
 
 test("plain cards are one line while closed; preview cards keep their result in view", () => {
