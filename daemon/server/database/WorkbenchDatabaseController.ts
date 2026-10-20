@@ -3,7 +3,7 @@
  * WorkbenchDatabaseRequestFailure: one rolled-back request that leaves the database lifecycle ready.
  * WorkbenchDatabaseFailure: stable controller failure carrying one bounded cause.
  * WorkbenchDatabaseController: owns the writer worker, the priority reader pool, their heap readings, the complete database lifecycle,
- *   step-sliced retention, and one method per registered request (./workbench-database-requests).
+ *   step-sliced retention, slow writer-call reports, and one method per registered request (./workbench-database-requests).
  */
 import { Worker } from "node:worker_threads";
 import type {
@@ -44,6 +44,7 @@ import {
 const ASSET_ADMISSION_GRACE_MS = 3_600_000;
 /** 1024 pages is about 4 MiB of file movement: short enough to keep each writer step well under a second. */
 const RECLAIMED_PAGES_PER_STEP = 1_024;
+const SLOW_WRITER_CALL_MS = 1_000;
 
 export interface WorkbenchDatabaseControllerOptions {
   beforeMigration?(backupPath: string): void;
@@ -87,6 +88,8 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
   /** Pure reads run here by priority; until the pool is ready they fall back to the writer. */
   readonly #readers: WorkbenchDatabaseReadPool;
   readonly #pending = new Map<number, PendingRequest>();
+  /** Writer calls in flight, in posting order; a slow one names the work queued ahead of it. */
+  readonly #writerQueue = new Map<number, { ahead: string; name: string; postedAt: number }>();
   // Thread-state reads retain write-before-read ordering across the writer and reader pool.
   #threadStateWrite: Promise<void> = Promise.resolve();
   #nextRequestId = 1;
@@ -421,7 +424,10 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
             reject(reason instanceof Error ? reason : new Error("Database read was abandoned."));
           },
         });
-      } else this.#worker.postMessage(message);
+      } else {
+        if (request.type === "call") this.#writerQueue.set(id, { ahead: this.#describeWriterQueue(), name: request.name, postedAt: performance.now() });
+        this.#worker.postMessage(message);
+      }
     });
     if (ordering === "threadStateWrite") this.#threadStateWrite = response.then(() => undefined, () => undefined);
     return await response;
@@ -441,6 +447,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       return;
     }
     this.#pending.delete(response.id);
+    this.#reportSlowWriterCall(response.id);
     if (response.type === "requestFailure") {
       pending.reject(new WorkbenchDatabaseRequestFailure(response.message));
       return;
@@ -452,6 +459,28 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       return;
     }
     pending.resolve(response);
+  }
+
+  /** Counts of writer calls still queued, most frequent first: what a newly posted call waits behind. */
+  #describeWriterQueue() {
+    if (!this.#writerQueue.size) return "";
+    const counts = new Map<string, number>();
+    for (const { name } of this.#writerQueue.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+    return `${this.#writerQueue.size} writes: ${[...counts].sort((left, right) => right[1] - left[1]).slice(0, 5)
+      .map(([name, count]) => `${name}x${count}`).join(", ")}`;
+  }
+
+  /** Writes share one worker, so a caller that waited (a steer's admission write) is named with what held it. */
+  #reportSlowWriterCall(id: number) {
+    const call = this.#writerQueue.get(id);
+    if (!call) return;
+    this.#writerQueue.delete(id);
+    const elapsedMs = performance.now() - call.postedAt;
+    if (elapsedMs < SLOW_WRITER_CALL_MS) return;
+    this.#report({
+      source: "database", operation: `writer ${call.name}`, phase: "completed", level: "warn",
+      detail: call.ahead ? `queued behind ${call.ahead}` : "nothing queued ahead", elapsedMs, progress: null,
+    });
   }
 
   #receive(message: WorkbenchDatabaseWorkerMessage) {
@@ -480,6 +509,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
     void this.#readers.terminate();
     for (const pending of this.#pending.values()) pending.reject(this.#failure);
     this.#pending.clear();
+    this.#writerQueue.clear();
   }
 }
 
