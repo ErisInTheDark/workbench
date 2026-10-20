@@ -106,9 +106,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     return {
       registrations: { claudeThreadOperations: threads, claudeTranscriptAdapter: transcript, claudeConfiguration: configuration },
       hasPendingWork: () => threads.hasPendingWork(),
-      start: () => {
+      start: async () => {
         attachHooks();
-        threads.adopt(inherited);
+        await threads.adopt(inherited);
       },
       beginHandoff: replacement => {
         const restartingHarness = replacement.isReplacing("harness:claude");

@@ -1,13 +1,15 @@
-/* Exports: none. Protect Claude admission, missing-runtime rejection, context, compaction admission, pre-history rename/delete, thread interruption and turn liveness. */
+/* Exports: none. Protect Claude admission, missing-runtime rejection, context, compaction admission, pre-history rename/delete, thread interruption, turn liveness and reload adoption identity. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
-  ProjectIdSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+  NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, TurnReferenceSchema, WorkbenchItemIdSchema,
+  WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
+import WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import { ProviderRuntimeMissingError } from "../provider-runtimes";
-import ClaudeSessionHost from "./ClaudeSessionHost";
+import ClaudeSessionHost, { ENDED_CLAUDE_SESSION } from "./ClaudeSessionHost";
 import ClaudeThreadOperations, { type ClaudeThreadOperationsOptions } from "./ClaudeThreadOperations";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
@@ -375,6 +377,49 @@ test("a Claude turn is live only while this daemon runs it or still owns its tra
   (Reflect.get(owner, "live") as Map<string, { turnId: string }>).set(threadId, { turnId });
   assert.equal(await owner.isTurnLive(threadId, turnId), true);
   assert.equal(await owner.isTurnLive(threadId, WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000009")), false);
+});
+
+test("a Claude turn adopted across a database reload is known to the replacement generation's identities", async () => {
+  const stored = {
+    threadId, turnId, turnIndex: 0,
+    native: {
+      harness: "claude", nativeLocation: "C:/repo",
+      nativeThreadId: NativeThreadIdSchema.parse("native-session"), nativeTurnId: NativeTurnIdSchema.parse(turnId),
+    },
+  };
+  // A fresh controller is what a database reload hands the adopting generation: nothing admitted in memory yet.
+  const identities = new WorkbenchThreadIdentityController({
+    listThreadIdentities: async () => [],
+    resolveTurnIdentity: async ({ threadId: owner, turnId: reference }: { threadId: string; turnId: string }) => (
+      owner === threadId && reference === turnId ? stored : null),
+  } as never);
+  await identities.start();
+  const owner = new ClaudeThreadOperations({
+    daemonOrigin: "http://127.0.0.1:1",
+    sessions: { get: () => ENDED_CLAUDE_SESSION },
+    signal: new AbortController().signal,
+    identities,
+    transcript: { restoreTurn: () => undefined, recordSteer: async () => undefined, settleTurn: async () => undefined },
+    observe: async () => undefined,
+    broadcast: () => undefined,
+  } as never);
+  Object.assign(owner, { read: async () => ({ turns: [] }), refreshUsage: () => undefined });
+  const empty = {
+    cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0,
+  };
+  try {
+    await owner.adopt([{
+      turn: {
+        scope: "previous-generation", cwd: "C:/repo", projectId, threadId, turnId, workingStatusInPrompt: false,
+        launchedContextWindow: null, undelivered: [], total: empty, last: null, contextWindow: null,
+      },
+      transcript: {} as never,
+    }]);
+    assert.equal(identities.knownTurn(TurnReferenceSchema.parse(turnId)).threadId, threadId);
+  } finally {
+    await owner.interruptAll();
+    identities.dispose();
+  }
 });
 
 test("a Claude thread without native history renames and deletes without its unwritten native session", async () => {

@@ -3,7 +3,7 @@
  * - ClaudeTurnHandoff: one paused live turn's turn and transcript state for the next bridge generation.
  * - ClaudeInstructionInput: thread facts one managed Claude prompt build reads.
  * - ClaudeThreadOperationsOptions: bind host-owned Claude sessions to Workbench identity, state, lifecycle publication, and managed MCP.
- * - default ClaudeThreadOperations: own Claude admission, thread interruption, reload handoff, context and native sessions.
+ * - default ClaudeThreadOperations: own Claude admission, thread interruption, reload handoff (re-admitting adopted turn identities), context and native sessions.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -150,8 +150,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     for (const turn of this.live.values()) this.track(turn.continue());
   }
 
-  /** Continue turns a previous bridge generation paused, over the sessions the harness kept alive. */
-  adopt(handoffs: readonly ClaudeTurnHandoff[]) {
+  /**
+   * Continue turns a previous bridge generation paused, over the sessions the harness kept alive. A database reload
+   * hands this generation identities that never admitted those turns, so each is re-admitted before it resumes.
+   */
+  async adopt(handoffs: readonly ClaudeTurnHandoff[]) {
+    await Promise.all(handoffs.map(({ turn }) => this.readmitTurn(turn.threadId, turn.turnId)));
     for (const { turn: snapshot, transcript } of handoffs) {
       this.options.transcript.restoreTurn(transcript);
       const session = this.options.sessions.get(snapshot.scope);
@@ -171,6 +175,17 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     await this.pause();
     await Promise.all(this.pending);
     await this.usageHydrator.settle();
+  }
+
+  /** A turn the identities cannot re-admit still resumes; only lookups that need its admission degrade. */
+  private async readmitTurn(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId) {
+    try {
+      if (await this.options.identities.resolveTurn({ threadId, turnId })) return;
+      console.error("[claude] adopted turn identity could not be re-admitted", turnId, "not stored");
+    } catch (error) {
+      console.error("[claude] adopted turn identity could not be re-admitted", turnId,
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+    }
   }
 
   private collaborators(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, scope: string) {
