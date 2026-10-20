@@ -5,7 +5,7 @@
 
 import { useLayoutEffect, useRef, type ComponentType, type ReactNode } from "react";
 
-import type { ThreadEmphasisColor, ThreadIconType } from "../../../workbench/markdown/thread-icon-marker";
+import type { ThreadEmphasisColor, ThreadIconType } from "../../../workbench/markdown/thread-emphasis-markup";
 import { AsteriskIcon, CheckIcon, CircleAlertIcon, type IconProps, XIcon } from "../workbench-icons";
 import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 

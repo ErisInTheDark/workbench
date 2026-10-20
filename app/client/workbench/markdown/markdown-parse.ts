@@ -11,7 +11,7 @@
  * - SourcedBlock/parseSourcedBlocks: top-level editor blocks with the source lines each was read from.
  * - ThreadMarkdownSection/parseThreadMarkdownSections: split thread markdown source into prose, plan, and mode-change sections.
  * - isThreadMarkdownSectionBreak: identify the parsed blocks that end a thread prose section.
- * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes; partial thread text closes open formatting at its end. Keywords: markdown, inline, parser, streaming.
+ * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes, including thread icon and colour markup; partial thread text closes open formatting at its end. Keywords: markdown, inline, parser, streaming.
  * - parseThreadStateChangeMode: detect display-only thread mode change tags. Keywords: thread, mode, state, parser.
  * - normalizeThreadBlockTagBoundaries: isolate known thread block tags before line-oriented parsing. Keywords: thread, HTML, block, parser.
  * - getThreadStateChangeTagText: normalize display-only thread mode change tags. Keywords: thread, mode, state, parser.
@@ -41,7 +41,13 @@ import {
     resolveProjectFileLinkTarget,
     type WorkspaceFileLinkRoot,
 } from "./markdown-links";
-import { readThreadIconMarker, type ThreadEmphasisColor, type ThreadIconType } from "./thread-icon-marker";
+import {
+    readThreadColorTag,
+    readThreadIconMarker,
+    type ThreadEmphasisColor,
+    type ThreadIconType,
+    type ThreadTextColor,
+} from "./thread-emphasis-markup";
 
 export interface ParsedListItem {
   contentIndent: number;
@@ -100,6 +106,7 @@ export type ParsedInlineNode =
   | { type: "superscript"; children: ParsedInlineNode[] }
   | { type: "markTag"; children: ParsedInlineNode[]; name: string }
   | { type: "threadIcon"; children: ParsedInlineNode[] | null; color: ThreadEmphasisColor | null; iconType: ThreadIconType }
+  | { type: "threadColor"; children: ParsedInlineNode[]; color: ThreadTextColor | null }
   | { type: "knownSkillMention"; text: string; title: string }
   | { type: "attachmentMention"; text: string; number: number | null }
   | {
@@ -660,6 +667,13 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
     if ((options.profile ?? "editor") === "thread" && markdown.startsWith("</icon>", index)) {
       pushTextNode(nodes, "</icon>");
       index += "</icon>".length;
+      continue;
+    }
+
+    const colorTag = (options.profile ?? "editor") === "thread" ? readThreadColorTag(markdown, index, partial) : null;
+    if (colorTag) {
+      nodes.push({ children: parseInlineMarkdown(colorTag.content, colorTag.closed ? settledOptions : options), color: colorTag.color, type: "threadColor" });
+      index = colorTag.end;
       continue;
     }
 

@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect thread emphasis delimiter pairing, fenced code scoping and editor-profile separation.
+ * No production exports. Regression wards protect thread emphasis delimiter pairing, colour tag streaming, fenced code scoping and editor-profile separation.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -161,6 +161,18 @@ test("an unclosed partial icon stays a bare marker so later text is not recolour
   const nodes = parseInlineMarkdown('<icon color="red" type="x">blocked ', PARTIAL);
   assert.deepEqual(nodes.map(node => node.type), ["threadIcon", "text"]);
   assert.equal(nodes[0]?.type === "threadIcon" && nodes[0].children, null);
+});
+
+test("thread colour tags wrap inline markdown and colour streamed text before their closer arrives", () => {
+  assert.deepEqual(parseInlineMarkdown('<color color="red">a **b**</color> c', { profile: "thread" }), [
+    { children: [{ text: "a ", type: "text" }, { children: [{ text: "b", type: "text" }], type: "strong" }], color: "red", type: "threadColor" },
+    { text: " c", type: "text" },
+  ]);
+  assert.deepEqual(parseInlineMarkdown('<color color="#FF8800">streaming wor', PARTIAL), [
+    { children: [{ text: "streaming ", type: "text" }], color: "#ff8800", type: "threadColor" },
+  ]);
+  assert.deepEqual(parseInlineMarkdown("ok <colo", PARTIAL), [{ text: "ok ", type: "text" }]);
+  assert.ok(parseInlineMarkdown('<color color="red">a</color>').every(node => node.type === "text"));
 });
 
 test("partial thread blocks hide unfinished frontier lines and close open containers", () => {

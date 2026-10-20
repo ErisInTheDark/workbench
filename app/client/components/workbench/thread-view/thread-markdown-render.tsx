@@ -2,7 +2,7 @@
  * Exports:
  * - createSvgCodeBlockPreviewSrcDoc: build the sandboxed SVG preview document and its content policy.
  * - ThreadRenderOptions: parse options plus the live reveal cursor that animates newly streamed text and framed blocks in document order, the frontier caret, and per-paragraph holding.
- * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers; top-level section breaks host section-action slots; partial text renders its stream frontier.
+ * - renderThreadMarkdown: render parsed markdown, inline content (including icon and colour markup) and interactive code headers; top-level section breaks host section-action slots; partial text renders its stream frontier.
  * - renderThreadInlineMarkdown: render inline markdown without a block container.
  */
 
@@ -37,6 +37,7 @@ import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
 import IconButton from "../../ui/IconButton";
 import Disclosure from "../../ui/Disclosure";
+import ThreadColorText from "./ThreadColorText";
 import ThreadFileList from "./ThreadFileList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadInlineIcon from "./ThreadInlineIcon";
@@ -273,6 +274,12 @@ function renderThreadInlineNodes (
           />
         );
       }
+      case "threadColor":
+        return (
+          <ThreadColorText color={node.color} key={key}>
+            {renderThreadInlineNodes(node.children, key, options)}
+          </ThreadColorText>
+        );
       case "attachmentMention":
         return renderRevealedAtom(<span key={key} title={node.number === null ? "Removed attachment" : `Attachment ${node.number}`}
           className={`${getInlineMentionMarkClassName("attachment")} rounded-[0.35rem] px-[0.34em] py-[0.08em] ${node.number === null ? "text-danger" : ""}`}>

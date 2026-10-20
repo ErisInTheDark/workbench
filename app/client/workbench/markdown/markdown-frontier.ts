@@ -8,6 +8,8 @@ import { THREAD_INLINE_HTML_TAG_NAMES } from "./inline-html-tags";
 
 const FRONTIER_TAG_NAMES = [
   ...THREAD_INLINE_HTML_TAG_NAMES,
+  "color",
+  "colour",
   "details",
   "icon",
   "notice",

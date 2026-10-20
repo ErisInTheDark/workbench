@@ -66,6 +66,8 @@ Notes:
 | yellow | important user control/input, warnings |
 | red | serious problems, breaking changes, mistakes |
 
+<color color="{color}">{inline markdown}</color> colours text without an icon; color also accepts hex like #ff8800
+
 ### Icons
 
 **Hard rule: use icons over emoji. Avoid emoji unless required by other rules**
