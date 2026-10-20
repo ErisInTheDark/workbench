@@ -366,11 +366,12 @@ export default class WorkbenchAppStateController {
   }
 
   #readRows(sinceRevision: number, projection?: BrowserProjection): WorkbenchClientStateRows {
-    const changed = <Row extends { revision: number }>(rows: Row[]) => (
-      rows.filter((row) => row.revision > sinceRevision)
-    );
     // A full read hydrates every owner, so one table read filtered by owner replaces a query per owner.
     const fullRead = sinceRevision < 0;
+    // Browsers replace their state with a full read, so its deletion tombstones would delete nothing; deltas keep them.
+    const changed = <Row extends { revision: number }>(rows: Row[]) => (
+      rows.filter((row) => row.revision > sinceRevision && !(fullRead && "deleted" in row && row.deleted))
+    );
     const owned = <Owner, Row extends Owner>(
       owners: readonly Owner[], key: (owner: Owner) => string, all: () => Row[], one: (owner: Owner) => Row[],
     ): Row[] => {

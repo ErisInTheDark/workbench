@@ -651,6 +651,17 @@ test("composer and questionnaire draft children hydrate with their owning draft"
   await controller.close();
 });
 
+test("full reads leave deletion tombstones out while deltas still carry them", async (context) => {
+  const { controller, daemonRegistrationId } = await controllerFixture(context);
+  const identity = { daemonRegistrationId, kind: "composerDraft" as const, projectId: "project", threadId: "gone" };
+  const created = await controller.mutate({ action: "put", record: { ...identity, value: { attachments: [], text: "draft", updatedAt: 1 } } });
+  await controller.mutate({ action: "delete", identity });
+  const drafts = (response: WorkbenchClientStateResponse) => response.rows.composerDrafts.filter(row => row.thread_id === "gone");
+  assert.deepEqual(drafts(controller.read()), []);
+  assert.deepEqual(drafts(controller.read(created.revision)).map(row => row.deleted), [1]);
+  await controller.close();
+});
+
 test("revision deltas carry questionnaire answers and selections only for drafts that changed", async (context) => {
   const { controller, daemonRegistrationId } = await controllerFixture(context);
   const questionnaire = (requestKey: string) => ({
