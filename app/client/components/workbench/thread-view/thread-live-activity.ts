@@ -10,6 +10,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { WorkbenchShellInputSchema, WorkbenchShellResultSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
+import { LIVE_TERMINAL_TOOL_CALLS } from "workbench-shared/workbench/transcript/workbench-transcript-deferred-bodies";
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/thread-optimistic-items";
@@ -88,7 +89,7 @@ export function getThreadTerminalEntries(items: readonly ThreadItem[], context: 
         : item.type === "dynamicToolCall" && item.status === "inProgress" && item.success !== false;
     if (running) return true;
     const expiry = expiresAt(item.id);
-    return index >= calls.length - 20 && (expiry === null || context.retention!.now < expiry);
+    return index >= calls.length - LIVE_TERMINAL_TOOL_CALLS && (expiry === null || context.retention!.now < expiry);
   }) : calls;
   return admitted.flatMap<ThreadTerminalEntry>(item => {
     const shellCommand = item.type === "mcpToolCall" ? getWorkbenchMcpShellCommandItem(item, context.cwd) : null;
