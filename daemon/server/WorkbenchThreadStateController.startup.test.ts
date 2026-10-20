@@ -22,8 +22,9 @@ function record(value: object) {
   return entry;
 }
 
-function controller(database: ReturnType<typeof createThreadStateTestDatabase>) {
+function controller(database: ReturnType<typeof createThreadStateTestDatabase>, log?: (message: string) => void) {
   return new WorkbenchThreadStateController({
+    ...(log ? { log } : {}),
     resolveProjectId: id => {
       if (id !== fixtureIdentityValues.ProjectId.project) throw new Error("Unknown fixture project.");
       return id;
@@ -81,6 +82,39 @@ test("cold relational startup preserves canonical entries and layout across reop
     assert.deepEqual(sqlite.pragma("foreign_key_check"), []);
   } finally {
     await current.dispose();
+  }
+});
+
+test("reopening an already canonical project never rewrites it, with or without a saved layout", async () => {
+  for (const layout of [false, true]) {
+    const sqlite = new Database(":memory:");
+    const database = createThreadStateTestDatabase(sqlite);
+    const threadId = "43596355-c379-497b-b1e0-2f2619c977a1";
+    database.admitThread(fixtureIdentityValues.ProjectId.project, threadId);
+    const storedRecord = record({
+      entryKind: "thread", identity: { harness: "codex", threadId }, title: "Saved", activityAt: 2,
+      metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "working", reason: "acceptedIntent", settled: false,
+        agent: { agentStatus: "completed", turnId: "8997417f-de30-47a7-b63b-fb41e6e8b4e5" } },
+    });
+    database.admitRecord(storedRecord);
+    await database.commitThreadState({
+      records: [storedRecord],
+      ...(layout ? { layouts: [{ owner: { kind: "project" as const, projectId: fixtureIdentityValues.ProjectId.project },
+        revision: 1, displayOrder: { pinned: { [`codex:${threadId}`]: { above: [], below: [] } } } }] } : {}),
+    });
+    // The first load may canonicalise what the fixture wrote; every later load must not rewrite.
+    const first = controller(database);
+    await first.readProject(fixtureIdentityValues.ProjectId.project);
+    await first.dispose();
+    const messages: string[] = [];
+    const reopened = controller(createThreadStateTestDatabase(sqlite), message => messages.push(message));
+    try {
+      await reopened.readProject(fixtureIdentityValues.ProjectId.project);
+      assert.deepEqual(messages.filter(message => message.startsWith("Rewriting stored thread state")), [], `layout=${layout}`);
+    } finally {
+      await reopened.dispose();
+    }
   }
 });
 

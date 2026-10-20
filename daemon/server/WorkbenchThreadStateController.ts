@@ -40,7 +40,6 @@ import {
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
   getWorkbenchThreadDisplayKey,
-  isWorkbenchThreadDisplayOrderEmpty,
   normalizeWorkbenchThreadDisplayOrder,
   reconcileWorkbenchThreadDisplayOrder,
   resolveWorkbenchThreadDisplayOrder,
@@ -1649,9 +1648,8 @@ export default class WorkbenchThreadStateController {
       : null;
     const latestDraft = [...drafts].sort((left, right) => right.updatedAt - left.updatedAt)[0];
     return {
-      ...("displayOrder" in stored && !isWorkbenchThreadDisplayOrderEmpty(stored.displayOrder)
-        ? { displayOrder: normalizeWorkbenchThreadDisplayOrder(stored.displayOrder) }
-        : {}),
+      // Storage always reads a layout back, empty included, so keeping it lets an unchanged project round-trip unrewritten.
+      ...("displayOrder" in stored ? { displayOrder: normalizeWorkbenchThreadDisplayOrder(stored.displayOrder) } : {}),
       drafts,
       newThreadProfile: storedNewThreadProfile?.success
         ? storedNewThreadProfile.data
