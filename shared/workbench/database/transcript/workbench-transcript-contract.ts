@@ -90,6 +90,8 @@ export type WorkbenchTranscriptSnapshotRows = {
 
 export interface WorkbenchTranscriptReadRequest {
   beforeTurnIndex?: number;
+  /** Within `turnLimit`, keep only the fewest latest turns holding at least this many items; ignored with `turnIds`. */
+  itemCredit?: number;
   protocolVersion?: 1 | 2 | 3 | 4 | 5;
   threadId: string;
   turnIds?: string[];

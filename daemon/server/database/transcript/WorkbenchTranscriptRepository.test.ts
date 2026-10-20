@@ -2455,6 +2455,52 @@ test("hydration pages keep full turn metadata and load only the requested immuta
   }
 });
 
+test("an item credit trims the latest-turn window to the fewest turns holding that many items", () => {
+  const { database, repository } = createRepository();
+  try {
+    const itemCounts = [1, 1, 2];
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      ...itemCounts.flatMap((count, turnIndex): WorkbenchTranscriptAtomicObservation[] => [
+        turnObservation(`turn-${turnIndex}`, turnIndex),
+        ...Array.from({ length: count }, (_, position): WorkbenchTranscriptAtomicObservation => ({
+          kind: "item",
+          threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+          turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(`turn-${turnIndex}`),
+          lifecycle: "completed",
+          observedAt: turnIndex * 10 + position,
+          item: {
+            type: "agentMessage",
+            id: `message-${turnIndex}-${position}`,
+            text: `message ${turnIndex}.${position}`,
+            phase: "commentary",
+            memoryCitation: null,
+            delivery: null,
+            questions: null,
+          },
+        })),
+      ]),
+    ], ["turn-0", "turn-1", "turn-2"])]);
+
+    const covered = repository.read({ threadId: "thread", turnLimit: 4, itemCredit: 2 })!;
+    assert.deepEqual(covered.loadedTurnIds, ["turn-2"]);
+    assert.deepEqual(covered.turns.map(({ id }) => id), ["turn-0", "turn-1", "turn-2"]);
+    assert.equal(covered.hasPreviousTurns, true);
+
+    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 4, itemCredit: 3 })!.loadedTurnIds, ["turn-1", "turn-2"]);
+    const capped = repository.read({ threadId: "thread", turnLimit: 2, itemCredit: 50 })!;
+    assert.deepEqual(capped.loadedTurnIds, ["turn-1", "turn-2"]);
+    assert.equal(capped.hasPreviousTurns, true);
+    const everything = repository.read({ threadId: "thread", turnLimit: 4, itemCredit: 50 })!;
+    assert.deepEqual(everything.loadedTurnIds, ["turn-0", "turn-1", "turn-2"]);
+    assert.equal(everything.hasPreviousTurns, false);
+    assert.deepEqual(repository.read({ threadId: "thread", turnIds: ["turn-0", "turn-2"], turnLimit: 4, itemCredit: 1 })!.loadedTurnIds,
+      ["turn-0", "turn-2"]);
+  } finally {
+    database.close();
+  }
+});
+
 test("JIT windows seed independent turns without importing old interactions into existing bodies", () => {
   const { database, repository } = createRepository();
   const turnHistory = Array.from({ length: 9 }, (_, turnIndex) => (

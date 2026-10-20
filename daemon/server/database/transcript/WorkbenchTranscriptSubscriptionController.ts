@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTranscriptSubscription: snapshot or incremental latest-window subscription.
- * - default WorkbenchTranscriptSubscriptionController: own bootstrap, replacement and disposal.
+ * - default WorkbenchTranscriptSubscriptionController: own bootstrap, credit-window pinning, replacement and disposal.
  */
 import type {
   WorkbenchTranscriptReadRequest,
@@ -20,6 +20,13 @@ export interface WorkbenchTranscriptSubscription {
 interface ActiveSubscription extends WorkbenchTranscriptSubscription {
   dirty: boolean;
   refreshing: boolean;
+}
+
+/** The first read sizes the window from its item credit; rereads keep that turn count so the window never shrinks under a viewer. */
+function pinCreditWindow(request: WorkbenchTranscriptReadRequest, snapshot: WorkbenchTranscriptSnapshot | null) {
+  if (request.itemCredit === undefined || !snapshot) return request;
+  const { itemCredit: _credit, ...window } = request;
+  return snapshot.hasPreviousTurns ? { ...window, turnLimit: Math.max(1, snapshot.loadedTurnIds.length) } : window;
 }
 
 export default class WorkbenchTranscriptSubscriptionController {
@@ -102,11 +109,13 @@ export default class WorkbenchTranscriptSubscriptionController {
         throw error;
       }
       if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
+      subscription.request = pinCreditWindow(subscription.request, snapshot);
       if (this.#live.open(subscription.id, snapshot, subscription.publishStream)) subscription.dirty = true;
       return;
     }
     const snapshot = await this.#read(subscription.request);
     if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
+    subscription.request = pinCreditWindow(subscription.request, snapshot);
     await subscription.publish(snapshot);
   }
 

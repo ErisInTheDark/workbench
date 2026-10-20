@@ -183,6 +183,22 @@ export default class WorkbenchTranscriptRepository {
     ]));
   }
 
+  /** Uncounted turns hold nothing, so a miscount only keeps more turns than needed. */
+  #fewestLatestTurnsHolding<Turn extends { id: string }>(threadId: string, turns: Turn[], itemCredit: number) {
+    const counts = new Map((this.#database.prepare(`
+      SELECT turn_id, COUNT(*) AS items FROM thread_items
+      WHERE thread_id = ? AND turn_id IN (SELECT value FROM json_each(?))
+      GROUP BY turn_id
+    `).all(threadId, JSON.stringify(turns.map(turn => turn.id))) as Array<{ items: number; turn_id: string }>)
+      .map(row => [row.turn_id, row.items]));
+    let held = 0;
+    for (let start = turns.length - 1; start >= 0; start--) {
+      held += counts.get(turns[start]!.id) ?? 0;
+      if (held >= itemCredit) return turns.slice(start);
+    }
+    return turns;
+  }
+
   readStoredItems(threadId: string, itemIds: number[]) {
     return this.#database.transaction(() => {
       const roots = this.#all(selectRows(itemTables.threadItems, {
@@ -420,9 +436,11 @@ export default class WorkbenchTranscriptRepository {
           ? this.#identity.resolveTurn({ threadId: WorkbenchThreadIdSchema.parse(threadId), turnId: TurnReferenceSchema.parse(turnId) })?.turnId ?? turnId
           : turnId
       ))) : null;
+      const latestTurns = eligibleTurns.slice(-request.turnLimit);
       const loadedTurns = requestedTurnIds
         ? eligibleTurns.filter((turn) => requestedTurnIds.has(turn.id))
-        : eligibleTurns.slice(-request.turnLimit);
+        : request.itemCredit === undefined ? latestTurns
+        : this.#fewestLatestTurnsHolding(threadId, latestTurns, request.itemCredit);
       if (requestedTurnIds && loadedTurns.length !== requestedTurnIds.size) {
         const missingTurnIds = [...requestedTurnIds].filter((turnId) => !loadedTurns.some(({ id }) => id === turnId));
         const foreignTurn = missingTurnIds

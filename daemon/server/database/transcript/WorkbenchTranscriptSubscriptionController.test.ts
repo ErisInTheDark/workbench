@@ -44,6 +44,30 @@ test("observation protection spans opening, multiple views, replacement, failure
   failed.dispose();
 });
 
+test("the first read's credit-sized window stays pinned as a plain turn count for rereads", async () => {
+  const window = (loadedTurnIds: string[], hasPreviousTurns: boolean) => ({
+    thread: { id: "thread" }, turns: [], loadedTurnIds, hasPreviousTurns,
+  }) as unknown as WorkbenchTranscriptSnapshot;
+  for (const [first, pinned] of [
+    [window(["latest"], true), { threadId: "thread", turnLimit: 1 }],
+    [window(["older", "latest"], false), { threadId: "thread", turnLimit: 4 }],
+  ] as const) {
+    const requests: unknown[] = [];
+    const controller = new WorkbenchTranscriptSubscriptionController(async (request) => {
+      requests.push(request);
+      return first;
+    }, assert.fail);
+    let published = 0;
+    await controller.subscribe({
+      id: "subscription", request: { threadId: "thread", turnLimit: 4, itemCredit: 96 }, publish: () => { published++; },
+    });
+    controller.settle(["thread"]);
+    for (let turn = 0; turn < 20 && published < 2; turn++) await Promise.resolve();
+    assert.deepEqual(requests, [{ threadId: "thread", turnLimit: 4, itemCredit: 96 }, pinned]);
+    controller.dispose();
+  }
+});
+
 test("subscriptions refresh only changed latest windows and replacement suppresses stale publication", async () => {
   const reads: string[] = [];
   const pending: Array<ReturnType<typeof deferred<WorkbenchTranscriptSnapshot | null>>> = [];

@@ -144,6 +144,7 @@ export interface WorkbenchWebSocketReloadDirtObserverState {
 interface WorkbenchWebSocketTranscriptSubscriptionState {
   client: BridgeClient;
   connectionId: string;
+  initialItemCredit?: number;
   protocolVersion?: 1 | 2 | 3 | 4 | 5;
   toolPatchPreviews?: boolean;
   subscriptionId: string;
@@ -919,6 +920,7 @@ export default class WorkbenchWebSocketRequestController {
     await this.subscribeTranscript({
       client,
       connectionId,
+      initialItemCredit: request.params.initialItemCredit,
       protocolVersion: request.params.protocolVersion,
       toolPatchPreviews: request.params.toolPatchPreviews,
       subscriptionId,
@@ -952,6 +954,7 @@ export default class WorkbenchWebSocketRequestController {
           threadId: subscription.threadId,
           turnIds: subscription.turnIds,
           turnLimit: subscription.turnLimit,
+          ...(subscription.initialItemCredit === undefined ? {} : { itemCredit: subscription.initialItemCredit }),
         },
         publish: async (snapshot) => {
           if (signal.aborted || this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
