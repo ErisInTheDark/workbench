@@ -3,7 +3,7 @@
  * - TranscriptAssetWrite: validated thread reference and image upload.
  * - TranscriptAssetRead: compatibility address and optional expected thread owner.
  * - TranscriptAssetContent: immutable image metadata and bytes.
- * - default WorkbenchTranscriptAssetStore: own atomic immutable content, thread-scoped addresses, and per-digest orphan collection.
+ * - default WorkbenchTranscriptAssetStore: own atomic immutable content, thread-scoped addresses, read-only reachability prefiltering, and per-digest orphan collection.
  */
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -116,18 +116,27 @@ export default class WorkbenchTranscriptAssetStore {
     `).pluck().all({ createdBefore }) as string[];
   }
 
-  /** One digest per transaction keeps each writer step short: the address scan costs O(thread payload text). */
+  /** The costly reachability scan as a pure read, so readers can prefilter candidates without holding the writer. */
+  listUnreachable(digests: readonly string[], createdBefore: number): string[] {
+    return digests.filter(digest => this.#isUnreachable(digest, createdBefore));
+  }
+
+  /** One digest per transaction; the canonical recheck keeps an asset referenced since a reader's prefilter. */
   collectOrphan(digest: string, createdBefore: number): boolean {
     return this.database.transaction(() => {
-      const unreachable = this.database.prepare(`
-        SELECT 1 FROM transcript_assets AS asset
-        WHERE asset.digest = @digest AND ${unreferencedAsset} AND ${unaddressedAsset}
-      `).get({ digest, createdBefore });
-      if (!unreachable) return false;
+      if (!this.#isUnreachable(digest, createdBefore)) return false;
       this.database.prepare("DELETE FROM transcript_asset_addresses WHERE digest = ?").run(digest);
       this.database.prepare("DELETE FROM transcript_assets WHERE digest = ?").run(digest);
       return true;
     })();
+  }
+
+  /** The address scan costs O(thread payload text). */
+  #isUnreachable(digest: string, createdBefore: number) {
+    return Boolean(this.database.prepare(`
+      SELECT 1 FROM transcript_assets AS asset
+      WHERE asset.digest = @digest AND ${unreferencedAsset} AND ${unaddressedAsset}
+    `).get({ digest, createdBefore }));
   }
 
   write(input: TranscriptAssetWrite): Omit<TranscriptAssetContent, "bytes"> {

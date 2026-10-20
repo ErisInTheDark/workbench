@@ -76,6 +76,10 @@ test("orphan collection honours canonical references, shared content, and admiss
       VALUES ('shared', ?, NULL, 'thread', 'test', 0, ?, 10)
     `).run(ownerThreadId, referenced.digest);
 
+    // The reachability scan is a pure read, so it can run off the writer before any collection.
+    assert.deepEqual(store.listUnreachable(store.listOrphanCandidates(100), 100), [orphan.digest]);
+    assert.equal(database.prepare("SELECT COUNT(*) FROM transcript_assets WHERE digest = ?").pluck().get(orphan.digest), 1);
+
     const collected = store.listOrphanCandidates(100).filter(digest => store.collectOrphan(digest, 100));
     assert.deepEqual(collected, [orphan.digest]);
     assert.equal(store.collectOrphan(referenced.digest, 100), false);

@@ -296,7 +296,8 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       { ...cutoffs, ...(readObservedThreadIds ? { observedThreadIds: readObservedThreadIds() } : {}) });
     const createdBefore = cutoffs.expiredAt - ASSET_ADMISSION_GRACE_MS;
     let expiredAssets = 0;
-    for (const digest of await step("listOrphanAssetCandidates", createdBefore)) {
+    const candidates = await step("listOrphanAssetCandidates", createdBefore);
+    for (const digest of candidates.length ? await step("listUnreachableAssets", candidates, createdBefore) : []) {
       if (await step("collectOrphanAsset", digest, createdBefore)) expiredAssets += 1;
     }
     const expiredProposalCaches = await step("evictProposalCaches", proposalCacheCutoff);

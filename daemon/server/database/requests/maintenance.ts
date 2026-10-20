@@ -75,6 +75,11 @@ export const maintenanceRequests = {
   listOrphanAssetCandidates: defineDatabaseRequest({
     run: ({ database }, createdBefore: number) => new WorkbenchTranscriptAssetStore(database).listOrphanCandidates(createdBefore),
   }),
+  /** Background read: the payload-text scan behind each candidate stays off the writer that admits steers. */
+  listUnreachableAssets: defineDatabaseRequest({
+    read: "stats",
+    run: ({ database }, digests: string[], createdBefore: number) => new WorkbenchTranscriptAssetStore(database).listUnreachable(digests, createdBefore),
+  }),
   collectOrphanAsset: defineDatabaseRequest({
     run: ({ database }, digest: string, createdBefore: number) => new WorkbenchTranscriptAssetStore(database).collectOrphan(digest, createdBefore),
   }),
