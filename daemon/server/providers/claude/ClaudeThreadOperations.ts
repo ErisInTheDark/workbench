@@ -97,6 +97,8 @@ export interface ClaudeThreadOperationsOptions {
   claudeDataRoot?: string;
 }
 
+const SLOW_SUBMIT_MS = 1_000;
+
 export default class ClaudeThreadOperations implements WorkbenchProviderThreads {
   private readonly live = new Map<WorkbenchThreadId, ClaudeLiveTurn>();
   private readonly scopes = new Map<string, ClaudeLiveTurn>();
@@ -348,15 +350,36 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
   }
   async admitTurn(threadId: string) { await this.read(threadId); }
 
+  /** Slow submits keep the sender's composer locked; their log names which step waited. */
   async submit(input: Parameters<WorkbenchProviderThreads["submit"]>[0]) {
+    const started = performance.now();
+    let last = started;
+    const phases: string[] = [];
+    const mark = (phase: string) => {
+      const now = performance.now();
+      phases.push(`${phase} ${Math.round(now - last)}ms`);
+      last = now;
+    };
+    try {
+      return await this.submitTimed(input, mark);
+    } finally {
+      const total = Math.round(performance.now() - started);
+      if (total >= SLOW_SUBMIT_MS) console.warn(`[claude] Slow submit thread=${input.threadId.slice(0, 40)} ${total}ms: ${phases.join(", ") || "no phase finished"}`);
+    }
+  }
+
+  private async submitTimed(input: Parameters<WorkbenchProviderThreads["submit"]>[0], mark: (phase: string) => void) {
     this.options.signal.throwIfAborted();
     const identity = await this.identity(input.threadId);
+    mark("identity");
     let runtime = this.live.get(identity.threadId);
     if (runtime && !runtime.acceptingInput) {
       await runtime.whenSettled();
+      mark("previous-turn-settle");
       runtime = this.live.get(identity.threadId);
     }
     const content = await claudePromptContent(input.input);
+    mark("content");
     const binding = identity.bindings.find(value => value.harness === "claude");
     if (!binding) throw new Error("Claude thread has no native session identity.");
     const activatedSkillPaths = collectActivatedSkillPaths(input.input, input.context);
@@ -375,9 +398,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
         dispatchSequence: null, error: null,
       };
       // Held in canonical history before delivery, so a dying process cannot take the steer with it.
+      mark("steer-skills");
       await this.options.transcript.recordSteer(entry);
+      mark("steer-record");
       runtime.steer(entry, steerContent);
       await this.collectInputContext(identity.threadId, "steer");
+      mark("steer-context");
       return { kind: "steered" as const, turnId: runtime.turnId };
     }
     if (runtime) throw new Error("Claude turn is already active.");
@@ -386,6 +412,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     if (nativeHistoryExists && !await getSessionInfo(binding.nativeThreadId, { dir: binding.nativeLocation })) {
       throw new Error("Claude native session history is unavailable for continuation.");
     }
+    mark("history");
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : null;
     const contextWindow = await this.launchContextWindow(settings);
@@ -393,6 +420,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const instructions = await this.options.buildInstructions(instructionInput);
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable.");
     const promptContent = await this.withActivatedSkills(content, activatedSkillPaths, instructionInput);
+    mark("instructions");
     const hasQuestionnaireResponse = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
     const workingStatusInPrompt = entry?.entryKind === "thread" && entry.lifecycle.kind === "working"
       || hasQuestionnaireResponse;
@@ -413,6 +441,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       threadId: identity.threadId, sessionId: binding.nativeThreadId, cwd: binding.nativeLocation,
       clientMessageId: input.clientMessageId, content: toWorkbenchThreadUserInput(input.input),
     });
+    mark("turn-start");
     const scope = randomUUID();
     const endpoint = new URL("/daemon/mcp", this.options.daemonOrigin);
     endpoint.searchParams.set("provider", "claude");
@@ -476,6 +505,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       await this.options.transcript.settleTurn(turnId, "failed");
       throw error;
     }
+    mark("session-launch");
     const live = new ClaudeLiveTurn({
       session, scope, cwd: binding.nativeLocation,
       projectId: ProjectIdSchema.parse(identity.projectId),
@@ -487,8 +517,10 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     // The registered runtime takes injected context ahead of its first prompt.
     await this.collectInputContext(identity.threadId, "start");
     const started = await live.start(sdkContent);
+    mark("prompt-start");
     this.track(started.task);
     const turn = (await this.read(identity.threadId)).turns.find(value => value.id === turnId);
+    mark("turn-read");
     if (!turn) throw new Error("Claude turn admission did not materialise a turn.");
     const warnings = started.warning ? [started.warning] : [];
     try {
