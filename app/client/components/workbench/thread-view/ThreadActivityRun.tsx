@@ -18,7 +18,7 @@ import { describeBrowseStep, getBrowseItemSteps, getCurrentBrowseStep } from "./
 import type { ActivitySegment, CommandSequenceItem, ThreadRenderableBlock } from "./thread-render-blocks";
 import { getThreadFileChangeEntries, ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import ThreadDurationText from "./ThreadDurationText";
-import ThreadInlineCode from "./ThreadInlineCode";
+import ProjectFilePath from "../ProjectFilePath";
 import { ThreadEntryAnimation } from "./ThreadRevealText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import useThreadActivityRun from "./use-thread-activity-run";
@@ -91,6 +91,7 @@ function ReasoningStatus({ item }: { item: ReasoningItem }) {
 }
 
 function StatusContent({ context, item }: { context: CommandChipContext; item: ThreadItem }) {
+  const project = useProject.contextual();
   if (item.type === "reasoning") return <ReasoningStatus item={item} />;
   if (item.type === "fileChange" || isNativeFileOperation(item)) {
     const file = getThreadFileChangeEntries([item]).at(-1);
@@ -98,7 +99,8 @@ function StatusContent({ context, item }: { context: CommandChipContext; item: T
     return (
       <span className="inline-flex min-w-0 items-center gap-1.5">
         <span className={shimmerTextClassName}>{FILE_VERBS[file.kind]}</span>
-        <ThreadInlineCode>{file.path}</ThreadInlineCode>
+        {/* A static pill: the status sits inside the run's toggle button, which a file-open button cannot nest in. */}
+        <ProjectFilePath className="min-w-0 shrink" path={project?.displayPath(file.path) ?? file.path} projectId={null} />
         <ThreadFileChangeTotals additions={file.additions} animateChanges deletions={file.deletions} />
       </span>
     );

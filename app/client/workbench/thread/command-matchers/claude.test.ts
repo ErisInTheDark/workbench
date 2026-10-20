@@ -68,6 +68,15 @@ test("before and without applied evidence, Write reads as a create and Edit as a
   assert.equal(isNativeFileOperation(item("Read", { file_path: "a.ts" })), false);
 });
 
+test("while Claude writes, the intended edit already counts its changed lines", () => {
+  const running = { status: "inProgress" as const, success: null };
+  const totals = (value: NativeItem) => getNativeFileChanges(value)[0]?.summaryTotals;
+  assert.deepEqual(totals({ ...item("Edit", { file_path: "a.ts", old_string: "a\nb\nc", new_string: "a\nB\nB2\nc" }), ...running }),
+    { additions: 2, deletions: 1 });
+  assert.deepEqual(totals({ ...item("Write", { file_path: "new.ts", content: "one\ntwo\nthree\n" }), ...running }),
+    { additions: 3, deletions: 0 });
+});
+
 test("claim denials stay distinguishable from other failed edits", () => {
   const failed = (metadata?: object): NativeItem => ({ ...item("Edit", { file_path: "a.ts" }),
     status: "failed", success: false, ...(metadata ? { metadata: metadata as never } : {}) });

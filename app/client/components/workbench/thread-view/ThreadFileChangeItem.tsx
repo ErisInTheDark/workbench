@@ -77,7 +77,9 @@ export function getThreadFileChangeEntries(items: readonly FileOperationItem[]):
   return items.flatMap(item => {
     if (item.type !== "fileChange") {
       if (getNativeFileOperationOutcome(item) === "failed") return [];
-      return getNativeFileChanges(item).map(({ change }) => ({ ...countsOf(parseFileChangeDiff(change)), kind: change.kind.type, path: change.path }));
+      return getNativeFileChanges(item).map(({ change, summaryTotals }) => ({
+        ...(summaryTotals ?? countsOf(parseFileChangeDiff(change))), kind: change.kind.type, path: change.path,
+      }));
     }
     if (item.status === "failed" || item.status === "declined") return [];
     return item.changes.map(change => ({ ...getFileChangeCounts(item, change), kind: change.kind.type, path: change.path }));

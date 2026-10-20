@@ -49,6 +49,23 @@ export function isClaudeFileOperation(item: ThreadItem): item is NativeItem & { 
   return item.type === "dynamicToolCall" && item.namespace === "claude" && (item.tool === "Edit" || item.tool === "Write");
 }
 
+function lines(value: unknown) {
+  return typeof value === "string" && value ? value.replace(/\n$/u, "").split("\n") : [];
+}
+
+/** Lines an edit changes, ignoring the context it shares at either end: the live count before Claude reports its diff. */
+function getIntendedTotals(tool: string, args: Record<string, unknown> | null) {
+  if (tool === "Write") return { additions: lines(args?.content).length, deletions: 0 };
+  if (tool !== "Edit") return null;
+  const before = lines(args?.old_string);
+  const after = lines(args?.new_string);
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+  let end = 0;
+  while (end < before.length - start && end < after.length - start && before.at(-1 - end) === after.at(-1 - end)) end += 1;
+  return { additions: after.length - start - end, deletions: before.length - start - end };
+}
+
 export function getClaudeFileChanges(item: ThreadItem): NativeFileChange[] {
   if (!isClaudeFileOperation(item)) return [];
   const path = text(record(item.arguments)?.file_path);
@@ -58,9 +75,11 @@ export function getClaudeFileChanges(item: ThreadItem): NativeFileChange[] {
   // Only a completed result carries what Claude applied; until then the tool decides the intent.
   const applied = !failed && item.status === "completed" ? metadata.fileChange : undefined;
   const kind = applied?.kind ?? (item.tool === "Write" ? "add" : "update");
+  const intended = !failed && !applied ? getIntendedTotals(item.tool, record(item.arguments)) : null;
   return [{
     change: { path, kind: kind === "add" ? { type: "add" } : { type: "update", move_path: null }, diff: applied?.diff ?? "" },
     sourceItemId: item.id, sourceChangeIndex: 0, danger: failed,
+    ...(intended ? { summaryTotals: intended } : {}),
     ...(failed && metadata.workbenchFailureKind ? { failureKind: metadata.workbenchFailureKind } : {}),
   }];
 }
