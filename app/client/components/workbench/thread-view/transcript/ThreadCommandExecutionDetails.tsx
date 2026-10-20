@@ -146,7 +146,9 @@ export default function ThreadCommandExecutionDetails ({
   }
   const messageCommand = parseWorkbenchMessageCommand(commandDisplay.unwrappedCommand, item.commandActions);
   const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
-  const resolvedSubagentTargets = subagentCommand ? resolveWorkbenchSubagentCommandTargets(transcript.subagents, subagentCommand.targets) : [];
+  const resolvedSubagentTargets = subagentCommand
+    ? resolveWorkbenchSubagentCommandTargets(transcript.subagents, subagentCommand.targets, { live: item.status === "inProgress" })
+    : [];
   const {
     artifactId: checkpointDiffArtifactId,
     compareChanges: checkpointCompareChanges,

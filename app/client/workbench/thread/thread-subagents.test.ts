@@ -86,6 +86,12 @@ test("resolves command selectors without guessing reused subagent names", () => 
   assert.deepEqual(resolveWorkbenchSubagentCommandTargets([subagent, reusedName], [targets[2]!]), [
     { fallbackName: "MIMI", subagent: null, targetKey: "name:mimi", threadId: null },
   ]);
+  // A running command's name can only mean its current holder; settled namesakes gave the name back.
+  assert.deepEqual(resolveWorkbenchSubagentCommandTargets([reusedName, subagent], [targets[2]!], { live: true }), [
+    { fallbackName: "MIMI", subagent, targetKey: "name:mimi", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child") },
+  ]);
+  assert.equal(resolveWorkbenchSubagentCommandTargets([reusedName, { ...reusedName, threadId: subagent.threadId }],
+    [targets[2]!], { live: true })[0]?.subagent, null);
   assert.equal(getWorkbenchSubagentCommandTargetKey({ kind: "id", value: "Case-Sensitive" }), "id:Case-Sensitive");
 });
 

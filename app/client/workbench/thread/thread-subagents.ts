@@ -12,7 +12,7 @@
  * - reconcileWorkbenchSubagentPage: reconcile paged children with retained summaries.
  * - getSubagentSummary: find a child by thread ID.
  * - getWorkbenchSubagentCommandTargetKey: key an ID/name selector.
- * - resolveWorkbenchSubagentCommandTargets: resolve selectors without guessing reused names.
+ * - resolveWorkbenchSubagentCommandTargets: resolve selectors without guessing reused names; running commands' names resolve to their unsettled holder.
  * - getSubagentHarness: resolve a child's harness with a fallback.
  * - filterSubagentsByParentThreadId: select a parent's children.
  * - filterSubagentThreadSummaries: exclude child IDs from thread summaries.
@@ -173,12 +173,15 @@ export function getWorkbenchSubagentCommandTargetKey(target: WorkbenchSubagentCo
 export function resolveWorkbenchSubagentCommandTargets(
   subagents: readonly WorkbenchSubagentSummary[],
   targets: readonly WorkbenchSubagentCommandTarget[],
+  { live = false }: { live?: boolean } = {},
 ): WorkbenchSubagentCommandDisplayTarget[] {
   return targets.map((target) => {
     const matches = target.kind === "id"
       ? subagents.filter((subagent) => subagent.threadId === target.value)
       : subagents.filter((subagent) => subagent.name.localeCompare(target.value, undefined, { sensitivity: "accent" }) === 0);
-    const subagent = matches.length === 1 ? matches[0]! : null;
+    // Settled subagents release their names, so a running command's name means its one unsettled holder.
+    const holders = live && matches.length > 1 ? matches.filter(subagent => !subagent.lifecycle?.settled) : matches;
+    const subagent = holders.length === 1 ? holders[0]! : null;
     return {
       fallbackName: target.kind === "name" ? target.value : null,
       subagent,

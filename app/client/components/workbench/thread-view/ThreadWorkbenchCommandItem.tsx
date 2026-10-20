@@ -262,7 +262,7 @@ export default function ThreadWorkbenchCommandItem({
   }
   if (operation.kind !== "subagent") return null;
   const subagentCommand = operation.operation;
-  const targets = resolveWorkbenchSubagentCommandTargets(subagents, subagentCommand.targets);
+  const targets = resolveWorkbenchSubagentCommandTargets(subagents, subagentCommand.targets, { live: item.status === "inProgress" });
   if (
     subagentCommand.action === "create"
     && subagentCommand.message
