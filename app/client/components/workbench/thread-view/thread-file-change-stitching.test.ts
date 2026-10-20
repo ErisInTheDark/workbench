@@ -4,7 +4,7 @@ import test from "node:test";
 
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import type { NativeFileOperationItem } from "../../../workbench/thread/thread-command-matchers";
-import { stitchFileOperationRows } from "./thread-file-change-stitching";
+import { getStitchedRowSpan, stitchFileOperationRows } from "./thread-file-change-stitching";
 
 type Status = "completed" | "failed" | "inProgress";
 
@@ -66,6 +66,19 @@ test("different failures, targets, or operations keep separate rows", () => {
 test("a live retry joins the failure run, and stays only if it fails the same way", () => {
   assert.deepEqual(rows([unclaimed("1"), unclaimed("2"), unclaimed("3", "inProgress")]), [["1+2+3"]]);
   assert.deepEqual(rows([unclaimed("1"), unclaimed("2"), edit("3", "a.ts")]), [["1+2"], ["3"]]);
+});
+
+test("a stitched row spans from its first piece starting to its last piece finishing", () => {
+  const timing = (itemId: string, startedAt: number | null, completedAt: number | null, firstSeenAt: number | null = null) => (
+    { itemId, startedAt, completedAt, firstSeenAt, lastSeenAt: null });
+  const items = [edit("1", "a.ts"), edit("2", "a.ts"), edit("3", "a.ts")];
+  assert.deepEqual(getStitchedRowSpan(items, [timing("1", 1_000, 1_200), timing("2", 4_000, 4_300), timing("3", 9_000, 9_500)]),
+    { startedAtMs: 1_000, durationMs: 8_500 });
+  // A piece the timeline only saw arrive still marks the start; a row with no timing has no span.
+  assert.deepEqual(getStitchedRowSpan(items, [timing("1", null, null, 2_000), timing("3", 9_000, 9_500)]), { startedAtMs: 2_000, durationMs: 7_500 });
+  assert.equal(getStitchedRowSpan(items, []), null);
+  // Still running: the span has begun but has no end yet.
+  assert.deepEqual(getStitchedRowSpan(items, [timing("1", 1_000, 1_200), timing("3", 9_000, null)]), { startedAtMs: 1_000, durationMs: null });
 });
 
 test("deletes and moves stay standalone", () => {

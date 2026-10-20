@@ -172,6 +172,8 @@ test("a card's status is the newest step actually running, else the newest that 
   assert.deepEqual(status([reasoning("why"), command("one"), command("two")]), ["commands", ["two"]]);
   // Everything still queued: the newest finished step, not a call that has not begun.
   assert.deepEqual(status([command("one"), running("waiting", "cargo test")], ["waiting"]), ["commands", ["one"]]);
+  // Repeated edits of one file are one stitched step, so the status keeps all of them.
+  assert.deepEqual(status([edit("other", "C:/repo/b.ts"), edit("e1", "C:/repo/a.ts"), edit("e2", "C:/repo/a.ts")]), ["files", ["e1", "e2"]]);
 });
 
 test("reasoning with nothing to show adds no step, and a run of only that renders nothing", () => {

@@ -13,6 +13,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { getAgentScreenshotSteerImages, isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { matchThreadGenericItem } from "../../../workbench/thread/thread-generic-item-matchers";
 import { getNativeFileChanges } from "../../../workbench/thread/thread-command-matchers";
+import { stitchFileOperationRows } from "./thread-file-change-stitching";
 import {
   buildCommandSequenceRenderSegments,
   isRunStepSegment,
@@ -139,8 +140,17 @@ export function getActivityRunPresentation(
   return !live || kind === "sleep" || kind === "commands" ? "bare" : "card";
 }
 
-/** One item of a segment as a segment of its own kind. */
+type FileStepItem = Extract<ActivitySegment, { kind: "files" }>["items"][number];
+
+/** One item's step as a segment of its own kind; a file edit keeps every edit stitched into its row. */
 function narrowSegment(segment: ActivitySegment, item: ThreadItem): ActivitySegment {
+  if (segment.kind === "files") {
+    const rows = stitchFileOperationRows(segment.items).flatMap<FileStepItem[]>(group => group.kind === "native"
+      ? group.rows.map(row => row.pieces.map(piece => piece.item))
+      : group.rows.map(row => row.pieces.map(piece => piece.item)));
+    const row = rows.find(candidate => candidate.some(piece => piece === item));
+    return { ...segment, items: row ? [...new Set(row)] : segment.items.filter(candidate => candidate === item) };
+  }
   // The item came from this segment's list, so it has the list's item type.
   return "items" in segment ? { ...segment, items: [item] } as ActivitySegment : segment;
 }

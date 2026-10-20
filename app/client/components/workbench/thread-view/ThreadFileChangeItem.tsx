@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadFileChangeItem: render adjacent native and canonical file operations as step rows, growing back-to-back edits of one kind or identical native failed attempts on one file into one row.
+ * - default ThreadFileChangeItem: render adjacent native and canonical file operations as step rows, growing back-to-back edits of one kind or identical native failed attempts on one file into one row,
+ *   each timed from its first piece starting to its last finishing; while `editing`, the last row stays in progress.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes, marking binary diffs without previews.
  * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
@@ -37,8 +38,10 @@ import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadDurationText from "./ThreadDurationText";
 import { formatToolCallOutput } from "./format-thread-tool-call";
 import {
-  stitchFileOperationRows, type StitchedCanonicalFileRow, type StitchedNativeFilePiece, type StitchedNativeFileRow,
+  getStitchedRowSpan, stitchFileOperationRows, type StitchedCanonicalFileRow, type StitchedNativeFilePiece, type StitchedNativeFileRow,
 } from "./thread-file-change-stitching";
+import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
+import type { ThreadStepProgress } from "./ThreadStepRow";
 
 type FileChangeItem = WorkbenchFileChangeItem;
 type NativeFileItem = NativeFileOperationItem;
@@ -131,6 +134,10 @@ export interface ThreadFileChangeListChange {
   staticMarker?: boolean;
   summaryTotals?: { additions: number; deletions: number };
   selection?: { checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void };
+  /** Step rows: how long the row's work took, from its first piece starting. */
+  span?: ReturnType<typeof getStitchedRowSpan>;
+  /** Step rows: still being worked on, so it reads in progress and its duration ticks from the span's start. */
+  editing?: boolean;
 }
 
 interface FileChangePresentation {
@@ -427,18 +434,22 @@ function ThreadFileChangeRows ({
     /> : content;
     if (steps) {
       const presentation = getFileChangePresentation(change.change);
-      const stepSummary = <ThreadFileChangeSummary icon={false} parsedChange={change} />;
+      const { editing = false, span = null } = changes[index];
+      const stepSummary = <ThreadFileChangeSummary icon={false} parsedChange={editing ? { ...change, presentationLabel: presentation.inProgressLabel } : change} />;
       const iconClassName = change.danger ? "text-danger" : undefined;
+      const progress: ThreadStepProgress | undefined = editing
+        ? { state: "inProgress", startedAtMs: span?.startedAtMs ?? null }
+        : span?.durationMs !== null && span?.durationMs !== undefined ? { state: "completed", durationMs: span.durationMs } : undefined;
       return (
         <ThreadEntryMotion enabled={animateEntries} identity={getThreadFileChangeMotionIdentity(change.sourceItemId, change.sourceChangeIndex)} key={key}>
           {(animate) => (
             <div className={animate ? `block ${enterMotionClassName}` : undefined}>
               {change.detailsAvailable ? (
-                <ThreadStepRow icon={<presentation.Icon size={16} />} iconClassName={iconClassName} summary={stepSummary}>
+                <ThreadStepRow icon={<presentation.Icon size={16} />} iconClassName={iconClassName} progress={progress} summary={stepSummary}>
                   {changes[index].showDiff !== false ? <ThreadFileChangeDetails parsedChange={change} /> : null}
                   {changes[index].details}
                 </ThreadStepRow>
-              ) : <ThreadStepRow icon={<presentation.Icon size={16} />} iconClassName={iconClassName} summary={stepSummary} />}
+              ) : <ThreadStepRow icon={<presentation.Icon size={16} />} iconClassName={iconClassName} progress={progress} summary={stepSummary} />}
             </div>
           )}
         </ThreadEntryMotion>
@@ -618,17 +629,32 @@ function getStitchedCanonicalRowChange({ pieces }: StitchedCanonicalFileRow): Th
 
 export default function ThreadFileChangeItem ({
   animateEntries = false,
+  editing = false,
+  itemTimeline,
   items,
 }: {
   animateEntries?: boolean;
+  /**
+   * Nothing has followed these edits in a live turn yet: the last row is still being worked on, so repeated calls
+   * on one file read as one ongoing edit until the agent moves on.
+   */
+  editing?: boolean;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   items: FileOperationItem[];
 }) {
   const hasRows = items.some((item) => item.type !== "fileChange" || item.changes.length || item.status !== "completed");
   if (items.length && items.every(item => item.type !== "fileChange"
     && item.status === "inProgress" && !getNativeFileChanges(item).length)) return null;
+  const groups = stitchFileOperationRows(items);
+  const trailingRow = groups.at(-1)?.rows.at(-1);
+  const timed = (change: ThreadFileChangeListChange, row: StitchedNativeFileRow | StitchedCanonicalFileRow): ThreadFileChangeListChange => ({
+    ...change,
+    editing: editing && row === trailingRow && !change.danger,
+    span: getStitchedRowSpan(row.pieces.map(piece => piece.item), itemTimeline),
+  });
   return (
     <div className="step-rows-packed py-1.5">
-      {stitchFileOperationRows(items).map((group) => {
+      {groups.map((group) => {
         if (group.kind === "native") {
           const { item, rows } = group;
           if (rows.length) {
@@ -636,7 +662,7 @@ export default function ThreadFileChangeItem ({
               <div className="space-y-0.5" key={item.id}>
                 <ThreadFileChangeRows
                   animateEntries={animateEntries}
-                  changes={rows.map(getStitchedNativeRowChange)}
+                  changes={rows.map(row => timed(getStitchedNativeRowChange(row), row))}
                   steps
                 />
               </div>
@@ -661,7 +687,7 @@ export default function ThreadFileChangeItem ({
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
             animateEntries={animateEntries}
-            changes={group.rows.map(getStitchedCanonicalRowChange)}
+            changes={group.rows.map(row => timed(getStitchedCanonicalRowChange(row), row))}
             steps
           />
           {item.workbenchRecovery?.state === "failed" ? (

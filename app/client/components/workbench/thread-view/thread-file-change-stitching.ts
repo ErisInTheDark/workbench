@@ -5,8 +5,10 @@
  * - StitchedCanonicalFilePiece/StitchedCanonicalFileRow: one canonical change, and one row grown from back-to-back applied changes of one kind on one file.
  * - FileOperationRenderGroup: one item's rows after stitching; items whose rows were all absorbed are omitted.
  * - stitchFileOperationRows: merge back-to-back pieces on one path into one growing row: native applied edits or identical failures, canonical applied changes of the same kind.
+ * - getStitchedRowSpan: one row's work span, from its first piece starting to its last finishing.
  */
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import {
   getNativeFileChanges, getNativeFileOperationOutcome,
   type NativeFileChange, type NativeFileOperationItem,
@@ -116,6 +118,20 @@ function stitchCanonicalItem(item: WorkbenchFileChangeItem, open: OpenRun | null
     open = attempt ? { attempt, kind: "fileChange", row } : null;
   }
   return open;
+}
+
+/**
+ * How long a stitched row's work took: from its first timed piece starting (or first seen) to its last piece
+ * finishing; no end while that piece still runs, and no span at all without timing.
+ */
+export function getStitchedRowSpan(
+  items: readonly { id: string }[], timeline: readonly WorkbenchThreadItemTimelineEntry[] | undefined,
+): { durationMs: number | null; startedAtMs: number } | null {
+  const entries = items.map(item => findWorkbenchThreadItemTimelineEntry(item.id, timeline));
+  const startedAtMs = entries.map(entry => entry?.startedAt ?? entry?.firstSeenAt ?? null).find(time => time !== null);
+  if (startedAtMs === undefined || startedAtMs === null) return null;
+  const completedAt = entries.at(-1)?.completedAt ?? null;
+  return { durationMs: completedAt === null ? null : Math.max(0, completedAt - startedAtMs), startedAtMs };
 }
 
 export function stitchFileOperationRows(items: readonly (WorkbenchFileChangeItem | NativeFileOperationItem)[]) {

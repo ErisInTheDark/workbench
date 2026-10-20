@@ -69,7 +69,15 @@ function useActivityRunRenderers(animateEntries: boolean, isMostRecent: boolean,
         ? <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id} rows={shownSteps} />
         : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;
     }),
-    files: ({ items }) => <ThreadFileChangeItem animateEntries={animateEntries} items={items} />,
+    // Edits nothing has followed in a live turn are still being worked on: repeat calls on one file read as one edit.
+    files: ({ items }, isLastSegment) => (
+      <ThreadFileChangeItem
+        animateEntries={animateEntries}
+        editing={isMostRecent && isLastSegment && turn.status === "inProgress"}
+        itemTimeline={itemTimeline}
+        items={items}
+      />
+    ),
     reasoning: ({ item }, isLastSegment) => (
       <ThreadReasoningSequence block={{ items: [item], kind: "reasoningSequence" }} isMostRecent={isMostRecent && isLastSegment} />
     ),
@@ -262,7 +270,7 @@ function ThreadRenderableBlockViewComponent ({
       return <ThreadCommandSequence itemTimeline={itemTimeline} items={block.items} />;
     case "fileChangeSequence":
       return (
-        <ThreadFileChangeItem animateEntries={animateEntries} items={block.items} />
+        <ThreadFileChangeItem animateEntries={animateEntries} itemTimeline={itemTimeline} items={block.items} />
       );
     case "reasoningSequence":
       return <ThreadReasoningSequence block={block} isMostRecent={isMostRecentBlock} />;
