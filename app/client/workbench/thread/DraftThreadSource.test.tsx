@@ -19,10 +19,8 @@ function renderProjection(projection: WorkbenchTranscriptProjection) {
   return renderToStaticMarkup(createElement(ThreadTranscriptProjection, {
     projection, liveTurnId: projection.turns[0]?.id ?? null,
     canLoadPreviousTurn: false, historySentinelRef: null,
-    knownSkills: [], projectFilePaths: [], projectId: projection.thread.projectId,
-    projectRootPath: projection.thread.projectRoot,
     presentationSource: { kind: "sqlite", sourceKey: projection.thread.id },
-    relatedThreadsById: {}, subagents: [], workspaceRoots: [],
+    relatedThreadsById: {}, subagents: [],
   }));
 }
 

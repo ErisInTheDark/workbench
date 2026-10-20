@@ -57,7 +57,7 @@ export function conformWorkbenchAppNetworkEvent(value: unknown): ZodSchemaRepair
     const discardedPaths = delta.discardedPaths.map(path => ["delta", ...path]);
     if (!delta.success) return { success: false, repairedPaths, discardedPaths };
     const shell = conformToZodSchema(DeltaEnvelopeSchema, event);
-    if (!shell.success) return { ...shell, repairedPaths: [...repairedPaths, ...shell.repairedPaths] };
+    if (shell.success === false) return { ...shell, repairedPaths: [...repairedPaths, ...shell.repairedPaths] };
     return { ...shell, data: { ...shell.data, delta: delta.data }, repairedPaths: [...repairedPaths, ...shell.repairedPaths], discardedPaths };
   }
   if (event.kind === "transcriptSnapshot" || event.kind === "transcriptStream") {
@@ -66,7 +66,7 @@ export function conformWorkbenchAppNetworkEvent(value: unknown): ZodSchemaRepair
     const repairedPaths = transcript.repairedPaths.map(path => ["data", ...path]);
     if (!("data" in transcript)) return { success: false, repairedPaths, discardedPaths: transcript.issues.map(issue => ["data", ...issue.path]) };
     const shell = conformToZodSchema(TranscriptEnvelopeSchema, event);
-    if (!shell.success) return { ...shell, repairedPaths: [...repairedPaths, ...shell.repairedPaths] };
+    if (shell.success === false) return { ...shell, repairedPaths: [...repairedPaths, ...shell.repairedPaths] };
     return {
       ...shell,
       data: { kind: shell.data.kind, data: transcript.data } as WorkbenchAppNetworkEvent,
