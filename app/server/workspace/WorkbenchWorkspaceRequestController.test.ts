@@ -802,20 +802,58 @@ test("a failed app-state refresh retains usable facts and only a new invalidatio
   await f.wait(value => value.kind === "appState" && value.data?.revision === 3);
 });
 
+/** A daemon source holding one stats observation; `connection` is what the app currently sees of the daemon. */
+function statsDaemon() {
+  const state = {
+    id: DaemonIdSchema.parse(randomUUID()), observed: [] as object[], released: 0, notify: () => {},
+    connection: { connection: "current", failure: null } as { connection: "current" | "connecting"; failure: string | null },
+    snapshot: { phase: "pending", failure: null, value: null } as { phase: "pending" | "current" | "failed"; failure: string | null; value: object | null },
+  };
+  return Object.assign(state, {
+    getSnapshot: () => ({ daemonId: state.id, hostname: "host", generation: 1, ...state.connection }),
+    observe: (query: object, listener: () => void) => {
+      state.observed.push(query);
+      state.notify = listener;
+      return { getSnapshot: () => state.snapshot, release: () => { state.released += 1; } };
+    },
+  });
+}
+
+const statsFeedback = (total: number) => ({
+  section: "feedback", generatedAt: 1, feedback: { ...EMPTY_WORKBENCH_STATS_FEEDBACK, total },
+});
+const feedbackRequest = {
+  feedbackId: null, model: null, period: null, provider: null, range: "7d" as const, section: "feedback" as const,
+  tokenTypes: ["input" as const, "output" as const],
+};
+
+test("stats leave out a daemon the app cannot see, without waiting on it or reporting it, and take it back once it answers", async context => {
+  const here = statsDaemon();
+  const there = statsDaemon();
+  there.connection = { connection: "connecting", failure: "Failed to connect to Workbench." };
+  const f = await fixture(context, {
+    get: (id) => [here, there].find((candidate) => candidate.id === id), all: () => [here, there], attached: here,
+  });
+  f.owner.observe({ subscriptionId: randomUUID(), generation: 1, query: { kind: "stats", projects: null, request: feedbackRequest } });
+  here.snapshot = { phase: "current", failure: null, value: { kind: "stats", refinement: "current", data: statsFeedback(2) } };
+  here.notify();
+  const alone = await f.wait(value => value.kind === "stats" && value.data?.section === "feedback" && value.data.feedback.total === 2);
+  assert.ok(alone.kind === "stats");
+  assert.deepEqual([alone.phase, alone.refinement, alone.failure], ["current", "current", null]);
+
+  there.connection = { connection: "current", failure: null };
+  there.snapshot = { phase: "current", failure: null, value: { kind: "stats", refinement: "current", data: statsFeedback(3) } };
+  there.notify();
+  await f.wait(value => value.kind === "stats" && value.phase === "current" && value.data?.section === "feedback" && value.data.feedback.total === 5);
+
+  for (const daemon of [here, there]) daemon.connection = { connection: "connecting", failure: "Failed to connect to Workbench." };
+  here.notify();
+  const nothing = await f.wait(value => value.kind === "stats" && value.data?.section === "feedback" && value.data.feedback.total === 0);
+  assert.deepEqual([nothing.phase, nothing.failure], ["current", null], "with nothing visible the section is empty, not pending");
+});
+
 test("stats fan out to every daemon, merge once all answer, combine refinement, and release every source", async context => {
-  function daemon() {
-    const state = {
-      id: DaemonIdSchema.parse(randomUUID()), observed: [] as object[], released: 0, notify: () => {},
-      snapshot: { phase: "pending", failure: null, value: null } as { phase: "pending" | "current" | "failed"; failure: string | null; value: object | null },
-    };
-    return Object.assign(state, {
-      observe: (query: object, listener: () => void) => {
-        state.observed.push(query);
-        state.notify = listener;
-        return { getSnapshot: () => state.snapshot, release: () => { state.released += 1; } };
-      },
-    });
-  }
+  const daemon = statsDaemon;
   const here = daemon();
   const there = daemon();
   const f = await fixture(context, {

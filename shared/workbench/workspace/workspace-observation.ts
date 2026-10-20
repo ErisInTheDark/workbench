@@ -63,6 +63,7 @@ import { WorkbenchSearchRequestSchema } from "../search/workbench-search";
 import { WorkspaceSearchResponseSchema } from "./workspace-commands";
 import { WorkbenchStatsReadRequestSchema } from "../stats/workbench-stats-contract";
 import { WorkbenchStatsObservedResponseSchema } from "../stats/workbench-stats-conformance";
+import { statsDataShape } from "../stats/workbench-stats-observation-shape";
 import { ObservationDeltaSchema, observationShape, type ObservationShape } from "./observation-patch";
 import { WorkingTreeSummarySchema } from "../git/working-tree-contracts";
 import { GitBranchPositionSchema, GitPeerAddressSchema, GitPeerCommitSchema, GitPeerCommitsRequestSchema, GitPeerCommitsSchema, WorkspaceGitPeersSchema } from "../git/git-peer-contracts";
@@ -674,6 +675,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
     case "projectTree": return { schema, fields: { project: projectTreeShape } };
     case "projectFile": return { schema, fields: { data: observationShape.object({ schema: ProjectFileSnapshotSchema }) } };
     case "threadVis": return { schema, fields: { data: visThreadShape } };
+    case "stats": return { schema, fields: { data: statsDataShape } };
     // A retarget adds and removes whole threads; one thread's change ships only its changed fields.
     case "threadSummaries": return { schema, fields: { summaries: observationShape.record(LocatedThreadSummarySchema.nullable(), {
       fields: { summary: observationShape.object(threadSummaryShape) },
@@ -712,6 +714,7 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
     case "projectTree": return { schema, fields: { data: projectTreeShape } };
     case "projectFile": return { schema, fields: { data: observationShape.object({ schema: ProjectFileSnapshotSchema }) } };
     case "threadVis": return { schema, fields: { data: visThreadShape } };
+    case "stats": return { schema, fields: { data: statsDataShape } };
     case "threadSummaries": return { schema, fields: { data: observationShape.record(WorkspaceThreadSummarySchema.nullable(), {
       fields: { summary: observationShape.object(threadSummaryShape) },
     }) } };

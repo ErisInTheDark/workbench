@@ -1,10 +1,12 @@
 /*
  * Exports:
  * - WorkbenchStatsObservationState: one published stats section with its refinement freshness.
- * - WorkbenchStatsInvalidation: which facts changed; claims also re-walk rename history.
+ * - WorkbenchStatsInvalidation: which stored fact changed; each rereads only the sections showing it, and claims also re-walk rename history.
  * - default WorkbenchStatsObservation: own one section's coalesced reads (two-stage for claims), publication, and release.
  */
-import type { WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import {
+  WORKBENCH_STATS_SECTIONS, type WorkbenchStatsReadRequest, type WorkbenchStatsResponse, type WorkbenchStatsSection,
+} from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkbenchClaimRenameRead } from "./WorkbenchClaimRenameController.ts";
 
@@ -16,7 +18,17 @@ export interface WorkbenchStatsObservationState {
   data: WorkbenchStatsResponse | null;
 }
 
-export type WorkbenchStatsInvalidation = "usage" | "claims";
+/** Thread activity can carry token usage, tool calls, claimants' tokens and report titles; imports touch every section. */
+const AFFECTED_SECTIONS = {
+  activity: ["usage", "tools", "claims", "feedback"],
+  claims: ["claims"],
+  feedback: ["feedback"],
+  import: WORKBENCH_STATS_SECTIONS,
+  limits: ["limits"],
+  status: ["status"],
+} as const satisfies Record<string, readonly WorkbenchStatsSection[]>;
+
+export type WorkbenchStatsInvalidation = keyof typeof AFFECTED_SECTIONS;
 
 const NO_RENAMES: WorkbenchClaimRenameRead = { renames: [], failures: [] };
 
@@ -27,11 +39,13 @@ function failureMessage(error: unknown) {
 
 /**
  * A section publishes as soon as it is read. Claim hotspots publish first from known rename history, then again once
- * history is re-walked. Invalidations during a read collapse into one follow-up read, and only claim changes re-walk Git history.
+ * history is re-walked. Only facts the section shows invalidate it; invalidations during a read collapse into one follow-up
+ * read, and only claim changes re-walk Git history.
  */
 export default class WorkbenchStatsObservation {
   #state: WorkbenchStatsObservationState = { phase: "pending", failure: null, refinement: "pending", data: null };
-  #dirty = { usage: true, claims: true };
+  /** `section` rereads this section; `history` also re-walks claim rename history. */
+  #dirty = { section: true, history: true };
   #history: WorkbenchClaimRenameRead | null = null;
   #work: Promise<void> | null = null;
   #released = false;
@@ -54,9 +68,10 @@ export default class WorkbenchStatsObservation {
   start() { this.#drive(); }
 
   invalidate(kind: WorkbenchStatsInvalidation) {
-    if (this.#released) return;
-    this.#dirty.usage = true;
-    if (kind === "claims") this.#dirty.claims = true;
+    const affected: readonly WorkbenchStatsSection[] = AFFECTED_SECTIONS[kind];
+    if (this.#released || !affected.includes(this.request.section)) return;
+    this.#dirty.section = true;
+    if (kind === "claims") this.#dirty.history = true;
     this.#drive();
   }
 
@@ -71,15 +86,15 @@ export default class WorkbenchStatsObservation {
     this.#work = work;
     void work.finally(() => {
       if (this.#work === work) this.#work = null;
-      if (!this.#released && (this.#dirty.usage || this.#dirty.claims)) this.#drive();
+      if (!this.#released && (this.#dirty.section || this.#dirty.history)) this.#drive();
     });
   }
 
   async #run() {
     const refines = this.request.section === "claims";
-    while (!this.#released && (this.#dirty.usage || this.#dirty.claims)) {
-      const walkClaims = refines && (this.#dirty.claims || !this.#history);
-      this.#dirty = { usage: false, claims: false };
+    while (!this.#released && (this.#dirty.section || this.#dirty.history)) {
+      const walkClaims = refines && (this.#dirty.history || !this.#history);
+      this.#dirty = { section: false, history: false };
       try {
         const known = this.#history ?? NO_RENAMES;
         const first = await this.owner.read(this.request, known, this.#lifetime.signal);

@@ -360,7 +360,7 @@ test("rate refresh and read-only account limits record actual windows and retain
   await controller.dispose();
 });
 
-test("observations publish usage while capture writes are still queued, then refresh once they land", async () => {
+test("observations publish while capture writes are still queued, then refresh once they land", async () => {
   let releaseWrite!: () => void;
   const writeBlocked = new Promise<void>((resolve) => { releaseWrite = resolve; });
   let reads = 0;
@@ -379,16 +379,16 @@ test("observations publish usage while capture writes are still queued, then ref
   const published: number[] = [];
   let first!: () => void;
   let landed!: () => void;
-  const usage = new Promise<void>((resolve) => { first = resolve; });
+  const claimsShown = new Promise<void>((resolve) => { first = resolve; });
   const refreshed = new Promise<void>((resolve) => { landed = resolve; });
-  const handle = controller.observe({ projectIds: null, range: "7d", section: "usage" }, (state) => {
+  const handle = controller.observe({ projectIds: null, range: "7d", section: "claims" }, (state) => {
     if (state.data && state.refinement !== "pending") published.push(state.data.generatedAt);
     if (published.length === 1) first();
     if (published.length === 2) landed();
   });
   try {
-    // Resolving at all proves usage did not wait behind the blocked claim write.
-    await usage;
+    // Resolving at all proves the read did not wait behind the blocked claim write.
+    await claimsShown;
     releaseWrite();
     await refreshed;
     assert.ok(published[1]! > published[0]!, "the landed write must trigger a fresh read");

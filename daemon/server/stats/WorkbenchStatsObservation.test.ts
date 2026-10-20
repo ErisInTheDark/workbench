@@ -1,5 +1,5 @@
 /*
- * No exports. Protect staged claim publication, single-stage sections, coalesced invalidation, history reuse, and release of one stats observation.
+ * No exports. Protect staged claim publication, single-stage sections, coalesced and section-scoped invalidation, history reuse, and release of one stats observation.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -86,7 +86,7 @@ test("other sections publish once per read as refined and never walk rename hist
   assert.deepEqual([published.phase, published.refinement], ["current", "current"]);
   await observation.settled;
   const again = reads.next();
-  observation.invalidate("claims");
+  observation.invalidate("import");
   (await again).release();
   await observation.settled;
   assert.equal(walks.all.length, 0);
@@ -105,15 +105,40 @@ test("invalidations during a read collapse into one follow-up that reuses known 
   await observation.settled;
 
   const inFlight = reads.next();
-  observation.invalidate("usage");
+  observation.invalidate("activity");
   const busy = await inFlight;
-  for (let burst = 0; burst < 5; burst += 1) observation.invalidate("usage");
+  for (let burst = 0; burst < 5; burst += 1) observation.invalidate("activity");
   const followUp = reads.next();
   busy.release();
   (await followUp).release();
   await observation.settled;
   assert.equal(reads.all.length, 3, "five invalidations during one read cause exactly one follow-up");
-  assert.equal(walks.all.length, 1, "usage invalidations never re-walk Git history");
+  assert.equal(walks.all.length, 1, "activity invalidations never re-walk Git history");
+});
+
+test("a section rereads only for facts it shows", async () => {
+  const cases = [
+    { section: "limits", ignored: ["activity", "feedback", "status", "claims"], reread: ["limits", "import"] },
+    { section: "usage", ignored: ["limits", "feedback", "status", "claims"], reread: ["activity", "import"] },
+    { section: "status", ignored: ["activity", "limits", "feedback", "claims"], reread: ["status", "import"] },
+  ] as const;
+  for (const { section, ignored, reread } of cases) {
+    const { observation, reads } = harness(section);
+    const first = reads.next();
+    observation.start();
+    (await first).release();
+    await observation.settled;
+    // A read starts synchronously on invalidation, so an ignored fact shows here without waiting.
+    for (const fact of ignored) observation.invalidate(fact);
+    assert.equal(reads.all.length, 1, `${section} ignores ${ignored.join(", ")}`);
+    for (const fact of reread) {
+      const next = reads.next();
+      observation.invalidate(fact);
+      (await next).release();
+      await observation.settled;
+    }
+    assert.equal(reads.all.length, 1 + reread.length, `${section} rereads for ${reread.join(", ")}`);
+  }
 });
 
 test("released observations abandon their waiting read and stop reading and publishing, without reporting a failure", async () => {

@@ -62,6 +62,7 @@ import WorkbenchDeliveredTranscriptWindow from "./WorkbenchDeliveredTranscriptWi
 import type WorkbenchAppReloadOrchestrator from "../runtime/WorkbenchAppReloadOrchestrator";
 import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
 import { mergeStatsSections } from "workbench-shared/workbench/stats/workbench-stats-merge";
+import { EMPTY_WORKBENCH_STATS_SECTIONS } from "workbench-shared/workbench/stats/workbench-stats-conformance";
 
 type Payload = {
   [Kind in WorkspaceObservation["kind"]]: Omit<
@@ -1012,10 +1013,23 @@ export default class WorkbenchWorkspaceRequestController {
       }
       return null;
     };
-    const facts = [...interest.sources.entries()].map(([daemonId, { observation }]) => {
+    // A daemon the app cannot see adds nothing and is not waited on; its observation stays open to answer once it is back.
+    const seen = (daemonId: DaemonId) => {
+      const daemon = this.options.sources.get(daemonId)?.getSnapshot();
+      if (!daemon || daemon.connection === "revoked") return false;
+      return daemon.connection === "current" || daemon.failure === null;
+    };
+    const facts = [...interest.sources.entries()].filter(([daemonId]) => seen(daemonId)).map(([daemonId, { observation }]) => {
       const fact = observation.getSnapshot();
       return { daemonId, fact, value: fact.value?.kind === "stats" ? fact.value : null };
     });
+    if (!facts.length && interest.sources.size) {
+      this.update(interest, {
+        kind: "stats", phase: "current", failure: null, refinement: "current",
+        data: EMPTY_WORKBENCH_STATS_SECTIONS[query.request.section],
+      });
+      return;
+    }
     // A daemon from another version may answer a different shape; only matching sections merge.
     const answered = facts.flatMap(({ daemonId, value }) => value?.data?.section === query.request.section
       ? [{ attached: daemonId === this.options.sources.attached?.id, daemonId, hostname: hostname(daemonId), data: value.data }] : []);

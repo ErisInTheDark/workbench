@@ -131,7 +131,8 @@ export default class WorkbenchStatsController {
     this.stopImportInvalidation = this.importer.subscribe((progress) => {
       const settled = importState === "running" && progress.state !== "running";
       importState = progress.state;
-      this.invalidate(settled ? "claims" : "usage");
+      this.invalidate("import");
+      if (settled) this.invalidate("claims");
     });
   }
 
@@ -317,21 +318,21 @@ export default class WorkbenchStatsController {
   async recordFeedback(entry: WorkbenchFeedbackRecord) {
     if (!this.active) throw new Error("Stats controller is disposed.");
     const id = await this.options.database.recordFeedback(entry);
-    this.invalidate("usage");
+    this.invalidate("feedback");
     return id;
   }
 
   async deleteFeedback(ids: readonly number[]) {
     if (!this.active) throw new Error("Stats controller is disposed.");
     const deleted = await this.options.database.deleteFeedback(ids);
-    this.invalidate("usage");
+    this.invalidate("feedback");
     return deleted;
   }
 
   async resolveFeedback(ids: readonly number[], resolved: boolean) {
     if (!this.active) throw new Error("Stats controller is disposed.");
     const changed = await this.options.database.resolveFeedback(ids, resolved);
-    this.invalidate("usage");
+    this.invalidate("feedback");
     return changed;
   }
 
@@ -376,7 +377,7 @@ export default class WorkbenchStatsController {
   }
 
   private recordRateLimits(observation: WorkbenchRateLimitObservation) {
-    this.enqueue(observation.harness, "rate limits", () => this.options.database.recordStatsRateLimits(observation), "usage");
+    this.enqueue(observation.harness, "rate limits", () => this.options.database.recordStatsRateLimits(observation), "limits");
   }
 
   private enqueue(harness: string | null, label: string, operation: () => Promise<void>, changes: WorkbenchStatsInvalidation) {
@@ -390,6 +391,6 @@ export default class WorkbenchStatsController {
     const bounded = message.replaceAll(/[\r\n]+/gu, " ").slice(0, 500);
     this.failures = [...this.failures, { harness, message: bounded, source }].slice(-20);
     this.options.log?.(`Workbench stats ${source} failure${harness ? ` for ${harness}` : ""}: ${bounded}`);
-    this.invalidate("usage");
+    this.invalidate("status");
   }
 }

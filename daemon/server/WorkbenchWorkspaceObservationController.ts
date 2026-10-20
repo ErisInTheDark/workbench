@@ -628,7 +628,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
           const parsed = ProjectIdSchema.safeParse(id);
           return parsed.success && this.canonicalProject(parsed.data) === projectId;
         });
-        if (inScope) observation.stats?.invalidate("usage");
+        if (inScope) observation.stats?.invalidate("activity");
         continue;
       }
       if (observation.request.query.kind === "thread"
