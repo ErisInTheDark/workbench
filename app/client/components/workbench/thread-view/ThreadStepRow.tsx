@@ -2,13 +2,15 @@
  * Exports:
  * - ThreadStepProgress: a step's state and timing, which the row turns into a spinner or a (live) duration.
  * - default ThreadStepRow: one step of work as a single line: kind icon, what happened (a tensed label and its subject, or a
- *   custom summary), then trailing meta ending in the step's progress; a step with detail opens it on tap.
+ *   custom summary), then trailing meta ending in the step's progress; a step with detail opens it on tap. Its lead and
+ *   meta are marked `data-thread-step-part` for entry motion; while in progress its words shimmer.
  */
 "use client";
 
 import { Fragment, type ReactNode } from "react";
 
 import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
+import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { LoaderIcon } from "../workbench-icons";
 import ThreadDurationText from "./ThreadDurationText";
 import { isFailedStep, type StepState } from "./thread-step";
@@ -51,6 +53,7 @@ export default function ThreadStepRow({
   iconLabel,
   keepMounted,
   label,
+  live = false,
   meta,
   progress,
   renderContent,
@@ -68,6 +71,8 @@ export default function ThreadStepRow({
   keepMounted?: boolean;
   /** What happened, already tensed for the step's state (see `stepLabel`); it reads as a failure when the step failed. */
   label?: string;
+  /** Still in progress, for steps whose progress the row does not carry (a custom summary); its words shimmer. */
+  live?: boolean;
   /** Trailing details before the progress (totals, counts), dot-separated; they never wrap under the summary. */
   meta?: readonly ReactNode[];
   progress?: ThreadStepProgress;
@@ -78,20 +83,27 @@ export default function ThreadStepRow({
   summary?: ReactNode;
 }) {
   const failed = progress ? isFailedStep(progress.state) : false;
+  const isLive = live || progress?.state === "inProgress";
   const shownMeta = [...meta ?? [], progress ? <Progress key="progress" progress={progress} /> : null]
     .filter(part => part !== null && part !== undefined && part !== false);
+  // Lead (icon, label and subject) and meta are the parts a step's entry motion moves, each about its own centre.
+  const marker = <span className="flex" data-thread-step-part="lead">{icon}</span>;
   const line = (
     <span className="flex min-w-0 items-center gap-2">
       <span className="flex min-w-0 flex-1 items-center overflow-hidden whitespace-nowrap">
+        {/* Hugs the text, so motion about the lead's centre is about what is written, not the empty row. A step in
+            progress shimmers all of it, chips included, like the live status. */}
+        <span className={`flex min-w-0 max-w-full items-center ${isLive && !failed ? shimmerTextClassName : ""}`} data-thread-step-part="lead">
         {summary ?? (
           <span className="flex min-w-0 items-center gap-1.5">
             {label ? <span className={`shrink-0 ${failed ? "text-danger" : ""}`}>{label}</span> : null}
             {typeof subject === "string" ? <span className="min-w-0 truncate font-medium text-text">{subject}</span> : subject}
           </span>
         )}
+        </span>
       </span>
       {shownMeta.length ? (
-        <span className="flex shrink-0 items-center gap-1.5 text-[0.85em] text-fg/muted">
+        <span className="flex shrink-0 items-center gap-1.5 text-[0.85em] text-fg/muted" data-thread-step-part="meta">
           {shownMeta.map((part, index) => (
             <Fragment key={index}>{index ? <span aria-hidden="true">·</span> : null}{part}</Fragment>
           ))}
@@ -103,7 +115,7 @@ export default function ThreadStepRow({
     return (
       <DisclosureStaticRow
         className={STATIC_ROW_CLASS}
-        marker={icon}
+        marker={marker}
         markerClassName={iconClassName}
         markerLabel={iconLabel}
         summary={line}
@@ -118,7 +130,7 @@ export default function ThreadStepRow({
       defaultOpen={defaultOpen}
       hideChevron
       keepMounted={keepMounted}
-      leading={icon}
+      leading={marker}
       leadingClassName={iconClassName}
       leadingLabel={iconLabel}
       renderContent={renderContent}

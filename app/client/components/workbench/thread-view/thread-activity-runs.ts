@@ -114,21 +114,27 @@ export function getSettledActivitySegments(segments: readonly ActivitySegment[])
   });
 }
 
-/** File operations on one path stitch into one row (a retried edit is one step), so files count by path. */
-function countVisibleSteps(segments: readonly ActivitySegment[]) {
+/**
+ * File operations on one path stitch into one row (a retried edit is one step), so files count by path; a command
+ * counts the rows it shows (a Browse call lifts one per BrowseMD step).
+ */
+function countVisibleSteps(segments: readonly ActivitySegment[], commandRows: (item: ThreadItem) => number) {
   return segments.reduce((count, segment) => count + (segment.kind === "files"
     ? new Set(segment.items.flatMap(item => item.type === "fileChange"
       ? item.changes.map(change => change.path)
       : getNativeFileChanges(item).map(({ change }) => change.path))).size
-    : getActivitySegmentItems(segment).length), 0);
+    : segment.kind === "commands" ? segment.items.reduce((rows, item) => rows + commandRows(item), 0)
+      : getActivitySegmentItems(segment).length), 0);
 }
 
 /**
  * A run is a card summarising several steps. Settled with one step it is just that step. A lone sleep or command shows
  * its own progress, so it stays bare even while live: one row from start to finish, until a second step joins it.
  */
-export function getActivityRunPresentation(segments: readonly ActivitySegment[], live: boolean): "bare" | "card" {
-  if (countVisibleSteps(segments) !== 1) return "card";
+export function getActivityRunPresentation(
+  segments: readonly ActivitySegment[], live: boolean, commandRows: (item: ThreadItem) => number = () => 1,
+): "bare" | "card" {
+  if (countVisibleSteps(segments, commandRows) !== 1) return "card";
   const kind = segments[0]?.kind;
   return !live || kind === "sleep" || kind === "commands" ? "bare" : "card";
 }

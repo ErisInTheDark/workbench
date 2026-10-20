@@ -155,9 +155,9 @@ function ThreadCommandStepRows({ icon, rows }: {
       const summary = <ThreadStructuredCommandDetailRow hideSharedContext={false} line row={getStepLine(row)} />;
       const meta = [typeof row.durationMs === "number" ? <ThreadDurationText durationMs={row.durationMs} /> : null];
       return <ThreadMeasuredContent key={row.id}>
-        {hasDetail ? <ThreadStepRow defaultOpen={row.defaultOpen ?? false} icon={icon(row)} meta={meta} summary={summary}>
+        {hasDetail ? <ThreadStepRow defaultOpen={row.defaultOpen ?? false} icon={icon(row)} live={row.state === "inProgress"} meta={meta} summary={summary}>
           <ThreadStepDetail row={row} />
-        </ThreadStepRow> : <ThreadStepRow icon={icon(row)} meta={meta} summary={summary} />}
+        </ThreadStepRow> : <ThreadStepRow icon={icon(row)} live={row.state === "inProgress"} meta={meta} summary={summary} />}
       </ThreadMeasuredContent>;
     })}
   </div>;

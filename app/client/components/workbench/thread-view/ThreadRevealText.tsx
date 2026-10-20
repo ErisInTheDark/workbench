@@ -4,6 +4,7 @@
  * - ThreadRevealBlock: play the style's block motion on a framed block that first appeared in streamed text.
  * - ThreadEntryAnimation: play the style's item motion on a newly arrived thread item or row, or slide an absorbing entry
  *   up from where the entry it absorbed had been.
+ * - ThreadStepEntryAnimation: play the style's item motion on a newly shown step row's lead and meta in parallel.
  * - ThreadStreamCaretSlot: an empty line holding the caret where the next block or item will land.
  * - ThreadStreamCaret: the typewriter caret riding the end of streaming text.
  */
@@ -98,6 +99,53 @@ export function ThreadEntryAnimation ({ children, className = "block", inline = 
   return inline
     ? <span className={className} ref={ref}>{children}</span>
     : <div className={className} ref={ref}>{children}</div>;
+}
+
+type StepPart = "lead" | "meta";
+
+/**
+ * A step row's own parts, never those of rows inside an opened body. Each part's elements share their group's
+ * centre as transform origin, so a scale grows the label and the meta in place rather than about the whole row.
+ */
+function stepPartOrigins(root: HTMLElement) {
+  const groups = new Map<StepPart, HTMLElement[]>();
+  for (const part of root.querySelectorAll<HTMLElement>("[data-thread-step-part]")) {
+    const body = part.closest("details > :not(summary)");
+    if (body && root.contains(body)) continue;
+    const name = part.dataset.threadStepPart;
+    if (name !== "lead" && name !== "meta") continue;
+    groups.set(name, [...groups.get(name) ?? [], part]);
+  }
+  return [...groups.values()].flatMap(elements => {
+    const rects = elements.map(element => element.getBoundingClientRect());
+    const centreX = (Math.min(...rects.map(rect => rect.left)) + Math.max(...rects.map(rect => rect.right))) / 2;
+    const centreY = (Math.min(...rects.map(rect => rect.top)) + Math.max(...rects.map(rect => rect.bottom))) / 2;
+    return elements.map((element, index) => ({
+      element, origin: `${centreX - rects[index]!.left}px ${centreY - rects[index]!.top}px`,
+    }));
+  });
+}
+
+/**
+ * The style's item motion on a newly shown step, played on its lead and meta in parallel; content without step parts
+ * moves as one block. Like `ThreadEntryAnimation`, `play` is read once at mount.
+ */
+export function ThreadStepEntryAnimation ({ children, className, play }: { children: ReactNode; className?: string; play: boolean }) {
+  const motion = useContext(ThreadAnimationStyleContext).item;
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (!play || !motion || !root || !canAnimate(root)) return;
+    const parts = stepPartOrigins(root);
+    const animations = (parts.length ? parts : [{ element: root, origin: null }]).map(({ element, origin }) => element.animate(
+      motion.keyframes(element).map(frame => origin ? { ...frame, transformOrigin: origin } : frame),
+      { duration: motion.duration, easing: motion.easing, fill: "backwards" },
+    ));
+    return () => { for (const animation of animations) animation.cancel(); };
+    // A step animates once when it appears; later renders of the same step never restart it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return <div className={className} ref={ref}>{children}</div>;
 }
 
 /** An empty line where the next streamed block or thread item will land; the typewriter caret waits in it. */

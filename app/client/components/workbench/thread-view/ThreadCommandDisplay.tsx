@@ -13,8 +13,10 @@ import { getCommandIcon } from "./thread-activity-chips";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 
-export default function ThreadCommandDisplay({ approval = null, command, display, expensive = false, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, output, previewHeight }: {
+export default function ThreadCommandDisplay({ approval = null, command, display, expensive = false, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, live = false, output, previewHeight }: {
   approval?: ThreadItemApprovalState | null;
+  /** The command is actually running (not queued), so its line shimmers. */
+  live?: boolean;
   command: string;
   /** A wb shell command marked expensive, queueing for a machine-wide slot. */
   expensive?: boolean;
@@ -31,6 +33,7 @@ export default function ThreadCommandDisplay({ approval = null, command, display
   return (
     <ThreadStepRow
       icon={createElement(getCommandIcon(summaryDisplay.summaryStats), { size: 16 })}
+      live={live}
       meta={meta}
       summary={<ThreadCommandSummary approval={approval} display={summaryDisplay} expensive={expensive} line />}
     >

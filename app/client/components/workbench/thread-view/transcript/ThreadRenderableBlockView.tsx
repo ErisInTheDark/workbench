@@ -61,8 +61,10 @@ function useActivityRunRenderers(animateEntries: boolean, isMostRecent: boolean,
     code: ({ item }) => <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />,
     commands: ({ items }, _isLastSegment, mode) => items.map((item) => {
       const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, { ...project?.matcherContext, cwd: project?.cwd }), turn.browseResultEntries);
-      // A status shows only the step the call is on, or its last once it is done.
-      const shownSteps = browseSteps && mode === "status" ? [getCurrentBrowseStep(browseSteps) ?? browseSteps.at(-1)!] : browseSteps;
+      // A status shows only the step the call is on, or its last once it is done, as one closed line.
+      const shownSteps = browseSteps && mode === "status"
+        ? [{ ...getCurrentBrowseStep(browseSteps) ?? browseSteps.at(-1)!, defaultOpen: false }]
+        : browseSteps;
       return shownSteps
         ? <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id} rows={shownSteps} />
         : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;

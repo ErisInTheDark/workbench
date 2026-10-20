@@ -14,12 +14,14 @@ import { getThreadItemTimelineDurationMs, type WorkbenchThreadItemTimelineEntry 
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { ThreadItemShellQueueContext } from "../../../workbench/thread/thread-item-shell-queue";
 import { LoaderIcon } from "../workbench-icons";
-import { getActivityChips, type ActivityChip, type CommandChipContext } from "./thread-activity-chips";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { getActivityChips, getCommandItemDisplay, type ActivityChip, type CommandChipContext } from "./thread-activity-chips";
+import { getLiftedBrowseSteps } from "./thread-browse-steps";
 import type { ActivitySegment, ThreadRenderableBlock } from "./thread-render-blocks";
 import { ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import ThreadDurationText from "./ThreadDurationText";
 import { ThreadRowChromeContext } from "./thread-row-chrome";
-import { ThreadEntryAnimation } from "./ThreadRevealText";
+import { ThreadStepEntryAnimation } from "./ThreadRevealText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import useThreadActivityRun from "./use-thread-activity-run";
 import {
@@ -118,7 +120,9 @@ export default function ThreadActivityRun({
   const statusItemId = statusStep ? getActivitySegmentItems(statusStep)[0]?.id : null;
   const steps = <ThreadActivitySteps renderers={renderers} segments={block.segments} />;
 
-  if (getActivityRunPresentation(block.segments, live) === "bare") return <div className="my-1.5">{steps}</div>;
+  const commandRows = (item: ThreadItem) => (item.type === "commandExecution" || item.type === "mcpToolCall" || item.type === "dynamicToolCall")
+    ? getLiftedBrowseSteps(item, getCommandItemDisplay(item, context), browseResultEntries)?.length ?? 1 : 1;
+  if (getActivityRunPresentation(block.segments, live, commandRows) === "bare") return <div className="my-1.5">{steps}</div>;
 
   return (
     <div className="my-1.5" data-thread-activity-run="true">
@@ -138,10 +142,13 @@ export default function ThreadActivityRun({
           {durationMs ? <ThreadDurationText className="shrink-0" durationMs={durationMs} /> : null}
         </button>
         {statusStep ? (
-          // The step itself, drawn as the opened card draws it; each new step arrives like a new row.
-          <ThreadEntryAnimation className="step-rows-packed -mt-1 pb-1" key={statusItemId} play={animateEntries}>
-            <ThreadRowChromeContext.Provider value="step">{renderSegment(renderers, statusStep, true, "status")}</ThreadRowChromeContext.Provider>
-          </ThreadEntryAnimation>
+          // The step itself, drawn as the opened card draws it, in a fixed one-row slot so steps of different heights
+          // never shift the card. It is a preview: inert, and tapping it toggles the card like the line above.
+          <div className="-mt-1 mb-1 flex h-8 cursor-pointer items-center overflow-hidden" onClick={run.toggle}>
+            <ThreadStepEntryAnimation className="step-rows-packed pointer-events-none min-w-0 flex-1" key={statusItemId} play={animateEntries}>
+              <ThreadRowChromeContext.Provider value="step">{renderSegment(renderers, statusStep, true, "status")}</ThreadRowChromeContext.Provider>
+            </ThreadStepEntryAnimation>
+          </div>
         ) : null}
       </div>
       {run.open ? <div className="px-5 pt-1.5">{steps}</div> : null}

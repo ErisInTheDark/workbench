@@ -149,6 +149,8 @@ test("a run is a card summarising several steps, and otherwise its one step", ()
   assert.equal(getActivityRunPresentation(runOf([running("nap", "Start-Sleep -Seconds 120")]).segments, true), "bare");
   assert.equal(getActivityRunPresentation(runOf([running("build", "cargo build")]).segments, true), "bare");
   assert.equal(getActivityRunPresentation(runOf([command("built", "cargo build")]).segments, true), "bare");
+  // A call that shows as several step rows (a multi-step Browse run) is several steps.
+  assert.equal(getActivityRunPresentation(runOf([command("browse", "wb browse run")]).segments, false, () => 3), "card");
 });
 
 test("a run's summary counts only finished steps", () => {

@@ -375,6 +375,7 @@ export default function ThreadCommandExecutionDetails ({
       detailRows={commandDetailRows}
       display={commandDisplay}
       expensive={Boolean(item.expensive)}
+      live={commandOutcome === "inProgress" && liveShellQueue?.admittedAt !== null}
       meta={[
         commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0 ? <ThreadSummaryText text={`exit ${item.exitCode}`} /> : null,
         queuedDurationMs !== null && queuedDurationMs !== undefined
