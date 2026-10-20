@@ -63,7 +63,6 @@ export function ThreadSubagentWaitExchange ({
   itemTimeline: Timeline;
 }) {
   const transcript = useTranscript();
-  const markdownProps = useTranscript.markdownProps();
   const entries = block.waits.map((item) => ({ item, outcome: block.outcome, targetKeys: [] }));
   const timing = getThreadSubagentWaitTiming({ anchor: entries.at(-1)!, entries }, itemTimeline ?? []);
   const results = block.waits.flatMap((item) => {
@@ -75,7 +74,7 @@ export function ThreadSubagentWaitExchange ({
       <ThreadSubagentWaitItem
         disclosureContent={results.length ? (
           <div className="space-y-3">
-            {results.map((result) => <MarkdownRender {...markdownProps} key={result.id} markdown={result.text} />)}
+            {results.map((result) => <MarkdownRender key={result.id} markdown={result.text} />)}
           </div>
         ) : undefined}
         durationMs={timing.durationMs}
@@ -161,7 +160,6 @@ function ThreadCoordinationOutgoingChannel({
   target: ThreadSubagentCoordinationTarget;
 }) {
   const transcript = useTranscript();
-  const markdownProps = useTranscript.markdownProps();
   const resolved = resolveCoordinationTarget(target, transcript.subagents);
   const recipient = (
     <ThreadAgentMessageTarget
@@ -180,10 +178,9 @@ function ThreadCoordinationOutgoingChannel({
         if (outgoing) {
           return (
             <ThreadAgentMessageBody
-              {...markdownProps}
+              cwd={item.type === "commandExecution" ? item.cwd : undefined}
               key={item.id}
               parts={[{ markdown: outgoing.message, userVisibleSimpleVersion: outgoing.userVisibleSimpleVersion }]}
-              threadCwdPath={item.type === "commandExecution" ? item.cwd : markdownProps.threadCwdPath}
             />
           );
         }
@@ -193,10 +190,6 @@ function ThreadCoordinationOutgoingChannel({
             action={claimAction.action}
             key={item.id}
             paths={claimAction.paths}
-            projectFilePaths={transcript.projectFilePaths}
-            projectId={transcript.projectId}
-            projectRootPath={transcript.projectRootPath}
-            workspaceRoots={transcript.workspaceRoots}
           />
         ) : null;
       })}
@@ -212,7 +205,6 @@ function ThreadCoordinationCreate({
   item: Extract<ThreadItem, { type: "commandExecution" | "mcpToolCall" }>;
 }) {
   const transcript = useTranscript();
-  const markdownProps = useTranscript.markdownProps();
   if (item.type === "commandExecution") {
     return <ThreadCommandExecutionDetails activeStartedAtMs={activeStartedAtMs} item={item} unwrapSubagentCreate />;
   }
@@ -220,7 +212,6 @@ function ThreadCoordinationCreate({
   if (route?.kind !== "specialized") return null;
   return (
     <ThreadWorkbenchCommandItem
-      {...markdownProps}
       activeStartedAtMs={activeStartedAtMs}
       item={item}
       relatedThreadsById={transcript.relatedThreadsById}

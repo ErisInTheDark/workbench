@@ -22,6 +22,7 @@ import ThreadInlineCode from "./ThreadInlineCode";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import useThreadActivityRun from "./use-thread-activity-run";
 import { getActivitySegmentItems } from "./thread-activity-runs";
+import { useProject } from "../use-projects";
 import { useTranscript } from "../use-transcript";
 
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
@@ -124,9 +125,12 @@ export default function ThreadActivityRun({
   renderers: ThreadActivityRunRenderers;
   turnLive: boolean;
 }) {
-  const transcript = useTranscript();
+  const project = useProject.contextual();
   const browseResultEntries = useTranscript.turn().browseResultEntries;
-  const context = useMemo<CommandChipContext>(() => ({ ...transcript, browseResultEntries }), [browseResultEntries, transcript]);
+  const context = useMemo<CommandChipContext>(
+    () => ({ ...project?.matcherContext, browseResultEntries, cwd: project?.cwd }),
+    [browseResultEntries, project],
+  );
   const run = useThreadActivityRun(block.items[0]?.id ?? "");
   const lastItem = block.items.at(-1);
   // Reasoning has no lifecycle of its own; it is current while nothing has followed it in a live turn.

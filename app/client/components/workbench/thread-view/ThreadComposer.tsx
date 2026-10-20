@@ -20,7 +20,6 @@ import type {
   WorkbenchListModelsOptions,
   WorkbenchModelOption,
   WorkbenchHarness,
-  WorkbenchSkillSummary,
   WorkbenchComposerInputDraft,
   WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
@@ -30,7 +29,6 @@ import {
   getWorkbenchAgentPathLabel,
 } from "workbench-shared/workbench/agent-paths";
 import { readClipboardImageDataUrls } from "../../../workbench/dom/clipboard";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   buildInlineMentionHighlights,
   getActivatedWorkbenchSkillPaths,
@@ -136,9 +134,7 @@ export default function ThreadComposer ({
   onThreadSettingsChange,
   onThreadModelChange,
   projectId,
-  projectRootPath,
   profileSlot,
-  workspaceRoots,
   rateLimits,
   sendLabel = "Send",
   surface = "card",
@@ -147,7 +143,6 @@ export default function ThreadComposer ({
   leadingActions,
   trailingActions,
   threadComposerDraft,
-  knownSkills,
   highlightSources,
   thread,
   turns,
@@ -185,9 +180,7 @@ export default function ThreadComposer ({
   onThreadSettingsChange?: (threadId: string, settings: WorkbenchComposerSettings) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   projectId: string;
-  projectRootPath: string;
   profileSlot?: WorkbenchComposerProfileSlot;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   rateLimits: RateLimitSnapshot | null;
   sendLabel?: string;
   surface?: "bare" | "card";
@@ -196,7 +189,6 @@ export default function ThreadComposer ({
   leadingActions?: ReactNode;
   trailingActions?: ReactNode;
   threadComposerDraft: WorkbenchComposerInputDraft | null;
-  knownSkills: WorkbenchSkillSummary[];
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadHead;
   /** Loaded turns without side-history items, newest last. */
@@ -743,14 +735,11 @@ export default function ThreadComposer ({
                   contentClassName={stickyMode ? stickyComposerContentClassName : undefined}
                   draft={threadQuestionnaireDraft}
                   highlightSources={highlightSources}
-                  knownSkills={knownSkills}
                   spellCheck={composerSpellCheck}
                   submitTarget={questionnaireSubmitTarget}
                   onDraftChange={questionnaire.save}
                   onDraftClear={questionnaire.clear}
-                  projectRootPath={projectRootPath}
                   request={visiblePendingUserInputRequest.request}
-                  workspaceRoots={workspaceRoots}
                   mode="live"
                   willAutoCompact={Boolean(thread.willAutoCompact)}
                   onSubmit={async (response, options) => {

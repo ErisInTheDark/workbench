@@ -1,11 +1,14 @@
 /*
  * Exports:
  * - useProjects: read logical projects, groups, folders, summaries and selection; observeSelection relays the sidebar's selected projects.
- * - useProject: read one logical project by id; members read the project owning a folder location and one project's summary.
+ * - useProject: read one logical project by id; members read the project owning a folder location, one project's summary,
+ *   and `contextual`, the project the surrounding content belongs to (see ContextualProjectProvider).
+ * - ContextualProjectContext: the nearest provided ContextualProject.
  */
 "use client";
 
-import { useCallback, useContext, useEffect, useRef, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useSyncExternalStore } from "react";
+import type ContextualProject from "../../workbench/project/ContextualProject";
 
 import type {
   WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchLogicalThreadRow, WorkbenchProjectOption,
@@ -23,6 +26,8 @@ import {
   resolveProjectSelection, type ProjectSelection, type ProjectSelectionFacts,
 } from "../../workbench/project/project-selection";
 import WorkbenchClientContext, { type WorkbenchClientController } from "./workbench-client-context";
+
+export const ContextualProjectContext = createContext<ContextualProject | null>(null);
 
 const EMPTY_SUBSCRIBE = (_listener: () => void) => () => {};
 const NO_PROJECTS: readonly WorkbenchLogicalProject[] = [];
@@ -128,6 +133,11 @@ useProjects.observeSelection = function useSelectedProjectObservation(selection:
 export function useProject(id: string | null | undefined) {
   return useFacts(store => id ? store.getProject(id) : null, null);
 }
+
+/** The project the surrounding content belongs to; null outside any ContextualProjectProvider. */
+useProject.contextual = function useContextualProject() {
+  return useContext(ContextualProjectContext);
+};
 
 useProject.forLocation = function useProjectForLocation(location: ProjectLocationReference | null | undefined) {
   return useFacts(store => location ? store.getForLocation(location) : null, null);

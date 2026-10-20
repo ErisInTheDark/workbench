@@ -16,7 +16,6 @@ import { useEffect, useState, type ComponentProps, type KeyboardEvent, type Reac
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { createGitArcOperationRejected, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcChangeTotal } from "workbench-shared/workbench/git/git-arc-receipts";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import PrimaryButton from "../../ui/PrimaryButton";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { AsteriskIcon, CheckIcon, GitArcProposalIcon, PlusIcon } from "../workbench-icons";
@@ -181,12 +180,8 @@ export default function ThreadCheckpointCommitCard({
   message,
   observationRef,
   paths = [],
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   sourceItemId,
   state,
-  workspaceRoots,
 }: {
   /** Present only where the card can edit and commit; without it every layout is readonly. */
   controls?: ThreadCommitControls;
@@ -201,12 +196,8 @@ export default function ThreadCheckpointCommitCard({
   observationRef?: (element: HTMLElement | null) => void;
   /** Intended paths, listed before a proposal has loaded its real changes. */
   paths?: readonly string[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   sourceItemId: string;
   state: CheckpointCommitCardState;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const proposal = state.status === "loaded" ? state.proposal : null;
   const summary = state.status === "summary" ? state.summary : null;
@@ -458,13 +449,7 @@ export default function ThreadCheckpointCommitCard({
   );
 
   const fileList = (changes: ThreadFileChangeListChange[]) => (
-    <ThreadFileChangeList
-      changes={changes}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
-      workspaceRoots={workspaceRoots}
-    />
+    <ThreadFileChangeList changes={changes} />
   );
   const knownChanges: ReactNode = proposal ? fileList(displayedChanges.map((change, index) => ({
     change: {
@@ -587,13 +572,7 @@ export default function ThreadCheckpointCommitCard({
 
       {failure ? (
         <div data-thread-checkpoint-card-error="true">
-          <ThreadGitArcFailure
-            failure={failure}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            workspaceRoots={workspaceRoots}
-          />
+          <ThreadGitArcFailure failure={failure} />
         </div>
       ) : null}
 

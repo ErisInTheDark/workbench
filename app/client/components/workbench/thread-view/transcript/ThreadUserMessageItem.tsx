@@ -35,11 +35,10 @@ import { UndeliveredSteerActions } from "./ThreadItemActionControls";
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 
 function ThreadUserInputLine ({ input }: { input: UserInput }) {
-  const markdownProps = useTranscript.markdownProps();
   switch (input.type) {
     case "text": {
       const text = input.text.trim();
-      return <MarkdownRender {...markdownProps} className="[&>p]:mb-[0.45em]" markdown={text || "No text captured."} />;
+      return <MarkdownRender className="[&>p]:mb-[0.45em]" markdown={text || "No text captured."} />;
     }
     case "image":
       return <ThreadUserImage alt="User-provided image" className="max-w-[22rem]" src={input.url} />;
@@ -90,13 +89,11 @@ export default function ThreadUserMessageItem ({
   startedAt: number | null;
 }) {
   const transcript = useTranscript();
-  const markdownProps = useTranscript.markdownProps();
   const agentMessage = readWorkbenchAgentMessageInput(item.content);
   if (agentMessage) {
     const steerState = getUserMessageDeliveryState(item);
     return (
       <ThreadIncomingAgentMessageItem
-        {...markdownProps}
         messages={[agentMessage]}
         steerState={steerState}
         steerActions={steerState === "unsent" ? <UndeliveredSteerActions items={sourceItems ?? [item]} /> : undefined}

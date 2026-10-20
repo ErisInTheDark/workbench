@@ -34,6 +34,7 @@ import { useThreadItemApproval } from "../../../../workbench/thread/thread-item-
 import { resolveWorkbenchSubagentCommandTargets } from "../../../../workbench/thread/thread-subagents";
 import MarkdownRender from "../../../ui/MarkdownRender";
 import { TerminalIcon } from "../../workbench-icons";
+import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
 import ThreadAgentMessageBody from "../ThreadAgentMessageBody";
 import ThreadSentAgentMessageItem from "../ThreadAgentMessageItem";
@@ -108,23 +109,10 @@ export default function ThreadCommandExecutionDetails ({
 }) {
   const transcript = useTranscript();
   const turn = useTranscript.turn();
-  const markdownProps = useTranscript.markdownProps();
+  const project = useProject.contextual();
   const SubagentActivity = useContext(SubagentActivitySlot);
-  const linkProps = {
-    projectFilePaths: transcript.projectFilePaths,
-    projectId: transcript.projectId,
-    projectRootPath: transcript.projectRootPath,
-    workspaceRoots: transcript.workspaceRoots,
-  };
-  const commandDisplay = useMemo(() => getThreadCommandDisplay({
-    command: item.command,
-    commandActions: item.commandActions,
-    cwd: item.cwd,
-    knownSkills: transcript.knownSkills,
-    projectRootPath: transcript.projectRootPath,
-    shell: item.shell,
-    workspaceRoots: transcript.workspaceRoots,
-  }), [item.command, item.commandActions, item.cwd, item.shell, transcript.knownSkills, transcript.projectRootPath, transcript.workspaceRoots]);
+  const commandInput = { command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell };
+  const commandDisplay = project ? project.commandDisplay(commandInput) : getThreadCommandDisplay(commandInput);
   const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
   const visibleDurationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
   const outcomeCommandDisplay = useMemo(() => {
@@ -152,7 +140,7 @@ export default function ThreadCommandExecutionDetails ({
       <ThreadStepRow
         icon={<TerminalIcon size={16} />}
         meta={["Result expired after 1 day."]}
-        summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} line projectFilePaths={transcript.projectFilePaths} projectId={transcript.projectId} />}
+        summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} line />}
       />
     );
   }
@@ -193,7 +181,7 @@ export default function ThreadCommandExecutionDetails ({
         feedbackId={parseWorkbenchFeedbackId(item.aggregatedOutput ?? "")}
         operation={feedbackCommand}
         outcome={commandOutcome}
-        projectId={transcript.projectId}
+        projectId={project?.id ?? null}
         threadId={transcript.threadId}
       />
     );
@@ -212,7 +200,6 @@ export default function ThreadCommandExecutionDetails ({
   if (isGitArcWaitMatcherClaim(commandDisplay.claimedBy)) {
     return (
       <ThreadGitArcWaitItem
-        {...linkProps}
         durationMs={visibleDurationMs ?? null}
         failureReason={commandOutcome === "completed" || commandOutcome === "inProgress" ? null : item.aggregatedOutput}
         outcome={commandOutcome}
@@ -237,7 +224,6 @@ export default function ThreadCommandExecutionDetails ({
   if (gitArcAction === "propose") {
     return (
       <ThreadGitArcProposalItem
-        {...linkProps}
         durationMs={visibleDurationMs ?? null}
         failureReason={failureOutput}
         intent={gitArcProposal?.intent ?? null}
@@ -249,7 +235,6 @@ export default function ThreadCommandExecutionDetails ({
   }
   const checkpointDiff = shouldRenderCheckpointDiff ? (
     <ThreadCheckpointDiffItem
-      {...linkProps}
       cwd={item.cwd}
       output={item.aggregatedOutput ?? ""}
       sourceItemId={item.id}
@@ -259,14 +244,13 @@ export default function ThreadCommandExecutionDetails ({
   if (gitArcCommandIntent && gitArcCommandIntent.action !== "propose") {
     return (
       <ThreadGitArcItem
-        {...linkProps}
         commandIntent={gitArcCommandIntent}
         statusOutput={gitArcCommandIntent.action === "status" ? item.aggregatedOutput ?? "" : undefined}
         durationMs={visibleDurationMs ?? null}
         editResult={gitArcCommandIntent.action === "edit" ? parseGitArcEditText(item.aggregatedOutput ?? "") : null}
         failureReason={failureOutput}
         operationDetails={checkpointCompareChanges?.length
-          ? <ThreadCheckpointCompareItem {...linkProps} changes={checkpointCompareChanges} />
+          ? <ThreadCheckpointCompareItem changes={checkpointCompareChanges} />
           : checkpointDiff}
         operationSummaryRows={checkpointSummaryRows}
         outcome={commandOutcome}
@@ -280,7 +264,7 @@ export default function ThreadCommandExecutionDetails ({
         activeStartedAtMs={subagentWaitTiming?.activeStartedAtMs}
         disclosureContent={commandOutcome === "completed"
           ? item.aggregatedOutput?.trim()
-            ? <MarkdownRender {...markdownProps} markdown={item.aggregatedOutput.trim()} threadCwdPath={item.cwd} />
+            ? <MarkdownRender cwd={item.cwd} markdown={item.aggregatedOutput.trim()} />
             : undefined
           : commandOutcome === "inProgress" ? undefined : (
             <ThreadCodeDisplay
@@ -330,9 +314,8 @@ export default function ThreadCommandExecutionDetails ({
         unwrapped={unwrapSubagentCreate}
       >
         <ThreadAgentMessageBody
-          {...markdownProps}
+          cwd={item.cwd}
           parts={[{ markdown: subagentCommand.message, userVisibleSimpleVersion: subagentCommand.userVisibleSimpleVersion }]}
-          threadCwdPath={item.cwd}
         />
       </ThreadSubagentCreateItem>
     );
@@ -351,7 +334,7 @@ export default function ThreadCommandExecutionDetails ({
           : target?.threadId ? { relation: "self", threadId: target.threadId } : null}
         thread={target?.threadId ? transcript.relatedThreadsById[target.threadId] : undefined}
       >
-        <MarkdownRender {...markdownProps} markdown={messageCommand.message} threadCwdPath={item.cwd} />
+        <MarkdownRender cwd={item.cwd} markdown={messageCommand.message} />
       </ThreadSentAgentMessageItem>
     );
   }
@@ -387,12 +370,10 @@ export default function ThreadCommandExecutionDetails ({
         visibleDurationMs !== null && visibleDurationMs !== undefined ? <ThreadDurationText durationMs={visibleDurationMs} /> : null,
       ]}
       output={item.aggregatedOutput}
-      projectFilePaths={transcript.projectFilePaths}
-      projectId={transcript.projectId}
       summaryDisplay={outcomeCommandDisplay}
     >
       {isBrowseCommand || shouldHideCommandOutput ? undefined
-        : checkpointCompareChanges && commandOutcome === "completed" ? <ThreadCheckpointCompareItem {...linkProps} changes={checkpointCompareChanges} />
+        : checkpointCompareChanges && commandOutcome === "completed" ? <ThreadCheckpointCompareItem changes={checkpointCompareChanges} />
           : checkpointDiff ?? undefined}
     </ThreadCommandDisplay>
   );

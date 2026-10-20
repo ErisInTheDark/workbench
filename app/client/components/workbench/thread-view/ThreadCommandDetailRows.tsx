@@ -54,15 +54,15 @@ function ThreadCommandDetailMeta({ row }: { row: ThreadCommandDetailRow }) {
   );
 }
 
-function ThreadStructuredCommandDetailRow({ hideSharedContext, line = false, projectFilePaths, projectId, row }: {
-  hideSharedContext: boolean; line?: boolean; projectFilePaths?: readonly string[]; projectId?: string | null; row: ThreadCommandDetailRow;
+function ThreadStructuredCommandDetailRow({ hideSharedContext, line = false, row }: {
+  hideSharedContext: boolean; line?: boolean; row: ThreadCommandDetailRow;
 }) {
   if (!row.label && !row.target) return <ThreadCommandSummary display={{
     claimedBy: "command-detail-row", omitFromDisplay: false, ongoingSummaryParts: row.summaryParts,
     ongoingSummaryText: "", shell: null, showShell: false, summaryKind: "matched",
     summaryParts: row.summaryParts, summaryText: "",
     summaryStats: createEmptyCommandSummaryStats(),
-  }} line={line} projectFilePaths={projectFilePaths} projectId={projectId} />;
+  }} line={line} />;
   return (
     <span
       className={`
@@ -144,15 +144,15 @@ function ThreadStepDetail({ row }: { row: ThreadCommandDetailRow }) {
 }
 
 /** Each row a full step row: its icon, one line, its duration trailing. */
-function ThreadCommandStepRows({ icon, rows, projectFilePaths, projectId }: {
+function ThreadCommandStepRows({ icon, rows }: {
   icon: (row: ThreadCommandDetailRow) => ReactNode;
-  rows: ThreadCommandDetailRow[]; projectFilePaths?: readonly string[]; projectId?: string | null;
+  rows: ThreadCommandDetailRow[];
 }) {
   return <div>
     {rows.map(row => {
       const hasDetail = isScriptStep(row) || Boolean(row.detailKind === "result" && row.detailText?.trim())
         || Boolean(row.imageUrl || row.imageUrls?.length);
-      const summary = <ThreadStructuredCommandDetailRow hideSharedContext={false} line projectFilePaths={projectFilePaths} projectId={projectId} row={getStepLine(row)} />;
+      const summary = <ThreadStructuredCommandDetailRow hideSharedContext={false} line row={getStepLine(row)} />;
       const meta = [typeof row.durationMs === "number" ? <ThreadDurationText durationMs={row.durationMs} /> : null];
       return <ThreadMeasuredContent key={row.id}>
         {hasDetail ? <ThreadStepRow defaultOpen={row.defaultOpen ?? false} icon={icon(row)} meta={meta} summary={summary}>
@@ -164,17 +164,17 @@ function ThreadCommandStepRows({ icon, rows, projectFilePaths, projectId }: {
 }
 
 /** `icon` presents rows as full step rows instead of nested detail rows. */
-export default function ThreadCommandDetailRows({ icon, rows, projectFilePaths, projectId }: {
+export default function ThreadCommandDetailRows({ icon, rows }: {
   icon?: (row: ThreadCommandDetailRow) => ReactNode;
-  rows: ThreadCommandDetailRow[]; projectFilePaths?: readonly string[]; projectId?: string | null;
+  rows: ThreadCommandDetailRow[];
 }) {
   if (!rows.length) return null;
-  if (icon) return <ThreadCommandStepRows icon={icon} projectFilePaths={projectFilePaths} projectId={projectId} rows={rows} />;
+  if (icon) return <ThreadCommandStepRows icon={icon} rows={rows} />;
   const contexts = Array.from(new Set(rows.map(row => row.contextText?.trim()).filter(Boolean)));
   const hideSharedContext = contexts.length === 1 && rows.length > 1;
   return <div className="space-y-0.5">
     {rows.map(row => {
-      const summary = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />;
+      const summary = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} row={getDetailRowSummary(row)} />;
       const hasExpandableContent = shouldRenderFramedDetailTarget(row) || Boolean(row.imageUrl || row.imageUrls?.length);
       return <ThreadMeasuredContent key={row.id}><div className="space-y-1">
         {hasExpandableContent ? <Disclosure className="py-1" contentClassName="space-y-1" defaultOpen={row.defaultOpen ?? false}

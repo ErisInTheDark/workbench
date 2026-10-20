@@ -13,7 +13,8 @@
 
 import type { ComponentType, ReactNode } from "react";
 
-import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import { toWorkspaceDisplayPath } from "../../../workbench/markdown/markdown-links";
+import { useProject } from "../use-projects";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import {
   getNativeFileChanges, getNativeFileOperationOutcome, type NativeFileOperationItem,
@@ -286,15 +287,7 @@ function parseFileChangeDiff (change: FileUpdateChange) {
   return parsedDiff;
 }
 
-function ThreadFileChangeDetails ({
-  parsedChange,
-  projectFilePaths,
-  projectId,
-}: {
-  parsedChange: ParsedFileChange;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-}) {
+function ThreadFileChangeDetails ({ parsedChange }: { parsedChange: ParsedFileChange }) {
   return (
     <div className="space-y-3">
       {parsedChange.change.workbenchAnalysis ? (
@@ -315,7 +308,7 @@ function ThreadFileChangeDetails ({
       {parsedChange.movePathDisplay ? (
         <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-fg/muted">
           <span>From</span>
-          <ProjectFilePath className="max-w-full align-baseline" disambiguationPaths={projectFilePaths} path={parsedChange.movePathDisplay} projectId={projectId} />
+          <ProjectFilePath className="max-w-full align-baseline" path={parsedChange.movePathDisplay} />
         </p>
       ) : null}
       {parsedChange.diff.binary ? (
@@ -333,13 +326,9 @@ function ThreadFileChangeDetails ({
 function ThreadFileChangeSummary ({
   icon = true,
   parsedChange,
-  projectFilePaths,
-  projectId,
 }: {
   icon?: boolean;
   parsedChange: ParsedFileChange;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
 }) {
   const presentation = getFileChangePresentation(parsedChange.change);
 
@@ -356,7 +345,7 @@ function ThreadFileChangeSummary ({
       <span className={parsedChange.danger ? "text-danger" : undefined}>
         <ThreadSummaryText text={parsedChange.presentationLabel ?? presentation.completedLabel} />
       </span>
-      <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={parsedChange.displayPath} projectId={projectId} />
+      <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" path={parsedChange.displayPath} />
       {parsedChange.failedAttempts > 1 ? (
         <span className={`font-mono text-[0.78em] leading-[1.6] ${parsedChange.danger ? "text-danger" : "text-fg/muted"}`}>
           <span aria-hidden="true" className="inline-block animate-tick motion-reduce:animate-none" key={parsedChange.failedAttempts}>×{parsedChange.failedAttempts}</span>
@@ -376,29 +365,11 @@ function ThreadFileChangeSummary ({
   );
 }
 
-export function ThreadFileChangeList ({
-  changes,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
-}: {
-  changes: ThreadFileChangeListChange[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
+export function ThreadFileChangeList ({ changes }: { changes: ThreadFileChangeListChange[] }) {
   return (
     <div className="space-y-1.5 py-2">
       {changes.length ? (
-        <ThreadFileChangeRows
-          changes={changes}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
+        <ThreadFileChangeRows changes={changes} />
       ) : (
         <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No changed files captured.</p>
       )}
@@ -411,21 +382,15 @@ function ThreadFileChangeRows ({
   animateEntries = false,
   changes,
   plainInset = true,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   steps = false,
-  workspaceRoots,
 }: {
   animateEntries?: boolean;
   changes: ThreadFileChangeListChange[];
   plainInset?: boolean;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   steps?: boolean;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const project = useProject.contextual();
+  const showPath = (path: string) => project?.displayPath(path) ?? toWorkspaceDisplayPath(path, {}) ?? path;
   const parsedChanges: ParsedFileChange[] = changes.map((entry, index) => {
     const diff = entry.diff ?? parseFileChangeDiff(entry.change);
     return {
@@ -433,11 +398,9 @@ function ThreadFileChangeRows ({
       danger: entry.danger ?? false,
       detailsAvailable: entry.detailsAvailable ?? true,
       diff,
-      displayPath: toWorkspaceDisplayPath(entry.change.path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.path,
+      displayPath: showPath(entry.change.path),
       failedAttempts: entry.failedAttempts ?? 0,
-      movePathDisplay: entry.change.kind.type === "update" && entry.change.kind.move_path
-        ? toWorkspaceDisplayPath(entry.change.kind.move_path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.kind.move_path
-        : null,
+      movePathDisplay: entry.change.kind.type === "update" && entry.change.kind.move_path ? showPath(entry.change.kind.move_path) : null,
       presentationLabel: entry.presentationLabel,
       sourceChangeIndex: entry.sourceChangeIndex ?? index,
       sourceItemId: entry.sourceItemId ?? "file-change-list",
@@ -452,7 +415,7 @@ function ThreadFileChangeRows ({
   return parsedChanges.map((change, index) => {
     const key = `${change.sourceItemId}:change:${change.sourceChangeIndex}:${change.displayPath}:${change.movePathDisplay ?? ""}`;
     const selection = changes[index].selection;
-    const content = <ThreadFileChangeSummary parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />;
+    const content = <ThreadFileChangeSummary parsedChange={change} />;
     const summary = selection ? <WorkbenchCheckbox
       checked={selection.checked}
       className="-ml-2 -my-1 min-w-0 max-w-full !text-[1em]"
@@ -462,7 +425,7 @@ function ThreadFileChangeRows ({
     /> : content;
     if (steps) {
       const presentation = getFileChangePresentation(change.change);
-      const stepSummary = <ThreadFileChangeSummary icon={false} parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />;
+      const stepSummary = <ThreadFileChangeSummary icon={false} parsedChange={change} />;
       const iconClassName = change.danger ? "text-danger" : undefined;
       return (
         <ThreadEntryMotion enabled={animateEntries} identity={getThreadFileChangeMotionIdentity(change.sourceItemId, change.sourceChangeIndex)} key={key}>
@@ -470,7 +433,7 @@ function ThreadFileChangeRows ({
             <div className={animate ? `block ${enterMotionClassName}` : undefined}>
               {change.detailsAvailable ? (
                 <ThreadStepRow icon={<presentation.Icon size={16} />} iconClassName={iconClassName} summary={stepSummary}>
-                  {changes[index].showDiff !== false ? <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} /> : null}
+                  {changes[index].showDiff !== false ? <ThreadFileChangeDetails parsedChange={change} /> : null}
                   {changes[index].details}
                 </ThreadStepRow>
               ) : <ThreadStepRow icon={<presentation.Icon size={16} />} iconClassName={iconClassName} summary={stepSummary} />}
@@ -488,7 +451,7 @@ function ThreadFileChangeRows ({
             summary={summary}
             summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
           >
-            {changes[index].showDiff !== false ? <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} /> : null}
+            {changes[index].showDiff !== false ? <ThreadFileChangeDetails parsedChange={change} /> : null}
             {changes[index].details}
           </Disclosure>
         ) : change.staticMarker ? (
@@ -508,19 +471,7 @@ function ThreadFileChangeRows ({
   });
 }
 
-export function ThreadFileChangePreviewList ({
-  changes,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
-}: {
-  changes: ThreadFileChangeListChange[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
+export function ThreadFileChangePreviewList ({ changes }: { changes: ThreadFileChangeListChange[] }) {
   if (!changes.length) return null;
   return (
     <div className="space-y-1.5 py-2">
@@ -531,10 +482,6 @@ export function ThreadFileChangePreviewList ({
           staticMarker: false,
         }))}
         plainInset={false}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        workspaceRoots={workspaceRoots}
       />
     </div>
   );
@@ -670,17 +617,9 @@ function getStitchedCanonicalRowChange({ pieces }: StitchedCanonicalFileRow): Th
 export default function ThreadFileChangeItem ({
   animateEntries = false,
   items,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   animateEntries?: boolean;
   items: FileOperationItem[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const hasRows = items.some((item) => item.type !== "fileChange" || item.changes.length || item.status !== "completed");
   if (items.length && items.every(item => item.type !== "fileChange"
@@ -696,8 +635,7 @@ export default function ThreadFileChangeItem ({
                 <ThreadFileChangeRows
                   animateEntries={animateEntries}
                   changes={rows.map(getStitchedNativeRowChange)}
-                  projectFilePaths={projectFilePaths} projectId={projectId}
-                  projectRootPath={projectRootPath} steps workspaceRoots={workspaceRoots}
+                  steps
                 />
               </div>
             );
@@ -722,11 +660,7 @@ export default function ThreadFileChangeItem ({
           <ThreadFileChangeRows
             animateEntries={animateEntries}
             changes={group.rows.map(getStitchedCanonicalRowChange)}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
             steps
-            workspaceRoots={workspaceRoots}
           />
           {item.workbenchRecovery?.state === "failed" ? (
             <p className="m-0 pl-6 text-[0.78em] leading-[1.6] text-danger">Recovery context could not be queued{item.workbenchRecovery.detail ? `. ${item.workbenchRecovery.detail}` : "."}</p>

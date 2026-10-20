@@ -58,7 +58,7 @@ import {
   type SubagentTabOrder,
 } from "../../../workbench/thread/thread-subagents";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
-import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 import { useThreads } from "../use-threads";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalReviewerReady } from "../WorkbenchApprovalModeMenu";
@@ -545,15 +545,9 @@ export default memo(function ThreadViewContent ({
     items: liveTurn?.items ?? [],
     terminalContext,
     terminalRetention,
-    inlineMentionSources,
     presentationSource: activeThread ? { kind: "sqlite", sourceKey: `${activeThread.harness}:${activeThread.id}` } : null,
-    projectFilePaths,
-    projectId,
-    projectRootPath,
-    threadCwdPath: activeThread?.cwd,
     threadId: activeThread?.id ?? "",
     turnId: liveTurn?.id ?? null,
-    workspaceRoots: workspaceFileLinkRoots,
   });
   const headTodos = active.head?.todos;
   const headFeedback = active.head?.addressedFeedback;
@@ -1015,9 +1009,7 @@ export default memo(function ThreadViewContent ({
       onThreadSettingsChange={handleThreadSettingsChange}
       onThreadModelChange={handleThreadModelChange}
       projectId={projectId}
-      projectRootPath={projectRootPath}
       profileSlot={activeProfileSlot!}
-      workspaceRoots={workspaceFileLinkRoots}
       rateLimits={rateLimits}
       stickyMode={!showDraftComposer}
       bottomUi={!showDraftComposer ? {
@@ -1028,7 +1020,6 @@ export default memo(function ThreadViewContent ({
       threadComposerDraft={activeThread.isDraft
         ? threadComposerDraft
         : threadComposerDraftsByThreadId[activeThread.id] ?? null}
-      knownSkills={workbenchSkills}
       thread={resolvedActiveThread!}
       turns={loadedTurns}
       threadTarget={activeThread.isDraft ? composerTarget : activeTarget}
@@ -1093,10 +1084,16 @@ export default memo(function ThreadViewContent ({
   return (
     <WorkbenchThreadDisplaySettingsContext.Provider value={threadCodeDetails}>
     <ThreadScrollViewportContext.Provider value={entryMotionContext}>
-    <ProjectFilePathDisplayProvider
-      disambiguationIndex={projectFilePathDisambiguationIndex}
-      disambiguationKey={projectFileIndexId}
-      disambiguationPaths={projectFilePaths}
+    <ContextualProjectProvider
+      cwd={activeThread?.cwd}
+      filePaths={projectFilePaths}
+      id={projectId}
+      mentions={inlineMentionSources}
+      pathDisambiguation={projectFileIndexId === undefined ? undefined
+        : { index: projectFilePathDisambiguationIndex ?? null, key: projectFileIndexId }}
+      rootPath={projectRootPath}
+      skills={workbenchSkills}
+      workspaceRoots={workspaceFileLinkRoots}
     >
       <ThreadStoreGitArcObservationProvider thread={active}>
       <ThreadGitArcPresentationContext.Provider value={{
@@ -1134,13 +1131,6 @@ export default memo(function ThreadViewContent ({
           <div>
           {isMessageBoardOpen ? (
             <ThreadMessageBoard
-              markdownProps={{
-                inlineMentionSources,
-                projectFilePaths,
-                projectId,
-                projectRootPath,
-                workspaceRoots: workspaceFileLinkRoots,
-              }}
               projectId={projectId}
               subagents={subagents}
             />
@@ -1171,11 +1161,6 @@ export default memo(function ThreadViewContent ({
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={null}
                     historySentinelRef={setHistorySentinel}
-                    inlineMentionSources={inlineMentionSources}
-                    knownSkills={workbenchSkills}
-                    projectFilePaths={projectFilePaths}
-                    projectId={projectId}
-                    projectRootPath={projectRootPath}
                     presentationSource={{
                       kind: "sqlite",
                       sourceKey: `${activeThread.harness}:${activeTranscriptProjection.thread.id}`,
@@ -1184,7 +1169,6 @@ export default memo(function ThreadViewContent ({
                     liveTurnId={activeTurns.liveTurnId}
                     relatedThreadsById={relatedThreadsById}
                     subagents={subagents}
-                    workspaceRoots={workspaceFileLinkRoots}
                   />
                   </ThreadItemActionsContext.Provider>
                   </ThreadItemApprovalsContext.Provider>
@@ -1233,14 +1217,10 @@ export default memo(function ThreadViewContent ({
             harness={activeThread.harness}
             key={activeThread.id}
             live={liveActivityView}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
             skills={active.entry && !isDraftThreadView ? { onDeactivate: active.actions.deactivateSkill, skills: active.head?.skills ?? [] } : null}
             threadId={activeThread.id}
             threadLifecycle={activeGitArcSelection?.lifecycle ?? active.entry?.lifecycle ?? null}
             vis={!isDraftThreadView && vis?.sessions.length ? { sessions: vis.sessions, ...visActions } : null}
-            workspaceRoots={workspaceFileLinkRoots}
             todos={active.entry && !isDraftThreadView ? {
               goalSet: Boolean(active.head?.goal),
               count: headTodos?.length ?? 0,
@@ -1291,7 +1271,7 @@ export default memo(function ThreadViewContent ({
       </>
       </ThreadGitArcPresentationContext.Provider>
       </ThreadStoreGitArcObservationProvider>
-    </ProjectFilePathDisplayProvider>
+    </ContextualProjectProvider>
     </ThreadScrollViewportContext.Provider>
     </WorkbenchThreadDisplaySettingsContext.Provider>
   );

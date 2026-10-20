@@ -9,14 +9,12 @@ import { useState, type ReactNode } from "react";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { repairQuestionnaireQuestion } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import type {
-  WorkbenchSkillSummary,
   WorkbenchUserInputOption,
   WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "workbench-shared/types";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
+import { useProject } from "../use-projects";
 import {
   buildQuestionnaireTranscriptPairs,
   getQuestionnaireTopicLabel,
@@ -234,22 +232,10 @@ function renderQuestionnaireHistorySummary (request: WorkbenchUserInputRequest |
 
 function ThreadQuestionnaireTranscriptPreview ({
   answeredAt,
-  inlineMentionSources,
   pairs,
-  threadCwdPath,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   answeredAt: number | null;
-  inlineMentionSources?: InlineMentionHighlightSources | null;
   pairs: Array<{ answerMarkdown: string; promptText: string }>;
-  threadCwdPath?: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (!pairs.length) {
     return null;
@@ -267,13 +253,7 @@ function ThreadQuestionnaireTranscriptPreview ({
           <div className="group/thread-bubble relative ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-fg/6 px-4 py-3 text-left leading-[1.55] text-text">
             <MarkdownRender
               className="text-[0.98em] leading-[1.55] [&_h3]:mb-[0.2em] [&_h3]:text-[1.15em] [&_p]:leading-[1.55]"
-              inlineMentionSources={inlineMentionSources}
               markdown={pair.answerMarkdown}
-              threadCwdPath={threadCwdPath}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
             />
             <ThreadBubbleCopyButton markdown={pair.answerMarkdown} side="right" />
           </div>
@@ -286,26 +266,14 @@ function ThreadQuestionnaireTranscriptPreview ({
 
 function ThreadQuestionnaireHistorySummary ({
   answeredAt,
-  inlineMentionSources,
   isOpen,
-  threadCwdPath,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   request,
   response,
-  workspaceRoots,
 }: {
   answeredAt: number | null;
-  inlineMentionSources?: InlineMentionHighlightSources | null;
   isOpen: boolean;
-  threadCwdPath?: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   request: WorkbenchUserInputRequest | null;
   response: WorkbenchUserInputResponse | null;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const transcriptPairs = request ? buildQuestionnaireTranscriptPairs(request, response) : [];
 
@@ -313,16 +281,7 @@ function ThreadQuestionnaireHistorySummary ({
     <div className="flex min-w-0 flex-1 flex-col">
       <div className="min-w-0">{renderQuestionnaireHistorySummary(request)}</div>
       {!isOpen ? (
-        <ThreadQuestionnaireTranscriptPreview
-          answeredAt={answeredAt}
-          inlineMentionSources={inlineMentionSources}
-          pairs={transcriptPairs}
-          threadCwdPath={threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
+        <ThreadQuestionnaireTranscriptPreview answeredAt={answeredAt} pairs={transcriptPairs} />
       ) : null}
     </div>
   );
@@ -338,22 +297,10 @@ function buildMetaParts (item: DynamicToolCallItem): ReactNode[] {
 
 function ThreadQuestionnaireToolCallItem ({
   answeredAt,
-  inlineMentionSources,
   item,
-  threadCwdPath,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   answeredAt: number | null;
-  inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
-  threadCwdPath?: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
   const { response } = parseQuestionnaireResponse(item);
@@ -372,15 +319,9 @@ function ThreadQuestionnaireToolCallItem ({
       summary={(
         <ThreadQuestionnaireHistorySummary
           answeredAt={response ? answeredAt : null}
-          inlineMentionSources={inlineMentionSources}
           isOpen={isOpen}
-          threadCwdPath={threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
           request={request}
           response={response}
-          workspaceRoots={workspaceRoots}
         />
       )}
       summaryClassName="items-start text-[0.92em] leading-[1.6] text-fg/muted"
@@ -410,18 +351,9 @@ function ThreadQuestionnaireToolCallItem ({
   );
 }
 
-function ThreadGenericDynamicToolCallItem ({
-  item,
-  knownSkills,
-  projectFilePaths,
-  projectId,
-}: {
-  item: DynamicToolCallItem;
-  knownSkills?: readonly WorkbenchSkillSummary[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-}) {
-  const display = getNativeToolDisplay(item, { knownSkills });
+function ThreadGenericDynamicToolCallItem ({ item }: { item: DynamicToolCallItem }) {
+  const project = useProject.contextual();
+  const display = getNativeToolDisplay(item, { knownSkills: project?.matcherContext.knownSkills });
   const outcome = item.success === false ? "failed" : item.status;
   const outcomeDisplay = display ? getThreadCommandOutcomeDisplay(display, outcome) : null;
   const Icon = getCommandIcon(outcomeDisplay?.summaryStats);
@@ -430,7 +362,7 @@ function ThreadGenericDynamicToolCallItem ({
     <ThreadStepRow
       icon={<Icon size={16} />}
       meta={buildMetaParts(item)}
-      summary={outcomeDisplay ? <ThreadCommandSummary display={outcomeDisplay} line projectFilePaths={projectFilePaths} projectId={projectId} />
+      summary={outcomeDisplay ? <ThreadCommandSummary display={outcomeDisplay} line />
         : <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.45rem] overflow-hidden">
           <ThreadSummaryText text="Tool" />
           {item.namespace ? <code className={INLINE_CODE_CLASS}>{item.namespace}</code> : null}
@@ -467,25 +399,11 @@ function ThreadCodeModeItem ({ item }: { item: DynamicToolCallItem }) {
 export default function ThreadDynamicToolCallItem ({
   activeStartedAtMs,
   answeredAt = null,
-  inlineMentionSources,
   item,
-  knownSkills,
-  threadCwdPath,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   activeStartedAtMs?: number | null;
   answeredAt?: number | null;
-  inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
-  knownSkills?: readonly WorkbenchSkillSummary[];
-  threadCwdPath?: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const visibleDurationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
   const presentedItem = visibleDurationMs === item.durationMs
@@ -500,14 +418,10 @@ export default function ThreadDynamicToolCallItem ({
     </div>;
   }
   if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME) {
-    return <ThreadQuestionnaireToolCallItem answeredAt={answeredAt} inlineMentionSources={inlineMentionSources} item={presentedItem} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+    return <ThreadQuestionnaireToolCallItem answeredAt={answeredAt} item={presentedItem} />;
   }
 
-  if (isNativeFileOperation(item)) {
-    return <ThreadFileChangeItem items={[presentedItem]} projectFilePaths={projectFilePaths} projectId={projectId}
-      projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
-  }
+  if (isNativeFileOperation(item)) return <ThreadFileChangeItem items={[presentedItem]} />;
   if (item.namespace === "opencode" && item.tool === "execute") return <ThreadCodeModeItem item={presentedItem} />;
-  return <ThreadGenericDynamicToolCallItem item={presentedItem} knownSkills={knownSkills}
-    projectFilePaths={projectFilePaths} projectId={projectId} />;
+  return <ThreadGenericDynamicToolCallItem item={presentedItem} />;
 }

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadUserInputRequest: render full or compact questionnaires, including loading, live answers, previews, and history.
- * Local components bind a keyed editing session and render approval command context.
+ * Local components bind a keyed editing session and render approval command context through the contextual project.
  */
 "use client";
 
@@ -11,7 +11,6 @@ import { createPortal } from "react-dom";
 import { applyAttachmentTextEdits, renumberAttachmentReferences } from "workbench-shared/workbench/thread/attachment-references";
 import type {
   WorkbenchQuestionnaireDraft,
-  WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerAttachmentDraft,
   WorkbenchUserInputQuestion,
@@ -19,7 +18,6 @@ import type {
   WorkbenchUserInputResponse,
 } from "workbench-shared/types";
 import { readClipboardImageDataUrls } from "../../../workbench/dom/clipboard";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   buildInlineMentionHighlights,
   getActivatedWorkbenchSkillPathsForTextValues,
@@ -46,6 +44,7 @@ import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
+import { useProject } from "../use-projects";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -87,7 +86,6 @@ function isSingleChoiceQuestion (
 type InteractiveThreadUserInputRequestProps = {
   draft: WorkbenchQuestionnaireDraft | null;
   highlightSources?: InlineMentionHighlightSources;
-  knownSkills?: WorkbenchSkillSummary[];
   mode: "live";
   onDraftChange: (update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
   onDraftClear: () => Promise<void> | void;
@@ -96,8 +94,6 @@ type InteractiveThreadUserInputRequestProps = {
     options: Pick<WorkbenchSubmitUserInputRequestOptions, "activatedSkillPaths" | "skipAutoCompact" | "supplementalInput">,
   ) => Promise<void>;
   presentation?: "compact" | "full";
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   request: WorkbenchUserInputRequest;
   spellCheck: boolean;
   /** Host action row that receives the full layout's submit control instead of an inline row. */
@@ -108,11 +104,8 @@ type InteractiveThreadUserInputRequestProps = {
 
 type HistoryThreadUserInputRequestProps = {
   highlightSources?: InlineMentionHighlightSources;
-  knownSkills?: WorkbenchSkillSummary[];
   mode: "history";
   presentation?: "compact" | "full";
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   request: WorkbenchUserInputRequest;
   response: WorkbenchUserInputResponse | null;
   statusLabel?: string;
@@ -121,12 +114,9 @@ type HistoryThreadUserInputRequestProps = {
 type PreviewThreadUserInputRequestProps = {
   draft: WorkbenchQuestionnaireDraft | null;
   highlightSources?: InlineMentionHighlightSources;
-  knownSkills?: WorkbenchSkillSummary[];
   mode: "preview";
   presentation?: "compact" | "full";
-  projectRootPath?: string;
   request: WorkbenchUserInputRequest;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 };
 
 type ThreadUserInputRequestProps = (
@@ -165,30 +155,13 @@ function ThreadUserInputRequestFrame({
   );
 }
 
-function ThreadApprovalCommand ({
-  knownSkills,
-  projectRootPath,
-  request,
-  workspaceRoots,
-}: {
-  knownSkills?: WorkbenchSkillSummary[];
-  projectRootPath?: string;
-  request: WorkbenchUserInputRequest;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
+function ThreadApprovalCommand ({ request }: { request: WorkbenchUserInputRequest }) {
+  const project = useProject.contextual();
   const commandContext = request.approval?.command ?? null;
-  const display = useMemo(() => (
-    commandContext
-      ? getThreadCommandDisplay({
-        command: commandContext.command,
-        commandActions: commandContext.commandActions,
-        cwd: commandContext.cwd,
-        knownSkills,
-        projectRootPath,
-        workspaceRoots,
-      })
-      : null
-  ), [commandContext, knownSkills, projectRootPath, workspaceRoots]);
+  const input = commandContext
+    ? { command: commandContext.command, commandActions: commandContext.commandActions, cwd: commandContext.cwd }
+    : null;
+  const display = input ? project?.commandDisplay(input) ?? getThreadCommandDisplay(input) : null;
 
   if (!display || !commandContext) {
     return null;
@@ -443,12 +416,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
           )}
         </div>
 
-        <ThreadApprovalCommand
-          knownSkills={props.knownSkills}
-          projectRootPath={props.projectRootPath}
-          request={request}
-          workspaceRoots={props.workspaceRoots}
-        />
+        <ThreadApprovalCommand request={request} />
 
         <div className="space-y-3">
           {request.questions.map((question, index) => {

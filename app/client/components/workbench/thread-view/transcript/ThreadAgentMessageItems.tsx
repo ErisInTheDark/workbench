@@ -47,7 +47,6 @@ export function ThreadAgentMessageItem ({
 }) {
   const transcript = useTranscript();
   const turn = useTranscript.turn();
-  const markdownProps = useTranscript.markdownProps();
   const presentationSource = canonical ? null : turn.presentationSource;
   const presentedText = useTranscript.presentedText({
     canonicalText: item.text,
@@ -69,7 +68,7 @@ export function ThreadAgentMessageItem ({
   return (
     <section className={copyRuns ? "relative py-2" : "py-2"}>
       <ThreadMarkdownSectionActionsProvider value={copyRuns ? renderBreakActions : null}>
-        <MarkdownRender {...markdownProps} live={Boolean(presentationSource)} markdown={text} streaming={streaming} />
+        <MarkdownRender live={Boolean(presentationSource)} markdown={text} streaming={streaming} />
       </ThreadMarkdownSectionActionsProvider>
       {copyRuns?.endCopyMarkdown ? <ThreadCommentaryActionRow markdown={copyRuns.endCopyMarkdown} placement="end" /> : null}
       {isFinal ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={completedAt} /> : null}
@@ -118,7 +117,6 @@ export function ThreadIncomingAgentMessageRuns ({
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
 }) {
   const transcript = useTranscript();
-  const markdownProps = useTranscript.markdownProps();
   return (
     <>
       {groupIncomingAgentMessageRuns(items).map((run) => {
@@ -130,7 +128,6 @@ export function ThreadIncomingAgentMessageRuns ({
         const userItems = run.items.filter((item): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage");
         return (
           <ThreadIncomingAgentMessageItem
-            {...markdownProps}
             key={run.items[0]!.id}
             messages={run.messages}
             steerActions={run.deliveryState === "unsent" ? <UndeliveredSteerActions items={userItems} /> : undefined}

@@ -12,6 +12,7 @@ import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-wo
 import { ProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import ProjectFileLinkList from "./ProjectFileLinkList";
+import ContextualProjectProvider from "./ContextualProjectProvider";
 import { useThreads } from "./use-threads";
 
 type ProviderThreadSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
@@ -50,7 +51,9 @@ export default function WorkbenchThreadReferenceList({
             entry={entry}
             href={href}
             projectId={ProjectIdSchema.parse(projectId)}
-            secondaryRow={paths.length ? <ProjectFileLinkList paths={paths} projectFilePaths={projectFilePaths} projectId={projectId} /> : undefined}
+            secondaryRow={paths.length ? (
+              <ContextualProjectProvider filePaths={projectFilePaths} id={projectId}><ProjectFileLinkList paths={paths} /></ContextualProjectProvider>
+            ) : undefined}
             showTooltip={false}
             trailing={detail}
           /> : detail ? (

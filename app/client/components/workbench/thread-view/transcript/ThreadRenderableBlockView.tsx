@@ -14,6 +14,7 @@ import {
   shouldUseWorkbenchMcpSpecializedRenderer,
 } from "../../../../workbench/thread/thread-command-matchers";
 import { useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
+import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
 import ThreadActivityRun from "../ThreadActivityRun";
 import ThreadBrowseStepIcon from "../ThreadBrowseStepIcon";
@@ -65,43 +66,22 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
   isMostRecent: boolean;
   itemTimeline: Timeline;
 }) {
-  const transcript = useTranscript();
   const turn = useTranscript.turn();
+  const project = useProject.contextual();
   return (
     <ThreadActivityRun
       block={block}
       isMostRecent={isMostRecent}
       itemTimeline={itemTimeline}
       renderers={{
-        code: (item) => (
-          <ThreadDynamicToolCallItem
-            activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
-            item={item}
-            knownSkills={transcript.knownSkills}
-          />
-        ),
+        code: (item) => <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />,
         commands: (items) => items.map((item) => {
-          const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, transcript), turn.browseResultEntries);
-          return browseSteps ? (
-            <ThreadCommandDetailRows
-              icon={row => <ThreadBrowseStepIcon row={row} />}
-              key={item.id}
-              projectFilePaths={transcript.projectFilePaths}
-              projectId={transcript.projectId}
-              rows={browseSteps}
-            />
-          ) : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;
+          const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, { ...project?.matcherContext, cwd: project?.cwd }), turn.browseResultEntries);
+          return browseSteps
+            ? <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id} rows={browseSteps} />
+            : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;
         }),
-        files: (items) => (
-          <ThreadFileChangeItem
-            animateEntries={animateEntries}
-            items={items}
-            projectFilePaths={transcript.projectFilePaths}
-            projectId={transcript.projectId}
-            projectRootPath={transcript.projectRootPath}
-            workspaceRoots={transcript.workspaceRoots}
-          />
-        ),
+        files: (items) => <ThreadFileChangeItem animateEntries={animateEntries} items={items} />,
         reasoning: (item, isLastSegment) => (
           <ThreadReasoningSequence block={{ items: [item], kind: "reasoningSequence" }} isMostRecent={isMostRecent && isLastSegment} />
         ),
@@ -114,7 +94,7 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
 
 function ThreadMcpItem({ block, itemTimeline }: { block: ItemBlock & { item: { type: "mcpToolCall" } }; itemTimeline: Timeline }) {
   const transcript = useTranscript();
-  const markdownProps = useTranscript.markdownProps();
+  const project = useProject.contextual();
   const SubagentActivity = useContext(SubagentActivitySlot);
   const item = block.item;
   const activeStartedAtMs = getActiveItemStartedAtMs(item, itemTimeline);
@@ -122,23 +102,17 @@ function ThreadMcpItem({ block, itemTimeline }: { block: ItemBlock & { item: { t
   const approval = useThreadItemApproval(item.id);
   const route = getWorkbenchMcpCommandRoute({
     argumentsValue: item.arguments,
-    context: {
-      knownSkills: transcript.knownSkills,
-      ...(transcript.threadCwdPath
-        ? { cwd: transcript.threadCwdPath, projectRootPath: transcript.projectRootPath, workspaceRoots: transcript.workspaceRoots }
-        : {}),
-    },
+    context: project?.mcpMatcherContext,
     server: item.server,
     tool: item.tool,
   });
   const isMcpFailure = item.status === "failed" || Boolean(item.error);
   if (shouldUseWorkbenchMcpSpecializedRenderer(route, isMcpFailure) && route?.kind === "specialized" && (
-    transcript.threadCwdPath || route.operation.kind === "feedback" || route.operation.kind === "todo"
+    project?.cwd || route.operation.kind === "feedback" || route.operation.kind === "todo"
     || route.operation.kind === "gitArc" || route.operation.kind === "gitArcWait"
   )) {
     return (
       <ThreadWorkbenchCommandItem
-        {...markdownProps}
         activeStartedAtMs={activeStartedAtMs}
         item={item}
         relatedThreadsById={transcript.relatedThreadsById}
@@ -155,8 +129,6 @@ function ThreadMcpItem({ block, itemTimeline }: { block: ItemBlock & { item: { t
       approval={approval}
       durationMs={durationMs ?? null}
       item={item}
-      projectFilePaths={transcript.projectFilePaths}
-      projectId={transcript.projectId}
       route={route}
     />
   );
@@ -171,7 +143,6 @@ function ThreadItemBlock({ block, finalAgentMessageId, isMostRecent, itemTimelin
 }) {
   const transcript = useTranscript();
   const turn = useTranscript.turn();
-  const markdownProps = useTranscript.markdownProps();
   const item = block.item;
   switch (item.type) {
     case "functionCallOutput": {
@@ -181,7 +152,6 @@ function ThreadItemBlock({ block, finalAgentMessageId, isMostRecent, itemTimelin
       const timestamp = findWorkbenchThreadItemTimelineEntry(output.id, itemTimeline)?.firstSeenAt ?? output.workbenchInjectionAcceptedAt;
       return (
         <ThreadToolOutputItem
-          {...markdownProps}
           item={output}
           subagents={transcript.subagents}
           timestamp={timestamp === undefined || timestamp === null
@@ -231,11 +201,9 @@ function ThreadItemBlock({ block, finalAgentMessageId, isMostRecent, itemTimelin
     case "dynamicToolCall":
       return (
         <ThreadDynamicToolCallItem
-          {...markdownProps}
           activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
           answeredAt={findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline)?.completedAt ?? null}
           item={item}
-          knownSkills={transcript.knownSkills}
         />
       );
     case "webSearch":
@@ -294,14 +262,7 @@ function ThreadRenderableBlockViewComponent ({
       return <ThreadCommandSequence itemTimeline={itemTimeline} items={block.items} />;
     case "fileChangeSequence":
       return (
-        <ThreadFileChangeItem
-          animateEntries={animateEntries}
-          items={block.items}
-          projectFilePaths={transcript.projectFilePaths}
-          projectId={transcript.projectId}
-          projectRootPath={transcript.projectRootPath}
-          workspaceRoots={transcript.workspaceRoots}
-        />
+        <ThreadFileChangeItem animateEntries={animateEntries} items={block.items} />
       );
     case "reasoningSequence":
       return <ThreadReasoningSequence block={block} isMostRecent={isMostRecentBlock} />;

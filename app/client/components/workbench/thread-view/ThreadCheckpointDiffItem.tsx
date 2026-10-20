@@ -9,7 +9,6 @@ import { useContext, useEffect, useMemo, useState } from "react";
 
 import type { FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
@@ -52,21 +51,13 @@ function buildFullDiffRequestBody({
 export default function ThreadCheckpointDiffItem({
   cwd,
   output,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   sourceItemId,
   threadId,
-  workspaceRoots,
 }: {
   cwd: string;
   output: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   sourceItemId: string;
   threadId: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const daemon = useWorkbenchDaemonClient();
   const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
@@ -118,10 +109,6 @@ export default function ThreadCheckpointDiffItem({
           sourceChangeIndex,
           sourceItemId,
         }))}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        workspaceRoots={workspaceRoots}
       />
     );
   }
@@ -134,23 +121,13 @@ export default function ThreadCheckpointDiffItem({
           sourceChangeIndex,
           sourceItemId,
         }))}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        workspaceRoots={workspaceRoots}
       />
     );
   }
 
   if (state.status === "error") {
     return (
-      <ThreadGitArcFailure
-        failure={state.failure}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        workspaceRoots={workspaceRoots}
-      />
+      <ThreadGitArcFailure failure={state.failure} />
     );
   }
 
@@ -163,12 +140,6 @@ export default function ThreadCheckpointDiffItem({
   }
 
   return (
-    <ThreadFileChangeList
-      changes={[]}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
-      workspaceRoots={workspaceRoots}
-    />
+    <ThreadFileChangeList changes={[]} />
   );
 }

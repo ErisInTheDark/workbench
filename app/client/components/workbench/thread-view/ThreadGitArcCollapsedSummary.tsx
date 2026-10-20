@@ -8,7 +8,6 @@ import type { GitArcEditFile } from "workbench-shared/workbench/git/git-arc-edit
 import type { FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import ThreadCheckpointCommitCard, { type ThreadCommitSummary } from "./ThreadCheckpointCommitCard";
 import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import { DisclosureStaticRow } from "../../ui/Disclosure";
@@ -81,16 +80,8 @@ export function createThreadGitArcDiffSummaryRows (changes: readonly FileUpdateC
 
 export default function ThreadGitArcCollapsedSummary ({
   content,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   content: ThreadGitArcCollapsedSummaryContent;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const visibleCount = content.kind === "commits"
     ? content.commits.length
@@ -116,22 +107,14 @@ export default function ThreadGitArcCollapsedSummary ({
           {content.commits.map(({ key, summary }) => (
             <ThreadCheckpointCommitCard
               key={key}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
               sourceItemId={`collapsed-commit:${key}`}
               state={summary ? { status: "summary", summary } : { status: "pending" }}
-              workspaceRoots={workspaceRoots}
             />
           ))}
         </div>
       ) : content.kind === "files" ? (
         <ThreadFileChangePreviewList
           changes={content.changes.slice(0, 2)}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
         />
       ) : content.kind === "claims" ? (
         <ThreadClaimedFileList
@@ -139,10 +122,6 @@ export default function ThreadGitArcCollapsedSummary ({
           label={content.label}
           marker={content.marker}
           paths={content.paths.slice(0, 2)}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
         />
       ) : (
         <div className="space-y-1 py-2">

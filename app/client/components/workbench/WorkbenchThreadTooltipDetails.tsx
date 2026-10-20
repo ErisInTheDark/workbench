@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 
 import ThreadCheckpointCommitActions from "./thread-view/ThreadCheckpointCommitActions";
 import ThreadGitArcProposalList from "./thread-view/ThreadGitArcProposalList";
+import ContextualProjectProvider from "./ContextualProjectProvider";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import { ThreadStoreGitArcObservationProvider } from "./thread-view/ThreadGitArcObservationContext";
 import { useWorkbenchClientController } from "./workbench-client-context";
@@ -109,6 +110,13 @@ export default function WorkbenchThreadTooltipDetails({
   return (
     <WorkbenchThreadDaemonScope context={threadContext}>
     <ThreadStoreGitArcObservationProvider thread={questionnaire.thread}>
+    <ContextualProjectProvider
+      cwd={cwd ?? undefined}
+      filePaths={projectFilePaths}
+      id={projectId}
+      rootPath={projectRootPath}
+      workspaceRoots={workspaceRoots}
+    >
     <div className="contents" data-thread-tooltip-details="true">
       {pendingRequest || questionnaireLoading ? (
         <section
@@ -131,19 +139,15 @@ export default function WorkbenchThreadTooltipDetails({
                 }}
                 willAutoCompact={Boolean(questionnaire.thread.head?.willAutoCompact)}
                 presentation="compact"
-                projectRootPath={projectRootPath}
                 request={pendingRequest.request}
                 spellCheck={settings.get("composerSpellCheck")}
-                workspaceRoots={workspaceRoots}
               />
             ) : (
               <ThreadUserInputRequest
                 draft={questionnaire.draft}
                 mode="preview"
                 presentation="compact"
-                projectRootPath={projectRootPath}
                 request={pendingRequest.request}
-                workspaceRoots={workspaceRoots}
               />
             )}
           </div>
@@ -159,13 +163,9 @@ export default function WorkbenchThreadTooltipDetails({
               commitActions={commitActions}
               cwd={cwd}
               harness={harness}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
               proposals={pendingProposals}
               stackLayers={stack?.stackLayers ?? []}
               threadId={threadId}
-              workspaceRoots={workspaceRoots}
             />
           </div>
         </ThreadTooltipSection>
@@ -182,6 +182,7 @@ export default function WorkbenchThreadTooltipDetails({
         </ThreadTooltipSection>
       ) : null}
     </div>
+    </ContextualProjectProvider>
     </ThreadStoreGitArcObservationProvider>
     </WorkbenchThreadDaemonScope>
   );

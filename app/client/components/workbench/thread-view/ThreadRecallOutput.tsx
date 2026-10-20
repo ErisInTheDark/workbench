@@ -5,7 +5,6 @@
 "use client";
 
 import { type ReactNode } from "react";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   parseWorkbenchThreadRecallOutput,
   type WorkbenchThreadRecallOutputRecord,
@@ -23,21 +22,7 @@ function RecallRecord({ record, index, renderRecord }: {
   return renderRecord(record, index);
 }
 
-function ThreadRecallQuestionnaire({
-  record,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  threadCwdPath,
-  workspaceRoots,
-}: {
-  record: WorkbenchThreadRecallOutputRecord;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  threadCwdPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
+function ThreadRecallQuestionnaire({ record }: { record: WorkbenchThreadRecallOutputRecord }) {
   return (
     <Disclosure
       className="py-2"
@@ -45,34 +30,17 @@ function ThreadRecallQuestionnaire({
       summary={<ThreadSummaryText text="Questionnaire response" />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
-      <MarkdownRender
-        markdown={record.text}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        threadCwdPath={threadCwdPath}
-        workspaceRoots={workspaceRoots}
-      />
+      <MarkdownRender markdown={record.text} />
     </Disclosure>
   );
 }
 
 export default function ThreadRecallOutput({
   markdown,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   renderRecord,
-  threadCwdPath,
-  workspaceRoots,
 }: {
   markdown: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   renderRecord: (record: WorkbenchThreadRecallOutputRecord, index: number) => ReactNode;
-  threadCwdPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const segments = parseWorkbenchThreadRecallOutput(markdown);
   return (
@@ -81,29 +49,12 @@ export default function ThreadRecallOutput({
         if (segment.type === "markdown") {
           return (
             <ThreadMeasuredContent key={`markdown:${index}`}>
-            <MarkdownRender
-              markdown={segment.markdown}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              threadCwdPath={threadCwdPath}
-              workspaceRoots={workspaceRoots}
-            />
+              <MarkdownRender markdown={segment.markdown} />
             </ThreadMeasuredContent>
           );
         }
         if (segment.record.kind === "questionnaire") {
-          return (
-            <ThreadRecallQuestionnaire
-              key={`record:${segment.record.ref}:${index}`}
-              record={segment.record}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              threadCwdPath={threadCwdPath}
-              workspaceRoots={workspaceRoots}
-            />
-          );
+          return <ThreadRecallQuestionnaire key={`record:${segment.record.ref}:${index}`} record={segment.record} />;
         }
         return (
           <ThreadMeasuredContent key={`record:${segment.record.ref}:${index}`}>

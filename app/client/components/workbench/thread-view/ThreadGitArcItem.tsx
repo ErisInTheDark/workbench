@@ -16,7 +16,6 @@ import type { GitArcEditResult } from "workbench-shared/workbench/git/git-arc-ed
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import type { GitArcEditStep } from "../../../workbench/thread/command-matchers/workbench-command-rendering";
 import { SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
@@ -126,15 +125,11 @@ export default function ThreadGitArcItem ({
   operationDetails,
   outcome,
   operationSummaryRows = [],
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   receipt,
   statusFacts,
   statusIncomplete = false,
   statusOutput,
   typedFailure,
-  workspaceRoots,
 }: {
   commandIntent: GitArcCommandIntent;
   durationMs: number | null;
@@ -148,15 +143,11 @@ export default function ThreadGitArcItem ({
   operationDetails?: ReactNode;
   outcome: ThreadCommandExecutionOutcome;
   operationSummaryRows?: readonly ThreadFileChangeListChange[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   receipt: GitArcReceipt | null;
   statusFacts?: Partial<GitArcStatusPresentation> | null;
   statusIncomplete?: boolean;
   statusOutput?: string;
   typedFailure?: GitArcFailure | null;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const state = interruptedBySteer ? "interrupted" : actionState(outcome);
   const defaultOpen = commandIntent.action === "status"
@@ -283,12 +274,7 @@ export default function ThreadGitArcItem ({
       key={entry.label}
       label={entry.label}
       marker={entry.marker}
-      paths={entry.paths}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
-      workspaceRoots={workspaceRoots}
-    />
+      paths={entry.paths}    />
   ));
   const updateSummaryGroups = [
     {
@@ -434,14 +420,7 @@ export default function ThreadGitArcItem ({
         summaryClassName="text-[0.82em] leading-[1.45] text-fg/muted"
       >
         {editResult ? (
-          <ThreadGitArcEditDetails
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            result={editResult}
-            rows={editRows}
-            workspaceRoots={workspaceRoots}
-          />
+          <ThreadGitArcEditDetails result={editResult} rows={editRows} />
         ) : null}
         {operationDetails && !ignoredFailure && !failedStartDrift ? <div>{operationDetails}</div> : null}
         {stackedProposals?.length ? (
@@ -449,18 +428,14 @@ export default function ThreadGitArcItem ({
             {stackedProposals.map((summary) => (
               <ThreadCheckpointCommitCard
                 key={summary.proposalId}
-                projectFilePaths={projectFilePaths}
-                projectId={projectId}
-                projectRootPath={projectRootPath}
                 sourceItemId={`stacked-proposal:${summary.proposalId}`}
                 state={{ status: "summary", summary }}
-                workspaceRoots={workspaceRoots}
               />
             ))}
           </div>
         ) : null}
         {commandIntent.action === "status" && state === "completed" && (statusOutput !== undefined || statusFacts !== undefined) ? (
-          <ThreadGitArcStatusDetails output={statusOutput ?? ""} status={statusFacts} incomplete={statusIncomplete} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
+          <ThreadGitArcStatusDetails output={statusOutput ?? ""} status={statusFacts} incomplete={statusIncomplete} />
         ) : null}
         {memberRefs.length > 1 ? (
           <div className="space-y-0.5 py-1 pl-6 text-[0.78em] text-fg/muted" data-thread-git-arc-members="true">
@@ -481,12 +456,7 @@ export default function ThreadGitArcItem ({
             key={entry.label}
             label={entry.label}
             marker={entry.marker}
-            paths={entry.paths}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            workspaceRoots={workspaceRoots}
-          />
+            paths={entry.paths}          />
         )) : null}
         {inventoryLists.length ? scopeUpdate ? (
           <Disclosure
@@ -500,12 +470,7 @@ export default function ThreadGitArcItem ({
               inset={!flushClaimLists}
               label="Changed since planning"
               marker="dirty"
-              paths={drift.paths}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
-            />
+              paths={drift.paths}            />
           </div>
         ))}
         {!fullInventory && !showUpdateChanges && primaryPaths.length ? (
@@ -515,11 +480,7 @@ export default function ThreadGitArcItem ({
             marker={primaryPathMarker}
             pathTotals={failedStartDriftTotals}
             paths={primaryPaths}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
             tone={state === "failed" || state === "timedOut" ? "danger" : "default"}
-            workspaceRoots={workspaceRoots}
           />
         ) : null}
         {!fullInventory && !showUpdateChanges && adoptPaths.length && !ignoredFailure ? (
@@ -528,11 +489,7 @@ export default function ThreadGitArcItem ({
             label={state === "failed" ? "Failed to adopt" : state === "timedOut" ? "Timed out adopting" : state === "inProgress" ? "Adopting" : commandIntent.action === "planStart" ? "Adopted and claimed" : "Adopted into plan"}
             marker={state === "failed" ? "unclaimed" : adoptedPathMarker}
             paths={adoptPaths}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
             tone={state === "failed" || state === "timedOut" ? "danger" : "default"}
-            workspaceRoots={workspaceRoots}
           />
         ) : null}
         {!fullInventory && showNestedClaims ? (
@@ -544,12 +501,7 @@ export default function ThreadGitArcItem ({
           >
             <ThreadClaimedFileList
               inset={!flushClaimLists}
-              paths={claimedPaths}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
-            />
+              paths={claimedPaths}            />
           </Disclosure>
         ) : null}
         {commandIntent.action === "unstash" && receipt?.conflictedPaths?.length ? (
@@ -557,33 +509,18 @@ export default function ThreadGitArcItem ({
             <ThreadClaimedFileList
               label="Resolve conflict markers"
               marker="dirty"
-              paths={receipt.conflictedPaths}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
-            />
+              paths={receipt.conflictedPaths}            />
             <p className="px-2 pb-1 text-[0.78em] text-fg/muted">Edit the markers directly. No Git continuation or abort command is required.</p>
           </div>
         ) : null}
       </Disclosure>
       {!isOpen && collapsedContent ? (
         <ThreadGitArcCollapsedSummary
-          content={collapsedContent}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
+          content={collapsedContent}        />
       ) : null}
       {failure ? (
         <ThreadGitArcFailure
-          failure={failure}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
+          failure={failure}        />
       ) : null}
     </article>
   );

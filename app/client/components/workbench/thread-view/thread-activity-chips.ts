@@ -41,7 +41,8 @@ export interface CommandChipContext {
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
-  threadCwdPath?: string;
+  /** The content's working directory; MCP summaries resolve paths only when it is known. */
+  cwd?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
@@ -77,8 +78,8 @@ export function getCommandItemDisplay(item: CommandSequenceItem, context: Comman
 type CommandBlockItem = Parameters<typeof getThreadCommandBlockDisplay>[0]["items"][number];
 
 export function getCommandBlockItems(items: readonly CommandSequenceItem[], context: CommandChipContext): CommandBlockItem[] {
-  const mcpContext = { knownSkills: context.knownSkills, ...(context.threadCwdPath
-    ? { cwd: context.threadCwdPath, projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots } : {}) };
+  const mcpContext = { knownSkills: context.knownSkills, ...(context.cwd
+    ? { cwd: context.cwd, projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots } : {}) };
   return items.flatMap<CommandBlockItem>(item => {
     if (item.type === "commandExecution") {
       return [{ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell }];

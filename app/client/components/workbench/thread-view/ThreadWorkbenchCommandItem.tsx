@@ -13,7 +13,7 @@ import reportClientSchemaError from "workbench-shared/workbench/report-client-sc
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import { useProject } from "../use-projects";
 import type { WorkbenchThreadRecallOutputRecord } from "../../../workbench/thread/thread-recall-output";
 import {
   parseGitCheckpointCompareOutput,
@@ -65,37 +65,29 @@ function getMcpOutput(item: McpToolCallItem) {
 
 export default function ThreadWorkbenchCommandItem({
   activeStartedAtMs,
-  inlineMentionSources,
   item,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   relatedThreadsById,
   renderRecallRecord,
   renderSubagentActivity,
   route,
   subagents,
-  threadCwdPath,
   threadId,
   unwrapSubagentCreate = false,
-  workspaceRoots,
 }: {
   activeStartedAtMs?: number | null;
-  inlineMentionSources?: Parameters<typeof MarkdownRender>[0]["inlineMentionSources"];
   item: McpToolCallItem;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   relatedThreadsById: Record<string, RelatedThread | undefined>;
   renderRecallRecord: (record: WorkbenchThreadRecallOutputRecord, index: number) => ReactNode;
   renderSubagentActivity?: (target: { subagent: WorkbenchSubagentSummary | null | undefined; thread: RelatedThread | undefined }) => ReactNode;
   route: SpecializedRoute;
   subagents: readonly WorkbenchSubagentSummary[];
-  threadCwdPath?: string;
   threadId: string;
   unwrapSubagentCreate?: boolean;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const project = useProject.contextual();
+  const projectId = project?.id ?? null;
+  // Thread content resolves against its working directory; recall and checkpoint diffs need one to read.
+  const threadCwdPath = project?.cwd;
   const outcome = getThreadMcpToolCallOutcome(item);
   const output = getMcpOutput(item);
   const operation = route.operation;
@@ -158,13 +150,8 @@ export default function ThreadWorkbenchCommandItem({
       <ThreadContextCommandItem
         activeStartedAtMs={activeStartedAtMs}
         operation={operation.operation}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
         renderRecord={renderRecallRecord}
         source={{ cwd: threadCwdPath, durationMs: item.durationMs, exitCode: null, id: item.id, outcome, output }}
-        threadCwdPath={threadCwdPath}
-        workspaceRoots={workspaceRoots}
       />
     );
   }
@@ -186,13 +173,9 @@ export default function ThreadWorkbenchCommandItem({
         interruptedBySteer={interruptedBySteer}
         outcome={gitArcOutcome}
         planRef={operation.ref}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
         receipt={structured?.kind === "success" ? structured.receipt : hasStructuredResult ? null : parseGitArcReceipt(output)}
         threadId={threadId}
         typedFailure={structured?.kind === "failure" ? structured.failure : null}
-        workspaceRoots={workspaceRoots}
       />
     );
   }
@@ -208,13 +191,9 @@ export default function ThreadWorkbenchCommandItem({
           interruptedBySteer={interruptedBySteer}
           intent={intent.proposalIntent ?? null}
           outcome={gitArcOutcome}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
           proposalId={proposalId}
           sourceItemId={item.id}
           typedFailure={structured?.kind === "failure" ? structured.failure : null}
-          workspaceRoots={workspaceRoots}
         />
       );
     }
@@ -232,24 +211,9 @@ export default function ThreadWorkbenchCommandItem({
       : null;
     const diffArtifactId = intent.action === "diff" && !hasStructuredResult ? parseGitCheckpointDiffArtifactId(output) : null;
     const operationDetails = compareChanges?.length ? (
-      <ThreadCheckpointCompareItem
-        changes={compareChanges}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        workspaceRoots={workspaceRoots}
-      />
+      <ThreadCheckpointCompareItem changes={compareChanges} />
     ) : threadCwdPath && diffChanges && (diffChanges.length || diffArtifactId) ? (
-      <ThreadCheckpointDiffItem
-        cwd={threadCwdPath}
-        output={diffOutput}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        sourceItemId={item.id}
-        threadId={threadId}
-        workspaceRoots={workspaceRoots}
-      />
+      <ThreadCheckpointDiffItem cwd={threadCwdPath} output={diffOutput} sourceItemId={item.id} threadId={threadId} />
     ) : null;
     return (
       <ThreadGitArcItem
@@ -263,15 +227,11 @@ export default function ThreadWorkbenchCommandItem({
           ? createThreadGitArcCompareSummaryRows(compareChanges)
           : diffChanges?.length ? createThreadGitArcDiffSummaryRows(diffChanges) : []}
         outcome={gitArcOutcome}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
         receipt={receipt}
         statusFacts={structured?.kind === "success" ? structured.status : undefined}
         statusIncomplete={Boolean(typed?.error)}
         statusOutput={intent.action === "status" ? output : undefined}
         typedFailure={structured?.kind === "failure" ? structured.failure : null}
-        workspaceRoots={workspaceRoots}
       />
     );
   }
@@ -295,13 +255,7 @@ export default function ThreadWorkbenchCommandItem({
         thread={resolved?.threadId ? relatedThreadsById[resolved.threadId] : undefined}
       >
         <ThreadAgentMessageBody
-          inlineMentionSources={inlineMentionSources}
           parts={[{ markdown: messageCommand.message, userVisibleSimpleVersion: messageCommand.userVisibleSimpleVersion }]}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          threadCwdPath={threadCwdPath}
-          workspaceRoots={workspaceRoots}
         />
       </ThreadAgentMessageItem>
     );
@@ -332,16 +286,10 @@ export default function ThreadWorkbenchCommandItem({
         unwrapped={unwrapSubagentCreate}
       >
         <ThreadAgentMessageBody
-          inlineMentionSources={inlineMentionSources}
           parts={[{
             markdown: subagentCommand.message,
             userVisibleSimpleVersion: subagentCommand.userVisibleSimpleVersion,
           }]}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          threadCwdPath={threadCwdPath}
-          workspaceRoots={workspaceRoots}
         />
       </ThreadSubagentCreateItem>
     );
@@ -366,15 +314,7 @@ export default function ThreadWorkbenchCommandItem({
     return (
       <ThreadSubagentWaitItem
         disclosureContent={interruptedBySteer ? undefined : outcome === "completed" && output.trim() ? (
-          <MarkdownRender
-            inlineMentionSources={inlineMentionSources}
-            markdown={output.trim()}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            threadCwdPath={threadCwdPath}
-            workspaceRoots={workspaceRoots}
-          />
+          <MarkdownRender markdown={output.trim()} />
         ) : outcome === "failed" ? output : undefined}
         activeStartedAtMs={activeStartedAtMs}
         durationMs={activeStartedAtMs === null || activeStartedAtMs === undefined ? visibleDurationMs : 0}

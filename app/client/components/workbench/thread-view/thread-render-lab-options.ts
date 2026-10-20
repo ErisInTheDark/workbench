@@ -7,14 +7,22 @@
  * - parseThreadRenderProjection: admit a canonical projection fixture for the thread renderer.
  */
 import type { ComponentProps } from "react";
-import type { ThreadPayload } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchSkillSummary } from "workbench-shared/types";
+import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
 type RendererProps = ComponentProps<typeof ThreadTranscriptProjection>;
-export type ThreadRenderContext = Partial<Pick<RendererProps,
-  "knownSkills" | "projectFilePaths" | "projectId" | "projectRootPath" | "workspaceRoots"
-  | "relatedThreadsById" | "subagents" | "inlineMentionSources" | "hiddenReasoningStep">>;
+/** The transcript's thread facts plus the project facts the surface provides as its contextual project. */
+export type ThreadRenderContext = Partial<Pick<RendererProps, "relatedThreadsById" | "subagents" | "hiddenReasoningStep"> & {
+  inlineMentionSources: InlineMentionHighlightSources | null;
+  knownSkills: WorkbenchSkillSummary[];
+  projectFilePaths: readonly string[];
+  projectId: string;
+  projectRootPath: string;
+  workspaceRoots: readonly WorkspaceFileLinkRoot[];
+}>;
 
 export const threadRenderFlags = {
   showLiveActivity: "Show live activity",

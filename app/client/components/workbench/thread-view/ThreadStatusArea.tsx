@@ -67,15 +67,11 @@ export default function ThreadStatusArea({
   threadLifecycle,
   todos,
   vis,
-  ...shared
 }: {
-  gitArc: Omit<ThreadGitArcWorkProps, "projectFilePaths" | "projectId" | "projectRootPath" | "threadId" | "workspaceRoots"> | null;
+  gitArc: Omit<ThreadGitArcWorkProps, "threadId"> | null;
   gitCommits?: readonly WorkbenchThreadGitCommitRef[];
   harness: WorkbenchHarnessId;
   live: ThreadLiveActivityView | null;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   /** Absent where a thread has no skills to manage, such as draft views. */
   skills: { onDeactivate: (path: string) => Promise<void>; skills: readonly WorkbenchThreadSkill[] } | null;
   threadId: string;
@@ -83,7 +79,6 @@ export default function ThreadStatusArea({
   /** Absent where a thread has no goal or todos to manage; the panel also lists the feedback the thread addresses. */
   todos: { count: number; feedbackCount: number; goalSet: boolean; renderPanel(): ReactNode } | null;
   vis: { onAnswer: (sessionId: string, value: string) => Promise<void>; onEnd: (sessionId: string) => void; sessions: readonly VisLiveSession[] } | null;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const { intersections, logicalProjectId, ownerProjectId } = useThread.claimIntersections(threadId, harness, "plan");
   const overlapCount = intersections.hasScope ? intersections.activeEntries.length : 0;
@@ -174,7 +169,7 @@ export default function ThreadStatusArea({
               ownerProjectId={ownerProjectId}
             />
           ) : null}
-          {gitArc ? <ThreadGitArcWork {...gitArc} history={gitCommits} {...shared} threadId={threadId} /> : null}
+          {gitArc ? <ThreadGitArcWork {...gitArc} history={gitCommits} threadId={threadId} /> : null}
         </div>
       ),
       segments: arcSegments,

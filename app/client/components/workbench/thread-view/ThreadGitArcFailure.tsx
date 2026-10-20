@@ -7,7 +7,8 @@
 import { useContext } from "react";
 
 import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import ContextualProjectProvider from "../ContextualProjectProvider";
+import { useProject } from "../use-projects";
 import ProjectFileLinkList from "../ProjectFileLinkList";
 import { GitArcConflictIcon } from "./GitArcIcon";
 import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
@@ -68,21 +69,13 @@ function LiveConflictOwners({
 
 export default function ThreadGitArcFailure({
   failure,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   failure: GitArcFailure;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const presentationContext = useContext(ThreadGitArcPresentationContext);
   // Live conflict owners lease thread rows and link to them, which needs a mounted client (not the render lab).
   const hasClient = useContext(WorkbenchClientContext) !== null;
-  const resolvedProjectId = projectId ?? presentationContext?.projectId ?? null;
+  const resolvedProjectId = useProject.contextual()?.id ?? presentationContext?.projectId ?? null;
   const presentation = describeGitArcFailure(failure);
   const conflicts = failure.code === "siblingClaimCollision" || failure.code === "planDrift" ? failure.conflicts : [];
   const rejection = failure.code === "rejection" ? failure.rejection : null;
@@ -130,7 +123,7 @@ export default function ThreadGitArcFailure({
             data-thread-git-arc-failure-intersections="inside-panel"
           >
             {failure.code === "planDrift" && failure.commits.length ? (
-              <ThreadGitArcCommitList commits={failure.commits} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
+              <ContextualProjectProvider id={resolvedProjectId}><ThreadGitArcCommitList commits={failure.commits} /></ContextualProjectProvider>
             ) : null}
             {conflicts.length && presentationContext?.threadId && hasClient ? (
               <LiveConflictOwners
@@ -144,7 +137,7 @@ export default function ThreadGitArcFailure({
       {hasOutsideFacts ? (
         <div className="mt-1 text-text" data-thread-git-arc-failure-facts="true">
           {rejectedPaths.length ? (
-            <ProjectFileLinkList paths={rejectedPaths} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath ?? ""} workspaceRoots={workspaceRoots} />
+            <ContextualProjectProvider id={resolvedProjectId}><ProjectFileLinkList paths={rejectedPaths} /></ContextualProjectProvider>
           ) : null}
           {rejectedProjects.length ? <p className="m-0 text-fg/muted">Projects: {rejectedProjects.join(", ")}</p> : null}
           {rejection && "proposalId" in rejection ? <p className="m-0 text-fg/muted">Proposal <ThreadInlineCode>{rejection.proposalId}</ThreadInlineCode></p> : null}

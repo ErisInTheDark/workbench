@@ -7,26 +7,17 @@
 import { useEffect } from "react";
 
 import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitCheckpointCommitCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import ThreadCheckpointCommitCard, { type CheckpointCommitCardState } from "./ThreadCheckpointCommitCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import { useThreadGitArcProposalObservation } from "./ThreadGitArcObservationContext";
-
-interface ProposalLinks {
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}
 
 /** Mounted only once the card is opened, so closed transcript proposals never read Git. */
 function ThreadGitArcProposalPreview({
   intent,
   proposalId,
   sourceItemId,
-  ...links
-}: ProposalLinks & { intent: GitCheckpointCommitCommandIntent | null; proposalId: string; sourceItemId: string }) {
+}: { intent: GitCheckpointCommitCommandIntent | null; proposalId: string; sourceItemId: string }) {
   const { isObserved, observe, state, summary } = useThreadGitArcProposalObservation(proposalId);
   useEffect(() => observe?.(proposalId), [observe, proposalId]);
   const cardState: Exclude<CheckpointCommitCardState, { status: "idle" }> = state?.status === "loaded"
@@ -42,7 +33,6 @@ function ThreadGitArcProposalPreview({
   const fallbackTitle = cardState.status === "pending" ? intent?.title.trim() : undefined;
   return (
     <ThreadCheckpointCommitCard
-      {...links}
       expanded
       message={fallbackTitle ? { availability: { description: false, title: true }, description: "", title: fallbackTitle } : undefined}
       sourceItemId={sourceItemId}
@@ -60,8 +50,7 @@ export default function ThreadGitArcProposalItem({
   proposalId,
   sourceItemId,
   typedFailure,
-  ...links
-}: ProposalLinks & {
+}: {
   durationMs: number | null;
   failureReason?: string | null;
   intent: GitCheckpointCommitCommandIntent | null;
@@ -75,14 +64,13 @@ export default function ThreadGitArcProposalItem({
   const name = intent?.title.trim() || summary?.title || "commit proposal";
   return (
     <ThreadGitArcItem
-      {...links}
       commandIntent={{ action: "propose", intentName: null, paths: intent?.paths ?? [], proposalId, ref: null }}
       durationMs={durationMs}
       failureReason={failureReason}
       interruptedBySteer={interruptedBySteer}
       name={name}
       operationDetails={proposalId && outcome === "completed" ? (
-        <ThreadGitArcProposalPreview {...links} intent={intent} proposalId={proposalId} sourceItemId={sourceItemId} />
+        <ThreadGitArcProposalPreview intent={intent} proposalId={proposalId} sourceItemId={sourceItemId} />
       ) : null}
       outcome={outcome}
       receipt={null}

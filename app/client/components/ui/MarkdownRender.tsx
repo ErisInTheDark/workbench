@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default MarkdownRender: render cached thread markdown with project, workspace, and external absolute file links; live text fades in and streaming text renders its frontier. Keywords: thread markdown, file links, external git roots, streaming.
+ * - default MarkdownRender: render cached thread markdown with the contextual project's file, workspace and mention links plus external absolute file links; live text fades in and streaming text renders its frontier. Keywords: thread markdown, file links, external git roots, streaming.
  * - Local helpers: bound rendered Markdown and external-root caches, and own one reveal timeline per live render context. Keywords: cache, markdown, reveal.
  */
 "use client";
@@ -14,6 +14,7 @@ import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../workbe
 import MarkdownRevealTimeline from "../../workbench/markdown/MarkdownRevealTimeline";
 import { renderThreadMarkdown } from "../workbench/thread-view/thread-markdown-render";
 import { useWorkbenchDaemonClient } from "../workbench/WorkbenchWorkspaceContext";
+import { useProject } from "../workbench/use-projects";
 import ThreadAnimationStyleContext from "../workbench/thread-view/ThreadAnimationStyleContext";
 
 function joinClasses (...values: Array<string | undefined>) {
@@ -262,59 +263,48 @@ function useRevealTimeline(live: boolean, streaming: boolean, contextKey: string
   return timelineRef.current.timeline;
 }
 
+/** Links and mentions resolve against the surrounding contextual project; outside one, markdown renders without project links. */
 export default memo(function MarkdownRender ({
   className,
-  inlineMentionSources,
+  cwd,
   live = false,
   markdown,
   streaming = false,
-  threadCwdPath,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   className?: string;
-  inlineMentionSources?: InlineMentionHighlightSources | null;
+  /** The directory this text's relative paths came from, when it differs from the contextual project's (a command's own cwd). */
+  cwd?: string;
   /** Text presented from a live source: newly visible text fades in. */
   live?: boolean;
   markdown: string;
   /** Text still streaming: its end is the stream frontier, so unfinished tokens hide and open markup closes there. */
   streaming?: boolean;
-  threadCwdPath?: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const projectFilePathsKey = getProjectFilePathsCacheKey(projectFilePaths);
+  const project = useProject.contextual();
   const externalFileLinkRoots = useExternalFileLinkRoots(markdown);
   const resolvedWorkspaceRoots = useMemo(
-    () => mergeWorkspaceRoots(workspaceRoots, externalFileLinkRoots),
-    [externalFileLinkRoots, workspaceRoots],
+    () => mergeWorkspaceRoots(project?.workspaceRoots, externalFileLinkRoots),
+    [externalFileLinkRoots, project],
   );
-  const cacheKey = getMarkdownCacheKey({
-    inlineMentionSources,
-    markdown,
+  const threadCwdPath = cwd ?? project?.cwd;
+  const keyFacts = {
+    inlineMentionSources: project?.mentions,
+    projectFilePathsKey: getProjectFilePathsCacheKey(project?.filePaths),
+    projectId: project?.id,
+    projectRootPath: project?.rootPath,
     threadCwdPath,
-    projectFilePathsKey,
-    projectId,
-    projectRootPath,
     workspaceRoots: resolvedWorkspaceRoots,
-  });
-  const contextKey = getMarkdownCacheKey({
-    inlineMentionSources,
-    markdown: "",
+  };
+  const cacheKey = getMarkdownCacheKey({ ...keyFacts, markdown });
+  const contextKey = getMarkdownCacheKey({ ...keyFacts, markdown: "" });
+  const renderOptions = useMemo(() => ({
+    inlineMentionSources: project?.mentions,
+    projectFilePaths: project?.filePaths,
+    projectId: project?.id,
+    projectRootPath: project?.rootPath,
     threadCwdPath,
-    projectFilePathsKey,
-    projectId,
-    projectRootPath,
     workspaceRoots: resolvedWorkspaceRoots,
-  });
-  const renderOptions = useMemo(
-    () => ({ inlineMentionSources, threadCwdPath, projectFilePaths, projectId, projectRootPath, workspaceRoots: resolvedWorkspaceRoots }),
-    [inlineMentionSources, projectFilePaths, projectId, projectRootPath, resolvedWorkspaceRoots, threadCwdPath],
-  );
+  }), [project, resolvedWorkspaceRoots, threadCwdPath]);
   const timeline = useRevealTimeline(live, streaming, contextKey);
   const animationStyle = useContext(ThreadAnimationStyleContext);
   const caret = streaming && animationStyle.caret;

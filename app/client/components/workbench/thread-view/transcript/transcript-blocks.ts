@@ -20,7 +20,7 @@ import type {
   WorkbenchProjectedTranscriptItem,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { getThreadItemsRenderChunkSignature } from "../../../../workbench/thread/thread-item-signature";
-import type { TranscriptScope } from "../../use-transcript";
+import type ContextualProject from "../../../../workbench/project/ContextualProject";
 import { buildActivityRuns } from "../thread-activity-runs";
 import { getBrowseScreenshotUrls } from "../thread-browse-steps";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
@@ -64,21 +64,22 @@ export function withInteractionTimeline(
 }
 
 export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscriptItem[], {
-  browseResultEntries, codeDetails, hiddenReasoningStep, scope,
+  browseResultEntries, codeDetails, hiddenReasoningStep, project,
 }: {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
   codeDetails: boolean;
   hiddenReasoningStep: ThreadReasoningStepReference | null;
-  scope: Pick<TranscriptScope, "knownSkills" | "projectRootPath" | "threadCwdPath" | "workspaceRoots">;
+  project: ContextualProject | null;
 }): TranscriptEntry[] {
+  const matchers = project?.matcherContext;
   const browseScreenshotUrls = getBrowseScreenshotUrls(items.flatMap(item => item.type === "commandExecution" ? [item] : []), browseResultEntries);
   const entries: TranscriptEntry[] = [];
   let pending: ThreadItem[] = [];
   const flush = () => {
     if (!pending.length) return;
     entries.push(...buildActivityRuns(
-      buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, scope.threadCwdPath),
-      { browseScreenshotUrls, codeDetails, knownSkills: scope.knownSkills, projectRootPath: scope.projectRootPath, workspaceRoots: scope.workspaceRoots },
+      buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, project?.cwd),
+      { browseScreenshotUrls, codeDetails, knownSkills: matchers?.knownSkills, projectRootPath: matchers?.projectRootPath, workspaceRoots: matchers?.workspaceRoots },
     ).map(block => ({ block, kind: "block" as const })));
     pending = [];
   };

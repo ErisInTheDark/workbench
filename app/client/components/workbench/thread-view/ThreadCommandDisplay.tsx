@@ -13,7 +13,7 @@ import { getCommandIcon } from "./thread-activity-chips";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 
-export default function ThreadCommandDisplay({ approval = null, command, display, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, projectFilePaths, projectId, browse = false, output, previewHeight }: {
+export default function ThreadCommandDisplay({ approval = null, command, display, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, output, previewHeight }: {
   approval?: ThreadItemApprovalState | null;
   command: string;
   display: CommandDisplay;
@@ -22,8 +22,6 @@ export default function ThreadCommandDisplay({ approval = null, command, display
   /** Trailing details such as exit code and duration. */
   meta?: readonly ReactNode[];
   children?: ReactNode;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
   browse?: boolean;
   output?: string | null;
   previewHeight?: string;
@@ -32,14 +30,14 @@ export default function ThreadCommandDisplay({ approval = null, command, display
     <ThreadStepRow
       icon={createElement(getCommandIcon(summaryDisplay.summaryStats), { size: 16 })}
       meta={meta}
-      summary={<ThreadCommandSummary approval={approval} display={summaryDisplay} line projectFilePaths={projectFilePaths} projectId={projectId} />}
+      summary={<ThreadCommandSummary approval={approval} display={summaryDisplay} line />}
     >
       {display.cwdDisplay && !display.hideCommandCwd ? (
         <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">
           Working dir: <span className="break-all font-mono text-text">{display.cwdDisplay}</span>
         </p>
       ) : null}
-      {detailRows.length ? <ThreadCommandDetailRows rows={detailRows} projectFilePaths={projectFilePaths} projectId={projectId} /> : null}
+      {detailRows.length ? <ThreadCommandDetailRows rows={detailRows} /> : null}
       {children !== undefined ? children : browse ? <ThreadCommandDetails command={command} output={output} previewHeight={previewHeight} />
         : display.hideCommandOutput && (detailRows.length > 0 || !output?.trim()) ? null
           : <ThreadCodeDisplay header={<ThreadCommandHeader command={command} surface="framed" />} output={output?.trim() || undefined} preview previewHeight={previewHeight} variant="plain" />}

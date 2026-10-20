@@ -1,20 +1,18 @@
 /*
  * Exports:
  * - TranscriptBodiesContext: the nearest rendered transcript's deferred tool output owner; absent where bodies arrive eagerly.
- * - TranscriptScope/TranscriptScopeContext: the thread a rendered transcript shows, with the project and workspace facts its items link against.
+ * - TranscriptScope/TranscriptScopeContext: the thread a rendered transcript shows, with its related threads and subagents.
  * - TranscriptTurnScope/TranscriptTurnContext: the turn a transcript renderer is inside.
- * - useTranscript: the nearest rendered transcript's scope. Members: `turn` its current turn; `markdownProps` its MarkdownRender link props;
+ * - useTranscript: the nearest rendered transcript's scope. Members: `turn` its current turn;
  *   `turns/approvals` read a leased store's transcript slices; `presentedText` subscribes to one exact streaming text field;
  *   `item` hydrates one deferred tool item's output.
  */
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
-import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { WorkbenchBrowseResultEntry, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
-import type { InlineMentionHighlightSources } from "../../workbench/thread/inline-mention-highlights";
 import type ThreadStore from "../../workbench/thread/ThreadStore";
 import {
   EMPTY_THREAD_STORE_STATE, type RelatedThread, type ThreadSliceName, type ThreadStoreState,
@@ -29,18 +27,11 @@ import WorkbenchClientContext from "./workbench-client-context";
 
 export const TranscriptBodiesContext = createContext<ThreadTranscriptBodies | null>(null);
 
+/** The thread a transcript shows; its project facts belong to the contextual project (`useProject.contextual()`). */
 export interface TranscriptScope {
-  inlineMentionSources: InlineMentionHighlightSources | null;
-  knownSkills: WorkbenchSkillSummary[];
-  projectFilePaths?: readonly string[];
-  projectId: string | null;
-  projectRootPath?: string;
   relatedThreadsById: Readonly<Record<string, RelatedThread | undefined>>;
   subagents: readonly WorkbenchSubagentSummary[];
-  /** The thread's working directory, which relative paths in its items resolve against. */
-  threadCwdPath?: string;
   threadId: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
 export interface TranscriptTurnScope {
@@ -75,19 +66,6 @@ useTranscript.turn = function useTranscriptTurn(): TranscriptTurnScope {
   const turn = useContext(TranscriptTurnContext);
   if (!turn) throw new Error("useTranscript.turn needs a transcript turn (TranscriptTurnContext).");
   return turn;
-};
-
-/** MarkdownRender's link and mention props for the nearest transcript. */
-useTranscript.markdownProps = function useTranscriptMarkdownProps() {
-  const scope = useTranscript();
-  return useMemo(() => ({
-    inlineMentionSources: scope.inlineMentionSources,
-    projectFilePaths: scope.projectFilePaths,
-    projectId: scope.projectId,
-    projectRootPath: scope.projectRootPath,
-    threadCwdPath: scope.threadCwdPath,
-    workspaceRoots: scope.workspaceRoots,
-  }), [scope]);
 };
 
 useTranscript.turns = function useTranscriptTurns(store: ThreadStore | null) { return useSlice(store, "turns"); };

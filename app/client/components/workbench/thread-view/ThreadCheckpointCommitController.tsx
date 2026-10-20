@@ -8,7 +8,6 @@
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { GitArcProposalCommitEntry, GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -36,15 +35,11 @@ export interface ThreadCheckpointCommitControllerProps {
   disclosure?: ThreadCommitDisclosure;
   harness?: WorkbenchHarness;
   intent: GitCheckpointCommitCommandIntent | null;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   proposalId: string | null;
   sourceItemId: string;
   /** A permanent commit's stored message, for proposals the observed lifecycle no longer carries. */
   summary?: WorkbenchGitArcProposalSummary;
   threadId: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
 /** A permanent commit whose proposal retention already retired stays its summary: nothing is left to amend. */
@@ -63,14 +58,10 @@ function ThreadCheckpointCommitController({
   disclosure,
   harness,
   intent,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   proposalId,
   sourceItemId,
   summary,
   threadId,
-  workspaceRoots,
   isProposalObserved,
   observeProposal,
   proposalObservation,
@@ -480,12 +471,8 @@ function ThreadCheckpointCommitController({
       }}
       observationRef={setObservationTarget}
       paths={intent?.paths ?? []}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
       sourceItemId={sourceItemId}
       state={state}
-      workspaceRoots={workspaceRoots}
     />
   );
 }
@@ -501,12 +488,8 @@ export default function ThreadCheckpointCommitControllerRoot(props: ThreadCheckp
         density="compact"
         message={{ description: resolvedIntent?.description ?? "", title: resolvedIntent?.title ?? "Commit proposal" }}
         paths={resolvedIntent?.paths ?? []}
-        projectFilePaths={props.projectFilePaths}
-        projectId={props.projectId}
-        projectRootPath={props.projectRootPath}
         sourceItemId={props.sourceItemId}
         state={{ status: "idle" }}
-        workspaceRoots={props.workspaceRoots}
       />
     );
   }

@@ -36,3 +36,27 @@ test("a watched child's work previews as the same activity runs the main transcr
   }));
   assert.match(html, /data-thread-activity-run="true"/u);
 });
+
+test("a child's relative paths resolve against the child's working directory, not the parent's", () => {
+  const childId = WorkbenchThreadIdSchema.parse("child");
+  const child: RelatedThread = {
+    agentNickname: "child", agentPath: null, agentRole: null, cwd: "C:/project/packages/child", harness: "codex", id: childId,
+    isDraft: false, model: null, name: null, reasoningEffort: null, serviceTier: null, status: "active", tokenUsage: null,
+    turns: [turn("child-turn", [
+      {
+        appContext: null, arguments: { args: ["needle", "notes.md"] }, durationMs: 12, error: null, id: "child-search",
+        pluginId: null, readOnlyHint: true, result: { _meta: null, content: [], structuredContent: null }, server: "wb",
+        status: "completed", tool: "rg", type: "mcpToolCall",
+      },
+      { id: "child-answer", memoryCitation: null, phase: "final_answer", text: "done", type: "agentMessage" },
+    ])],
+  };
+  const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
+    projectRootPath: "C:/project",
+    relatedThreadsById: { [childId]: child },
+    threadCwdPath: "C:/project",
+    threadId: "parent",
+    turn: turn("parent-turn", [command("wait", "wb subagent wait --id child")]),
+  }));
+  assert.match(html, /title="packages\/child\/notes\.md"/u);
+});

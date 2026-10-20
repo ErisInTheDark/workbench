@@ -16,6 +16,7 @@ import {
 } from "./ThreadGitArcCollapsedSummary";
 import type { ThreadFileChangeListChange } from "./ThreadFileChangeItem";
 import ThreadGitArcItem from "./ThreadGitArcItem";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 
 function intent(action: GitArcCommandAction): GitArcCommandIntent {
   return {
@@ -43,13 +44,15 @@ function renderCard (
   operationSummaryRows: readonly ThreadFileChangeListChange[] = [],
   intentValues: Partial<GitArcCommandIntent> = {},
 ) {
-  return renderToStaticMarkup(createElement(ThreadGitArcItem, {
-    commandIntent: { ...intent(action), ...intentValues },
-    durationMs: 12,
-    operationSummaryRows,
-    outcome: "completed",
-    projectId: "project",
-    receipt: result,
+  return renderToStaticMarkup(createElement(ContextualProjectProvider, {
+    children: createElement(ThreadGitArcItem, {
+      commandIntent: { ...intent(action), ...intentValues },
+      durationMs: 12,
+      operationSummaryRows,
+      outcome: "completed",
+      receipt: result,
+    }),
+    id: "project",
   }));
 }
 
@@ -114,13 +117,15 @@ function editOutput(values: Partial<GitArcEditResult>) {
 }
 
 function renderEditCard(step: GitArcEditStep, output: string) {
-  return renderToStaticMarkup(createElement(ThreadGitArcItem, {
-    commandIntent: { ...intent("edit"), editStep: step },
-    durationMs: 12,
-    editResult: parseGitArcEditText(output),
-    outcome: "completed",
-    projectId: "project",
-    receipt: null,
+  return renderToStaticMarkup(createElement(ContextualProjectProvider, {
+    children: createElement(ThreadGitArcItem, {
+      commandIntent: { ...intent("edit"), editStep: step },
+      durationMs: 12,
+      editResult: parseGitArcEditText(output),
+      outcome: "completed",
+      receipt: null,
+    }),
+    id: "project",
   }));
 }
 

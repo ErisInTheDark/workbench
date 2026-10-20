@@ -9,6 +9,7 @@ import { useMemo, type CSSProperties } from "react";
 
 import type { ThreadPayload, WorkbenchProjectRoot } from "workbench-shared/types";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
 import ThreadStatusRow from "./ThreadStatusRow";
@@ -90,15 +91,22 @@ export default function ThreadRenderSurface({
     ?? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? defaultProviderKey}:${threadId}` };
   const liveView = useThreadLiveActivity({
     activity, items: liveTurn?.items ?? [], terminalContext, terminalRetention,
-    threadId, turnId: liveTurn?.id ?? null, threadCwdPath: thread?.cwd ?? cwd,
-    presentationSource, projectRootPath: cwd, projectId: context.projectId,
-    inlineMentionSources: context.inlineMentionSources, projectFilePaths: context.projectFilePaths, workspaceRoots,
+    threadId, turnId: liveTurn?.id ?? null, presentationSource,
   });
   const style = {
     fontSize: `${fontSizeRem}rem`,
   } satisfies CSSProperties;
 
   return (
+    <ContextualProjectProvider
+      cwd={thread?.cwd ?? cwd}
+      filePaths={context.projectFilePaths ?? []}
+      id={context.projectId ?? projection?.thread.projectId ?? null}
+      mentions={context.inlineMentionSources}
+      rootPath={cwd}
+      skills={knownSkills}
+      workspaceRoots={workspaceRoots}
+    >
     <ThreadScrollViewport resetKey={threadId} className={`h-full ${className}`}>
     <div
       className="mx-auto w-full min-w-0 max-w-content px-5 py-4 text-text md:px-6"
@@ -116,15 +124,9 @@ export default function ThreadRenderSurface({
           liveTurnId={liveTurn?.id ?? null}
           canLoadPreviousTurn={false}
           historySentinelRef={null}
-          knownSkills={knownSkills}
-          projectFilePaths={context.projectFilePaths ?? []}
-          projectId={context.projectId ?? projection.thread.projectId}
-          projectRootPath={cwd}
           presentationSource={presentationSource}
           relatedThreadsById={context.relatedThreadsById ?? {}}
           subagents={context.subagents ?? []}
-          workspaceRoots={workspaceRoots}
-          inlineMentionSources={context.inlineMentionSources}
           hiddenReasoningStep={context.hiddenReasoningStep}
         />
       ) : <p className="text-fg/muted">{transcriptExpired ? "Transcript expired 3 days after settlement." : emptyMessage}</p>}
@@ -132,5 +134,6 @@ export default function ThreadRenderSurface({
     </div>
     <ThreadScrollViewportEnd />
     </ThreadScrollViewport>
+    </ContextualProjectProvider>
   );
 }

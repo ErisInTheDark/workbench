@@ -8,7 +8,8 @@
 
 import type { ReactNode } from "react";
 
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import ContextualProjectProvider from "../ContextualProjectProvider";
+import { useProject } from "../use-projects";
 import {
   summarizeWorkbenchThreadRecallOutput,
   type WorkbenchThreadRecallOutputRecord,
@@ -105,24 +106,15 @@ export default function ThreadContextCommandItem ({
   defaultOpen = false,
   operation,
   source,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   renderRecord,
-  threadCwdPath,
-  workspaceRoots,
 }: {
   activeStartedAtMs?: number | null;
   defaultOpen?: boolean;
   operation: WorkbenchThreadRecallOperation;
   source: ThreadContextCommandSource;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   renderRecord: (record: WorkbenchThreadRecallOutputRecord, index: number) => ReactNode;
-  threadCwdPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const project = useProject.contextual();
   const visibleDurationMs = useThreadItemLiveDuration(source.durationMs, activeStartedAtMs);
   const markdown = source.output.trim();
   const outputSummary = summarizeWorkbenchThreadRecallOutput(markdown);
@@ -146,11 +138,7 @@ export default function ThreadContextCommandItem ({
       leadingLabel={iconLabel}
       summary={(
         <>
-          <ThreadCommandSummary
-            display={summaryDisplay}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-          />
+          <ThreadCommandSummary display={summaryDisplay} />
           <ThreadContextCommandMetaParts source={{ ...source, durationMs: visibleDurationMs ?? null }} />
         </>
       )}
@@ -164,15 +152,9 @@ export default function ThreadContextCommandItem ({
         mode="panel"
       >
         {markdown ? (
-          <ThreadRecallOutput
-            markdown={markdown}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            renderRecord={renderRecord}
-            threadCwdPath={threadCwdPath ?? source.cwd}
-            workspaceRoots={workspaceRoots}
-          />
+          <ContextualProjectProvider cwd={project?.cwd ?? source.cwd}>
+            <ThreadRecallOutput markdown={markdown} renderRecord={renderRecord} />
+          </ContextualProjectProvider>
         ) : (
           <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No Thread Recall output captured.</p>
         )}

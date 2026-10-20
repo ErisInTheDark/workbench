@@ -21,6 +21,7 @@ import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
 import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "./ThreadGitArcPresentationContext";
 import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import Disclosure from "../../ui/Disclosure";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -333,14 +334,16 @@ function renderSpecialized(
           createElement(
             ThreadGitArcPresentationContext.Provider,
             { value: presentation },
-            createElement(openDetails ? OpenedSpecialized : ThreadWorkbenchCommandItem, {
-              item,
-              relatedThreadsById: {},
-              renderRecallRecord: () => null,
-              route,
-              subagents: [],
-              threadCwdPath: "C:/workspace",
-              threadId: "thread-one",
+            createElement(ContextualProjectProvider, {
+              children: createElement(openDetails ? OpenedSpecialized : ThreadWorkbenchCommandItem, {
+                item,
+                relatedThreadsById: {},
+                renderRecallRecord: () => null,
+                route,
+                subagents: [],
+                threadId: "thread-one",
+              }),
+              cwd: "C:/workspace",
             }),
           ),
         ),

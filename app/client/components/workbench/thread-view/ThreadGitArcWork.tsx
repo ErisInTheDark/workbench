@@ -18,7 +18,6 @@ import type {
   WorkbenchHarnessId,
   WorkbenchThreadGitCommitRef,
 } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import PrimaryButton from "../../ui/PrimaryButton";
 import Disclosure from "../../ui/Disclosure";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
@@ -46,13 +45,9 @@ export interface ThreadGitArcWorkProps {
   cwd: string;
   harness: WorkbenchHarnessId;
   history?: readonly WorkbenchThreadGitCommitRef[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   /** A running turn still owns its claims: they list, but their actions wait for the turn to stop. */
   running: boolean;
   threadId: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
 export default function ThreadGitArcWork ({
@@ -61,12 +56,8 @@ export default function ThreadGitArcWork ({
   cwd,
   harness,
   history = [],
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   running,
   threadId,
-  workspaceRoots,
 }: ThreadGitArcWorkProps) {
   const daemon = useWorkbenchDaemonClient();
   const phase = claim?.phase ?? (claim?.claimedPaths.length ? "active" : "resolved");
@@ -160,14 +151,10 @@ export default function ThreadGitArcWork ({
           cwd={cwd}
           harness={harness}
           history={history}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
           proposals={visibleProposals}
           stackLayers={claim?.stackLayers ?? []}
           standalone={!sections.length}
           threadId={threadId}
-          workspaceRoots={workspaceRoots}
         />
       ) : null}
       {sections.map(({ phase: sectionPhase, paths }, index) => (
@@ -273,10 +260,6 @@ export default function ThreadGitArcWork ({
             <ThreadClaimedFileList
               marker={sectionPhase === "stashed" ? "unclaimed" : undefined}
               paths={paths}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
             />
           </Disclosure>
         </div>
@@ -286,10 +269,6 @@ export default function ThreadGitArcWork ({
           {failure ? (
             <ThreadGitArcFailure
               failure={failure}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
             />
           ) : null}
           {conflictedPaths.length ? (
@@ -298,10 +277,6 @@ export default function ThreadGitArcWork ({
                 label="Resolve conflict markers"
                 marker="dirty"
                 paths={conflictedPaths}
-                projectFilePaths={projectFilePaths}
-                projectId={projectId}
-                projectRootPath={projectRootPath}
-                workspaceRoots={workspaceRoots}
               />
               <p className="m-0 px-2 pb-1 text-[0.76em] text-fg/muted">Edit the markers directly. No Git continuation or abort command is required.</p>
             </div>

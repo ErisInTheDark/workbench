@@ -155,14 +155,10 @@ function splitCommandSummaryStages (parts: ThreadCommandDisplayPart[]) {
 function ThreadCommandStageParts ({
   parts,
   plainCode,
-  projectFilePaths,
-  projectId,
 }: {
   parts: ThreadCommandDisplayPart[];
   /** Code reads as plain monospace text instead of a chip, as an unmatched command's own text does. */
   plainCode: boolean;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
 }) {
   return (
     <>
@@ -180,11 +176,9 @@ function ThreadCommandStageParts ({
             key={`path:${part.path}:${part.lineNumber ?? ""}:${part.columnNumber ?? ""}:${index}`}
             className="max-w-full shrink min-w-0 align-baseline"
             columnNumber={part.columnNumber ?? null}
-            disambiguationPaths={projectFilePaths}
             label={part.label}
             lineNumber={part.lineNumber ?? null}
             path={part.path}
-            projectId={projectId}
           />
         ) : part.type === "pattern" ? (
           <ThreadCommandPattern key={`pattern:${part.pattern}:${index}`} pattern={part.pattern} syntax={part.syntax} />
@@ -234,14 +228,10 @@ export function ThreadCommandSummary ({
   approval = null,
   display,
   line = false,
-  projectFilePaths,
-  projectId,
 }: {
   approval?: ThreadItemApprovalState | null;
   display: ThreadCommandSummaryDisplay;
   line?: boolean;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
 }) {
   const stages = splitCommandSummaryStages(display.summaryParts);
   const plainCode = line && display.summaryKind === "raw";
@@ -264,7 +254,7 @@ export function ThreadCommandSummary ({
         {stages.map((stage, index) => (
           index === 0 ? (
             <span key={`stage:${index}`} className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
-              <ThreadCommandStageParts parts={stage} plainCode={plainCode} projectFilePaths={projectFilePaths} projectId={projectId} />
+              <ThreadCommandStageParts parts={stage} plainCode={plainCode} />
             </span>
           ) : (
             <span
@@ -273,7 +263,7 @@ export function ThreadCommandSummary ({
             >
               <ArrowRightIcon className="shrink-0 opacity-30" size={22} />
               <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
-                <ThreadCommandStageParts parts={stage} plainCode={plainCode} projectFilePaths={projectFilePaths} projectId={projectId} />
+                <ThreadCommandStageParts parts={stage} plainCode={plainCode} />
               </span>
             </span>
           )

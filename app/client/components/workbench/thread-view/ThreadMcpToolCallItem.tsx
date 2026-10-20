@@ -47,16 +47,12 @@ export default function ThreadMcpToolCallItem ({
   details,
   item,
   durationMs = item.durationMs,
-  projectFilePaths,
-  projectId,
   route,
 }: {
   approval?: ThreadItemApprovalState | null;
   details?: ReactNode;
   durationMs?: number | null;
   item: McpToolCallItem;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
   route: WorkbenchCommandRoute | null;
 }) {
   const commandDisplay = getWorkbenchCommandRouteSummaryDisplay(route);
@@ -75,7 +71,7 @@ export default function ThreadMcpToolCallItem ({
         durationMs !== null ? <ThreadDurationText durationMs={durationMs} /> : null,
       ]}
       summary={outcomeDisplay ? (
-        <ThreadCommandSummary approval={approval} display={outcomeDisplay} line projectFilePaths={projectFilePaths} projectId={projectId} />
+        <ThreadCommandSummary approval={approval} display={outcomeDisplay} line />
       ) : (
         <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.45rem] overflow-hidden">
           {approval ? <ThreadApprovalGlyph state={approval} /> : null}

@@ -13,6 +13,7 @@ import type {
   WorkbenchFeedbackItem,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import MarkdownRender from "../../../ui/MarkdownRender";
+import ContextualProjectProvider from "../../ContextualProjectProvider";
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
 import WorkbenchThreadButton from "../../WorkbenchThreadButton";
 import { CheckIcon, FlameIcon, HarnessIcon } from "../../workbench-icons";
@@ -73,7 +74,7 @@ export function WorkbenchFeedbackReportDisplay({
         `}
         ref={ref}
       >
-        <MarkdownRender markdown={report} projectId={projectId} />
+        <ContextualProjectProvider id={projectId ?? null}><MarkdownRender markdown={report} /></ContextualProjectProvider>
       </div>
       {clamp && (overflowing || expanded) ? (
         <button

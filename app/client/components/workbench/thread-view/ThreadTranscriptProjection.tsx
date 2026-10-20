@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadTranscriptProjection: render canonical SQLite transcript turns through the one turn renderer, providing the transcript scope its items read.
+ * - default ThreadTranscriptProjection: render canonical SQLite transcript turns through the one turn renderer, providing the
+ *   transcript scope and the thread's working directory to its items.
  */
 "use client";
 
@@ -9,15 +10,13 @@ import { Fragment, useMemo, type Ref } from "react";
 import type {
   ThreadPayload,
   WorkbenchBrowseResultEntry,
-  WorkbenchSkillSummary,
   WorkbenchSubagentSummary,
 } from "workbench-shared/types";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
-import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 import { TranscriptScopeContext, type TranscriptScope } from "../use-transcript";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
@@ -59,33 +58,21 @@ export default function ThreadTranscriptProjection({
   canLoadPreviousTurn,
   hiddenReasoningStep,
   historySentinelRef,
-  inlineMentionSources,
-  knownSkills,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   presentationSource,
   projection,
   liveTurnId,
   relatedThreadsById,
   subagents,
-  workspaceRoots,
 }: {
   canLoadPreviousTurn: boolean;
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
   historySentinelRef: Ref<HTMLDivElement>;
-  inlineMentionSources?: InlineMentionHighlightSources | null;
-  knownSkills: WorkbenchSkillSummary[];
-  projectFilePaths: readonly string[];
-  projectId: string;
-  projectRootPath: string;
   presentationSource: ThreadTextPresentationSource;
   projection: WorkbenchTranscriptProjection;
   /** The turn the thread is working on, or null; providers' own turn statuses never mark a turn live. */
   liveTurnId: string | null;
   relatedThreadsById: Record<string, RelatedThread | undefined>;
   subagents: readonly WorkbenchSubagentSummary[];
-  workspaceRoots: readonly WorkspaceFileLinkRoot[];
 }) {
   // A turn renders live only while the thread works on it; an orphaned provider status renders settled.
   const displayStatus = (turn: WorkbenchTranscriptProjection["turns"][number]) => turn.id === liveTurnId ? "inProgress" as const
@@ -100,24 +87,13 @@ export default function ThreadTranscriptProjection({
     [projection.display.segments],
   );
   const threadId = projection.thread.id;
-  const threadCwdPath = projection.thread.projectRoot;
-  const scope = useMemo<TranscriptScope>(() => ({
-    inlineMentionSources: inlineMentionSources ?? null,
-    knownSkills,
-    projectFilePaths,
-    projectId,
-    projectRootPath,
-    relatedThreadsById,
-    subagents,
-    threadCwdPath,
-    threadId,
-    workspaceRoots,
-  }), [
-    inlineMentionSources, knownSkills, projectFilePaths, projectId, projectRootPath, relatedThreadsById, subagents,
-    threadCwdPath, threadId, workspaceRoots,
-  ]);
+  const scope = useMemo<TranscriptScope>(
+    () => ({ relatedThreadsById, subagents, threadId }),
+    [relatedThreadsById, subagents, threadId],
+  );
 
   return (
+    <ContextualProjectProvider cwd={projection.thread.projectRoot}>
     <TranscriptScopeContext.Provider value={scope}>
       {canLoadPreviousTurn ? (
         <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
@@ -166,5 +142,6 @@ export default function ThreadTranscriptProjection({
         );
       })}
     </TranscriptScopeContext.Provider>
+    </ContextualProjectProvider>
   );
 }

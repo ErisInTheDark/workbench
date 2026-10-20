@@ -12,6 +12,7 @@ import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineE
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadTextPresentationSource } from "../../../../workbench/thread/ThreadTextPresentationController";
+import { useProject } from "../../use-projects";
 import { TranscriptTurnContext, useTranscript, type TranscriptTurnScope } from "../../use-transcript";
 import { getThreadEntryMotionIdentity } from "../ThreadEntryMotionController";
 import ThreadGenericItem from "../ThreadGenericItem";
@@ -75,9 +76,10 @@ export default memo(function ThreadTurnItems({
   const animateEntries = useEntryMotionAfterMount(turnStatus === "inProgress");
   const renderItemTimeline = useMemo(() => withInteractionTimeline(items, itemTimeline), [items, itemTimeline]);
   const codeDetails = useThreadCodeDetails();
+  const project = useProject.contextual();
   const entries = useMemo(
-    () => buildTranscriptEntries(items, { browseResultEntries, codeDetails, hiddenReasoningStep, scope: transcript }),
-    [browseResultEntries, codeDetails, hiddenReasoningStep, items, transcript],
+    () => buildTranscriptEntries(items, { browseResultEntries, codeDetails, hiddenReasoningStep, project }),
+    [browseResultEntries, codeDetails, hiddenReasoningStep, items, project],
   );
   const stableBlocks = useStableRenderableBlocks(entries.flatMap(entry => entry.kind === "block" ? [entry.block] : []), "identity");
   let stableBlockIndex = 0;

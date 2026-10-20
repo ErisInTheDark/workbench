@@ -4,21 +4,12 @@
  */
 "use client";
 
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { ThreadFileChangeList } from "./ThreadFileChangeItem";
 
 export default function ThreadCheckpointCompareItem({
   changes,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   changes: Array<{ additions: number; deletions: number; path: string; status: "A" | "D" | "M" | "U" }>;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return (
     <ThreadFileChangeList
@@ -40,10 +31,6 @@ export default function ThreadCheckpointCompareItem({
           deletions: change.deletions,
         },
       }))}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
-      workspaceRoots={workspaceRoots}
     />
   );
 }

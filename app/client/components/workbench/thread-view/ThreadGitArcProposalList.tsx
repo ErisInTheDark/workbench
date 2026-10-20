@@ -16,7 +16,6 @@ import {
   type WorkbenchHarnessId,
   type WorkbenchThreadGitCommitRef,
 } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { threadGitCommitHistoryFor, type ThreadGitCommitDetail } from "../../../workbench/thread/ThreadGitCommitHistory";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../../ui/PrimaryButton";
@@ -149,14 +148,10 @@ export default function ThreadGitArcProposalList({
   cwd,
   harness,
   history = [],
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   proposals,
   stackLayers,
   standalone = false,
   threadId,
-  workspaceRoots,
 }: {
   /** The observed running batched acceptance, if any. */
   acceptance: WorkbenchGitArcLifecycleState["acceptance"] | null;
@@ -164,12 +159,8 @@ export default function ThreadGitArcProposalList({
   cwd: string;
   harness: WorkbenchHarnessId;
   history?: readonly WorkbenchThreadGitCommitRef[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
   threadId: string;
   proposals: readonly WorkbenchGitArcProposalState[];
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   /** Sealed layers, bottom first; their proposals render inside one disclosure per layer. */
   stackLayers: ReadonlyArray<{ layerId: string; proposalIds: readonly string[]; title: string }>;
   /** Nothing else shares the panel, so accepted history alone may drop its group row. */
@@ -276,13 +267,9 @@ export default function ThreadGitArcProposalList({
         disclosure={disclosure}
         harness={harness}
         intent={null}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
         proposalId={proposalId}
         sourceItemId={`lifecycle-proposal:${proposalId}`}
         threadId={threadId}
-        workspaceRoots={workspaceRoots}
       />
     </div>
   );
@@ -309,9 +296,6 @@ export default function ThreadGitArcProposalList({
           cwd={cwd}
           harness={harness}
           intent={null}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
           proposalId={commit.sourceProposalId}
           sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
           summary={{
@@ -323,7 +307,6 @@ export default function ThreadGitArcProposalList({
             title: commit.title,
           }}
           threadId={threadId}
-          workspaceRoots={workspaceRoots}
         />
       </div>
     );

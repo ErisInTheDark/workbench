@@ -5,7 +5,6 @@
 import { useEffect, useMemo } from "react";
 import { parseGitArcStatus, type GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
@@ -13,14 +12,10 @@ import ThreadGitArcCommitGroup, { plural, threadGitArcCommitRowClassName } from 
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
 import { CheckCheckIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
 
-export default function ThreadGitArcStatusDetails ({ incomplete = false, output, status, projectFilePaths, projectId, projectRootPath, workspaceRoots }: {
+export default function ThreadGitArcStatusDetails ({ incomplete = false, output, status }: {
   incomplete?: boolean;
   output: string;
   status?: Partial<GitArcStatusPresentation> | null;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const parsed = useMemo(() => status === undefined ? parseGitArcStatus(output) : null, [output, status]);
   useEffect(() => {
@@ -28,7 +23,6 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
   }, [parsed]);
   const facts = status === undefined ? parsed?.success ? parsed.data : null : status;
   if (!facts) return <p className="text-danger">Status facts could not be read.</p>;
-  const context = { projectFilePaths, projectId, projectRootPath, workspaceRoots };
   const pendingCommits = (proposals: ReadonlyArray<{ proposalId: string; title: string }>) => proposals
     .map(({ proposalId, title }) => ({ committedSha: null, proposalId, title }));
   // Each kind of commit collapses into its own group, so long histories read as one line each.
@@ -65,7 +59,7 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
         <span>{label}: {paths}</span>
       </p>
     )
-    : paths.length ? <ThreadClaimedFileList inset={false} key={label} label={label} marker={marker} paths={paths} {...context} /> : null;
+    : paths.length ? <ThreadClaimedFileList inset={false} key={label} label={label} marker={marker} paths={paths} /> : null;
   return (
     <div className="min-w-0 py-1">
       {incomplete || !Object.keys(facts).length ? <p className="text-fg/muted">Some status facts are unavailable.</p> : null}
@@ -76,7 +70,6 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
               <ThreadCheckpointCommitCard
                 sourceItemId={`status-proposal:${proposalId}`}
                 state={{ status: "summary", summary: { changes: null, committedSha, description: "", title: commitTitle } }}
-                {...context}
               />
             </div>
           ))}
@@ -91,11 +84,11 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
           {evidence.headMovement === "incompatible" ? (
             <p className="text-danger">HEAD moved incompatibly {evidence.kind === "restored" ? "before restore" : "since claim loss"}.</p>
           ) : null}
-          {evidence.commits.length ? <ThreadGitArcCommitList commits={evidence.commits.map(commit => ({ ...commit, paths: commit.changedPaths }))} {...context} /> : null}
+          {evidence.commits.length ? <ThreadGitArcCommitList commits={evidence.commits.map(commit => ({ ...commit, paths: commit.changedPaths }))} /> : null}
           {evidence.omittedCommits ? <p className="text-fg/muted">{evidence.omittedCommits} more intersecting commits</p> : null}
           {evidence.comparison.length ? <ThreadCheckpointCompareItem changes={evidence.comparison.map(change => ({
             ...change, status: change.kind === "add" ? "A" : change.kind === "delete" ? "D" : "U",
-          }))} {...context} /> : null}
+          }))} /> : null}
           {evidence.kind === "restored" ? (
             <p className="text-fg/muted">Arc restored: checkpoint rebased to current HEAD; inspect the restored diff and resolve any conflict markers before continuing.</p>
           ) : null}

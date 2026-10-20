@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { describeWorkingTreeDiff } from "workbench-shared/workbench/git/working-tree-selection";
 import MarkdownRender from "../../ui/MarkdownRender";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
 export default function WorkbenchGitMarkdownDiff() {
@@ -20,7 +21,7 @@ export default function WorkbenchGitMarkdownDiff() {
   }, [snapshot.diff?.patch]);
   if (!snapshot.preview) return <p className="p-4 text-sm text-fg/muted">{snapshot.contentError ? "Markdown preview unavailable." : "Loading markdown preview..."}</p>;
   if (snapshot.preview.unavailable) return <p className="p-4 text-sm text-fg/muted">{snapshot.preview.unavailable}</p>;
-  return <div className="space-y-6 px-4 pb-4">
+  return <ContextualProjectProvider id={state.projectId}><div className="space-y-6 px-4 pb-4">
     <section className="space-y-2">
       <h3 className="text-sm font-medium">Changed passages</h3>
       {changes.map((change, index) => <div key={index} className={`
@@ -28,14 +29,14 @@ export default function WorkbenchGitMarkdownDiff() {
         ${change.type === "addition" ? "bg-emerald-500/10" : "bg-red-500/10"}
       `}>
         <span className="text-xs text-fg/muted">{change.type === "addition" ? "Added" : "Removed"}</span>
-        <MarkdownRender markdown={change.text} projectId={state.projectId} />
+        <MarkdownRender markdown={change.text} />
       </div>)}
     </section>
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {(["before", "after"] as const).map(side => <section key={side} className="min-w-0">
         <h3 className="text-sm font-medium">{side === "before" ? "Before" : "After"}</h3>
-        <MarkdownRender markdown={snapshot.preview![side] ?? "*File does not exist in this version.*"} projectId={state.projectId} />
+        <MarkdownRender markdown={snapshot.preview![side] ?? "*File does not exist in this version.*"} />
       </section>)}
     </div>
-  </div>;
+  </div></ContextualProjectProvider>;
 }

@@ -22,7 +22,6 @@ export default function ThreadReasoningSequence ({
 }) {
   const transcript = useTranscript();
   const turn = useTranscript.turn();
-  const markdownProps = useTranscript.markdownProps();
   const presentationSource = turn.presentationSource;
   const visibleItems = block.items.filter(hasReasoningSteps);
   const steps = getThreadReasoningSteps(visibleItems);
@@ -66,7 +65,6 @@ export default function ThreadReasoningSequence ({
     <ThreadStepRow defaultOpen={isMostRecent} icon={icon} summary={summary}>
       {onlyStep ? (
         <MarkdownRender
-          {...markdownProps}
           className="text-[0.8em] text-fg/muted"
           live={Boolean(presentationSource)}
           markdown={onlyStep.body ?? ""}
@@ -76,7 +74,6 @@ export default function ThreadReasoningSequence ({
         <div className="space-y-4">
           {visibleItems.map((item, index) => (
             <ThreadReasoningItem
-              {...markdownProps}
               key={item.id}
               className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" : undefined}
               isMostRecent={isMostRecent && index === visibleItems.length - 1}

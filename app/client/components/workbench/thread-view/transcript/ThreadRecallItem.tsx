@@ -7,13 +7,11 @@
 import type { WorkbenchThreadRecallOutputRecord } from "../../../../workbench/thread/thread-recall-output";
 import Disclosure from "../../../ui/Disclosure";
 import MarkdownRender from "../../../ui/MarkdownRender";
-import { useTranscript } from "../../use-transcript";
 import ThreadPlanSummary from "../ThreadPlanSummary";
 import { ThreadAgentMessageItem } from "./ThreadAgentMessageItems";
 import ThreadUserMessageItem from "./ThreadUserMessageItem";
 
 function ThreadRecallPlanItem ({ markdown }: { markdown: string }) {
-  const markdownProps = useTranscript.markdownProps();
   return (
     <Disclosure
       className="py-2"
@@ -21,7 +19,7 @@ function ThreadRecallPlanItem ({ markdown }: { markdown: string }) {
       summary={<ThreadPlanSummary markdown={markdown} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
-      <MarkdownRender {...markdownProps} markdown={markdown} />
+      <MarkdownRender markdown={markdown} />
     </Disclosure>
   );
 }

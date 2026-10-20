@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 
 import ThreadAgentMessageItem, {
   ThreadAgentMessageBubble,
@@ -36,10 +37,10 @@ test("the standalone outgoing item keeps one disclosure and no duplicate bubble 
 });
 
 test("a claim action paragraph previews three file links behind one ellipsis toggle", () => {
-  const html = renderToStaticMarkup(createElement(
-    ThreadAgentMessageClaimAction,
-    { action: "release", paths: ["src/one.ts", "src/two.ts", "src/three.ts", "src/four.ts"], projectId: "project" },
-  ));
+  const html = renderToStaticMarkup(createElement(ContextualProjectProvider, {
+    children: createElement(ThreadAgentMessageClaimAction, { action: "release", paths: ["src/one.ts", "src/two.ts", "src/three.ts", "src/four.ts"] }),
+    id: "project",
+  }));
 
   assert.match(html, /src\/one\.ts/u);
   assert.match(html, /src\/two\.ts/u);

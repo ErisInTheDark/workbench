@@ -16,6 +16,8 @@ import {
   type TranscriptScope, type TranscriptTurnScope,
 } from "../../use-transcript";
 import WorkbenchClientContext from "../../workbench-client-context";
+import ContextualProjectProvider from "../../ContextualProjectProvider";
+import { useProject } from "../../use-projects";
 import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import { getRenderableBlockKey, type ThreadRenderableBlock } from "../thread-render-blocks";
 import ThreadRenderableBlockView from "./ThreadRenderableBlockView";
@@ -48,8 +50,8 @@ export default function ThreadSubagentActivityWindow (props: SubagentActivityPro
 }
 
 function LiveThreadSubagentActivityWindow ({ fallbackThread, subagent }: SubagentActivityProps & { subagent: NonNullable<SubagentActivityProps["subagent"]> }) {
-  const transcript = useTranscript();
-  const live = useThread(transcript.projectId ?? "", {
+  const project = useProject.contextual();
+  const live = useThread(project?.id ?? "", {
     harness: subagent.harness, kind: "subagent", parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
   }, "view");
   const { turns } = useTranscript.turns(live.store);
@@ -61,15 +63,24 @@ function LiveThreadSubagentActivityWindow ({ fallbackThread, subagent }: Subagen
   );
 }
 
+/** The child's paths resolve against its own working directory. */
 function ThreadSubagentActivityWindowBody ({ thread }: { thread: RelatedThread | undefined }) {
+  return (
+    <ContextualProjectProvider cwd={thread?.cwd}>
+      <ThreadSubagentActivityTail thread={thread} />
+    </ContextualProjectProvider>
+  );
+}
+
+function ThreadSubagentActivityTail ({ thread }: { thread: RelatedThread | undefined }) {
   const parent = useTranscript();
+  const project = useProject.contextual();
   const currentTurn = thread?.turns?.at(-1) ?? null;
   const scope = useMemo<TranscriptScope>(() => ({
-    ...parent,
+    relatedThreadsById: parent.relatedThreadsById,
     subagents: NO_SUBAGENTS,
-    threadCwdPath: thread?.cwd,
     threadId: thread?.id ?? "",
-  }), [parent, thread?.cwd, thread?.id]);
+  }), [parent.relatedThreadsById, thread?.id]);
   const turnScope = useMemo<TranscriptTurnScope | null>(() => currentTurn ? {
     browseResultEntries: NO_BROWSE_RESULTS,
     completedAt: currentTurn.completedAt,
@@ -81,10 +92,10 @@ function ThreadSubagentActivityWindowBody ({ thread }: { thread: RelatedThread |
   const turnItems = currentTurn?.items;
   const codeDetails = useThreadCodeDetails();
   const recentBlocks = useMemo(() => turnItems
-    ? buildTranscriptEntries(turnItems, { browseResultEntries: NO_BROWSE_RESULTS, codeDetails, hiddenReasoningStep: null, scope })
+    ? buildTranscriptEntries(turnItems, { browseResultEntries: NO_BROWSE_RESULTS, codeDetails, hiddenReasoningStep: null, project })
       .flatMap(entry => entry.kind === "block" ? [entry.block] : [])
       .slice(-SUBAGENT_ACTIVITY_WINDOW_BLOCKS)
-    : NO_BLOCKS, [codeDetails, scope, turnItems]);
+    : NO_BLOCKS, [codeDetails, project, turnItems]);
   const blocks = useStableRenderableBlocks(recentBlocks);
   if (!thread || !currentTurn || !turnScope) {
     return <ThreadContentLoadingSkeleton />;

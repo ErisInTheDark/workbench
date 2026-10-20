@@ -11,7 +11,8 @@ import { useState, type ReactNode } from "react";
 
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
-import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import { toWorkspaceDisplayPath } from "../../../workbench/markdown/markdown-links";
+import { useProject } from "../use-projects";
 import { isProjectDirectoryPath } from "../../../workbench/project/project-file-path";
 
 import ProjectFilePath from "../ProjectFilePath";
@@ -71,18 +72,11 @@ export function ThreadAgentMessageBubble({
 export function ThreadAgentMessageClaimAction({
   action,
   paths,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
 }: {
   action: "adopt" | "release";
   paths: readonly string[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const project = useProject.contextual();
   const [showAll, setShowAll] = useState(false);
   const visiblePaths = showAll ? paths : paths.slice(0, 3);
   const actionLabel = action === "adopt" ? "Adopted claims from subagent" : "Released claims to subagent";
@@ -98,18 +92,13 @@ export function ThreadAgentMessageClaimAction({
           : <SquareArrowRightEnterIcon size={16} />}
       </span>
       {visiblePaths.map((filePath) => {
-        const displayPath = toWorkspaceDisplayPath(filePath, {
-          projectRootPath: projectRootPath ?? "",
-          workspaceRoots,
-        }) ?? filePath;
+        const displayPath = project?.displayPath(filePath) ?? toWorkspaceDisplayPath(filePath, {}) ?? filePath;
         return (
           <ProjectFilePath
             className="min-w-0 max-w-full"
-            disambiguationPaths={projectFilePaths}
             key={filePath}
             path={displayPath}
-            projectId={projectId}
-            targetType={isProjectDirectoryPath(displayPath, projectFilePaths ?? []) ? "directory" : "file"}
+            targetType={isProjectDirectoryPath(displayPath, project?.filePaths ?? []) ? "directory" : "file"}
           />
         );
       })}

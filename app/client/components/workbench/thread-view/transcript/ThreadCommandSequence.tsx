@@ -11,16 +11,16 @@ import { useContext, useMemo } from "react";
 
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import {
-  getNativeToolDisplay,
   getThreadCommandBlockDisplay,
   getThreadCommandExecutionOutcome,
   getWorkbenchCommandRouteSummaryDisplay,
-  getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
 } from "../../../../workbench/thread/thread-command-matchers";
 import { ThreadItemApprovalsContext, useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
 import Disclosure from "../../../ui/Disclosure";
+import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
+import { getCommandBlockItems } from "../thread-activity-chips";
 import ThreadCommandDetailRows from "../ThreadCommandDetailRows";
 import ThreadContextCommandItem from "../ThreadContextCommandItem";
 import ThreadDynamicToolCallItem from "../ThreadDynamicToolCallItem";
@@ -39,38 +39,21 @@ import ThreadRecallItem from "./ThreadRecallItem";
 import { getActiveItemStartedAtMs } from "./transcript-blocks";
 
 type McpItem = Extract<CommandSequenceItem, { type: "mcpToolCall" }>;
-type CommandBlockItem = Parameters<typeof getThreadCommandBlockDisplay>[0]["items"][number];
 type Timeline = readonly WorkbenchThreadItemTimelineEntry[] | undefined;
 
-/** The transcript's matcher context for MCP calls: paths resolve against the thread's cwd. */
-function useMcpMatcherContext() {
-  const transcript = useTranscript();
-  return useMemo(() => ({
-    knownSkills: transcript.knownSkills,
-    ...(transcript.threadCwdPath
-      ? { cwd: transcript.threadCwdPath, projectRootPath: transcript.projectRootPath, workspaceRoots: transcript.workspaceRoots }
-      : {}),
-  }), [transcript]);
-}
-
 function ThreadApprovalAwareMcpToolCallItem ({ itemTimeline, item }: { item: McpItem; itemTimeline: Timeline }) {
-  const transcript = useTranscript();
   const turn = useTranscript.turn();
-  const context = useMcpMatcherContext();
+  const project = useProject.contextual();
   const durationMs = useThreadItemLiveDuration(item.durationMs, getActiveItemStartedAtMs(item, itemTimeline));
   const approval = useThreadItemApproval(item.id);
-  const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context, server: item.server, tool: item.tool });
+  const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context: project?.mcpMatcherContext, server: item.server, tool: item.tool });
   const browseSteps = getBrowseItemSteps(item, getWorkbenchCommandRouteSummaryDisplay(route), turn.browseResultEntries);
   return (
     <ThreadMcpToolCallItem
       approval={approval}
-      details={browseSteps?.length
-        ? <ThreadCommandDetailRows projectFilePaths={transcript.projectFilePaths} projectId={transcript.projectId} rows={browseSteps} />
-        : undefined}
+      details={browseSteps?.length ? <ThreadCommandDetailRows rows={browseSteps} /> : undefined}
       durationMs={durationMs ?? null}
       item={item}
-      projectFilePaths={transcript.projectFilePaths}
-      projectId={transcript.projectId}
       route={route}
     />
   );
@@ -83,18 +66,9 @@ export function ThreadRegularCommandItem ({
   item: CommandSequenceItem;
   itemTimeline: Timeline;
 }) {
-  const transcript = useTranscript();
-  const markdownProps = useTranscript.markdownProps();
   if (item.type === "mcpToolCall") return <ThreadApprovalAwareMcpToolCallItem item={item} itemTimeline={itemTimeline} />;
   if (item.type === "dynamicToolCall") {
-    return (
-      <ThreadDynamicToolCallItem
-        {...markdownProps}
-        activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
-        item={item}
-        knownSkills={transcript.knownSkills}
-      />
-    );
+    return <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />;
   }
   return (
     <ThreadCommandExecutionDetails
@@ -112,22 +86,12 @@ function ThreadRegularCommandSequence ({
   itemTimeline: Timeline;
   items: CommandSequenceItem[];
 }) {
-  const transcript = useTranscript();
-  const context = useMcpMatcherContext();
-  const commandBlockDisplay = useMemo(() => items.length <= 1 ? null : getThreadCommandBlockDisplay({
-    items: items.flatMap<CommandBlockItem>((item) => {
-      if (item.type === "commandExecution") {
-        return [{ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell }];
-      }
-      const display = item.type === "dynamicToolCall"
-        ? getNativeToolDisplay(item, { knownSkills: transcript.knownSkills })
-        : getWorkbenchMcpCommandDisplay({ argumentsValue: item.arguments, context, server: item.server, tool: item.tool });
-      return display ? [{ display }] : [];
-    }),
-    knownSkills: transcript.knownSkills,
-    projectRootPath: transcript.projectRootPath,
-    workspaceRoots: transcript.workspaceRoots,
-  }), [context, items, transcript]);
+  const project = useProject.contextual();
+  const commandBlockDisplay = useMemo(() => {
+    if (items.length <= 1) return null;
+    const context = { ...project?.matcherContext, cwd: project?.cwd };
+    return getThreadCommandBlockDisplay({ items: getCommandBlockItems(items, context), ...context });
+  }, [items, project]);
 
   if (items.length === 1) return <ThreadRegularCommandItem item={items[0]} itemTimeline={itemTimeline} />;
   if (!commandBlockDisplay) return null;
@@ -136,7 +100,7 @@ function ThreadRegularCommandSequence ({
       className="py-2"
       contentClassName="mt-2 space-y-1 pl-6"
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      summary={<ThreadCommandSummary display={commandBlockDisplay} projectFilePaths={transcript.projectFilePaths} projectId={transcript.projectId} />}
+      summary={<ThreadCommandSummary display={commandBlockDisplay} />}
     >
       {items.map((item) => (
         <ThreadRegularCommandItem
@@ -173,13 +137,12 @@ export default function ThreadCommandSequence ({
     ? canonicalItems.map((item) => item === activeCommand ? { ...activeCommand, aggregatedOutput: presentedOutput } : item)
     : canonicalItems, [activeCommand, canonicalItems, presentedOutput]);
   const approvals = useContext(ThreadItemApprovalsContext);
+  const project = useProject.contextual();
   const renderSegments = useMemo(() => buildCommandSequenceRenderSegments({
     approvalItemIds: approvals,
     items,
-    knownSkills: transcript.knownSkills,
-    projectRootPath: transcript.projectRootPath,
-    workspaceRoots: transcript.workspaceRoots,
-  }), [approvals, items, transcript]);
+    ...project?.matcherContext,
+  }), [approvals, items, project]);
 
   if (!renderSegments.some((segment) => segment.kind !== "commands")) {
     return <ThreadRegularCommandSequence itemTimeline={itemTimeline} items={items} />;
@@ -195,11 +158,6 @@ export default function ThreadCommandSequence ({
                 activeStartedAtMs={getActiveItemStartedAtMs(segment.item, itemTimeline)}
                 key={`thread-context:${segment.item.id}`}
                 operation={segment.operation}
-                projectFilePaths={transcript.projectFilePaths}
-                projectId={transcript.projectId}
-                projectRootPath={transcript.projectRootPath}
-                threadCwdPath={transcript.threadCwdPath}
-                workspaceRoots={transcript.workspaceRoots}
                 renderRecord={(record) => <ThreadRecallItem record={record} />}
                 source={{
                   cwd: segment.item.cwd,

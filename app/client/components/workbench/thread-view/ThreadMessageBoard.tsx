@@ -7,14 +7,12 @@
 import { useMemo } from "react";
 
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
-import ThreadMessageBoardTopic, { type ThreadMessageBoardMarkdownProps } from "./ThreadMessageBoardTopic";
+import ThreadMessageBoardTopic from "./ThreadMessageBoardTopic";
 
 export default function ThreadMessageBoard({
-  markdownProps,
   projectId,
   subagents,
 }: {
-  markdownProps: ThreadMessageBoardMarkdownProps;
   projectId: string;
   /** Direct subagents of the thread; also used to colour sibling senders. */
   subagents: readonly WorkbenchSubagentSummary[];
@@ -29,7 +27,6 @@ export default function ThreadMessageBoard({
       {topics.length ? topics.map((subagent) => (
         <ThreadMessageBoardTopic
           key={subagent.threadId}
-          markdownProps={markdownProps}
           projectId={projectId}
           subagent={subagent}
           subagents={subagents}

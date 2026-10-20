@@ -21,6 +21,7 @@ import type {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 import { ThreadTestOpenActivityRuns } from "./thread-view-test-render";
 import ThreadUserImage from "./ThreadUserImage";
 import { WorkbenchDaemonAssetOriginContext, getWorkbenchTranscriptAssetUrl } from "../WorkbenchWorkspaceContext";
@@ -103,21 +104,18 @@ function renderItems(
   return renderToStaticMarkup(
     <WorkbenchDaemonAssetOriginContext.Provider value={{ kind: "source", daemonId: assetDaemonId }}>
     <ThreadTestOpenActivityRuns runIds={openActivityRunIds}>
+    <ContextualProjectProvider filePaths={[]} id="project" rootPath="C:/project" skills={[]} workspaceRoots={[]}>
     <ThreadTranscriptProjection
       canLoadPreviousTurn={false}
       hiddenReasoningStep={hiddenReasoningStep}
       historySentinelRef={createRef<HTMLDivElement>()}
-      knownSkills={[]}
-      projectFilePaths={[]}
-      projectId="project"
-      projectRootPath="C:/project"
       presentationSource={{ kind: "sqlite", sourceKey: "codex:thread" }}
       projection={projection}
       liveTurnId={liveTurnId}
       relatedThreadsById={{}}
       subagents={[]}
-      workspaceRoots={[]}
     />
+    </ContextualProjectProvider>
     </ThreadTestOpenActivityRuns>
     </WorkbenchDaemonAssetOriginContext.Provider>,
   );
@@ -304,16 +302,11 @@ test("SQLite projection preserves canonical order with initially closed Browse d
     <ThreadTranscriptProjection
       canLoadPreviousTurn={false}
       historySentinelRef={createRef<HTMLDivElement>()}
-      knownSkills={[]}
-      projectFilePaths={[]}
-      projectId="project"
-      projectRootPath="C:/project"
       presentationSource={{ kind: "sqlite", sourceKey: "codex:thread" }}
       projection={projection}
       liveTurnId={null}
       relatedThreadsById={{}}
       subagents={[]}
-      workspaceRoots={[]}
     />
     </ThreadTestOpenActivityRuns>,
   );

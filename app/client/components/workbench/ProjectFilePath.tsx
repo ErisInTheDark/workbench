@@ -1,11 +1,10 @@
 /*
  * Exports:
- * - ProjectFilePathDisplayProvider: provide a project-owned disambiguation index to nested path pills. Keywords: project path, cache, context.
- * - default ProjectFilePath: render a project-relative file path pill or file-open button. Keywords: project path, display, button.
+ * - default ProjectFilePath: render a project-relative file path pill or file-open button, disambiguated and opened through
+ *   the contextual project unless given its own paths or project. Keywords: project path, display, button.
  */
 "use client";
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useFile } from "../../workbench/file/use-file";
 
 import {
@@ -15,18 +14,12 @@ import {
   projectFilePathMissingClassName,
   projectFilePathPillClassName,
   projectFilePathStaticClassName,
-  type ProjectFilePathDisambiguationIndex,
   type ProjectFilePathDisplayOptions,
 } from "../../workbench/project/project-file-path";
+import { useProject } from "./use-projects";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
-}
-
-interface ProjectFilePathDisplayContextValue {
-  disambiguationIndex?: ProjectFilePathDisambiguationIndex | null;
-  disambiguationKey?: string;
-  disambiguationPaths?: readonly string[];
 }
 
 type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
@@ -42,32 +35,6 @@ type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
   targetType?: "directory" | "file";
 };
 
-const ProjectFilePathDisplayContext = createContext<ProjectFilePathDisplayContextValue | null>(null);
-
-export function ProjectFilePathDisplayProvider ({
-  children,
-  disambiguationIndex,
-  disambiguationKey,
-  disambiguationPaths,
-}: {
-  children: ReactNode;
-  disambiguationIndex?: ProjectFilePathDisambiguationIndex | null;
-  disambiguationKey?: string;
-  disambiguationPaths?: readonly string[];
-}) {
-  const value = useMemo(() => ({
-    disambiguationIndex,
-    disambiguationKey,
-    disambiguationPaths,
-  }), [disambiguationIndex, disambiguationKey, disambiguationPaths]);
-
-  return (
-    <ProjectFilePathDisplayContext.Provider value={value}>
-      {children}
-    </ProjectFilePathDisplayContext.Provider>
-  );
-}
-
 export default function ProjectFilePath ({
   absolutePath = null,
   className,
@@ -82,33 +49,21 @@ export default function ProjectFilePath ({
   nativeTitle = true,
   openPath = null,
   path,
-  projectId = null,
+  projectId: givenProjectId,
   targetType = "file",
 }: ProjectFilePathProps) {
-  const context = useContext(ProjectFilePathDisplayContext);
-  const usesInheritedDisambiguation = Boolean(
-    context
-    && disambiguationIndex === undefined
-    && (disambiguationPaths === undefined || context.disambiguationPaths === disambiguationPaths),
-  );
-  const resolvedDisambiguationPaths = disambiguationPaths ?? (
-    usesInheritedDisambiguation
-      ? context?.disambiguationPaths
-      : undefined
-  );
-  const resolvedDisambiguationIndex = disambiguationIndex !== undefined
-    ? disambiguationIndex
-    : usesInheritedDisambiguation
-      ? context?.disambiguationIndex ?? null
-      : undefined;
+  const project = useProject.contextual();
+  const projectId = givenProjectId === undefined ? project?.id ?? null : givenProjectId;
+  // Given paths are their own list; otherwise the contextual project's indexed file list disambiguates.
+  const inherits = disambiguationIndex === undefined && disambiguationPaths === undefined;
   const { display, isFileControl, open } = useFile({
     absolutePath,
     columnNumber,
     displayOptions: {
       columnNumber,
-      disambiguationIndex: resolvedDisambiguationIndex,
-      disambiguationKey: disambiguationKey ?? (usesInheritedDisambiguation ? context?.disambiguationKey : undefined),
-      disambiguationPaths: resolvedDisambiguationPaths,
+      disambiguationIndex: inherits ? project?.pathDisambiguation?.index ?? null : disambiguationIndex,
+      disambiguationKey: disambiguationKey ?? (inherits ? project?.pathDisambiguation?.key : undefined),
+      disambiguationPaths: inherits ? project?.filePaths : disambiguationPaths,
       label,
       lineNumber,
       targetType,

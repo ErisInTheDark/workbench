@@ -12,6 +12,7 @@ import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-co
 import ThreadTestTurn from "./thread-view-test-render";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadStepRow from "./ThreadStepRow";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 import { getThreadTerminalEntries } from "./thread-live-activity";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
@@ -197,11 +198,10 @@ test("typed ripgrep calls render the shared query and project path presentation"
     server: item.server,
     tool: item.tool,
   });
-  const html = renderToStaticMarkup(createElement(ThreadMcpToolCallItem, {
-    item,
-    projectFilePaths: ["app/client/components/workbench.tsx"],
-    projectId: "project-one",
-    route,
+  const html = renderToStaticMarkup(createElement(ContextualProjectProvider, {
+    children: createElement(ThreadMcpToolCallItem, { item, route }),
+    filePaths: ["app/client/components/workbench.tsx"],
+    id: "project-one",
   }));
 
   assert.match(html, /Search for/u);

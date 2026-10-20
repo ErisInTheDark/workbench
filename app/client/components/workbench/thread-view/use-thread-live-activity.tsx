@@ -7,8 +7,6 @@
 
 import type { ReactNode } from "react";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
@@ -33,30 +31,18 @@ export default function useThreadLiveActivity({
   items,
   terminalContext,
   terminalRetention,
-  inlineMentionSources,
   presentationSource,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  threadCwdPath,
   threadId,
   turnId,
-  workspaceRoots,
 }: {
   activity: LiveThreadActivity | null;
   items: readonly ThreadItem[];
   terminalContext: ThreadTerminalContext;
   terminalRetention: Omit<ThreadTerminalRetention, "now">;
-  inlineMentionSources?: InlineMentionHighlightSources | null;
   presentationSource?: ThreadTextPresentationSource | null;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  threadCwdPath?: string;
   threadId: string;
   /** Null without a live turn. */
   turnId: string | null;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }): ThreadLiveActivityView | null {
   const reasoningStep = activity?.kind === "reasoning" ? activity.hiddenStep : null;
   const presentedMarkdown = useTranscript.presentedText({
@@ -90,15 +76,9 @@ export default function useThreadLiveActivity({
           <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="flex-[0 1 auto] max-h-[30%] overscroll-contain border-b border-fg-alpha/16 [& [data-thread-scroll-end=true]]:[scroll-margin-block-start: 0]" contentClassName="px-3 py-2">
             {reasoningDisplay?.body ? <MarkdownRender
               className="text-[0.8em] text-fg/muted"
-              inlineMentionSources={inlineMentionSources}
               markdown={reasoningDisplay.body}
-              threadCwdPath={threadCwdPath}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
               live={Boolean(presentationSource)}
               streaming={Boolean(presentationSource)}
-              workspaceRoots={workspaceRoots}
             /> : activity.kind === "webSearch" ? activity.contextItems.map(item => (
               <p key={item.id} className="m-0 text-[0.8em] text-fg/muted"><ThreadWebSearchActionRow item={item} /></p>
             )) : null}

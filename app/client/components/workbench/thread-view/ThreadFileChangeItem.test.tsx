@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import ThreadFileChangeItem, { ThreadFileChangeList, getStitchedNativeRowChange, getThreadFileChangeTotals } from "./ThreadFileChangeItem";
+import ContextualProjectProvider from "../ContextualProjectProvider";
 import { stitchFileOperationRows } from "./thread-file-change-stitching";
 
 type FileChangeItem = WorkbenchFileChangeItem;
@@ -39,9 +40,9 @@ function changes(streaming = false): FileChangeItem["changes"] {
 }
 
 function render(items: ComponentProps<typeof ThreadFileChangeItem>["items"]) {
-  return renderToStaticMarkup(createElement(ThreadFileChangeItem, {
-    items,
-    projectRootPath: "C:/workspace",
+  return renderToStaticMarkup(createElement(ContextualProjectProvider, {
+    children: createElement(ThreadFileChangeItem, { items }),
+    rootPath: "C:/workspace",
   }));
 }
 

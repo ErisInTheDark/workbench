@@ -1,11 +1,10 @@
 /*
  * Exports:
  * - default ThreadMessageBoardTopic: one subagent topic as a status-bordered thread-row disclosure whose bottom-anchored body lists its message history with sender/destination headers.
- * - ThreadMessageBoardMarkdownProps: markdown context shared by board message bubbles.
  */
 "use client";
 
-import { useMemo, useState, type ComponentProps } from "react";
+import { useMemo, useState } from "react";
 
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import { deriveThreadMessageBoardHistory, type ThreadMessageBoardMessage } from "../../../workbench/thread/thread-message-board";
@@ -19,11 +18,8 @@ import { ArrowRightIcon } from "../workbench-icons";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
 import ThreadAgentName from "./ThreadAgentName";
 import Disclosure from "../../ui/Disclosure";
-import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadSteerDecoration from "./ThreadSteerDecoration";
-
-export type ThreadMessageBoardMarkdownProps = Omit<ComponentProps<typeof MarkdownRender>, "markdown">;
 
 const neutralBorderClassName = "border-[color-mix(in_srgb,var(--text)_12%,transparent)]";
 
@@ -76,12 +72,13 @@ function ThreadMessageBoardBubbleHeader({
 }
 
 function ThreadMessageBoardBubble({
-  markdownProps,
+  cwd,
   message,
   subagent,
   subagents,
 }: {
-  markdownProps: ThreadMessageBoardMarkdownProps;
+  /** The subagent's working directory, which its message paths resolve against. */
+  cwd: string | undefined;
   message: ThreadMessageBoardMessage;
   subagent: WorkbenchSubagentSummary;
   subagents: readonly WorkbenchSubagentSummary[];
@@ -93,7 +90,7 @@ function ThreadMessageBoardBubble({
       <div className="w-fit min-w-0 max-w-[min(100%,36rem)] text-left [overflow-wrap:anywhere]">
         <ThreadSteerDecoration className="space-y-1.5" state={null}>
           {incoming && !message.sender ? null : <p className="m-0 text-[0.78em] font-medium leading-[1.5] text-fg/muted">{label}</p>}
-          <ThreadAgentMessageBody {...markdownProps} parts={[message]} />
+          <ThreadAgentMessageBody cwd={cwd} parts={[message]} />
         </ThreadSteerDecoration>
       </div>
       <ThreadMessageTimestamp align={incoming ? "right" : "left"} className="mt-1" timestampSeconds={message.timestampSeconds} />
@@ -102,12 +99,10 @@ function ThreadMessageBoardBubble({
 }
 
 function ThreadMessageBoardHistory({
-  markdownProps,
   projectId,
   subagent,
   subagents,
 }: {
-  markdownProps: ThreadMessageBoardMarkdownProps;
   projectId: string;
   subagent: WorkbenchSubagentSummary;
   subagents: readonly WorkbenchSubagentSummary[];
@@ -157,7 +152,7 @@ function ThreadMessageBoardHistory({
         ) : history.length ? history.map((message) => (
           <ThreadMessageBoardBubble
             key={message.id}
-            markdownProps={{ ...markdownProps, threadCwdPath: live.head?.cwd ?? subagent.cwd }}
+            cwd={live.head?.cwd ?? subagent.cwd}
             message={message}
             subagent={subagent}
             subagents={subagents}
@@ -171,12 +166,10 @@ function ThreadMessageBoardHistory({
 }
 
 export default function ThreadMessageBoardTopic({
-  markdownProps,
   projectId,
   subagent,
   subagents,
 }: {
-  markdownProps: ThreadMessageBoardMarkdownProps;
   projectId: string;
   subagent: WorkbenchSubagentSummary;
   subagents: readonly WorkbenchSubagentSummary[];
@@ -199,7 +192,7 @@ export default function ThreadMessageBoardTopic({
         onToggle={(event) => setIsOpen(event.currentTarget.open)}
         open={isOpen}
         renderContent={() => isOpen ? (
-          <ThreadMessageBoardHistory markdownProps={markdownProps} projectId={projectId} subagent={subagent} subagents={subagents} />
+          <ThreadMessageBoardHistory projectId={projectId} subagent={subagent} subagents={subagents} />
         ) : null}
         summary={(
           <div className="relative text-text">

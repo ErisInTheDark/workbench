@@ -20,15 +20,11 @@ export default function ThreadGitArcWaitItem({
   failureReason,
   interruptedBySteer = false,
   outcome,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
   planRef,
   receipt,
   threadId,
   typedFailure = null,
-  workspaceRoots,
-}: Pick<GitArcItemProps, "failureReason" | "projectFilePaths" | "projectId" | "projectRootPath" | "receipt" | "typedFailure" | "workspaceRoots"> & {
+}: Pick<GitArcItemProps, "failureReason" | "receipt" | "typedFailure"> & {
   durationMs: number | null;
   interruptedBySteer?: boolean;
   outcome: ThreadCommandExecutionOutcome;
@@ -47,12 +43,8 @@ export default function ThreadGitArcWaitItem({
         failureReason={failureReason}
         interruptedBySteer={interruptedBySteer}
         outcome={outcome}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
         receipt={receipt}
         typedFailure={typedFailure}
-        workspaceRoots={workspaceRoots}
       />
     );
   }
