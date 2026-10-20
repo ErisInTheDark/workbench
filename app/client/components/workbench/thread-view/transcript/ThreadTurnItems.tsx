@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - default ThreadTurnItems: the one transcript renderer for a turn's items: provides the turn scope, folds items into
- *   blocks and activity runs, and windows them with stable content keys so history landing above never remounts rows.
+ *   blocks and activity runs, and windows them with stable content keys so history landing above never remounts rows;
+ *   a running turn's typewriter caret waits below its last item for the next one.
  */
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
@@ -18,7 +19,8 @@ import { getThreadEntryMotionIdentity } from "../ThreadEntryMotionController";
 import ThreadGenericItem from "../ThreadGenericItem";
 import ThreadMeasuredContent from "../ThreadMeasuredContent";
 import ThreadProgressiveWindow, { type ThreadProgressiveWindowChunk } from "../ThreadProgressiveWindow";
-import { ThreadEntryAnimation } from "../ThreadRevealText";
+import ThreadAnimationStyleContext from "../ThreadAnimationStyleContext";
+import { ThreadEntryAnimation, ThreadStreamCaretSlot } from "../ThreadRevealText";
 import ThreadStableChunkIdentities from "../ThreadStableChunkIdentities";
 import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
@@ -65,6 +67,7 @@ export default memo(function ThreadTurnItems({
   turnStatus: Turn["status"];
 }) {
   const transcript = useTranscript();
+  const caret = useContext(ThreadAnimationStyleContext).caret;
   const presentationKind = presentationSource?.kind;
   const presentationKey = presentationSource?.sourceKey;
   const turn = useMemo<TranscriptTurnScope>(() => ({
@@ -142,6 +145,10 @@ export default memo(function ThreadTurnItems({
       </ThreadEntryMotion>
     );
   };
+  // Messages and reasoning carry their own caret while they stream; after anything else, it waits where the next item lands.
+  const lastItemType = items.at(-1)?.type;
+  const nextItemSlot = caret && turnStatus === "inProgress" && Boolean(presentationSource)
+    && lastItemType !== "agentMessage" && lastItemType !== "reasoning";
   const groupIdentity = chunkIdentities.groups([entryKeys])[0]!;
   const progressiveChunks: ThreadProgressiveWindowChunk[] = chunkIdentities
     .chunks(groupIdentity, entryKeys, THREAD_WINDOW_CHUNK_SIZE)
@@ -166,6 +173,7 @@ export default memo(function ThreadTurnItems({
           identity={`${turnId}:${groupIdentity}`}
           key={`progressive:${turnId}:${groupIdentity}`}
         />
+        {nextItemSlot ? <div className="py-2"><ThreadStreamCaretSlot /></div> : null}
       </SubagentActivitySlot.Provider>
     </TranscriptTurnContext.Provider>
   );

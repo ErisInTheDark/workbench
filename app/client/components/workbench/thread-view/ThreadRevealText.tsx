@@ -3,6 +3,7 @@
  * - default ThreadRevealText: fade one run of newly streamed text in with the style's text motion, continuing from when it first appeared.
  * - ThreadRevealBlock: play the style's block motion on a framed block that first appeared in streamed text.
  * - ThreadEntryAnimation: play the style's item motion on a newly arrived thread item or row.
+ * - ThreadStreamCaretSlot: an empty line holding the caret where the next block or item will land.
  * - ThreadStreamCaret: the typewriter caret riding the end of streaming text.
  */
 "use client";
@@ -59,6 +60,11 @@ export function ThreadEntryAnimation ({ children, className = "block", inline = 
   return inline
     ? <span className={className} ref={ref}>{children}</span>
     : <div className={className} ref={ref}>{children}</div>;
+}
+
+/** An empty line where the next streamed block or thread item will land; the typewriter caret waits in it. */
+export function ThreadStreamCaretSlot () {
+  return <p className="mb-[0.9em] last:mb-0" data-thread-stream-caret-slot="true"><ThreadStreamCaret /></p>;
 }
 
 export function ThreadStreamCaret () {

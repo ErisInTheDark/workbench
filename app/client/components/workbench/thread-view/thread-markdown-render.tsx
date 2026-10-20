@@ -44,7 +44,7 @@ import ThreadMarkdownSectionActions from "./ThreadMarkdownSectionActions";
 import ThreadNotice from "./ThreadNotice";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
-import ThreadRevealText, { ThreadRevealBlock, ThreadStreamCaret } from "./ThreadRevealText";
+import ThreadRevealText, { ThreadRevealBlock, ThreadStreamCaret, ThreadStreamCaretSlot } from "./ThreadRevealText";
 import ThreadVisFrame from "./ThreadVisFrame";
 
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
@@ -327,25 +327,41 @@ export function renderThreadInlineMarkdown (
   return options.caret ? [...nodes, <ThreadStreamCaret key={`${keyPrefix}-caret`} />] : nodes;
 }
 
-/** Only the last content block is at the stream frontier; everything before it is settled. */
+/** Streamed source ending in a blank line has finished its block; the next one has not started. */
+function endsBlock (markdown: string) {
+  return /\n[^\S\n]*\n\s*$/u.test(markdown);
+}
+
+/**
+ * Only the last content block is at the stream frontier; everything before it is settled.
+ * A frontier still being written keeps the typewriter caret at its end; once it is complete (or held back),
+ * the caret waits in a fresh slot below, where the next block will land.
+ */
 function renderThreadBlockSequence (
   parsedBlocks: readonly ParsedBlock[],
   options: ThreadRenderOptions,
   keyFor: (index: number) => string,
   sectionActionsFor?: (block: ParsedBlock) => ReactNode,
+  sourceEndsBlock = false,
 ) {
   const holding = Boolean(options.partial && options.holdIncompleteBlocks);
   const blocks = holding ? holdStreamingBlocks(parsedBlocks, (markdown) => parseBlocks(markdown, options)) : parsedBlocks;
   const frontierIndex = lastContentBlockIndex(blocks);
+  const frontier = blocks[frontierIndex];
   const settled = settledOptions(options);
-  // Held text shows only complete blocks, so the last one must not hide its final token as unfinished; it keeps the caret.
-  const frontierOptions = holding && frontierIndex >= 0 && !holdsInside(blocks[frontierIndex]!) ? { ...options, partial: false } : options;
-  return blocks.map((block, index) => renderEnteringBlock(block, options, `${keyFor(index)}-entry`, () => renderThreadBlock(
+  // Containers fill in place (their own sequence places the caret); fences end only with their closer, not a blank line.
+  const writingInPlace = !options.partial || (frontier !== undefined && (holding
+    ? holdsInside(frontier) && frontier === parsedBlocks[lastContentBlockIndex(parsedBlocks)]
+    : holdsInside(frontier) || frontier.type === "code" || !sourceEndsBlock));
+  // A complete frontier must not hide its final token as unfinished.
+  const frontierOptions = writingInPlace ? options : { ...options, caret: false, partial: false };
+  const rendered = blocks.map((block, index) => renderEnteringBlock(block, options, `${keyFor(index)}-entry`, () => renderThreadBlock(
     block,
     index === frontierIndex ? frontierOptions : settled,
     keyFor(index),
     sectionActionsFor?.(block),
   )));
+  return options.caret && !writingInPlace ? [...rendered, <ThreadStreamCaretSlot key={`${keyFor(blocks.length)}-caret`} />] : rendered;
 }
 
 function renderThreadChildBlocks (
@@ -478,7 +494,7 @@ function renderThreadStateChange (mode: string, keyPrefix: string, sectionAction
 }
 
 function renderThreadMarkdownBlocks (markdown: string, options: ThreadRenderOptions, keyPrefix: string) {
-  return renderThreadBlockSequence(parseBlocks(markdown, options), options, (index) => `${keyPrefix}-${index}`);
+  return renderThreadBlockSequence(parseBlocks(markdown, options), options, (index) => `${keyPrefix}-${index}`, undefined, endsBlock(markdown));
 }
 
 function renderThreadPlanBlock (
@@ -910,6 +926,7 @@ export function renderThreadMarkdown (
     (block) => isThreadMarkdownSectionBreak(block, threadOptions)
       ? <ThreadMarkdownSectionActions breakIndex={sectionBreakIndex++} />
       : undefined,
+    endsBlock(markdown),
   );
 
   return renderedBlocks.length ? renderedBlocks : <p className={BLOCK_SPACING_CLASS}><br /></p>;

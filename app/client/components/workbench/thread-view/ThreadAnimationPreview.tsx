@@ -1,17 +1,17 @@
 /*
  * Exports:
- * - default ThreadAnimationPreview: loop a short scripted reply (heading, paragraph, notice, then a command run) through the real thread markdown renderer in one animation style.
+ * - default ThreadAnimationPreview: loop a short scripted reply (heading, paragraph, notice, then a command run) through the real thread markdown renderer in one animation style; a typewriter caret waits below the running command.
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import type { WorkbenchThreadAnimationStyle } from "workbench-shared/workbench/settings/workbench-setting-definitions";
 import { THREAD_ANIMATION_STYLES } from "../../../workbench/thread/thread-animation-styles";
 import MarkdownRender from "../../ui/MarkdownRender";
 import { CheckIcon, LoaderIcon, TerminalIcon } from "../workbench-icons";
 import ThreadAnimationStyleContext from "./ThreadAnimationStyleContext";
-import { ThreadEntryAnimation } from "./ThreadRevealText";
+import { ThreadEntryAnimation, ThreadStreamCaretSlot } from "./ThreadRevealText";
 
 const SCRIPT = [
   "### Tracing the reveal",
@@ -34,6 +34,7 @@ type Phase = { kind: "streaming"; tokens: number } | { kind: "command"; settled:
 /** One pass of the script; remounting it restarts the loop. */
 function PreviewPass({ onDone }: { onDone: () => void }) {
   const [phase, setPhase] = useState<Phase>({ kind: "streaming", tokens: 0 });
+  const caret = useContext(ThreadAnimationStyleContext).caret;
   useEffect(() => {
     const streamEnd = TOKEN_ENDS.length * TOKEN_MS;
     const timers = TOKEN_ENDS.map((_, index) => window.setTimeout(() => setPhase({ kind: "streaming", tokens: index + 1 }), (index + 1) * TOKEN_MS));
@@ -55,6 +56,7 @@ function PreviewPass({ onDone }: { onDone: () => void }) {
         {phase.settled ? <span className="text-success"><CheckIcon size={12} /></span> : <LoaderIcon size={12} className="shrink-0 text-fg/muted" />}
       </span>
     </ThreadEntryAnimation> : null}
+    {caret && phase.kind === "command" && !phase.settled ? <span className="mt-1 block"><ThreadStreamCaretSlot /></span> : null}
   </>;
 }
 

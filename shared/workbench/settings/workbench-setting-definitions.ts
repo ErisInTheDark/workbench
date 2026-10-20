@@ -130,7 +130,11 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
   },
   showUnopenableFiles: { description: "Controls whether the project sidebar shows files Workbench cannot open directly.", key: "showUnopenableFiles", label: "Show unsupported files", type: "boolean" },
   threadAnimationPerParagraph: {
-    description: "Hold streaming text until each block is complete.", key: "threadAnimationPerParagraph", label: "Per paragraph", type: "boolean",
+    description: "", key: "threadAnimationPerParagraph", label: "Stream in as", type: "select",
+    options: [
+      { description: "Hold each block until it is complete.", label: "Blocks", value: true },
+      { description: "Reveal text word by word as it arrives.", label: "Tokens", value: false },
+    ],
   },
   threadAnimationStyle: {
     description: "", key: "threadAnimationStyle", label: "Thread animation", type: "select",

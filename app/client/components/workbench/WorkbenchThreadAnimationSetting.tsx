@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadAnimationSetting: thread animation row with the per-paragraph checkbox and a drag menu whose opener and rows play each style live.
+ * - default WorkbenchThreadAnimationSetting: thread animation row with the stream-in (blocks or tokens) choice and a drag menu whose opener and rows play each style live.
  */
 "use client";
 
@@ -9,11 +9,14 @@ import { WORKBENCH_SETTING_DEFINITIONS } from "../../workbench/state/workbench-s
 import PressDragMenu from "../ui/PressDragMenu";
 import ThreadAnimationPreview from "./thread-view/ThreadAnimationPreview";
 import { useSettings } from "./use-settings";
-import WorkbenchCheckbox from "./WorkbenchCheckbox";
+import RadioRow from "../ui/RadioRow";
 import { ChevronDownIcon } from "./workbench-icons";
 
 const definition = WORKBENCH_SETTING_DEFINITIONS.threadAnimationStyle;
-const perParagraphDefinition = WORKBENCH_SETTING_DEFINITIONS.threadAnimationPerParagraph;
+const streamDefinition = WORKBENCH_SETTING_DEFINITIONS.threadAnimationPerParagraph;
+const STREAM_UNITS = streamDefinition.options ?? [];
+/** Stored as the per-paragraph boolean: blocks holds each block until complete, tokens reveals word by word. */
+type StreamUnit = "blocks" | "tokens";
 /** Seven live rows outgrow the default menu cap; past this the menu scrolls. */
 const MENU_MAX_HEIGHT = 760;
 
@@ -41,13 +44,17 @@ export default function WorkbenchThreadAnimationSetting({ onError }: { onError: 
   const perParagraphUnavailable = settings.unavailable("threadAnimationPerParagraph");
   return <section className="flex min-w-0 flex-col items-start gap-2 py-3">
     <h3 className="m-0 text-sm font-semibold text-text">{definition.label}</h3>
-    <WorkbenchCheckbox
-      checked={perParagraph}
-      className="-ml-2 text-sm"
-      disabled={perParagraphUnavailable}
-      label={perParagraphDefinition.label}
-      onChange={next => { void settings.set("threadAnimationPerParagraph", next).catch(report); }}
-    />
+    <div className="flex items-center gap-2 text-detail text-fg/muted">
+      <span>{streamDefinition.label}</span>
+      <RadioRow<StreamUnit>
+        ariaLabel={streamDefinition.label}
+        disabled={perParagraphUnavailable}
+        size="comfortable"
+        value={perParagraph ? "blocks" : "tokens"}
+        options={STREAM_UNITS.map(unit => ({ label: unit.label, title: unit.description, value: unit.value ? "blocks" : "tokens" }))}
+        onChange={unit => { void settings.set("threadAnimationPerParagraph", unit === "blocks").catch(report); }}
+      />
+    </div>
     <PressDragMenu
       label={`Thread animation: ${current?.label ?? value}`}
       align="start"

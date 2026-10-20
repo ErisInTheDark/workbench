@@ -428,6 +428,41 @@ test("streaming text renders its frontier: hidden partial tokens, optimistic clo
   assert.doesNotMatch(html, /&lt;icon/u);
 });
 
+const CARET = 'data-thread-stream-caret="true"';
+const SLOT = 'data-thread-stream-caret-slot="true"';
+function typewriter(markdown: string, holdIncompleteBlocks = false) {
+  return renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(markdown, { caret: true, holdIncompleteBlocks, partial: true })));
+}
+
+test("the typewriter caret rides text mid-block, and waits in a fresh slot once the block ends", () => {
+  const midBlock = typewriter("first paragraph\n\nsecond para");
+  assert.doesNotMatch(midBlock, new RegExp(SLOT, "u"));
+  assert.match(midBlock, new RegExp(`second <span[^>]*${CARET}`, "u"));
+
+  const betweenBlocks = typewriter("first paragraph\n\n");
+  assert.match(betweenBlocks, new RegExp(`first paragraph</p><p[^>]*${SLOT}[^>]*><span[^>]*${CARET}`, "u"));
+  assert.equal(betweenBlocks.split(CARET).length - 1, 1);
+});
+
+test("with nothing visible yet the typewriter caret sits alone in its slot", () => {
+  assert.match(typewriter(""), new RegExp(`${SLOT}[^>]*><span[^>]*${CARET}`, "u"));
+  assert.match(typewriter("still arriv", true), new RegExp(`^<p[^>]*${SLOT}`, "u"));
+});
+
+test("blocks mode puts the caret in a slot below the shown blocks, or inside a filling container", () => {
+  const held = typewriter("done paragraph\n\nheld paragr", true);
+  assert.match(held, new RegExp(`done paragraph</p><p[^>]*${SLOT}`, "u"));
+  assert.equal(held.split(CARET).length - 1, 1);
+
+  const inside = typewriter('<notice title="Heads up" color="yellow">\ninner done\n\ninner still', true);
+  assert.match(inside, new RegExp(`inner done</p><p[^>]*${SLOT}[^]*</aside>`, "u"));
+});
+
+test("no caret style means no slot", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown("first paragraph\n\n", { partial: true })));
+  assert.doesNotMatch(html, new RegExp(`${SLOT}|${CARET}`, "u"));
+});
+
 test("per-paragraph streaming shows complete blocks whole, including their last word", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     "### Tracing",

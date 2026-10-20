@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - ThreadAgentMessageItem: one agent message as streamed markdown, with commentary copy rows and the final answer's timestamp.
+ * - ThreadAgentMessageItem: one agent message as streamed markdown (a typewriter caret holds its spot before text shows), with commentary copy rows and the final answer's timestamp.
  * - ThreadAgentCommentarySequence: consecutive commentary as one hover group, so a merged prose run's copy row appears from any of its items.
  * - ThreadIncomingAgentMessageRuns: one bubble per run of consecutive same-sender incoming messages, stamped with the run's latest message.
  * Keep runtime exports component-only for React Refresh.
  */
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useContext, useMemo } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
@@ -20,6 +20,7 @@ import { getThreadEntryMotionIdentity } from "../ThreadEntryMotionController";
 import ThreadCommentaryActionRow from "../ThreadCommentaryActionRow";
 import ThreadIncomingAgentMessageItem from "../ThreadIncomingAgentMessageItem";
 import { ThreadMarkdownSectionActionsProvider } from "../ThreadMarkdownSectionActions";
+import ThreadAnimationStyleContext from "../ThreadAnimationStyleContext";
 import ThreadMessageTimestamp from "../ThreadMessageTimestamp";
 import { ThreadEntryAnimation } from "../ThreadRevealText";
 import { buildThreadCommentaryRuns, type ThreadCommentaryRunActions } from "../thread-commentary-runs";
@@ -59,12 +60,14 @@ export function ThreadAgentMessageItem ({
   const text = stripWorkbenchTurnEndMarker(presentedText);
   // No provider-neutral item completion exists; a later item proves this text finished, and a lagging reveal is still streaming.
   const streaming = Boolean(presentationSource) && (isMostRecent || presentedText !== item.text);
+  const caret = useContext(ThreadAnimationStyleContext).caret;
   const breakCopyMarkdown = copyRuns?.breakCopyMarkdown;
   const renderBreakActions = useCallback((breakIndex: number) => {
     const markdown = breakCopyMarkdown?.[breakIndex];
     return markdown ? <ThreadCommentaryActionRow markdown={markdown} placement="break" /> : null;
   }, [breakCopyMarkdown]);
-  if (!text.trim()) return null;
+  // A typewriter caret waits in the message's spot until its first words show.
+  if (!text.trim() && !(streaming && caret)) return null;
   return (
     <section className={copyRuns ? "relative py-2" : "py-2"}>
       <ThreadMarkdownSectionActionsProvider value={copyRuns ? renderBreakActions : null}>
