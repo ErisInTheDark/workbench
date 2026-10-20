@@ -1241,7 +1241,7 @@ export default class WorkbenchWorkspaceRequestController {
     this.update(interest, { kind: "projectThreads",
       phase: !discoveryPending && projects.every(project => project.phase === "current") ? "current"
         : rows.length ? "stale" : failure ? "failed" : "pending",
-      failure, data: { ...projectWorkbenchThreadMembership(rows, presentation), projects } });
+      failure, data: { ...projectWorkbenchThreadMembership(rows, presentation, { settledLimit: query.settledLimit }), projects } });
   }
 
   private update(interest: Interest, payload: Payload) {

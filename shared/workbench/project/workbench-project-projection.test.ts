@@ -607,6 +607,29 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
   assert.deepEqual(titles(snoozedWork.placement.working ?? []), ["working"]);
   assert.deepEqual(titles(snoozedWork.placement.main), ["claimed", "draft", "attention", "complete"]);
   assert.deepEqual(itemTitles(snoozedWork.placement.snoozed), ["snoozed"]);
+
+  // A browser's settled page lists only that much history, and subagents ride on their parent instead of as rows.
+  const parent = rows.find(row => row.entry.title === "claimed")!;
+  if (parent.entry.entryKind !== "thread") throw new Error("Expected the claimed parent thread.");
+  const child = {
+    ...parent,
+    entry: {
+      entryKind: "subagent" as const, title: "child", activityAt: 1, createdAt: 1, updatedAt: 1, cwd: "C:/repo",
+      directSubagentIndex: 0, name: "Lily", parentThreadId: parent.entry.identity.threadId, pinned: false,
+      profileId: "", profileName: "", projectId: concrete,
+      identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("child") },
+      lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+      gitArc: { checkpointCommit: "a".repeat(40), phase: "active" as const, claimedPaths: ["child.ts"] as [string], proposals: [] },
+    },
+  };
+  const closed = projectWorkbenchThreadMembership([...rows, child], snapshot, { settledLimit: 0 });
+  const closedTitles = closed.members.map(member => member.title);
+  assert.deepEqual(closed.placement.settled, []);
+  assert.equal(closed.placement.settledCount, 1);
+  assert.ok(!closedTitles.includes("settled") && !closedTitles.includes("child"), "closed history and subagents stay app-side");
+  assert.deepEqual(closed.members.find(member => member.title === "claimed")?.subagentClaims?.map(claim => claim.claimedPaths), [["child.ts"]]);
+  const open = projectWorkbenchThreadMembership([...rows, child], snapshot, { settledLimit: 5 });
+  assert.ok(open.members.some(member => member.title === "settled"));
 });
 
 test("observed daemon facts show Home rows without becoming persisted launch targets", () => {

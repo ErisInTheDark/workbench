@@ -264,6 +264,8 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
     kind: z.literal("projectThreads"),
     projects: z.array(WorkspaceProjectReferenceSchema).nullable(),
     sidebarRowVersion: WorkbenchThreadSidebarRowVersionSchema.optional(),
+    /** Settled threads the sidebar shows (0 while its section is closed); absent lists every one, as older browsers expect. */
+    settledLimit: z.number().int().nonnegative().optional(),
   }).strict(),
   z.object({ kind: z.literal("projectTree"), location: ProjectLocationReferenceSchema }).strict(),
   z.object({ kind: z.literal("projectFile"), location: ProjectLocationReferenceSchema, path: z.string().min(1) }).strict(),
@@ -405,6 +407,11 @@ export const WorkspaceThreadMemberSchema = z.object({
     /** `launching`: the app is launching this draft, so it stands in for its thread. */
     z.object({ kind: z.literal("draft"), draftId: z.string().min(1), launching: z.literal(true).optional() }).strict(),
   ]),
+  /** Direct subagents holding active claims; their own rows are not listed, so the parent row carries their claims. */
+  subagentClaims: z.array(z.object({
+    threadId: WorkbenchThreadIdSchema, parentThreadId: WorkbenchThreadIdSchema, name: z.string(), title: z.string(),
+    directSubagentIndex: z.number().int().nonnegative(), claimedPaths: z.array(z.string().min(1)),
+  }).strict()).optional(),
 }).strict();
 export type WorkspaceThreadMember = z.infer<typeof WorkspaceThreadMemberSchema>;
 const placementItem = z.discriminatedUnion("kind", [
@@ -418,7 +425,9 @@ export const WorkspaceThreadPlacementSchema = z.object({
   pinned: z.array(placementItem),
   snoozed: z.array(placementItem),
   working: z.array(z.string().min(1)).optional(),
+  /** The first settled threads up to the query's `settledLimit`; `settledCount` counts every settled thread. */
   settled: z.array(placementItem),
+  settledCount: z.number().int().nonnegative().optional(),
 }).strict();
 export type WorkspaceThreadPlacement = z.infer<typeof WorkspaceThreadPlacementSchema>;
 export type WorkspaceThreadPlacementItem = z.infer<typeof placementItem>;

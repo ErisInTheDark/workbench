@@ -1371,6 +1371,8 @@ export interface WorkbenchControls {
    * of the selected projects (merged into `logicalThreads`); null releases them.
    */
   setArchivedThreadLimit: (limit: number | null) => void;
+  /** Settled threads the sidebar shows; 0 while its section is closed, so their rows never load. */
+  setSettledThreadLimit: (limit: number) => void;
   setEditorFontSize: (fontSize: number) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;

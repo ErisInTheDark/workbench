@@ -2,12 +2,13 @@
  * Exports:
  * - WorkbenchSubagentClaims: one direct child's active claim paths with its name, colour identity, and title.
  * - collectSubagentClaims: select direct children of a parent that hold active (unstashed) claims.
- * - useWorkbenchSubagentClaims: subscribe to a parent's direct-child claims from its project sidebar.
+ * - useWorkbenchSubagentClaims: subscribe to a parent's direct-child claims from its listing member, or its project sidebar.
  */
 "use client";
 
 import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 
+import type { WorkbenchThreadListing } from "workbench-shared/types";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { ThreadAgentIdentitySubject } from "../../workbench/thread/thread-subagents";
@@ -38,6 +39,7 @@ export function collectSubagentClaims(entries: readonly WorkbenchThreadSidebarEn
 }
 
 const EMPTY_SUBSCRIBE = () => () => undefined;
+const NO_MEMBERS: WorkbenchThreadListing["members"] = {};
 
 /** Provider-optional: thread rows also render standalone, where there are no sidebar children to roll up. */
 export function useWorkbenchSubagentClaims(projectId: ProjectId | "" | null | undefined, parentThreadId: string | null) {
@@ -47,8 +49,17 @@ export function useWorkbenchSubagentClaims(projectId: ProjectId | "" | null | un
     [parentThreadId, projectId, store],
   );
   const snapshot = useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
-  return useMemo(
-    () => parentThreadId && snapshot ? collectSubagentClaims(snapshot.entries, parentThreadId) : NO_CLAIMS,
-    [parentThreadId, snapshot],
-  );
+  const getMembers = useCallback(() => store?.getListing?.().members ?? NO_MEMBERS, [store]);
+  const members = useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getMembers, getMembers);
+  return useMemo(() => {
+    if (!parentThreadId) return NO_CLAIMS;
+    // Listings without subagent rows carry each parent's children's claims on the parent member.
+    const member = Object.values(members).find(candidate => candidate.ref.kind === "thread"
+      && candidate.ref.identity.threadId === parentThreadId && candidate.subagentClaims);
+    if (member?.subagentClaims) {
+      return member.subagentClaims.length ? [...member.subagentClaims]
+        .sort((left, right) => left.name.localeCompare(right.name) || left.threadId.localeCompare(right.threadId)) : NO_CLAIMS;
+    }
+    return snapshot ? collectSubagentClaims(snapshot.entries, parentThreadId) : NO_CLAIMS;
+  }, [members, parentThreadId, snapshot]);
 }

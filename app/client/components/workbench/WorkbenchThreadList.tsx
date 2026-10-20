@@ -356,8 +356,12 @@ export default function WorkbenchThreadList ({
   const displayedSettledThreadCount = displayedHistoryItems.reduce((count, item) => count + itemThreadCount(item), 0);
   // Archived rows load in pages; count every archived thread so "Load more" reaches the unloaded ones.
   const archivedThreadCount = Math.max(list.archivedEntries.length, listedArchivedCount);
-  const historyThreadCount = historyItems.reduce((count, item) => count + itemThreadCount(item), 0)
-    - list.archivedEntries.length + archivedThreadCount;
+  // Settled rows load only up to the open page; the placement still counts every settled thread.
+  const listedSettledThreadCount = list.settledItems.reduce((count, item) => count + itemThreadCount(item), 0);
+  const settledThreadTotal = Math.max(listedSettledThreadCount, structure.placement?.settledCount ?? 0);
+  const historyThreadCount = settledThreadTotal + archivedThreadCount;
+  const settledDemand = preferences.settledThreadsOpen ? settledLimit : 0;
+  useEffect(() => { controls?.setSettledThreadLimit(settledDemand); }, [controls, settledDemand]);
   const remainingSettledThreadCount = historyThreadCount - displayedSettledThreadCount;
   const archivedDemand = preferences.settledThreadsOpen && archivedThreadCount ? settledLimit : null;
   useEffect(() => {
@@ -668,7 +672,7 @@ export default function WorkbenchThreadList ({
             {renderSection(list.snoozedItems, "snoozed")}
           </Disclosure>
         ) : priorityTarget("snoozed")}
-        {historyItems.length || archivedThreadCount ? (
+        {historyThreadCount ? (
           <Disclosure
             className="mt-2"
             hideChevron={true}

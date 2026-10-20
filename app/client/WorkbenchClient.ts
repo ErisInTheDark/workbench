@@ -174,6 +174,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   /** Archived rows are observed only while a view shows them, for the current row selection. */
   let archived: { handle: QueryHandle<"archivedThreads">; limit: number; selection: WorkspaceProjectReference[] | null } | null = null;
   let archivedLimit: number | null = null;
+  let settledLimit = 0;
   const owners = new Map<string, QueryHandle<"threadOwner">>();
   const renderers = new Map<DaemonId, ThreadClient>();
   const warmedOpenCodeSources = new Map<DaemonId, number>();
@@ -399,14 +400,18 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     catch { return false; }
   }
 
-  function selectRows(selection: WorkspaceProjectReference[] | null) {
-    if (rowSelection !== undefined && areDeeplyEqual(rowSelection, selection)) return;
-    if (rows && retargeted(rows, { kind: "projectThreads", projects: selection })) {
+  /** Rows list only what the sidebar shows: settled threads up to its open page, none while it is closed. */
+  const rowsQuery = (selection: WorkspaceProjectReference[] | null) =>
+    ({ kind: "projectThreads" as const, projects: selection, settledLimit });
+
+  function selectRows(selection: WorkspaceProjectReference[] | null, force = false) {
+    if (!force && rowSelection !== undefined && areDeeplyEqual(rowSelection, selection)) return;
+    if (rows && retargeted(rows, rowsQuery(selection))) {
       rowSelection = selection;
       observeArchived();
       return;
     }
-    const next = workspace.observe({ kind: "projectThreads", projects: selection }, factsChanged);
+    const next = workspace.observe(rowsQuery(selection), factsChanged);
     const retained = usableRows(rows) ? rows : previousRows;
     if (rows && rows !== retained) rows.release();
     if (previousRows && previousRows !== retained) previousRows.release();
@@ -960,6 +965,12 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       archivedLimit = limit === null ? null : Math.min(Math.max(1, Math.floor(limit)), 500);
       observeArchived();
       emit();
+    },
+    setSettledThreadLimit: limit => {
+      const next = Math.max(0, Math.floor(limit));
+      if (next === settledLimit) return;
+      settledLimit = next;
+      if (rowSelection !== undefined) selectRows(rowSelection, true);
     },
     listModels: (...args) => threadClient.listModels(...args),
     watchRateLimits: () => threadClient.watchRateLimits(),

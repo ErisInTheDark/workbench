@@ -265,6 +265,8 @@ export function projectWorkspaceThreadMember(row: WorkbenchProjectedThreadRow): 
 export function projectWorkbenchThreadMembership(
   rows: readonly WorkbenchProjectedThreadRow[],
   presentation: PresentationSnapshot,
+  /** A browser's settled page. Present, only placed threads are listed and subagents fold into their parent. */
+  { settledLimit }: { settledLimit?: number } = {},
 ): Pick<WorkspaceThreadRows, "members" | "placement" | "folders"> {
   const logical = rows.filter((row): row is WorkbenchLogicalThreadRow => row.logicalProjectId !== null);
   const byProject = new Map<LogicalProjectId, WorkbenchLogicalThreadRow[]>();
@@ -284,20 +286,68 @@ export function projectWorkbenchThreadMembership(
     ? { kind: "folder", projectId: value.projectId, folder: value.folder, keys: value.threadKeys }
     : { kind: "thread", key: value.entry.threadKey };
   const snoozed = partitionSnoozedThreadItems(list.snoozedItems);
+  const placement = {
+    main: list.mainEntries.map(entry => entry.threadKey),
+    archived: list.archivedEntries.map(entry => entry.threadKey),
+    pinned: list.pinnedItems.map(item),
+    snoozed: snoozed.snoozedItems.map(item),
+    working: snoozed.workingEntries.map(entry => entry.threadKey),
+    settled: list.settledItems.map(item),
+  };
   return {
-    members: rows.map(projectWorkspaceThreadMember),
-    placement: {
-      main: list.mainEntries.map(entry => entry.threadKey),
-      archived: list.archivedEntries.map(entry => entry.threadKey),
-      pinned: list.pinnedItems.map(item),
-      snoozed: snoozed.snoozedItems.map(item),
-      working: snoozed.workingEntries.map(entry => entry.threadKey),
-      settled: list.settledItems.map(item),
-    },
+    ...(settledLimit === undefined
+      ? { members: rows.map(projectWorkspaceThreadMember), placement }
+      : listedMembership(rows, placement, settledLimit)),
     folders: {
       pinned: projectLogicalPinnedDisplayOrder(logical, presentation).folders ?? [],
       projects: Object.fromEntries([...projectOrders].map(([projectId, order]) => [projectId, order.folders ?? []])),
     },
+  };
+}
+
+const placementKeys = (items: readonly WorkspaceThreadPlacementItem[]) =>
+  items.flatMap(entry => entry.kind === "thread" ? [entry.key] : entry.keys);
+
+/**
+ * Only what the sidebar shows crosses to the browser: settled threads up to the page it asked for, and no subagent
+ * rows. A parent carries its direct subagents' active claims instead, which its badge and tooltip read.
+ */
+function listedMembership(
+  rows: readonly WorkbenchProjectedThreadRow[],
+  placement: WorkspaceThreadRows["placement"],
+  settledLimit: number,
+): Pick<WorkspaceThreadRows, "members" | "placement"> {
+  const settled: WorkspaceThreadPlacementItem[] = [];
+  let shown = 0;
+  for (const entry of placement.settled) {
+    if (shown >= settledLimit) break;
+    settled.push(entry);
+    shown += placementKeys([entry]).length;
+  }
+  const listed = new Set([
+    ...placement.main, ...placement.archived, ...(placement.working ?? []),
+    ...placementKeys(placement.pinned), ...placementKeys(placement.snoozed), ...placementKeys(settled),
+  ]);
+  const children = new Map<string, NonNullable<WorkspaceThreadMember["subagentClaims"]>>();
+  for (const { entry } of rows) {
+    if (entry.entryKind !== "subagent" || entry.gitArc?.phase !== "active") continue;
+    const claims = children.get(entry.parentThreadId) ?? [];
+    claims.push({
+      threadId: entry.identity.threadId, parentThreadId: entry.parentThreadId, name: entry.name, title: entry.title,
+      directSubagentIndex: entry.directSubagentIndex, claimedPaths: entry.gitArc.claimedPaths,
+    });
+    children.set(entry.parentThreadId, claims);
+  }
+  const members = rows.flatMap(row => {
+    if (row.entry.entryKind === "subagent") return [];
+    const member = projectWorkspaceThreadMember(row);
+    if (member.homeKey !== null && !listed.has(member.homeKey)) return [];
+    const claims = member.ref.kind === "thread" ? children.get(member.ref.identity.threadId) : undefined;
+    return [claims ? { ...member, subagentClaims: claims } : member];
+  });
+  return {
+    members,
+    placement: { ...placement, settled, settledCount: placementKeys(placement.settled).length },
   };
 }
 
