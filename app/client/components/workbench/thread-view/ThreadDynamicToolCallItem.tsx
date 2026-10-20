@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default ThreadDynamicToolCallItem: render generic tool calls as step rows, Workbench questionnaire history and MCP tool enable decisions.
+ * - default ThreadDynamicToolCallItem: render generic tool calls and code-mode executions as step rows, Workbench questionnaire history and MCP tool enable decisions.
  */
 "use client";
 
-import { useContext, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { repairQuestionnaireQuestion } from "workbench-shared/workbench/thread/thread-questionnaire-request";
@@ -40,9 +40,6 @@ import { ThreadMcpDecisionCard, type ThreadMcpRequestSubject } from "./ThreadMcp
 import { isMcpToolRequestApproved } from "workbench-shared/workbench/mcp/mcp-tool-request";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
-import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
-import { readGlobalWorkbenchSettings } from "../../../workbench/state/workbench-settings";
-import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
@@ -415,34 +412,25 @@ function ThreadQuestionnaireToolCallItem ({
 
 function ThreadGenericDynamicToolCallItem ({
   item,
-  hasCapturedChildren,
   knownSkills,
   projectFilePaths,
   projectId,
 }: {
   item: DynamicToolCallItem;
-  hasCapturedChildren?: boolean;
   knownSkills?: readonly WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
 }) {
-  const metaParts = buildMetaParts(item);
   const display = getNativeToolDisplay(item, { knownSkills });
   const outcome = item.success === false ? "failed" : item.status;
   const outcomeDisplay = display ? getThreadCommandOutcomeDisplay(display, outcome) : null;
-  const state = useWorkbenchClientStateSnapshot();
-  const paneCodeDetails = useContext(WorkbenchThreadDisplaySettingsContext);
-  const showCodeDetails = paneCodeDetails ?? readGlobalWorkbenchSettings(state.records).threadCodeDetails;
-  if (hasCapturedChildren && !showCodeDetails && outcome !== "failed") return null;
-
-  const Icon = hasCapturedChildren ? CodeIcon : getCommandIcon(outcomeDisplay?.summaryStats);
+  const Icon = getCommandIcon(outcomeDisplay?.summaryStats);
 
   return (
     <ThreadStepRow
       icon={<Icon size={16} />}
-      meta={metaParts}
-      summary={hasCapturedChildren ? <ThreadSummaryText text="Code details" />
-        : outcomeDisplay ? <ThreadCommandSummary display={outcomeDisplay} line projectFilePaths={projectFilePaths} projectId={projectId} />
+      meta={buildMetaParts(item)}
+      summary={outcomeDisplay ? <ThreadCommandSummary display={outcomeDisplay} line projectFilePaths={projectFilePaths} projectId={projectId} />
         : <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.45rem] overflow-hidden">
           <ThreadSummaryText text="Tool" />
           {item.namespace ? <code className={INLINE_CODE_CLASS}>{item.namespace}</code> : null}
@@ -457,10 +445,28 @@ function ThreadGenericDynamicToolCallItem ({
   );
 }
 
+/** Code-mode JavaScript reads like a shell command: the code is the step, and opening it shows the code with its output. */
+function ThreadCodeModeItem ({ item }: { item: DynamicToolCallItem }) {
+  const code = asString(asRecord(item.arguments)?.code)?.trim() ?? "";
+  const failed = item.success === false || item.status === "failed";
+  return (
+    <ThreadStepRow
+      icon={<CodeIcon size={16} />}
+      iconClassName={failed ? "text-danger" : undefined}
+      meta={buildMetaParts(item)}
+      summary={<span className="min-w-0 truncate font-mono text-[0.92em] text-text" title={code}>{code.split(/\r?\n/u)[0] || item.tool}</span>}
+      renderContent={() => <ThreadHydratedToolCallDetails
+        invocation={code}
+        item={item}
+        output={body => body.resultExpiredAt ? null : formatToolCallOutput({ content: body.contentItems })}
+      />}
+    />
+  );
+}
+
 export default function ThreadDynamicToolCallItem ({
   activeStartedAtMs,
   answeredAt = null,
-  hasCapturedChildren,
   inlineMentionSources,
   item,
   knownSkills,
@@ -472,7 +478,6 @@ export default function ThreadDynamicToolCallItem ({
 }: {
   activeStartedAtMs?: number | null;
   answeredAt?: number | null;
-  hasCapturedChildren?: boolean;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
   knownSkills?: readonly WorkbenchSkillSummary[];
@@ -502,6 +507,7 @@ export default function ThreadDynamicToolCallItem ({
     return <ThreadFileChangeItem items={[presentedItem]} projectFilePaths={projectFilePaths} projectId={projectId}
       projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
-  return <ThreadGenericDynamicToolCallItem item={presentedItem} hasCapturedChildren={hasCapturedChildren} knownSkills={knownSkills}
+  if (item.namespace === "opencode" && item.tool === "execute") return <ThreadCodeModeItem item={presentedItem} />;
+  return <ThreadGenericDynamicToolCallItem item={presentedItem} knownSkills={knownSkills}
     projectFilePaths={projectFilePaths} projectId={projectId} />;
 }

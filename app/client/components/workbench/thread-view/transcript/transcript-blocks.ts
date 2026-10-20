@@ -64,9 +64,10 @@ export function withInteractionTimeline(
 }
 
 export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscriptItem[], {
-  browseResultEntries, hiddenReasoningStep, scope,
+  browseResultEntries, codeDetails, hiddenReasoningStep, scope,
 }: {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
+  codeDetails: boolean;
   hiddenReasoningStep: ThreadReasoningStepReference | null;
   scope: Pick<TranscriptScope, "knownSkills" | "projectRootPath" | "threadCwdPath" | "workspaceRoots">;
 }): TranscriptEntry[] {
@@ -77,7 +78,7 @@ export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscr
     if (!pending.length) return;
     entries.push(...buildActivityRuns(
       buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, scope.threadCwdPath),
-      { browseScreenshotUrls, knownSkills: scope.knownSkills, projectRootPath: scope.projectRootPath, workspaceRoots: scope.workspaceRoots },
+      { browseScreenshotUrls, codeDetails, knownSkills: scope.knownSkills, projectRootPath: scope.projectRootPath, workspaceRoots: scope.workspaceRoots },
     ).map(block => ({ block, kind: "block" as const })));
     pending = [];
   };

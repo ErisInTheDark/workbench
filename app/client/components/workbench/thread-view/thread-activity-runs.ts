@@ -1,6 +1,8 @@
 /*
  * Exports:
- * - buildActivityRuns: fold consecutive reasoning, plain commands (Browse included), file changes and web searches into activity runs; screenshot steers a Browse step already shows fold away; every other block stays a boundary.
+ * - buildActivityRuns: fold consecutive reasoning, plain commands (Browse included), file changes, web searches and code-mode
+ *   executions into activity runs; screenshot steers a Browse step already shows fold away; every other block stays a boundary.
+ * - getActivitySegmentItems: the items one run segment shows.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getAgentScreenshotSteerImages, isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
@@ -15,11 +17,17 @@ type ActivityRunBlock = Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
 type CommandContext = Omit<Parameters<typeof buildCommandSequenceRenderSegments>[0], "items"> & {
   /** Screenshots Browse steps already show; steers carrying only these are duplicates. */
   browseScreenshotUrls?: ReadonlySet<string>;
+  /** Show code-mode executions as steps even when their calls already show as their own steps. */
+  codeDetails?: boolean;
 };
+
+/** A run member that adds no visible step: a code-mode execution whose calls show as their own steps. */
+interface HiddenMember { kind: "hidden"; item: ThreadItem }
+type Piece = ActivitySegment | HiddenMember | ThreadRenderableBlock;
 
 /** Plain commands join runs; lifecycle commands (arc, subagents, titles, approvals) keep their own rows and end the run. */
 function splitCommandBlock(block: Extract<ThreadRenderableBlock, { kind: "commandSequence" }>, context: CommandContext) {
-  return buildCommandSequenceRenderSegments({ items: block.items, ...context }).map<ActivitySegment | ThreadRenderableBlock>(segment => {
+  return buildCommandSequenceRenderSegments({ items: block.items, ...context }).map<Piece>(segment => {
     if (segment.kind === "commands") return { items: segment.items, kind: "commands" };
     if (segment.kind === "approval") return { items: segment.items, kind: "commandSequence" };
     if (segment.kind === "subagentWait") return { items: segment.group.entries.map(entry => entry.item), kind: "commandSequence" };
@@ -33,30 +41,40 @@ function isBrowseScreenshotDuplicate(block: ThreadRenderableBlock, urls: Readonl
   return images.length > 0 && images.every(image => urls.has(image.url));
 }
 
-function toSegments(block: ThreadRenderableBlock, context: CommandContext): Array<ActivitySegment | ThreadRenderableBlock> {
+/** OpenCode code mode runs JavaScript whose tool calls are recorded as their own items; the execution itself is a run step. */
+function toCodeModePiece(block: Extract<ThreadRenderableBlock, { kind: "item" }>, context: CommandContext): Piece | null {
+  const item = block.item;
+  if (item.type !== "dynamicToolCall" || item.namespace !== "opencode" || item.tool !== "execute") return null;
+  const failed = item.status === "failed" || item.success === false;
+  return block.hasCapturedChildren && !failed && !context.codeDetails ? { item, kind: "hidden" } : { item, kind: "code" };
+}
+
+function toPieces(block: ThreadRenderableBlock, context: CommandContext): Piece[] {
   switch (block.kind) {
     case "reasoningSequence": return block.items.map(item => ({ item, kind: "reasoning" as const }));
     case "fileChangeSequence": return [{ items: block.items, kind: "files" }];
     case "webSearchSequence": return [{ items: block.items, kind: "webSearch" }];
     case "commandSequence": return splitCommandBlock(block, context);
+    case "item": return [toCodeModePiece(block, context) ?? block];
     default: return [block];
   }
 }
 
-function isSegment(piece: ActivitySegment | ThreadRenderableBlock): piece is ActivitySegment {
-  return piece.kind === "reasoning" || piece.kind === "commands" || piece.kind === "files" || piece.kind === "webSearch";
+function isRunPiece(piece: Piece): piece is ActivitySegment | HiddenMember {
+  return piece.kind === "reasoning" || piece.kind === "code" || piece.kind === "commands" || piece.kind === "files"
+    || piece.kind === "webSearch" || piece.kind === "hidden";
 }
 
-function segmentItems(segment: ActivitySegment): ThreadItem[] {
-  return segment.kind === "reasoning" ? [segment.item] : segment.items;
+export function getActivitySegmentItems(segment: ActivitySegment): ThreadItem[] {
+  return segment.kind === "reasoning" || segment.kind === "code" ? [segment.item] : segment.items;
 }
 
 export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], context: CommandContext = {}): ThreadRenderableBlock[] {
   const result: ThreadRenderableBlock[] = [];
   let run: ActivityRunBlock | null = null;
   const visible = blocks.filter(block => !isBrowseScreenshotDuplicate(block, context.browseScreenshotUrls));
-  for (const piece of visible.flatMap(block => toSegments(block, context))) {
-    if (!isSegment(piece)) {
+  for (const piece of visible.flatMap(block => toPieces(block, context))) {
+    if (!isRunPiece(piece)) {
       run = null;
       result.push(piece);
       continue;
@@ -65,13 +83,18 @@ export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], cont
       run = { items: [], kind: "activityRun", segments: [] };
       result.push(run);
     }
+    if (piece.kind === "hidden") {
+      run.items.push(piece.item);
+      continue;
+    }
     if (!appendToPrevious(run.segments.at(-1), piece)) run.segments.push(copySegment(piece));
-    run.items.push(...segmentItems(piece));
+    run.items.push(...getActivitySegmentItems(piece));
   }
-  return result;
+  // A run holding only hidden members has nothing to show.
+  return result.filter(block => block.kind !== "activityRun" || block.segments.length > 0);
 }
 
-/** Adjacent commands share one group, adjacent file changes one list, adjacent searches one row; reasoning steps stay apart. */
+/** Adjacent commands share one group, adjacent file changes one list, adjacent searches one row; reasoning and code steps stay apart. */
 function appendToPrevious(previous: ActivitySegment | undefined, piece: ActivitySegment) {
   if (previous?.kind === "commands" && piece.kind === "commands") previous.items.push(...piece.items);
   else if (previous?.kind === "files" && piece.kind === "files") previous.items.push(...piece.items);
@@ -82,7 +105,8 @@ function appendToPrevious(previous: ActivitySegment | undefined, piece: Activity
 
 function copySegment(segment: ActivitySegment): ActivitySegment {
   switch (segment.kind) {
-    case "reasoning": return segment;
+    case "reasoning":
+    case "code": return segment;
     case "commands": return { items: [...segment.items], kind: "commands" };
     case "files": return { items: [...segment.items], kind: "files" };
     case "webSearch": return { items: [...segment.items], kind: "webSearch" };

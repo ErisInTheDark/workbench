@@ -73,6 +73,13 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
       isMostRecent={isMostRecent}
       itemTimeline={itemTimeline}
       renderers={{
+        code: (item) => (
+          <ThreadDynamicToolCallItem
+            activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
+            item={item}
+            knownSkills={transcript.knownSkills}
+          />
+        ),
         commands: (items) => items.map((item) => {
           const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, transcript), turn.browseResultEntries);
           return browseSteps ? (
@@ -227,7 +234,6 @@ function ThreadItemBlock({ block, finalAgentMessageId, isMostRecent, itemTimelin
           {...markdownProps}
           activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
           answeredAt={findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline)?.completedAt ?? null}
-          hasCapturedChildren={block.hasCapturedChildren}
           item={item}
           knownSkills={transcript.knownSkills}
         />

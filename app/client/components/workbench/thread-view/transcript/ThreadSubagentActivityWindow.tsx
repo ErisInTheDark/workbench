@@ -16,6 +16,7 @@ import {
   type TranscriptScope, type TranscriptTurnScope,
 } from "../../use-transcript";
 import WorkbenchClientContext from "../../workbench-client-context";
+import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import { getRenderableBlockKey, type ThreadRenderableBlock } from "../thread-render-blocks";
 import ThreadRenderableBlockView from "./ThreadRenderableBlockView";
 import { ThreadContentLoadingSkeleton } from "./ThreadTurnLoadStates";
@@ -78,11 +79,12 @@ function ThreadSubagentActivityWindowBody ({ thread }: { thread: RelatedThread |
     status: currentTurn.status,
   } : null, [currentTurn]);
   const turnItems = currentTurn?.items;
+  const codeDetails = useThreadCodeDetails();
   const recentBlocks = useMemo(() => turnItems
-    ? buildTranscriptEntries(turnItems, { browseResultEntries: NO_BROWSE_RESULTS, hiddenReasoningStep: null, scope })
+    ? buildTranscriptEntries(turnItems, { browseResultEntries: NO_BROWSE_RESULTS, codeDetails, hiddenReasoningStep: null, scope })
       .flatMap(entry => entry.kind === "block" ? [entry.block] : [])
       .slice(-SUBAGENT_ACTIVITY_WINDOW_BLOCKS)
-    : NO_BLOCKS, [scope, turnItems]);
+    : NO_BLOCKS, [codeDetails, scope, turnItems]);
   const blocks = useStableRenderableBlocks(recentBlocks);
   if (!thread || !currentTurn || !turnScope) {
     return <ThreadContentLoadingSkeleton />;

@@ -9,48 +9,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
-import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
-import { WorkbenchClientStateContext } from "../workbench-client-state-context";
-import WorkbenchClientStateController from "../../../workbench/state/WorkbenchClientStateController";
-import { writeGlobalWorkbenchSetting } from "../../../workbench/state/workbench-settings";
 
 type DynamicItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
-test("captured code details follow the owning pane setting rather than the physical folder", async () => {
-  const controller = new WorkbenchClientStateController({ mode: "memory" });
+test("a code-mode execution reads as its code, never as a generic tool call", () => {
   const item: DynamicItem = {
     type: "dynamicToolCall", id: "execute", namespace: "opencode", tool: "execute",
-    arguments: {}, contentItems: null, durationMs: null, status: "completed", success: true,
+    arguments: { code: "const r = await tools.wbex_message({ parent: true });\nreturn r;" },
+    contentItems: [{ type: "inputText", text: "Unknown tool 'wbex_message'." }], durationMs: 9, status: "failed", success: false,
   };
-  const render = (details: boolean | null, projectId: string) => renderToStaticMarkup(createElement(WorkbenchClientStateContext.Provider, {
-    value: controller,
-  }, createElement(WorkbenchThreadDisplaySettingsContext.Provider, { value: details },
-    createElement(ThreadDynamicToolCallItem, { item, projectId, hasCapturedChildren: true }))));
-  assert.ok(!render(null, "alpha"));
-  await writeGlobalWorkbenchSetting(controller, "threadCodeDetails", true);
-  assert.ok(render(null, "alpha"));
-  assert.ok(!render(false, "alpha"));
-  assert.ok(!render(false, "beta"));
-  assert.ok(render(true, "alpha"));
-});
-
-test("captured execution details are hidden by default without hiding failure or uncaptured output", () => {
-  const item: DynamicItem = {
-    type: "dynamicToolCall", id: "execute", namespace: "opencode", tool: "execute",
-    arguments: { code: "await tools.wb.task_get({})" }, contentItems: null,
-    durationMs: null, status: "inProgress", success: null,
-  };
-  for (const status of ["inProgress", "completed"] as const) {
-    assert.ok(!renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, {
-      item: { ...item, status }, hasCapturedChildren: true,
-    })));
-  }
-  assert.notEqual(renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, {
-    item, hasCapturedChildren: false,
-  })), "");
-  assert.notEqual(renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, {
-    item: { ...item, status: "failed", success: false }, hasCapturedChildren: true,
-  })), "");
+  const html = renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, { item }));
+  assert.match(html, /const r = await tools\.wbex_message/u);
+  assert.doesNotMatch(html, />Tool</u);
 });
 
 test("a completed native edit has one disclosure rather than a second copy of its operation", () => {

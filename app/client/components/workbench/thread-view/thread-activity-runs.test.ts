@@ -25,12 +25,41 @@ function edit(id: string, path: string): ThreadItem {
     status: "completed", success: true, contentItems: null, durationMs: 1 };
 }
 
+/** OpenCode code mode: an `execute` wrapper whose wb calls are recorded as their own items in its call group. */
+function codeWrapper(id: string, group: string, status: "completed" | "failed" = "completed"): ThreadItem {
+  return { id, type: "dynamicToolCall", namespace: "opencode", tool: "execute", arguments: { code: "await tools.wb.shell({ command: 'pwd' })" },
+    status, success: status === "completed", contentItems: null, durationMs: 1, toolCallGroupId: group };
+}
+function codeCall(id: string, group: string): ThreadItem {
+  return {
+    ...mcp(id, "shell", { command: "pwd", workdir: "C:/repo" }),
+    result: { _meta: null, content: [], structuredContent: { cwd: "C:/repo", exitCode: 0, shell: "pwsh", stderr: "", stdout: "" } },
+    toolCallGroupId: group,
+  };
+}
+
 /** Runs as `run:[segment kinds and ids]`, other blocks as their kind and ids. */
-function shape(items: ThreadItem[]) {
-  return buildActivityRuns(buildRenderableBlocks(items)).map((block: ThreadRenderableBlock) => block.kind === "activityRun"
-    ? ["run", block.segments.map(segment => [segment.kind, (segment.kind === "reasoning" ? [segment.item] : segment.items).map(item => item.id)])]
+function shape(items: ThreadItem[], context: Parameters<typeof buildActivityRuns>[1] = {}) {
+  return buildActivityRuns(buildRenderableBlocks(items), context).map((block: ThreadRenderableBlock) => block.kind === "activityRun"
+    ? ["run", block.segments.map(segment => [segment.kind, (segment.kind === "reasoning" || segment.kind === "code" ? [segment.item] : segment.items).map(item => item.id)])]
     : [block.kind, getRenderableBlockItems(block).map(item => item.id)]);
 }
+
+test("code-mode wrappers stay inside the run: hidden behind their calls, or one code step when shown or failed", () => {
+  const steps = [
+    reasoning("think"), codeWrapper("wrap-a", "a"), codeCall("call-a", "a"),
+    reasoning("again"), codeWrapper("wrap-b", "b"), codeCall("call-b", "b"),
+  ];
+  assert.deepEqual(shape(steps), [["run", [
+    ["reasoning", ["think"]], ["commands", ["call-a"]], ["reasoning", ["again"]], ["commands", ["call-b"]],
+  ]]]);
+  assert.deepEqual(shape(steps.slice(0, 3), { codeDetails: true }), [["run", [
+    ["reasoning", ["think"]], ["code", ["wrap-a"]], ["commands", ["call-a"]],
+  ]]]);
+  assert.deepEqual(shape([command("before"), codeWrapper("failed", "lost", "failed"), command("after")]), [["run", [
+    ["commands", ["before"]], ["code", ["failed"]], ["commands", ["after"]],
+  ]]]);
+});
 
 test("reasoning, plain commands, file edits and native reads share one run; adjacent commands share one group", () => {
   assert.deepEqual(shape([

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadActivityRun: one run of consecutive work as a tinted summary (counted chips, live duration, current step) that expands into its steps.
+ * - default ThreadActivityRun: one run of consecutive work as a tinted summary (counted chips, live duration, current step) that expands into its steps;
+ *   a settled run holding one step shows that step alone.
  */
 "use client";
 
@@ -20,6 +21,7 @@ import ThreadDurationText from "./ThreadDurationText";
 import ThreadInlineCode from "./ThreadInlineCode";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import useThreadActivityRun from "./use-thread-activity-run";
+import { getActivitySegmentItems } from "./thread-activity-runs";
 import { useTranscript } from "../use-transcript";
 
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
@@ -29,6 +31,7 @@ const FILE_VERBS = { add: "Creating", delete: "Deleting", update: "Editing" } as
 
 /** Each group's existing renderer draws its steps; the run owns only summary, status and layout. */
 export interface ThreadActivityRunRenderers {
+  code: (item: Extract<ActivitySegment, { kind: "code" }>["item"]) => ReactNode;
   commands: (items: CommandSequenceItem[], isLastSegment: boolean) => ReactNode;
   files: (items: FileItem[]) => ReactNode;
   reasoning: (item: ReasoningItem, isLastSegment: boolean) => ReactNode;
@@ -108,10 +111,6 @@ function StatusContent({ context, item }: { context: CommandChipContext; item: T
   return <span className={shimmerTextClassName}>{text || "Working"}</span>;
 }
 
-function segmentItems(segment: ActivitySegment): ThreadItem[] {
-  return segment.kind === "reasoning" ? [segment.item] : segment.items;
-}
-
 export default function ThreadActivityRun({
   block,
   isMostRecent,
@@ -145,6 +144,25 @@ export default function ThreadActivityRun({
   const status = current
     ? <StatusContent context={context} item={current} />
     : live ? <span className={shimmerTextClassName}>Thinking</span> : null;
+  const steps = block.segments.map((segment, index) => {
+    const previous = block.segments[index - 1];
+    // Adjacent action groups sit tight; reasoning gets breathing room either side.
+    const gap = !previous ? "" : segment.kind !== "reasoning" && previous.kind !== "reasoning" ? "mt-0.5" : "mt-2";
+    const key = getActivitySegmentItems(segment)[0]?.id ?? index;
+    const last = index === block.segments.length - 1;
+    switch (segment.kind) {
+      case "reasoning": return <div className={gap} key={key}>{renderers.reasoning(segment.item, last)}</div>;
+      case "commands": return <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>{renderers.commands(segment.items, last)}</div>;
+      case "code": return <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>{renderers.code(segment.item)}</div>;
+      case "files": return <div className={gap} key={key}>{renderers.files(segment.items)}</div>;
+      case "webSearch": return <div className={gap} key={key}>{renderers.webSearch(segment.items)}</div>;
+    }
+  });
+
+  // A run that settled holding one step is just that step; the card only earns its place summarising several.
+  if (!live && block.segments.flatMap(getActivitySegmentItems).length === 1) {
+    return <div className="my-1.5">{steps}</div>;
+  }
 
   return (
     <div className="my-1.5" data-thread-activity-run="true">
@@ -157,7 +175,7 @@ export default function ThreadActivityRun({
         <span className="flex h-8 min-w-0 items-center gap-2">
           <span className="min-w-0 flex-1 overflow-hidden">
             {chips.length ? <ChipRow chips={chips} /> : status
-              ? <span className="flex min-w-0 items-center gap-2"><LoaderIcon className="shrink-0" />{status}</span>
+              ? <span className="flex min-w-0 items-center gap-2 font-medium"><LoaderIcon className="shrink-0" />{status}</span>
               : <span>Reasoned</span>}
           </span>
           {durationMs ? <ThreadDurationText className="shrink-0" durationMs={durationMs} /> : null}
@@ -170,31 +188,13 @@ export default function ThreadActivityRun({
           />
         </span>
         {chips.length && status ? (
-          <span className="-mt-1 flex h-7 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap pb-0.5 text-[1.05em]">
+          <span className="-mt-1 flex h-7 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap pb-0.5 text-[1.05em] font-medium">
             <LoaderIcon className="shrink-0" />
             <span className="min-w-0 truncate">{status}</span>
           </span>
         ) : null}
       </button>
-      {run.open ? (
-        <div className="px-3 pt-1.5">
-          {block.segments.map((segment, index) => {
-            const previous = block.segments[index - 1];
-            // Adjacent action groups sit tight; reasoning gets breathing room either side.
-            const gap = !previous ? "" : segment.kind !== "reasoning" && previous.kind !== "reasoning" ? "mt-0.5" : "mt-2";
-            const key = segmentItems(segment)[0]?.id ?? index;
-            const last = index === block.segments.length - 1;
-            if (segment.kind === "reasoning") {
-              return <div className={gap} key={key}>{renderers.reasoning(segment.item, last)}</div>;
-            }
-            if (segment.kind === "commands") {
-              return <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>{renderers.commands(segment.items, last)}</div>;
-            }
-            if (segment.kind === "files") return <div className={gap} key={key}>{renderers.files(segment.items)}</div>;
-            return <div className={gap} key={key}>{renderers.webSearch(segment.items)}</div>;
-          })}
-        </div>
-      ) : null}
+      {run.open ? <div className="px-3 pt-1.5">{steps}</div> : null}
     </div>
   );
 }

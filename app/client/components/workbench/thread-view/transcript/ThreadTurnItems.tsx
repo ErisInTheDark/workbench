@@ -19,6 +19,7 @@ import ThreadMeasuredContent from "../ThreadMeasuredContent";
 import ThreadProgressiveWindow, { type ThreadProgressiveWindowChunk } from "../ThreadProgressiveWindow";
 import { ThreadEntryAnimation } from "../ThreadRevealText";
 import ThreadStableChunkIdentities from "../ThreadStableChunkIdentities";
+import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
 import { getRenderableBlockItems } from "../thread-render-blocks";
 import { THREAD_WINDOW_CHUNK_SIZE } from "../thread-progressive-window-policy";
@@ -73,9 +74,10 @@ export default memo(function ThreadTurnItems({
   }), [browseResultEntries, presentationKey, presentationKind, turnCompletedAt, turnId, turnStartedAt, turnStatus]);
   const animateEntries = useEntryMotionAfterMount(turnStatus === "inProgress");
   const renderItemTimeline = useMemo(() => withInteractionTimeline(items, itemTimeline), [items, itemTimeline]);
+  const codeDetails = useThreadCodeDetails();
   const entries = useMemo(
-    () => buildTranscriptEntries(items, { browseResultEntries, hiddenReasoningStep, scope: transcript }),
-    [browseResultEntries, hiddenReasoningStep, items, transcript],
+    () => buildTranscriptEntries(items, { browseResultEntries, codeDetails, hiddenReasoningStep, scope: transcript }),
+    [browseResultEntries, codeDetails, hiddenReasoningStep, items, transcript],
   );
   const stableBlocks = useStableRenderableBlocks(entries.flatMap(entry => entry.kind === "block" ? [entry.block] : []), "identity");
   let stableBlockIndex = 0;

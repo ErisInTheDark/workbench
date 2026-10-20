@@ -76,9 +76,13 @@ export interface IncomingAgentMessageRun {
 }
 export type AgentCommentaryItem = Extract<ThreadItem, { type: "agentMessage" }>;
 type FileOperationBlockItem = Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" | "mcpToolCall" }>;
-/** One group inside an activity run: a reasoning step, consecutive plain commands, consecutive file changes, or web searches. */
+/**
+ * One group inside an activity run: a reasoning step, consecutive plain commands, consecutive file changes, web searches,
+ * or a code-mode execution shown as its own step.
+ */
 export type ActivitySegment =
   | { kind: "reasoning"; item: Extract<ThreadItem, { type: "reasoning" }> }
+  | { kind: "code"; item: Extract<ThreadItem, { type: "dynamicToolCall" }> }
   | { kind: "commands"; items: CommandSequenceItem[] }
   | { kind: "files"; items: FileOperationBlockItem[] }
   | { kind: "webSearch"; items: Extract<ThreadItem, { type: "webSearch" }>[] };
