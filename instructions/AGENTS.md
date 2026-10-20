@@ -258,7 +258,11 @@ Bundled calls can result in one command failing and wasting time on pointless va
 
 **Hard rule: every test must earn its permanent project tax.** Test semantic and logical invariants, not representation. Tautological assertions that pin exact source code, strings, constants, user-facing text, display details, or implementation shape are actively harmful: they add failing-test maintenance tax without protecting behavior. Add tests that protect important behavioral invariants from realistic regressions. Do not add tests merely because code changed, a branch exists, coverage is low, or a test is easy to write. A low-value test is a defect in the suite, not harmless coverage.
 
-- Test behavioral invariants at the smallest real owner, never implementation shape.
+- Test behavioral invariants at the smallest real owner, never implementation shape. UI tests are tautological by default: test utilities, not components; to test a component's decision, move it into a utility first.
+<!-- Rendered-markup and mounted (jsdom) component tests mostly restate what the component draws: they pin wording,
+     markup and wiring ("the button calls the callback"), break on every visual change, and miss the real decision
+     hidden in the component. Agents reach for them because the component is where the logic happens to live.
+     Moving the decision into a pure owner both improves the code and gives a test that protects behaviour. -->
 - Add no test for trivial, static, or framework-guaranteed behavior.
 - Cover every owner route that can break the protected invariant, including failure routes.
 - Do not test Tailwind classes, display details, exact constants, private source text, thin delegation, or removed features staying removed.
