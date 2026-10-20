@@ -7,12 +7,11 @@
 
 import { createContext, useContext } from "react";
 
-import { readGlobalWorkbenchSettings } from "../../../workbench/state/workbench-settings";
-import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { useSettings } from "../use-settings";
 
 export const WorkbenchThreadDisplaySettingsContext = createContext<boolean | null>(null);
 
 export function useThreadCodeDetails(): boolean {
-  const state = useWorkbenchClientStateSnapshot();
-  return useContext(WorkbenchThreadDisplaySettingsContext) ?? readGlobalWorkbenchSettings(state.records).threadCodeDetails;
+  const global = useSettings().get("threadCodeDetails");
+  return useContext(WorkbenchThreadDisplaySettingsContext) ?? global;
 }

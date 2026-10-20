@@ -4,12 +4,13 @@
  * - WorkbenchNavigateOptions: href options plus history replacement.
  * - useWorkbenchNavigationState: the url route, focused tab, tab strip and navigator behind hrefs and tab controls.
  * - useWorkbenchProjectNavigation: bind public href generation (path plus tab strip) to the mounted project navigator, re-rendering when its addresses change.
- * - useWorkbenchNavigate: push or replace a destination through the same hrefs links render.
- * - useWorkbenchSwapTab: turn the focused tab into another destination in place, as a new history entry.
+ * - useWorkbenchNavigate: push or replace a destination through the same hrefs links render; one stable action.
+ * - useWorkbenchSwapTab: turn the focused tab into another destination in place, as a new history entry; one stable action.
  */
 import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
+import useStableAction from "../../components/workbench/use-stable-action";
 import WorkbenchClientContext, { type WorkbenchClientController } from "../../components/workbench/workbench-client-context";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../../components/workbench/workbench-client-state-context";
+import { useWorkbenchClientState, useWorkbenchClientStateController } from "../../components/workbench/workbench-client-state-context";
 import { formatWorkbenchTab, parseWorkbenchRouteFromPath, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchTabStrip } from "workbench-shared/workbench/navigation/workbench-tabs";
@@ -39,19 +40,19 @@ export function useWorkbenchNavigationState(explicitClient?: WorkbenchClientCont
   const context = useContext(WorkbenchClientContext);
   const client = explicitClient ?? context;
   const state = useWorkbenchClientStateController();
-  useWorkbenchClientStateSnapshot();
+  // Before mount there are no catalogues yet, so only aliases resolve.
+  const aliases = useWorkbenchClientState(() => state.getProjectAliases());
   const pathname = usePathname();
   const search = useSearchParams().toString();
   const current = useMemo(() => parseWorkbenchRouteFromPath(pathname, search), [pathname, search]);
   const mounted = client?.mounted?.projectNavigator ?? null;
   const revision = useSyncExternalStore(mounted?.subscribe ?? EMPTY_SUBSCRIBE,
     mounted?.getRevision ?? NO_REVISION, NO_REVISION);
-  // Before mount there are no catalogues yet, so only aliases resolve.
-  const navigation = useMemo(() => mounted ?? new WorkbenchProjectNavigation([], state.getProjectAliases(), [],
+  const navigation = useMemo(() => mounted ?? new WorkbenchProjectNavigation([], aliases, [],
     threadId => {
       const owner = client?.mounted?.threadOwnerFor(threadId);
       return owner ? { daemonId: owner.daemonId, projectId: ProjectIdSchema.parse(owner.projectId) } : null;
-    }), [client, mounted, state]);
+    }), [aliases, client, mounted]);
   // The url's active tab exactly as written, so it always matches its entry in the url's strip.
   const currentTab = useMemo(() => formatWorkbenchTab(current), [current]);
   // A url without a strip is its one durable active tab.
@@ -84,18 +85,19 @@ export function useWorkbenchProjectNavigation(explicitClient?: WorkbenchClientCo
 export function useWorkbenchSwapTab(explicitClient?: WorkbenchClientController) {
   const { current, currentTab, navigation, strip } = useWorkbenchNavigationState(explicitClient);
   const navigate = useWorkbenchNavigate(explicitClient);
-  return useCallback((route: WorkbenchRoute) => {
+  return useStableAction((route: WorkbenchRoute) => {
     const next = navigation.tabFor(route, current);
     navigate(route, next && currentTab ? { tab: { strip: WorkbenchTabStrip.replace(strip, currentTab, next) } } : {});
-  }, [current, currentTab, navigate, navigation, strip]);
+  });
 }
 
+/** Stable across url changes, so effects and memos can depend on it; it always navigates from the latest url. */
 export function useWorkbenchNavigate(explicitClient?: WorkbenchClientController) {
   const href = useWorkbenchProjectNavigation(explicitClient);
-  return useCallback((route: WorkbenchRoute, options: WorkbenchNavigateOptions = {}) => {
+  return useStableAction((route: WorkbenchRoute, options: WorkbenchNavigateOptions = {}) => {
     const nextHref = href(route, options);
     if (nextHref === undefined || nextHref === `${window.location.pathname}${window.location.search}`) return;
     if (options.replace) window.history.replaceState({ workbench: true }, "", nextHref);
     else window.history.pushState({ workbench: true }, "", nextHref);
-  }, [href]);
+  });
 }

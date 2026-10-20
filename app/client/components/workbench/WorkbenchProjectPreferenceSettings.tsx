@@ -11,7 +11,7 @@ import type { LogicalProjectId } from "workbench-shared/workbench/identity";
 import { readLogicalProjectWorkbenchSettings, type WorkbenchSettingKey } from "../../workbench/state/workbench-settings";
 import Disclosure from "../ui/Disclosure";
 import PressDragMenu from "../ui/PressDragMenu";
-import { useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
+import { useWorkbenchClientState } from "./workbench-client-state-context";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import WorkbenchSettingsPreferences from "./WorkbenchSettingsPreferences";
 import WorkbenchSettingsRadioTable from "./WorkbenchSettingsRadioTable";
@@ -42,10 +42,10 @@ export default function WorkbenchProjectPreferenceSettings({ id, projects, onErr
   projects: readonly Project[];
   onError: (message: string) => void;
 }) {
-  const records = useWorkbenchClientStateSnapshot().records;
+  const overridden = useWorkbenchClientState(state => projects.flatMap(project => PROJECT_SETTING_KEYS.some(key =>
+    readLogicalProjectWorkbenchSettings(project.id, state.records)[key].enabled) ? [project.id] : []));
   const [added, setAdded] = useState<ReadonlySet<LogicalProjectId>>(() => new Set());
-  const overriding = projects.filter(project => added.has(project.id) || PROJECT_SETTING_KEYS.some(key =>
-    readLogicalProjectWorkbenchSettings(project.id, records)[key].enabled));
+  const overriding = projects.filter(project => added.has(project.id) || overridden.includes(project.id));
   const available = projects.filter(project => !overriding.includes(project));
   return <section id={id} className="scroll-mt-24 space-y-1">
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 pb-1 pt-6">

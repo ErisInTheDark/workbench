@@ -156,11 +156,13 @@ useThread.fileIndex = function useThreadFileIndex(threadId: string, enabled: boo
       error instanceof Error ? error.message.slice(0, 512) : "Unknown file-index failure.",
     ));
   }, [enabled, store, target]);
-  return {
+  const retry = useCallback(() => store && target ? store.ensure(target, true) : Promise.resolve(MISSING_THREAD_FILE_INDEX),
+    [store, target]);
+  return useMemo(() => ({
     snapshot: enabled && !target ? MISSING_THREAD_FILE_INDEX : snapshot,
     canRetry: Boolean(store && target),
-    retry: () => store && target ? store.ensure(target, true) : Promise.resolve(MISSING_THREAD_FILE_INDEX),
-  };
+    retry,
+  }), [enabled, retry, snapshot, store, target]);
 };
 
 /** The thread owner's account model cache by identity. */

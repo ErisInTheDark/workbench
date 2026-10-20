@@ -7,9 +7,11 @@
 import type { ReactNode } from "react";
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
-import { useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
+import { useWorkbenchClientState } from "./workbench-client-state-context";
 import { ClockIcon, HarnessIcon, StarIcon } from "./workbench-icons";
-import { groupWorkbenchModels, type WorkbenchGroupedModel } from "./workbench-model-groups";
+import {
+  groupWorkbenchModels, selectFavouriteModels, selectModelGroupDisclosures, type WorkbenchGroupedModel,
+} from "./workbench-model-groups";
 import PressDragMenu, { type PressDragMenuGroup } from "../ui/PressDragMenu";
 
 export default function WorkbenchModelMenu ({
@@ -25,12 +27,8 @@ export default function WorkbenchModelMenu ({
   onOpen?: () => void;
   onSelect: (entry: WorkbenchGroupedModel) => void;
 }) {
-  const clientState = useWorkbenchClientStateSnapshot();
-  const favourites = clientState.records.flatMap(record =>
-    record.kind === "modelPreference" && record.favourite
-      ? [{ harness: record.harness, modelId: record.modelId }] : []);
-  const disclosureOpen = new Map(clientState.records.flatMap(record =>
-    record.kind === "modelGroupDisclosure" ? [[record.groupId, record.open] as const] : []));
+  const favourites = useWorkbenchClientState(selectFavouriteModels);
+  const disclosureOpen = new Map(useWorkbenchClientState(selectModelGroupDisclosures));
   const groups = groupWorkbenchModels({
     catalogues, favourites, allowedHarnesses, now: Date.now(), order: "drag",
   });

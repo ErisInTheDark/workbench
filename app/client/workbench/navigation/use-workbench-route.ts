@@ -13,7 +13,7 @@ import {
   LEGACY_TAB_SEARCH_PARAMS, salvageWorkbenchPath, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchClientController } from "../../components/workbench/workbench-client-context";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../../components/workbench/workbench-client-state-context";
+import { useWorkbenchClientState, useWorkbenchClientStateController } from "../../components/workbench/workbench-client-state-context";
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
 import { useWorkbenchNavigate, useWorkbenchProjectNavigation, type WorkbenchNavigateOptions } from "./use-workbench-project-navigation";
 import {
@@ -30,7 +30,8 @@ export function canCanonicalizeWorkbenchRoute(pathname: string, stateSchemaVersi
 
 export function useWorkbenchRoute(client: WorkbenchClientController) {
   const state = useWorkbenchClientStateController();
-  const stateSnapshot = useWorkbenchClientStateSnapshot();
+  const schemaVersion = useWorkbenchClientState(snapshot => snapshot.schemaVersion);
+  const launchSelection = useWorkbenchClientState(snapshot => readWorkbenchLaunchSelection(snapshot.records));
   const href = useWorkbenchProjectNavigation(client);
   const navigateToRoute = useWorkbenchNavigate(client);
   const navigation = client.mounted?.navigation;
@@ -46,7 +47,6 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     () => `${pathname || "/"}${search ? `?${search}` : ""}`,
     [pathname, search],
   );
-  const launchSelection = readWorkbenchLaunchSelection(stateSnapshot.records);
   const launchSelectionKey = typeof launchSelection === "string"
     ? `legacy\0${launchSelection}`
     : launchSelection === null
@@ -67,7 +67,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     // Prefer the catalogue once available, including when an old junction URL
     // was opened directly. Never replace newer user navigation.
     if (!client.controls || `${window.location.pathname}${window.location.search}` !== locationSnapshot) return;
-    if (!canCanonicalizeWorkbenchRoute(pathname, stateSnapshot.schemaVersion)) return;
+    if (!canCanonicalizeWorkbenchRoute(pathname, schemaVersion)) return;
     if (pathname === "/launch") {
       navigateToRoute(route, { replace: true });
       return;
@@ -91,13 +91,12 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     if (pathname !== "/" && pathname !== "/@/" && (canonicalPath !== pathname || hadLegacyTabs)) {
       window.history.replaceState({ workbench: true }, "", `${canonicalPath}${params.size ? `?${params}` : ""}${window.location.hash}`);
     }
-  }, [pathname, locationSnapshot, client.controls, client.mounted, href, navigateToRoute, route, state,
-    stateSnapshot.schemaVersion]);
+  }, [pathname, locationSnapshot, client.controls, client.mounted, href, navigateToRoute, route, state, schemaVersion]);
 
   const selectedProjectIdsKey = route.selectedProjectIds === null
     ? "unfiltered"
     : ["explicit", ...route.selectedProjectIds].join("\0");
-  const canSaveSelection = stateSnapshot.schemaVersion >= WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION
+  const canSaveSelection = schemaVersion >= WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION
     && route.view !== "invalid" && (!route.selectedProjectIds?.length || Boolean(route.logical));
   useEffect(() => {
     if (!canSaveSelection) return;

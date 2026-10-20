@@ -20,7 +20,7 @@ import { threadGitCommitHistoryFor, type ThreadGitCommitDetail } from "../../../
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../../ui/PrimaryButton";
 import { CheckCheckIcon, EllipsisIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { useWorkbenchClientState, useWorkbenchClientStateController } from "../workbench-client-state-context";
 import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
@@ -168,8 +168,8 @@ export default function ThreadGitArcProposalList({
 }) {
   const daemon = useWorkbenchDaemonClient();
   const clientStateController = useWorkbenchClientStateController();
-  const clientState = useWorkbenchClientStateSnapshot();
-  const canPersist = clientState.schemaVersion >= appStateReleases.threadGitArcProposalsOpen.version;
+  const canPersist = useWorkbenchClientState(state => state.schemaVersion >= appStateReleases.threadGitArcProposalsOpen.version);
+  const storedOpen = useWorkbenchClientState(state => readProposalsOpen(state.records));
   const [unpersistedOpen, setUnpersistedOpen] = useState(true);
   const [committingAll, setCommittingAll] = useState(false);
   const [showAllLayers, setShowAllLayers] = useState(false);
@@ -191,7 +191,7 @@ export default function ThreadGitArcProposalList({
     : unsealedProposals;
   // Only the lowest layer with pending work can commit; higher layers wait on it.
   const lowestPendingGroup = layerGroups.find(({ pendingIds }) => pendingIds.length);
-  const open = canPersist ? readProposalsOpen(clientState.records) : unpersistedOpen;
+  const open = canPersist ? storedOpen : unpersistedOpen;
   const storedFailure = useObservedProposalCommits(commitActions, proposals.filter(({ status }) => status === "proposed"));
   const readSnapshot = () => commitActions.isReady(proposedIds);
   const commitAllReady = useSyncExternalStore(commitActions.subscribe, readSnapshot, readSnapshot);

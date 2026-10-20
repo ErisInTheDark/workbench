@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { WorkspaceQuery } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WorkbenchWorkspaceClient from "./WorkbenchWorkspaceClient";
 import type { WorkspaceQueryHandle, WorkspaceQuerySnapshot } from "./WorkbenchWorkspaceClient";
@@ -12,21 +12,24 @@ import type { WorkspaceQueryHandle, WorkspaceQuerySnapshot } from "./WorkbenchWo
 const PENDING: WorkspaceQuerySnapshot = { phase: "pending", failure: null, value: null };
 const unsubscribed = () => () => {};
 
-/** Callers memoize `query`; a new object identity replaces the observation. Null observes nothing. */
+/** The observation follows the query's meaning, so an inline query object is fine; an equal one never re-observes. Null observes nothing. */
 export default function useWorkspaceObservation<Query extends WorkspaceQuery>(
   workspace: WorkbenchWorkspaceClient | null,
   query: Query | null,
 ): WorkspaceQuerySnapshot<Query["kind"]> {
+  const key = query ? JSON.stringify(query) : null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` is the query's meaning; its identity is noise.
+  const stableQuery = useMemo(() => query, [key]);
   const [handle, setHandle] = useState<WorkspaceQueryHandle<Query["kind"]> | null>(null);
   useEffect(() => {
-    if (!workspace || !query) {
+    if (!workspace || !stableQuery) {
       setHandle(null);
       return;
     }
-    const next = workspace.observe(query);
+    const next = workspace.observe(stableQuery);
     setHandle(next);
     return () => next.release();
-  }, [query, workspace]);
+  }, [stableQuery, workspace]);
   const read = () => (handle?.getSnapshot() ?? PENDING) as WorkspaceQuerySnapshot<Query["kind"]>;
   return useSyncExternalStore(handle?.subscribe ?? unsubscribed, read, read);
 }

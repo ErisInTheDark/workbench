@@ -4,7 +4,7 @@
  * - FileOpenAction: shared file-opening action signature.
  * - FileActionContext: share one file-open action without DOM delegation.
  * - FileScopeContext: identify the project and daemon owning rendered file controls.
- * - useFileActions: route file opens through the per-file-kind Workbench or VS Code policy of the file's own folder.
+ * - useFileActions: route file opens through the per-file-kind Workbench or VS Code policy of the file's own folder; one stable action.
  * - useFile: derive file-pill display and its owner-scoped open action.
  * - resolveFileOpenDestination: choose the destination for a file target.
  * - resolveWorkbenchFileRoute: route a file through its concrete project owner.
@@ -12,6 +12,7 @@
 "use client";
 
 import { createContext, useCallback, useContext } from "react";
+import useStableAction from "../../components/workbench/use-stable-action";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import {
@@ -103,7 +104,8 @@ export function useFileActions({
   route: WorkbenchRoute;
   selectedDaemon: WorkbenchDaemonClient | null;
 }): FileOpenAction {
-  return useCallback(async (target, scope) => {
+  // Stable, so the shared file-open context doesn't re-render every file control on each route or project change.
+  return useStableAction<Parameters<FileOpenAction>, ReturnType<FileOpenAction>>(async (target, scope) => {
     const projectId = target.projectId ?? scope?.projectId ?? currentProjectId ?? route.projectId;
     const locationValue = scope?.daemonId
       ? { daemonId: scope.daemonId, projectId }
@@ -144,8 +146,7 @@ export function useFileActions({
       console.error("Unable to open file in VS Code.");
       return false;
     }
-  }, [policyFor, browseLocation, currentProjectId, defaultDaemon, logicalProjects, navigateToRoute,
-    onInvalidLocation, route, selectedDaemon]);
+  });
 }
 
 export function useFile({

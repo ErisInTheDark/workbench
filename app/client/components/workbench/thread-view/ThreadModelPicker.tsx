@@ -8,12 +8,12 @@ import { JSX, useRef, useState } from "react";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { useWorkbenchClientState, useWorkbenchClientStateController } from "../workbench-client-state-context";
 import { ClockIcon, HarnessIcon, StarIcon } from "../workbench-icons";
 import IconButton from "../../ui/IconButton";
 import { OptionCard } from "../../ui/OptionCards";
 import WorkbenchTag from "../WorkbenchTag";
-import type { WorkbenchGroupedModel, WorkbenchModelGroup } from "../workbench-model-groups";
+import { selectModelGroupDisclosures, type WorkbenchGroupedModel, type WorkbenchModelGroup } from "../workbench-model-groups";
 import Disclosure from "../../ui/Disclosure";
 
 function formatContextWindow (tokens: number | null) {
@@ -90,11 +90,9 @@ export default function ThreadModelPicker ({
 }) {
 	const scroll = useRef<HTMLDivElement>(null);
 	const clientStateController = useWorkbenchClientStateController();
-	const clientState = useWorkbenchClientStateSnapshot();
-	const canPersistDisclosures = clientState.schemaVersion >= appStateReleases.modelGroupDisclosures.version;
+	const canPersistDisclosures = useWorkbenchClientState(state => state.schemaVersion >= appStateReleases.modelGroupDisclosures.version);
 	const [disclosureError, setDisclosureError] = useState("");
-	const disclosureOpen = new Map(clientState.records.flatMap(record =>
-		record.kind === "modelGroupDisclosure" ? [[record.groupId, record.open] as const] : []));
+	const disclosureOpen = new Map(useWorkbenchClientState(selectModelGroupDisclosures));
 	const toggleDisclosure = (groupId: string, open: boolean) => {
 		setDisclosureError("");
 		void clientStateController.put({ kind: "modelGroupDisclosure", groupId, open }).catch(() => {

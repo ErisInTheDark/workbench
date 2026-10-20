@@ -9,7 +9,7 @@ import type { WorkbenchQuestionnaireDraft, WorkbenchSubmitUserInputRequestOption
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { clearQuestionnaireDraft, saveQuestionnaireDraft } from "../../workbench/state/draft-persistence";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
+import { useWorkbenchClientState, useWorkbenchClientStateController } from "./workbench-client-state-context";
 import { useThread } from "./use-thread";
 import { useTranscript } from "./use-transcript";
 import { useWorkbenchClientController } from "./workbench-client-context";
@@ -19,7 +19,6 @@ export default function useWorkbenchQuestionnaire(projectId: string, target: Wor
   const thread = useThread(projectId, target);
   const { pending: request } = useThread.questionnaire(thread.store);
   const { transcript, turns } = useTranscript.turns(thread.store);
-  const clientState = useWorkbenchClientStateSnapshot();
   const client = useWorkbenchClientController();
   const store = useWorkbenchClientStateController();
   const threadId = target && "threadId" in target ? target.threadId : null;
@@ -28,11 +27,11 @@ export default function useWorkbenchQuestionnaire(projectId: string, target: Wor
   const ownerIdentity = rootThreadId ? client.mounted?.threadDraftIdentityFor(rootThreadId) : null;
   const ownerProjectId = ownerIdentity?.projectId ?? projectId;
   const requestKey = request?.requestKey ?? "";
-  const daemonRegistrationId = rootThreadId
-    ? ownerIdentity?.daemonRegistrationId ?? "" : clientState.daemonRegistrationId;
-  const draft = useMemo(() => clientState.records.find(record => record.kind === "questionnaireDraft"
-    && record.daemonRegistrationId === daemonRegistrationId && record.projectId === ownerProjectId
-    && record.threadId === threadId && record.requestKey === requestKey), [clientState.records, daemonRegistrationId, ownerProjectId, threadId, requestKey]);
+  const ownerRegistrationId = rootThreadId ? ownerIdentity?.daemonRegistrationId ?? "" : null;
+  // Only this request's draft, so other drafts saving elsewhere re-render nothing here.
+  const draft = useWorkbenchClientState(state => state.records.find(record => record.kind === "questionnaireDraft"
+    && record.daemonRegistrationId === (ownerRegistrationId ?? state.daemonRegistrationId) && record.projectId === ownerProjectId
+    && record.threadId === threadId && record.requestKey === requestKey) ?? null);
   const resolveDraftIdentity = useCallback(() => {
     if (!threadId || !requestKey) return null;
     const owner = rootThreadId ? client.mounted?.threadDraftIdentityFor(rootThreadId) : {
@@ -74,12 +73,6 @@ export default function useWorkbenchQuestionnaire(projectId: string, target: Wor
       ...(supplementalInput ? { supplementalInput } : {}),
     });
   }, [request, store, transcript, turns, thread.actions]);
-  return {
-    thread,
-    request,
-    draft: draft?.kind === "questionnaireDraft" ? draft.value : null,
-    save,
-    clear,
-    submit,
-  };
+  const draftValue = draft?.kind === "questionnaireDraft" ? draft.value : null;
+  return useMemo(() => ({ thread, request, draft: draftValue, save, clear, submit }), [clear, draftValue, request, save, submit, thread]);
 }

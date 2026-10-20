@@ -12,7 +12,7 @@ import ProjectStoreRowsController from "../../../workbench/environment/ProjectSt
 import { createInitialEditHistory } from "../../../workbench/state/edit-history";
 import FileDraftStore from "../../../workbench/state/FileDraftStore";
 import InputList from "../InputList";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { useWorkbenchClientState, useWorkbenchClientStateController } from "../workbench-client-state-context";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import WorkbenchEnvironmentFile from "./WorkbenchEnvironmentFile";
 
@@ -32,7 +32,7 @@ function useStoreRows(projectId: ProjectId) {
 function useEnvironmentFiles(daemonId: DaemonId, projectId: ProjectId, onDraftError: (message: string) => void) {
   const daemon = useWorkbenchDaemonClient();
   const clientState = useWorkbenchClientStateController();
-  const registrationId = useWorkbenchClientStateSnapshot().registrations.find(item => item.daemonId === daemonId)?.id ?? null;
+  const registrationId = useWorkbenchClientState(state => state.registrations.find(item => item.daemonId === daemonId)?.id ?? null);
   const controller = useMemo(() => {
     // Without a daemon registration, drafts stay in memory for this page only.
     const drafts = FileDraftStore(() => projectId, undefined, registrationId ? clientState : undefined, onDraftError, () => registrationId ?? "");

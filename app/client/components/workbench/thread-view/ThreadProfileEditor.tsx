@@ -10,9 +10,9 @@ import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-pat
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { contextWindowFloor, copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
-import { groupWorkbenchModels, type WorkbenchGroupedModel } from "../workbench-model-groups";
+import { groupWorkbenchModels, selectFavouriteModels, type WorkbenchGroupedModel } from "../workbench-model-groups";
 import ChevronIcon from "../ChevronIcon";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { useWorkbenchClientState, useWorkbenchClientStateController } from "../workbench-client-state-context";
 import { ReloadIcon, ZapIcon } from "../workbench-icons";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import IconButton from "../../ui/IconButton";
@@ -45,15 +45,13 @@ export default function ThreadProfileEditor ({
 }) {
   const profiles = useWorkbenchComposerProfiles();
   const clientStateController = useWorkbenchClientStateController();
-  const clientState = useWorkbenchClientStateSnapshot();
+  const favourites = useWorkbenchClientState(selectFavouriteModels);
+  const canSaveFavourites = useWorkbenchClientState(state => state.schemaVersion >= 7);
   const [favouriteError, setFavouriteError] = useState("");
   const sectionId = useId();
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const profile = profiles.controller.getSelectedProfile(slot);
   const settings = profile ? copyComposerSettings(profile) : profiles.controller.resolveSettings(slot) ?? fallbackSettings;
-  const favourites = clientState.records.flatMap(record =>
-    record.kind === "modelPreference" && record.favourite
-      ? [{ harness: record.harness, modelId: record.modelId }] : []);
   const favouriteKeys = new Set(favourites.map(item => `${item.harness}\0${item.modelId}`));
   const allowedHarnesses = slot.kind === "thread" ? [settings.harness] : [...installedProviderKeys];
   const groups = groupWorkbenchModels({
@@ -62,7 +60,6 @@ export default function ThreadProfileEditor ({
     allowedHarnesses,
     now: Date.now(),
   });
-  const canSaveFavourites = clientState.schemaVersion >= 7;
   const toggleFavourite = async ({ harness, model }: WorkbenchGroupedModel) => {
     if (!canSaveFavourites) return;
     setFavouriteError("");

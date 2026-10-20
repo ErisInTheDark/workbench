@@ -2,8 +2,20 @@
  * Exports:
  * - groupWorkbenchModels: favourite, recent and provider sections with optional drag order.
  * - WorkbenchModelGroup/WorkbenchGroupedModel: section and model identities for both pickers.
+ * - selectFavouriteModels/selectModelGroupDisclosures: the browser state's favourite models and open model groups.
  */
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
+import type { WorkbenchClientStateSnapshot } from "../../workbench/state/WorkbenchClientStateController";
+
+export function selectFavouriteModels(state: WorkbenchClientStateSnapshot) {
+  return state.records.flatMap(record => record.kind === "modelPreference" && record.favourite
+    ? [{ harness: record.harness, modelId: record.modelId }] : []);
+}
+
+/** Group id to open state, for groups the user has toggled. */
+export function selectModelGroupDisclosures(state: WorkbenchClientStateSnapshot) {
+  return state.records.flatMap(record => record.kind === "modelGroupDisclosure" ? [[record.groupId, record.open] as const] : []);
+}
 
 export interface WorkbenchGroupedModel {
   harness: WorkbenchHarness;

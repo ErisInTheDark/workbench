@@ -137,8 +137,8 @@ import { useWorkbenchClientMount } from "./workbench/use-workbench-client";
 import { useProjects } from "./workbench/use-projects";
 import { useThreads } from "./workbench/use-threads";
 import {
+    useWorkbenchClientState,
     useWorkbenchClientStateController,
-    useWorkbenchClientStateSnapshot,
 } from "./workbench/workbench-client-state-context";
 import { WorkbenchExplorerContext } from "./workbench/explorer/workbench-explorer-context";
 import {
@@ -286,11 +286,15 @@ function getProjectTabLabel (projectName: string | null | undefined) {
 export default function Workbench ({ appRuntime = null }: { appRuntime?: WorkbenchAppRuntimeStore | null }) {
   const appRpc = useWorkbenchAppRpc();
   const clientStateController = useWorkbenchClientStateController();
-  const clientState = useWorkbenchClientStateSnapshot();
+  const daemonRegistrationId = useWorkbenchClientState(state => state.daemonRegistrationId);
+  const schemaVersion = useWorkbenchClientState(state => state.schemaVersion);
+  const composerDraftRecords = useWorkbenchClientState(state => state.records.filter(record => record.kind === "composerDraft"));
+  const storedHarness = useWorkbenchClientState(state => state.records.flatMap(record => record.kind === "globalPreference"
+    && record.preference.key === "harness" && typeof record.preference.value === "string" ? [record.preference.value] : [])[0] ?? null);
   const [composerProfileControllers] = useState(() => new Map<string, WorkbenchComposerProfileController>());
   const initialRoute = new WorkbenchProjectNavigation([], clientStateController.getProjectAliases())
     .readRoute(typeof window === "undefined" ? "/" : window.location.href,
-      readWorkbenchLaunchSelection(clientState.records));
+      readWorkbenchLaunchSelection(clientStateController.getSnapshot().records));
   const currentRouteRef = useRef<WorkbenchRoute>(initialRoute);
   const activeDraftSessionRef = useRef<DraftSessionController<WorkbenchComposerInputDraft> | null>(null);
   const workbenchMount = useWorkbenchClientMount({
@@ -409,17 +413,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const composerDraftIdentityFor = useCallback((threadId: string) => route.logical
     ? workbenchClient.mounted?.threadDraftIdentityFor(threadId) ?? null
     : selectedThreadProjectId ? {
-      daemonRegistrationId: clientState.daemonRegistrationId,
+      daemonRegistrationId,
       projectId: ProjectIdSchema.parse(selectedThreadProjectId),
       threadId: ThreadReferenceSchema.parse(threadId),
-    } : null, [clientState.daemonRegistrationId, route.logical, selectedThreadProjectId, workbenchClient.mounted]);
+    } : null, [daemonRegistrationId, route.logical, selectedThreadProjectId, workbenchClient.mounted]);
   // Owners land asynchronously; re-project only when which drafts resolve changes.
   const readResolvedComposerDrafts = useCallback(() => Object.keys(projectComposerDrafts(
-    clientState.records, composerDraftIdentityFor)).join("\n"), [clientState.records, composerDraftIdentityFor]);
+    composerDraftRecords, composerDraftIdentityFor)).join("\n"), [composerDraftRecords, composerDraftIdentityFor]);
   const resolvedComposerDrafts = useSyncExternalStore(workbenchClient.mounted?.subscribeChanges ?? noSubscription,
     readResolvedComposerDrafts, readResolvedComposerDrafts);
-  const threadComposerDraftsByThreadId = useMemo(() => projectComposerDrafts(clientState.records, composerDraftIdentityFor),
-    [clientState.records, composerDraftIdentityFor, resolvedComposerDrafts]);
+  const threadComposerDraftsByThreadId = useMemo(() => projectComposerDrafts(composerDraftRecords, composerDraftIdentityFor),
+    [composerDraftRecords, composerDraftIdentityFor, resolvedComposerDrafts]);
 
   const isMobileMosaicRoute = isMobile && route.view === "mosaic";
   const routeMosaicNodeForControls = isMobileMosaicRoute ? route.mosaicNode : null;
@@ -582,13 +586,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [pageTitle]);
 
   useEffect(() => {
-    const storedHarness = clientState.records.find((record) => (
-      record.kind === "globalPreference" && record.preference.key === "harness"
-    ));
-    if (storedHarness?.kind === "globalPreference" && typeof storedHarness.preference.value === "string") {
-      setHarness(storedHarness.preference.value as WorkbenchHarness);
-    }
-  }, [clientState.records]);
+    if (storedHarness) setHarness(storedHarness as WorkbenchHarness);
+  }, [storedHarness]);
 
   const theme = shellSettings.get("theme");
   useEffect(() => {
@@ -1001,7 +1000,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     target: WorkbenchThreadTarget,
     reference: WorkbenchThreadAddressedFeedback,
   ) => {
-    if (clientState.schemaVersion < appStateReleases.composerDraftReferences.version) {
+    if (schemaVersion < appStateReleases.composerDraftReferences.version) {
       throw new Error("Restart Workbench to attach feedback to an existing thread.");
     }
     if (target.kind === "new") throw new Error("Feedback needs a concrete thread composer.");
@@ -1014,7 +1013,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       target,
       true,
     );
-  }, [clientState.schemaVersion, handleThreadComposerDraftChange]);
+  }, [schemaVersion, handleThreadComposerDraftChange]);
 
   const setThreadComposerSettings = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     if (currentThread?.id === threadId && currentThread.isDraft && currentThread.harness !== settings.harness) {
@@ -1701,7 +1700,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               createThread={createThreadFromSidebar}
               currentFilePath={activeFilePath}
               harness={harness}
-              onAttachFeedback={clientState.schemaVersion >= appStateReleases.composerDraftReferences.version
+              onAttachFeedback={schemaVersion >= appStateReleases.composerDraftReferences.version
                 ? handleAttachFeedbackToThread
                 : undefined}
               onFileDeleted={closeDeletedFileViews}

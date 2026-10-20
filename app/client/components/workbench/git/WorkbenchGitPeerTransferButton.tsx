@@ -1,23 +1,20 @@
 /* Exports: default WorkbenchGitPeerTransferButton: shared preference-aware Pull/Send control with Shift and explicit mode selection. */
 "use client";
 
-import { useSyncExternalStore, type MouseEvent } from "react";
+import type { MouseEvent } from "react";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { GitPeerAddress, GitPeerSyncMode, GitPeerTransfer } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { useGitPeerState } from "../../../workbench/git/WorkbenchGitPeerState";
-import { readGlobalWorkbenchSettings, readLogicalProjectWorkbenchSettings, resolveWorkbenchSettings } from "../../../workbench/state/workbench-settings";
 import PrimaryButton from "../../ui/PrimaryButton";
 import Tooltip from "../../ui/Tooltip";
 import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
 import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
-import { useWorkbenchClientController } from "../workbench-client-context";
-import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { useSettings } from "../use-settings";
+import { useWorkbenchClientState } from "../workbench-client-state-context";
 import { GitFastForwardIcon, GitMergeIcon, GitRebaseIcon } from "../workbench-icons";
 import WorkbenchGitPeerTooltip from "./WorkbenchGitPeerTooltip";
-
-const unsubscribe = () => () => undefined;
 
 export default function WorkbenchGitPeerTransferButton({ location, peer: address, action, showCount = false, showHostname = false, className }: {
   location: ProjectLocationReference;
@@ -28,25 +25,20 @@ export default function WorkbenchGitPeerTransferButton({ location, peer: address
   className?: string;
 }) {
   const { state, snapshot } = useGitPeerState(useWorkbenchWorkspace(), location);
-  const client = useWorkbenchClientController();
-  const preferences = useWorkbenchClientStateSnapshot();
-  const projectFacts = client.mounted?.projectFacts;
-  const project = useSyncExternalStore(projectFacts?.subscribe ?? unsubscribe,
-    () => projectFacts?.getForLocation(location) ?? null, () => null);
+  // The folder's project may override the sync mode; until the project is known the setting is unavailable.
+  const settings = useSettings.forLocation(location);
+  const schemaReady = useWorkbenchClientState(state => state.schemaVersion >= appStateReleases.gitPeerSyncMode.version);
   const menu = useWorkbenchContextMenu();
   const shift = useNonTextInputShiftKey({ allowWhileTextInputFocused: true });
   const peer = snapshot.data?.peers.find(item => item.daemonId === address.daemonId && item.projectId === address.projectId);
-  const global = readGlobalWorkbenchSettings(preferences.records);
-  const defaultMode = project
-    ? resolveWorkbenchSettings(global, readLogicalProjectWorkbenchSettings(project.id, preferences.records)).gitPeerSyncMode
-    : global.gitPeerSyncMode;
+  const defaultMode = settings.get("gitPeerSyncMode");
   const alternate: GitPeerSyncMode = defaultMode === "merge" ? "rebase" : "merge";
   const busy = snapshot.busy?.peerKey === `${address.daemonId}/${address.projectId}` && snapshot.busy.action === action;
   const fastForward = peer?.state === "current" && (action === "pull"
     ? peer.ahead === 0 && peer.behind > 0
     : peer.behind === 0 && peer.ahead > 0);
   const selected = busy ? snapshot.busy!.mode : fastForward ? "fastForward" : shift ? alternate : defaultMode;
-  const available = preferences.schemaVersion >= appStateReleases.gitPeerSyncMode.version && project !== null;
+  const available = !settings.unavailable("gitPeerSyncMode");
   const disabled = !available || !state || !peer || peer.state !== "current" || snapshot.busy !== null;
   const verb = action === "pull" ? "Pull" : "Send";
   const count = peer ? action === "pull" ? peer.behind : peer.ahead : 0;
@@ -70,7 +62,7 @@ export default function WorkbenchGitPeerTransferButton({ location, peer: address
     key={`${location.daemonId}/${location.projectId}/${address.daemonId}/${address.projectId}/${snapshot.data?.branch}/${action}`}
     location={location} peer={address} hostname={peer?.hostname ?? "peer"} branch={snapshot.data?.branch ?? null}
     action={action} mode={selected} unavailable={!available
-      ? preferences.schemaVersion < appStateReleases.gitPeerSyncMode.version ? "App database reload needed" : "Loading project"
+      ? !schemaReady ? "App database reload needed" : "Loading project"
       : peer?.state !== "current" ? "Device unavailable" : null}
   />}>
       <span className="inline-flex shrink-0">
