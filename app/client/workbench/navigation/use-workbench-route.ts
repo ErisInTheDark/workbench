@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - canCanonicalizeWorkbenchRoute: keep launch URLs intact until browser app state has loaded.
+ * - readWorkbenchRoute: the route a url (by default the current browser location) names under the saved launch selection.
  * - useWorkbenchRoute: derive routes from browser history, persist local launch selection, and expose guarded canonical
  *   navigation; a url that cannot open is replaced by its nearest salvageable one.
  * - useWorkbenchRouteIntent: apply one URL-derived route intent and its canonical replacement.
@@ -15,6 +16,7 @@ import {
 import type { WorkbenchClientController } from "../../components/workbench/workbench-client-context";
 import { useWorkbenchClientState, useWorkbenchClientStateController } from "../../components/workbench/workbench-client-state-context";
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
+import type WorkbenchClientStateController from "../state/WorkbenchClientStateController";
 import { useWorkbenchNavigate, useWorkbenchProjectNavigation, type WorkbenchNavigateOptions } from "./use-workbench-project-navigation";
 import {
   readWorkbenchLaunchSelection,
@@ -26,6 +28,17 @@ const emptySubscribe = (_listener: () => void) => () => {};
 
 export function canCanonicalizeWorkbenchRoute(pathname: string, stateSchemaVersion: number) {
   return pathname !== "/launch" || stateSchemaVersion > 0;
+}
+
+/** The route the url names; outside render it reads the browser location now, as the route hook would on its next render. */
+export function readWorkbenchRoute(
+  client: WorkbenchClientController,
+  state: WorkbenchClientStateController,
+  location = `${window.location.pathname}${window.location.search}`,
+  launchSelection = readWorkbenchLaunchSelection(state.getSnapshot().records),
+): WorkbenchRoute {
+  return (client.mounted?.projectNavigator ?? new WorkbenchProjectNavigation([], state.getProjectAliases()))
+    .readRoute(location, launchSelection);
 }
 
 export function useWorkbenchRoute(client: WorkbenchClientController) {
@@ -54,8 +67,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
       : launchSelection === undefined
         ? "absent"
         : `explicit\0${launchSelection.join("\0")}`;
-  const resolved = (client.mounted?.projectNavigator ?? new WorkbenchProjectNavigation([], state.getProjectAliases()))
-    .readRoute(locationSnapshot, launchSelection);
+  const resolved = readWorkbenchRoute(client, state, locationSnapshot, launchSelection);
   const route = useMemo(() => resolved, [
     locationSnapshot, resolved.projectId, resolved.threadOwnerProjectId,
     resolved.selectedProjectIds?.join("\0") ?? null,

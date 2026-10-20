@@ -36,7 +36,7 @@ type ActionsProps = ComponentProps<typeof WorkbenchThreadSidebarActionsProvider>
 export default function WorkbenchSidebarPane({
   activeProjectId, appRuntime, askAgentWithReferences,
   browseSessionController, collapsed, createThread, currentFilePath,
-  onAttachFeedback, onFileDeleted, onOpenQualifiedThread, onOpenThread,
+  onFileDeleted, onOpenQualifiedThread, onOpenThread,
   onPresentationDraftDeleted, onThreadSettled, projectSourceError,
   renderThreadTooltipDetails, route, showGitView,
   viewedProjectId,
@@ -49,7 +49,6 @@ export default function WorkbenchSidebarPane({
   createThread: ThreadSidebarProps["onCreateThread"];
   /** The file the main pane shows, highlighted in the explorer. */
   currentFilePath: string;
-  onAttachFeedback: ThreadSidebarProps["onAttachFeedback"];
   /** Close the views of a file the explorer deleted or a new file it discarded. */
   onFileDeleted: (path: string) => void;
   /** Context-menu "Open" for a listed thread row; row clicks follow their hrefs. */
@@ -166,7 +165,6 @@ export default function WorkbenchSidebarPane({
                     : undefined}
                   logicalProject={selection.selectedLogicalProject}
                   logicalProjects={selection.displayedLogicalProjects}
-                  onAttachFeedback={onAttachFeedback}
                   presentation={presentation?.data}
                   controls={client.controls}
                   selectedLocation={browseLocation}

@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
 import type {
@@ -20,7 +20,7 @@ import type {
     WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
 import {
     createFileRoute,
     createDiscardedDraftExitRoute,
@@ -46,10 +46,7 @@ import {
 import { projectFolderOptions } from "workbench-shared/workbench/project/project-folder-address";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { isSvgFile } from "workbench-shared/workbench/project/tree-utils";
-import {
-    preferredSelectedLaunchTarget,
-    projectLogicalThreadDisplayOrder,
-} from "workbench-shared/workbench/project/workbench-project-projection";
+import { preferredSelectedLaunchTarget } from "workbench-shared/workbench/project/workbench-project-projection";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { useThread } from "./workbench/use-thread";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
@@ -75,10 +72,6 @@ import {
 } from "../workbench/search/workbench-action-registry";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../workbench/state/composer-profile-api";
 import {
-    attachComposerDraftReference, clearComposerDraft, presentationDraftToInput, projectComposerDrafts, saveComposerDraft,
-    type ComposerDraftTarget,
-} from "../workbench/state/draft-persistence";
-import {
     getPreferredMobilePane,
     isMobileSidebarRequested,
     MOBILE_MEDIA_QUERY,
@@ -91,7 +84,6 @@ import {
     MIN_EDITOR_FONT_SIZE,
 } from "../workbench/state/workbench-settings";
 import { useSettings } from "./workbench/use-settings";
-import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
@@ -109,10 +101,10 @@ import type DraftSessionController from "./workbench/thread-view/DraftSessionCon
 import { draftSessionOwner } from "./workbench/thread-view/DraftSessionController";
 import { seedNewThreadReferences } from "../workbench/thread/new-thread-reference-seeds";
 import { WorkbenchFeedbackAddressingContext } from "./workbench/address-feedback-context";
-import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
+import { WorkbenchShellErrorContext } from "./workbench/workbench-shell-error-context";
+import { useWorkbenchComposerProfiles } from "./workbench/WorkbenchComposerProfileContext";
 import { readWorkbenchLaunchSelection } from "workbench-shared/state/workbench-client-state";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
-import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import { useWorkbenchClientMount } from "./workbench/use-workbench-client";
@@ -220,7 +212,6 @@ function formatWorkbenchPageTitle (projectName: string | null | undefined) {
   return normalizedProjectName ? `${normalizedProjectName} / Workbench` : "Workbench";
 }
 
-const noSubscription = (_listener: () => void) => () => {};
 
 function getProjectTabLabel (projectName: string | null | undefined) {
   return projectName?.trim() || "Project";
@@ -229,12 +220,8 @@ function getProjectTabLabel (projectName: string | null | undefined) {
 export default function Workbench ({ appRuntime = null }: { appRuntime?: WorkbenchAppRuntimeStore | null }) {
   const appRpc = useWorkbenchAppRpc();
   const clientStateController = useWorkbenchClientStateController();
-  const daemonRegistrationId = useWorkbenchClientState(state => state.daemonRegistrationId);
-  const schemaVersion = useWorkbenchClientState(state => state.schemaVersion);
-  const composerDraftRecords = useWorkbenchClientState(state => state.records.filter(record => record.kind === "composerDraft"));
   const storedHarness = useWorkbenchClientState(state => state.records.flatMap(record => record.kind === "globalPreference"
     && record.preference.key === "harness" && typeof record.preference.value === "string" ? [record.preference.value] : [])[0] ?? null);
-  const [composerProfileControllers] = useState(() => new Map<string, WorkbenchComposerProfileController>());
   const initialRoute = new WorkbenchProjectNavigation([], clientStateController.getProjectAliases())
     .readRoute(typeof window === "undefined" ? "/" : window.location.href,
       readWorkbenchLaunchSelection(clientStateController.getSnapshot().records));
@@ -295,18 +282,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     threadContext: routeThreadContext, draftContext: routeDraftContext, launchLocation: routeLaunchLocation,
     ownerMetadata: routeOwnerMetadata, browseDaemon, selectedDaemon, selectedAssetSource, profileScopeKey,
   } = useWorkbenchRouteContext(workbenchClient, route, currentThread, browseLocation);
-  const profileControllerFor = useCallback((key: string) => {
-    const existing = composerProfileControllers.get(key);
-    if (existing) return existing;
-    const controller = new WorkbenchComposerProfileController();
-    composerProfileControllers.set(key, controller);
-    return controller;
-  }, [composerProfileControllers]);
+  const profileControllerFor = useWorkbenchComposerProfiles.registry();
+  if (!profileControllerFor) throw new Error("Workbench requires WorkbenchComposerProfileRegistryProvider.");
   const composerProfileController = profileControllerFor(profileScopeKey);
-  useEffect(() => () => {
-    for (const controller of composerProfileControllers.values()) controller.dispose();
-    composerProfileControllers.clear();
-  }, [composerProfileControllers]);
   useEffect(() => {
     const presentation = workbenchClient.mounted?.presentationClient;
     const source = DaemonIdSchema.safeParse(profileScopeKey);
@@ -338,23 +316,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const sidebarPreferences = useWorkbenchSidebarPreferences.global();
   const isEffectiveDesktopSidebarCollapsed = !isMobile && sidebarPreferences.preferences.sidebarCollapsed;
 
-  const selectedThreadProjectId = route.view === "thread"
-    ? route.threadOwnerProjectId || explorer.currentProjectId || route.projectId
-    : explorer.currentProjectId;
-  const composerDraftIdentityFor = useCallback((threadId: string) => route.logical
-    ? workbenchClient.mounted?.threadDraftIdentityFor(threadId) ?? null
-    : selectedThreadProjectId ? {
-      daemonRegistrationId,
-      projectId: ProjectIdSchema.parse(selectedThreadProjectId),
-      threadId: ThreadReferenceSchema.parse(threadId),
-    } : null, [daemonRegistrationId, route.logical, selectedThreadProjectId, workbenchClient.mounted]);
-  // Owners land asynchronously; re-project only when which drafts resolve changes.
-  const readResolvedComposerDrafts = useCallback(() => Object.keys(projectComposerDrafts(
-    composerDraftRecords, composerDraftIdentityFor)).join("\n"), [composerDraftRecords, composerDraftIdentityFor]);
-  const resolvedComposerDrafts = useSyncExternalStore(workbenchClient.mounted?.subscribeChanges ?? noSubscription,
-    readResolvedComposerDrafts, readResolvedComposerDrafts);
-  const threadComposerDraftsByThreadId = useMemo(() => projectComposerDrafts(composerDraftRecords, composerDraftIdentityFor),
-    [composerDraftRecords, composerDraftIdentityFor, resolvedComposerDrafts]);
 
   const routeToApplyToControls = useMemo(() => {
     if (route.logical) return route;
@@ -742,141 +703,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     return await controls.sendThreadMessage(thread, input, materializedOptions);
   }, [composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted]);
 
-  const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
-    ? route.threadTarget.draftId
-    : "";
-  const activeSidebarDraft = useThreads.draft(selectedThreadProjectId, activeSidebarDraftId, workbenchClient);
-  const selectedPinnedThreadDraft = route.view === "thread"
-    && route.threadTarget?.kind === "draft"
-    && route.threadOwnerProjectId
-    && route.threadOwnerProjectId !== route.projectId
-    ? controls?.getSelectedThreadDraft() ?? null
-    : null;
-  const activeRouteDraft = selectedPinnedThreadDraft ?? activeSidebarDraft;
-
-  const getThreadComposerDraftForTarget = useCallback((target: WorkbenchThreadTarget | null | undefined): WorkbenchComposerInputDraft | null => {
-    if (!target || target.kind === "new") return null;
-    if (target.kind === "provider" || target.kind === "subagent") return threadComposerDraftsByThreadId[target.threadId] ?? null;
-    if (workbenchClient.mounted?.presentationClient) {
-      return presentationDraftToInput(workbenchClient.mounted.presentationClient, target.draftId);
-    }
-    return null;
-  }, [threadComposerDraftsByThreadId, workbenchClient.mounted]);
-
-  const activeThreadComposerDraft = getThreadComposerDraftForTarget(route.view === "thread" ? route.threadTarget : null);
-
-  const getComposerDraftTarget = useCallback((projectId: string, threadId: string, originTarget?: WorkbenchThreadTarget): ComposerDraftTarget => {
-    if (!projectId) throw new Error("The composer draft has no project identity.");
-    const ownerProjectId = ProjectIdSchema.parse(projectId);
-    if (originTarget?.kind !== "new" && originTarget?.kind !== "draft") {
-      const ownerIdentity = workbenchClient.mounted?.threadDraftIdentityFor(threadId);
-      if (!ownerIdentity) throw new Error("The thread daemon is not registered in app state.");
-      return { kind: "thread", daemonRegistrationId: ownerIdentity.daemonRegistrationId,
-        projectId: ownerIdentity.projectId,
-        threadId: ThreadReferenceSchema.parse(threadId) };
-    }
-    const draftId = originTarget.kind === "draft" ? originTarget.draftId : DraftIdSchema.parse(threadId);
-    if (!draftId || !controls) throw new Error("The new-thread draft owner is unavailable.");
-    const isNew = originTarget.kind === "new";
-    const owner = workbenchClient.mounted?.presentationClient;
-    const location = workbenchClient.mounted?.draftLocationFor(draftId) ?? route.logical?.location;
-    if (!location || !owner) throw new Error("The selected draft location is unavailable.");
-    const logicalProjectId = route.logical?.threadOwnerProjectId
-      ?? owner.snapshot().data?.locations.find(item => item.target.daemonId === location.daemonId
-        && item.target.projectId === location.projectId)?.logicalProjectId;
-    if (!logicalProjectId) throw new Error("This folder is waiting for its app project identity. Draft text remains local.");
-    const draftProfiles = profileControllerFor(location.daemonId);
-    let placement: Extract<ComposerDraftTarget, { kind: "presentation" }>["placement"];
-    if (originTarget.kind === "new" && originTarget.folderId && !owner.draft(draftId)) {
-      const presentation = owner.snapshot().data;
-      const folder = presentation && projectLogicalThreadDisplayOrder(
-        logicalProjectId, workbenchClient.mounted?.threadSidebar.getListing?.().rows ?? [], presentation,
-      ).folders?.find(item => item.folderId === originTarget.folderId);
-      if (!folder || folder.section === "settled") throw new Error("The draft folder is unavailable. Draft text remains local.");
-      placement = { folderId: folder.folderId, priority: folder.section };
-    }
-    return {
-      kind: "presentation", draftId, isNew, logicalProjectId, location, owner, placement,
-      selection: async () => {
-        const slot = isNew
-          ? { kind: "new-thread" as const, projectId: ownerProjectId }
-          : { kind: "draft" as const, projectId: ownerProjectId, draftId,
-            harness: currentThread?.harness ?? defaultProviderKey };
-        await draftProfiles.waitForSelection(slot);
-        return draftProfiles.getDraftSelection(slot, {
-          agentPath: currentThread?.agentPath ?? null, agentSource: null,
-          harness: currentThread?.harness ?? defaultProviderKey, model: currentThread?.model ?? "",
-          reasoningEffort: currentThread?.reasoningEffort ?? null,
-          serviceTier: currentThread?.serviceTier === "fast" ? "fast" : null,
-          contextWindowTokens: currentThread?.contextWindowTokens ?? null,
-        });
-      },
-      materialize: () => {
-        const current = currentRouteRef.current;
-        if (current.view !== "thread" || current.threadTarget?.kind !== "new"
-          || !current.logical
-          || (current.logical.threadOwnerProjectId
-            ? current.logical.threadOwnerProjectId !== logicalProjectId
-            : current.logical.location?.daemonId !== location.daemonId
-              || current.logical.location.projectId !== location.projectId)
-          || workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id !== draftId) return;
-        navigateToRoute(createLogicalThreadRoute(current.logical.threadOwnerProjectId
-          ? current.logical.projectId : logicalProjectId,
-          logicalProjectId, null, { draftId, kind: "draft" }), { replace: true });
-      },
-      dematerialize: () => {
-        const current = currentRouteRef.current;
-        if (current.view !== "thread" || current.threadTarget?.kind !== "draft"
-          || current.threadTarget.draftId !== draftId || !current.logical
-          || current.logical.threadOwnerProjectId !== logicalProjectId) return;
-        navigateToRoute(createLogicalThreadRoute(current.logical.projectId,
-          logicalProjectId, current.logical.location ?? location, { kind: "new" }), { replace: true });
-      },
-    };
-  }, [controls, currentThread, navigateToRoute, profileControllerFor, route, workbenchClient]);
-
-  const handleThreadComposerDraftChange = useCallback(async (
-    projectId: string, threadId: string, update: (draft: WorkbenchComposerInputDraft) => WorkbenchComposerInputDraft,
-    reason: "autosave" | "submission" | "retarget" = "autosave", target?: WorkbenchThreadTarget, detached = false,
-  ) => {
-    try {
-      return await saveComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, target),
-        update, { reason, detached });
-    } catch (error) {
-      setSelectionError(error instanceof Error ? error.message : "Unable to save composer draft.");
-      throw error;
-    }
-  }, [clientStateController, getComposerDraftTarget]);
-
-  const handleThreadComposerDraftClear = useCallback(async (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => {
-    try {
-      await clearComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, target));
-    } catch (error) {
-      setSelectionError(error instanceof Error ? error.message : "Unable to clear composer draft.");
-      throw error;
-    }
-  }, [clientStateController, getComposerDraftTarget]);
-
-  const handleAttachFeedbackToThread = useCallback(async (
-    ownerProjectId: string,
-    target: WorkbenchThreadTarget,
-    reference: WorkbenchThreadAddressedFeedback,
-  ) => {
-    if (schemaVersion < appStateReleases.composerDraftReferences.version) {
-      throw new Error("Restart Workbench to attach feedback to an existing thread.");
-    }
-    if (target.kind === "new") throw new Error("Feedback needs a concrete thread composer.");
-    const threadId = target.kind === "draft" ? target.draftId : target.threadId;
-    await handleThreadComposerDraftChange(
-      ownerProjectId,
-      threadId,
-      draft => attachComposerDraftReference(draft, reference),
-      "autosave",
-      target,
-      true,
-    );
-  }, [schemaVersion, handleThreadComposerDraftChange]);
-
   const setThreadComposerSettings = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     if (currentThread?.id === threadId && currentThread.isDraft && currentThread.harness !== settings.harness) {
       void clientStateController.put({
@@ -1168,7 +994,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       <WorkbenchThreadTooltipDetails
         harness={entry.identity.harness}
         materialized={materializedThreadRootIds.has(rootThreadId)}
-        onQuestionnaireError={setSelectionError}
         fallbackProjectId={activeProjectId}
         threadId={threadId}
         parentThreadId={entry.entryKind === "subagent" ? entry.parentThreadId : undefined}
@@ -1348,6 +1173,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   };
 
   return (
+    <WorkbenchShellErrorContext.Provider value={setSelectionError}>
     <WorkbenchFeedbackAddressingContext.Provider value={feedbackAddressing}>
     <WorkbenchExplorerContext.Provider value={explorer}>
     <FileActionContext.Provider value={openFileByPolicy}>
@@ -1397,9 +1223,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               collapsed={isEffectiveDesktopSidebarCollapsed}
               createThread={createThreadFromSidebar}
               currentFilePath={activeFilePath}
-              onAttachFeedback={schemaVersion >= appStateReleases.composerDraftReferences.version
-                ? handleAttachFeedbackToThread
-                : undefined}
               onFileDeleted={closeDeletedFileViews}
               onOpenQualifiedThread={openQualifiedThread}
               onOpenThread={openThreadFromExplorer}
@@ -1574,9 +1397,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       onDraftHarnessChange={handleHarnessChange}
                       onThreadSettled={handleComposerThreadSettled}
                       onSendMessage={sendThreadMessage}
-                      onThreadComposerDraftChange={handleThreadComposerDraftChange}
-                      onThreadComposerDraftClear={handleThreadComposerDraftClear}
-                      onQuestionnaireError={setSelectionError}
                       onThreadSettingsChange={setThreadComposerSettings}
                       selectedThreadId={selectedThreadIdForView}
                       onSelectedThreadChange={handleSelectedThreadChange}
@@ -1590,8 +1410,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       projectRootPath={threadProjectRootPath}
                       projectRoots={threadProjectRoots}
                       scrollViewportRef={directThreadScrollViewportRef}
-                      threadComposerDraft={activeThreadComposerDraft}
-                      threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                       viewInstanceKey={threadViewInstanceKey}
                     />
                     </div>
@@ -1714,5 +1532,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     </FileActionContext.Provider>
     </WorkbenchExplorerContext.Provider>
     </WorkbenchFeedbackAddressingContext.Provider>
+    </WorkbenchShellErrorContext.Provider>
   );
 }

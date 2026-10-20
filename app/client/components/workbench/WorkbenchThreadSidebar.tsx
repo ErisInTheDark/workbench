@@ -13,7 +13,6 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
-import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import { ProjectIdSchema, type FolderId, type ProjectId } from "workbench-shared/workbench/identity";
 import SidebarLoadingSkeleton from "./SidebarLoadingSkeleton";
 import WorkbenchThreadList from "./WorkbenchThreadList";
@@ -56,11 +55,6 @@ interface WorkbenchThreadSidebarProps {
   currentTarget: WorkbenchThreadTarget | null;
   emptySelectionMessage?: string;
   logicalProjects?: readonly WorkbenchLogicalProject[];
-  onAttachFeedback?: (
-    ownerProjectId: string,
-    target: WorkbenchThreadTarget,
-    reference: WorkbenchThreadAddressedFeedback,
-  ) => Promise<void>;
   onCreateThread: (ownerProjectId: string, options?: {
     folderId?: FolderId;
     location?: ProjectLocationReference;
@@ -82,7 +76,6 @@ export default memo(function WorkbenchThreadSidebar({
   currentTarget,
   emptySelectionMessage,
   logicalProjects,
-  onAttachFeedback,
   onCreateThread,
   projectId,
   renderThreadTooltipDetails,
@@ -141,7 +134,6 @@ export default memo(function WorkbenchThreadSidebar({
                 row?.location ?? selectedLocation ?? null, target));
           } : logicalProjects ? undefined : (target) => projectHref(createThreadRoute(projectId, target)),
           logicalProjects: logicalProjects ?? (logicalProject ? [logicalProject] : undefined),
-          onAttachFeedback,
           onCreateThread,
           presentation,
           projectId: ownerProjectId,

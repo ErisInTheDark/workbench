@@ -6,6 +6,7 @@
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import { useMemo, useState } from "react";
 
@@ -17,7 +18,7 @@ import { ThreadStoreGitArcObservationProvider } from "./thread-view/ThreadGitArc
 import { useWorkbenchClientController } from "./workbench-client-context";
 import WorkbenchThreadDaemonScope from "./WorkbenchThreadDaemonScope";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
-import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
+import useComposer from "./use-composer";
 import { useProjects } from "./use-projects";
 import { useThread } from "./use-thread";
 import { useThreads } from "./use-threads";
@@ -29,14 +30,12 @@ import WorkbenchThreadTooltipTodos from "./WorkbenchThreadTooltipTodos";
 export default function WorkbenchThreadTooltipDetails({
   harness,
   materialized,
-  onQuestionnaireError,
   fallbackProjectId,
   threadId,
   parentThreadId,
 }: {
   harness: WorkbenchHarness;
   materialized: boolean;
-  onQuestionnaireError?: (message: string) => void;
   /** The project to read the thread through when no sidebar or summary lists it. */
   fallbackProjectId: ProjectId | "";
   threadId: WorkbenchThreadId;
@@ -51,10 +50,13 @@ export default function WorkbenchThreadTooltipDetails({
   )))?.projectId ?? summaries.projects.find(({ unsettledThreads }) => (
     unsettledThreads.some(candidate => candidate.identity.harness === harness && candidate.identity.threadId === threadId)
   ))?.projectId ?? fallbackProjectId, [fallbackProjectId, harness, sidebars, summaries, threadId]);
-  const questionnaire = useWorkbenchQuestionnaire(projectId, parentThreadId
-    ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId }, onQuestionnaireError);
+  const target = useMemo<WorkbenchThreadRouteTarget>(() => parentThreadId
+    ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId },
+  [harness, parentThreadId, threadId]);
+  const thread = useThread(projectId, target);
+  const questionnaire = useComposer.questionnaire(projectId, target, thread);
   const threadContext = useWorkbenchClientController().mounted?.threadContextFor(threadId) ?? null;
-  const cwd = questionnaire.thread.head?.cwd || null;
+  const cwd = thread.head?.cwd || null;
   const projectRootPath = threadContext?.project.rootPath;
   const roots = threadContext?.project.roots;
   const workspaceRoots = useMemo<readonly WorkspaceFileLinkRoot[]>(() => roots && roots.length > 1
@@ -63,13 +65,13 @@ export default function WorkbenchThreadTooltipDetails({
   const ownerArcEntry = useThread.arc(threadId, harness);
   const planIntersections = useThread.claimIntersections(threadId, harness, "plan");
   const stashedIntersections = useThread.claimIntersections(threadId, harness, "stashed");
-  const entry = questionnaire.thread.entry ?? ownerArcEntry ?? sidebarEntry;
+  const entry = thread.entry ?? ownerArcEntry ?? sidebarEntry;
   const hasStash = Boolean((ownerArcEntry?.gitArc ?? entry?.gitArc)?.stashedPaths?.length);
   const hasLiveClaims = Boolean((ownerArcEntry?.gitArc ?? entry?.gitArc)?.claimedPaths.length);
-  const pendingRequest = questionnaire.request;
+  const pendingRequest = questionnaire.getRequest();
   const gitArc = entry?.gitArc ?? null;
   // Lean sidebar and pinned rows carry a narrower arc; acceptance and layers come from the leased store's lifecycle.
-  const stack = questionnaire.thread.entry?.gitArc ?? null;
+  const stack = thread.entry?.gitArc ?? null;
   const pendingProposals = useMemo(() => gitArc?.proposals.filter(({ status }) => status === "proposed") ?? [], [gitArc]);
   const [commitActions] = useState(() => new ThreadCheckpointCommitActions());
   const projectFilePaths = useThread.fileIndex(threadId, pendingProposals.length > 0).snapshot.paths;
@@ -78,10 +80,10 @@ export default function WorkbenchThreadTooltipDetails({
     || ("canCompleteQuestionnaire" in entry && entry.canCompleteQuestionnaire)
     || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput")
   ));
-  const questionnaireIsLive = Boolean(pendingRequest && !materialized && questionnaire.thread.store);
+  const questionnaireIsLive = Boolean(pendingRequest && !materialized && thread.store);
   const waitingFor = entry && "waitingOnThreads" in entry ? entry.waitingOnThreads ?? [] : [];
-  const todos = questionnaire.thread.head?.todos ?? [];
-  if (questionnaire.thread.status === "failed") return null;
+  const todos = thread.head?.todos ?? [];
+  if (thread.status === "failed") return null;
 
   // A stashed arc reports its stash's overlap; live claims still report the plan's.
   const shown = [
@@ -104,7 +106,7 @@ export default function WorkbenchThreadTooltipDetails({
 
   return (
     <WorkbenchThreadDaemonScope context={threadContext}>
-    <ThreadStoreGitArcObservationProvider thread={questionnaire.thread}>
+    <ThreadStoreGitArcObservationProvider thread={thread}>
     <ContextualProjectProvider
       cwd={cwd ?? undefined}
       filePaths={projectFilePaths}
@@ -125,21 +127,21 @@ export default function WorkbenchThreadTooltipDetails({
             ) : questionnaireIsLive ? (
               <ThreadUserInputRequest
                 key={`${projectId}:${threadId}:${pendingRequest.requestKey}`}
-                draft={questionnaire.draft}
+                draft={questionnaire.getDraft()}
                 mode="live"
                 onDraftChange={questionnaire.save}
                 onDraftClear={questionnaire.clear}
                 onSubmit={async (response, options) => {
                   await questionnaire.submit(response, options);
                 }}
-                willAutoCompact={Boolean(questionnaire.thread.head?.willAutoCompact)}
+                willAutoCompact={Boolean(thread.head?.willAutoCompact)}
                 presentation="compact"
                 request={pendingRequest.request}
                 spellCheck={settings.get("composerSpellCheck")}
               />
             ) : (
               <ThreadUserInputRequest
-                draft={questionnaire.draft}
+                draft={questionnaire.getDraft()}
                 mode="preview"
                 presentation="compact"
                 request={pendingRequest.request}

@@ -3,17 +3,18 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { WorkbenchComposerInputDraft } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchComposerInputDraft } from "workbench-shared/types";
 import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import DraftSessionController from "../../components/workbench/thread-view/DraftSessionController";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
 import type WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 import {
-  attachComposerDraftReference, clearComposerDraft, clearQuestionnaireDraft, projectComposerDrafts,
-  saveComposerDraft, saveQuestionnaireDraft,
-  type ComposerDraftTarget,
+  attachComposerDraftReference, clearComposerDraft, clearQuestionnaireDraft, readComposerDraft,
+  resolveComposerDraftTarget, saveComposerDraft, saveQuestionnaireDraft,
+  type ComposerDraftTarget, type ComposerDraftTargetContext,
 } from "./draft-persistence";
+import { createHomeRoute, createLogicalThreadRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function presentationFixture() {
@@ -50,6 +51,48 @@ function presentationFixture() {
 }
 
 const autosave = { reason: "autosave", detached: false } as const;
+
+test("new-thread draft handoffs follow the url as it is when the save lands, not when the composer rendered", () => {
+  const logicalProjectId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse(crypto.randomUUID());
+  const location = { daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID());
+  const composing = createLogicalThreadRoute(null, logicalProjectId, location, { kind: "new" });
+  const drafted = createLogicalThreadRoute(null, logicalProjectId, null, { kind: "draft", draftId });
+  let route: WorkbenchRoute = composing;
+  const navigations: WorkbenchRoute[] = [];
+  const context: ComposerDraftTargetContext = {
+    threadDraftIdentityFor: () => null,
+    draftLocationFor: () => location,
+    presentation: { draft: () => null, snapshot: () => ({ data: null }) } as unknown as WorkbenchPresentationClient,
+    listingRows: () => [],
+    currentThread: () => ({ id: draftId }) as ThreadPayload,
+    route: () => route,
+    navigate: next => { navigations.push(next); route = next; },
+    profilesFor: () => null,
+  };
+  const target = resolveComposerDraftTarget(context, "project", draftId, { kind: "new" });
+  assert.equal(target.kind, "presentation");
+  if (target.kind !== "presentation") return;
+
+  route = createHomeRoute();
+  target.materialize();
+  assert.equal(navigations.length, 0, "the user left the composer before the save landed");
+
+  route = composing;
+  target.materialize();
+  assert.equal(navigations.length, 1);
+  assert.deepEqual(navigations[0]?.threadTarget, { kind: "draft", draftId });
+
+  route = { ...drafted, threadTarget: { kind: "draft", draftId: fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID()) } };
+  target.dematerialize();
+  assert.equal(navigations.length, 1, "another draft's route is never dematerialised");
+
+  route = drafted;
+  target.dematerialize();
+  assert.equal(navigations.length, 2);
+  assert.equal(navigations[1]?.threadTarget?.kind, "new");
+});
 
 test("saved presentation draft keeps its owner location when a queued save captured an older folder", async () => {
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID());
@@ -318,7 +361,7 @@ test("attaching feedback preserves composer content and deduplicates its referen
   assert.equal(twice, once);
 });
 
-test("composer draft projection follows the UUID owner across daemon registrations", async () => {
+test("a composer draft reads back only at the owner address it was saved under", async () => {
   const state = new WorkbenchClientStateController();
   const attached: ComposerDraftTarget = { kind: "thread", daemonRegistrationId: "attached",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("one"),
@@ -326,7 +369,7 @@ test("composer draft projection follows the UUID owner across daemon registratio
   const remote: ComposerDraftTarget = { ...attached, daemonRegistrationId: "remote" };
   await saveComposerDraft(state, attached, draft => ({ ...draft, text: "attached" }), autosave);
   await saveComposerDraft(state, remote, draft => ({ ...draft, text: "remote" }), autosave);
-  const resolve = () => remote;
-  assert.equal(projectComposerDrafts(state.getSnapshot().records, resolve)[attached.threadId]?.text, "remote");
-  assert.deepEqual(projectComposerDrafts(state.getSnapshot().records, () => null), {});
+  assert.equal(readComposerDraft(state.getSnapshot().records, remote)?.text, "remote");
+  assert.equal(readComposerDraft(state.getSnapshot().records, attached)?.text, "attached");
+  assert.equal(readComposerDraft(state.getSnapshot().records, null), null);
 });

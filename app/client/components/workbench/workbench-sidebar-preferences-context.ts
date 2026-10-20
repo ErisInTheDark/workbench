@@ -13,7 +13,7 @@ import {
   type WorkbenchGlobalSidebarPreferences,
   type WorkbenchSidebarPreferences,
 } from "../../workbench/state/workbench-settings";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
+import { useWorkbenchClientState, useWorkbenchClientStateController } from "./workbench-client-state-context";
 
 export type WorkbenchSidebarDisclosurePreferenceKey =
   | "gitOpen"
@@ -55,19 +55,17 @@ export function useWorkbenchSidebarPreferences() {
 
 useWorkbenchSidebarPreferences.global = function useWorkbenchGlobalSidebarPreferences() {
   const controller = useWorkbenchClientStateController();
-  const clientState = useWorkbenchClientStateSnapshot();
-  const preferences = useMemo(
-    () => readWorkbenchGlobalSidebarPreferences(clientState.daemonRegistrationId, clientState.records),
-    [clientState.daemonRegistrationId, clientState.records],
-  );
+  const preferences = useWorkbenchClientState(state =>
+    readWorkbenchGlobalSidebarPreferences(state.daemonRegistrationId, state.records));
+  const schemaVersion = useWorkbenchClientState(state => state.schemaVersion);
   const set = useCallback(<Key extends keyof WorkbenchGlobalSidebarPreferences>(
     key: Key,
     value: WorkbenchGlobalSidebarPreferences[Key],
   ) => {
     if (preferences[key] === value) return;
-    void writeWorkbenchGlobalSidebarPreference(controller, clientState.schemaVersion, key, value).catch((error) => {
+    void writeWorkbenchGlobalSidebarPreference(controller, schemaVersion, key, value).catch((error) => {
       console.error("Workbench global sidebar preference persistence failed.", error);
     });
-  }, [clientState.schemaVersion, controller, preferences]);
+  }, [schemaVersion, controller, preferences]);
   return useMemo(() => ({ preferences, set }), [preferences, set]);
 };

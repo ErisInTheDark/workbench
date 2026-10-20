@@ -15,6 +15,7 @@ import ThreadAnimationStyleContext from "./ThreadAnimationStyleContext";
 import { THREAD_ANIMATION_STYLES } from "../../../workbench/thread/thread-animation-styles";
 import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import { useSettings } from "../use-settings";
+import { useWorkbenchShellError } from "../workbench-shell-error-context";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 
 export default function ThreadView({ thread: fallbackThread, routeOwned = false, routeError = "", settingsLocation = null,
@@ -58,7 +59,7 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   const perParagraph = settings.get("threadAnimationPerParagraph");
   const animation = useMemo(() => ({ ...THREAD_ANIMATION_STYLES[animationStyle], perParagraph }), [animationStyle, perParagraph]);
   const [settingsFailure, setSettingsFailure] = useState<{ owner: string | null; message: string } | null>(null);
-  const reportError = props.onQuestionnaireError;
+  const reportError = useWorkbenchShellError();
   const setCodeWrap = useCallback((value: boolean) => {
     setSettingsFailure(null);
     void settings.set("threadCodeBlockWrap", value).catch((error: Error) => {

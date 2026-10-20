@@ -22,6 +22,8 @@ import {
   type WorkbenchThreadSidebarEntry,
 } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientStateProvider from "./WorkbenchClientStateProvider";
+import { WorkbenchClientStateContext } from "./workbench-client-state-context";
+import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPresenceProvider";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
@@ -142,15 +144,21 @@ function renderThreads(
   options: {
     attachedDaemonId?: string;
     logicalThreads?: readonly WorkbenchLogicalThreadRow[];
-    onAttachFeedback?: ComponentProps<typeof WorkbenchThreadList>["onAttachFeedback"];
+    /** App state at a schema version that stores composer references. */
+    referencesSupported?: boolean;
   } = {},
 ) {
+  const clientState = new WorkbenchClientStateController({ mode: "memory" });
+  if (options.referencesSupported) {
+    const snapshot = { ...clientState.getSnapshot(), schemaVersion: appStateReleases.composerDraftReferences.version };
+    Object.assign(clientState, { getSnapshot: () => snapshot });
+  }
   const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
   const threadSidebar = new ThreadSidebarClient({ onChange: () => {}, remove: async () => {}, move: async () => {} });
   threadSidebar.acceptListing({
     members: {}, rows: options.logicalThreads ?? [], archivedCount: 0, status: { listed: true, loading: false, error: "" },
   });
-  return renderToStaticMarkup(createElement(
+  return renderToStaticMarkup(createElement(WorkbenchClientStateContext.Provider, { value: clientState }, createElement(
     WorkbenchSidebarPreferencesProvider,
     {
       children: createElement(
@@ -171,7 +179,6 @@ function renderThreads(
               ),
               getThreadHref: () => "/agent/thread/thread-one",
               onCreateThread: () => undefined,
-              onAttachFeedback: options.onAttachFeedback,
               projectId,
               projects: [],
               selectedOwnerProjectId: projectId,
@@ -182,7 +189,7 @@ function renderThreads(
       ),
       projectId,
     },
-  ));
+  )));
 }
 
 test("feedback drags target writable thread composers but not observed rows", () => {
@@ -208,11 +215,15 @@ test("feedback drags target writable thread composers but not observed rows", ()
   const render = (observedOnly: boolean) => renderThreads([entry], payload, {}, {
     attachedDaemonId: daemonId,
     logicalThreads: [row(observedOnly)],
-    onAttachFeedback: async () => undefined,
+    referencesSupported: true,
   });
 
   assert.match(render(false), /data-thread-feedback-drop-target="true"/u);
   assert.doesNotMatch(render(true), /data-thread-feedback-drop-target="true"/u);
+  // App state too old to store composer references offers no drop target at all.
+  assert.doesNotMatch(renderThreads([entry], payload, {}, {
+    attachedDaemonId: daemonId, logicalThreads: [row(false)],
+  }), /data-thread-feedback-drop-target="true"/u);
 });
 
 function renderHomeThreads({

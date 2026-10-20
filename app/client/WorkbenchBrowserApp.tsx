@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchBrowserApp: own the app-wide stats store and select the ordinary Workbench SPA (inside its drag and search owners) or chrome-free
+ * - WorkbenchBrowserApp: own the app-wide stats store and select the ordinary Workbench SPA (inside its drag, search and composer profile owners) or chrome-free
  *   thread rendering surface from browser location.
  */
 import { useEffect, useLayoutEffect, useState } from "react";
@@ -11,6 +11,7 @@ import Workbench from "./components/workbench.tsx";
 import WorkbenchClientStateProvider from "./components/workbench/WorkbenchClientStateProvider.tsx";
 import WorkbenchDragProvider from "./components/workbench/drag/WorkbenchDragProvider.tsx";
 import WorkbenchSearchProvider from "./components/workbench/search/WorkbenchSearchProvider.tsx";
+import WorkbenchComposerProfileRegistryProvider from "./components/workbench/WorkbenchComposerProfileRegistryProvider.tsx";
 import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController.ts";
 import WorkbenchAppRuntimeClient from "./workbench/app/WorkbenchAppRuntimeClient.ts";
 import WorkbenchAppRpcContext from "./workbench/app/WorkbenchAppRpcContext";
@@ -114,7 +115,9 @@ export default function WorkbenchBrowserApp({
     content = (
       <WorkbenchDragProvider>
       <WorkbenchSearchProvider>
+      <WorkbenchComposerProfileRegistryProvider>
         <Workbench appRuntime={runtime} />
+      </WorkbenchComposerProfileRegistryProvider>
       </WorkbenchSearchProvider>
       </WorkbenchDragProvider>
     );

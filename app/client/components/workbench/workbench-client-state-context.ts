@@ -2,9 +2,7 @@
  * Exports:
  * - WorkbenchClientStateContext: current browser state owner context with intentional memory-only Next default. Keywords: browser, state, React, context.
  * - useWorkbenchClientStateController: read the current browser state owner. Keywords: browser, state, React, controller.
- * - useWorkbenchClientState: select one fact from the browser state, re-rendering only when that fact changes.
- * - useWorkbenchClientStateSnapshot: subscribe to the whole browser state projection; being removed in favour of selections.
- */
+ * - useWorkbenchClientState: select one fact from the browser state, re-rendering only when that fact changes. */
 "use client";
 
 import { createContext, useCallback, useContext, useRef, useSyncExternalStore } from "react";
@@ -34,9 +32,4 @@ export function useWorkbenchClientState<Value>(select: (state: WorkbenchClientSt
     return next;
   }, [controller, select]);
   return useSyncExternalStore(controller.subscribe, read, read);
-}
-
-export function useWorkbenchClientStateSnapshot() {
-  const controller = useWorkbenchClientStateController();
-  return useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
 }

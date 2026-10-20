@@ -51,7 +51,8 @@ import { useWorkbenchClientController } from "../workbench-client-context";
 import { useThread } from "../use-thread";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
 import SendActionBadge from "./SendActionBadge";
-import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
+import useComposer from "../use-composer";
+import { DraftIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadAgentQuickPicker from "./ThreadAgentQuickPicker";
@@ -60,7 +61,7 @@ import StickyComposerSurface from "./StickyComposerSurface";
 import ThreadProfileQuickPicker from "./ThreadProfileQuickPicker";
 import WorkbenchModelQuickPicker from "../WorkbenchModelQuickPicker";
 import type DraftSessionController from "./DraftSessionController";
-import { draftSessionOwner, type DraftUpdate } from "./DraftSessionController";
+import { draftSessionOwner } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import SurfacePanels from "./SurfacePanels";
 import { takeNewThreadReferences } from "../../../workbench/thread/new-thread-reference-seeds";
@@ -126,9 +127,6 @@ export default function ThreadComposer ({
   onSendMessage,
   onStopThread,
   onThreadSettled,
-  onThreadComposerDraftChange,
-  onThreadComposerDraftClear,
-  onQuestionnaireError,
   onSubmitRejected,
   onCompactSendHoldChange,
   onThreadAgentChange,
@@ -145,7 +143,6 @@ export default function ThreadComposer ({
   bottomUi,
   leadingActions,
   trailingActions,
-  threadComposerDraft,
   highlightSources,
   thread,
   turns,
@@ -172,9 +169,6 @@ export default function ThreadComposer ({
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadSettled?: (target: WorkbenchThreadTarget, ownerProjectId: string) => void;
-  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
-  onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
-  onQuestionnaireError?: (message: string) => void;
   /** A message or answer the daemon rejected; the owner of stale facts (such as known skills) refreshes them. */
   onSubmitRejected?: (error: unknown) => void;
   /** Enter is being held to confirm a compact-first send; the compact control shows its progress. */
@@ -193,7 +187,6 @@ export default function ThreadComposer ({
   bottomUi?: StickyComposerSurface.BottomUi;
   leadingActions?: ReactNode;
   trailingActions?: ReactNode;
-  threadComposerDraft: WorkbenchComposerInputDraft | null;
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadHead;
   /** Loaded turns without side-history items, newest last. */
@@ -210,27 +203,31 @@ export default function ThreadComposer ({
   onReferencesSent?: (references: readonly ComposerReference[]) => void;
 }) {
   const daemon = useWorkbenchDaemonClient();
-  const questionnaire = useWorkbenchQuestionnaire(projectId, thread.isDraft ? { kind: "draft", draftId: thread.id }
+  const questionnaireTarget = useMemo<WorkbenchThreadTarget>(() => thread.isDraft
+    ? { kind: "draft", draftId: DraftIdSchema.parse(thread.id) }
     : threadTarget?.kind === "subagent" && threadTarget.threadId === thread.id ? threadTarget
-    : { kind: "provider", harness: thread.harness, threadId: thread.id }, onQuestionnaireError);
-  const threadController = questionnaire.thread;
+    : { kind: "provider", harness: thread.harness, threadId: ThreadReferenceSchema.parse(thread.id) },
+  [thread.harness, thread.id, thread.isDraft, threadTarget]);
+  const threadController = useThread(projectId, questionnaireTarget);
+  const questionnaire = useComposer.questionnaire(projectId, questionnaireTarget, threadController);
   const sidebarEntry = threadController.entry;
   const client = useWorkbenchClientController();
   const summary = useThread.summary(sidebarEntry?.entryKind === "thread" ? sidebarEntry.identity.threadId : null);
   const threadState = useMemo(() => ({ status: thread.status, turns: [...turns] }), [thread.status, turns]);
   const threadLifecycle = sidebarEntry?.lifecycle ?? null;
-  const pendingUserInputRequest = questionnaire.request;
-  const threadQuestionnaireDraft = questionnaire.draft;
+  const pendingUserInputRequest = questionnaire.getRequest();
+  const threadQuestionnaireDraft = questionnaire.getDraft();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const composerTarget = useMemo<WorkbenchThreadTarget>(() => thread.isDraft
     ? threadTarget ?? { kind: "draft", draftId: thread.id }
     : { kind: "provider", harness: thread.harness, threadId: thread.id },
   [thread.harness, thread.id, thread.isDraft, threadTarget]);
   const emptyDraft = useMemo<WorkbenchComposerInputDraft>(() => ({ attachments: [], text: "", updatedAt: 0 }), []);
-  const editing = useDraftSession(threadComposerDraft ?? emptyDraft, {
+  const composer = useComposer(projectId, thread.id, composerTarget);
+  const editing = useDraftSession(composer.getDraft() ?? emptyDraft, {
     owner: draftSessionOwner(projectId, thread.id),
     empty: () => emptyDraft,
-    save: (update, options) => onThreadComposerDraftChange(projectId, thread.id, update, options.reason, composerTarget, options.detached),
+    save: (update, options) => composer.save(update, options),
   });
   const [profileEditor] = useState(() => new ThreadProfileEditorController());
   const editorState = useSyncExternalStore(profileEditor.subscribe, profileEditor.getSnapshot, profileEditor.getSnapshot);
@@ -498,16 +495,16 @@ export default function ThreadComposer ({
       await editing.session.submitAccepted(async () => {
         await send();
         if (pickedReferences.length) onReferencesSent?.(pickedReferences);
-      }, () => onThreadComposerDraftClear(projectId, thread.id, composerTarget), "message");
+      }, () => composer.clear(), "message");
       return;
     }
     await threadController.actions.submitDraft(
       createThreadComposerMessageInput(trimmedValue, attachments, references),
       accept => editing.session.submit(async (submitted, options) => {
         return await runThreadComposerSubmission({
-          clearDurableDraft: () => onThreadComposerDraftClear(projectId, thread.id, composerTarget),
+          clearDurableDraft: () => composer.clear(),
           preserveDurableDraft: async () => {
-            await onThreadComposerDraftChange(projectId, thread.id, () => submitted, "submission", composerTarget, options.detached);
+            await composer.save(() => submitted, { reason: "submission", detached: options.detached });
           },
           send: () => send(accept),
           showError: setError,

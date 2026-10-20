@@ -12,6 +12,7 @@ import type {
 import type { WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import { useThreads } from "./use-threads";
+import useComposer from "./use-composer";
 
 import {
   ProjectIdSchema, ProjectThreadDisplayKeySchema, type FolderId, type ProjectThreadDisplayKey,
@@ -35,7 +36,6 @@ import {
   type WorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import type { WorkbenchThreadPriority, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import {
   canMoveWorkbenchThreadRowToSection,
@@ -184,7 +184,6 @@ export default function WorkbenchThreadList ({
   folderSidebars,
   getThreadHref,
   logicalProjects,
-  onAttachFeedback,
   onCreateThread,
   presentation,
   projectId,
@@ -213,11 +212,6 @@ export default function WorkbenchThreadList ({
   };
   getThreadHref?: (target: WorkbenchThreadTarget, ownerProjectId?: string) => string | undefined;
   logicalProjects?: readonly WorkbenchLogicalProject[];
-  onAttachFeedback?: (
-    ownerProjectId: string,
-    target: WorkbenchThreadTarget,
-    reference: WorkbenchThreadAddressedFeedback,
-  ) => Promise<void>;
   onCreateThread: (ownerProjectId: string, options?: {
     folderId?: FolderId;
     location?: ProjectLocationReference;
@@ -230,6 +224,7 @@ export default function WorkbenchThreadList ({
   selectedProjectIds: readonly string[];
 }) {
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
+  const references = useComposer.references();
   const [layoutError, setLayoutError] = useState("");
   const [workingThreadsOpen, setWorkingThreadsOpen] = useState(false);
   const isShiftPressed = useNonTextInputShiftKey();
@@ -392,7 +387,8 @@ export default function WorkbenchThreadList ({
   const rowContext: ThreadListRowContext = {
     actions, attachedDaemonId, controls, currentTarget, focusRow, getThreadHref, hasSelectedEntry,
     firstThreadKey: navigableEntries[0]?.threadKey ?? null, homeDisplayOrderSupported, isShiftPressed, logicalProjects,
-    onAttachFeedback, projectHref, projectsById, readRowForPayload: rowForPayload,
+    onAttachFeedback: references.canAttach ? references.attach : undefined,
+    projectHref, projectsById, readRowForPayload: rowForPayload,
     registerRow: (threadKey, node) => { if (node) rowRefs.current.set(threadKey, node); else rowRefs.current.delete(threadKey); },
     renderThreadTooltipDetails, selectedOwnerProjectId, setLayoutError, showProjectEyebrow, updateProjectLayout,
   };

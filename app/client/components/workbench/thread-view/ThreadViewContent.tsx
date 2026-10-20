@@ -71,7 +71,7 @@ import { ThreadStoreGitArcObservationProvider } from "./ThreadGitArcObservationC
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import type DraftSessionController from "./DraftSessionController";
-import type { DraftUpdate } from "./DraftSessionController";
+import useComposer from "../use-composer";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadStatusArea from "./ThreadStatusArea";
@@ -251,9 +251,6 @@ export default memo(function ThreadViewContent ({
   onThreadCodeBlockWrapChange,
   onThreadSettled,
   onSendMessage,
-  onThreadComposerDraftChange,
-  onThreadComposerDraftClear,
-  onQuestionnaireError,
   onThreadSettingsChange,
   onSelectedThreadChange,
   projectId,
@@ -268,8 +265,6 @@ export default memo(function ThreadViewContent ({
   selectedThreadId,
   threadCodeBlockWrap,
   threadCodeDetails = null,
-  threadComposerDraft,
-  threadComposerDraftsByThreadId,
   rootTarget,
   threadTarget,
   viewInstanceKey = rootTarget.kind === "draft" ? rootTarget.draftId : rootTarget.threadId,
@@ -295,9 +290,6 @@ export default memo(function ThreadViewContent ({
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
-  onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
-  onQuestionnaireError?: (message: string) => void;
   onThreadSettingsChange: (threadId: string, settings: WorkbenchComposerSettings) => void;
   onSelectedThreadChange?: (threadId: string) => void;
   projectId: string;
@@ -312,8 +304,6 @@ export default memo(function ThreadViewContent ({
   selectedThreadId?: string;
   threadCodeBlockWrap: boolean;
   threadCodeDetails?: boolean | null;
-  threadComposerDraft: WorkbenchComposerInputDraft | null;
-  threadComposerDraftsByThreadId: Record<string, WorkbenchComposerInputDraft | undefined>;
   rootTarget: Exclude<WorkbenchThreadTarget, { kind: "new" }>;
   threadTarget: WorkbenchThreadTarget | null;
   viewInstanceKey?: string;
@@ -465,8 +455,10 @@ export default memo(function ThreadViewContent ({
     gitCommits: activeSidebarEntry.gitCommits ?? [],
     lifecycle: activeSidebarEntry.lifecycle,
   } : null, [activeSidebarEntry]);
-  const composerTarget = useMemo(() => activeThread?.isDraft && !threadComposerDraft && threadTarget?.kind === "draft"
-    ? { kind: "new" as const } : threadTarget, [activeThread?.isDraft, threadComposerDraft, threadTarget]);
+  // A draft route whose saved draft is gone composes as new again, so its next words recreate it.
+  const routeDraftSaved = Boolean(useComposer(projectId, activeThread?.id ?? "", threadTarget ?? null).getDraft());
+  const composerTarget = useMemo(() => activeThread?.isDraft && !routeDraftSaved && threadTarget?.kind === "draft"
+    ? { kind: "new" as const } : threadTarget, [activeThread?.isDraft, routeDraftSaved, threadTarget]);
   const activeProfileSlot = useMemo(() => activeThread
     ? resolveThreadComposerProfileSlot(ProjectIdSchema.parse(projectId), composerTarget, activeThread)
     : null, [activeThread?.harness, activeThread?.id, projectId, composerTarget]);
@@ -1025,9 +1017,6 @@ export default memo(function ThreadViewContent ({
       onSendMessage={handleSendMessage}
       onStopThread={handleStopThread}
       onThreadSettled={onThreadSettled}
-      onThreadComposerDraftChange={onThreadComposerDraftChange}
-      onThreadComposerDraftClear={onThreadComposerDraftClear}
-      onQuestionnaireError={onQuestionnaireError}
       onThreadAgentChange={handleThreadAgentChange}
       onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
       onThreadServiceTierChange={handleThreadServiceTierChange}
@@ -1042,9 +1031,6 @@ export default memo(function ThreadViewContent ({
         after: composerStatus,
         paddingClassName: bottomPaddingClassName,
       } : undefined}
-      threadComposerDraft={activeThread.isDraft
-        ? threadComposerDraft
-        : threadComposerDraftsByThreadId[activeThread.id] ?? null}
       thread={resolvedActiveThread!}
       turns={loadedTurns}
       threadTarget={activeThread.isDraft ? composerTarget : activeTarget}

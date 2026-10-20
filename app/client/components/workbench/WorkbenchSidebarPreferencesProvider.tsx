@@ -29,8 +29,8 @@ import {
   type WorkbenchSidebarPreferencesValue,
 } from "./workbench-sidebar-preferences-context";
 import {
+  useWorkbenchClientState,
   useWorkbenchClientStateController,
-  useWorkbenchClientStateSnapshot,
 } from "./workbench-client-state-context";
 
 export default function WorkbenchSidebarPreferencesProvider({
@@ -41,7 +41,11 @@ export default function WorkbenchSidebarPreferencesProvider({
   projectId: string;
 }) {
   const controller = useWorkbenchClientStateController();
-  const clientState = useWorkbenchClientStateSnapshot();
+  const projectPreferences = useWorkbenchClientState(state =>
+    readWorkbenchProjectSidebarPreferences(state.daemonRegistrationId, projectId, state.records));
+  const openFolders = useWorkbenchClientState(state =>
+    readWorkbenchSidebarOpenFolders(state.daemonRegistrationId, state.records));
+  const schemaVersion = useWorkbenchClientState(state => state.schemaVersion);
   const globalPreferences = useWorkbenchSidebarPreferences.global();
   const [displayState, setDisplayState] = useState<WorkbenchSidebarDisplayState>({
     gitOpen: true,
@@ -52,9 +56,9 @@ export default function WorkbenchSidebarPreferencesProvider({
   const [pendingDisclosure, setPendingDisclosure] = useState<Partial<Record<WorkbenchSidebarDisclosurePreferenceKey, boolean>>>({});
   const disclosureGeneration = useRef(new Map<WorkbenchSidebarDisclosurePreferenceKey, number>());
   const persistedPreferences = useMemo(() => ({
-    ...readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records),
+    ...projectPreferences,
     ...globalPreferences.preferences,
-  }), [clientState.daemonRegistrationId, clientState.records, globalPreferences.preferences, projectId]);
+  }), [globalPreferences.preferences, projectPreferences]);
   const preferences = useMemo(() => ({
     ...persistedPreferences, ...displayState, ...pendingDisclosure,
   }), [displayState, pendingDisclosure, persistedPreferences]);
@@ -97,7 +101,7 @@ export default function WorkbenchSidebarPreferencesProvider({
           });
         };
         const write = key === "projectsOpen"
-          ? writeWorkbenchGlobalSidebarPreference(controller, clientState.schemaVersion, key, open)
+          ? writeWorkbenchGlobalSidebarPreference(controller, schemaVersion, key, open)
           : writeWorkbenchProjectSidebarPreference(controller, projectId, key, open);
         void write.then(clear, error => {
           clear();
@@ -105,11 +109,7 @@ export default function WorkbenchSidebarPreferencesProvider({
         });
       }
     },
-    [clientState.schemaVersion, controller, preferences, projectId],
-  );
-  const openFolders = useMemo(
-    () => readWorkbenchSidebarOpenFolders(clientState.daemonRegistrationId, clientState.records),
-    [clientState.daemonRegistrationId, clientState.records],
+    [schemaVersion, controller, preferences, projectId],
   );
   const openFolderKeys = useMemo(() => new Set(openFolders.map(folder => folder.key)), [openFolders]);
   const setFolderOpen = useCallback<WorkbenchSidebarPreferencesValue["setFolderOpen"]>((folderProjectId, folderId, open) => {
