@@ -6,7 +6,7 @@ import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
-import { buildActivityRuns } from "./thread-activity-runs";
+import { buildActivityRuns, getActivitySegmentItems } from "./thread-activity-runs";
 import { buildRenderableBlocks, getRenderableBlockItems, type CommandItem, type ThreadRenderableBlock } from "./thread-render-blocks";
 
 function command(id: string, text = "pwd"): CommandItem {
@@ -41,7 +41,7 @@ function codeCall(id: string, group: string): ThreadItem {
 /** Runs as `run:[segment kinds and ids]`, other blocks as their kind and ids. */
 function shape(items: ThreadItem[], context: Parameters<typeof buildActivityRuns>[1] = {}) {
   return buildActivityRuns(buildRenderableBlocks(items), context).map((block: ThreadRenderableBlock) => block.kind === "activityRun"
-    ? ["run", block.segments.map(segment => [segment.kind, (segment.kind === "reasoning" || segment.kind === "code" ? [segment.item] : segment.items).map(item => item.id)])]
+    ? ["run", block.segments.map(segment => [segment.kind, getActivitySegmentItems(segment).map(item => item.id)])]
     : [block.kind, getRenderableBlockItems(block).map(item => item.id)]);
 }
 
@@ -118,6 +118,12 @@ test("arc reads, plans, vis, recall and queue checks are steps inside the surrou
   assert.deepEqual(shape(steps), [["run", [["commands", steps.map(step => step.id)]]]]);
   assert.deepEqual(shape([command("before"), mcp("propose", "git_arc_propose", { title: "Keep this visible" }), command("after")]).map(([kind]) => kind),
     ["run", "item", "run"]);
+});
+
+test("sleeps join runs as their own untinted steps, splitting the command group around them", () => {
+  assert.deepEqual(shape([command("before"), command("nap", "Start-Sleep -Seconds 120"), command("after")]), [
+    ["run", [["commands", ["before"]], ["sleep", ["nap"]], ["commands", ["after"]]]],
+  ]);
 });
 
 test("reasoning with nothing to show adds no step, and a run of only that renders nothing", () => {

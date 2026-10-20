@@ -10,7 +10,7 @@
 
 import { useContext, useMemo } from "react";
 
-import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
+import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandExecutionOutcome,
@@ -27,6 +27,7 @@ import ThreadCommandDetailRows from "../ThreadCommandDetailRows";
 import ThreadContextCommandItem from "../ThreadContextCommandItem";
 import ThreadDynamicToolCallItem from "../ThreadDynamicToolCallItem";
 import ThreadMcpToolCallItem from "../ThreadMcpToolCallItem";
+import ThreadSleepItem from "../ThreadSleepItem";
 import ThreadStatusCommandItem from "../ThreadStatusCommandItem";
 import ThreadTitleCommandItem from "../ThreadTitleCommandItem";
 import ThreadWorkbenchCommandItem from "../ThreadWorkbenchCommandItem";
@@ -238,6 +239,16 @@ export default function ThreadCommandSequence ({
                 item={segment.group.anchor.item}
                 key={`subagent-wait:${segment.group.anchor.item.id}`}
                 subagentWaitTiming={getThreadSubagentWaitTiming(segment.group, itemTimeline ?? [])}
+              />
+            );
+          case "sleep":
+            return (
+              <ThreadSleepItem
+                durationMs={segment.durationMs}
+                ended={segment.item.status !== "inProgress"}
+                key={`sleep:${segment.item.id}`}
+                timeline={findWorkbenchThreadItemTimelineEntry(segment.item.id, itemTimeline)}
+                turnStatus={turn.status}
               />
             );
           default:

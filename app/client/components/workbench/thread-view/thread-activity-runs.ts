@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - buildActivityRuns: fold consecutive reasoning, plain commands (Browse included), file changes, web searches and code-mode
- *   executions into activity runs; screenshot steers a Browse step already shows fold away; every other block stays a boundary.
+ * - buildActivityRuns: fold consecutive reasoning, plain commands (Browse included), sleeps, file changes, web searches and
+ *   code-mode executions into activity runs; screenshot steers a Browse step already shows fold away; every other block stays a boundary.
  * - getActivitySegmentItems: the items one run segment shows.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getAgentScreenshotSteerImages, isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
+import { matchThreadGenericItem } from "../../../workbench/thread/thread-generic-item-matchers";
 import {
   buildCommandSequenceRenderSegments,
   isRunStepSegment,
@@ -34,6 +35,7 @@ function splitCommandBlock(block: Extract<ThreadRenderableBlock, { kind: "comman
   return buildCommandSequenceRenderSegments({ items: block.items, ...context }).map<Piece>(segment => {
     if (segment.kind === "commands") return { items: segment.items, kind: "commands" };
     if (isRunStepSegment(segment)) return { items: [segment.item], kind: "commands" };
+    if (segment.kind === "sleep") return segment;
     if (segment.kind === "approval") return { items: segment.items, kind: "commandSequence" };
     if (segment.kind === "subagentWait") return { items: segment.group.entries.map(entry => entry.item), kind: "commandSequence" };
     return { items: [segment.item], kind: "commandSequence" };
@@ -54,24 +56,31 @@ function toCodeModePiece(block: Extract<ThreadRenderableBlock, { kind: "item" }>
   return block.hasCapturedChildren && !failed && !context.codeDetails ? { item, kind: "hidden" } : { item, kind: "code" };
 }
 
+/** A provider's sleep item is the same run step as a sleep command. */
+function toSleepPiece(block: Extract<ThreadRenderableBlock, { kind: "item" }>): Piece | null {
+  if (block.item.type !== "generic") return null;
+  const match = matchThreadGenericItem(block.item);
+  return match?.kind === "sleep" ? { durationMs: match.durationMs, item: block.item, kind: "sleep" } : null;
+}
+
 function toPieces(block: ThreadRenderableBlock, context: CommandContext): Piece[] {
   switch (block.kind) {
     case "reasoningSequence": return block.items.map(item => ({ item, kind: "reasoning" as const }));
     case "fileChangeSequence": return [{ items: block.items, kind: "files" }];
     case "webSearchSequence": return [{ items: block.items, kind: "webSearch" }];
     case "commandSequence": return splitCommandBlock(block, context);
-    case "item": return [toCodeModePiece(block, context) ?? block];
+    case "item": return [toCodeModePiece(block, context) ?? toSleepPiece(block) ?? block];
     default: return [block];
   }
 }
 
 function isRunPiece(piece: Piece): piece is ActivitySegment | HiddenMember {
   return piece.kind === "reasoning" || piece.kind === "code" || piece.kind === "commands" || piece.kind === "files"
-    || piece.kind === "webSearch" || piece.kind === "hidden";
+    || piece.kind === "sleep" || piece.kind === "webSearch" || piece.kind === "hidden";
 }
 
 export function getActivitySegmentItems(segment: ActivitySegment): ThreadItem[] {
-  return segment.kind === "reasoning" || segment.kind === "code" ? [segment.item] : segment.items;
+  return segment.kind === "reasoning" || segment.kind === "code" || segment.kind === "sleep" ? [segment.item] : segment.items;
 }
 
 export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], context: CommandContext = {}): ThreadRenderableBlock[] {
@@ -111,7 +120,8 @@ function appendToPrevious(previous: ActivitySegment | undefined, piece: Activity
 function copySegment(segment: ActivitySegment): ActivitySegment {
   switch (segment.kind) {
     case "reasoning":
-    case "code": return segment;
+    case "code":
+    case "sleep": return segment;
     case "commands": return { items: [...segment.items], kind: "commands" };
     case "files": return { items: [...segment.items], kind: "files" };
     case "webSearch": return { items: [...segment.items], kind: "webSearch" };

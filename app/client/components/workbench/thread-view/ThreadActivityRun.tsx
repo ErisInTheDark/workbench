@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadActivityRun: one run of consecutive work as a tinted summary (counted chips, live duration, current step) that expands into its steps;
- *   a settled run holding one step shows that step alone.
+ * - default ThreadActivityRun: one run of consecutive work as a tinted summary (finished steps as counted chips, live duration,
+ *   current step) that expands into its steps; a settled run holding one step, or a lone sleep, shows that step alone.
  */
 "use client";
 
@@ -12,6 +12,8 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { LoaderIcon } from "../workbench-icons";
 import { getNativeFileChanges, isNativeFileOperation } from "../../../workbench/thread/thread-command-matchers";
+import { parseSleepCommandMs } from "../../../workbench/thread/command-matchers/sleep-command";
+import { matchThreadGenericItem } from "../../../workbench/thread/thread-generic-item-matchers";
 import { getActivityChips, getCommandItemDisplay, type ActivityChip, type CommandChipContext } from "./thread-activity-chips";
 import { describeBrowseStep, getBrowseItemSteps, getCurrentBrowseStep } from "./thread-browse-steps";
 import type { ActivitySegment, CommandSequenceItem, ThreadRenderableBlock } from "./thread-render-blocks";
@@ -37,6 +39,7 @@ export interface ThreadActivityRunRenderers {
   commands: (items: CommandSequenceItem[], isLastSegment: boolean) => ReactNode;
   files: (items: FileItem[]) => ReactNode;
   reasoning: (item: ReasoningItem, isLastSegment: boolean) => ReactNode;
+  sleep: (segment: Extract<ActivitySegment, { kind: "sleep" }>) => ReactNode;
   webSearch: (items: Extract<ActivitySegment, { kind: "webSearch" }>["items"]) => ReactNode;
 }
 
@@ -66,6 +69,29 @@ function useThrottledSentence(sentence: string) {
     return () => window.clearTimeout(timer);
   }, [sentence, shown]);
   return shown;
+}
+
+const UNTINTED: ReadonlySet<ActivitySegment["kind"]> = new Set(["reasoning", "sleep"]);
+
+/** The run's steps without the ones still running. */
+function settledSegments(segments: readonly ActivitySegment[]): ActivitySegment[] {
+  return segments.flatMap((segment): ActivitySegment[] => {
+    switch (segment.kind) {
+      case "commands": {
+        const items = segment.items.filter(item => !isRunning(item));
+        return items.length ? [{ ...segment, items }] : [];
+      }
+      case "files": {
+        const items = segment.items.filter(item => !isRunning(item));
+        return items.length ? [{ ...segment, items }] : [];
+      }
+      case "webSearch": {
+        const items = segment.items.filter(item => !isRunning(item));
+        return items.length ? [{ ...segment, items }] : [];
+      }
+      default: return isRunning(segment.item) ? [] : [segment];
+    }
+  });
 }
 
 /** File operations on one path stitch into one row (a retried edit is one step), so files count by path. */
@@ -114,6 +140,10 @@ function StatusContent({ context, item }: { context: CommandChipContext; item: T
       </span>
     );
   }
+  if ((item.type === "commandExecution" && parseSleepCommandMs(item.command) !== null)
+    || (item.type === "generic" && matchThreadGenericItem(item)?.kind === "sleep")) {
+    return <span className={shimmerTextClassName}>Sleeping</span>;
+  }
   if (item.type !== "commandExecution" && item.type !== "mcpToolCall" && item.type !== "dynamicToolCall") {
     return <span className={shimmerTextClassName}>Working</span>;
   }
@@ -150,7 +180,8 @@ export default function ThreadActivityRun({
   const lastItem = block.items.at(-1);
   // Reasoning has no lifecycle of its own; it is current while nothing has followed it in a live turn.
   const current = lastItem && (isRunning(lastItem) || (lastItem.type === "reasoning" && turnLive && isMostRecent)) ? lastItem : null;
-  const chips = getActivityChips(block.segments, context);
+  // The summary counts what has happened; a step still running shows as the status line instead.
+  const chips = getActivityChips(settledSegments(block.segments), context);
   const settledDurationMs = getThreadItemTimelineDurationMs(block.items.map(item => item.id), itemTimeline);
   const startedAtMs = block.items.flatMap(item => {
     const entry = itemTimeline?.find(candidate => candidate.itemId === item.id);
@@ -165,8 +196,8 @@ export default function ThreadActivityRun({
     : live ? <span className={shimmerTextClassName}>Thinking</span> : null;
   const steps = block.segments.map((segment, index) => {
     const previous = block.segments[index - 1];
-    // Adjacent action groups sit tight; reasoning gets breathing room either side.
-    const gap = !previous ? "" : segment.kind !== "reasoning" && previous.kind !== "reasoning" ? "mt-0.5" : "mt-2";
+    // Adjacent action groups sit tight; untinted steps (reasoning, sleeps) get breathing room either side.
+    const gap = !previous ? "" : !UNTINTED.has(segment.kind) && !UNTINTED.has(previous.kind) ? "mt-0.5" : "mt-2";
     const key = getActivitySegmentItems(segment)[0]?.id ?? index;
     const last = index === block.segments.length - 1;
     switch (segment.kind) {
@@ -178,12 +209,15 @@ export default function ThreadActivityRun({
       );
       case "code": return <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>{renderers.code(segment.item)}</div>;
       case "files": return <div className={gap} key={key}>{renderers.files(segment.items)}</div>;
+      case "sleep": return <div className={gap} key={key}>{renderers.sleep(segment)}</div>;
       case "webSearch": return <div className={gap} key={key}>{renderers.webSearch(segment.items)}</div>;
     }
   });
 
   // A run that settled holding one step is just that step; the card only earns its place summarising several.
-  if (!live && countVisibleSteps(block.segments) === 1) {
+  // A lone sleep is its own live countdown, so it shows bare even while it runs.
+  const lone = countVisibleSteps(block.segments) === 1;
+  if (lone && (!live || block.segments[0]?.kind === "sleep")) {
     return <div className="my-1.5">{steps}</div>;
   }
 

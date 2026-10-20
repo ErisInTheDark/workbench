@@ -14,16 +14,19 @@ import ThreadSummaryText from "./ThreadSummaryText";
 
 export default function ThreadSleepItem({
   durationMs,
+  ended = false,
   timeline,
   turnStatus,
 }: {
   durationMs: number;
+  /** The sleep's own item says it ended (a sleep command's status), whatever the timeline has recorded so far. */
+  ended?: boolean;
   timeline?: WorkbenchThreadItemTimelineEntry | null;
   turnStatus: Turn["status"];
 }) {
   const [nowMs, setNowMs] = useState(Date.now);
   const startedAt = timeline?.startedAt ?? timeline?.firstSeenAt ?? null;
-  const completedAt = timeline?.completedAt ?? null;
+  const completedAt = timeline?.completedAt ?? (ended ? startedAt ?? 0 : null);
   const display = getSleepDisplay({ durationMs, startedAt, completedAt, turnStatus, nowMs });
 
   useEffect(() => {

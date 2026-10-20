@@ -42,3 +42,17 @@ test("repeated failed edits of one file are one stitched step, so their settled 
 test("a live run is a card even with one step, so its status row never jumps", () => {
   assert.equal(cards(render([reasoning("thinking")], "inProgress")), 1);
 });
+
+const running = (id: string, text: string): ThreadItem => ({ ...command(id), command: text, durationMs: null, exitCode: null, status: "inProgress" } as ThreadItem);
+
+test("a run holding only a running sleep is that sleep's countdown, not a card", () => {
+  const html = render([running("nap", "Start-Sleep -Seconds 120")], "inProgress");
+  assert.equal(cards(html), 0);
+  assert.match(html.replace(/<[^>]*>/gu, ""), /Sleeping for 120s/u);
+});
+
+test("a run's summary counts only finished steps", () => {
+  const html = render([command("done"), running("busy", "node build.js")], "inProgress");
+  const chips = /data-thread-activity-run="true"[\s\S]*?<\/button>/u.exec(html)?.[0].replace(/<[^>]*>/gu, " ").replace(/\s+/gu, " ") ?? "";
+  assert.match(chips, /1 ran/u);
+});

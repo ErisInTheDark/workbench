@@ -20,6 +20,7 @@ import ThreadFileChangeItem from "../ThreadFileChangeItem";
 import ThreadGenericItem from "../ThreadGenericItem";
 import ThreadIncomingAgentMessageGroup from "../ThreadIncomingAgentMessageGroup";
 import ThreadMessageTimestamp from "../ThreadMessageTimestamp";
+import ThreadSleepItem from "../ThreadSleepItem";
 import ThreadToolOutputItem from "../ThreadToolOutputItem";
 import ThreadWebSearchItem, { ThreadWebSearchSequence } from "../ThreadWebSearchItem";
 import { getCommandItemDisplay } from "../thread-activity-chips";
@@ -75,6 +76,14 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
         files: (items) => <ThreadFileChangeItem animateEntries={animateEntries} items={items} />,
         reasoning: (item, isLastSegment) => (
           <ThreadReasoningSequence block={{ items: [item], kind: "reasoningSequence" }} isMostRecent={isMostRecent && isLastSegment} />
+        ),
+        sleep: ({ durationMs, item }) => (
+          <ThreadSleepItem
+            durationMs={durationMs}
+            ended={item.type === "commandExecution" && item.status !== "inProgress"}
+            timeline={findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline)}
+            turnStatus={turn.status}
+          />
         ),
         webSearch: (items) => <ThreadWebSearchSequence items={items} />,
       }}

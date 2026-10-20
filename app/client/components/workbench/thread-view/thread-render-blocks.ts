@@ -41,6 +41,7 @@ import {
   type WorkbenchSpecializedOperation,
   type WorkbenchThreadRecallOperation,
 } from "../../../workbench/thread/thread-command-matchers";
+import { parseSleepCommandMs } from "../../../workbench/thread/command-matchers/sleep-command";
 import type { WorkbenchSubagentCommandTarget } from "../../../workbench/thread/command-matchers/workbench-cli";
 import { countKnownCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
@@ -86,6 +87,8 @@ export type ActivitySegment =
   | { kind: "code"; item: Extract<ThreadItem, { type: "dynamicToolCall" }> }
   | { kind: "commands"; items: CommandSequenceItem[] }
   | { kind: "files"; items: FileOperationBlockItem[] }
+  /** A wait on the clock (a sleep command or provider sleep item): a step of the run, drawn untinted like reasoning. */
+  | { durationMs: number; item: CommandItem | Extract<ThreadItem, { type: "generic" }>; kind: "sleep" }
   | { kind: "webSearch"; items: Extract<ThreadItem, { type: "webSearch" }>[] };
 export type ThreadRenderableBlock =
   /** Consecutive work (reasoning, plain commands, file changes, searches) shown as one summary that expands into its steps. */
@@ -593,6 +596,7 @@ export type CommandSequenceRenderSegment =
   | { item: CommandItem; kind: "message" }
   /** A command its dedicated renderer draws, which no grouped summary could name. */
   | { claimedBy: string | null; item: CommandItem; kind: "ownRow" }
+  | { durationMs: number; item: CommandItem; kind: "sleep" }
   | { item: CommandItem; kind: "subagent" }
   | { item: CommandSequenceItem; kind: "subagentQueueCheck" }
   | { item: CommandItem; kind: "threadContext"; operation: WorkbenchThreadRecallOperation }
@@ -652,6 +656,8 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     }
     const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
     const display = getThreadCommandDisplay({ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell, ...context });
+    const sleepMs = parseSleepCommandMs(display.unwrappedCommand);
+    if (sleepMs !== null) { flushCommands(); flushWaits(); segments.push({ durationMs: sleepMs, item, kind: "sleep" }); continue; }
     const title = isWorkbenchTaskTitleSetMatcherClaim(display.claimedBy) ? parseWorkbenchTaskTitleCommand(display.unwrappedCommand, item.commandActions) : null;
     const status = isWorkbenchTaskStatusMatcherClaim(display.claimedBy) ? parseWorkbenchTaskStatusCommand(display.unwrappedCommand, item.commandActions) : null;
     const recall = isThreadContextMatcherClaim(display.claimedBy) ? parseWorkbenchThreadRecallCommand(display.unwrappedCommand) : null;
