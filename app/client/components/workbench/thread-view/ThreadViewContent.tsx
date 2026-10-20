@@ -6,7 +6,7 @@
 import { useThread } from "../use-thread";
 import { TranscriptBodiesContext, useTranscript } from "../use-transcript";
 
-import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
@@ -19,21 +19,9 @@ import { writeTextToClipboard } from "../../../workbench/dom/clipboard";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
-import {
-  createProjectFilePathDisambiguationIndexCooperatively,
-  readCachedProjectFilePathDisambiguationIndex,
-  writeProjectFilePathDisambiguationIndexCache,
-  type ProjectFilePathDisambiguationIndex,
-} from "../../../workbench/project/project-file-path";
 import type { ProjectTreeFileCandidate } from "workbench-shared/workbench/project/ProjectTreeFileIndex";
-import CooperativeRebuildQueue from "../../../workbench/state/CooperativeRebuildQueue";
-import {
-  buildInlineMentionCandidates,
-  buildInlineMentionCandidatesCooperatively,
-  readCachedInlineMentionCandidates,
-  type BuildInlineMentionCandidatesOptions,
-  type InlineMentionHighlightSources,
-} from "../../../workbench/thread/inline-mention-highlights";
+import { useBackgroundInlineMentionSources, useBackgroundProjectFilePathDisambiguationIndex } from "./use-background-thread-indexes";
+import useThreadHistoryPaging from "./use-thread-history-paging";
 import resolveThreadComposerProfileSlot from "../../../workbench/thread/thread-composer-profile-slot";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { ThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
@@ -63,8 +51,6 @@ import ContextualProjectProvider from "../ContextualProjectProvider";
 import { useThreads } from "../use-threads";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalReviewerReady } from "../WorkbenchApprovalModeMenu";
-import previousTurnLoadReducer from "./previous-turn-load-state";
-import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
 import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./transcript/ThreadTurnLoadStates";
 import getThreadGitArcProposalPresentation, { getThreadGitArcWork } from "./thread-git-arc-presentation";
 import { ThreadStoreGitArcObservationProvider } from "./ThreadGitArcObservationContext";
@@ -101,9 +87,6 @@ import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const EMPTY_TURNS: readonly Turn[] = [];
-const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
-const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
-const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -125,114 +108,6 @@ function setCodeBlockToggleButtonState (button: HTMLButtonElement, isActive: boo
   button.setAttribute("data-thread-codeblock-toggle-state", isActive ? "active" : "idle");
 }
 
-function useBackgroundInlineMentionSources ({
-  files,
-  filesIdentity,
-  projectRootPath,
-  skills,
-  threadCwdPath,
-  workspaceRoots = [],
-}: BuildInlineMentionCandidatesOptions): InlineMentionHighlightSources {
-  const fallbackSources = useMemo(() => buildInlineMentionCandidates({
-    files: EMPTY_PROJECT_FILE_CANDIDATES,
-    filesIdentity: "thread-view:empty-project-files",
-    projectRootPath,
-    skills,
-    threadCwdPath,
-    workspaceRoots,
-  }), [projectRootPath, skills, threadCwdPath, workspaceRoots]);
-  const [sources, setSources] = useState<InlineMentionHighlightSources>(() => (
-    readCachedInlineMentionCandidates({
-      files,
-      filesIdentity,
-      projectRootPath,
-      skills,
-      threadCwdPath,
-      workspaceRoots,
-    }) ?? fallbackSources
-  ));
-  const generationRef = useRef(0);
-
-  useEffect(() => {
-    generationRef.current += 1;
-    const generation = generationRef.current;
-    const cachedSources = readCachedInlineMentionCandidates({
-      files,
-      filesIdentity,
-      projectRootPath,
-      skills,
-      threadCwdPath,
-      workspaceRoots,
-    });
-    if (cachedSources) {
-      setSources(cachedSources);
-      return;
-    }
-
-    threadViewBackgroundRebuildQueue.enqueue({
-      key: "thread-view:inline-mention-sources",
-      run: (budget) => buildInlineMentionCandidatesCooperatively({
-        files,
-        filesIdentity,
-        projectRootPath,
-        skills,
-        threadCwdPath,
-        workspaceRoots,
-      }, budget),
-      commit (result) {
-        if (generationRef.current === generation) {
-          setSources(result);
-        }
-      },
-      onError (error) {
-        console.error("Failed to rebuild inline mention sources", error);
-      },
-      sliceMs: THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS,
-    });
-  }, [fallbackSources, files, filesIdentity, projectRootPath, skills, threadCwdPath, workspaceRoots]);
-
-  return sources;
-}
-
-function useBackgroundProjectFilePathDisambiguationIndex (
-  disambiguationPaths: readonly string[],
-  disambiguationKey: string,
-): ProjectFilePathDisambiguationIndex | null {
-  const [disambiguationIndex, setDisambiguationIndex] = useState<ProjectFilePathDisambiguationIndex | null>(() => (
-    readCachedProjectFilePathDisambiguationIndex(disambiguationPaths, disambiguationKey)
-  ));
-  const generationRef = useRef(0);
-
-  useEffect(() => {
-    generationRef.current += 1;
-    const generation = generationRef.current;
-    const cachedIndex = readCachedProjectFilePathDisambiguationIndex(disambiguationPaths, disambiguationKey);
-    if (cachedIndex) {
-      setDisambiguationIndex(cachedIndex);
-      return;
-    }
-
-    threadViewBackgroundRebuildQueue.enqueue({
-      key: "thread-view:project-file-path-disambiguation",
-      async run (budget) {
-        const index = await createProjectFilePathDisambiguationIndexCooperatively(disambiguationPaths, budget);
-        writeProjectFilePathDisambiguationIndexCache(disambiguationPaths, disambiguationKey, index);
-        return index;
-      },
-      commit (result) {
-        if (generationRef.current === generation) {
-          setDisambiguationIndex(result);
-        }
-      },
-      onError (error) {
-        console.error("Failed to rebuild project file path disambiguation index", error);
-      },
-      sliceMs: THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS,
-    });
-  }, [disambiguationKey, disambiguationPaths]);
-
-  return disambiguationIndex;
-}
 
 export default memo(function ThreadViewContent ({
   approvalModeSettings = null,
@@ -334,17 +209,9 @@ export default memo(function ThreadViewContent ({
   const [isMessageBoardOpen, setIsMessageBoardOpen] = useState(false);
   const [isCompactSendHolding, setIsCompactSendHolding] = useState(false);
   useEffect(() => { setIsMessageBoardOpen(false); }, [thread.id]);
-  const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
-  // Older history can land inside the first loaded turn, so each completed page opens a new paging boundary.
-  const [historyPage, setHistoryPage] = useState(0);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
-  const [historySentinel, setHistorySentinel] = useState<HTMLDivElement | null>(null);
-  const historyPagingRef = useRef<ThreadHistoryPagingController | null>(null);
-  const historyPagingBindingsRef = useRef<HistoryPagingOptions | null>(null);
-  const previousLoadedTurnIdsRef = useRef<{ threadId: string; turnIds: readonly string[] } | null>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
-  const historyLoadGenerationRef = useRef(0);
   const knownDirectSubagents = useMemo(
     () => filterSubagentsByParentThreadId(rootThread.subagents, thread.id),
     [rootThread.subagents, thread.id],
@@ -463,10 +330,8 @@ export default memo(function ThreadViewContent ({
   useEffect(() => {
     if (activeProfileSlot && projectedProfile !== undefined) composerProfileController.observeSelection(activeProfileSlot, projectedProfile);
   }, [activeProfileSlot, composerProfileController, projectedProfile]);
-  const historyPagingIdentity = useMemo(() => ({}), [projectId, viewInstanceKey, activeThread?.id]);
   const loadedTurns = activeThread?.isDraft || activeTranscriptProjection ? activeTurns.turns : EMPTY_TURNS;
   const renderedHistoryTurnIds = useMemo(() => loadedTurns.map(({ id }) => id), [loadedTurns]);
-  const loadedTurnIds = renderedHistoryTurnIds;
   const activeItemApprovals = useMemo(
     () => deriveThreadItemApprovals(activeThread ? activeApprovalEntries : [], activePendingUserInputRequest),
     [activeApprovalEntries, activePendingUserInputRequest, activeThread],
@@ -492,12 +357,6 @@ export default memo(function ThreadViewContent ({
     ? activeTranscriptProjection?.turnHistory[firstLoadedHistoryIndex - 1] ?? null
     : null;
   const canLoadPreviousTurn = activeTurns.canLoadOlder;
-  const previousTurnLoadKey = activeThread && canLoadPreviousTurn
-    ? `${activeThread.id}:${loadedTurns[0]?.id ?? ""}:${historyPage}`
-    : "";
-  const previousTurnLoadStatus = previousTurnLoadKey
-    ? previousTurnLoadStates[previousTurnLoadKey]
-    : undefined;
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
@@ -602,60 +461,18 @@ export default memo(function ThreadViewContent ({
     setAreSettledSubagentsVisible((current) => !current);
   }, []);
 
-  const loadPreviousTurn = useCallback(async ({ retry = false }: { retry?: boolean } = {}) => {
-    if (
-      !activeThread
-      || !canLoadPreviousTurn
-      || !previousTurnLoadKey
-      || previousTurnLoadStatus === "loading"
-      || (previousTurnLoadStatus === "failed" && !retry)
-    ) {
-      return;
-    }
-
-    const loadGeneration = historyLoadGenerationRef.current;
-    const targetThreadId = activeThread.id;
-    const targetHarness = activeThread.harness;
-    const historyPaging = historyPagingRef.current;
-    const transaction = historyPaging?.begin();
-    if (!historyPaging || transaction === null || transaction === undefined) return;
-    dispatchPreviousTurnLoad({ type: "start", key: previousTurnLoadKey });
-
-    try {
-      const turnIds = await active.actions.loadOlder();
-      if (loadGeneration !== historyLoadGenerationRef.current) {
-        return;
-      }
-      if (!turnIds) {
-        historyPaging.fail(transaction);
-        dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
-        console.error("Previous thread turn load returned no turns while its view remained current.", {
-          threadId: targetThreadId.slice(0, 160), harness: targetHarness.slice(0, 80),
-        });
-        return;
-      }
-
-      historyPaging.succeed(transaction, turnIds);
-      dispatchPreviousTurnLoad({ type: "succeed", key: previousTurnLoadKey });
-      setHistoryPage(page => page + 1);
-    } catch (error) {
-      if (loadGeneration !== historyLoadGenerationRef.current) {
-        return;
-      }
-      historyPaging.fail(transaction);
-      dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
-      console.error("Previous thread turn load failed.", {
-        threadId: targetThreadId.slice(0, 160), harness: targetHarness.slice(0, 80),
-        reason: (error instanceof Error ? error.message : "Unexpected history read failure")
-          .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").slice(0, 500),
-      });
-    }
-  }, [activeThread, active.actions, canLoadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus]);
-
-  useEffect(() => {
-    historyLoadGenerationRef.current += 1;
-    dispatchPreviousTurnLoad({ type: "reset" });
-  }, [projectId, viewInstanceKey]);
+  // Reconciles after every commit, including SQL's later prepend and skeleton removal.
+  const historyPaging = useThreadHistoryPaging({
+    thread: activeThread ? { id: activeThread.id, harness: activeThread.harness } : null,
+    viewKey: `${projectId}\0${viewInstanceKey}`,
+    canLoadOlder: canLoadPreviousTurn,
+    renderedTurnIds: renderedHistoryTurnIds,
+    sourceReady: !usesSqlTranscript || activeTranscriptSource?.status === "ready",
+    loadOlder: active.actions.loadOlder,
+    scrollViewportRef,
+    reconcileLayout: threadScrollViewport.reconcileLayout,
+  });
+  const previousTurnLoadStatus = historyPaging.status;
 
   useEffect(() => {
     let cancelled = false;
@@ -675,101 +492,6 @@ export default memo(function ThreadViewContent ({
     };
   }, [daemon, projectId, activeProvider]);
 
-  // Reconcile after every parent commit, including SQL's later prepend and skeleton removal.
-  useLayoutEffect(() => {
-    historyPagingBindingsRef.current = {
-      readView: () => {
-        const viewport = scrollViewportRef.current;
-        if (!viewport || !activeThread) return null;
-        const viewportRect = viewport.getBoundingClientRect();
-        const sentinelRect = historySentinel?.getBoundingClientRect();
-        return {
-          identity: historyPagingIdentity,
-          viewport,
-          boundaryKey: previousTurnLoadKey || null,
-          requestStatus: previousTurnLoadStatus,
-          sourceReady: !usesSqlTranscript || activeTranscriptSource?.status === "ready",
-          renderedTurnIds: renderedHistoryTurnIds,
-          nearTop: Boolean(sentinelRect && viewport.clientHeight > 0
-            && sentinelRect.bottom > viewportRect.top - viewport.clientHeight && sentinelRect.top < viewportRect.bottom),
-        };
-      },
-      load: () => { void loadPreviousTurn(); },
-      schedule: (callback, delayMs) => {
-        const timer = window.setTimeout(callback, delayMs);
-        return () => window.clearTimeout(timer);
-      },
-    };
-    historyPagingRef.current ??= new ThreadHistoryPagingController({
-      readView: () => historyPagingBindingsRef.current?.readView() ?? null,
-      load: () => historyPagingBindingsRef.current?.load(),
-      schedule: historyPagingBindingsRef.current.schedule,
-    });
-    threadScrollViewport.reconcileLayout();
-    historyPagingRef.current.reconcile();
-  });
-
-  useLayoutEffect(() => {
-    const threadId = activeThread?.id ?? "";
-    const previous = previousLoadedTurnIdsRef.current;
-    if (threadId && previous?.threadId === threadId) {
-      const loaded = new Set(loadedTurnIds);
-      if (previous.turnIds.some((turnId) => !loaded.has(turnId))) {
-        historyPagingRef.current?.suppressUntilHistoryIntent();
-      }
-    }
-    previousLoadedTurnIdsRef.current = threadId ? { threadId, turnIds: loadedTurnIds } : null;
-  }, [activeThread?.id, loadedTurnIds]);
-
-  useLayoutEffect(() => () => {
-    historyPagingRef.current?.dispose();
-    historyPagingRef.current = null;
-    historyPagingBindingsRef.current = null;
-  }, []);
-
-  useEffect(() => {
-    const sentinel = historySentinel;
-    const scrollTarget = scrollViewportRef.current;
-    if (!sentinel || !scrollTarget) {
-      return;
-    }
-
-    const reconcile = () => historyPagingRef.current?.reconcile();
-    const interrupt = (historyIntent = false) => historyPagingRef.current?.interrupt({ historyIntent });
-    const handleScroll = () => historyPagingRef.current?.reconcile();
-    const handleWheel = (event: WheelEvent) => interrupt(event.deltaY < 0);
-    const handleTouchMove = () => interrupt();
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target;
-      if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=true]")) return;
-      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
-        interrupt(["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey));
-      }
-    };
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.target === scrollTarget) interrupt();
-    };
-    const observer = new IntersectionObserver(reconcile, {
-      root: scrollTarget,
-      // One screen ahead, so history usually lands in the reserve before the reader reaches it.
-      rootMargin: "100% 0px 0px 0px",
-      threshold: 0.1,
-    });
-    observer.observe(sentinel);
-    scrollTarget.addEventListener("scroll", handleScroll, { passive: true });
-    scrollTarget.addEventListener("wheel", handleWheel, { passive: true });
-    scrollTarget.addEventListener("touchmove", handleTouchMove, { passive: true });
-    scrollTarget.addEventListener("keydown", handleKeyDown);
-    scrollTarget.addEventListener("pointerdown", handlePointerDown);
-    return () => {
-      observer.disconnect();
-      scrollTarget.removeEventListener("scroll", handleScroll);
-      scrollTarget.removeEventListener("wheel", handleWheel);
-      scrollTarget.removeEventListener("touchmove", handleTouchMove);
-      scrollTarget.removeEventListener("keydown", handleKeyDown);
-      scrollTarget.removeEventListener("pointerdown", handlePointerDown);
-    };
-  }, [historySentinel, scrollViewportRef]);
 
   useEffect(() => () => {
     codeBlockCopyResetTimersRef.current.forEach((timeoutId) => {
@@ -1141,7 +863,7 @@ export default memo(function ThreadViewContent ({
             ) : previousTurnLoadStatus === "failed" ? (
               <ThreadTurnLoadFailure
                 entry={previousTurnEntry}
-                onRetry={() => void loadPreviousTurn({ retry: true })}
+                onRetry={() => void historyPaging.load({ retry: true })}
               />
             ) : null
           ) : null}
@@ -1163,7 +885,7 @@ export default memo(function ThreadViewContent ({
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={null}
-                    historySentinelRef={setHistorySentinel}
+                    historySentinelRef={historyPaging.setSentinel}
                     presentationSource={{
                       kind: "sqlite",
                       sourceKey: `${activeThread.harness}:${activeTranscriptProjection.thread.id}`,
