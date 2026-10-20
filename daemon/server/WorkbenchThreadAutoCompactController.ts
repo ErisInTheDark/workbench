@@ -175,18 +175,25 @@ export default class WorkbenchThreadAutoCompactController {
     provider: AdmissionProvider,
     message: QueuedThreadMessage,
     deliver: QueuedMessageDelivery,
-    options: { skipAutoCompact?: boolean } = {},
+    options: { skipAutoCompact?: boolean; mark?: (phase: string) => void } = {},
   ): Promise<WorkbenchThreadMessageSubmitResult> {
     this.lifetime.signal.throwIfAborted();
+    const mark = options.mark ?? (() => {});
     const deliverQueued = (merged: QueuedThreadMessage, ticket: WorkbenchThreadAdmissionTicket) => deliver(merged, { admission: ticket });
-    if (await this.compaction.enqueue(threadId, message, deliverQueued)) return { kind: "queued" };
+    const joinedQueue = await this.compaction.enqueue(threadId, message, deliverQueued);
+    mark("compaction-queue");
+    if (joinedQueue) return { kind: "queued" };
     if (options.skipAutoCompact) return await deliver(message, { skipAutoCompact: true });
     const queued = Promise.withResolvers<boolean>();
     const compaction = this.admission.run(threadId, async ticket => {
+      mark("admission");
       const signal = this.lifetime.signal;
       signal.throwIfAborted();
       await this.compaction.retireStranded(threadId);
-      if (!(await this.decide(threadId, provider)).willAutoCompact) {
+      mark("stranded");
+      const decision = await this.decide(threadId, provider);
+      mark("decision");
+      if (!decision.willAutoCompact) {
         queued.resolve(false);
         return;
       }

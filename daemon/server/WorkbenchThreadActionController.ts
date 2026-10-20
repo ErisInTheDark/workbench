@@ -75,6 +75,9 @@ export interface WorkbenchThreadActionOwners {
   warn(message: string): void;
 }
 
+/** Submits slower than this log which phase waited, since the request line alone cannot name it. */
+const SLOW_SUBMIT_MS = 1_000;
+
 type ActionTarget = Awaited<ReturnType<WorkbenchThreadActionController["target"]>>;
 
 function stateTarget({ identity, harness }: ActionTarget) {
@@ -282,13 +285,34 @@ export default class WorkbenchThreadActionController {
   }
 
   private async message(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageSubmitResult> {
+    const started = performance.now();
+    let last = started;
+    const phases: string[] = [];
+    const mark = (phase: string) => {
+      const now = performance.now();
+      phases.push(`${phase} ${Math.round(now - last)}ms`);
+      last = now;
+    };
+    try {
+      return await this.submitMessage(input, mark);
+    } finally {
+      const total = Math.round(performance.now() - started);
+      if (total >= SLOW_SUBMIT_MS) {
+        this.owners.warn(`Slow message submit thread=${input.threadId.slice(0, 40)} ${total}ms: ${phases.join(", ") || "no phase finished"}`);
+      }
+    }
+  }
+
+  private async submitMessage(input: WorkbenchThreadMessage, mark: (phase: string) => void): Promise<WorkbenchThreadMessageSubmitResult> {
     const { identity, harness, provider } = await this.target(input.threadId);
+    mark("identity");
     const threadId = identity.threadId;
     // Senders that track skills claim them; the claim must match what this daemon would activate.
     const claimed = input.context?.activatedSkillPaths;
     if (claimed) {
       assertWorkbenchSkillActivations(claimed, input.input.flatMap(part => part.type === "text" ? [part.text] : []),
         await this.owners.readSkills(threadId));
+      mark("skills");
     }
     const message = {
       clientMessageId: input.clientMessageId,
@@ -299,10 +323,13 @@ export default class WorkbenchThreadActionController {
     // A held questionnaire whose turn ended keeps the message as a virtual steer for the answer's continuation.
     // Otherwise browser steer classification is advisory; the provider decides whether a continuation steers.
     // Admission activates and records the skills the admitted input names.
-    return await this.owners.questionnaireSteers.hold(threadId, message)
-      ? { kind: "queued" }
-      : await this.owners.autoCompact.submit(threadId, provider, message, this.delivery(harness, threadId),
-        input.skipAutoCompact ? { skipAutoCompact: true } : {});
+    const held = await this.owners.questionnaireSteers.hold(threadId, message);
+    mark("questionnaire-hold");
+    if (held) return { kind: "queued" };
+    const result = await this.owners.autoCompact.submit(threadId, provider, message, this.delivery(harness, threadId),
+      { mark, ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}) });
+    mark("delivered");
+    return result;
   }
 
   /** The current generation delivers a compaction queue a retiring generation could not. */
