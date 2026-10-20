@@ -71,7 +71,7 @@ export default function ThreadIncomingAgentMessageGroup({
 }) {
   return (
     <Disclosure
-      className="py-2"
+      className="py-3"
       contentClassName="mt-1"
       hideChevron
       // Agent chatter is rarely relevant to the user, so every group starts closed.

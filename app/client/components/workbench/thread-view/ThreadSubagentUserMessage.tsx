@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadSubagentUserMessage: render a subagent-bound user prompt in the shared left-aligned message bubble. Keywords: workbench, thread, subagent, user message, prompt, bubble.
+ * - default ThreadSubagentUserMessage: render a subagent-bound user prompt in the shared left-aligned message bubble.
  */
 "use client";
 
@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 
 export default function ThreadSubagentUserMessage ({ children }: { children: ReactNode }) {
   return (
-    <section className="flex flex-col items-start py-2">
+    <section className="flex flex-col items-start py-3">
       <div className="w-full max-w-[42rem] rounded-[1.15rem] bg-fg/6 px-4 py-3 text-left">
         {children}
       </div>

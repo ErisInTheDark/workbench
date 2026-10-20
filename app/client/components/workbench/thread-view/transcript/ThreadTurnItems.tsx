@@ -158,7 +158,10 @@ export default memo(function ThreadTurnItems({
         key,
         content: (
           <ThreadMeasuredContent key={key} visibilityRange="approaching" windowed>
-            {stableEntries.slice(chunk.start, chunk.end).map((entry, index) => renderEntry(entry, chunk.start + index))}
+            {/* Flex stops entry margins collapsing, so gaps inside a chunk match gaps across its flow-root border. */}
+            <div className="flex flex-col">
+              {stableEntries.slice(chunk.start, chunk.end).map((entry, index) => renderEntry(entry, chunk.start + index))}
+            </div>
           </ThreadMeasuredContent>
         ),
       };

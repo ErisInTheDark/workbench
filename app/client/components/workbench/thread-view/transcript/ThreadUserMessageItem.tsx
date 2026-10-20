@@ -121,7 +121,7 @@ export default function ThreadUserMessageItem ({
   if (!bubbles.length && !references.length) return null;
   return (
     <section
-      className="flex flex-col items-end gap-2 py-2"
+      className="flex flex-col items-end gap-2 py-3"
       data-thread-user-message-state={isPendingInitial ? "pending-initial" : steerState ? `${steerState}-steer` : undefined}
     >
       {(bubbles.length ? bubbles : [[]]).map((bubble, bubbleIndex) => (

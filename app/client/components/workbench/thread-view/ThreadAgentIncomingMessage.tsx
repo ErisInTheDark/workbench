@@ -33,7 +33,7 @@ export default function ThreadAgentIncomingMessage ({
 }) {
   return (
     <section
-      className="flex flex-col items-end py-2"
+      className="flex flex-col items-end py-3"
       data-thread-user-message-state={steerState ? `${steerState}-agent-message` : "agent-message"}
     >
       <div className="group/thread-bubble relative w-fit min-w-0 max-w-[min(100%,42rem)] [overflow-wrap:anywhere]">

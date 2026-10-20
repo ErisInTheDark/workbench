@@ -69,7 +69,7 @@ export function ThreadAgentMessageItem ({
   // A typewriter caret waits in the message's spot until its first words show.
   if (!text.trim() && !(streaming && caret)) return null;
   return (
-    <section className={copyRuns ? "relative py-2" : "py-2"}>
+    <section className={copyRuns ? "relative py-3" : "py-3"}>
       <ThreadMarkdownSectionActionsProvider value={copyRuns ? renderBreakActions : null}>
         <MarkdownRender live={Boolean(presentationSource)} markdown={text} streaming={streaming} />
       </ThreadMarkdownSectionActionsProvider>
@@ -92,7 +92,7 @@ export function ThreadAgentCommentarySequence ({
 }) {
   const copyRuns = useMemo(() => buildThreadCommentaryRuns(items.map(item => stripWorkbenchTurnEndMarker(item.text))), [items]);
   return (
-    <div className="group/commentary space-y-2">
+    <div className="group/commentary">
       {items.map((item, index) => (
         <ThreadEntryMotion enabled={animateEntries && index > 0} identity={getThreadEntryMotionIdentity(item)} key={item.id}>
           {(animate) => (
