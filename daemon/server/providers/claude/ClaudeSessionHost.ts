@@ -8,7 +8,8 @@
  * - ClaudeSessionHandlers: bridge-generation collaborators that native hooks reach through the host.
  * - ClaudeSessionLaunch: one live process launch request.
  * - ClaudeProcessSession: one live Claude Code process, its input queue, buffered output, and config view.
- * - default ClaudeSessionHost: own live Claude Code processes across bridge reloads and route their hooks to the attached bridge.
+ * - default ClaudeSessionHost: own live Claude Code processes, their commentary nudge, hooks and commentary server across bridge reloads,
+ *   routing hook collaborators to the attached bridge.
  */
 import {
   query, type Options, type Query, type SDKMessage, type SDKUserMessage, type SpawnOptions,
@@ -16,7 +17,10 @@ import {
 import { spawn } from "node:child_process";
 import { lowerAgentProcessPriority } from "../../process-helpers";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import ClaudeConfigView from "./ClaudeConfigView";
+import { CLAUDE_COMMENTARY_SERVER_NAME, createClaudeCommentaryServer } from "./claude-commentary-tool";
+import { createClaudeSessionHooks } from "./claude-session-hooks";
 
 export class ClaudePromptQueue implements AsyncIterable<SDKUserMessage> {
   private readonly values: SDKUserMessage[] = [];
@@ -84,10 +88,10 @@ export interface ClaudeSessionHandlers {
 export interface ClaudeSessionLaunch {
   scope: string;
   captureStderr: boolean;
-  /** Sees each output message as the SDK yields it, before buffering, so hooks that follow it see its effect. */
-  observe(message: SDKMessage): void;
-  /** SDK options for this process; the host owns process spawning and stderr capture. */
-  options(viewEnv: NodeJS.ProcessEnv | undefined): Omit<Options, "spawnClaudeCodeProcess" | "stderr">;
+  /** Plain facts the host's own session hooks need; the host builds them so no bridge generation's code outlives it. */
+  binding: { cwd: string; threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
+  /** SDK options for this process; the host owns process spawning, stderr capture, session hooks and the commentary server. */
+  options(viewEnv: NodeJS.ProcessEnv | undefined): Omit<Options, "spawnClaudeCodeProcess" | "stderr" | "hooks">;
 }
 
 export class ClaudeProcessSession implements ClaudeSession {
@@ -102,7 +106,8 @@ export class ClaudeProcessSession implements ClaudeSession {
     private readonly sdkQuery: Query,
     private readonly queue: ClaudePromptQueue,
     private readonly runtime: { exit(): Promise<void>; stderr(): string; release(): Promise<void> },
-    private readonly observe: ClaudeSessionLaunch["observe"],
+    /** Sees each output message as the SDK yields it, before buffering, so hooks that follow it see its effect. */
+    private readonly observe: (message: SDKMessage) => void,
   ) {
     void this.pump();
   }
@@ -234,21 +239,27 @@ export default class ClaudeSessionHost {
       await view?.dispose();
       throw error;
     }
-    return await this.start(input.scope, input.captureStderr, input.observe, options, view);
+    const { cwd, threadId, turnId } = input.binding;
+    return await this.start(input.scope, input.captureStderr, cwd, threadId, turnId, options, view);
   }
 
   /**
    * Sessions outlive the bridge generation that launched them. Every closure here shares one context, so none of
    * them may see the launch request: its `options` builder belongs to that generation and would pin all of it.
+   * For the same reason the nudge, hooks and commentary server are built here from plain facts, reaching the
+   * attached bridge through `call`.
    */
   private async start(
     scope: string,
     captureStderr: boolean,
-    observe: ClaudeSessionLaunch["observe"],
+    cwd: string,
+    threadId: WorkbenchThreadId,
+    turnId: WorkbenchTurnId,
     sdkOptions: ReturnType<ClaudeSessionLaunch["options"]>,
     view: ClaudeConfigView | null,
   ) {
     const queue = new ClaudePromptQueue();
+    const nudge = new ClaudeCommentaryNudge();
     let exit: Promise<void> | null = null;
     let stderr = "";
     let session: ClaudeProcessSession;
@@ -257,6 +268,17 @@ export default class ClaudeSessionHost {
         prompt: queue,
         options: {
           ...sdkOptions,
+          hooks: createClaudeSessionHooks({
+            cwd, nudge,
+            check: paths => this.call(handlers => handlers.checkFileClaims({ cwd, threadId, paths })),
+            onDenied: toolUseId => {
+              void this.call(async handlers => handlers.recordNativeToolDenial(turnId, toolUseId)).catch((error: unknown) => {
+                console.warn("[claude] native tool denial was not recorded",
+                  error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+              });
+            },
+          }),
+          mcpServers: { ...sdkOptions.mcpServers, [CLAUDE_COMMENTARY_SERVER_NAME]: createClaudeCommentaryServer() },
           spawnClaudeCodeProcess: options => spawnTrackedClaude(options, value => { exit = value; }),
           ...(captureStderr ? { stderr: (data: string) => { stderr = (stderr + data).slice(-2000); } } : {}),
         },
@@ -268,7 +290,7 @@ export default class ClaudeSessionHost {
           if (this.sessions.get(scope) === session) this.sessions.delete(scope);
           await view?.dispose();
         },
-      }, observe);
+      }, message => nudge.observe(message));
     } catch (error) {
       await view?.dispose();
       throw error;

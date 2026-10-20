@@ -37,8 +37,6 @@ import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireC
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
-import { createClaudeSessionHooks } from "./claude-session-hooks";
-import ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import { claudeEnvironment } from "./claude-process-options";
 import {
     appendClaudePrompt, claudeImageBlock, claudePromptContent, prefixClaudePrompt, type ClaudePromptContent,
@@ -51,7 +49,6 @@ import type ClaudeSessionHost from "./ClaudeSessionHost";
 import { ENDED_CLAUDE_SESSION, spawnTrackedClaude } from "./ClaudeSessionHost";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import type { ClaudeTranscriptTurnState } from "./ClaudeTranscriptAdapter";
-import { CLAUDE_COMMENTARY_SERVER_NAME, createClaudeCommentaryServer } from "./claude-commentary-tool";
 import ClaudeUsageHydrator from "./ClaudeUsageHydrator";
 import ClaudeSessionLog from "./claude-session-log";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
@@ -450,11 +447,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
     const { sessions } = this.options;
     let session: Awaited<ReturnType<ClaudeSessionHost["launch"]>>;
-    const nudge = new ClaudeCommentaryNudge();
     try {
+      // Hooks still run under bypassPermissions: compact recovery, the plain-text hint and claim-gated edits. The host
+      // builds them from this binding, so a session outliving this bridge generation never holds its code.
       session = await sessions.launch({
         scope, captureStderr: Boolean(fakeEndpoint),
-        observe: message => nudge.observe(message),
+        binding: { cwd: binding.nativeLocation, threadId: identity.threadId, turnId },
         options: viewEnv => ({
           cwd: binding.nativeLocation,
           pathToClaudeCodeExecutable: executable,
@@ -475,24 +473,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           ],
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
-          // Hooks still run under bypassPermissions; they inject compact recovery, hint after plain text, and gate edits
-          // with shared claim policy. They outlive this bridge generation, so claim collaborators are reached through the host.
-          hooks: createClaudeSessionHooks({
-            cwd: binding.nativeLocation, nudge,
-            check: paths => sessions.call(handlers => handlers.checkFileClaims({
-              cwd: binding.nativeLocation, threadId: identity.threadId, paths,
-            })),
-            onDenied: toolUseId => {
-              void sessions.call(async handlers => handlers.recordNativeToolDenial(turnId, toolUseId)).catch((error: unknown) => {
-                console.warn("[claude] native tool denial was not recorded",
-                  error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
-              });
-            },
-          }),
-          mcpServers: {
-            wb: { type: "http", url: endpoint.href, alwaysLoad: true },
-            [CLAUDE_COMMENTARY_SERVER_NAME]: createClaudeCommentaryServer(),
-          },
+          mcpServers: { wb: { type: "http", url: endpoint.href, alwaysLoad: true } },
           includePartialMessages: true,
           // Workbench composes every prompt: the CLI must not dispatch slash commands or expand `@path`. Slash-led
           // queued input would otherwise wait for the turn to end instead of folding in as a steer.
