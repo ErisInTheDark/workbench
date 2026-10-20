@@ -11,11 +11,12 @@ import {
   type WorkbenchThreadClaimIntersections,
 } from "workbench-shared/workbench/thread/thread-state";
 import Disclosure from "../../ui/Disclosure";
-import { GitArcUnclaimIcon, GitArcWaitIcon } from "./GitArcIcon";
+import { GitArcUnclaimIcon } from "./GitArcIcon";
 import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
 import { useThread } from "../use-thread";
 import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 
+/** Wait lists only the claim holders: its host card already says it is waiting. */
 type IntersectionMode = "plan" | "wait" | "stashed";
 
 const activeNotice = getThreadMarkdownEmphasisColors("yellow")!;
@@ -80,17 +81,21 @@ export default function ThreadGitArcIntersectionCard({
       data-thread-plan-conflict-card={mode === "plan" ? "true" : undefined}
     >
       {notice ? <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-[0.22rem] bg-current opacity-60 ${activeNotice.text}`} /> : null}
-      <h2 className={`m-0 flex min-w-0 items-center gap-2 px-3 pt-2 text-[0.82em] leading-[1.45]${visibleThreadCount ? "" : " pb-2"}${overlapsActive ? " text-amber-600 dark:text-amber-300" : ""}`}>
-        {waiting ? <GitArcWaitIcon className="shrink-0" size={16} /> : <GitArcUnclaimIcon className="shrink-0" size={16} />}
-        <span className={`min-w-0 flex-1 truncate font-medium ${overlapsActive ? "" : "text-text"}`}>
-          {waiting
-            ? "Waiting for Git arc claims"
-            : stashed
+      {waiting ? null : (
+        <h2 className={`
+          m-0 flex min-w-0 items-center gap-2 px-3 pt-2 text-[0.82em] leading-[1.45]
+          ${visibleThreadCount ? "" : "pb-2"}
+          ${overlapsActive ? "text-amber-600 dark:text-amber-300" : ""}
+        `}>
+          <GitArcUnclaimIcon className="shrink-0" size={16} />
+          <span className={`min-w-0 flex-1 truncate font-medium ${overlapsActive ? "" : "text-text"}`}>
+            {stashed
               ? activeThreadCount ? "Stashed claims overlap active threads" : "No active work intersects stashed claims."
               : activeThreadCount ? chrome !== "card" ? "Active threads claiming planned files" : "Planned changes overlap active threads"
                 : "No active work intersects this plan."}
-        </span>
-      </h2>
+          </span>
+        </h2>
+      )}
       <WorkbenchThreadReferenceList references={references(intersections.activeEntries, !stashed)} />
       {!waiting && !compact && plannedThreadCount ? (
         <Disclosure
