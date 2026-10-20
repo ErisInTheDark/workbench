@@ -6,7 +6,7 @@ import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, withWorkbenchThreadLifecycle, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema, WorkbenchThreadSidebarEntrySchema } from "./thread-state.ts";
 import { countDraftPromptTokens, createDraftTitle, createWorkbenchPinnedThreadSummaryEntry, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
-import { projectSidebarRow } from "./thread-sidebar-row";
+import { projectSidebarRow, WorkbenchThreadSidebarRowSchema } from "./thread-sidebar-row";
 
 const fixtureIdentityValues = {
   DraftId: {
@@ -526,6 +526,25 @@ test("stashed claim intersections use retained paths rather than a pending plan"
   assert.deepEqual(getWorkbenchThreadClaimIntersections(
     [mixed, ...entries.slice(1)].map(projectSidebarRow), owner.identity, "stashed",
   ).activeEntries.map(({ entry }) => entry.title), ["blocking"]);
+});
+
+test("a full thread entry projects to a sidebar row the strict row schema accepts", () => {
+  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 12_345,
+    entryKind: "thread" as const,
+    gitArc: null,
+    gitArcPlan: null,
+    gitCommits: [{ commitSha: "d".repeat(40), historyIndex: 0, rootId: "root" }],
+    identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("heavy") },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    previousTitles: [{ title: "older title", usedAt: 1 }],
+    title: "heavy",
+  };
+  const row = projectSidebarRow(entry);
+  assert.equal("gitCommits" in row, false);
+  assert.equal("previousTitles" in row, false);
+  assert.equal(WorkbenchThreadSidebarRowSchema.safeParse(row).success, true);
 });
 
 test("lifecycle parsing preserves canonical attention variants and normalizes legacy reasons", () => {
