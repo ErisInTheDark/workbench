@@ -1,13 +1,14 @@
 /*
  * Exports:
  * - WorkbenchProjectSnapshotControllerOptions: injected project resolution, tree operations, clock, polling, logging, and cache bound for deterministic lifecycle tests.
- * - default WorkbenchProjectSnapshotController: own one reloadable snapshot loop per observed project, file deletion, change-only publication, the HTTP tree read, and disposal.
+ * - default WorkbenchProjectSnapshotController: own one reloadable snapshot loop per observed project (walking the tree only for tree observers and reads), file deletion, change-only publication, the HTTP tree read, and disposal.
  */
 import type http from "node:http";
 
 import {
   assertProjectFileCanBeDeleted,
   deleteProjectFile,
+  getProjectChanges,
   getProjectSnapshotFromResolvedProject,
   resolveProjectFilePath,
   type ResolvedProject,
@@ -30,6 +31,8 @@ interface ProjectSnapshotState {
   observers: Set<{
     publish(update: WorkbenchProjectStateUpdate): void;
     failed?(message: string): void;
+    /** False for observers that read only Git changes; their polls skip the tree walk. */
+    tree: boolean;
   }>;
   refreshPromise: Promise<ProjectSnapshot | null> | null;
   refreshRequested: boolean;
@@ -48,6 +51,7 @@ interface SnapshotResponse {
 type ProjectOperations = {
   assertProjectFileCanBeDeleted: typeof assertProjectFileCanBeDeleted;
   deleteProjectFile: typeof deleteProjectFile;
+  getProjectChanges: typeof getProjectChanges;
   getProjectSnapshot: typeof getProjectSnapshotFromResolvedProject;
   isGitTrackedFile: typeof isGitTrackedFile;
   resolveProjectFilePath: typeof resolveProjectFilePath;
@@ -95,7 +99,10 @@ export default class WorkbenchProjectSnapshotController {
     logError = (message) => console.error(message),
     maxProjectSnapshots = DEFAULT_MAX_PROJECT_SNAPSHOTS,
     now = Date.now,
-    operations = { assertProjectFileCanBeDeleted, deleteProjectFile, getProjectSnapshot: getProjectSnapshotFromResolvedProject, isGitTrackedFile, resolveProjectFilePath },
+    operations = {
+      assertProjectFileCanBeDeleted, deleteProjectFile, getProjectChanges,
+      getProjectSnapshot: getProjectSnapshotFromResolvedProject, isGitTrackedFile, resolveProjectFilePath,
+    },
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     resolveProjectById,
     observeProject = () => undefined,
@@ -121,12 +128,13 @@ export default class WorkbenchProjectSnapshotController {
     projectId: string,
     publish: (update: WorkbenchProjectStateUpdate) => void,
     failed?: (message: string) => void,
+    { tree = true }: { tree?: boolean } = {},
   ) {
     this.assertActive();
     this.observeProject(projectId);
     const key = this.projectKey(projectId);
     const state = this.getState(key);
-    const observer = { publish, failed };
+    const observer = { publish, failed, tree };
     state.lastAccessAt = this.now();
     state.observers.add(observer);
     if (state.snapshot) publish(this.toUpdate(state.snapshot, state.revision));
@@ -232,14 +240,21 @@ export default class WorkbenchProjectSnapshotController {
     const state = this.getState(key);
     const now = this.now();
     state.lastAccessAt = now;
-    if (state.snapshot && state.serialized && state.expiresAt > now) {
-      return { cacheState: "hit", serialized: state.serialized, snapshot: state.snapshot };
+    if (state.snapshot && state.expiresAt > now) {
+      return { cacheState: "hit", serialized: state.serialized ??= JSON.stringify(state.snapshot), snapshot: state.snapshot };
     }
     const cacheState: SnapshotCacheState = state.refreshPromise ? "coalesced" : "miss";
     await this.refreshNow(key, projectId);
+    // A joined change-only refresh never makes the tree fresh; this read needs the tree.
+    if (!state.failure && state.expiresAt <= this.now()) await this.refreshNow(key, projectId, true);
     if (state.failure) throw new Error(state.failure);
-    if (!state.snapshot || !state.serialized) throw new Error("Project tree refresh did not produce a snapshot.");
-    return { cacheState, serialized: state.serialized, snapshot: state.snapshot };
+    if (!state.snapshot) throw new Error("Project tree refresh did not produce a snapshot.");
+    return { cacheState, serialized: state.serialized ??= JSON.stringify(state.snapshot), snapshot: state.snapshot };
+  }
+
+  /** Only observers that show the tree make a poll walk it; change-only observers (working-tree badges) read Git alone. */
+  private pollsTree(state: ProjectSnapshotState) {
+    return !state.snapshot || [...state.observers].some(observer => observer.tree);
   }
 
   private scheduleRefresh(key: string, projectId: string | null, delayMs: number) {
@@ -252,12 +267,12 @@ export default class WorkbenchProjectSnapshotController {
     if (state.refreshTimer) clearTimeout(state.refreshTimer);
     state.refreshTimer = setTimeout(() => {
       state.refreshTimer = null;
-      void this.refreshNow(key, projectId);
+      void this.refreshNow(key, projectId, this.pollsTree(state));
     }, delayMs);
     state.refreshTimer.unref?.();
   }
 
-  private async refreshNow(key: string, projectId: string | null) {
+  private async refreshNow(key: string, projectId: string | null, tree = true) {
     const state = this.getState(key);
     if (state.refreshPromise) {
       return await state.refreshPromise;
@@ -265,11 +280,14 @@ export default class WorkbenchProjectSnapshotController {
     if (state.refreshTimer) clearTimeout(state.refreshTimer);
     state.refreshTimer = null;
     state.refreshRequested = false;
-    const promise = this.resolveProjectById(projectId).then((project) => (
-      this.operations.getProjectSnapshot(project)
-    )).then((snapshot) => {
+    const walk = tree || !state.snapshot;
+    const promise = this.resolveProjectById(projectId).then(async (project): Promise<ProjectSnapshot> => {
+      if (walk || !state.snapshot) return await this.operations.getProjectSnapshot(project);
+      const changes = await this.operations.getProjectChanges(project);
+      return { ...state.snapshot, changes };
+    }).then((snapshot) => {
       if (this.disposed) return null;
-      this.installSnapshot(key, state, snapshot);
+      this.installSnapshot(key, state, snapshot, walk);
       return snapshot;
     }).catch((error: unknown) => {
       if (this.disposed) return null;
@@ -295,13 +313,14 @@ export default class WorkbenchProjectSnapshotController {
     return await promise;
   }
 
-  private installSnapshot(key: string, state: ProjectSnapshotState, snapshot: ProjectSnapshot) {
+  /** Only a walked tree is fresh; a change-only refresh keeps the previous tree's expiry. */
+  private installSnapshot(key: string, state: ProjectSnapshotState, snapshot: ProjectSnapshot, walked: boolean) {
     const changed = !state.snapshot || !areDeeplyEqual(state.snapshot, snapshot);
     const recovered = state.failure !== null;
     state.failure = null;
-    state.expiresAt = this.now() + this.cacheTtlMs;
+    if (walked) state.expiresAt = this.now() + this.cacheTtlMs;
     state.lastAccessAt = this.now();
-    state.serialized = JSON.stringify(snapshot);
+    if (changed) state.serialized = null;
     state.snapshot = snapshot;
     if (changed) state.revision += 1;
     if (changed || recovered) {

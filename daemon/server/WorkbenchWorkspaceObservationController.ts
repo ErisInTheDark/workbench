@@ -296,7 +296,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
           if (!observation.summaryInputs || observation.summaryInputs.changes === changes) return;
           observation.summaryInputs.changes = changes;
           this.readSummary(observation);
-        });
+        }, undefined, { tree: false });
         this.readSummary(observation);
         break;
       }

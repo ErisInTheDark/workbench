@@ -97,6 +97,8 @@ function createHarness({
   let tracked = true;
   let now = 1_000;
   let snapshotReads = 0;
+  let changeReads = 0;
+  let changes: ProjectSnapshot["changes"] = {};
   let snapshotReader = async (projectId: string | null | undefined) => createSnapshot(projectId || "default");
   const resolvedProjectIds: Array<string | null | undefined> = [];
   const controller = new WorkbenchProjectSnapshotController({
@@ -111,6 +113,10 @@ function createHarness({
       getProjectSnapshot: async (project) => {
         snapshotReads += 1;
         return await snapshotReader(project.id);
+      },
+      getProjectChanges: async () => {
+        changeReads += 1;
+        return changes;
       },
       isGitTrackedFile: async () => tracked,
       resolveProjectFilePath: (project, requestPath) => ({
@@ -141,6 +147,8 @@ function createHarness({
     deletedPaths,
     errors,
     get snapshotReads() { return snapshotReads; },
+    get changeReads() { return changeReads; },
+    setChanges(value: ProjectSnapshot["changes"]) { changes = value; },
     readTree,
     resolvedProjectIds,
     setNow(value: number) { now = value; },
@@ -287,6 +295,37 @@ test("automatic observation refreshes at ten seconds and stops after disposal", 
   context.mock.timers.tick(10_000);
   await flushPromises();
   assert.equal(harness.snapshotReads, 2);
+  harness.controller.dispose();
+});
+
+test("change-only observers poll Git changes without rewalking the tree, which explicit reads still refresh", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const harness = createHarness({ pollIntervalMs: 10_000 });
+  const updates: WorkbenchProjectStateUpdate[] = [];
+  const stop = harness.controller.observe("alpha", (update) => updates.push(update), undefined, { tree: false });
+  context.mock.timers.tick(0);
+  await flushPromises();
+  assert.equal(harness.snapshotReads, 1);
+  harness.setChanges({ "src/a.ts": { status: "modified" } } as unknown as ProjectSnapshot["changes"]);
+  harness.setNow(5_000);
+  context.mock.timers.tick(10_000);
+  await flushPromises();
+  assert.deepEqual([harness.snapshotReads, harness.changeReads], [1, 1]);
+  assert.deepEqual(updates.at(-1)?.snapshot.changes, { "src/a.ts": { status: "modified" } });
+  assert.deepEqual(updates.at(-1)?.snapshot.tree, createSnapshot("alpha").tree);
+
+  // The change-only tick never made the tree fresh again, so a tree read past its TTL walks it.
+  await harness.controller.readProjectSnapshot("alpha");
+  assert.equal(harness.snapshotReads, 2);
+
+  const treeUpdates: WorkbenchProjectStateUpdate[] = [];
+  const stopTree = harness.controller.observe("alpha", (update) => treeUpdates.push(update));
+  harness.setNow(20_000);
+  context.mock.timers.tick(10_000);
+  await flushPromises();
+  assert.equal(harness.snapshotReads, 3);
+  stop();
+  stopTree();
   harness.controller.dispose();
 });
 

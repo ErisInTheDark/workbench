@@ -11,6 +11,7 @@
  * - assertProjectFileCanBeDeleted/deleteProjectFile: validate and perform file deletion.
  * - buildProjectTree: build one root's visible explorer tree, marking ignored and untracked files.
  * - getProjectSnapshotFromResolvedProject: assemble tree, roots and Git changes.
+ * - getProjectChanges: read a project's Git changes alone, without walking its tree.
  * - resolveExternalFileLinkRoot: locate a file link's Git root.
  * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified paths.
  * - listProjectSkillDefinitionsFromRoot: discover project skills.
@@ -1043,7 +1044,7 @@ async function buildWorkspaceTree(project: ResolvedProject) {
   }));
 }
 
-async function getProjectChanges(project: ResolvedProject) {
+export async function getProjectChanges(project: ResolvedProject) {
   if (project.kind === "daemon") {
     return {};
   }
