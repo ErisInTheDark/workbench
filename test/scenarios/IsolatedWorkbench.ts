@@ -206,6 +206,7 @@ export default class IsolatedWorkbench {
   private releaseSignalCleanup: (() => void) | null = null;
   private readonly cancellation = new AbortController();
   private readonly serviceSession = randomUUID();
+  private readonly processLogLineStarts = new Map<string, boolean>();
   readonly signal: AbortSignal;
   private constructor(
     private readonly fixtures: string,
@@ -457,7 +458,7 @@ export default class IsolatedWorkbench {
     const collect = ({ chunk, stream }: { chunk: Buffer; stream: "stderr" | "stdout" }) => {
       const text = chunk.toString();
       this.log += text;
-      appendFileSync(path.join(this.root, "daemon.log"), chunk);
+      this.appendProcessLog("daemon.log", text);
       this.processEvent?.({ kind: "output", source: "daemon", stream, text });
     };
     const owned = new IsolatedWorkbenchProcess("daemon", child, {
@@ -627,7 +628,7 @@ stream_max_retries = 0
     const collect = ({ chunk, stream }: { chunk: Buffer; stream: "stderr" | "stdout" }) => {
       const text = chunk.toString();
       output += text;
-      appendFileSync(path.join(this.root, "service.log"), chunk);
+      this.appendProcessLog("service.log", text);
       this.processEvent?.({ kind: "output", source: "host", stream, text });
     };
     const owned = new IsolatedWorkbenchProcess("host", child, {
@@ -672,7 +673,7 @@ stream_max_retries = 0
     const collect = ({ chunk, stream }: { chunk: Buffer; stream: "stderr" | "stdout" }) => {
       const text = chunk.toString();
       this.appLog += text;
-      appendFileSync(path.join(this.root, "app.log"), chunk);
+      this.appendProcessLog("app.log", text);
       this.processEvent?.({ kind: "output", source: "app", stream, text });
     };
     const owned = new IsolatedWorkbenchProcess("app", child, {
@@ -762,6 +763,18 @@ stream_max_retries = 0
     return (await this.workspace.launchDraft(id, draft.revision, { workflowIds: [] })).threadId;
   }
 
+  /**
+   * Retained process logs carry an arrival time per line, so a slow start shows which phase owned its time without
+   * the processes timing themselves. Chunks may split lines; only a line's first chunk is stamped.
+   */
+  private appendProcessLog(file: "app.log" | "daemon.log" | "service.log", text: string) {
+    const atLineStart = this.processLogLineStarts.get(file) ?? true;
+    const stamp = `${new Date().toISOString()} `;
+    const stamped = (atLineStart ? stamp : "") + text.replace(/\n(?!$)/gu, `\n${stamp}`);
+    this.processLogLineStarts.set(file, text.endsWith("\n"));
+    appendFileSync(path.join(this.root, file), stamped);
+  }
+
   markPhase(label: string) {
     const message = `[scenario] ${label}`;
     console.log(message);
@@ -771,6 +784,7 @@ stream_max_retries = 0
   async phase<T>(label: string, operation: (signal: AbortSignal) => Promise<T>, timeoutMs = 90_000): Promise<T> {
     this.signal.throwIfAborted();
     this.markPhase(`begin ${label}`);
+    const startedAt = performance.now();
     const controller = new AbortController();
     // Readiness is a scenario assertion with one budget for the whole phase.
     // Substeps share it rather than restarting a deadline for each awaited call.
@@ -783,7 +797,7 @@ stream_max_retries = 0
       signal.throwIfAborted();
       const result = await this.withSignal(operation(signal), signal);
       signal.throwIfAborted();
-      this.markPhase(`complete ${label}`);
+      this.markPhase(`complete ${label} in ${((performance.now() - startedAt) / 1_000).toFixed(1)}s`);
       return result;
     } catch (error) {
       if (signal.aborted) this.cancellation.abort(signal.reason);
@@ -891,17 +905,8 @@ stream_max_retries = 0
     let diagnosticsPath: string | null = null;
     let diagnosticsFailed = false;
     if (options.preserveDiagnostics || failures.length) {
-      diagnosticsPath = path.join(this.fixtures, `failure-${path.basename(this.root)}-${randomUUID()}`);
       try {
-        await fs.mkdir(diagnosticsPath);
-        // Retain only named logs, never cloned databases, credentials or identity links.
-        for (const file of ["scenario.log", "daemon.log", "service.log", "app.log"]) {
-          try {
-            await fs.copyFile(path.join(this.root, file), path.join(diagnosticsPath, file));
-          } catch (error) {
-            if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-          }
-        }
+        diagnosticsPath = await WorkbenchTestProcessResources.retainScenarioDiagnostics(this.root);
         console.error(`Scenario diagnostics retained: ${diagnosticsPath}`);
       } catch (error) {
         diagnosticsFailed = true;

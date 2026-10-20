@@ -1,7 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchTestProcessResources: retain isolated service and workspace records outside a test worker.
+ * - default WorkbenchTestProcessResources: retain isolated service and workspace records outside a test worker,
+ *   keep a killed scenario's logs before removing its workspace, and cap retained scenario diagnostics.
  */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -43,6 +45,12 @@ function missing(error: unknown) {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
+/** Only named logs; never cloned databases, credentials or identity links. */
+const SCENARIO_DIAGNOSTIC_LOGS = ["scenario.log", "daemon.log", "service.log", "app.log"] as const;
+const SCENARIO_DIAGNOSTIC_PREFIX = "failure-wb-scenario-";
+/** Recent failures are what get read; older ones only grow the fixtures directory. */
+const RETAINED_SCENARIO_DIAGNOSTICS = 20;
+
 async function retirePid(pid: number) {
   try { process.kill(pid, "SIGKILL"); }
   catch (error) {
@@ -74,15 +82,16 @@ export default class WorkbenchTestProcessResources {
     readonly file: string,
     private readonly ownedDirectory: WorkbenchTemporaryDirectory | null,
     private readonly projectRoot: string,
+    private readonly report: (message: string) => void,
   ) {}
 
-  static async create(inherit = false, projectRoot = process.cwd()) {
+  static async create(inherit = false, projectRoot = process.cwd(), report = (message: string) => console.error(message)) {
     const inherited = inherit ? process.env[REGISTRY_ENV] : undefined;
-    if (inherited) return new WorkbenchTestProcessResources(inherited, null, path.resolve(projectRoot));
+    if (inherited) return new WorkbenchTestProcessResources(inherited, null, path.resolve(projectRoot), report);
     const directory = await WorkbenchTemporaryDirectory.create("wb-test-services-");
     const file = path.join(directory.path, "records.jsonl");
     await fs.writeFile(file, "");
-    return new WorkbenchTestProcessResources(file, directory, path.resolve(projectRoot));
+    return new WorkbenchTestProcessResources(file, directory, path.resolve(projectRoot), report);
   }
 
   get environment() { return { [REGISTRY_ENV]: this.file }; }
@@ -98,6 +107,26 @@ export default class WorkbenchTestProcessResources {
     if (registry) await fs.appendFile(registry, `${JSON.stringify({
       kind: "workspace", source: path.resolve(source), root: owned,
     })}\n`);
+  }
+
+  /** Copy a scenario workspace's logs beside it, drop all but the newest retained runs, and return the new directory. */
+  static async retainScenarioDiagnostics(root: string) {
+    const fixtures = path.dirname(root);
+    const diagnostics = path.join(fixtures, `failure-${path.basename(root)}-${randomUUID()}`);
+    await fs.mkdir(diagnostics);
+    for (const file of SCENARIO_DIAGNOSTIC_LOGS) {
+      await fs.copyFile(path.join(root, file), path.join(diagnostics, file)).catch(error => { if (!missing(error)) throw error; });
+    }
+    const retained = await Promise.all((await fs.readdir(fixtures, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory() && entry.name.startsWith(SCENARIO_DIAGNOSTIC_PREFIX))
+      .map(async entry => {
+        const directory = path.join(fixtures, entry.name);
+        return { directory, modified: directory === diagnostics ? Infinity : (await fs.stat(directory)).mtimeMs };
+      }));
+    for (const { directory } of retained.sort((left, right) => right.modified - left.modified).slice(RETAINED_SCENARIO_DIAGNOSTICS)) {
+      await fs.rm(directory, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    }
+    return diagnostics;
   }
 
   static async retireService(serviceFile: string, kill = retirePid) {
@@ -122,6 +151,9 @@ export default class WorkbenchTestProcessResources {
       typeof record !== "string");
     for (const root of new Set(workspaces.map(record =>
       validateWorkspace(record.source, record.root, this.projectRoot)))) {
+      // A scenario that closed removed its own root; one still holding logs was killed before it could keep them.
+      const killed = await fs.stat(path.join(root, "scenario.log")).then(() => true, error => { if (missing(error)) return false; throw error; });
+      if (killed) this.report(`Scenario diagnostics retained: ${await WorkbenchTestProcessResources.retainScenarioDiagnostics(root)}`);
       await fs.rm(root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
     }
     if (this.ownedDirectory) await this.ownedDirectory.dispose();
