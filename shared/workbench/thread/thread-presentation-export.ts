@@ -1,9 +1,8 @@
 /*
  * Exports:
  * - WorkbenchPresentationExportRequestSchema/WorkbenchPresentationExportPageSchema: paged legacy draft source.
- * - WorkbenchPresentationLayoutChunkRequestSchema/WorkbenchPresentationLayoutChunkSchema: revision-fenced layout transfer.
  * - WorkbenchPresentationAttachmentChunkRequestSchema/WorkbenchPresentationAttachmentChunkSchema: bounded inline attachment transfer.
- * - WorkbenchPresentationManifestRequestSchema/WorkbenchPresentationManifestPageSchema: bounded legacy source inventory.
+ * - WorkbenchPresentationManifestRequestSchema/WorkbenchPresentationManifestPageSchema: bounded legacy draft inventory.
  */
 import { z } from "zod";
 import { DraftIdSchema, ProjectIdSchema } from "../identity.ts";
@@ -48,32 +47,12 @@ export const WorkbenchPresentationManifestRequestSchema = z.object({
 }).strict();
 export type WorkbenchPresentationManifestRequest = z.input<typeof WorkbenchPresentationManifestRequestSchema>;
 export const WorkbenchPresentationManifestPageSchema = z.object({
-  sources: z.array(z.discriminatedUnion("kind", [
+  sources: z.array(
     z.object({ kind: z.literal("draft"), projectId: ProjectIdSchema, sourceId: DraftIdSchema }).strict(),
-    z.object({ kind: z.literal("projectLayout"), projectId: ProjectIdSchema, sourceId: z.string().min(1) }).strict(),
-    z.object({ kind: z.literal("homeLayout"), sourceId: z.literal("home") }).strict(),
-    z.object({ kind: z.literal("pinnedLayout"), sourceId: z.literal("pinned") }).strict(),
-  ])).max(200),
+  ).max(200),
   nextCursor: z.string().nullable(),
 }).strict();
 export type WorkbenchPresentationManifestPage = z.infer<typeof WorkbenchPresentationManifestPageSchema>;
-const layoutCursor = {
-  sourceRevision: z.number().int().nonnegative().nullable(),
-  offset: z.number().int().nonnegative(),
-};
-export const WorkbenchPresentationLayoutChunkRequestSchema = z.discriminatedUnion("scope", [
-  z.object({ scope: z.literal("project"), projectId: ProjectIdSchema, ...layoutCursor }).strict(),
-  z.object({ scope: z.literal("home"), ...layoutCursor }).strict(),
-  z.object({ scope: z.literal("pinned"), ...layoutCursor }).strict(),
-]);
-export type WorkbenchPresentationLayoutChunkRequest = z.infer<typeof WorkbenchPresentationLayoutChunkRequestSchema>;
-export const WorkbenchPresentationLayoutChunkSchema = z.object({
-  sourceRevision: z.number().int().nonnegative(),
-  bytes: z.string().max(87_384),
-  totalBytes: z.number().int().nonnegative(),
-  nextOffset: z.number().int().nonnegative().nullable(),
-}).strict();
-export type WorkbenchPresentationLayoutChunk = z.infer<typeof WorkbenchPresentationLayoutChunkSchema>;
 export const WorkbenchPresentationAttachmentChunkRequestSchema = z.object({
   projectId: ProjectIdSchema,
   draftId: z.uuid(),

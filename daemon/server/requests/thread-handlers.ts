@@ -9,7 +9,6 @@ import { WorkbenchThreadLaunchReadSchema, WorkbenchThreadLaunchRequestSchema } f
 import {
   WorkbenchPresentationAttachmentChunkRequestSchema,
   WorkbenchPresentationExportRequestSchema,
-  WorkbenchPresentationLayoutChunkRequestSchema,
   WorkbenchPresentationManifestRequestSchema,
 } from "workbench-shared/workbench/thread/thread-presentation-export";
 import {
@@ -102,10 +101,6 @@ export const threadRequestHandlers = defineDaemonRequestHandlers({
   "thread/presentation/attachment/read": async (params, context) => {
     const owner = presentationExport(context);
     return await owner.readPresentationAttachmentChunk(WorkbenchPresentationAttachmentChunkRequestSchema.parse(params));
-  },
-  "thread/presentation/layout/read": async (params, context) => {
-    const owner = presentationExport(context);
-    return await owner.exportPresentationLayoutChunk(WorkbenchPresentationLayoutChunkRequestSchema.parse(params));
   },
   "questionnaire/respond": async (params, { owners }) => await owners.questionnaireResponses.respond(questionnaireRespondRequest(params)),
   "browse/sessions/read": async (params, context) => await browse(context).listSessions(params),

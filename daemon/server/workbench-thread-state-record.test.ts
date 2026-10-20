@@ -34,10 +34,9 @@ test("internal MCP freshness and Git retention timing never leak into the sideba
   assert.deepEqual(projectWorkbenchThreadStateEntry(record), { ...entry, previousTitles: [], waitingOnThreads: [] });
 });
 
-test("provider omission preserves saved top-level visibility and placement", () => {
+test("provider omission preserves saved top-level visibility", () => {
   for (const metadata of [
     { archived: false, pinned: false, snoozed: false },
-    { archived: false, pinned: true, snoozed: false },
     { archived: true, pinned: false, snoozed: false },
   ]) {
     const record = parseWorkbenchThreadStateEntry({ ...entry, metadata, providerObserved: false });

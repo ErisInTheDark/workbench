@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
-import { countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import { countDraftPromptTokens, createDraftTitle, createWorkbenchPinnedThreadSummaryEntry, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { projectSidebarRow } from "./thread-sidebar-row";
 
@@ -108,7 +108,7 @@ test("sidebar completion and pinned eligibility exclude working threads", () => 
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable({
     ...entry, lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, settled: false },
   }), false);
-  const pin = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [entry], 1).pinnedThreads[0]!;
+  const pin = createWorkbenchPinnedThreadSummaryEntry(entry)!;
   assert.equal(pin.entryKind === "thread" && pin.canCompleteQuestionnaire, true);
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable(pin), true);
   const { canCompleteQuestionnaire: _eligibility, ...legacy } = pin as Extract<typeof pin, { entryKind: "thread" }>;
@@ -299,16 +299,6 @@ test("legacy draft settings conform from reload-compatible flattened fields", ()
     reasoningEffort: "high",
     serviceTier: "fast",
   });
-});
-
-test("daemon priority requests place threads in pinned or main only, since snooze is app-owned", () => {
-  const request = (priority: string) => WorkbenchThreadStateRequestSchema.safeParse({
-    method: "workbench/thread-state/priority/set", priority,
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), sourceKey: "codex:source",
-  }).success;
-  assert.equal(request("main"), true);
-  assert.equal(request("snoozed"), false);
-  assert.equal(request("settled"), false);
 });
 
 test("durable questionnaire state accepts proper questions and rejects approvals", () => {
@@ -815,7 +805,6 @@ test("project summaries count each top-level thread's own status", () => {
       working: 0,
     },
     lastThreadUpdateAt: 4,
-    pinnedThreads: [],
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     revision: 7,
     unsettledThreads: [
@@ -853,9 +842,8 @@ test("project summaries count each top-level thread's own status", () => {
   });
 });
 
-test("project summaries expose ordered unsnoozed pins without draft bodies", () => {
-  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000031");
-  const pinnedThread: WorkbenchThreadSidebarEntry = {
+test("pinned summary rows carry wait targets and leave out snoozed and settled pins", () => {
+  const pinnedThread: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 2,
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["pinned"] },
@@ -867,55 +855,18 @@ test("project summaries expose ordered unsnoozed pins without draft bodies", () 
       projectId: fixtureIdentityValues.ProjectId["project"], title: "Target",
     }],
   };
-  const summary = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [
-    {
-      activityAt: 3,
-      draft: {
-        attachments: [{ id: "private-attachment", url: "https://example.invalid/private" }],
-        clientUpdatedAt: 3,
-        composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null },
-        createdAt: 1,
-        draftId,
-        profileId: null,
-        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-        prompt: "private draft body",
-        updatedAt: 3,
-      },
-      entryKind: "draft",
-      metadata: { archived: false, pinned: true, snoozed: false },
-      title: "Pinned draft",
-    },
-    pinnedThread,
-    {
-      ...pinnedThread,
-      identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("snoozed") },
-      metadata: { archived: false, pinned: true, snoozed: true },
-      title: "Snoozed pin",
-    },
-  ], 4, {
-    pinned: {
-      "codex:pinned": { above: [], below: [`draft:${draftId}`] },
-      [`draft:${draftId}`]: { above: ["codex:pinned"], below: [] },
-    },
-  });
-
-  assert.deepEqual(summary.pinnedThreads.map((entry) => entry.title), ["Pinned provider", "Pinned draft"]);
-  const projectedThread = summary.pinnedThreads.find((entry) => entry.entryKind === "thread");
+  const projectedThread = createWorkbenchPinnedThreadSummaryEntry(pinnedThread);
+  assert.equal(projectedThread?.status, "working");
   assert.deepEqual(projectedThread?.waitingOnThreads, pinnedThread.waitingOnThreads);
   const parsedOldPin = WorkbenchPinnedThreadSummaryEntrySchema.parse({
     ...projectedThread, waitingOnThreads: undefined,
   });
   assert.equal(parsedOldPin.entryKind, "thread");
   if (parsedOldPin.entryKind === "thread") assert.deepEqual(parsedOldPin.waitingOnThreads, []);
-  assert.equal(summary.pinnedThreads.some((entry) => entry.title === "Snoozed pin"), false);
-  const projectedDraft = summary.pinnedThreads.find((entry) => entry.entryKind === "draft");
-  assert.deepEqual(projectedDraft, {
-    activityAt: 3,
-    draftId,
-    entryKind: "draft",
-    hasAttachments: true,
-    metadata: { archived: false, pinned: true, snoozed: false },
-    status: "draft",
-    title: "Pinned draft",
-  });
+  assert.equal(createWorkbenchPinnedThreadSummaryEntry({
+    ...pinnedThread, metadata: { archived: false, pinned: true, snoozed: true },
+  }), null);
+  assert.equal(createWorkbenchPinnedThreadSummaryEntry({
+    ...pinnedThread, lifecycle: { kind: "completed", reason: "userCompleted", settled: true },
+  }), null);
 });

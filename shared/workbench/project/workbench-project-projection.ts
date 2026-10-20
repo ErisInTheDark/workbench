@@ -7,7 +7,7 @@
  * - isDaemonOwnedProject: whether a logical project's folders are each daemon's own and can't be hidden.
  * - preferredLogicalLaunchLocation: choose a project's last used launch target without changing its combined view.
  * - preferredSelectedLaunchTarget: choose the newest accepted thread's available selected project and folder.
- * - projectLogicalSummaries/LogicalProjectSummary: combine source-qualified thread summaries without rewriting ids.
+ * - projectLogicalSummaries/LogicalProjectSummary: combine source-qualified thread summaries and the app's pinned rows without rewriting ids.
  * - projectLogicalGroups: combine daemon placement and app drafts into ordered cross-daemon project groups.
  * - projectLogicalThreadRows/projectLogicalThreadDisplayOrder/projectLogicalHomeDisplayOrder/projectLogicalPinnedDisplayOrder: retain sources and app-owned layouts.
  * - projectPresentationDraftRow: one listed presentation draft as a sidebar row; in-flight launches stand in for their thread.
@@ -23,7 +23,9 @@ import type {
   WorkbenchProjectThreadSummaries, WorkbenchProjectThreadSummaryCounts,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
-import { createDraftTitle, WorkbenchThreadDraftSchema, type DraftReferenceKind } from "workbench-shared/workbench/thread/thread-state";
+import {
+  createDraftTitle, createWorkbenchPinnedThreadSummaryEntry, WorkbenchThreadDraftSchema, type DraftReferenceKind,
+} from "workbench-shared/workbench/thread/thread-state";
 import { getThreadSidebarGroup } from "workbench-shared/workbench/thread/thread-state";
 import {
   compareThreadSidebarEntries, getWorkbenchThreadDisplayKey, getWorkbenchThreadDisplaySection,
@@ -38,6 +40,7 @@ import {
 } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { sidebarRowKey, type WorkbenchThreadSidebarRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { ThreadSnooze } from "workbench-shared/workbench/thread/thread-snooze";
+import ThreadPlacement from "workbench-shared/workbench/thread/thread-placement";
 import type {
   WorkspaceThreadMember, WorkspaceThreadPlacementItem, WorkspaceThreadRows,
 } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -187,7 +190,7 @@ export function projectLogicalThreadRows(
   const launching = (draft: PresentationSnapshot["drafts"][number]) => draft.phase === "submitting" && inFlight.has(draft.id);
   // A launching draft stands in for the thread its launch created until the launch is accepted.
   const launchingIds = new Set(listedDrafts.flatMap(draft => launching(draft) && draft.launchId ? [draft.launchId] : []));
-  const snoozes = ThreadSnooze.byThread(presentation.threadSnoozes);
+  const placement = ThreadPlacement.from(presentation);
   const materialized = projects.flatMap(project => projectDisplayLocations(project).flatMap(location =>
     (sources.get(location.target.daemonId)?.projects.find(sidebar =>
       sidebar.projectId === location.target.projectId)?.entries ?? [])
@@ -195,7 +198,7 @@ export function projectLogicalThreadRows(
       .map(entry => ({
         logicalProjectId: project.id, location: location.target,
         hostname: location.hostname, rootPath: location.rootPath,
-        entry: entry.entryKind === "thread" ? ThreadSnooze.apply(entry, snoozes.get(entry.identity.threadId)) : entry,
+        entry: placement.apply(entry),
         ...(location.observedOnly ? { observedOnly: true } : {}),
       })),
   ));
@@ -413,10 +416,15 @@ export function preferredSelectedLaunchTarget(
   return null;
 }
 
+/**
+ * Pinned rows come from the app's own watch on pinned threads, since daemons no longer know pins; `pinnedRows` must
+ * already carry the app's placement.
+ */
 export function projectLogicalSummaries(
   projects: readonly WorkbenchLogicalProject[],
   sources: ReadonlyMap<DaemonId, WorkbenchProjectThreadSummaries>,
   presentation: Pick<PresentationSnapshot, "drafts" | "threadSnoozes">,
+  pinnedRows: ReadonlyMap<string, { location: ProjectLocationReference; row: WorkbenchThreadSidebarRow }> = new Map(),
 ): Map<LogicalProjectId, LogicalProjectSummary> {
   const result = new Map<LogicalProjectId, LogicalProjectSummary>();
   const snoozes = ThreadSnooze.byThread(presentation.threadSnoozes);
@@ -428,7 +436,13 @@ export function projectLogicalSummaries(
     const pinnedThreads: LogicalProjectSummary["pinnedThreads"] = [];
     const unsettledThreads: LogicalProjectSummary["unsettledThreads"] = [];
     let lastThreadUpdateAt: number | null = null;
-    for (const location of projectDisplayLocations(project)) {
+    const locations = projectDisplayLocations(project);
+    for (const { location, row } of pinnedRows.values()) {
+      const entry = row.entryKind === "thread" ? createWorkbenchPinnedThreadSummaryEntry(row) : null;
+      if (entry && locations.some(candidate => candidate.target.daemonId === location.daemonId
+        && candidate.target.projectId === location.projectId)) pinnedThreads.push({ location, entry });
+    }
+    for (const location of locations) {
       const summary = sources.get(location.target.daemonId)?.projects.find(
         item => item.projectId === location.target.projectId,
       );
@@ -436,9 +450,6 @@ export function projectLogicalSummaries(
       if (summary.lastThreadUpdateAt !== null) {
         lastThreadUpdateAt = Math.max(lastThreadUpdateAt ?? 0, summary.lastThreadUpdateAt);
       }
-      pinnedThreads.push(...summary.pinnedThreads.filter(entry => entry.entryKind !== "draft"
-        && !snoozes.has(entry.identity.threadId))
-        .map(entry => ({ location: location.target, entry })));
       // Snoozed threads only count while they need attention, and then never as active attention.
       for (const entry of summary.unsettledThreads) {
         const status = !snoozes.has(entry.identity.threadId) ? entry.status

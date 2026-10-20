@@ -60,7 +60,6 @@ import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListRow, { targetForRowEntry, type ThreadListRowContext, type ThreadListRowEntry } from "./WorkbenchThreadListRow";
 import { threadAttentionLabels } from "./thread-attention";
-import { useProjects } from "./use-projects";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 
@@ -125,8 +124,7 @@ function ListedThreadFolder ({ listEntries, ...props }: Omit<ComponentProps<type
 }) {
   const listed = useThreads.rowsFor(listEntries.flatMap(entry => "slot" in entry ? [entry.threadKey] : []));
   const sidebars = useThreads.sidebars();
-  const summaries = useProjects.threads();
-  const attentionLabelsByThreadId = useMemo(() => threadAttentionLabels(sidebars, summaries), [sidebars, summaries]);
+  const attentionLabelsByThreadId = useMemo(() => threadAttentionLabels(sidebars), [sidebars]);
   const entries = useMemo(() => {
     const byKey = new Map(listed.map(row => [getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) as string, row.entry]));
     return listEntries.flatMap(entry => {
@@ -243,6 +241,7 @@ export default function WorkbenchThreadList ({
   const client = useWorkbenchClientController();
   const projectHref = useWorkbenchProjectNavigation();
   const {
+    openFolderKeys,
     preferences,
     setDisclosureOpen,
     setFolderOpen,
@@ -371,7 +370,7 @@ export default function WorkbenchThreadList ({
   }, [archivedDemand, controls]);
   const nextSettledThreadCount = Math.min(SETTLED_THREAD_PAGE_SIZE, remainingSettledThreadCount);
   const visibleRows = (items: ListDisplayItem[]) => items.flatMap(item => item.itemKind === "folder"
-    ? preferences.threadFolderIds.includes(itemKey(item)) ? item.entries : []
+    ? openFolderKeys.has(itemKey(item)) ? item.entries : []
     : [item.entry]);
   const navigableEntries = [
     ...visibleRows(list.pinnedItems),
@@ -537,7 +536,7 @@ export default function WorkbenchThreadList ({
               folder={item.folder}
               homeFolderKey={key}
               onAutoFocusComplete={actions.onAutoFocusFolderComplete}
-              onOpenChange={(open) => setFolderOpen("threads", key, open)}
+              onOpenChange={(open) => setFolderOpen(item.projectId, item.folder.folderId, open)}
               onPrependThread={(payload) => {
                 const sourceKey = keyForPayload(payload);
                 if (sourceKey) void moveHome(sourceKey, section, key, item.entries[0]?.threadKey ?? null);
@@ -554,7 +553,7 @@ export default function WorkbenchThreadList ({
                 })) throw new Error("Project folder rename could not be saved.");
                 return title.trim();
               }}
-              open={preferences.threadFolderIds.includes(key)}
+              open={openFolderKeys.has(key)}
               project={project ?? undefined}
               tooltip={renderFolderTooltip(item)}
             >

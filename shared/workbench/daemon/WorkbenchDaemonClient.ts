@@ -217,8 +217,6 @@ class WorkbenchDaemonClient {
       this.request("thread/presentation/export", params),
     attachment: (params: WorkbenchDaemonParams<"thread/presentation/attachment/read">) =>
       this.request("thread/presentation/attachment/read", params),
-    layout: (params: WorkbenchDaemonParams<"thread/presentation/layout/read">) =>
-      this.request("thread/presentation/layout/read", params),
   };
 
   readonly commandApprovals = {

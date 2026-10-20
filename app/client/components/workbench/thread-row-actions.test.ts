@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkbenchProjectThreadSummary, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import { createWorkbenchPinnedThreadSummaryEntry, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import { getThreadRowActions, getThreadStopIntent } from "./thread-row-actions";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -84,10 +84,11 @@ test("stop carries the owning questionnaire or active turn evidence", () => {
 });
 
 test("pinned summaries preserve questionnaire completion without enabling shift settlement", () => {
-  const summary = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [{
+  const pinned = createWorkbenchPinnedThreadSummaryEntry({
     ...pending, metadata: { archived: false, pinned: true, snoozed: false }, waitingFor: "other",
-  }], 1);
-  assert.deepEqual(getThreadRowActions(summary.pinnedThreads[0]!, "pinned"), { baseAction: "snooze", shiftAction: "complete" });
+  });
+  assert.ok(pinned);
+  assert.deepEqual(getThreadRowActions(pinned, "pinned"), { baseAction: "snooze", shiftAction: "complete" });
 });
 
 test("required todos and unhandled addressed feedback hold settlement like live claims", () => {
@@ -103,10 +104,7 @@ test("completed rows keep settlement primary while snoozed rows expose settlemen
   assert.deepEqual(getThreadRowActions(completed, "snoozed"), { baseAction: "wake", shiftAction: "settle" });
   assert.deepEqual(getThreadRowActions({
     ...completed,
-    gitArc: {
-      checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], intentName: "work",
-      intentDescription: "", phase: "active", proposals: [], updatedAt: "2026-09-08T00:00:00Z",
-    },
+    gitArc: { checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], phase: "active", proposals: [] },
   }, "snoozed"), { baseAction: "wake", shiftAction: null });
 });
 

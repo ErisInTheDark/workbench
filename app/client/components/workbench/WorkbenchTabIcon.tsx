@@ -10,7 +10,6 @@ import { useEffect, useMemo } from "react";
 import {
   isThreadStatusActive, isThreadStatusWaitingOnUserInput, threadAttentionLabels, threadLifecycleSignal,
 } from "./thread-attention";
-import { useProjects } from "./use-projects";
 import { useThreads } from "./use-threads";
 
 export type WorkbenchTabIconState = "default" | "questionnaire" | "active";
@@ -36,9 +35,8 @@ function ensureIconLink(rel: "icon" | "shortcut icon") {
 
 export default function WorkbenchTabIcon() {
   const sidebars = useThreads.sidebars();
-  const summaries = useProjects.threads();
   const currentThread = useThreads.current();
-  const attention = useMemo(() => threadAttentionLabels(sidebars, summaries), [sidebars, summaries]);
+  const attention = useMemo(() => threadAttentionLabels(sidebars), [sidebars]);
   const signal = useMemo(() => threadLifecycleSignal(sidebars), [sidebars]);
   const state: WorkbenchTabIconState = (currentThread && currentThread.id in attention
     && isThreadStatusWaitingOnUserInput(currentThread.status)) || signal === "needsAttention"

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, projected once per burst of answers, project selections and rows, and folder peer sync) and publication fences; thread rows carry the app's snoozes.
+ * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, projected once per burst of answers, project selections and rows, and folder peer sync) and publication fences; thread rows carry the app's pins and snoozes.
  */
 import {
   RETARGETABLE_QUERY_KINDS, WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, applyThreadSummariesPatch,
@@ -26,8 +26,8 @@ import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type { WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import type WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
-import type WorkbenchThreadSnoozeController from "../state/WorkbenchThreadSnoozeController";
-import { ThreadSnooze } from "workbench-shared/workbench/thread/thread-snooze";
+import type WorkbenchThreadPlacementController from "../state/WorkbenchThreadPlacementController";
+import ThreadPlacement from "workbench-shared/workbench/thread/thread-placement";
 import type WorkbenchGitPeerSync from "./WorkbenchGitPeerSync";
 import type WorkbenchWorkspaceDrafts from "./WorkbenchWorkspaceDrafts";
 import { z } from "zod";
@@ -46,7 +46,7 @@ import {
 import {
   getWorkbenchThreadDisplayKey, getWorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
-import { getProjectQualifiedThreadDisplayKey, getThreadDisplayThreadKey, parseProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import { getProjectQualifiedThreadDisplayKey, parseProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { WorkbenchThreadStateMutationResultSchema, WorkbenchComposerProfileSlotSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
   WorkspaceTranscriptRequestSchema,
@@ -131,7 +131,7 @@ export default class WorkbenchWorkspaceRequestController {
     workspace: WorkbenchWorkspaceController;
     sources: WorkbenchDaemonSources;
     threads: WorkbenchWorkspaceThreads;
-    snoozes: Pick<WorkbenchThreadSnoozeController, "read" | "subscribe" | "snooze" | "toggleTarget">;
+    placements: Pick<WorkbenchThreadPlacementController, "read" | "subscribe" | "pin" | "snooze" | "toggleTarget">;
     presentation: Pick<WorkbenchPresentationController, "read" | "subscribe" | "mutate">;
     /** Draft launches in flight, whose reservations stand in for their thread rows. */
     launches?: Pick<WorkbenchWorkspaceDrafts, "inFlight" | "subscribe">;
@@ -264,8 +264,9 @@ export default class WorkbenchWorkspaceRequestController {
   async threadAction(input: z.infer<typeof WorkspaceThreadActionSchema>): Promise<WorkspaceThreadActionResult> {
     const { threadId, intent } = WorkspaceThreadActionSchema.parse(input);
     if (intent.kind === "priority") return { accepted: await this.setThreadPriority(threadId, intent.priority) };
-    if (intent.kind === "snooze") return { accepted: await this.options.snoozes.snooze(threadId, intent.snoozed, intent.requestKey) };
-    if (intent.kind === "snoozeUntil") return { accepted: await this.options.snoozes.toggleTarget(threadId, intent.targetThreadId) };
+    if (intent.kind === "pin") return { accepted: await this.options.placements.pin(threadId, intent.pinned) };
+    if (intent.kind === "snooze") return { accepted: await this.options.placements.snooze(threadId, intent.snoozed, intent.requestKey) };
+    if (intent.kind === "snoozeUntil") return { accepted: await this.options.placements.toggleTarget(threadId, intent.targetThreadId) };
     return this.options.threads.withThread(threadId, async (source, owner) => {
       const projectId = owner.location.projectId;
       const identity = { harness: owner.identity.harness, threadId: owner.identity.threadId };
@@ -277,24 +278,19 @@ export default class WorkbenchWorkspaceRequestController {
         });
         return { accepted: true };
       }
-      const mutation = intent.kind === "pin" ? { method: "workbench/thread-state/pin/set", pinned: intent.pinned }
-        : intent.kind === "archive" ? { method: "workbench/thread-state/archive/set", archived: intent.archived }
-          : intent.kind === "status" ? { method: "workbench/thread-state/status/set", status: intent.status }
-            : { method: intent.kind === "restore" ? "workbench/thread-state/restore" : "workbench/thread-state/settle" };
+      const mutation = intent.kind === "archive" ? { method: "workbench/thread-state/archive/set", archived: intent.archived }
+        : intent.kind === "status" ? { method: "workbench/thread-state/status/set", status: intent.status }
+          : { method: intent.kind === "restore" ? "workbench/thread-state/restore" : "workbench/thread-state/settle" };
       const { method, ...params } = mutation;
       return WorkbenchThreadStateMutationResultSchema.parse(await source.request<Json>(method, { ...params, projectId, identity }));
     }, this.cancellation.signal);
   }
 
-  /** Snooze is app-owned; pinned and main are the daemon's, and leaving snoozed for either wakes the thread. */
+  /** Snoozing keeps a pin, so a wake returns to it; choosing pinned or main also wakes the thread. */
   private async setThreadPriority(threadId: string, priority: "pinned" | "main" | "snoozed") {
-    if (priority === "snoozed") return await this.options.snoozes.snooze(threadId, true);
-    const accepted = await this.options.threads.withThread(threadId, async (source, owner) =>
-      WorkbenchThreadStateMutationResultSchema.parse(await source.request<Json>("workbench/thread-state/priority/set", {
-        projectId: owner.location.projectId, priority,
-        sourceKey: getThreadDisplayThreadKey(owner.identity.harness, owner.identity.threadId),
-      })).accepted, this.cancellation.signal);
-    return accepted && await this.options.snoozes.snooze(threadId, false);
+    if (priority === "snoozed") return await this.options.placements.snooze(threadId, true);
+    return await this.options.placements.pin(threadId, priority === "pinned")
+      && await this.options.placements.snooze(threadId, false);
   }
 
   async transcript(input: z.infer<typeof WorkspaceTranscriptRequestSchema>) {
@@ -647,7 +643,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "threadOwner":
         interest.owner = this.options.threads.observe(request.query.threadId, refresh);
         interest.stop.push(this.options.sources.subscribe(refresh));
-        if (request.query.kind === "thread") interest.stop.push(this.options.snoozes.subscribe(refresh));
+        if (request.query.kind === "thread") interest.stop.push(this.options.placements.subscribe(refresh));
         break;
       case "threadVis":
       case "visSnapshot":
@@ -660,7 +656,7 @@ export default class WorkbenchWorkspaceRequestController {
         break;
       case "threadSummaries":
         interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh),
-          this.options.snoozes.subscribe(refresh));
+          this.options.placements.subscribe(refresh));
         break;
     }
     try { this.refresh(interest); }
@@ -947,9 +943,8 @@ export default class WorkbenchWorkspaceRequestController {
         }
         const fact = interest.thread?.observation.getSnapshot();
         const value = fact?.value?.kind === "thread" ? fact.value : null;
-        const snoozes = this.options.snoozes.read();
-        const data = value?.data ? { ...value.data, entries: value.data.entries.map(entry => entry.entryKind === "thread"
-          ? ThreadSnooze.apply(entry, snoozes.get(entry.identity.threadId)) : entry) } : null;
+        const placement = this.options.placements.read();
+        const data = value?.data ? { ...value.data, entries: value.data.entries.map(entry => placement.apply(entry)) } : null;
         this.update(interest, { kind: "thread", owner, phase: fact?.phase ?? phase, failure: fact?.failure ?? failure,
           data, runtime: value?.runtime ?? {} });
       }
@@ -1174,7 +1169,7 @@ export default class WorkbenchWorkspaceRequestController {
     const logicalProjectId = (daemonId: DaemonId, projectId: ProjectId) => (presentation ??= this.options.presentation.read())
       .locations.find(item => item.target.daemonId === daemonId && item.target.projectId === projectId)?.logicalProjectId ?? null;
     const data: WorkspaceThreadSummaries = {};
-    const snoozes = this.options.snoozes.read();
+    const placement = this.options.placements.read();
     for (const threadId of requested) {
       const claims = answers.flatMap(answer => {
         const located = answer.summaries[threadId];
@@ -1185,7 +1180,7 @@ export default class WorkbenchWorkspaceRequestController {
         data[threadId] = null;
       } else if (claims[0]) {
         const { daemonId, located: { projectId, summary } } = claims[0];
-        const row = ThreadSnooze.apply(summary.row, snoozes.get(threadId));
+        const row = placement.apply(summary.row);
         data[threadId] = { location: { daemonId, projectId }, logicalProjectId: logicalProjectId(daemonId, projectId),
           summary: row === summary.row ? summary : { ...summary, row } };
       } else if (answers.length && answers.every(answer => answer.settled && threadId in answer.summaries)) {
@@ -1222,14 +1217,14 @@ export default class WorkbenchWorkspaceRequestController {
     const inFlight = this.options.launches?.inFlight() ?? new Set<string>();
     const rows: WorkbenchProjectedThreadRow[] = projectLogicalThreadRows(workspace.projects, sidebars, presentation, inFlight)
       .filter(row => targets.get(row.location.daemonId)?.has(row.location.projectId));
-    const snoozes = ThreadSnooze.byThread(presentation.threadSnoozes);
+    const placement = ThreadPlacement.from(presentation);
     for (const project of workspace.observedProjects) for (const location of project.locations) {
       if (!targets.get(location.location.daemonId)?.has(location.location.projectId)) continue;
       const sidebar = sidebars.get(location.location.daemonId)?.projects.find(item => item.projectId === location.location.projectId);
       for (const entry of sidebar?.entries ?? []) {
         if (entry.entryKind !== "draft") rows.push({
           logicalProjectId: null, location: location.location, hostname: location.hostname, rootPath: location.project.rootPath,
-          entry: entry.entryKind === "thread" ? ThreadSnooze.apply(entry, snoozes.get(entry.identity.threadId)) : entry,
+          entry: placement.apply(entry),
           observedOnly: true,
         });
       }

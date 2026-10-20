@@ -9,16 +9,14 @@ import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDire
 import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
-import { getProjectQualifiedThreadDisplayKey, getThreadDisplayFolderKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { projectWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchGitArcLifecycleState, type WorkbenchThreadGitCommit, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
-import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
+import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import { normalizeProviderSidebarEntry as normalizeSidebarEntry } from "./WorkbenchThreadStateFeature";
 import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
 import { createWorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
 import { projectWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
-import { projectWorkbenchThreadDraft } from "./WorkbenchThreadDraftStore";
 
 import { ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -98,7 +96,6 @@ type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolv
   };
 
 class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
-  readonly globals = new Map<WorkbenchThreadStateGlobalDocumentId, object>();
   readonly projects = new Map<ProjectId, object>();
   readonly titleHistories = new Map<string, WorkbenchStoredThreadTitleHistory[]>();
 
@@ -128,7 +125,7 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
     return [...this.projects].flatMap(([projectId, document]) =>
       parseProjectDocument(JSON.stringify(document), projectId).records
         .filter(record => record.entryKind === "thread" && record.lifecycle.settled
-          && !record.metadata.archived && !record.metadata.pinned && record.activityAt <= activeBefore)
+          && !record.metadata.archived && record.activityAt <= activeBefore)
         .map(record => ({ projectId, record })));
   }
 
@@ -159,10 +156,6 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
     }));
   }
 
-  async readGlobal(id: WorkbenchThreadStateGlobalDocumentId) {
-    return structuredClone(this.globals.get(id) ?? null);
-  }
-
   async readProject(projectId: string) {
     return structuredClone(this.projects.get(ProjectIdSchema.parse(projectId)) ?? null);
   }
@@ -170,18 +163,10 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
   async readNavigationSummary(projectId: ProjectId) {
     const stored = parseProjectDocument(JSON.stringify(this.projects.get(projectId)
       ?? { version: 4, records: [], drafts: [] }), projectId);
-    return createWorkbenchProjectThreadSummary(projectId, [
-      ...stored.records.flatMap(record => {
-        const entry = projectWorkbenchThreadStateEntry(record);
-        return entry ? [entry] : [];
-      }),
-      ...stored.drafts.filter(draft => draft.pinned && !draft.snoozed).map(draft =>
-        projectWorkbenchThreadDraft(draft, { archived: false, pinned: true, snoozed: false })),
-    ], 0, stored.displayOrder ?? {});
-  }
-
-  async writeGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object) {
-    this.globals.set(id, structuredClone(document));
+    return createWorkbenchProjectThreadSummary(projectId, stored.records.flatMap(record => {
+      const entry = projectWorkbenchThreadStateEntry(record);
+      return entry ? [entry] : [];
+    }), 0);
   }
 
   async writeProject(projectId: string, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
@@ -210,11 +195,11 @@ test("retained project reads and mutations use canonical ownership without creat
   try {
     const opened = await controller.readProject(fixtureProjectIds.alpha);
     assert.equal(opened.projectId, source);
-    const before = structuredClone({ projects: persistence.projects, globals: persistence.globals });
+    const before = structuredClone(persistence.projects);
     for (const id of ["remote:/example.test/source", "remote://example.test/unknown"]) {
       await assert.rejects(controller.readProject(ProjectIdSchema.parse(id)), /project/i);
     }
-    assert.deepEqual({ projects: persistence.projects, globals: persistence.globals }, before);
+    assert.deepEqual(persistence.projects, before);
     const entry = pinnedRecord("thread", "retained");
     await controller.ensureProviderEntry(fixtureProjectIds.alpha, entry);
     assert.equal((await controller.getSnapshot(source)).entries.length, 1);
@@ -264,7 +249,6 @@ test("thread mutations do not replace their project document", async () => {
     await controller.setMcpGeneration(fixtureProjectIds["project"], "codex", provider.identity.threadId, "generation");
     assert.equal(await controller.getMcpGeneration(fixtureProjectIds["project"], "codex", provider.identity.threadId), "generation");
     for (const request of [
-      { method: "workbench/thread-state/priority/set" as const, sourceKey: getThreadDisplayThreadKey("codex", provider.identity.threadId), priority: "pinned" as const },
       { method: "workbench/thread-state/status/set" as const, identity: provider.identity, status: "completed" as const },
       { method: "workbench/thread-state/settle" as const, identity: provider.identity },
     ]) {
@@ -390,31 +374,28 @@ test("failed discovery rollback preserves a newer title and its eventual save", 
   }
 });
 
-for (const scope of ["project", "global"] as const) {
-  test(`retiring thread state fences ${scope} storage reads before repair writes`, async () => {
-    let enter!: () => void;
-    const entered = new Promise<void>(resolve => { enter = resolve; });
-    let release!: (value: null) => void;
-    const gate = new Promise<null>(resolve => { release = resolve; });
-    const persistence = new MemoryThreadStatePersistence();
-    if (scope === "project") persistence.readProject = async () => { enter(); return await gate; };
-    else persistence.readGlobal = async () => { enter(); return await gate; };
-    const controller = new WorkbenchThreadStateController({
-      storageRoot: `retired-${scope}`, threadStateStore: persistence,
-      getProjectCatalog: () => ({ data: [], rootPath: "" }),
-      reconcileProject: async () => [],
-    });
-    const reading = controller.getSnapshot(fixtureProjectIds["project"]);
-    const rejected = assert.rejects(reading, /retired/);
-    await entered;
-    const writesBeforeRetirement = persistence.projects.size + persistence.globals.size;
-    const disposing = controller.dispose();
-    await disposing;
-    release(null);
-    await rejected;
-    assert.equal(persistence.projects.size + persistence.globals.size, writesBeforeRetirement);
+test("retiring thread state fences project storage reads before repair writes", async () => {
+  let enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  let release!: (value: null) => void;
+  const gate = new Promise<null>(resolve => { release = resolve; });
+  const persistence = new MemoryThreadStatePersistence();
+  persistence.readProject = async () => { enter(); return await gate; };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "retired-project", threadStateStore: persistence,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }),
+    reconcileProject: async () => [],
   });
-}
+  const reading = controller.getSnapshot(fixtureProjectIds["project"]);
+  const rejected = assert.rejects(reading, /retired/);
+  await entered;
+  const writesBeforeRetirement = persistence.projects.size;
+  const disposing = controller.dispose();
+  await disposing;
+  release(null);
+  await rejected;
+  assert.equal(persistence.projects.size, writesBeforeRetirement);
+});
 
 test("thread-state retirement retains an already-issued document write", async () => {
   let enter!: () => void;
@@ -753,12 +734,6 @@ test("settlement publishes the affected entry while discovery is held, including
     });
     const settled = publications.at(-1)?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === "changed");
     assert.ok(settled && settled.entryKind !== "draft" && settled.lifecycle.settled);
-    publications.length = 0;
-    await controller.handleRequest("viewer", {
-      method: "workbench/thread-state/priority/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), sourceKey: "codex:unrelated", priority: "pinned",
-    });
-    const priority = publications.at(-1)?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === "unrelated");
-    assert.ok(priority?.entryKind === "thread" && priority.metadata.pinned);
     publications.length = 0;
     await controller.setTitle(fixtureProjectIds["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("unrelated"), "visible title");
     const title = publications.at(-1)?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === "unrelated");
@@ -1165,11 +1140,7 @@ test("questionnaire completion revalidates the captured item after interruption 
   }
 });
 
-async function readGlobalState<T extends object>(storageRoot: string, id: WorkbenchThreadStateGlobalDocumentId) {
-  return await testPersistence(storageRoot).readGlobal(id) as T;
-}
-
-test("overdue settlement archives retroactively except pinned threads and restore clears archival", async () => {
+test("overdue settlement archives retroactively, old daemon pins included, and restore clears archival", async () => {
   const persistence = new MemoryThreadStatePersistence();
   const now = 20 * 24 * 60 * 60 * 1_000;
   const records = ["overdue", "pinned", "recent", "missing-time"].map(threadId => ({
@@ -1191,15 +1162,9 @@ test("overdue settlement archives retroactively except pinned threads and restor
     for (const id of ["overdue", "pinned", "recent", "missing-time"]) {
       const entry = await read(id);
       assert.ok(entry?.entryKind === "thread");
-      assert.equal(entry.metadata.archived, id === "overdue" || id === "missing-time");
+      assert.equal(entry.metadata.archived, id !== "recent");
       assert.equal(entry.lifecycle.kind, id === "missing-time" ? "stopped" : "completed");
     }
-    await controller.handleRequest("observer", {
-      method: "workbench/thread-state/pin/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("pinned") }, pinned: false,
-    });
-    const unpinned = await read("pinned");
-    assert.ok(unpinned?.entryKind === "thread");
-    assert.equal(unpinned.metadata.archived, true);
     await controller.handleRequest("observer", {
       method: "workbench/thread-state/restore", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("overdue") },
     });
@@ -1385,10 +1350,6 @@ async function seedProjectState(storageRoot: string, projectId: string, document
   await testPersistence(storageRoot).writeProject(projectId, document);
 }
 
-async function seedGlobalState(storageRoot: string, id: WorkbenchThreadStateGlobalDocumentId, document: object) {
-  await testPersistence(storageRoot).writeGlobal(id, document);
-}
-
 function pinnedRecord(threadId: string, title: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> {
   return {
     activityAt: 1,
@@ -1472,78 +1433,6 @@ test("independent project subscribers and warm reads do not own background recon
   await controller.dispose();
 });
 
-test("retained project folders import into the legacy pinned export with source-qualified members", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-global-pinned-layout-");
-  const root = temporary.path;
-  const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000041");
-  const projects = ["project-a", "project-b"];
-  await seedProjectState(root, "project-a", {
-    displayOrder: { folders: [{ folderId, section: "pinned", threadKeys: ["codex:a"], title: "Everywhere" }] },
-    drafts: [],
-    records: [pinnedRecord("a", "A")],
-    version: 3,
-  });
-  await seedProjectState(root, "project-b", {
-    drafts: [],
-    records: [{
-      ...pinnedRecord("b", "B"),
-      metadata: { archived: false, pinned: false, snoozed: true },
-    }],
-    version: 3,
-  });
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({ data: projects.map((id) => projectOption(id, path.join(root, id))), rootPath: root }),
-    reconcileProject: async () => [],
-    storageRoot: root,
-  });
-  await controller.readProject(fixtureProjectIds["project-a"]);
-  await controller.readProject(fixtureProjectIds["project-b"]);
-  const keyA = getProjectQualifiedThreadDisplayKey(fixtureProjectIds["project-a"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:a"));
-  const stored = await readGlobalState<{ displayOrder: { folders?: Array<{ threadKeys: string[] }> } }>(root, "pinnedLayout");
-  assert.deepEqual(stored.displayOrder.folders?.[0]?.threadKeys, [keyA]);
-  await controller.dispose();
-  await temporary.dispose();
-});
-
-test("a failed priority write restores the loaded project state", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-pinned-move-rollback-");
-  const root = temporary.path;
-  const persistence = testPersistence(root);
-  await persistence.writeProject("project", {
-    drafts: [],
-    records: [{
-      ...pinnedRecord("thread", "Thread"),
-      metadata: { archived: false, pinned: false, snoozed: false },
-    }],
-    version: 3,
-  });
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
-    reconcileProject: async () => [],
-    storageRoot: root,
-  });
-  await controller.readProject(fixtureProjectIds["project"]);
-  const writeChanges = persistence.writeChanges.bind(persistence);
-  persistence.writeChanges = async () => {
-    persistence.writeChanges = writeChanges;
-    throw new Error("Project persistence unavailable.");
-  };
-
-  await assert.rejects(
-    controller.handleRequest("observer", {
-      method: "workbench/thread-state/priority/set",
-      projectId: fixtureProjectIds["project"],
-      priority: "pinned",
-      sourceKey: "codex:thread",
-    }),
-    /Project persistence unavailable/u,
-  );
-  const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
-  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: false, snoozed: false });
-  await controller.dispose();
-  await temporary.dispose();
-});
-
 test("reconciled project thread state persists authoritatively in SQLite across controller restart", async () => {
   const projectId = testProjectIds.project;
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-sqlite-authority-");
@@ -1624,33 +1513,6 @@ test("authoritative SQLite read and write failures surface at the controller bou
   }
 });
 
-test("repairable global pinned layout drift cannot block thread-state open", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-global-pinned-layout-repair-");
-  const root = temporary.path;
-  await seedGlobalState(root, "pinnedLayout", {
-    displayOrder: {},
-    importedProjectIds: ["project"],
-    revision: "old",
-    secretField: "must-not-be-logged",
-    version: 1,
-  });
-  const logs: string[] = [];
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
-    log: (message) => { logs.push(message); },
-    reconcileProject: async () => [],
-    storageRoot: root,
-  });
-
-  await controller.readProject(fixtureProjectIds["project"]);
-  const stored = await readGlobalState<{ revision: number }>(root, "pinnedLayout");
-  assert.equal(stored.revision, 0);
-  assert.match(logs.join("\n"), /Conformed stored pinned thread layout/u);
-  assert.match(logs.join("\n"), /revision/u);
-  assert.doesNotMatch(logs.join("\n"), /must-not-be-logged/u);
-  await controller.dispose();
-  await temporary.dispose();
-});
 
 test("project subscribers receive activity and transient wait state without socket-owned observations", async context => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
@@ -1788,18 +1650,6 @@ test("a subagent observation includes its root without granting authority throug
   });
   assert.equal(WorkbenchThreadTitleMutationResultSchema.parse(renamed.result).title, "Renamed while open");
 
-  await controller.handleRequest("owner-loader", {
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
-    method: "workbench/thread-state/pin/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-    pinned: false,
-  });
-  const unpinned = await controller.readWorkspaceThread({
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-    subscriptionId: "bb7efb3d-4670-4198-a8ab-8926782c4ed3",
-    target: { kind: "provider", harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
-  });
-  assert.ok(unpinned.entries.some(entry => entry.entryKind === "thread" && !entry.metadata.pinned));
   const foreign = await controller.handleRequest("viewer", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
     method: "workbench/thread-state/title/set",
@@ -1957,7 +1807,7 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
     },
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("kept-thread") },
     lifecycle: { agent: { agentStatus: "working" }, kind: "working", reason: "acceptedIntent", settled: false },
-    metadata: { archived: false, pinned: true, snoozed: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
     providerObserved: true,
     title: "Kept title",
   };
@@ -2068,18 +1918,10 @@ test("legacy presentation export pages drafts and reads inline attachments witho
   const selected = await controller.exportPresentationPage({ projectId, draftIds: [secondId] });
   assert.deepEqual(selected.drafts.map(item => item.draftId), [secondId],
     "missing-source transfer must not reread an already receipted draft");
-  const layout = await controller.exportPresentationLayoutChunk({
-    scope: "project", projectId, sourceRevision: null, offset: 0,
-  });
-  assert.equal(JSON.parse(Buffer.from(layout.bytes, "base64").toString("utf8")).displayOrder !== undefined, true);
-  assert.equal(layout.nextOffset, null);
   await controller.ensureProviderEntry(projectId, pinnedRecord("thread", "export-revision"));
   await controller.setTitle(projectId, "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), "changed revision");
   await assert.rejects(controller.exportPresentationPage({ projectId, cursor: first.nextCursor, limit: 1 }),
     /source changed/u);
-  await assert.rejects(controller.exportPresentationLayoutChunk({
-    scope: "project", projectId, sourceRevision: layout.sourceRevision, offset: 0,
-  }), /source changed/u);
 });
 
 test("presentation manifest identifies missing sources without exporting every empty project", async context => {
@@ -2105,41 +1947,6 @@ test("presentation manifest identifies missing sources without exporting every e
     { kind: "draft", projectId, sourceId: draftId },
   ]);
   assert.equal(manifest.nextCursor, null);
-});
-
-test("legacy layout export keeps each socket response bounded across a large retained order", async context => {
-  const persistence = new MemoryThreadStatePersistence();
-  const projectId = fixtureProjectIds.project;
-  persistence.projects.set(projectId, {
-    version: 4, records: [], drafts: [],
-    displayOrder: { pinned: Object.fromEntries(Array.from({ length: 2_500 }, (_, index) =>
-      [`codex:thread-${index}`, { above: [], below: [] }])) },
-  });
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
-    reconcileProject: async () => [], storageRoot: "presentation-large-layout", threadStateStore: persistence,
-  });
-  context.after(() => controller.dispose());
-  const chunks: Buffer[] = [];
-  let revision: number | null = null;
-  let offset = 0;
-  for (;;) {
-    const result = await controller.exportPresentationLayoutChunk({
-      scope: "project", projectId, sourceRevision: revision, offset,
-    });
-    revision = result.sourceRevision;
-    const bytes = Buffer.from(result.bytes, "base64");
-    assert.ok(bytes.length <= 64 * 1024);
-    chunks.push(bytes);
-    if (result.nextOffset === null) {
-      assert.equal(Buffer.concat(chunks).length, result.totalBytes);
-      break;
-    }
-    offset = result.nextOffset;
-  }
-  assert.ok(chunks.length > 1);
-  const decoded = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  assert.equal(Object.keys(decoded.displayOrder.pinned).length, 2_500);
 });
 
 test("draft targets are provider-agnostic and adopt any addressed provider", async () => {
@@ -3049,7 +2856,7 @@ test("provider admission keeps a first-message display fallback separate from ex
   }
 });
 
-test("successful user input keeps pins and questionnaire turn order", async () => {
+test("successful user input keeps questionnaire turn order", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-user-input-wake-");
   const root = temporary.path;
   let discovered = false;
@@ -3059,7 +2866,7 @@ test("successful user input keeps pins and questionnaire turn order", async () =
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureThreadIds["accepted"] },
     lifecycle: { agent: { agentStatus: "working", turnId: fixtureTurnIds["old-turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
-    metadata: { archived: false, pinned: true, snoozed: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
     orderAt: 10,
     title: "Accepted",
   };
@@ -3090,7 +2897,6 @@ test("successful user input keeps pins and questionnaire turn order", async () =
   await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.accepted,
     { kind: "started", turnId: fixtureTurnIds["new-turn"] }, "Accepted");
   let entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "accepted");
-  assert.equal(entry?.entryKind === "thread" ? entry.metadata.pinned : null, true);
   assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 30);
 
   now = 40;
@@ -3558,45 +3364,6 @@ test("proper questionnaires and late-response history survive controller restart
   await temporary.dispose();
 });
 
-test("retained legacy folders reconcile members that leave their section", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-folders-");
-  const root = temporary.path;
-  const pinned = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
-    activityAt: orderAt,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    metadata: { archived: false, pinned: true, snoozed: false },
-    orderAt,
-    title: threadId,
-  });
-  const providerEntries: WorkbenchThreadSidebarEntry[] = [pinned("a", 2), pinned("b", 1)];
-  const createController = () => new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
-    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      await acceptProviderSnapshot("codex", providerEntries, { complete: true });
-      return [];
-    },
-    storageRoot: root,
-  });
-  const folderId = "00000000-0000-4000-8000-000000000030";
-  await seedProjectState(root, "project", {
-    version: 4, drafts: [], records: providerEntries,
-    displayOrder: { folders: [{ folderId, section: "pinned", title: "Important", threadKeys: ["codex:a", "codex:b"] }] },
-  });
-  const reopened = createController();
-  await reopened.readProject(fixtureProjectIds["project"]);
-  const restoredFolder = (await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder?.folders?.[0];
-  assert.equal(restoredFolder?.title, "Important");
-  assert.deepEqual(restoredFolder?.threadKeys, ["codex:a", "codex:b"]);
-  await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("b") }, method: "workbench/thread-state/pin/set", pinned: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
-  assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder?.folders?.[0]?.threadKeys, ["codex:a"]);
-  await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("a") }, method: "workbench/thread-state/pin/set", pinned: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
-  assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder, {});
-  await reopened.dispose();
-  await temporary.dispose();
-});
-
 test("a held questionnaire never leaves the thread in the automatic recovery state", async () => {
   const question = {
     itemId: "3d9b1f6a-2f2e-4a4e-9f2d-6b1c0f5a7c11",
@@ -3997,7 +3764,7 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureThreadIds["terminal"] },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
-    metadata: { archived: false, pinned: true, snoozed: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
     title: "Terminal",
   };
   const controller = new WorkbenchThreadStateController({
@@ -4028,7 +3795,6 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
   assert.equal(new Set(responses.map((response) => (response as { result?: { revision?: number } }).result?.revision ?? null)).size, 1);
   const restored = (await controller.getSnapshot(fixtureProjectIds["project"])).entries[0];
   assert.equal(restored?.entryKind === "thread" ? restored.lifecycle.settled : null, false);
-  assert.equal(restored?.entryKind === "thread" ? restored.metadata.pinned : null, true);
   await controller.refresh(fixtureProjectIds["project"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
   const reconciled = (await controller.getSnapshot(fixtureProjectIds["project"])).entries[0];
@@ -4050,7 +3816,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureThreadIds["terminal"] },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
-    metadata: { archived: false, pinned: true, snoozed: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
     title: "Terminal",
   };
   const pending: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {

@@ -13,8 +13,7 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkbenchProjectedThreadRow } from "workbench-shared/workbench/project/workbench-project-projection";
 import type {
-  WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot,
-  WorkbenchProjectThreadSummaries, WorkbenchThreadDraft,
+  WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft,
 } from "workbench-shared/workbench/thread/thread-state";
 import type {
   WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
@@ -50,9 +49,6 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   private readonly home: WorkbenchHomeThreadDisplayOrderSnapshot = {
     displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder",
   };
-  private readonly pinned: WorkbenchPinnedThreadLayoutSnapshot = {
-    displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout",
-  };
 
   constructor(private readonly options: ThreadSidebarClientOptions) {}
 
@@ -67,7 +63,6 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   getProjectThreadSummaries = () => this.summaries;
   getHomeThreadDisplayOrder = () => this.home;
   getHomeThreadDisplayOrderSupported = () => false;
-  getPinnedThreadLayout = () => this.pinned;
   getDraft = (projectId: ProjectId, draftId: DraftId): WorkbenchThreadDraft | null => {
     const entry = this.getProjectSnapshot(projectId)?.entries.find(item =>
       item.entryKind === "draft" && item.draft.draftId === draftId);

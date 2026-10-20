@@ -204,7 +204,6 @@ function WorkbenchThreadSidebarActionsProvider({
     const thread = !source && entry.entryKind === "thread" && ownerProjectId === projectId
       ? runtime?.getSnapshot().threads.find(candidate => candidate.id === entry.identity.threadId) ?? null : null;
     const threadFolders = sidebarStore?.getListing?.().folders;
-    const pinnedThreadLayout = sidebarStore?.getPinnedThreadLayout?.() ?? null;
     const target = targetForEntry(entry);
     const draftId = target.kind === "draft" ? target.draftId : null;
     // Its send is in flight: the app no longer lets the draft change, and its thread takes over once accepted.
@@ -258,9 +257,7 @@ function WorkbenchThreadSidebarActionsProvider({
       order?.folders?.find(item => item.threadKeys.includes(displayKey)) ?? null;
     const folder = appOrder
       ? folderIn(appOrder)
-      : useProjectFolder
-        ? folderIn(ownerSidebar?.displayOrder)
-        : folderIn(pinnedThreadLayout?.displayOrder);
+      : useProjectFolder ? folderIn(ownerSidebar?.displayOrder) : null;
     if (entry.entryKind !== "subagent" && (group === "pinned" || group === "snoozed" || group === "settled") && !folder) {
       items.push({
         icon: <FolderInputIcon size={16} />,
@@ -304,16 +301,18 @@ function WorkbenchThreadSidebarActionsProvider({
     }
 
     const snoozed = group === "snoozed";
+    // Settled threads keep a stored pin only for restoring; they offer no pin control.
+    const pinControl = group === "settled" || group === "archived" ? [] : [{
+      checked: pinned,
+      disabled: launching,
+      icon: <PinIcon size={16} />,
+      id: "pin",
+      label: pinned ? "Unpin thread" : "Pin thread",
+      onSelect: () => mutateEntry(entry, ownerProjectId, "pin/set", !pinned, source),
+    }];
     items.push({ id: "priority-separator", kind: "separator" }, {
       closeOnSelect: false,
-      controls: [{
-        checked: pinned,
-        disabled: group === "archived" || launching,
-        icon: <PinIcon size={16} />,
-        id: "pin",
-        label: pinned ? "Unpin thread" : "Pin thread",
-        onSelect: () => mutateEntry(entry, ownerProjectId, "pin/set", !pinned, source),
-      }, {
+      controls: [...pinControl, {
         checked: snoozed,
         disabled: group === "archived" || launching || (!snoozed && !isWorkbenchThreadSnoozeAvailable(entry)),
         icon: <SnoozedThreadIcon size={16} />,

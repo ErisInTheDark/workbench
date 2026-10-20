@@ -14,7 +14,7 @@ import type { WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
-import WorkbenchThreadSnoozeController from "../state/WorkbenchThreadSnoozeController";
+import WorkbenchThreadPlacementController from "../state/WorkbenchThreadPlacementController";
 import WorkbenchWorkspaceRequestController from "./WorkbenchWorkspaceRequestController";
 import { WorkspaceCommandSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
@@ -365,7 +365,7 @@ async function fixture(
   const warnings: string[] = [];
   const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn: message => warnings.push(message) });
   const threads = new WorkbenchWorkspaceThreads({ sources, presentation, warn: message => warnings.push(message) });
-  const snoozes = new WorkbenchThreadSnoozeController({ sources, presentation, threads, warn: message => warnings.push(message) });
+  const placements = new WorkbenchThreadPlacementController({ sources, presentation, threads, warn: message => warnings.push(message) });
   const changes = new Set<() => void>();
   const updates: WorkspaceObservation[] = [];
   const deltas: WorkspaceObservationDelta[] = [];
@@ -381,7 +381,7 @@ async function fixture(
   const owner = new WorkbenchWorkspaceRequestController({
     workspace, presentation,
     threads: owners ? Object.assign(Object.create(threads) as typeof threads, owners) : threads,
-    snoozes,
+    placements,
     sources: requestSources,
     network: { read: () => ({ kind: "network", phase: "pending", failure: null, data: null }), subscribe: () => () => {} },
     runtime: { read: () => null, subscribe: () => () => {} },
@@ -407,7 +407,7 @@ async function fixture(
     schedule,
   });
   context.after(async () => {
-    owner.dispose(); snoozes.dispose(); threads.dispose(); workspace.dispose(); sources.dispose();
+    owner.dispose(); placements.dispose(); threads.dispose(); workspace.dispose(); sources.dispose();
     presentation.close(); await repository.close(); await temporary.dispose();
   });
   return { owner, workspace, updates, deltas, providerEvents, transcriptEvents, warnings, changes, sources: requestSources,

@@ -64,7 +64,7 @@ test("agent completion intent round-trips without completing working or pending-
   } finally { database.close(); }
 });
 
-test("navigation summaries preserve lifecycle counts and pinned title projection", () => {
+test("navigation summaries preserve lifecycle counts", () => {
   const database = openDatabase();
   try {
     const [pinned, stopped, working] = seedIdentities(database, "project", "pinned", "stopped", "working");
@@ -75,7 +75,7 @@ test("navigation summaries preserve lifecycle counts and pinned title projection
       lifecycle: index === 2
         ? { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working" }, settled: false }
         : { kind: "stopped", reason: "userMarkedStopped", settled: false },
-      metadata: { archived: false, pinned: index === 0, snoozed: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
       profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
       titleHistory: [{ title: `Renamed ${index}`, usedAt: 20 }, { title: `Previous ${index}`, usedAt: 10 }],
     }));
@@ -85,12 +85,12 @@ test("navigation summaries preserve lifecycle counts and pinned title projection
       const projected = projectWorkbenchThreadStateEntry(record);
       return projected ? [projected] : [];
     });
-    const expected = createWorkbenchProjectThreadSummary(testProjectIds.project, entries, 0, full.displayOrder);
+    const expected = createWorkbenchProjectThreadSummary(testProjectIds.project, entries, 0);
     const navigation = repository.readNavigationSummary(testProjectIds.project);
     assert.deepEqual(navigation, expected);
     assert.equal(navigation.counts.working, 1);
     assert.equal(navigation.counts.stopped, 2);
-    assert.equal(navigation.pinnedThreads[0]?.title, "Renamed 0");
+    assert.equal(navigation.unsettledThreads.find(entry => entry.identity.threadId === pinned)?.title, "Renamed 0");
   } finally { database.close(); }
 });
 
@@ -300,13 +300,12 @@ test("relational batches roll back invalid references and preserve valid draft p
         { owner: projectOwner, revision: 1, displayOrder: projectOrder },
         { owner: pinnedOwner, revision: 1, displayOrder: pinnedOrder },
       ],
-      pinnedImports: [fixtureIdentityValues.ProjectId["project"]],
     });
     assert.deepEqual(repository.readDrafts(fixtureIdentityValues.ProjectId["project"]), [{ draft, pinned: true, snoozed: false }]);
     const record: WorkbenchThreadStateRecord = {
       entryKind: "thread", identity: { harness: "codex", threadId: threadId! }, title: "promoted", activityAt: 1,
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-      metadata: { archived: false, pinned: true, snoozed: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
       profile: { kind: "custom", settings: draft.composerSettings },
       providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
     };
@@ -342,7 +341,6 @@ test("relational batches roll back invalid references and preserve valid draft p
     repository.commit({ records: [skipping], projectProfiles: [{ projectId: draft.projectId, profile: { ...skipping.profile, approvalMode: "auto" } }] });
     assert.equal(repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]?.profile?.approvalMode, "skip");
     assert.equal(repository.readProjectProfile(draft.projectId)?.approvalMode, "auto");
-    assert.deepEqual(repository.readPinnedImports(), [fixtureIdentityValues.ProjectId.project]);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }
 });
@@ -521,8 +519,8 @@ test("live reads retain parent-status inputs without decoding settled history", 
   const database = openDatabase();
   try {
     database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(fixtureIdentityValues.ProjectId.other);
-    const [live, settled, archived, pinned, child] = seedIdentities(database, "project", "live", "settled", "archived", "pinned", "child");
-    for (const [index, threadId] of [live!, settled!, archived!, pinned!, child!].entries()) {
+    const [live, settled, archived, later, child] = seedIdentities(database, "project", "live", "settled", "archived", "later", "child");
+    for (const [index, threadId] of [live!, settled!, archived!, later!, child!].entries()) {
       const isSettled = threadId !== live && threadId !== child;
       database.prepare(`
         INSERT INTO workbench_thread_states(thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
@@ -541,9 +539,9 @@ test("live reads retain parent-status inputs without decoding settled history", 
         `).run(threadId, live);
       } else {
         database.prepare(`
-          INSERT INTO workbench_top_level_thread_states(thread_id, thread_kind, archived, pinned)
-          VALUES (?, 'topLevel', ?, ?)
-        `).run(threadId, Number(threadId === archived), Number(threadId === pinned));
+          INSERT INTO workbench_top_level_thread_states(thread_id, thread_kind, archived)
+          VALUES (?, 'topLevel', ?)
+        `).run(threadId, Number(threadId === archived));
       }
     }
     database.prepare(`
@@ -557,7 +555,7 @@ test("live reads retain parent-status inputs without decoding settled history", 
     assert.equal(repository.readNextArchiveEligibility(), 2);
     assert.deepEqual(repository.readArchiveEligible(2).map(({ record }) => record.identity.threadId), [settled]);
     database.prepare("UPDATE workbench_thread_retention SET settled_at = 10 WHERE thread_id = ?").run(settled);
-    assert.equal(repository.readNextArchiveEligibility(), 10, "settling after the last item restarts the archive clock");
+    assert.equal(repository.readNextArchiveEligibility(), 4, "settling after the last item restarts the archive clock, so a later settled thread comes due first");
     assert.deepEqual(repository.readArchiveEligible(2), []);
     database.prepare("UPDATE workbench_thread_retention SET settled_at = 2 WHERE thread_id = ?").run(settled);
     assert.equal(repository.readProjectActivity(fixtureIdentityValues.ProjectId["project"]), 5);

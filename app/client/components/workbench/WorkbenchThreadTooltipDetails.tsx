@@ -48,9 +48,8 @@ export default function WorkbenchThreadTooltipDetails({
   const summaries = useProjects.threads();
   const projectId = useMemo(() => sidebars.projects.find(({ entries }) => entries.some(candidate => (
     candidate.entryKind !== "draft" && candidate.identity.harness === harness && candidate.identity.threadId === threadId
-  )))?.projectId ?? summaries.projects.find(({ pinnedThreads, unsettledThreads }) => (
-    pinnedThreads.some(candidate => candidate.entryKind === "thread" && candidate.identity.harness === harness && candidate.identity.threadId === threadId)
-    || unsettledThreads.some(candidate => candidate.identity.harness === harness && candidate.identity.threadId === threadId)
+  )))?.projectId ?? summaries.projects.find(({ unsettledThreads }) => (
+    unsettledThreads.some(candidate => candidate.identity.harness === harness && candidate.identity.threadId === threadId)
   ))?.projectId ?? fallbackProjectId, [fallbackProjectId, harness, sidebars, summaries, threadId]);
   const questionnaire = useWorkbenchQuestionnaire(projectId, parentThreadId
     ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId }, onQuestionnaireError);
@@ -64,11 +63,7 @@ export default function WorkbenchThreadTooltipDetails({
   const ownerArcEntry = useThread.arc(threadId, harness);
   const planIntersections = useThread.claimIntersections(threadId, harness, "plan");
   const stashedIntersections = useThread.claimIntersections(threadId, harness, "stashed");
-  const pinnedEntry = summaries.projects.find(project => project.projectId === projectId)?.pinnedThreads.find(entry => (
-    entry.entryKind === "thread" && entry.identity.harness === harness && entry.identity.threadId === threadId
-  ));
-  const entry = questionnaire.thread.entry ?? ownerArcEntry ?? sidebarEntry
-    ?? (pinnedEntry?.entryKind === "thread" ? pinnedEntry : null);
+  const entry = questionnaire.thread.entry ?? ownerArcEntry ?? sidebarEntry;
   const hasStash = Boolean((ownerArcEntry?.gitArc ?? entry?.gitArc)?.stashedPaths?.length);
   const hasLiveClaims = Boolean((ownerArcEntry?.gitArc ?? entry?.gitArc)?.claimedPaths.length);
   const pendingRequest = questionnaire.request;

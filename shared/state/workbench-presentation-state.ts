@@ -2,8 +2,8 @@
  * Exports:
  * - PresentationDraftReferenceSchema/PresentationDraftReference: a composer reference a new-thread draft keeps.
  * - PresentationDraftInputSchema/PresentationDraftInput: app-owned unsent content and one concrete target.
- * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents, incl. hiding project folders and thread snoozes.
- * - PresentationSnapshotSchema/PresentationSnapshot: app drafts, layout, hidden folders, thread snoozes and compact accepted-launch history.
+ * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents, incl. hiding project folders, thread snoozes and pins.
+ * - PresentationSnapshotSchema/PresentationSnapshot: app drafts, layout, hidden folders, thread snoozes and pins, and compact accepted-launch history.
  * - WorkbenchPresentationRevisionEventSchema: compact app presentation change notice.
  * - WorkbenchPresentationImportStatusSchema/WorkbenchPresentationImportStatus: bounded server import progress.
  */
@@ -112,6 +112,8 @@ export const PresentationSnapshotSchema = z.object({
   }).strict()).optional(),
   /** App-owned thread snoozes; daemons never decide snooze placement. */
   threadSnoozes: z.array(ThreadSnoozeSchema).optional(),
+  /** App-owned thread pins; daemons never see them. */
+  threadPins: z.array(WorkbenchThreadIdSchema).optional(),
 }).strict();
 export type PresentationSnapshot = z.infer<typeof PresentationSnapshotSchema>;
 export const PresentationMutationSchema = z.discriminatedUnion("kind", [
@@ -155,6 +157,10 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
     kind: z.literal("setThreadSnoozes"),
     put: z.array(ThreadSnoozeSchema).max(500), wake: z.array(WorkbenchThreadIdSchema).max(500),
   }).strict(),
+  z.object({
+    kind: z.literal("setThreadPins"),
+    pin: z.array(WorkbenchThreadIdSchema).max(500), unpin: z.array(WorkbenchThreadIdSchema).max(500),
+  }).strict(),
   layoutInput.extend({ kind: z.literal("saveLayout"), expectedRevision: revision }).strict(),
   z.object({
     kind: z.literal("saveLayouts"), expectedRevision: revision,
@@ -171,16 +177,6 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("finishImportDraft"), daemonId: DaemonIdSchema, sourceId: z.string().min(1),
     draftId: uuid, sourceRevision: revision,
-  }).strict(),
-  z.object({
-    kind: z.literal("importLayout"), daemonId: DaemonIdSchema, sourceId: z.string().min(1),
-    sourceRevision: revision, scope: layoutScope,
-    logicalProjectId: LogicalProjectIdSchema.nullable(),
-    folders: z.array(folder.extend({ sourceId: z.string().min(1) })),
-    members: z.array(member.extend({
-      sourceId: z.string().min(1), folderId: z.string().min(1).nullable(),
-      draftId: z.string().min(1).nullable(),
-    })),
   }).strict(),
 ]);
 export type PresentationMutation = z.infer<typeof PresentationMutationSchema>;

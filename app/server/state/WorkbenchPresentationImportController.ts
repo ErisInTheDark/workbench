@@ -1,21 +1,12 @@
 /*
  * Default export:
- * - WorkbenchPresentationImportController: reconcile attached-daemon legacy presentation once per app connection.
+ * - WorkbenchPresentationImportController: import attached-daemon legacy drafts once per app connection.
  */
 import { createHash } from "node:crypto";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import { WorkbenchHomeThreadDisplayOrderSchema } from "workbench-shared/workbench/thread/thread-state";
-import {
-  projectSidebarRowSnapshot, type WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
-} from "workbench-shared/workbench/thread/thread-sidebar-row";
-import { WorkbenchThreadDisplayOrderSchema } from "workbench-shared/workbench/thread/thread-display-order";
-import type { WorkbenchPresentationManifestPage } from "workbench-shared/workbench/thread/thread-presentation-export";
 import type {
   PresentationMutation, PresentationSnapshot, WorkbenchPresentationImportStatus,
 } from "workbench-shared/state/workbench-presentation-state";
-import {
-  homeLegacyPresentationLayout, pinnedLegacyPresentationLayout, projectLegacyPresentationLayout,
-} from "workbench-shared/state/workbench-presentation-legacy-layout";
 import { DaemonIdSchema, type DaemonId, type DraftId, type ProjectId } from "workbench-shared/workbench/identity";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
@@ -23,7 +14,6 @@ import type WorkbenchDaemonSource from "../workspace/WorkbenchDaemonSource";
 import type { DaemonWorkspaceQuery, DaemonWorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WorkbenchPresentationController from "./WorkbenchPresentationController";
 
-type Source = WorkbenchPresentationManifestPage["sources"][number];
 const ATTACHMENT_CHUNK_BYTES = 1024 * 1024;
 const MAX_ATTACHMENT_CHUNKS = 1024;
 const expectedImportFailures = new Set([
@@ -33,11 +23,6 @@ const expectedImportFailures = new Set([
   "Legacy image transfer did not advance.",
   "Legacy image content did not match its source.",
   "Legacy image exceeds the app attachment limit.",
-  "Legacy layout changed during transfer.",
-  "Legacy layout length changed during transfer.",
-  "Legacy layout transfer did not advance.",
-  "Legacy layout transfer is incomplete.",
-  "Legacy project layout source is unavailable.",
 ]);
 type Owner = Pick<WorkbenchPresentationController,
   "read" | "readImportReceipts" | "mutate" | "mutateImportBatch" | "putAttachmentChunk" | "completeAttachment">;
@@ -158,57 +143,33 @@ export default class WorkbenchPresentationImportController {
       });
       const snapshot = this.options.presentation.read();
       let cursor: string | null = null;
-      let sidebars: WorkbenchProjectThreadSidebars | null = null;
       do {
         const page = await daemon.presentationExport.manifest({ cursor, limit: 200 });
         this.assertCurrent(target.daemonId, target.generation);
         scanned += page.sources.length;
-        const receiptSources = page.sources.map(source => ({
-          kind: source.kind === "draft" ? "draft" as const : "layout" as const,
-          sourceId: source.sourceId,
-        }));
-        const present = this.options.presentation.readImportReceipts(target.daemonId, receiptSources).present;
-        const accepted = new Set(present.map(source => `${source.kind}:${source.sourceId}`));
-        const missing = page.sources.filter((source, index) =>
-          !accepted.has(`${receiptSources[index]!.kind}:${source.sourceId}`));
+        const present = this.options.presentation.readImportReceipts(target.daemonId,
+          page.sources.map(source => ({ kind: "draft" as const, sourceId: source.sourceId }))).present;
+        const accepted = new Set(present.map(source => source.sourceId));
+        const missing = page.sources.filter(source => !accepted.has(source.sourceId));
         skipped += page.sources.length - missing.length;
         for (let index = 0; index < missing.length;) {
           this.cancellation.signal.throwIfAborted();
           const source = missing[index]!;
-          if (source.kind === "draft") {
-            const draftIds: DraftId[] = [];
-            while (index < missing.length && draftIds.length < 10) {
-              const candidate = missing[index];
-              if (candidate?.kind !== "draft" || candidate.projectId !== source.projectId) break;
-              draftIds.push(candidate.sourceId);
-              index++;
-            }
-            try {
-              const outcome = await this.importDrafts(target.daemonId, source.projectId, draftIds, daemon, snapshot);
-              imported += outcome.imported;
-              failed += outcome.failed;
-            } catch (error) {
-              this.assertActive(target.daemonId);
-              failed += draftIds.length;
-              this.warn("drafts", error);
-            }
-            continue;
+          const draftIds: DraftId[] = [];
+          while (index < missing.length && draftIds.length < 10) {
+            const candidate = missing[index];
+            if (candidate?.projectId !== source.projectId) break;
+            draftIds.push(candidate.sourceId);
+            index++;
           }
-          index++;
           try {
-            if (!sidebars) {
-              const result = await this.source!.read({
-                kind: "projectThreads", projectIds: locations.data.map(item => item.project.id),
-              });
-              if (result.kind !== "projectThreads") throw new Error("Attached project rows are unavailable.");
-              sidebars = { projects: result.projects.flatMap(project => project.sidebar ? [projectSidebarRowSnapshot(project.sidebar)] : []) };
-            }
-            await this.importLayout(target.daemonId, source, daemon, snapshot, sidebars);
-            imported++;
+            const outcome = await this.importDrafts(target.daemonId, source.projectId, draftIds, daemon, snapshot);
+            imported += outcome.imported;
+            failed += outcome.failed;
           } catch (error) {
             this.assertActive(target.daemonId);
-            failed++;
-            this.warn("layout", error);
+            failed += draftIds.length;
+            this.warn("drafts", error);
           }
         }
         this.publishStatus({ phase: "running", scanned, imported, failed });
@@ -382,59 +343,6 @@ export default class WorkbenchPresentationImportController {
     } while (cursor !== null);
     flush();
     return { imported, failed };
-  }
-
-  private async importLayout(
-    daemonId: DaemonId, source: Exclude<Source, { kind: "draft" }>, daemon: WorkbenchDaemonClient,
-    snapshot: PresentationSnapshot, sidebars: WorkbenchProjectThreadSidebars,
-  ) {
-    const scope = source.kind === "projectLayout"
-      ? { scope: "project" as const, projectId: source.projectId }
-      : { scope: source.kind === "homeLayout" ? "home" as const : "pinned" as const };
-    const chunks: Buffer[] = [];
-    let offset = 0;
-    let revision: number | null = null;
-    let totalBytes: number | null = null;
-    do {
-      const part = await daemon.presentationExport.layout({ ...scope, sourceRevision: revision, offset });
-      this.assertActive(daemonId);
-      if (revision !== null && revision !== part.sourceRevision) throw new Error("Legacy layout changed during transfer.");
-      if (totalBytes !== null && totalBytes !== part.totalBytes) throw new Error("Legacy layout length changed during transfer.");
-      revision = part.sourceRevision;
-      totalBytes = part.totalBytes;
-      chunks.push(Buffer.from(part.bytes, "base64"));
-      if (part.nextOffset !== null && part.nextOffset <= offset) throw new Error("Legacy layout transfer did not advance.");
-      offset = part.nextOffset ?? -1;
-    } while (offset >= 0);
-    const bytes = Buffer.concat(chunks);
-    if (bytes.length !== totalBytes) throw new Error("Legacy layout transfer is incomplete.");
-    const value: unknown = JSON.parse(bytes.toString("utf8"));
-    const mappings = snapshot.sourceMappings;
-    let mutation: Extract<PresentationMutation, { kind: "importLayout" }>;
-    if (source.kind === "projectLayout") {
-      const logicalProjectId = snapshot.locations.find(location =>
-        location.target.daemonId === daemonId && location.target.projectId === source.projectId)?.logicalProjectId;
-      const sidebar = sidebars.projects.find(item => item.projectId === source.projectId);
-      if (!logicalProjectId || !sidebar) throw new Error("Legacy project layout source is unavailable.");
-      const layout = WorkbenchThreadDisplayOrderSchema.parse(
-        (value as { displayOrder?: unknown }).displayOrder);
-      mutation = projectLegacyPresentationLayout({
-        daemonId, projectId: source.projectId, logicalProjectId, sidebar, displayOrder: layout,
-        sourceRevision: revision ?? 0, mappings,
-      });
-    } else if (source.kind === "homeLayout") {
-      mutation = homeLegacyPresentationLayout({
-        daemonId, sidebars, displayOrder: WorkbenchHomeThreadDisplayOrderSchema.parse(value),
-        sourceRevision: revision ?? 0, mappings,
-      });
-    } else {
-      mutation = pinnedLegacyPresentationLayout({
-        daemonId, sidebars, displayOrder: WorkbenchThreadDisplayOrderSchema.parse(value),
-        sourceRevision: revision ?? 0, mappings,
-      });
-    }
-    this.assertActive(daemonId);
-    this.options.presentation.mutateImportBatch([mutation]);
   }
 
   private warn(kind: string, error: unknown) {

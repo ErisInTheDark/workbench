@@ -34,8 +34,11 @@ export interface WorkbenchSidebarDisplayState {
 
 export interface WorkbenchSidebarPreferencesValue {
   readonly preferences: WorkbenchSidebarPreferences & WorkbenchSidebarDisplayState;
+  /** Home folder keys of open folders, whichever project is viewed. */
+  readonly openFolderKeys: ReadonlySet<string>;
   setDisclosureOpen(key: WorkbenchSidebarDisclosurePreferenceKey, open: boolean): void;
-  setFolderOpen(scope: "pinned" | "threads", folderId: string, open: boolean): void;
+  /** `projectId` is the folder's own logical project. */
+  setFolderOpen(projectId: string, folderId: string, open: boolean): void;
   setProjectTimeGroupCount(count: number): void;
   setReloadNecessaryOpen(open: boolean): void;
   setSettledThreadItemLimit(limit: number): void;

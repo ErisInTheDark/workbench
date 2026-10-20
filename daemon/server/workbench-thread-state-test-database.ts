@@ -120,8 +120,6 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
         repository.writeProject(projectId, document, titleHistories);
       })();
     },
-    readThreadStateGlobal: async id => repository.readGlobal(id),
-    writeThreadStateGlobal: async document => { repository.writeGlobal(document); },
     readThreadStateArchiveDeadline: async () => repository.readNextArchiveEligibility(),
     readThreadStateArchiveEligible: async before => repository.readArchiveEligible(before),
     commitThreadState: async changes => {
@@ -158,15 +156,6 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
         drafts: project.drafts.map(({ pinned, snoozed, ...draft }) => ({ draft, pinned, snoozed })),
         projectProfiles: [{ projectId: ownerProjectId, profile: project.newThreadProfile }],
         layouts: [{ owner: { kind: "project", projectId: ownerProjectId }, revision: 0, displayOrder: project.displayOrder }],
-      });
-    },
-    async seedGlobal(id: "pinnedLayout" | "homeDisplayOrder", source: { displayOrder?: object; revision?: number; importedProjectIds?: string[] }) {
-      await database.commitThreadState({
-        layouts: [{
-          owner: { kind: id === "pinnedLayout" ? "pinned" : "home" }, revision: source.revision ?? 0,
-          displayOrder: normalizeThreadDisplayLayout(source.displayOrder),
-        }],
-        ...(source.importedProjectIds ? { pinnedImports: source.importedProjectIds.map(id => ProjectIdSchema.parse(id)) } : {}),
       });
     },
   };

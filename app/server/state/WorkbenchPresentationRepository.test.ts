@@ -576,44 +576,11 @@ test("incomplete imported attachments stay hidden and receipt blocks resurrectio
       sourceId: "old-draft", sourceRevision: 3, draftId });
     const imported = repository.read().drafts[0]!;
     assert.equal(imported.attachments[0]?.contentHash, contentHash);
-    const folderId = "e43d2705-6e45-4566-82f1-e08ca4b4e8bc";
-    const layout = {
-      kind: "importLayout" as const, daemonId: first, sourceId: "project-layout",
-      sourceRevision: 4, scope: "project" as const, logicalProjectId,
-      folders: [{ id: folderId, scope: "project" as const, logicalProjectId,
-        sourceId: "legacy-folder", title: "saved folder", position: 0 }],
-      members: [{ id: "7c836900-c401-450f-a35d-c450c2a765d9",
-        sourceId: "legacy-member", scope: "project" as const, logicalProjectId,
-        folderId: "legacy-folder", kind: "draft" as const,
-        draftId: "old-draft", thread: null, position: 0 }],
-    };
-    repository.mutate(layout);
-    repository.mutate(layout);
-    assert.deepEqual(repository.readImportReceipts(first, [
-      { kind: "draft", sourceId: "old-draft" },
-      { kind: "layout", sourceId: "project-layout" },
-      { kind: "layout", sourceId: "home" },
-    ]), [
-      { kind: "draft", sourceId: "old-draft" },
-      { kind: "layout", sourceId: "project-layout" },
-    ]);
-    const homeLayout = { ...layout, sourceId: "home", scope: "home" as const,
-      logicalProjectId: null, folders: [], members: [] };
-    assert.throws(() => repository.mutateImportBatch([
-      homeLayout,
-      { ...homeLayout, sourceId: "invalid", scope: "project" as const },
-    ]), /belongs to another scope/u);
-    assert.deepEqual(repository.readImportReceipts(first, [{ kind: "layout", sourceId: "home" }]), [],
-      "a later invalid item rolls back the whole import batch");
-    assert.deepEqual(repository.mutateImportBatch([homeLayout]), { accepted: true });
-    assert.deepEqual(repository.readImportReceipts(first, [{ kind: "layout", sourceId: "home" }]),
-      [{ kind: "layout", sourceId: "home" }]);
-    assert.equal(repository.read().folders.length, 1);
-    assert.equal(repository.read().members[0]?.draftId, draftId);
+    assert.deepEqual(repository.readImportReceipts(first, [{ kind: "draft", sourceId: "old-draft" }]),
+      [{ kind: "draft", sourceId: "old-draft" }]);
     repository.mutate({ kind: "deleteDraft", draftId, expectedRevision: imported.revision });
     repository.mutate(staged);
     assert.equal(repository.read().drafts.length, 0);
-    assert.equal(repository.read().members.length, 0);
     repository.mutate({ ...staged, sourceRevision: 5 });
     assert.deepEqual(repository.read().divergences.map(item => ({
       sourceId: item.sourceId, importedRevision: item.importedRevision, latestRevision: item.latestRevision,
@@ -624,7 +591,7 @@ test("incomplete imported attachments stay hidden and receipt blocks resurrectio
   }
 });
 
-test("equal legacy draft and folder ids from two daemons map to independent app owners", async () => {
+test("equal legacy draft ids from two daemons map to independent app owners", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-sources-");
   const root = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
@@ -634,11 +601,8 @@ test("equal legacy draft and folder ids from two daemons map to independent app 
     repository.mutate({ kind: "registerLocations", daemonId: second, hostname: "laptop", catalog: catalog("/laptop/repo") });
     const logicalProjectId = repository.read().projects[0]!.id;
     const targets = [
-      { daemonId: first, draftId, folderId: "f238fe8a-3659-4dc7-8a5f-b3457d0297df",
-        memberId: "92972fbc-e5b3-4723-868d-591c3a45a1b4" },
-      { daemonId: second, draftId: "13505db0-03ed-4961-9c8c-a8b7e12a9748",
-        folderId: "7f59527e-719a-44a0-b0bb-1c900609834a",
-        memberId: "9e00a7ad-bd0f-4635-a3d4-64eed8545a32" },
+      { daemonId: first, draftId },
+      { daemonId: second, draftId: "13505db0-03ed-4961-9c8c-a8b7e12a9748" },
     ] as const;
     for (const item of targets) {
       repository.mutate({
@@ -659,23 +623,12 @@ test("equal legacy draft and folder ids from two daemons map to independent app 
       }
       repository.mutate({ kind: "finishImportDraft", daemonId: item.daemonId,
         sourceId: "same-draft", sourceRevision: 1, draftId: item.draftId });
-      repository.mutate({
-        kind: "importLayout", daemonId: item.daemonId, sourceId: "same-layout",
-        sourceRevision: 1, scope: "project", logicalProjectId,
-        folders: [{ id: item.folderId, sourceId: "same-folder", scope: "project",
-          logicalProjectId, title: "same name", position: 0 }],
-        members: [{ id: item.memberId, sourceId: "same-member", scope: "project",
-          logicalProjectId, folderId: "same-folder", kind: "draft",
-          draftId: "same-draft", thread: null, position: 0 }],
-      });
     }
-    assert.equal(repository.read().folders.length, 2);
-    assert.deepEqual(repository.read().members.map(member => [member.draftId, member.folderId]),
-      targets.map(item => [item.draftId, item.folderId]));
-    assert.equal(repository.read().sourceMappings.length, 6);
+    assert.deepEqual(repository.read().drafts.map(draft => draft.id).sort(), targets.map(item => item.draftId).sort());
+    assert.equal(repository.read().sourceMappings.length, 2);
     await repository.close();
     await repository.start();
-    assert.equal(repository.read().sourceMappings.length, 6);
+    assert.equal(repository.read().sourceMappings.length, 2);
   } finally {
     await repository.close();
     await temporary.dispose();

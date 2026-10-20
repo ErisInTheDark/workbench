@@ -11,6 +11,7 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { projectLogicalGroups, projectLogicalProjects, projectLogicalSummaries } from "workbench-shared/workbench/project/workbench-project-projection";
 import { hasUnarchivedSidebarWork } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController";
+import type WorkbenchThreadPlacementController from "../state/WorkbenchThreadPlacementController";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import type { WorkbenchProjectAlias } from "workbench-shared/types";
@@ -45,6 +46,8 @@ export default class WorkbenchWorkspaceController {
   constructor(private readonly options: {
     sources: WorkbenchDaemonSources;
     presentation: WorkbenchPresentationController;
+    /** Pinned summaries come from the app's own watch on pinned threads. */
+    placements?: Pick<WorkbenchThreadPlacementController, "readPinnedRows" | "subscribe">;
     warn(message: string): void;
     canProject?(): boolean;
   }) {
@@ -57,6 +60,7 @@ export default class WorkbenchWorkspaceController {
     this.unsubscribe.push(
       this.options.sources.subscribe(() => this.refresh()),
       this.options.presentation.subscribe(() => this.refresh()),
+      ...this.options.placements ? [this.options.placements.subscribe(() => this.refresh())] : [],
     );
     this.refresh();
   }
@@ -80,7 +84,8 @@ export default class WorkbenchWorkspaceController {
       const value = this.interests.get(id)?.summaries?.getSnapshot().value;
       if (value?.kind === "summaries") summaries.set(id, { projects: value.projects });
     }
-    return { projects, summaries: Object.fromEntries(projectLogicalSummaries(projects, summaries, this.options.presentation.read())),
+    return { projects, summaries: Object.fromEntries(projectLogicalSummaries(
+      projects, summaries, this.options.presentation.read(), this.options.placements?.readPinnedRows())),
       observedProjects: all.observedProjects.map(project => ({
         ...project, locations: project.locations.filter(location => daemonIds.includes(location.location.daemonId)),
       })).filter(project => project.locations.length),
@@ -272,7 +277,7 @@ export default class WorkbenchWorkspaceController {
     }
     const next: WorkspaceProjects = {
       projects, observedProjects: [...observed.values()],
-      summaries: Object.fromEntries(projectLogicalSummaries(projects, summaries, presentation)),
+      summaries: Object.fromEntries(projectLogicalSummaries(projects, summaries, presentation, this.options.placements?.readPinnedRows())),
       sources: this.options.sources.all().map(source => source.getSnapshot()),
       catalogues: [...this.interests].map(([daemonId, interest]) => {
         const fact = interest.catalogue.getSnapshot();

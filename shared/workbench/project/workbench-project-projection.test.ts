@@ -21,9 +21,8 @@ const remoteId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981
 const collisionId = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
 const localId = LogicalProjectIdSchema.parse("b12f7e1e-81b6-4c30-bdc0-f83475981003");
 
-test("pinned draft summaries use app facts even when retained daemon drafts disagree or the source is offline", () => {
+test("pinned draft summaries use app facts even when the source is offline", () => {
   const draftId = DraftIdSchema.parse("40000000-0000-4000-8000-000000000001");
-  const oldDraftId = DraftIdSchema.parse("40000000-0000-4000-8000-000000000002");
   const location = { daemonId: first, projectId: concrete };
   const snapshot: PresentationSnapshot = {
     revision: 1, daemons: [], projects: [{ id: localId, label: "local", matchKey: "local://C:/repo" }],
@@ -42,11 +41,6 @@ test("pinned draft summaries use app facts even when retained daemon drafts disa
     projectId: concrete, revision: 1, lastThreadUpdateAt: null,
     counts: { working: 0, needsAttention: 0, needsAttentionActive: 0, completed: 0, stopped: 0, proposedCommit: 0 },
     unsettledThreads: [],
-    pinnedThreads: [{
-      entryKind: "draft" as const, draftId: oldDraftId, activityAt: 1, hasAttachments: false,
-      metadata: { archived: false as const, pinned: true as const, snoozed: false as const },
-      status: "draft" as const, title: "retained daemon draft",
-    }],
   }] }]]);
   const entries = projectLogicalSummaries(projects, sources, snapshot).get(localId)!.pinnedThreads;
   assert.equal(entries.length, 1);
@@ -56,6 +50,31 @@ test("pinned draft summaries use app facts even when retained daemon drafts disa
   snapshot.drafts[0]!.phase = "deleted";
   assert.deepEqual(projectLogicalSummaries(projects, sources, snapshot).get(localId)!.pinnedThreads, []);
   assert.deepEqual(projectLogicalGroups(projects, {}, new Map(), snapshot).unarchivedProjectIds, []);
+});
+
+test("pinned thread summaries come from the app's watched rows in the project's own folders, never settled or snoozed ones", () => {
+  const location = { daemonId: first, projectId: concrete };
+  const snapshot: PresentationSnapshot = {
+    revision: 1, daemons: [], projects: [{ id: localId, label: "local", matchKey: "local://C:/repo" }],
+    locations: [{ target: location, logicalProjectId: localId, identityKey: "local://C:/repo", name: "repo", rootPath: "C:/repo" }],
+    defaults: [], folders: [], members: [], divergences: [], sourceMappings: [], drafts: [],
+  };
+  const projects = projectLogicalProjects(snapshot, new Map());
+  const row = (threadId: string, lifecycle: WorkbenchThreadLifecycle, snoozed = false): WorkbenchThreadSidebarEntry => ({
+    entryKind: "thread", title: threadId, activityAt: 1, lifecycle,
+    identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse(threadId) },
+    metadata: { archived: false, pinned: true, snoozed },
+  });
+  const completed: WorkbenchThreadLifecycle = { kind: "completed", reason: "providerInactive", settled: false };
+  const pinnedRows = new Map([
+    ["kept", { location, row: row("kept", completed) }],
+    ["settled", { location, row: row("settled", { ...completed, settled: true }) }],
+    ["snoozed", { location, row: row("snoozed", completed, true) }],
+    ["elsewhere", { location: { daemonId: second, projectId: concrete }, row: row("elsewhere", completed) }],
+  ]);
+  const pinned = projectLogicalSummaries(projects, new Map(), snapshot, pinnedRows).get(localId)!.pinnedThreads;
+  assert.deepEqual(pinned.map(item => item.entry.entryKind === "thread" ? item.entry.identity.threadId : null), ["kept"]);
+  assert.equal(pinned[0]?.entry.entryKind === "thread" && pinned[0].entry.status, "completed");
 });
 
 function catalog(rootPath: string): WorkbenchProjectOption {
@@ -98,7 +117,6 @@ test("remote identity has one row, collisions show hosts, and unavailable locati
       projectId: concrete, revision: 1, lastThreadUpdateAt: working,
       counts: { completed: 0, needsAttention: 0, needsAttentionActive: 0,
         proposedCommit: 0, stopped: 0, working },
-      pinnedThreads: [],
       unsettledThreads: [{
         activityAt: working, identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse(threadId) },
         status: "working" as const, title: threadId,
@@ -150,7 +168,7 @@ test("hidden registered and observed folders leave every projection and only rem
   const working = (threadId: string) => ({ projects: [{
     projectId: concrete, revision: 1, lastThreadUpdateAt: 1,
     counts: { completed: 0, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 0, working: 1 },
-    pinnedThreads: [], unsettledThreads: [{ activityAt: 1, status: "working" as const, title: threadId,
+    unsettledThreads: [{ activityAt: 1, status: "working" as const, title: threadId,
       identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse(threadId) } }],
   }] });
   const summary = projectLogicalSummaries([project!], new Map([[first, working("desktop")], [second, working("laptop")]]), snapshot)
@@ -457,7 +475,7 @@ test("app snoozes place and count rows on any daemon, waiting on targets elsewhe
   const summary = projectLogicalSummaries([project], new Map([
     [first, { projects: [{ projectId: concrete, revision: 1, lastThreadUpdateAt: 1,
       counts: { completed: 1, needsAttention: 0, needsAttentionActive: 1, proposedCommit: 0, stopped: 0, working: 0 },
-      pinnedThreads: [], unsettledThreads: [entry("waiting", "completed"), entry("attention", "needsAttentionActive")] }] }],
+      unsettledThreads: [entry("waiting", "completed"), entry("attention", "needsAttentionActive")] }] }],
   ]), snapshot).get(remoteId)!;
   assert.deepEqual([summary.counts.completed, summary.counts.needsAttention, summary.counts.needsAttentionActive], [0, 1, 0]);
 
@@ -540,6 +558,7 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
     }], folders: [], members: [], divergences: [], sourceMappings: [],
     threadSnoozes: [{ threadId: WorkbenchThreadIdSchema.parse("snoozed"), targets: [],
       basis: { lifecycleKind: "needsAttention", turnId: null, questionnaireKey: null } }],
+    threadPins: [WorkbenchThreadIdSchema.parse("pinned")],
   };
   const completed: WorkbenchThreadLifecycle = { kind: "completed", reason: "providerInactive", settled: false };
   const attention: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
@@ -564,11 +583,12 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
     [first, { projects: [{ projectId: concrete, revision: 1, error: null, freshness: "fresh", entries: [
       thread("attention", 3, attention),
       thread("claimed", 1, completed, { claimed: true }),
-      thread("pinned", 1, completed, { pinned: true }),
+      thread("pinned", 1, completed),
       thread("settled", 11, { ...completed, settled: true }),
     ] }] }],
     [second, { projects: [{ projectId: concrete, revision: 1, error: null, freshness: "fresh", entries: [
-      thread("complete", 9, completed),
+      // A stale daemon flag cannot pin; only the app's pins place a thread.
+      thread("complete", 9, completed, { pinned: true }),
       thread("working", 4, working),
       thread("snoozed", 10, attention),
     ] }] }],

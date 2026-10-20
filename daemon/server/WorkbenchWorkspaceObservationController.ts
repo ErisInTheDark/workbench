@@ -380,7 +380,6 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       ...summary,
       lastThreadUpdateAt: summary.lastThreadUpdateAt === null ? null : coarseActivity(summary.lastThreadUpdateAt),
       unsettledThreads: summary.unsettledThreads.map(entry => ({ ...entry, activityAt: coarseActivity(entry.activityAt) })),
-      pinnedThreads: summary.pinnedThreads.map(entry => ({ ...entry, activityAt: coarseActivity(entry.activityAt) })),
     };
   }
 

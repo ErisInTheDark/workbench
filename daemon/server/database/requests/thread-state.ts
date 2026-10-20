@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - threadStateRequests: database requests for relational thread state (project and global documents, records, drafts, profiles, layouts,
+ * - threadStateRequests: database requests for relational thread state (project documents, records, drafts, profiles, layouts,
  *   archive facts, Git commits) and subagent relationships; each runs in its own transaction.
  */
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
@@ -14,7 +14,6 @@ import type {
   WorkbenchSubagentRelationshipRead,
   WorkbenchThreadRecordQuery,
   WorkbenchThreadStateCommit,
-  WorkbenchThreadStateGlobalDocument,
   WorkbenchThreadStateProjectDocument,
 } from "../thread-state/workbench-thread-state-persistence.ts";
 import { defineDatabaseRequest, type WorkbenchDatabaseWorkerContext } from "./define-database-request.ts";
@@ -42,9 +41,6 @@ export const threadStateRequests = {
   readThreadStateTitleHistories: defineDatabaseRequest({
     ...stateRead, run: (context, projectId: ProjectId) => inTransaction(context, state => state.readTitleHistories(projectId)),
   }),
-  readThreadStateGlobal: defineDatabaseRequest({
-    ...stateRead, run: (context, documentId: WorkbenchThreadStateGlobalDocument["id"]) => inTransaction(context, state => state.readGlobal(documentId)),
-  }),
   readThreadStateRecords: defineDatabaseRequest({
     ...stateRead, run: (context, query: WorkbenchThreadRecordQuery) => inTransaction(context, state => state.readRecords(query)),
   }),
@@ -56,9 +52,6 @@ export const threadStateRequests = {
   }),
   readThreadStateLayout: defineDatabaseRequest({
     ...stateRead, run: (context, owner: WorkbenchThreadLayoutOwner) => inTransaction(context, state => state.readLayout(owner)),
-  }),
-  readThreadStatePinnedImports: defineDatabaseRequest({
-    ...stateRead, run: context => inTransaction(context, state => state.readPinnedImports()),
   }),
   readThreadStateArchiveDeadline: defineDatabaseRequest({
     ...stateRead, run: context => inTransaction(context, state => state.readNextArchiveEligibility()),
@@ -74,10 +67,6 @@ export const threadStateRequests = {
     run: (context, projectId: ProjectId, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) => {
       inTransaction(context, state => state.writeProject(projectId, document, titleHistories));
     },
-  }),
-  writeThreadStateGlobal: defineDatabaseRequest({
-    ordering: "threadStateWrite",
-    run: (context, document: WorkbenchThreadStateGlobalDocument) => { inTransaction(context, state => state.writeGlobal(document)); },
   }),
   commitThreadState: defineDatabaseRequest({
     ordering: "threadStateWrite",

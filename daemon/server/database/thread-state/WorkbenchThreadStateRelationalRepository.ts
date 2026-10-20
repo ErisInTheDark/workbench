@@ -24,10 +24,9 @@ import WorkbenchThreadStateGitRepository, { type WorkbenchThreadGitCommitTime } 
 import WorkbenchThreadStateQuestionnaireRepository from "./WorkbenchThreadStateQuestionnaireRepository.ts";
 import type {
   WorkbenchStoredThreadDraft, WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit,
-  WorkbenchThreadStateProjectDocument, WorkbenchThreadStateGlobalDocument,
+  WorkbenchThreadStateProjectDocument,
 } from "./workbench-thread-state-persistence.ts";
 import { projectWorkbenchThreadStateEntry, type WorkbenchThreadStateRecord } from "../../workbench-thread-state-record.ts";
-import { projectWorkbenchThreadDraft } from "../../WorkbenchThreadDraftStore";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStoredThreadTitleHistory } from "../../WorkbenchThreadStateStore.ts";
 import WorkbenchThreadStateLayoutRepository, { type WorkbenchThreadLayoutOwner } from "./WorkbenchThreadStateLayoutRepository.ts";
@@ -46,7 +45,6 @@ interface ThreadStateRow {
   provider_observed: 0 | 1;
   project_id: ProjectId;
   archived: 0 | 1 | null;
-  pinned: 0 | 1 | null;
   order_at: number | null;
   parent_thread_id: WorkbenchThreadId | null;
   cwd: string | null;
@@ -70,7 +68,7 @@ interface ThreadStateRow {
 }
 
 const SELECT_THREAD_STATES = `
-  SELECT state.*, thread.project_id, top.archived, top.pinned, top.order_at,
+  SELECT state.*, thread.project_id, top.archived, top.order_at,
     child.parent_thread_id, child.cwd, child.name, child.profile_id, child.profile_name,
     child.direct_subagent_index, child.created_at, child.updated_at, child.pinned AS child_pinned,
     lifecycle.lifecycle_kind, lifecycle.reason, lifecycle.settled, lifecycle.turn_id,
@@ -266,23 +264,6 @@ export default class WorkbenchThreadStateRelationalRepository {
     })();
   }
 
-  readGlobal(id: WorkbenchThreadStateGlobalDocument["id"]): WorkbenchThreadStateGlobalDocument | null {
-    return this.database.transaction(() => {
-      const layout = this.layouts.read({ kind: id === "pinnedLayout" ? "pinned" : "home" });
-      if (!layout) return null;
-      return id === "pinnedLayout"
-        ? { id, version: 1 as const, ...layout, importedProjectIds: this.readPinnedImports() }
-        : { id, version: 1 as const, ...layout };
-    })();
-  }
-
-  writeGlobal(document: WorkbenchThreadStateGlobalDocument) {
-    this.commit({
-      layouts: [{ owner: { kind: document.id === "pinnedLayout" ? "pinned" : "home" }, revision: document.revision, displayOrder: document.displayOrder }],
-      ...(document.id === "pinnedLayout" ? { pinnedImports: document.importedProjectIds } : {}),
-    });
-  }
-
   commit(changes: WorkbenchThreadStateCommit) {
     this.database.transaction(() => {
       changes = {
@@ -298,7 +279,6 @@ export default class WorkbenchThreadStateRelationalRepository {
           ...layout, owner: layout.owner.kind === "project"
             ? { ...layout.owner, projectId: this.projects.requireStoredReference(layout.owner.projectId) } : layout.owner,
         })) } : {}),
-        ...(changes.pinnedImports ? { pinnedImports: [...new Set(changes.pinnedImports.map(id => this.projects.requireStoredReference(id)))] } : {}),
       };
       if (changes.projectId !== undefined) {
         const projectId = changes.projectId;
@@ -311,8 +291,9 @@ export default class WorkbenchThreadStateRelationalRepository {
         }
         if (changes.drafts?.some(({ draft }) => draft.projectId !== projectId)
           || changes.projectProfiles?.some(profile => profile.projectId !== projectId)
-          || changes.layouts?.some(({ owner }) => owner.kind !== "project" || owner.projectId !== projectId)
-          || changes.pinnedImports !== undefined) throw new Error("Changed facts belong to another project.");
+          || changes.layouts?.some(({ owner }) => owner.kind !== "project" || owner.projectId !== projectId)) {
+          throw new Error("Changed facts belong to another project.");
+        }
       }
       this.writeDrafts(changes.drafts ?? []);
       this.writeRecords(changes.records ?? []);
@@ -339,25 +320,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       for (const threadId of changes.deletedThreadIds ?? []) {
         this.database.prepare("DELETE FROM workbench_thread_states WHERE thread_id = ?").run(threadId);
       }
-      if (changes.pinnedImports !== undefined) {
-        this.database.prepare("DELETE FROM workbench_sidebar_pinned_imports").run();
-        if (changes.pinnedImports.length) {
-          const pinned = this.database.prepare(`
-            SELECT layout_id FROM workbench_sidebar_global_layouts WHERE owner_kind = 'pinned'
-          `).get() as { layout_id: string } | undefined;
-          if (!pinned) throw new Error("Pinned imports require a pinned layout.");
-          const insert = this.database.prepare(`
-            INSERT INTO workbench_sidebar_pinned_imports(project_id, layout_id, owner_kind) VALUES (?, ?, 'pinned')
-          `);
-          for (const projectId of changes.pinnedImports) insert.run(projectId, pinned.layout_id);
-        }
-      }
     })();
-  }
-
-  readPinnedImports(): ProjectId[] {
-    return (this.database.prepare("SELECT project_id FROM workbench_sidebar_pinned_imports ORDER BY project_id").all() as Array<{ project_id: ProjectId }>)
-      .map((row) => row.project_id);
   }
 
   readProjectProfile(projectId: ProjectId): WorkbenchComposerProfileSelectionState | null {
@@ -367,15 +330,14 @@ export default class WorkbenchThreadStateRelationalRepository {
     return profile ? decodeProfileRow(profile) : null;
   }
 
-  readDrafts(projectId: ProjectId, pinnedOnly = false): WorkbenchStoredThreadDraft[] {
+  readDrafts(projectId: ProjectId): WorkbenchStoredThreadDraft[] {
     projectId = this.projects.requireStoredReference(projectId);
-    const where = `project_id = ?${pinnedOnly ? " AND pinned = 1 AND snoozed = 0" : ""}`;
     const rows = this.database.prepare(`
-      SELECT * FROM workbench_thread_drafts WHERE ${where} ORDER BY updated_at DESC, draft_id
+      SELECT * FROM workbench_thread_drafts WHERE project_id = ? ORDER BY updated_at DESC, draft_id
     `).all(projectId) as Array<Record<string, SqlValue>>;
     const attachmentRows = this.database.prepare(`
       SELECT draft_id, attachment_index, attachment_id, url FROM workbench_thread_draft_attachments
-      WHERE draft_id IN (SELECT id FROM workbench_thread_drafts WHERE ${where}) ORDER BY attachment_index
+      WHERE draft_id IN (SELECT id FROM workbench_thread_drafts WHERE project_id = ?) ORDER BY attachment_index
     `).all(projectId) as Array<{ draft_id: string; attachment_index: number; attachment_id: string; url: string }>;
     const byDraft = Map.groupBy(attachmentRows, row => row.draft_id);
     return rows.map((row) => {
@@ -521,11 +483,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       const entry = projectWorkbenchThreadStateEntry(record);
       return entry ? [entry] : [];
     });
-    entries.push(...this.readDrafts(projectId, true)
-      .map(draft => projectWorkbenchThreadDraft(draft.draft, { archived: false, pinned: true, snoozed: false })));
-    return createWorkbenchProjectThreadSummary(projectId, entries, 0,
-      this.layouts.read({ kind: "project", projectId })?.displayOrder ?? {},
-      new Set(proposed.map(row => row.thread_id)));
+    return createWorkbenchProjectThreadSummary(projectId, entries, 0, new Set(proposed.map(row => row.thread_id)));
   }
 
   readNextArchiveEligibility(): number | null {
@@ -534,7 +492,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       JOIN workbench_top_level_thread_states top ON top.thread_id = state.thread_id
       JOIN workbench_thread_lifecycle lifecycle ON lifecycle.thread_id = state.thread_id
       LEFT JOIN workbench_thread_retention retention ON retention.thread_id = state.thread_id
-      WHERE top.archived = 0 AND top.pinned = 0 AND lifecycle.settled = 1
+      WHERE top.archived = 0 AND lifecycle.settled = 1
     `).get() as { activity_at: number | null };
     return row.activity_at;
   }
@@ -542,7 +500,7 @@ export default class WorkbenchThreadStateRelationalRepository {
   readArchiveEligible(activeBefore: number): Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }> {
     if (!Number.isSafeInteger(activeBefore)) throw new Error("Archive eligibility boundary must be an integer timestamp.");
     const rows = this.database.prepare(`${SELECT_THREAD_STATES}
-      WHERE top.archived = 0 AND top.pinned = 0 AND lifecycle.settled = 1
+      WHERE top.archived = 0 AND lifecycle.settled = 1
         AND MAX(state.activity_at, COALESCE(retention.settled_at, 0)) <= ?
       ORDER BY MAX(state.activity_at, COALESCE(retention.settled_at, 0)), state.thread_id
     `).all(activeBefore) as ThreadStateRow[];
@@ -577,7 +535,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     if (record.entryKind === "thread") {
       this.writeDomainFact("workbench_top_level_thread_states", ["thread_id"], {
         thread_id: threadId, thread_kind: threadKind, archived: Number(record.metadata.archived),
-        pinned: Number(record.metadata.pinned), order_at: record.orderAt ?? null,
+        order_at: record.orderAt ?? null,
       });
     } else {
       const owner = this.database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?")
@@ -671,14 +629,13 @@ export default class WorkbenchThreadStateRelationalRepository {
       const profiles = navigationOnly ? [] : this.database.prepare(`SELECT * FROM workbench_thread_profiles WHERE thread_id IN (${placeholders})`)
         .all(...ids) as ProfileRow[];
       const titles = this.database.prepare(`SELECT history.thread_id, history.title, history.used_at FROM workbench_thread_title_history history
-        WHERE history.thread_id IN (${placeholders}) ${navigationOnly ? `AND (
-          EXISTS (SELECT 1 FROM workbench_top_level_thread_states pinned WHERE pinned.thread_id = history.thread_id AND pinned.pinned = 1)
-          OR history.title = (SELECT latest.title FROM workbench_thread_title_history latest
-            WHERE latest.thread_id = history.thread_id ORDER BY latest.used_at DESC, latest.title LIMIT 1)
+        WHERE history.thread_id IN (${placeholders}) ${navigationOnly ? `AND history.title = (
+          SELECT latest.title FROM workbench_thread_title_history latest
+          WHERE latest.thread_id = history.thread_id ORDER BY latest.used_at DESC, latest.title LIMIT 1
         )` : ""} ORDER BY history.used_at DESC, history.title`).all(...ids) as TitleRow[];
       const profilesByThread = new Map(profiles.map(profile => [profile.thread_id, profile]));
       const titlesByThread = Map.groupBy(titles, title => title.thread_id);
-      const detailedIds = navigationOnly ? batch.filter(row => row.pinned && !row.archived).map(row => row.thread_id) : ids;
+      const detailedIds = navigationOnly ? [] : ids;
       const questionnaires = this.questionnaires.readMany(detailedIds, navigationOnly);
       const git = this.git.readMany(detailedIds);
       for (const row of batch) result.push(this.decodeThreadState(row, {
@@ -717,12 +674,12 @@ export default class WorkbenchThreadStateRelationalRepository {
       ...related.git,
     };
     if (row.thread_kind === "topLevel") {
-      if (row.archived === null || row.pinned === null) throw new Error("Top-level thread metadata is incomplete.");
+      if (row.archived === null) throw new Error("Top-level thread metadata is incomplete.");
       return {
         ...common, entryKind: "thread", ...(row.order_at === null ? {} : { orderAt: row.order_at }),
         metadata: row.archived
           ? { archived: true, pinned: false, snoozed: false }
-          : { archived: false, pinned: Boolean(row.pinned), snoozed: false },
+          : { archived: false, pinned: false, snoozed: false },
       };
     }
     if (row.parent_thread_id === null || row.cwd === null || row.name === null || row.profile_id === null

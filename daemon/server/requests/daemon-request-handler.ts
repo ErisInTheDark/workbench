@@ -50,8 +50,7 @@ export interface WorkbenchDaemonRequestOwners {
   threadActions?: Pick<WorkbenchThreadActionController, "handle">;
   launches?: Pick<WorkbenchThreadLaunchController, "launch" | "read">;
   presentationExport?: Pick<WorkbenchThreadStateController,
-    "exportPresentationPage" | "exportPresentationManifestPage"
-    | "readPresentationAttachmentChunk" | "exportPresentationLayoutChunk">;
+    "exportPresentationPage" | "exportPresentationManifestPage" | "readPresentationAttachmentChunk">;
   agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
   files: Pick<WorkbenchProjectFileController, "read" | "write">;
   gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;

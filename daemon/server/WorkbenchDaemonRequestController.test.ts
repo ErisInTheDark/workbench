@@ -700,8 +700,6 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
       readThreadGitCommits: async threadIds => repository.readGitCommits(threadIds),
       recordThreadGitCommitTimes: async (threadId, times) => { repository.recordGitCommitTimes(threadId, times); },
       writeThreadStateProject: async (id, document, histories) => { repository.writeProject(id, document, histories); },
-      readThreadStateGlobal: async id => repository.readGlobal(id),
-      writeThreadStateGlobal: async document => { repository.writeGlobal(document); },
       readThreadStateArchiveDeadline: async () => repository.readNextArchiveEligibility(),
       readThreadStateArchiveEligible: async before => repository.readArchiveEligible(before),
     });

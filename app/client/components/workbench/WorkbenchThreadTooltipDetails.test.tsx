@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkbenchPendingUserInputRequest, WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type {
-  WorkbenchGitArcProposalSummary, WorkbenchPinnedThreadSummaryEntry, WorkbenchThreadSidebarEntry, WorkbenchThreadWaitTarget,
+  WorkbenchGitArcProposalSummary, WorkbenchThreadSidebarEntry, WorkbenchThreadWaitTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
@@ -331,44 +331,6 @@ test("transcript readiness does not hide admitted questionnaire and proposal det
   const html = await renderDetails(true, "C:/workspace", true);
   assert.match(html, /data-thread-tooltip-questionnaire="preview"/u);
   assert.match(html, /data-thread-tooltip-proposal="commit"/u);
-});
-
-test("cold pinned tooltips use project-qualified summary hints for each pending component", async () => {
-  const pinned = {
-    ...planThread("thread", {
-      checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "",
-      phase: "active", proposals: [{ proposalId: "pinned-proposal", status: "proposed" }], updatedAt: "2026-09-11",
-    }),
-    canCompleteQuestionnaire: true,
-    metadata: { archived: false, pinned: true, snoozed: false },
-    status: "needsAttention",
-  } satisfies WorkbenchPinnedThreadSummaryEntry;
-  const summary = {
-    counts: { completed: 0, needsAttention: 0, needsAttentionActive: 1, proposedCommit: 1, stopped: 0, working: 0 },
-    lastThreadUpdateAt: null, pinnedThreads: [pinned],
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1, unsettledThreads: [],
-  };
-  const sidebarStore: WorkbenchThreadSidebarStore = {
-    ...planStore,
-    getProjectSnapshot: () => null,
-    getProjectThreadSummaries: () => ({ projects: [summary] }),
-  };
-  const html = await renderDetails(false, "C:/workspace", true, {
-    observationPending: true, pendingRequest: null, proposalId: null, sidebarStore,
-  });
-  assert.match(html, /data-thread-tooltip-questionnaire="loading"/u);
-  assert.match(html, /data-thread-tooltip-proposal="commit"/u);
-
-  const otherProjectHtml = await renderDetails(false, "C:/workspace", true, {
-    observationPending: true, pendingRequest: null, proposalId: null,
-    sidebarStore: {
-      ...sidebarStore,
-      getProjectThreadSummaries: () => ({
-        projects: [{ ...summary, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other-project") }],
-      }),
-    },
-  });
-  assert.doesNotMatch(otherProjectHtml, /data-thread-tooltip-questionnaire|data-thread-tooltip-proposal|aria-busy="true"/u);
 });
 
 test("admitted metadata removes obsolete sidebar questionnaire and proposal hints", async () => {

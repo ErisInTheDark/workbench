@@ -29,8 +29,9 @@
  * - readWorkbenchGlobalSidebarPreferences: project global sidebar records.
  * - writeWorkbenchGlobalSidebarPreference: persist one global sidebar intent.
  * - readWorkbenchProjectSidebarPreferences: project scoped sidebar records.
+ * - readWorkbenchSidebarOpenFolders: open folders, each under its own logical project.
  * - writeWorkbenchProjectSidebarPreference: persist one project sidebar intent.
- * - setWorkbenchProjectSidebarFolderOpen: persist folder disclosure.
+ * - setWorkbenchSidebarFolderOpen: persist one folder's disclosure under its own project.
  * - resolveWorkbenchSettings: merge overrides over global preferences.
  */
 import type {
@@ -38,7 +39,8 @@ import type {
   WorkbenchGlobalPreference,
   WorkbenchSidebarPreference,
 } from "workbench-shared/state/workbench-client-state";
-import { LogicalProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
+import { FolderIdSchema, LogicalProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
+import { getWorkbenchHomeFolderKey } from "workbench-shared/workbench/thread/home-thread-display-order";
 import {
   WORKBENCH_SETTING_DEFINITIONS,
   type WorkbenchEditorFontFamily,
@@ -96,10 +98,8 @@ export interface WorkbenchGlobalSidebarPreferences {
 export interface WorkbenchProjectSidebarPreferences {
   browseSessionsOpen: boolean;
   explorerOpen: boolean;
-  pinnedFolderIds: readonly string[];
   pinnedStatusCountsExpanded: boolean;
   pinnedThreadsOpen: boolean;
-  threadFolderIds: readonly string[];
   threadsOpen: boolean;
 }
 
@@ -280,10 +280,8 @@ export function createDefaultWorkbenchProjectSidebarPreferences(): WorkbenchProj
   return {
     browseSessionsOpen: true,
     explorerOpen: true,
-    pinnedFolderIds: [],
     pinnedStatusCountsExpanded: true,
     pinnedThreadsOpen: true,
-    threadFolderIds: [],
     threadsOpen: true,
   };
 }
@@ -482,35 +480,29 @@ export function readWorkbenchProjectSidebarPreferences(
       }
     }
   }
-  preferences.pinnedFolderIds = records.flatMap((record) => (
-    record.kind === "sidebarFolder"
-    && record.daemonRegistrationId === daemonRegistrationId
-    && record.projectId === projectId
-    && record.scope === "pinned"
-      ? [record.folderId]
-      : []
-  ));
-  preferences.threadFolderIds = records.flatMap((record) => (
-    record.kind === "sidebarFolder"
-    && record.daemonRegistrationId === daemonRegistrationId
-    && record.projectId === projectId
-    && record.scope === "thread"
-      ? [record.folderId]
-      : []
-  ));
   return preferences;
 }
 
-type WorkbenchProjectSidebarScalarKey = Exclude<
-  keyof WorkbenchProjectSidebarPreferences,
-  "pinnedFolderIds" | "threadFolderIds"
->;
+/** Open folders as home folder keys; each folder's disclosure belongs to its own logical project, not the viewed one. */
+export function readWorkbenchSidebarOpenFolders(
+  daemonRegistrationId: string,
+  records: readonly WorkbenchClientStateRecord[] = [],
+): readonly { projectId: string; folderId: string; key: string }[] {
+  return records.flatMap((record) => {
+    if (record.kind !== "sidebarFolder" || record.daemonRegistrationId !== daemonRegistrationId || record.scope !== "thread") return [];
+    // Records from before folder-owned disclosure stored a whole key as the folder id; they no longer address a folder.
+    const folderId = FolderIdSchema.safeParse(record.folderId);
+    return folderId.success
+      ? [{ projectId: record.projectId, folderId: record.folderId, key: getWorkbenchHomeFolderKey(record.projectId, folderId.data) }]
+      : [];
+  });
+}
 
-export async function writeWorkbenchProjectSidebarPreference(
+export async function writeWorkbenchProjectSidebarPreference<K extends keyof WorkbenchProjectSidebarPreferences>(
   controller: WorkbenchClientStateController,
   projectId: string,
-  key: WorkbenchProjectSidebarScalarKey,
-  value: WorkbenchProjectSidebarPreferences[WorkbenchProjectSidebarScalarKey],
+  key: K,
+  value: WorkbenchProjectSidebarPreferences[K],
 ) {
   await controller.put({
     daemonRegistrationId: controller.daemonRegistrationId,
@@ -520,10 +512,9 @@ export async function writeWorkbenchProjectSidebarPreference(
   });
 }
 
-export async function setWorkbenchProjectSidebarFolderOpen(
+export async function setWorkbenchSidebarFolderOpen(
   controller: WorkbenchClientStateController,
   projectId: string,
-  scope: "pinned" | "thread",
   folderId: string,
   open: boolean,
 ) {
@@ -532,7 +523,7 @@ export async function setWorkbenchProjectSidebarFolderOpen(
     folderId,
     kind: "sidebarFolder" as const,
     projectId,
-    scope,
+    scope: "thread" as const,
   };
   if (open) {
     await controller.put(identity);

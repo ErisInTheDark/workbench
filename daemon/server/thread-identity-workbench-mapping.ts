@@ -7,15 +7,11 @@
  * - createWorkbenchQuestionnaireStatePorts: validate WB questionnaire ownership without live-turn admission.
  */
 import type { WorkbenchHarness, WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
-import { getWorkbenchLifecycleTurnId, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId } from "workbench-shared/workbench/thread/thread-state";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 import type {
   WorkbenchDurableQuestionnaire, WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
-import {
-  getProjectQualifiedThreadDisplayKey, parseProjectQualifiedThreadDisplayKey,
-  getThreadDisplayThreadKey,
-} from "workbench-shared/workbench/thread/thread-display-layout";
 import { z } from "zod";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
@@ -155,21 +151,6 @@ export async function mapNativeQuestionnaireHistory(owners: NativeTranscriptIden
   return { ...entry, ...questionnaire, threadId: thread.threadId, turnId, insertAfterItemId };
 }
 
-async function mapThreadDisplayKey(
-  owners: NativeTranscriptIdentityOwners, key: string, projectId: string | undefined,
-): Promise<string> {
-  const qualified = projectId ? null : parseProjectQualifiedThreadDisplayKey(key);
-  const localKey = qualified?.threadKey ?? key;
-  const ownerProjectId = qualified?.projectId ?? projectId;
-  if (localKey.startsWith("folder:") || localKey.startsWith("draft:")) return key;
-  const reference = /^([^:]+):(.+)$/u.exec(localKey);
-  if (!reference) return key;
-  const harness = WorkbenchHarnessSchema.parse(reference[1]);
-  const thread = await resolveNativeReference(owners, { harness, threadId: reference[2]! }, ownerProjectId);
-  const mapped = getThreadDisplayThreadKey(harness, thread.threadId);
-  return qualified ? getProjectQualifiedThreadDisplayKey(qualified.projectId, mapped) : mapped;
-}
-
 export async function mapWorkbenchThreadStateRequest(owners: NativeTranscriptIdentityOwners, request: WorkbenchThreadStateRequest): Promise<WorkbenchThreadStateRequest> {
   const projectId = "projectId" in request ? request.projectId : undefined;
   let result = request;
@@ -181,9 +162,6 @@ export async function mapWorkbenchThreadStateRequest(owners: NativeTranscriptIde
     result = { ...result, identity: { ...request.identity, threadId: thread.threadId },
       ...("turnId" in request ? { turnId: turn?.turnId ?? request.turnId } : {}),
     } as WorkbenchThreadStateRequest;
-  }
-  if (request.method === "workbench/thread-state/priority/set") {
-    result = { ...request, sourceKey: await mapThreadDisplayKey(owners, request.sourceKey, projectId) as typeof request.sourceKey };
   }
   if (request.method === "workbench/thread-state/questionnaire/resolve") {
     result = { ...result, entry: await mapNativeQuestionnaireHistory(owners, request.identity, {

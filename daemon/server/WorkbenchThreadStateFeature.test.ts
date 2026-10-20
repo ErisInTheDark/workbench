@@ -195,12 +195,12 @@ test("project reads reject unknown owners before loading or writing state", asyn
     await feature.controller.ensureProviderEntry(projectId, {
       ...sidebar, lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     });
-    const pinned = await feature.controller.handleRequest("observer", {
-      method: "workbench/thread-state/pin/set", projectId, identity: sidebar.identity, pinned: true,
+    const completed = await feature.controller.handleRequest("observer", {
+      method: "workbench/thread-state/status/set", projectId, identity: sidebar.identity, status: "completed",
     });
-    assert.equal(pinned.error, undefined);
+    assert.equal(completed.error, undefined);
     const saved = await feature.controller.getCanonicalThreadEntry(projectId, sidebar.identity.threadId);
-    assert.ok(saved?.entryKind === "thread" && saved.metadata.pinned);
+    assert.ok(saved?.entryKind === "thread" && saved.lifecycle.kind === "completed");
     const before = database.sqlite.prepare("SELECT * FROM workbench_sidebar_project_layouts").all();
     database.operations.length = 0;
     for (const id of ["remote:/example.test/project", "remote://example.test/unregistered"]) {

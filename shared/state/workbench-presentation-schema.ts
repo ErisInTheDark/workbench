@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - presentationTables/PresentationRows: typed app-wide project, draft, layout, hidden-folder and thread-snooze storage.
+ * - presentationTables/PresentationRows: typed app-wide project, draft, layout, hidden-folder, thread-snooze and thread-pin storage.
  * - presentationSchema: protected relational history for the shared presentation database.
  */
 import {
@@ -309,6 +309,12 @@ const threadSnoozeTargets = snoozeTable(defineTable("presentation_thread_snooze_
     }),
   ],
 })));
+// Keyed by thread UUID alone: a pinned thread may live on any daemon.
+const threadPinTable = defineTable("presentation_thread_pins", { thread_id: text().primaryKey() });
+const threadPins = defineTableHistory({
+  current: threadPinTable,
+  versions: [tableVersion({ schemaVersion: releases.threadPins.version, table: threadPinTable, migration: createTable(threadPinTable) })],
+});
 const divergences = initial(defineTable("presentation_source_divergences", {
   daemon_id: text().notNull().references("presentation_daemons", "id"),
   source_kind: enumText("draft", "layout").notNull(),
@@ -326,12 +332,13 @@ export const presentationTables = Object.freeze({
   receipts: receipts.current, mappings: mappings.current, importAttachments: importAttachments.current,
   divergences: divergences.current, hiddenLocations: hiddenLocations.current,
   threadSnoozes: threadSnoozes.current, threadSnoozeTargets: threadSnoozeTargets.current,
+  threadPins: threadPins.current,
 });
 export type PresentationRows = { [Name in keyof typeof presentationTables]: SelectRow<(typeof presentationTables)[Name]> };
 export const presentationSchema = defineWorkbenchDatabaseSchema({
   subsystems: [defineSubsystemHistory([
     metadata, daemons, projects, locations, defaults, drafts, attachments, attachmentChunks,
     references, feedbackReferences, folders, members, receipts, mappings, importAttachments, divergences,
-    hiddenLocations, threadSnoozes, threadSnoozeTargets,
+    hiddenLocations, threadSnoozes, threadSnoozeTargets, threadPins,
   ])],
 });

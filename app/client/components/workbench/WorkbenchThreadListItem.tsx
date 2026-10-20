@@ -198,7 +198,9 @@ export default function WorkbenchThreadListItem({
     <span className="truncate">{entry.title}</span>
   </span>;
   const archived = entry.entryKind === "thread" && group === "archived";
-  const pinned = isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
+  // A settled thread keeps its stored pin only for restoring, so it never shows as pinned.
+  const pinned = group === "settled" || archived ? false
+    : isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
   const { baseAction, shiftAction } = getThreadRowActions(entry, group, facts);
   const action = isShiftPressed && shiftAction ? shiftAction : baseAction;
   const priority = group === "snoozed" ? "snoozed" : showPinPriorityIcon && pinned ? "pinned" : null;

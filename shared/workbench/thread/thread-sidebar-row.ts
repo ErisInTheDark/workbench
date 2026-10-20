@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSidebarGitArcSchema/WorkbenchSidebarGitArc: independently live and saved Git work for sidebar rows.
+ * - WorkbenchSidebarGitArcSchema/WorkbenchSidebarGitArc: re-exported lean Git work for sidebar rows.
  * - WorkbenchSidebarGitArcPlanSchema/WorkbenchSidebarGitArcPlan: inactive-plan scope a sidebar row needs for collisions.
  * - WorkbenchThreadSidebarRowVersionSchema: the row version older browsers still request; rows no longer differ by it.
  * - WorkbenchThreadSidebarRowSchema/WorkbenchThreadSidebarRow: lean list-rendering row; per-thread detail rides the thread observation.
@@ -13,20 +13,15 @@
  * - coarseActivity: ten-second activity timestamps for observations.
  */
 import { z } from "zod";
-import { WorkbenchThreadSidebarEntryVariants, type WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshotSchema, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
+import {
+  WorkbenchSidebarGitArcSchema, WorkbenchThreadSidebarEntryVariants, type WorkbenchSidebarGitArc, type WorkbenchThreadSidebarEntry,
+  WorkbenchThreadSidebarSnapshotSchema, type WorkbenchThreadSidebarSnapshot,
+} from "./thread-state";
 import { getThreadDisplayDraftKey, getThreadDisplayThreadKey } from "./thread-display-layout";
 
+export { WorkbenchSidebarGitArcSchema, type WorkbenchSidebarGitArc } from "./thread-state";
 const commit = z.string().regex(/^[a-f0-9]{40,64}$/u);
 const paths = z.array(z.string().min(1));
-const proposals = z.array(z.object({
-  proposalId: z.string().min(1), rootId: z.string().min(1).optional(), status: z.enum(["committed", "proposed"]),
-}).strict());
-export const WorkbenchSidebarGitArcSchema = z.discriminatedUnion("phase", [
-  z.object({ phase: z.literal("active"), checkpointCommit: commit, proposals, claimedPaths: paths.min(1), stashedPaths: paths.default([]).optional() }).strict(),
-  z.object({ phase: z.literal("stashed"), checkpointCommit: commit, proposals, claimedPaths: paths.length(0), stashedPaths: paths.min(1) }).strict(),
-  z.object({ phase: z.literal("resolved"), checkpointCommit: commit, proposals, claimedPaths: paths.length(0), stashedPaths: paths.default([]).optional() }).strict(),
-]);
-export type WorkbenchSidebarGitArc = z.infer<typeof WorkbenchSidebarGitArcSchema>;
 export const WorkbenchSidebarGitArcPlanSchema = z.object({ checkpointCommit: commit, scopePaths: paths }).strict();
 export type WorkbenchSidebarGitArcPlan = z.infer<typeof WorkbenchSidebarGitArcPlanSchema>;
 

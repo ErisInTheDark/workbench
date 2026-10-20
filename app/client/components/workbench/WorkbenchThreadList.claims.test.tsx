@@ -839,7 +839,7 @@ test("only home thread rows show pin while snooze keeps priority", () => {
   assert.doesNotMatch(ordinaryHtml, /data-role="thread-priority-icon"/u);
 });
 
-test("settled home thread rows retain pin priority", () => {
+test("a settled thread keeps its stored pin for restoring but shows no pin", () => {
   const html = renderThreadItem({
     ...createThreadEntry({ threadId: "settled-pinned", title: "Settled pinned" }),
     lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
@@ -847,7 +847,8 @@ test("settled home thread rows retain pin priority", () => {
   }, null, undefined, { showPinPriorityIcon: true });
 
   assert.match(html, /aria-label="Restore"/u);
-  assert.match(html, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
+  assert.doesNotMatch(html, /data-thread-priority="pinned"/u);
+  assert.doesNotMatch(html, /, pinned,/u);
 });
 
 test("home renders one combined priority list with project-owned folders and foreign drag blocking", () => {

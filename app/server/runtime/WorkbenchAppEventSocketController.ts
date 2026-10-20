@@ -18,7 +18,7 @@ import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTraff
 import WorkbenchWorkspaceRequestController from "../workspace/WorkbenchWorkspaceRequestController";
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
-import type WorkbenchThreadSnoozeController from "../state/WorkbenchThreadSnoozeController";
+import type WorkbenchThreadPlacementController from "../state/WorkbenchThreadPlacementController";
 import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
 import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
 import type WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
@@ -140,7 +140,7 @@ export default class WorkbenchAppEventSocketController {
     sources?: WorkbenchDaemonSources;
     workspace?: WorkbenchWorkspaceController;
     workspaceThreads?: WorkbenchWorkspaceThreads;
-    threadSnoozes?: WorkbenchThreadSnoozeController;
+    threadPlacements?: WorkbenchThreadPlacementController;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
     gitPeers?: Pick<WorkbenchGitPeerSync, "observe" | "transfer">;
     /** Records every browser frame for `wb socket spy`. */
@@ -210,10 +210,10 @@ export default class WorkbenchAppEventSocketController {
       stateOwner = browserStateId;
     };
     const workspace = this.options.workspace && this.options.sources && this.options.workspaceThreads
-      && this.options.threadSnoozes && this.options.presentation && this.options.runtime && this.options.state
+      && this.options.threadPlacements && this.options.presentation && this.options.runtime && this.options.state
       ? new WorkbenchWorkspaceRequestController({
         workspace: this.options.workspace, sources: this.options.sources, threads: this.options.workspaceThreads,
-        snoozes: this.options.threadSnoozes,
+        placements: this.options.threadPlacements,
         presentation: this.options.presentation, launches: this.options.workspaceDrafts,
         network: {
           read: () => ({ kind: "network", phase: this.options.network.getFacts().phase,

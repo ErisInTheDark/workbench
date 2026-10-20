@@ -81,13 +81,13 @@ function defaultThreadMetadata(value: unknown): Extract<WorkbenchThreadSidebarEn
   const metadata = recordValue(value);
   return metadata.archived === true
     ? { archived: true, pinned: false, snoozed: false }
-    : { archived: false, pinned: metadata.pinned === true, snoozed: false };
+    : { archived: false, pinned: false, snoozed: false };
 }
 
-/** Snooze is app-owned; a record carrying an older daemon's flag drops it. */
-function unsnoozed<Entry extends WorkbenchProviderThreadEntry>(record: Entry): Entry {
-  return record.entryKind === "thread" && record.metadata.snoozed
-    ? { ...record, metadata: { archived: false, pinned: record.metadata.pinned, snoozed: false } } : record;
+/** Pin and snooze are app-owned; a record carrying an older daemon's flags drops them. */
+function unplaced<Entry extends WorkbenchProviderThreadEntry>(record: Entry): Entry {
+  return record.entryKind === "thread" && (record.metadata.snoozed || record.metadata.pinned)
+    ? { ...record, metadata: { archived: false, pinned: false, snoozed: false } } : record;
 }
 
 function storedRecordDefaults(
@@ -160,7 +160,7 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   if (parsed.data.entryKind === "draft") return { data: parsed.data, success: true };
   if (parsed.data.entryKind === "thread") {
     const { previousTitles: _previousTitles, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...persistent } = parsed.data;
-    return { data: { ...unsnoozed(persistent), ...internalFields(value) }, success: true };
+    return { data: { ...unplaced(persistent), ...internalFields(value) }, success: true };
   }
   const { previousTitles: _previousTitles, waitingFor: _waitingFor, ...persistent } = parsed.data;
   return { data: { ...persistent, ...internalFields(value) }, success: true };
@@ -197,7 +197,7 @@ export function conformStoredWorkbenchThreadStateRecord(
   const gitArc = persistent.gitArc?.acceptance
     ? (({ acceptance: _acceptance, ...arc }) => arc)(persistent.gitArc)
     : persistent.gitArc;
-  const record = unsnoozed({ ...persistent, ...(gitArc !== undefined ? { gitArc } : {}) });
+  const record = unplaced({ ...persistent, ...(gitArc !== undefined ? { gitArc } : {}) });
   return {
     data: { ...record, ...internalFields(value) },
     repairedPaths: conformed.repairedPaths,

@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchSidebarPreferencesProvider: compose global and project-scoped persisted preferences with memory-only
- *   Git/settled disclosure state.
+ * - default WorkbenchSidebarPreferencesProvider: compose global and project-scoped persisted preferences, folder-owned
+ *   folder disclosure, and memory-only Git/settled disclosure state.
  */
 "use client";
 
@@ -15,7 +15,8 @@ import {
 
 import {
   readWorkbenchProjectSidebarPreferences,
-  setWorkbenchProjectSidebarFolderOpen,
+  readWorkbenchSidebarOpenFolders,
+  setWorkbenchSidebarFolderOpen,
   writeWorkbenchGlobalSidebarPreference,
   writeWorkbenchProjectSidebarPreference,
   type WorkbenchProjectSidebarPreferences,
@@ -59,7 +60,7 @@ export default function WorkbenchSidebarPreferencesProvider({
   }), [displayState, pendingDisclosure, persistedPreferences]);
 
   const persistProjectPreference = useCallback((
-    key: Exclude<keyof WorkbenchProjectSidebarPreferences, "pinnedFolderIds" | "threadFolderIds">,
+    key: keyof WorkbenchProjectSidebarPreferences,
     value: boolean,
   ) => {
     if (!projectId || persistedPreferences[key] === value) return;
@@ -106,36 +107,26 @@ export default function WorkbenchSidebarPreferencesProvider({
     },
     [clientState.schemaVersion, controller, preferences, projectId],
   );
-  const setFolderOpen = useCallback<WorkbenchSidebarPreferencesValue["setFolderOpen"]>((scope, folderId, open) => {
-    const key = scope === "pinned" ? "pinnedFolderIds" : "threadFolderIds";
-    if (preferences[key].includes(folderId) === open) return;
-    const storedScope = scope === "pinned" ? "pinned" : "thread";
+  const openFolders = useMemo(
+    () => readWorkbenchSidebarOpenFolders(clientState.daemonRegistrationId, clientState.records),
+    [clientState.daemonRegistrationId, clientState.records],
+  );
+  const openFolderKeys = useMemo(() => new Set(openFolders.map(folder => folder.key)), [openFolders]);
+  const setFolderOpen = useCallback<WorkbenchSidebarPreferencesValue["setFolderOpen"]>((folderProjectId, folderId, open) => {
+    if (openFolders.some(folder => folder.projectId === folderProjectId && folder.folderId === folderId) === open) return;
     const operation = async () => {
-      if (open && preferences[key].length >= 500) {
-        const oldestFolderId = preferences[key][0];
-        if (oldestFolderId) {
-          await setWorkbenchProjectSidebarFolderOpen(
-            controller,
-            projectId,
-            storedScope,
-            oldestFolderId,
-            false,
-          );
-        }
+      const oldest = openFolders[0];
+      if (open && openFolders.length >= 500 && oldest) {
+        await setWorkbenchSidebarFolderOpen(controller, oldest.projectId, oldest.folderId, false);
       }
-      await setWorkbenchProjectSidebarFolderOpen(
-        controller,
-        projectId,
-        storedScope,
-        folderId,
-        open,
-      );
+      await setWorkbenchSidebarFolderOpen(controller, folderProjectId, folderId, open);
     };
     void operation().catch((error) => {
       console.error("Workbench sidebar folder persistence failed.", error);
     });
-  }, [controller, preferences, projectId]);
+  }, [controller, openFolders]);
   const value = useMemo<WorkbenchSidebarPreferencesValue>(() => ({
+    openFolderKeys,
     preferences,
     setDisclosureOpen,
     setFolderOpen,
@@ -156,6 +147,7 @@ export default function WorkbenchSidebarPreferencesProvider({
     },
   }), [
     globalPreferences,
+    openFolderKeys,
     persistProjectPreference,
     preferences,
     setDisclosureOpen,

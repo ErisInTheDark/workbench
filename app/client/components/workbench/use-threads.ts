@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - useThreads: read and act on the route-owned thread collection; members read the current thread and documents alone, the sidebars and one sidebar draft, home and pinned ordering, and the combined thread listing (activity-free structure, one row by key or physical key, rows for keys, sidebar errors and loading, archived count, load status).
+ * - useThreads: read and act on the route-owned thread collection; members read the current thread and documents alone, the sidebars and one sidebar draft, home ordering, and the combined thread listing (activity-free structure, one row by key or physical key, rows for keys, sidebar errors and loading, archived count, load status).
  */
 "use client";
 
@@ -14,7 +14,7 @@ import type {
 import { threadRowLookup } from "./thread-row-lookup";
 import type { WorkspaceThreadMember } from "workbench-shared/workbench/workspace/workspace-observation";
 import type {
-  WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchThreadDraft, WorkbenchThreadStateRequest,
+  WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchThreadDraft, WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchProjectThreadRowSidebars } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { ProjectId } from "workbench-shared/workbench/identity";
@@ -33,9 +33,6 @@ const EMPTY_THREAD_RUNTIME_SNAPSHOT: WorkbenchThreadRuntimeSnapshot = {
 const EMPTY_PROJECT_THREAD_SIDEBARS: WorkbenchProjectThreadRowSidebars = { projects: [] };
 const EMPTY_HOME_THREAD_DISPLAY_ORDER: WorkbenchHomeThreadDisplayOrderSnapshot = {
   displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder",
-};
-const EMPTY_PINNED_THREAD_LAYOUT: WorkbenchPinnedThreadLayoutSnapshot = {
-  displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout",
 };
 const EMPTY_LISTING: WorkbenchThreadListing = {
   members: {}, rows: [], archivedCount: 0, status: { listed: false, loading: false, error: "" },
@@ -155,15 +152,6 @@ useThreads.homeOrder = function useThreadsHomeOrder(explicitClient?: WorkbenchCl
     () => false,
   );
   return useMemo(() => ({ order, supported }), [order, supported]);
-};
-
-useThreads.pinnedLayout = function useThreadsPinnedLayout(explicitClient?: WorkbenchClientController) {
-  const store = useSidebarStore(explicitClient);
-  return useSyncExternalStore(
-    store?.subscribe ?? EMPTY_SUBSCRIBE,
-    store?.getPinnedThreadLayout ?? (() => EMPTY_PINNED_THREAD_LAYOUT),
-    () => EMPTY_PINNED_THREAD_LAYOUT,
-  );
 };
 
 const EMPTY_STRUCTURE: WorkbenchThreadListingStructure = { slots: {} };

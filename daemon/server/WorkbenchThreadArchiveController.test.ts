@@ -6,11 +6,11 @@ import test from "node:test";
 import WorkbenchThreadArchiveController from "./WorkbenchThreadArchiveController";
 import { parseWorkbenchThreadStateEntry, type WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 
-function settled(pinned = false): WorkbenchThreadStateRecord {
+function settled(archived = false): WorkbenchThreadStateRecord {
   const entry = parseWorkbenchThreadStateEntry({
     entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, activityAt: 1, title: "Thread",
     lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
-    metadata: { archived: false, pinned, snoozed: false }, settledAt: 1,
+    metadata: { archived, pinned: false, snoozed: false }, settledAt: 1,
   });
   assert.ok(entry.entryKind !== "draft");
   return entry;
@@ -22,7 +22,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test("expiry derives its next wake from current records and cancels it on pin or disposal", async () => {
+test("expiry derives its next wake from current records and cancels it on archive or disposal", async () => {
   let now = 1;
   let record = settled();
   let wake: (() => Promise<void>) | null = null;
@@ -30,7 +30,7 @@ test("expiry derives its next wake from current records and cancels it on pin or
   let expires = 0;
   let scheduled = deferred<void>();
   const controller = new WorkbenchThreadArchiveController({
-    now: () => now, readNextActivity: async () => record.entryKind === "thread" && !record.metadata.pinned ? record.activityAt : null,
+    now: () => now, readNextActivity: async () => record.entryKind === "thread" && !record.metadata.archived ? record.activityAt : null,
     expire: async () => { expires++; record = settled(true); },
     onError: error => { throw error; },
     schedule: (callback, delayMs) => {

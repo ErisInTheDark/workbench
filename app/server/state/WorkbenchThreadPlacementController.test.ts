@@ -1,6 +1,6 @@
 /*
- * Exports: none. Tests protect app-owned snooze across daemons: dependent waits on another daemon's thread,
- * unreachable targets, questionnaire interruption order, and refusals.
+ * Exports: none. Tests protect app-owned placement across daemons: dependent waits on another daemon's thread,
+ * unreachable targets, questionnaire interruption order, refusals, and pins that follow their thread until archived.
  */
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -11,7 +11,7 @@ import { DaemonIdSchema, ProjectIdSchema, type DaemonId } from "workbench-shared
 import type { WorkbenchThreadSidebarThreadRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import WorkbenchPresentationController from "./WorkbenchPresentationController";
 import WorkbenchPresentationRepository from "./WorkbenchPresentationRepository";
-import WorkbenchThreadSnoozeController from "./WorkbenchThreadSnoozeController";
+import WorkbenchThreadPlacementController from "./WorkbenchThreadPlacementController";
 
 type Row = WorkbenchThreadSidebarThreadRow;
 
@@ -63,7 +63,7 @@ async function fixture(context: TestContext, daemons: Array<ReturnType<typeof da
   const presentation = new WorkbenchPresentationController(repository);
   let connected = [...daemons];
   const notifySources = new Set<() => void>();
-  const controller = new WorkbenchThreadSnoozeController({
+  const controller = new WorkbenchThreadPlacementController({
     sources: { all: () => connected.map(entry => entry.source) as never, subscribe: listener => {
       notifySources.add(listener); return () => { notifySources.delete(listener); };
     } },
@@ -99,15 +99,15 @@ test("a thread waits on a thread from another daemon and wakes once that target 
   const f = await fixture(context, [desktop, remote]);
 
   assert.equal(await f.controller.toggleTarget(sourceId, targetId), true);
-  assert.deepEqual(f.controller.read().get(sourceId)?.targets.map(target => [target.identity.threadId, target.projectId]),
+  assert.deepEqual(f.controller.read().snoozes.get(sourceId)?.targets.map(target => [target.identity.threadId, target.projectId]),
     [[targetId, remote.projectId]]);
 
   remote.put(row(targetId, completed("t1"), { gitArc: {
     phase: "active", checkpointCommit: "a".repeat(40), proposals: [], claimedPaths: ["file.ts"],
   } }));
-  assert.ok(f.controller.read().has(sourceId), "a target still holding claims is not ready");
+  assert.ok(f.controller.read().snoozes.has(sourceId), "a target still holding claims is not ready");
   remote.put(row(targetId, completed("t1")));
-  assert.equal(f.controller.read().has(sourceId), false);
+  assert.equal(f.controller.read().snoozes.has(sourceId), false);
 });
 
 test("a target no connected daemon answers for keeps its source waiting", async context => {
@@ -122,7 +122,7 @@ test("a target no connected daemon answers for keeps its source waiting", async 
 
   f.disconnect(remote);
   desktop.put(row(sourceId, completed("s1")));
-  assert.ok(f.controller.read().has(sourceId));
+  assert.ok(f.controller.read().snoozes.has(sourceId));
 });
 
 test("a target that is already done adds nothing, and an idle thread holding claims cannot snooze", async context => {
@@ -136,9 +136,9 @@ test("a target that is already done adds nothing, and an idle thread holding cla
   const f = await fixture(context, [desktop]);
 
   assert.equal(await f.controller.toggleTarget(sourceId, doneId), true);
-  assert.equal(f.controller.read().has(sourceId), false);
+  assert.equal(f.controller.read().snoozes.has(sourceId), false);
   assert.equal(await f.controller.snooze(sourceId, true), false);
-  assert.equal(f.controller.read().has(sourceId), false);
+  assert.equal(f.controller.read().snoozes.has(sourceId), false);
 });
 
 test("questionnaire snooze interrupts its turn before recording, then wakes only when the question leaves", async context => {
@@ -156,10 +156,41 @@ test("questionnaire snooze interrupts its turn before recording, then wakes only
   assert.deepEqual(desktop.interrupts, []);
   assert.equal(await f.controller.snooze(threadId, true, "q"), true);
   assert.deepEqual(desktop.interrupts, [{ threadId, requestKey: "q" }]);
-  assert.equal(f.controller.read().get(threadId)?.basis.questionnaireKey, "q");
+  assert.equal(f.controller.read().snoozes.get(threadId)?.basis.questionnaireKey, "q");
 
   desktop.put(row(threadId, working("t9"), { pendingQuestionnaire: question }));
-  assert.ok(f.controller.read().has(threadId), "turn movement keeps a held question snoozed");
+  assert.ok(f.controller.read().snoozes.has(threadId), "turn movement keeps a held question snoozed");
   desktop.put(row(threadId, working("t9")));
-  assert.equal(f.controller.read().has(threadId), false);
+  assert.equal(f.controller.read().snoozes.has(threadId), false);
+});
+
+test("a pin on another daemon's thread feeds its watched row, survives settling and drops on archive", async context => {
+  const desktop = daemon("desktop");
+  const remote = daemon("remote");
+  const threadId = randomUUID();
+  remote.put(row(threadId, working("t1")));
+  const f = await fixture(context, [desktop, remote]);
+
+  assert.equal(await f.controller.pin(threadId, true), true);
+  assert.equal(f.controller.read().isPinned(threadId), true);
+  const watched = f.controller.readPinnedRows().get(threadId);
+  assert.deepEqual(watched?.location, { daemonId: remote.id, projectId: remote.projectId });
+  assert.equal(watched?.row.entryKind === "thread" && watched.row.metadata.pinned, true);
+
+  remote.put(row(threadId, { ...completed("t1"), settled: true }));
+  assert.equal(f.controller.read().isPinned(threadId), true, "a restore inside the archive window returns pinned");
+  remote.put(row(threadId, { ...completed("t1"), settled: true }, { metadata: { archived: true, pinned: false, snoozed: false } }));
+  assert.equal(f.controller.read().isPinned(threadId), false);
+  assert.equal(f.controller.readPinnedRows().has(threadId), false);
+});
+
+test("settled threads cannot gain a pin, and unpinning always succeeds", async context => {
+  const desktop = daemon("desktop");
+  const threadId = randomUUID();
+  desktop.put(row(threadId, { ...completed("t1"), settled: true }));
+  const f = await fixture(context, [desktop]);
+
+  assert.equal(await f.controller.pin(threadId, true), false);
+  assert.equal(f.controller.read().isPinned(threadId), false);
+  assert.equal(await f.controller.pin(randomUUID(), false), true);
 });

@@ -3,6 +3,7 @@
  * - WorkbenchHarnessSchema/WorkbenchHarnessId: stored provider identities, independent of installation.
  * - WorkbenchThreadDraft/WorkbenchThreadLifecycle/WorkbenchGitArcPlanState: draft, lifecycle, and inactive-plan types.
  * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active, stashed, and resolved Git work.
+ * - WorkbenchSidebarGitArcSchema/WorkbenchSidebarGitArc: the lean Git work sidebar rows and pinned summaries carry.
  * - WorkbenchGitArcProposalState/WorkbenchGitArcProposalSummary: one observed lifecycle proposal and its Git-derived message and totals.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
  * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
@@ -14,7 +15,6 @@
  * - WorkbenchReloadDirtSnapshotSchema: reload ownership and pending-scope diagnostics.
  * - WorkbenchProjectThreadSummaryCounts/WorkbenchProjectThreadSummaryEntry/WorkbenchPinnedThreadSummaryEntry/WorkbenchProjectThreadSummary: summary projection types.
  * - WorkbenchProjectThreadSummariesSchema/WorkbenchProjectThreadSummaries: cross-project summary collection.
- * - WorkbenchPinnedThreadLayoutSnapshotSchema/WorkbenchPinnedThreadLayoutSnapshot: revisioned global pin layout.
  * - WorkbenchHomeThreadDisplayOrderSchema/WorkbenchHomeThreadDisplayOrder/WorkbenchHomeThreadDisplayOrderSnapshot: folder-free home order and revision.
  * - WorkbenchObservedThreadTargetSchema/WorkbenchObservedThreadTarget: provider and subagent observation targets.
  * - WorkbenchThreadObservationSnapshotSchema/WorkbenchThreadObservationSnapshot: revisioned full thread-family observation.
@@ -32,8 +32,9 @@
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchThreadGitCommitSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema: current project and grouped sidebar facts.
  * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order.
- * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity.
- * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent.
+ * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled cross-project rows, counts, and activity.
+ * - WorkbenchPinnedThreadSummaryEntrySchema/getWorkbenchProjectThreadSummaryStatus/createWorkbenchPinnedThreadSummaryEntry: one row's summary status, and the app's pinned summary row for it.
+ * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent; all three are app-owned.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: current thread-family snapshots and daemon-owned mutations.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable: identify Git blockers and terminal settlement.
  * - WorkbenchThreadSettlementHold/getWorkbenchThreadSettlementHold: thread-owned settlement blockers (required todos, unhandled addressed feedback) and reading them from summary facts.
@@ -64,12 +65,7 @@ import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerSettingsSchem
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
 import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
 import type { WorkbenchThreadSidebarRow } from "./thread-sidebar-row.ts";
-import {
-  projectWorkbenchThreadDisplaySection,
-  resolveWorkbenchThreadDisplayOrder,
-  WorkbenchThreadDisplayOrderSchema,
-  type WorkbenchThreadDisplayOrder,
-} from "./thread-display-order.ts";
+import { WorkbenchThreadDisplayOrderSchema } from "./thread-display-order.ts";
 
 export { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 export { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
@@ -631,11 +627,25 @@ const PinnedDraftSummaryEntrySchema = SidebarCommonSchema.extend({
   metadata: PinnedMetadataSchema,
   status: z.literal("draft"),
 }).strict();
+const sidebarArcCommit = z.string().regex(/^[a-f0-9]{40,64}$/u);
+const sidebarArcPaths = z.array(z.string().min(1));
+const sidebarArcProposals = z.array(z.object({
+  proposalId: z.string().min(1), rootId: z.string().min(1).optional(), status: z.enum(["committed", "proposed"]),
+}).strict());
+export const WorkbenchSidebarGitArcSchema = z.discriminatedUnion("phase", [
+  z.object({ phase: z.literal("active"), checkpointCommit: sidebarArcCommit, proposals: sidebarArcProposals,
+    claimedPaths: sidebarArcPaths.min(1), stashedPaths: sidebarArcPaths.default([]).optional() }).strict(),
+  z.object({ phase: z.literal("stashed"), checkpointCommit: sidebarArcCommit, proposals: sidebarArcProposals,
+    claimedPaths: sidebarArcPaths.length(0), stashedPaths: sidebarArcPaths.min(1) }).strict(),
+  z.object({ phase: z.literal("resolved"), checkpointCommit: sidebarArcCommit, proposals: sidebarArcProposals,
+    claimedPaths: sidebarArcPaths.length(0), stashedPaths: sidebarArcPaths.default([]).optional() }).strict(),
+]);
+export type WorkbenchSidebarGitArc = z.infer<typeof WorkbenchSidebarGitArcSchema>;
+/** Built by the app from a pinned thread's lean row, so it carries the row's lean Git work. */
 const PinnedTopLevelSummaryEntrySchema = SidebarCommonSchema.extend({
   canCompleteQuestionnaire: z.boolean().default(false),
-  previousTitles: z.array(WorkbenchThreadTitleHistoryEntrySchema).max(4).default([]).optional(),
   entryKind: z.literal("thread"),
-  gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
+  gitArc: WorkbenchSidebarGitArcSchema.nullable().optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   metadata: PinnedMetadataSchema,
@@ -652,7 +662,6 @@ export type WorkbenchPinnedThreadSummaryEntry = z.infer<typeof WorkbenchPinnedTh
 export const WorkbenchProjectThreadSummarySchema = z.object({
   counts: WorkbenchProjectThreadSummaryCountsSchema,
   lastThreadUpdateAt: z.number().int().nonnegative().nullable(),
-  pinnedThreads: z.array(WorkbenchPinnedThreadSummaryEntrySchema).default([]),
   projectId: z.string().min(1).brand<"ProjectId">(),
   revision: z.number().int().nonnegative(),
   unsettledThreads: z.array(WorkbenchProjectThreadSummaryEntrySchema),
@@ -663,13 +672,6 @@ export const WorkbenchProjectThreadSummariesSchema = z.object({
   projects: z.array(WorkbenchProjectThreadSummarySchema),
 }).strict();
 export type WorkbenchProjectThreadSummaries = z.infer<typeof WorkbenchProjectThreadSummariesSchema>;
-
-export const WorkbenchPinnedThreadLayoutSnapshotSchema = z.object({
-  displayOrder: WorkbenchThreadDisplayOrderSchema,
-  revision: z.number().int().nonnegative(),
-  updateKind: z.literal("pinnedThreadLayout"),
-}).strict();
-export type WorkbenchPinnedThreadLayoutSnapshot = z.infer<typeof WorkbenchPinnedThreadLayoutSnapshotSchema>;
 
 export const WorkbenchHomeThreadDisplayOrderSchema = ThreadDisplayLayoutSchema.omit({ folders: true }).strict();
 export type WorkbenchHomeThreadDisplayOrder = z.infer<typeof WorkbenchHomeThreadDisplayOrderSchema>;
@@ -743,8 +745,7 @@ const ProjectRequestBase = z.object({ projectId: ProjectIdSchema }).strict();
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/set"), title: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/dismiss"), title: z.string().trim().min(1) }),
-  /** Snooze is app-owned, so daemons only place threads in pinned or main. */
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/priority/set"), priority: z.enum(["pinned", "main"]), sourceKey: z.string().min(1).brand<"ThreadDisplayKey">() }),
+  /** Locks a subagent; sidebar-thread pins are app-owned and never reach daemons. */
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/pin/set"), pinned: z.boolean() }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/settle") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/restore") }),
@@ -1069,11 +1070,52 @@ export function reduceWorkbenchThreadLifecycle(
   }
 }
 
+/** An unsettled thread's summary status; null when its placement keeps it out of the summary. */
+export function getWorkbenchProjectThreadSummaryStatus(
+  entry: TopLevelSidebarRow,
+  proposedThreadIds?: ReadonlySet<string>,
+): WorkbenchProjectThreadSummaryEntry["status"] | null {
+  if (entry.metadata.archived || entry.lifecycle.settled
+    || (entry.metadata.snoozed && entry.lifecycle.kind !== "needsAttention")) return null;
+  return entry.waitingFor && !entry.metadata.snoozed
+    ? "waiting"
+    : entry.lifecycle.kind === "working"
+      ? "working"
+      : entry.lifecycle.kind === "needsAttention"
+        ? entry.metadata.snoozed ? "needsAttention" : "needsAttentionActive"
+        : entry.lifecycle.kind === "stopped"
+          ? "stopped"
+          : (proposedThreadIds?.has(entry.identity.threadId)
+            ?? entry.gitArc?.proposals.some(({ status: proposalStatus }) => proposalStatus === "proposed"))
+            ? "proposedCommit"
+            : "completed";
+}
+
+/** A pinned thread's summary row; null when it is not shown as pinned (settled, archived or snoozed). */
+export function createWorkbenchPinnedThreadSummaryEntry(
+  entry: TopLevelSidebarRow,
+): Extract<WorkbenchPinnedThreadSummaryEntry, { entryKind: "thread" }> | null {
+  const status = getWorkbenchProjectThreadSummaryStatus(entry);
+  if (!status || entry.metadata.snoozed) return null;
+  return {
+    activityAt: entry.activityAt,
+    canCompleteQuestionnaire: Boolean(entry.pendingQuestionnaire) && isWorkbenchSidebarThreadCompletionAvailable(entry),
+    entryKind: "thread",
+    ...(entry.gitArc !== undefined ? { gitArc: entry.gitArc } : {}),
+    identity: entry.identity,
+    lifecycle: entry.lifecycle,
+    metadata: { archived: false, pinned: true, snoozed: false },
+    status,
+    title: entry.title,
+    ...(entry.waitingFor ? { waitingFor: entry.waitingFor } : {}),
+    ...(entry.waitingOnThreads?.length ? { waitingOnThreads: entry.waitingOnThreads } : {}),
+  };
+}
+
 export function createWorkbenchProjectThreadSummary(
   projectId: ProjectId,
   entries: readonly WorkbenchThreadSidebarEntry[],
   revision: number,
-  displayOrder: WorkbenchThreadDisplayOrder = {},
   proposedThreadIds?: ReadonlySet<string>,
 ): WorkbenchProjectThreadSummary {
   const counts: WorkbenchProjectThreadSummaryCounts = {
@@ -1086,24 +1128,10 @@ export function createWorkbenchProjectThreadSummary(
     working: 0,
   };
   const unsettledThreads: WorkbenchProjectThreadSummaryEntry[] = [];
-  const statusByThreadKey = new Map<string, WorkbenchProjectThreadSummaryEntry["status"]>();
   for (const entry of entries) {
-    if (entry.entryKind !== "thread" || entry.metadata.archived || entry.lifecycle.settled
-      || (entry.metadata.snoozed && entry.lifecycle.kind !== "needsAttention")) continue;
-    const status: WorkbenchProjectThreadSummaryEntry["status"] = entry.waitingFor && !entry.metadata.snoozed
-      ? "waiting"
-      : entry.lifecycle.kind === "working"
-        ? "working"
-      : entry.lifecycle.kind === "needsAttention"
-        ? entry.metadata.snoozed ? "needsAttention" : "needsAttentionActive"
-        : entry.lifecycle.kind === "stopped"
-          ? "stopped"
-          : (proposedThreadIds?.has(entry.identity.threadId)
-            ?? entry.gitArc?.proposals.some(({ status: proposalStatus }) => proposalStatus === "proposed"))
-            ? "proposedCommit"
-            : "completed";
+    const status = entry.entryKind === "thread" ? getWorkbenchProjectThreadSummaryStatus(entry, proposedThreadIds) : null;
+    if (entry.entryKind !== "thread" || !status) continue;
     counts[status] += 1;
-    statusByThreadKey.set(`${entry.identity.harness}:${entry.identity.threadId}`, status);
     unsettledThreads.push({
       activityAt: entry.activityAt,
       identity: entry.identity,
@@ -1111,37 +1139,6 @@ export function createWorkbenchProjectThreadSummary(
       title: entry.title,
     });
   }
-  const resolved = resolveWorkbenchThreadDisplayOrder(entries, displayOrder);
-  const pinnedThreads = projectWorkbenchThreadDisplaySection(resolved.entries, resolved.displayOrder, "pinned")
-    .flatMap((item) => item.itemKind === "folder" ? item.entries : [item.entry])
-    .flatMap<WorkbenchPinnedThreadSummaryEntry>((entry) => {
-      if (entry.entryKind === "draft") {
-        return [{
-          activityAt: entry.activityAt,
-          draftId: entry.draft.draftId,
-          entryKind: "draft",
-          hasAttachments: entry.draft.attachments.length > 0,
-          metadata: { archived: false, pinned: true, snoozed: false },
-          status: "draft",
-          title: entry.title,
-        }];
-      }
-      if (entry.entryKind !== "thread") return [];
-      return [{
-        activityAt: entry.activityAt,
-        canCompleteQuestionnaire: Boolean(entry.pendingQuestionnaire) && isWorkbenchSidebarThreadCompletionAvailable(entry),
-        entryKind: "thread",
-        ...(entry.gitArc !== undefined ? { gitArc: entry.gitArc } : {}),
-        identity: entry.identity,
-        lifecycle: entry.lifecycle,
-        metadata: { archived: false, pinned: true, snoozed: false },
-        status: statusByThreadKey.get(`${entry.identity.harness}:${entry.identity.threadId}`) ?? "completed",
-        title: entry.title,
-        previousTitles: entry.previousTitles ?? [],
-        ...(entry.waitingFor ? { waitingFor: entry.waitingFor } : {}),
-        ...(entry.waitingOnThreads?.length ? { waitingOnThreads: entry.waitingOnThreads } : {}),
-      }];
-    });
   const lastThreadUpdateAt = entries.reduce<number | null>(
     (latest, entry) => entry.entryKind === "draft" ? latest : Math.max(latest ?? 0, entry.activityAt),
     null,
@@ -1150,7 +1147,6 @@ export function createWorkbenchProjectThreadSummary(
   return {
     counts: waiting ? counts : countsWithoutWaiting,
     lastThreadUpdateAt,
-    pinnedThreads,
     projectId,
     revision,
     unsettledThreads,

@@ -31,7 +31,6 @@ export default class WorkbenchThreadStateIntegrity {
       }
       repository.readLayout({ kind: "pinned" });
       repository.readLayout({ kind: "home" });
-      repository.readPinnedImports();
       const relationships = new WorkbenchSubagentRelationshipRepository(this.database);
       const parents = this.database.prepare("SELECT parent_thread_id FROM workbench_subagent_parents").all() as { parent_thread_id: WorkbenchThreadId }[];
       for (const { parent_thread_id: parentThreadId } of parents) {

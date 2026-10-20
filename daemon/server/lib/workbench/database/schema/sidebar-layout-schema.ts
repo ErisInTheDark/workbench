@@ -8,8 +8,9 @@ import {
   sql, text, unique, type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
 import {
-  createTable, defineSubsystemHistory, defineTableHistory, tableVersion,
+  createTable, defineSubsystemHistory, defineTableHistory, retireTableHistory, tableVersion,
 } from "workbench-shared/database/schema/schema-history";
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 
 export function defineSidebarLayoutSchema(schemaVersion: number) {
   function install<Table extends TableDefinition>(table: Table) {
@@ -168,11 +169,12 @@ export function defineSidebarLayoutSchema(schemaVersion: number) {
       layouts: layouts.current, projectLayouts: projectLayouts.current, globalLayouts: globalLayouts.current,
       folders: folders.current, items: items.current, threads: threads.current, drafts: drafts.current,
       layoutFolders: layoutFolders.current, relations: relations.current, members: members.current,
-      pinnedImports: pinnedImports.current,
     },
     history: defineSubsystemHistory([
       layouts, ownProjectReferences(projectLayouts), globalLayouts, folders, items, threads, drafts, layoutFolders,
-      relations, members, ownProjectReferences(pinnedImports),
+      relations, members,
+      // Only the retired app-presentation pin import read these; pins are app-owned now.
+      retireTableHistory(ownProjectReferences(pinnedImports), databaseReleases.appOwnedPins.version),
     ]),
   };
 }

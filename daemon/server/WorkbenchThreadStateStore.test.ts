@@ -11,7 +11,6 @@ import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
 import { currentThreadTitleName, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
-import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { insertRow } from "workbench-shared/database/workbench-database-statements";
@@ -111,7 +110,7 @@ test("same-tick title renames keep recency order across cold reopen", async () =
   }
 });
 
-test("project-qualified draft replacement preserves a moved draft and removes deleted layout references", async () => {
+test("project-qualified draft replacement preserves a moved draft until its own project deletes it", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-draft-facade-");
   const directory = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
@@ -133,14 +132,7 @@ test("project-qualified draft replacement preserves a moved draft and removes de
     await store.writeChanges(fixtureIdentityValues.ProjectId["first"], { deletedDraftIds: [draft.draftId] });
     await store.writeProject(fixtureIdentityValues.ProjectId["first"], document([]));
     assert.equal((await store.readProject(fixtureIdentityValues.ProjectId["second"])).drafts[0]?.prompt, "kept");
-    const key = getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["second"], getThreadDisplayDraftKey(draft.draftId));
-    await store.writeGlobal("pinnedLayout", {
-      version: 1, revision: 2, importedProjectIds: [fixtureIdentityValues.ProjectId.second],
-      displayOrder: { pinned: { [key]: { above: [], below: [] } } },
-    });
     await store.writeChanges(fixtureIdentityValues.ProjectId["second"], { deletedDraftIds: [draft.draftId] });
-    const pinned = await store.readGlobal("pinnedLayout") as { displayOrder: { pinned?: object } };
-    assert.deepEqual(pinned.displayOrder.pinned ?? {}, {});
     assert.deepEqual((await store.readProject(fixtureIdentityValues.ProjectId["second"])).drafts, []);
   } finally {
     await database.close();

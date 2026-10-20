@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchPresentationRepositoryOptions: durable shared-presentation database path.
- * - default WorkbenchPresentationRepository: own project, draft, layout, thread-snooze and import transactions, projecting compact launch
+ * - default WorkbenchPresentationRepository: own project, draft, layout, thread-snooze, thread-pin and draft-import transactions, projecting compact launch
  *   history and one shared frozen snapshot per revision; folder registration merges projects whose folders all re-keyed
  *   into their successor identity.
  */
@@ -219,6 +219,7 @@ export default class WorkbenchPresentationRepository {
         target: { daemonId: row.daemon_id, projectId: row.project_id },
       })),
       threadSnoozes: this.readThreadSnoozes(db),
+      threadPins: db.prepare("SELECT thread_id FROM presentation_thread_pins ORDER BY thread_id").pluck().all(),
     });
   }
 
@@ -248,8 +249,7 @@ export default class WorkbenchPresentationRepository {
   mutateImportBatch(values: readonly PresentationMutation[]) {
     if (!values.length || values.length > 20) throw new Error("Import batch size is invalid.");
     const mutations = values.map(value => PresentationMutationSchema.parse(value));
-    if (mutations.some(value => value.kind !== "importDraft"
-      && value.kind !== "finishImportDraft" && value.kind !== "importLayout")) {
+    if (mutations.some(value => value.kind !== "importDraft" && value.kind !== "finishImportDraft")) {
       throw new Error("Import batch contains a non-import mutation.");
     }
     this.snapshot = null;
@@ -267,6 +267,7 @@ export default class WorkbenchPresentationRepository {
       case "setDraftPriority": this.setDraftPriority(mutation); break;
       case "setLocationsHidden": this.setLocationsHidden(mutation); break;
       case "setThreadSnoozes": this.setThreadSnoozes(mutation); break;
+      case "setThreadPins": this.setThreadPins(mutation); break;
       case "deleteAttachment": this.deleteAttachment(mutation); break;
       case "reserveLaunch": this.reserveLaunch(mutation); break;
       case "completeLaunch": this.completeLaunch(mutation); break;
@@ -275,7 +276,6 @@ export default class WorkbenchPresentationRepository {
       case "saveLayouts": this.saveLayouts(mutation); break;
       case "importDraft": this.importDraft(mutation); break;
       case "finishImportDraft": this.finishImportDraft(mutation); break;
-      case "importLayout": this.importLayout(mutation); break;
     }
   }
 
@@ -628,6 +628,16 @@ export default class WorkbenchPresentationRepository {
     this.nextRevision();
   }
 
+  /** Unchanged pins publish no revision. */
+  private setThreadPins(input: Extract<PresentationMutation, { kind: "setThreadPins" }>) {
+    const db = this.requireDatabase();
+    const pin = db.prepare("INSERT OR IGNORE INTO presentation_thread_pins(thread_id) VALUES (?)");
+    const unpin = db.prepare("DELETE FROM presentation_thread_pins WHERE thread_id = ?");
+    const changed = input.pin.reduce((count, threadId) => count + pin.run(threadId).changes, 0)
+      + input.unpin.reduce((count, threadId) => count + unpin.run(threadId).changes, 0);
+    if (changed) this.nextRevision();
+  }
+
   /**
    * Hide or show folders of one logical project for this app. Targets registered to another project are rejected;
    * unregistered (observed) targets are accepted. At least one registered folder must stay visible, so the project
@@ -925,18 +935,14 @@ export default class WorkbenchPresentationRepository {
     `).get(daemonId, kind, sourceId) as ReceiptRow | undefined;
   }
 
-  private sourceMapping(daemonId: string, kind: "draft" | "folder" | "member", sourceId: string) {
+  private sourceMapping(daemonId: string, kind: "draft", sourceId: string) {
     return this.requireDatabase().prepare(`
       SELECT target_id, source_revision FROM presentation_source_mappings
       WHERE daemon_id = ? AND source_kind = ? AND source_id = ?
     `).get(daemonId, kind, sourceId) as { target_id: string; source_revision: number | null } | undefined;
   }
 
-  private sourceTarget(daemonId: string, kind: "draft" | "folder" | "member", sourceId: string) {
-    return this.sourceMapping(daemonId, kind, sourceId)?.target_id;
-  }
-
-  private mapSource(daemonId: string, kind: "draft" | "folder" | "member",
+  private mapSource(daemonId: string, kind: "draft",
     sourceId: string, targetId: string, sourceRevision: number) {
     const existing = this.sourceMapping(daemonId, kind, sourceId);
     if (existing && (existing.target_id !== targetId || existing.source_revision !== sourceRevision)) {
@@ -947,64 +953,6 @@ export default class WorkbenchPresentationRepository {
       INSERT INTO presentation_source_mappings(daemon_id, source_kind, source_id, target_id, source_revision)
       VALUES (?, ?, ?, ?, ?)
     `).run(daemonId, kind, sourceId, targetId, sourceRevision);
-  }
-
-  private importLayout(input: Extract<PresentationMutation, { kind: "importLayout" }>) {
-    const db = this.requireDatabase();
-    const receipt = this.receipt(input.daemonId, "layout", input.sourceId);
-    if (receipt) {
-      if (receipt.source_revision !== input.sourceRevision) this.noteDivergence(
-        input.daemonId, "layout", input.sourceId, receipt.source_revision, input.sourceRevision);
-      return;
-    }
-    if ((input.scope === "project") !== (input.logicalProjectId !== null)
-      || input.folders.some(folder => folder.scope !== input.scope
-      || folder.logicalProjectId !== input.logicalProjectId)
-      || input.members.some(member => member.scope !== input.scope
-        || member.logicalProjectId !== input.logicalProjectId)) {
-      throw new Error("Imported layout member belongs to another scope.");
-    }
-    const base = (db.prepare(`
-      SELECT MAX(position) FROM presentation_layout_members
-      WHERE scope = ? AND logical_project_id IS ?
-    `).pluck().get(input.scope, input.logicalProjectId) as number | null) ?? -1;
-    const revision = this.nextRevision();
-    const insertFolder = db.prepare(`
-      INSERT INTO presentation_folders(id, scope, logical_project_id, title, position, revision)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    const folderIds = new Set(input.folders.map(folder => folder.sourceId));
-    for (const [index, folder] of [...input.folders].sort((a, b) => a.position - b.position).entries()) {
-      this.mapSource(input.daemonId, "folder", folder.sourceId, folder.id, input.sourceRevision);
-      insertFolder.run(folder.id, folder.scope, folder.logicalProjectId, folder.title, base + index + 1, revision);
-    }
-    const insertMember = db.prepare(`
-      INSERT INTO presentation_layout_members
-        (id, scope, logical_project_id, folder_id, kind, draft_id, daemon_id, project_id, thread_id, position, revision)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const [index, member] of [...input.members].sort((a, b) => a.position - b.position).entries()) {
-      if (member.folderId && !folderIds.has(member.folderId)) {
-        throw new Error("Imported folder membership is unresolved.");
-      }
-      const targetFolderId = member.folderId
-        ? this.sourceTarget(input.daemonId, "folder", member.folderId) : null;
-      const targetDraftId = member.kind === "draft" && member.draftId
-        ? this.sourceTarget(input.daemonId, "draft", member.draftId) : null;
-      this.validateLayoutMember({ ...member, folderId: targetFolderId ?? null,
-        draftId: targetDraftId ?? null }, new Set(input.folders.map(folder => folder.id)));
-      this.mapSource(input.daemonId, "member", member.sourceId, member.id, input.sourceRevision);
-      insertMember.run(
-        member.id, member.scope, member.logicalProjectId, targetFolderId, member.kind,
-        targetDraftId, member.thread?.location.daemonId ?? null,
-        member.thread?.location.projectId ?? null, member.thread?.threadId ?? null,
-        base + index + 1, revision,
-      );
-    }
-    db.prepare(`
-      INSERT INTO presentation_import_receipts(daemon_id, source_kind, source_id, target_id, source_revision)
-      VALUES (?, 'layout', ?, ?, ?)
-    `).run(input.daemonId, input.sourceId, input.logicalProjectId ?? input.scope, input.sourceRevision);
   }
 
   private validateLayoutMember(member: {
@@ -1041,7 +989,7 @@ export default class WorkbenchPresentationRepository {
     }
   }
 
-  private noteDivergence(daemonId: string, sourceKind: "draft" | "layout", sourceId: string,
+  private noteDivergence(daemonId: string, sourceKind: "draft", sourceId: string,
     importedRevision: number, latestRevision: number) {
     if (latestRevision <= importedRevision) return;
     const recorded = this.requireDatabase().prepare(`

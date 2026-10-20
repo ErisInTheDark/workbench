@@ -20,8 +20,7 @@ const uuid = z.string().uuid();
 const isLegacy = (project: ProjectSchemaRows["projects"]) => !FIXED_PROJECT_IDS.has(project.id) && !uuid.safeParse(project.id).success;
 const shadowTables = new Set([
   "workbench_project_roots", "workbench_project_aliases", "git_claim_thread_file_days",
-  "git_claim_imports", "workbench_sidebar_project_layouts", "workbench_sidebar_pinned_imports",
-  "workbench_search_documents",
+  "git_claim_imports", "workbench_sidebar_project_layouts", "workbench_search_documents",
 ]);
 
 export default class WorkbenchProjectIdentityMigration {
@@ -262,9 +261,6 @@ export default class WorkbenchProjectIdentityMigration {
         .run(...columns.map(column => column === "project_id" ? destination : receipt[column]));
     }
     this.database.prepare("UPDATE git_claim_imports SET state = 'pending', run_id = NULL WHERE project_id = ? AND state = 'processing'").run(destination);
-    this.database.prepare(`INSERT OR IGNORE INTO workbench_sidebar_pinned_imports
-      SELECT ?, layout_id, owner_kind FROM workbench_sidebar_pinned_imports WHERE project_id = ?`).run(destination, source);
-    this.database.prepare("DELETE FROM workbench_sidebar_pinned_imports WHERE project_id = ?").run(source);
     const layout = this.database.prepare("SELECT layout_id FROM workbench_sidebar_project_layouts WHERE project_id = ?").pluck().get(source) as string | undefined;
     this.database.prepare("DELETE FROM workbench_sidebar_project_layouts WHERE project_id = ?").run(source);
     if (layout) this.database.prepare("DELETE FROM workbench_sidebar_layouts WHERE id = ?").run(layout);

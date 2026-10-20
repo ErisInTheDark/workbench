@@ -14,7 +14,6 @@ import {
   readWorkbenchGlobalSidebarPreferences,
   readWorkbenchProjectSidebarPreferences,
   resolveWorkbenchSettings,
-  setWorkbenchProjectSidebarFolderOpen,
   writeGlobalWorkbenchSetting,
   writeLogicalProjectWorkbenchSetting,
   writeProjectWorkbenchSetting,
@@ -113,16 +112,13 @@ test("each focused setting intent writes one app-state identity", async () => {
   assert.equal(controller.getSnapshot().records.length, 4);
 });
 
-test("sidebar preferences project scalar and collection records without crossing projects", async () => {
+test("sidebar preferences project scalar records without crossing projects", async () => {
   const controller = new WorkbenchClientStateController({ mode: "memory" });
   const alpha = {
     ...createDefaultWorkbenchProjectSidebarPreferences(),
-    pinnedFolderIds: ["one", "two"],
     threadsOpen: false,
   };
   await writeWorkbenchProjectSidebarPreference(controller, "alpha", "threadsOpen", false);
-  await setWorkbenchProjectSidebarFolderOpen(controller, "alpha", "pinned", "one", true);
-  await setWorkbenchProjectSidebarFolderOpen(controller, "alpha", "pinned", "two", true);
   await writeWorkbenchProjectSidebarPreference(controller, "beta", "threadsOpen", false);
 
   assert.deepEqual(

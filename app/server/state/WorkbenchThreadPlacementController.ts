@@ -1,11 +1,15 @@
 /*
  * Exports:
- * - default WorkbenchThreadSnoozeController: own app thread snoozes across daemons: record each from the thread's current
- *   summary, publish the snooze set, watch every snoozed thread and dependent target, and wake them from current facts.
+ * - default WorkbenchThreadPlacementController: own app thread pins and snoozes across daemons: record each from the
+ *   thread's current summary, publish the placement, watch every pinned, snoozed and dependent-target thread, wake
+ *   snoozes and drop archived pins from current facts, and expose the watched pinned rows for project summaries.
  */
-import { ThreadReferenceSchema, WorkbenchThreadIdSchema, type DaemonId } from "workbench-shared/workbench/identity";
+import {
+  ThreadReferenceSchema, WorkbenchThreadIdSchema, type DaemonId, type ProjectId, type WorkbenchThreadId,
+} from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { isWorkbenchThreadSnoozeAvailable } from "workbench-shared/workbench/thread/thread-state";
+import ThreadPlacement from "workbench-shared/workbench/thread/thread-placement";
 import { ThreadSnooze } from "workbench-shared/workbench/thread/thread-snooze";
 import type { LocatedThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
 import type { WorkbenchThreadSidebarThreadRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
@@ -15,13 +19,18 @@ import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThrea
 import type WorkbenchPresentationController from "./WorkbenchPresentationController";
 
 type Batch = ReturnType<WorkbenchDaemonSource["observe"]>;
+export interface PlacedThreadRow {
+  location: { daemonId: DaemonId; projectId: ProjectId };
+  row: WorkbenchThreadSidebarThreadRow;
+}
 
-export default class WorkbenchThreadSnoozeController {
+export default class WorkbenchThreadPlacementController {
   private readonly batches = new Map<DaemonId, Batch>();
   private readonly listeners = new Set<() => void>();
   private readonly unsubscribe: Array<() => void> = [];
   private readonly cancellation = new AbortController();
-  private snoozes: ReadonlyMap<string, ThreadSnooze> = new Map();
+  private placement = ThreadPlacement.empty;
+  private pinnedRows: ReadonlyMap<string, PlacedThreadRow> = new Map();
   private evaluating = false;
   private dirty = false;
 
@@ -52,19 +61,34 @@ export default class WorkbenchThreadSnoozeController {
     this.listeners.clear();
   }
 
-  /** Every snooze by thread id; changes only when the snooze set does. */
-  read() { return this.snoozes; }
+  /** Every pin and snooze; a new object only when either set changes. */
+  read() { return this.placement; }
 
+  /** The current rows of pinned threads that a connected daemon reports, with placement applied. */
+  readPinnedRows() { return this.pinnedRows; }
+
+  /** Fires when the placement or a watched pinned row changes. */
   subscribe(listener: () => void) {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
+  }
+
+  /** Settled and archived threads cannot gain a pin; unpinning always succeeds. */
+  async pin(threadId: string, pinned: boolean) {
+    const id = WorkbenchThreadIdSchema.parse(threadId);
+    if (pinned) {
+      const row = (await this.readSummary(id))?.summary.row;
+      if (row?.entryKind !== "thread" || row.metadata.archived || row.lifecycle.settled) return false;
+    }
+    this.writePins(pinned ? [id] : [], pinned ? [] : [id]);
+    return true;
   }
 
   /** A pending questionnaire's turn is interrupted first; the questionnaire stays and its leaving wakes the thread. */
   async snooze(threadId: string, snoozed: boolean, requestKey?: string) {
     const id = WorkbenchThreadIdSchema.parse(threadId);
     if (!snoozed) {
-      this.write([], [id]);
+      this.writeSnoozes([], [id]);
       return true;
     }
     const row = (await this.readSummary(id))?.summary.row;
@@ -77,7 +101,7 @@ export default class WorkbenchThreadSnoozeController {
     if (question) await this.options.threads.withThread(id, async source => {
       await source.daemon.threads.interrupt({ threadId: id, requestKey: question });
     }, this.cancellation.signal);
-    this.write([{ threadId: id, basis: ThreadSnooze.capture(row, question), targets: [] }], []);
+    this.writeSnoozes([{ threadId: id, basis: ThreadSnooze.capture(row, question), targets: [] }], []);
     return true;
   }
 
@@ -90,15 +114,15 @@ export default class WorkbenchThreadSnoozeController {
     const targetRow = target?.summary.row;
     if (sourceRow?.entryKind !== "thread" || !ThreadSnooze.canWait(sourceRow)
       || targetRow?.entryKind !== "thread" || targetRow.metadata.archived) return false;
-    const next = ThreadSnooze.toggleTarget(this.snoozes.get(id) ?? null, sourceRow, {
+    const next = ThreadSnooze.toggleTarget(this.placement.snoozes.get(id) ?? null, sourceRow, {
       identity: targetRow.identity, projectId: target!.projectId, title: targetRow.title,
     }, ThreadSnooze.isTargetReady(targetRow));
-    this.write(next ? [next] : [], next ? [] : [id]);
+    this.writeSnoozes(next ? [next] : [], next ? [] : [id]);
     return true;
   }
 
   /** Unchanged writes are skipped, so waking an unsnoozed thread publishes nothing. */
-  private write(put: ThreadSnooze[], wake: ThreadSnooze["threadId"][]) {
+  private writeSnoozes(put: ThreadSnooze[], wake: ThreadSnooze["threadId"][]) {
     const current = ThreadSnooze.byThread(this.options.presentation.read().threadSnoozes);
     const changedPut = put.filter(snooze => !areDeeplyEqual(current.get(snooze.threadId), snooze));
     const changedWake = wake.filter(threadId => current.has(threadId));
@@ -106,7 +130,15 @@ export default class WorkbenchThreadSnoozeController {
     this.options.presentation.mutate({ kind: "setThreadSnoozes", put: changedPut, wake: changedWake });
   }
 
-  /** Re-runs until stable, since its own writes change the snooze set it reads. */
+  private writePins(pin: WorkbenchThreadId[], unpin: WorkbenchThreadId[]) {
+    const current = new Set(this.options.presentation.read().threadPins ?? []);
+    const changedPin = pin.filter(threadId => !current.has(threadId));
+    const changedUnpin = unpin.filter(threadId => current.has(threadId));
+    if (!changedPin.length && !changedUnpin.length) return;
+    this.options.presentation.mutate({ kind: "setThreadPins", pin: changedPin, unpin: changedUnpin });
+  }
+
+  /** Re-runs until stable, since its own writes change the placement it reads. */
   private evaluate() {
     if (this.cancellation.signal.aborted || this.options.canProject?.() === false) return;
     this.dirty = true;
@@ -115,26 +147,31 @@ export default class WorkbenchThreadSnoozeController {
     try {
       while (this.dirty) {
         this.dirty = false;
-        this.publish();
+        const changed = this.readPlacement();
         this.observe();
-        this.wakeDue();
+        const rows = this.reportedRows();
+        this.reconcile(rows);
+        if (this.publishPinnedRows(rows) || changed) for (const listener of [...this.listeners]) listener();
       }
     } catch (error) {
-      this.options.warn(`Thread snooze evaluation failed: ${error instanceof Error ? error.message.slice(0, 500) : "Unexpected failure."}`);
+      this.options.warn(`Thread placement evaluation failed: ${error instanceof Error ? error.message.slice(0, 500) : "Unexpected failure."}`);
     } finally { this.evaluating = false; }
   }
 
-  private publish() {
-    const next = ThreadSnooze.byThread(this.options.presentation.read().threadSnoozes);
-    if (areDeeplyEqual([...next.values()], [...this.snoozes.values()])) return;
-    this.snoozes = next;
-    for (const listener of [...this.listeners]) listener();
+  private readPlacement() {
+    const next = ThreadPlacement.from(this.options.presentation.read());
+    if (areDeeplyEqual([...next.snoozes.values()], [...this.placement.snoozes.values()])
+      && areDeeplyEqual([...next.pins].sort(), [...this.placement.pins].sort())) return false;
+    this.placement = next;
+    return true;
   }
 
   private observe() {
-    const threadIds = [...new Set([...this.snoozes.values()].flatMap(snooze =>
-      [snooze.threadId, ...snooze.targets.map(target => target.identity.threadId)]))].sort()
-      .map(id => ThreadReferenceSchema.parse(id));
+    const threadIds = [...new Set([
+      ...this.placement.pins,
+      ...[...this.placement.snoozes.values()].flatMap(snooze =>
+        [snooze.threadId, ...snooze.targets.map(target => target.identity.threadId)]),
+    ])].sort().map(id => ThreadReferenceSchema.parse(id));
     const query = { kind: "threadSummaries" as const, threadIds };
     const sources = threadIds.length ? this.options.sources.all() : [];
     for (const [daemonId, batch] of this.batches) {
@@ -157,38 +194,58 @@ export default class WorkbenchThreadSnoozeController {
 
   /**
    * Only rows a daemon actually reports decide anything: a thread no connected daemon holds may sit on one that is
-   * offline, so its snooze or target keeps waiting rather than guessing it is gone.
+   * offline, so its pin, snooze or target keeps waiting rather than guessing it is gone.
    */
-  private wakeDue() {
-    const rows = new Map<string, WorkbenchThreadSidebarThreadRow>();
+  private reportedRows() {
+    const rows = new Map<string, PlacedThreadRow>();
     const conflicts = new Set<string>();
-    for (const batch of this.batches.values()) {
+    for (const [daemonId, batch] of this.batches) {
       const fact = batch.getSnapshot();
       if (fact.value?.kind !== "threadSummaries") continue;
       for (const [threadId, located] of Object.entries(fact.value.summaries)) {
         if (!located) continue;
         if (rows.has(threadId)) conflicts.add(threadId);
-        rows.set(threadId, located.summary.row);
+        rows.set(threadId, { location: { daemonId, projectId: located.projectId }, row: located.summary.row });
       }
     }
     for (const threadId of conflicts) rows.delete(threadId);
+    return rows;
+  }
+
+  /** Archiving drops a pin; settling keeps it so a restore comes back pinned. */
+  private reconcile(rows: ReadonlyMap<string, PlacedThreadRow>) {
     const put: ThreadSnooze[] = [];
     const wake: ThreadSnooze["threadId"][] = [];
-    for (const snooze of this.snoozes.values()) {
-      const row = rows.get(snooze.threadId);
+    for (const snooze of this.placement.snoozes.values()) {
+      const row = rows.get(snooze.threadId)?.row;
       if (row && ThreadSnooze.isWakeDue(snooze, row)) {
         wake.push(snooze.threadId);
         continue;
       }
       const targets = snooze.targets.filter(target => {
-        const targetRow = rows.get(target.identity.threadId);
+        const targetRow = rows.get(target.identity.threadId)?.row;
         return !targetRow || !ThreadSnooze.isTargetReady(targetRow);
       });
       if (targets.length === snooze.targets.length) continue;
       if (targets.length) put.push({ ...snooze, targets });
       else wake.push(snooze.threadId);
     }
-    if (put.length || wake.length) this.write(put, wake);
+    if (put.length || wake.length) this.writeSnoozes(put, wake);
+    const unpin = [...this.placement.pins].flatMap(threadId => {
+      const row = rows.get(threadId)?.row;
+      return row?.entryKind === "thread" && row.metadata.archived ? [WorkbenchThreadIdSchema.parse(threadId)] : [];
+    });
+    if (unpin.length) this.writePins([], unpin);
+  }
+
+  private publishPinnedRows(rows: ReadonlyMap<string, PlacedThreadRow>) {
+    const next = new Map([...this.placement.pins].flatMap(threadId => {
+      const placed = rows.get(threadId);
+      return placed ? [[threadId, { ...placed, row: this.placement.apply(placed.row) }] as const] : [];
+    }));
+    if (areDeeplyEqual([...next.entries()], [...this.pinnedRows.entries()])) return false;
+    this.pinnedRows = next;
+    return true;
   }
 
   /** The thread's current summary from the daemon that holds it. */
@@ -207,7 +264,7 @@ export default class WorkbenchThreadSnoozeController {
           if (result instanceof Error) reject(result);
           else resolve(result);
         };
-        const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Thread snooze is closing."));
+        const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Thread placement is closing."));
         const check = () => {
           const fact = batch?.getSnapshot();
           if (!fact) return;

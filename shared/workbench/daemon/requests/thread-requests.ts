@@ -18,14 +18,11 @@ import { WorkbenchThreadLaunchStateSchema, type WorkbenchThreadLaunchRequest, ty
 import {
   WorkbenchPresentationAttachmentChunkSchema,
   WorkbenchPresentationExportPageSchema,
-  WorkbenchPresentationLayoutChunkSchema,
   WorkbenchPresentationManifestPageSchema,
   type WorkbenchPresentationAttachmentChunk,
   type WorkbenchPresentationAttachmentChunkRequest,
   type WorkbenchPresentationExportPage,
   type WorkbenchPresentationExportRequest,
-  type WorkbenchPresentationLayoutChunk,
-  type WorkbenchPresentationLayoutChunkRequest,
   type WorkbenchPresentationManifestPage,
   type WorkbenchPresentationManifestRequest,
 } from "../../thread/thread-presentation-export.ts";
@@ -76,9 +73,6 @@ export const threadDaemonRequests = {
   }),
   "thread/presentation/attachment/read": defineDaemonRequest<WorkbenchPresentationAttachmentChunkRequest, WorkbenchPresentationAttachmentChunk>()({
     route: "app", result: WorkbenchPresentationAttachmentChunkSchema,
-  }),
-  "thread/presentation/layout/read": defineDaemonRequest<WorkbenchPresentationLayoutChunkRequest, WorkbenchPresentationLayoutChunk>()({
-    route: "app", result: WorkbenchPresentationLayoutChunkSchema,
   }),
   // Browser identity lookup uses the workspace owner observation.
   "thread/identity/resolve": defineDaemonRequest<WorkbenchThreadIdentityResolveRequest, { data: WorkbenchThreadIdentityResolution | null }>()({

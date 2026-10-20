@@ -3,7 +3,7 @@
  * - WorkbenchStoredThreadDraft: draft body and its persistent sidebar flags.
  * - WorkbenchThreadStateCommit: changed facts committed together before publication.
  * - WorkbenchThreadRecordQuery: project, provider-working, history or explicit-record selection.
- * - WorkbenchThreadStateProjectDocument/WorkbenchThreadStateGlobalDocument: assembled consumer documents, never stored JSON blobs.
+ * - WorkbenchThreadStateProjectDocument: assembled consumer document, never a stored JSON blob.
  * - WorkbenchThreadStatePersistence: typed worker boundary; all thread and turn references are canonical.
  * - WorkbenchSubagentRelationshipRead/WorkbenchSubagentPersistence: scoped membership reads and atomic parent allocation.
  */
@@ -19,9 +19,6 @@ import type { ProjectDocument } from "./workbench-thread-state-document-source";
 import type { DraftId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 export type WorkbenchThreadStateProjectDocument = ProjectDocument & { version: 4 };
-export type WorkbenchThreadStateGlobalDocument =
-  | { id: "homeDisplayOrder"; version: 1; revision: number; displayOrder: ThreadDisplayLayout }
-  | { id: "pinnedLayout"; version: 1; revision: number; displayOrder: ThreadDisplayLayout; importedProjectIds: ProjectId[] };
 
 export interface WorkbenchSubagentRelationshipRead {
   projectId: ProjectId;
@@ -50,7 +47,6 @@ export interface WorkbenchThreadStateCommit {
   deletedDraftIds?: readonly DraftId[];
   projectProfiles?: readonly { projectId: ProjectId; profile: WorkbenchComposerProfileSelectionState | null }[];
   layouts?: readonly { owner: WorkbenchThreadLayoutOwner; revision: number; displayOrder: ThreadDisplayLayout }[];
-  pinnedImports?: readonly ProjectId[];
 }
 
 export type WorkbenchThreadRecordQuery =
@@ -68,7 +64,6 @@ export interface WorkbenchThreadStatePersistence {
   readDrafts(projectId: ProjectId): Promise<WorkbenchStoredThreadDraft[]>;
   readProjectProfile(projectId: ProjectId): Promise<WorkbenchComposerProfileSelectionState | null>;
   readLayout(owner: WorkbenchThreadLayoutOwner): Promise<{ revision: number; displayOrder: ThreadDisplayLayout } | null>;
-  readPinnedImports(): Promise<ProjectId[]>;
   readNextArchiveEligibility(): Promise<number | null>;
   readArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
   commit(changes: WorkbenchThreadStateCommit): Promise<void>;

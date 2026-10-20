@@ -658,7 +658,6 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
       projects: byProject(WorkbenchProjectThreadSummarySchema, { schema: WorkbenchProjectThreadSummarySchema, incidental: ["revision"],
         fields: {
           unsettledThreads: observationShape.keyed(summaryEntryKey, WorkbenchProjectThreadSummaryEntrySchema),
-          pinnedThreads: observationShape.keyed(summaryEntryKey, WorkbenchPinnedThreadSummaryEntrySchema, entryShape),
         } }),
     } };
     case "catalogue": return { schema, fields: { catalogue: catalogueShape, locations: locationsShape } };

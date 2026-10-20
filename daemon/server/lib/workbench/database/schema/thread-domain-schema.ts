@@ -120,13 +120,29 @@ export function defineThreadDomainSchema(schemaVersion: number) {
       indexes: [index("workbench_top_level_thread_states_visibility_idx", [table.archived, table.pinned, table.thread_id])],
     }),
   });
+  // Pins moved to app presentation state too; existing daemon pins are dropped.
+  const topLevelV3 = evolveTable(topLevelV2, {
+    drop: ["pinned"],
+    extras: table => ({
+      constraints: [
+        foreignKey([table.thread_id, table.thread_kind], {
+          table: "workbench_thread_states", columns: ["thread_id", "thread_kind"], onDelete: "CASCADE",
+        }),
+      ],
+      indexes: [index("workbench_top_level_thread_states_visibility_idx", [table.archived, table.thread_id])],
+    }),
+  });
   const topLevel = defineTableHistory({
-    current: topLevelV2,
+    current: topLevelV3,
     versions: [
       tableVersion({ schemaVersion, table: topLevelV1, migration: createTable(topLevelV1) }),
       tableVersion({
         schemaVersion: databaseReleases.appOwnedSnooze.version, table: topLevelV2,
         migration: rebuildTable({ from: topLevelV1, to: topLevelV2 }),
+      }),
+      tableVersion({
+        schemaVersion: databaseReleases.appOwnedPins.version, table: topLevelV3,
+        migration: rebuildTable({ from: topLevelV2, to: topLevelV3 }),
       }),
     ],
   });

@@ -186,7 +186,7 @@ import type { DaemonReloadResponse, DaemonReloadScope } from "./workbench/daemon
 import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, WorkbenchReloadDirtScope as SharedWorkbenchReloadDirtScope, WorkbenchReloadResponse, WorkbenchReloadScope } from "./reload/workbench-reload.ts";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex.ts";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline.ts";
-import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
+import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
 import type {
   WorkbenchProjectThreadRowSidebars, WorkbenchThreadSidebarRow, WorkbenchThreadSidebarRowSnapshot,
 } from "./workbench/thread/thread-sidebar-row.ts";
@@ -1306,7 +1306,6 @@ export interface WorkbenchThreadSidebarStore {
   getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
   getLocationSnapshot?: (location: ProjectLocationReference) => WorkbenchThreadSidebarRowSnapshot | null;
   getHomeThreadDisplayOrderSupported?: () => boolean;
-  getPinnedThreadLayout?: () => WorkbenchPinnedThreadLayoutSnapshot;
   getProjectSnapshot: (projectId: ProjectId) => WorkbenchThreadSidebarRowSnapshot | null;
   getProjectThreadSidebars?: () => WorkbenchProjectThreadRowSidebars;
   getProjectThreadSummaries?: () => WorkbenchProjectThreadSummaries;

@@ -22,7 +22,7 @@ import WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
-import WorkbenchThreadSnoozeController from "../state/WorkbenchThreadSnoozeController";
+import WorkbenchThreadPlacementController from "../state/WorkbenchThreadPlacementController";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 
@@ -175,7 +175,7 @@ test("app merges compact placement across daemons and falls back only for an old
   socketA.push(await socketA.query("catalogue"), cataloguePayload);
   socketB.push(await socketB.query("catalogue"), cataloguePayload);
   const summaryPayload = { kind: "summaries" as const, phase: "current" as const, failure: null,
-    projects: [createWorkbenchProjectThreadSummary(projectId, [], 1, {})],
+    projects: [createWorkbenchProjectThreadSummary(projectId, [], 1)],
     pendingProjectIds: [], failures: [] };
   socketA.push(await socketA.query("summaries"), summaryPayload);
   socketB.push(await socketB.query("summaries"), summaryPayload);
@@ -328,7 +328,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   });
   const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn: message => warnings.push(message) });
   const threads = new WorkbenchWorkspaceThreads({ sources, presentation, warn: message => warnings.push(message) });
-  const threadSnoozes = new WorkbenchThreadSnoozeController({ sources, presentation, threads, warn: message => warnings.push(message) });
+  const threadPlacements = new WorkbenchThreadPlacementController({ sources, presentation, threads, warn: message => warnings.push(message) });
   const network = {
     getFacts: () => ({ phase: "pending" as const, failure: null, snapshot: null }),
     ingress: () => ({ deviceNodeId: null, manageApp: true, manageNetwork: true, trustHost: false }),
@@ -339,7 +339,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   const routes = new WorkbenchNetworkRoutes(network);
   const appSockets = new WorkbenchAppEventSocketController({
     logger: new WorkbenchProcessLogger({ color: false, writeOutput: () => {}, writeError: line => warnings.push(line) }),
-    network, routes, sources, workspace, workspaceThreads: threads, threadSnoozes, presentation,
+    network, routes, sources, workspace, workspaceThreads: threads, threadPlacements, presentation,
     runtime: { read: () => ({ frontendGeneration: null, reloadDirt: { dirtyScopes: [], pendingScopes: [], error: null } }),
       subscribe: () => () => {} },
     state: {
@@ -358,7 +358,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   context.after(async () => {
     for (const client of clients) { client.workspace.dispose(); client.rpc.dispose(); }
     appSockets.close(); routes.close();
-    threadSnoozes.dispose(); threads.dispose(); workspace.dispose(); sources.dispose(); presentation.close();
+    threadPlacements.dispose(); threads.dispose(); workspace.dispose(); sources.dispose(); presentation.close();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await repository.close(); await temporary.dispose();
@@ -401,9 +401,9 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   });
   await waitFor(owner, snapshot => snapshot.value?.data.phase === "current");
   const mutation = second.rpc.requestRaw({ method: "workspace/thread/action",
-    params: { threadId, intent: { kind: "pin", pinned: true } } });
-  const dispatch = await daemonA.wait(request => request.method === "workbench/thread-state/pin/set");
-  assert.deepEqual(dispatch.params, { projectId, identity: { threadId, harness: "codex" }, pinned: true });
+    params: { threadId, intent: { kind: "archive", archived: true } } });
+  const dispatch = await daemonA.wait(request => request.method === "workbench/thread-state/archive/set");
+  assert.deepEqual(dispatch.params, { projectId, identity: { threadId, harness: "codex" }, archived: true });
   dispatch.socket.send(JSON.stringify({ id: dispatch.id, result: { accepted: true, revision: 1 } }));
   assert.deepEqual(WorkspaceThreadActionResultSchema.parse(await mutation), { accepted: true, revision: 1 });
   assert.equal(daemonB.requests.some(request => request.method === dispatch.method), false);
@@ -461,7 +461,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   assert.equal(daemonA.connections.length, 1);
 
   const unsettled = second.rpc.requestRaw({ method: "workspace/thread/action",
-    params: { threadId, intent: { kind: "pin", pinned: false } } });
+    params: { threadId, intent: { kind: "archive", archived: false } } });
   const interrupted = assert.rejects(unsettled, error =>
     error instanceof Error && "dispatched" in error && error.dispatched === true);
   await daemonA.wait(request => request.method === dispatch.method && request !== dispatch);
@@ -487,7 +487,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   });
   await waitFor(owner, snapshot => snapshot.value?.data.phase === "conflict");
   await assert.rejects(second.rpc.requestRaw({ method: "workspace/thread/action",
-    params: { threadId, intent: { kind: "pin", pinned: false } } }), /conflicting/i);
+    params: { threadId, intent: { kind: "archive", archived: false } } }), /conflicting/i);
   assert.equal(daemonA.requests.filter(request => request.method === dispatch.method).length, 2);
   owner.release(); secondProjects.release();
 });

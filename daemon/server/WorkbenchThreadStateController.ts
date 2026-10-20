@@ -27,8 +27,6 @@ import {
   WorkbenchPresentationAttachmentChunkSchema,
   WorkbenchPresentationExportRequestSchema,
   WorkbenchPresentationExportPageSchema,
-  WorkbenchPresentationLayoutChunkRequestSchema,
-  WorkbenchPresentationLayoutChunkSchema,
   WorkbenchPresentationManifestPageSchema,
   WorkbenchPresentationManifestRequestSchema,
   type WorkbenchPresentationManifestPage,
@@ -79,13 +77,8 @@ import {
   type WorkbenchThreadObservationSnapshot,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
-import WorkbenchHomeThreadDisplayOrderStore from "./WorkbenchHomeThreadDisplayOrderStore";
-import WorkbenchPinnedThreadLayoutStore from "./WorkbenchPinnedThreadLayoutStore";
 import WorkbenchThreadArchiveController from "./WorkbenchThreadArchiveController";
 import WorkbenchProjectThreadState from "./WorkbenchProjectThreadState";
-import {
-  setWorkbenchThreadEntryPriority,
-} from "./WorkbenchThreadDisplayController";
 import {
   conformStoredWorkbenchThreadDraft,
   projectWorkbenchThreadDraft,
@@ -273,10 +266,8 @@ export default class WorkbenchThreadStateController {
   private static readonly GIT_COMMIT_TIME_CHUNK = 100;
   private active = true;
   private readonly archives: WorkbenchThreadArchiveController;
-  private readonly homeDisplayOrder: WorkbenchHomeThreadDisplayOrderStore;
   private readonly now: () => number;
   private readonly options: WorkbenchThreadStateControllerOptions;
-  private readonly pinnedLayout: WorkbenchPinnedThreadLayoutStore;
   private readonly projects = new Map<ProjectId, ProjectState>();
   private readonly operationQueues = new Map<string, Promise<unknown>>();
   private readonly locks: Pick<WorkbenchThreadTransitionCoordinator, "exclusive" | "holds">;
@@ -315,23 +306,11 @@ export default class WorkbenchThreadStateController {
     const projects = await Promise.all(catalog.map(async projectId => ({
       projectId, state: await this.getProject(projectId),
     })));
-    const sources: WorkbenchPresentationManifestPage["sources"] = projects.flatMap(({ projectId, state }) => [
-      ...[...state.drafts.keys()].sort((left, right) => left.localeCompare(right))
-        .map(sourceId => ({ kind: "draft" as const, projectId, sourceId: DraftIdSchema.parse(sourceId) })),
-      ...(isWorkbenchThreadDisplayOrderEmpty(state.displayOrder)
-        ? [] : [{ kind: "projectLayout" as const, projectId, sourceId: `project:${projectId}` }]),
-    ]);
-    const [home, pinned] = await Promise.all([
-      this.homeDisplayOrder.getSnapshot(), this.pinnedLayout.getSnapshot(),
-    ]);
-    if (!isWorkbenchThreadDisplayOrderEmpty(home.displayOrder)) {
-      sources.push({ kind: "homeLayout", sourceId: "home" });
-    }
-    if (!isWorkbenchThreadDisplayOrderEmpty(pinned.displayOrder)) {
-      sources.push({ kind: "pinnedLayout", sourceId: "pinned" });
-    }
+    const sources: WorkbenchPresentationManifestPage["sources"] = projects.flatMap(({ projectId, state }) =>
+      [...state.drafts.keys()].sort((left, right) => left.localeCompare(right))
+        .map(sourceId => ({ kind: "draft" as const, projectId, sourceId: DraftIdSchema.parse(sourceId) })));
     const signature = createHash("sha256").update(sources.map(source =>
-      `${source.kind}\0${"projectId" in source ? source.projectId : ""}\0${source.sourceId}`).join("\n")).digest("hex");
+      `${source.kind}\0${source.projectId}\0${source.sourceId}`).join("\n")).digest("hex");
     const cursor = request.cursor
       ? z.object({ signature: z.string().length(64), index: z.number().int().nonnegative() }).strict()
         .parse(JSON.parse(request.cursor))
@@ -386,35 +365,6 @@ export default class WorkbenchThreadStateController {
   }
 
   /** @deprecated Legacy app-presentation import source; remove after verified migration and backup. */
-  async exportPresentationLayoutChunk(value: z.input<typeof WorkbenchPresentationLayoutChunkRequestSchema>) {
-    const request = WorkbenchPresentationLayoutChunkRequestSchema.parse(value);
-    const source = request.scope === "project"
-      ? await this.getProject(request.projectId).then(state => ({
-        revision: state.revision,
-        content: { displayOrder: state.displayOrder, newThreadProfile: state.newThreadProfile },
-      }))
-      : request.scope === "home"
-        ? await this.homeDisplayOrder.getSnapshot().then(state => ({
-          revision: state.revision, content: state.displayOrder,
-        }))
-        : await this.pinnedLayout.getSnapshot().then(state => ({
-          revision: state.revision, content: state.displayOrder,
-        }));
-    const revision = source.revision;
-    if (request.sourceRevision !== null && request.sourceRevision !== revision) {
-      throw new Error("Layout source changed during export; restart the chunk read.");
-    }
-    const bytes = Buffer.from(JSON.stringify(source.content), "utf8");
-    if (request.offset > bytes.length) throw new Error("Layout offset exceeds its content.");
-    const chunk = bytes.subarray(request.offset, request.offset + 64 * 1024);
-    const next = request.offset + chunk.length;
-    return WorkbenchPresentationLayoutChunkSchema.parse({
-      sourceRevision: revision, bytes: chunk.toString("base64"),
-      totalBytes: bytes.length, nextOffset: next < bytes.length ? next : null,
-    });
-  }
-
-  /** @deprecated Legacy app-presentation import source; remove after verified migration and backup. */
   async readPresentationAttachmentChunk(value: z.input<typeof WorkbenchPresentationAttachmentChunkRequestSchema>) {
     const request = WorkbenchPresentationAttachmentChunkRequestSchema.parse(value);
     const state = await this.getProject(request.projectId);
@@ -438,13 +388,11 @@ export default class WorkbenchThreadStateController {
       writeChanges: (projectId, changes) => this.writePersistence(() => persistence.writeChanges(projectId, changes)),
       readNextArchiveEligibility: () => this.readPersistence(() => persistence.readNextArchiveEligibility()),
       readArchiveEligible: before => this.readPersistence(() => persistence.readArchiveEligible(before)),
-      readGlobal: id => this.readPersistence(() => persistence.readGlobal(id)),
       readProject: projectId => this.readPersistence(() => persistence.readProject(projectId)),
       readNavigationSummary: projectId => this.readPersistence(() => persistence.readNavigationSummary(projectId)),
       readTitleHistories: projectId => this.readPersistence(() => persistence.readTitleHistories(projectId)),
       readGitCommits: threadIds => this.readPersistence(() => persistence.readGitCommits(threadIds)),
       recordGitCommitTimes: (threadId, times) => this.writePersistence(() => persistence.recordGitCommitTimes(threadId, times)),
-      writeGlobal: (id, document) => this.writePersistence(() => persistence.writeGlobal(id, document)),
       writeProject: (projectId, document, histories) => this.writePersistence(() => persistence.writeProject(projectId, document, histories)),
     };
     this.options = { ...options, threadStateStore: ownedPersistence };
@@ -474,12 +422,6 @@ export default class WorkbenchThreadStateController {
         }
       },
       onError: error => this.options.log?.(`Thread archival failed: ${sanitizeError(error)}`),
-    });
-    this.homeDisplayOrder = new WorkbenchHomeThreadDisplayOrderStore(ownedPersistence, {
-      reportRepairs: (repairedPaths) => this.logHomeDisplayOrderRepairs(repairedPaths),
-    });
-    this.pinnedLayout = new WorkbenchPinnedThreadLayoutStore(ownedPersistence, {
-      reportRepairs: (repairedPaths) => this.logPinnedLayoutRepairs(repairedPaths),
     });
   }
 
@@ -530,7 +472,6 @@ export default class WorkbenchThreadStateController {
           return { error: { code: "threadTitleMutationFailed", message: sanitizeError(error) } };
         }
       }
-      case "workbench/thread-state/priority/set": return { result: await this.mutatePriority(request) };
       default: return { result: await this.mutateThread(request) };
     }
   }
@@ -1475,9 +1416,7 @@ export default class WorkbenchThreadStateController {
     this.assertActive();
     projectId = this.canonicalProjectId(projectId);
     const state = this.projects.get(projectId);
-    return state ? createWorkbenchProjectThreadSummary(
-      projectId, this.naturallyOrderedEntries(state), state.revision, state.displayOrder,
-    ) : null;
+    return state ? createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision) : null;
   }
 
   private async readPersistence<T>(read: () => Promise<T>) {
@@ -1527,7 +1466,6 @@ export default class WorkbenchThreadStateController {
       const originalEntries = new Map(state.entries);
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state, { loaded: true });
       this.projects.set(projectId, state);
-      await this.pinnedLayout.importProject(projectId, this.naturallyOrderedEntries(state), state.displayOrder);
       if (repairedSettlementTimestamps) await this.persist(projectId, state, this.changedEntryKeys(originalEntries, state), { previousEntries: originalEntries });
       this.archives.reschedule();
       setTimeout(() => {
@@ -1634,7 +1572,7 @@ export default class WorkbenchThreadStateController {
     projectId = this.canonicalProjectId(projectId);
     const state = this.projects.get(projectId);
     if (state) {
-      return createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision, state.displayOrder);
+      return createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision);
     }
     return this.options.threadStateStore.readNavigationSummary(projectId);
   }
@@ -1773,22 +1711,6 @@ export default class WorkbenchThreadStateController {
       .map((repairPath) => repairPath.length ? repairPath.map(sanitizeLogValue).join(".") : "root")
       .join(",");
     this.options.log?.(`Conformed stored thread state: project=${sanitizeLogValue(projectId)} entry=${sanitizeLogValue(entryId)} repairedPaths=${paths || "none"}`);
-  }
-  private logPinnedLayoutRepairs(repairedPaths: PropertyKey[][]) {
-    if (!repairedPaths.length) return;
-    const paths = repairedPaths
-      .slice(0, 20)
-      .map((repairPath) => repairPath.length ? repairPath.map(sanitizeLogValue).join(".") : "root")
-      .join(",");
-    this.options.log?.(`Conformed stored pinned thread layout: repairedPaths=${paths || "none"}`);
-  }
-  private logHomeDisplayOrderRepairs(repairedPaths: PropertyKey[][]) {
-    if (!repairedPaths.length) return;
-    const paths = repairedPaths
-      .slice(0, 20)
-      .map((repairPath) => repairPath.length ? repairPath.map(sanitizeLogValue).join(".") : "root")
-      .join(",");
-    this.options.log?.(`Conformed stored home thread display order: repairedPaths=${paths || "none"}`);
   }
   private snapshot(projectId: ProjectId, state: ProjectState): WorkbenchThreadSidebarSnapshot {
     const order = this.naturalOrder(state);
@@ -1936,7 +1858,7 @@ export default class WorkbenchThreadStateController {
           mcpGeneration: existing.mcpGeneration,
           profile: existing.profile,
           ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
-          pinned: existing.entryKind === "subagent" ? existing.pinned : existing.metadata.pinned,
+          pinned: existing.entryKind === "subagent" && existing.pinned,
           providerObserved: true,
           settledAt: adopted ? null : existing.settledAt,
           ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
@@ -1945,7 +1867,7 @@ export default class WorkbenchThreadStateController {
       }
       const metadata = existing?.entryKind === "thread" && existing.metadata.archived
         ? { archived: true as const, pinned: false as const, snoozed: false as const }
-        : { archived: false as const, pinned: existing?.entryKind === "thread" ? existing.metadata.pinned : providerEntry.metadata.pinned, snoozed: false };
+        : { archived: false as const, pinned: false, snoozed: false };
       const lifecycle = providerLifecycle(key, providerEntry, existing);
       const launchId = providerEntry.launchId ?? (existing?.entryKind === "thread" ? existing.launchId : undefined);
       install(key, parseWorkbenchThreadStateEntry(existing ? {
@@ -2015,25 +1937,9 @@ export default class WorkbenchThreadStateController {
     return this.locks.holds(threadStateLockKey(key)) ? undefined : this.operationQueues.get(key);
   }
 
-  private async mutatePriority(
-    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" }>,
-  ) {
-    const state = await this.getProject(request.projectId);
-    return await this.enqueue(`${request.projectId}:thread:${request.sourceKey}`, async () => {
-      const entry = state.entries.get(request.sourceKey);
-      if (!entry) return { accepted: false, revision: state.revision };
-      const next = setWorkbenchThreadEntryPriority(entry, request.priority);
-      if (!next) return { accepted: false, revision: state.revision };
-      if (areDeeplyEqual(entry, next)) return { accepted: true, revision: state.revision };
-      const previousEntries = new Map(state.entries);
-      state.entries.set(request.sourceKey, next);
-      await this.persist(request.projectId, state, [request.sourceKey], { previousEntries, layout: true });
-      this.publish(request.projectId, state, next);
-      return { accepted: true, revision: state.revision };
-    });
-  }
-
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" }>) {
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, {
+    method: "workbench/thread-state/title/set" | "workbench/thread-state/title/dismiss";
+  }>) {
     const state = await this.getProject(request.projectId);
     const key = getThreadDisplayThreadKey(request.identity.harness, request.identity.threadId);
     const candidate = state.entries.get(key);
@@ -2101,11 +2007,10 @@ export default class WorkbenchThreadStateController {
           lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: heldQuestionnaire.requestKey, settled: false },
         };
       }
-      if (request.method === "workbench/thread-state/pin/set") next = entry.entryKind === "subagent"
-        ? { ...entry, pinned: request.pinned }
-        : entry.metadata.archived
-          ? entry
-          : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: false } };
+      if (request.method === "workbench/thread-state/pin/set") {
+        if (entry.entryKind !== "subagent") return { accepted: false, revision: state.revision };
+        next = { ...entry, pinned: request.pinned };
+      }
       if (request.method === "workbench/thread-state/settle") {
         const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle", entryKind: entry.entryKind });
         next = entry.entryKind === "subagent" ? { ...entry, lifecycle, pinned: false } : { ...entry, lifecycle };

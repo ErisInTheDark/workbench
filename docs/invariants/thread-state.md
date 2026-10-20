@@ -9,7 +9,7 @@
 - Settled and archived are placement, not status. Preserve lifecycle presentation.
 - Live claims, required todos and addressed feedback hold settlement; addressed feedback releases only when resolved or detached.
 - Subagent settle attempts every selected child and reports each outcome. Handover moves a child's Git claims, saved stash and todos to its parent before settling; rejected Git adoption leaves that child unchanged.
-- Unpinned settled sidebar threads archive 14 days after the later of their last thread item or settling, including existing records.
+- Settled sidebar threads archive 14 days after the later of their last thread item or settling, including existing records. Pins are app-owned and never exempt them: a settled thread keeps its pin only so restoring returns it pinned, and archiving drops the pin.
 - Transcript payload retention uses the current settlement generation. Restoring or re-settling starts a new generation; old tombstones never suppress new turns.
 - Thread activity time advances only when the canonical transcript admits a new thread item, to that item's observed time. Providers and lifecycle transitions never set it.
 - A dependent-snooze source owns its target set; targets may live on any daemon. Target readiness removes one membership. Only an empty set wakes the source. Unreachable targets keep waiting.

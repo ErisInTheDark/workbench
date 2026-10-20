@@ -10,8 +10,8 @@
 | Active Skill | A skill recorded for one thread after user activation or agent Skill Load, until the user deactivates it |
 | Keyed delta | Upserted/removed items plus changed field names against an observation's previous revision; see `shared/workbench/workspace/observation-patch.ts` |
 | thread status row | Row under a thread's transcript: live title plus skills, vis, Git arc and todo pills, each opening one shared animated panel area; `ThreadStatusRow`, composed by `ThreadStatusArea` |
-| thread state | Durable sidebar state owned by `WorkbenchThreadStateController`. It includes project thread and draft records, project display order, new-thread profile selection, home display order, and pinned layout |
-| thread priority | Sidebar placement state: pinned, main, or snoozed. Settled is lifecycle, not priority. |
+| thread state | Durable daemon thread state owned by `WorkbenchThreadStateController`: thread records, new-thread profile selection, legacy drafts and legacy project display order. Pins, snoozes, folders and layout are app presentation state |
+| thread priority | App-owned sidebar placement: pinned, main, or snoozed. Settled is lifecycle, not priority. |
 | arc edit session | Per-thread previewable, revertible batch of ordered moves/regex replacements run via `wb git arc edit`; claims Git-visible touched files in the active arc; stored at the thread's `edit-session` ref |
 | thread attention | Amber when unsnoozed; purple when snoozed. Existing snooze wake rules apply. |
 | thread display order | Durable manual ordering for pinned, snoozed, and settled sidebar sections. Main remains automatically ordered by claims, lifecycle, and activity. |
