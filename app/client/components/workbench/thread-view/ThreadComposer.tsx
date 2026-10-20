@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadComposer: render thread composer controls, message input, attachments, composer reference pills, and questionnaire handoff.
+ * - default ThreadComposer: render thread composer controls, message input, attachments, composer reference pills, and questionnaire handoff;
+ *   Enter must be held to confirm a send that compacts context first.
  */
 "use client";
 
@@ -84,6 +85,7 @@ import { getThreadUserInputRequestPreviewText } from "./thread-user-input-reques
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-user-input-request-submission";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
+import useCompactSendHold from "./use-compact-send-hold";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -128,6 +130,7 @@ export default function ThreadComposer ({
   onThreadComposerDraftClear,
   onQuestionnaireError,
   onSubmitRejected,
+  onCompactSendHoldChange,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadServiceTierChange,
@@ -174,6 +177,8 @@ export default function ThreadComposer ({
   onQuestionnaireError?: (message: string) => void;
   /** A message or answer the daemon rejected; the owner of stale facts (such as known skills) refreshes them. */
   onSubmitRejected?: (error: unknown) => void;
+  /** Enter is being held to confirm a compact-first send; the compact control shows its progress. */
+  onCompactSendHoldChange?: (holding: boolean) => void;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
@@ -321,6 +326,7 @@ export default function ThreadComposer ({
     && hasSendableInput
     && !isSendDisabled
     && !isShiftPressed;
+  const compactSendHold = useCompactSendHold(willAutoCompactOnSend, onCompactSendHoldChange);
   const sendButtonLabel = isSending
     ? "Sending..."
     : isAttaching
@@ -558,14 +564,24 @@ export default function ThreadComposer ({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") compactSendHold.cancel();
     const action = getThreadComposerEnterAction({
       key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey,
       isComposing: isComposing || event.nativeEvent.isComposing,
       isMobile: isMobileTextInputEnvironment(),
+      holdsToCompact: willAutoCompactOnSend,
     });
     if (!action) return;
     event.preventDefault();
+    if (action === "compactHold") {
+      if (!event.repeat) compactSendHold.begin(event.timeStamp);
+      return;
+    }
     void submit(action === "alt");
+  };
+
+  const handleKeyUp = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" && compactSendHold.release(event.timeStamp)) void submit(false);
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
@@ -797,7 +813,9 @@ export default function ThreadComposer ({
                   onCompositionEnd={() => {
                     setIsComposing(false);
                   }}
+                  onBlur={compactSendHold.cancel}
                   onKeyDown={handleKeyDown}
+                  onKeyUp={handleKeyUp}
                   onPaste={handlePaste}
                 />
                 {hasNormalComposerSupplementalContent ? (

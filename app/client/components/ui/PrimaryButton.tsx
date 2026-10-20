@@ -7,6 +7,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 import WorkbenchSpinningBorder from "../workbench/WorkbenchSpinningBorder";
+import HoldConfirmationRail from "./HoldConfirmationRail";
 import useHoldToConfirm from "./use-hold-to-confirm";
 
 type PrimaryButtonShape = "pill" | "circle" | "compact";
@@ -119,24 +120,7 @@ export default function PrimaryButton ({
         )}
       />
       <span className="relative z-20 inline-flex items-center justify-center">{children}</span>
-      {hold.enabled ? (
-        <span
-          aria-hidden="true"
-          className={joinClasses(
-            "pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-[inherit] transition-opacity duration-100",
-            hold.holding ? "opacity-100" : "opacity-0",
-          )}
-          data-primary-button-confirmation-rail="true"
-        >
-          <span className="absolute inset-x-0 bottom-0 h-1.5 bg-[color-mix(in_srgb,var(--text)_18%,transparent)]">
-            <span
-              className="block h-full origin-left bg-[color:var(--text)] transition-transform ease-linear"
-              data-primary-button-confirmation-progress="true"
-              {...hold.progressProps}
-            />
-          </span>
-        </span>
-      ) : null}
+      {hold.enabled ? <HoldConfirmationRail holding={hold.holding !== null} progress={hold.progressProps} /> : null}
     </button>
   );
 }

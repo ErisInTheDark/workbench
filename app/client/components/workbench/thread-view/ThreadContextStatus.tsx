@@ -1,10 +1,15 @@
 /*
  * Exports:
- * - default ThreadContextStatus: render context-window usage and the compact action, pending while any compaction runs and blocked only by live turns, beside composer quota stats.
+ * - default ThreadContextStatus: render context-window usage and the compact action, pending while any compaction runs and blocked only by live turns, beside composer quota stats;
+ *   the compact action shows the composer's held compact-first send filling up.
  */
 "use client";
 
 import { useState } from "react";
+
+import HoldConfirmationRail from "../../ui/HoldConfirmationRail";
+import { holdProgressStyle } from "../../ui/use-hold-to-confirm";
+import { COMPACT_SEND_HOLD_MS } from "./use-compact-send-hold";
 
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadHead } from "../../../workbench/thread/ThreadStore";
@@ -40,12 +45,15 @@ export default function ThreadContextStatus ({
   lifecycle,
   launching = false,
   onCompactThread,
+  sendHolding = false,
   snoozed = false,
   thread,
 }: {
   lifecycle?: WorkbenchThreadLifecycle;
   launching?: boolean;
   onCompactThread: () => Promise<void>;
+  /** The composer's Enter is held to confirm a send that compacts first. */
+  sendHolding?: boolean;
   snoozed?: boolean;
   thread: ThreadHead;
 }) {
@@ -119,6 +127,7 @@ export default function ThreadContextStatus ({
             {isCompacting ? <WorkbenchSpinningBorder radius="1rem" /> : null}
             <CompactIcon size={16} />
             <span>{isCompacting ? "Compacting" : "Compact"}</span>
+            <HoldConfirmationRail holding={sendHolding} progress={{ style: holdProgressStyle(sendHolding, COMPACT_SEND_HOLD_MS) }} />
           </button>
         ) : null}
       </div>

@@ -244,6 +244,7 @@ export default function PlaintextEditable ({
   onCompositionEnd,
   onCompositionStart,
   onKeyDown,
+  onKeyUp,
   onPaste,
   placeholder,
   highlights: suppliedHighlights = [],
@@ -270,6 +271,7 @@ export default function PlaintextEditable ({
   onCompositionEnd?: (event: CompositionEvent<HTMLDivElement>) => void;
   onCompositionStart?: (event: CompositionEvent<HTMLDivElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onKeyUp?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
   /** Sorted, non-overlapping ranges drawn by the overlay. */
@@ -657,7 +659,10 @@ export default function PlaintextEditable ({
             insertText(`#[attach:${number}]`);
           }}
           onClick={updateCaretOffset}
-          onKeyUp={updateCaretOffset}
+          onKeyUp={event => {
+            updateCaretOffset();
+            onKeyUp?.(event);
+          }}
           onMouseUp={onSelectionChange ? updateCaretOffset : undefined}
         />
       </div>

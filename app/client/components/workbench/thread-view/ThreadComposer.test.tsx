@@ -16,7 +16,16 @@ test("enter shortcuts distinguish sending, alt-sending and inserting a newline",
   for (const blocked of [{ isComposing: true }, { isMobile: true }, { key: "Escape" }]) {
     assert.equal(getThreadComposerEnterAction({ ...input, ...blocked }), null);
     assert.equal(getThreadComposerEnterAction({ ...input, ...blocked, shiftKey: true, ctrlKey: true }), null);
+    assert.equal(getThreadComposerEnterAction({ ...input, ...blocked, holdsToCompact: true }), null);
   }
+});
+
+test("a compact-first send must be held, while newline and the compaction-skipping alt-send stay immediate", () => {
+  const input = { key: "Enter", shiftKey: false, ctrlKey: false, isComposing: false, isMobile: false, holdsToCompact: true };
+  assert.equal(getThreadComposerEnterAction(input), "compactHold");
+  assert.equal(getThreadComposerEnterAction({ ...input, ctrlKey: true }), "compactHold");
+  assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true }), null);
+  assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true, ctrlKey: true }), "alt");
 });
 
 test("snoozed questionnaires offer stop or dismissal instead of snoozing again", () => {

@@ -1,18 +1,21 @@
 /*
  * Exports:
- * - getThreadComposerEnterAction: distinguish send and alt-send (shift-mode) shortcuts from newline and composition input.
+ * - getThreadComposerEnterAction: distinguish send, held compact-first send and alt-send (shift-mode) shortcuts from newline
+ *   and composition input.
  * - getThreadComposerStopControlState: derive settle/snooze/stop action, visibility, and availability.
  */
 
+/** `holdsToCompact`: the plain send would compact context first, so Enter must be held to confirm it instead. */
 export function getThreadComposerEnterAction(input: {
   key: string;
   shiftKey: boolean;
   ctrlKey: boolean;
   isComposing: boolean;
   isMobile: boolean;
-}): "send" | "alt" | null {
+  holdsToCompact?: boolean;
+}): "send" | "compactHold" | "alt" | null {
   if (input.key !== "Enter" || input.isComposing || input.isMobile) return null;
-  if (!input.shiftKey) return "send";
+  if (!input.shiftKey) return input.holdsToCompact ? "compactHold" : "send";
   return input.ctrlKey ? "alt" : null;
 }
 

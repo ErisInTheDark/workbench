@@ -356,6 +356,7 @@ export default memo(function ThreadViewContent ({
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
   const [checkpointCommitActions] = useState(() => new ThreadCheckpointCommitActions());
   const [isMessageBoardOpen, setIsMessageBoardOpen] = useState(false);
+  const [isCompactSendHolding, setIsCompactSendHolding] = useState(false);
   useEffect(() => { setIsMessageBoardOpen(false); }, [thread.id]);
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
   // Older history can land inside the first loaded turn, so each completed page opens a new paging boundary.
@@ -978,6 +979,7 @@ export default memo(function ThreadViewContent ({
           launching={isLaunchingDraft}
           lifecycle={activeSidebarEntry?.lifecycle}
           onCompactThread={handleCompactThread}
+          sendHolding={isCompactSendHolding}
           snoozed={activeThreadSnoozed}
           thread={activeThread}
         />
@@ -1023,6 +1025,7 @@ export default memo(function ThreadViewContent ({
       subscribeModelUpdates={threads.subscribeModelUpdates}
       highlightSources={inlineMentionSources}
       onSubmitRejected={reconcileRejectedSkills}
+      onCompactSendHoldChange={setIsCompactSendHolding}
       onSendMessage={handleSendMessage}
       onStopThread={handleStopThread}
       onThreadSettled={onThreadSettled}
@@ -1058,7 +1061,7 @@ export default memo(function ThreadViewContent ({
           harness={resolvedActiveThread?.harness ?? activeThread.harness}
           leadingContent={draftLeadingContent}
           rateLimits={rateLimits}
-          trailingContent={<ThreadContextStatus lifecycle={activeSidebarEntry?.lifecycle} onCompactThread={handleCompactThread} snoozed={activeThreadSnoozed} thread={activeThread} />}
+          trailingContent={<ThreadContextStatus lifecycle={activeSidebarEntry?.lifecycle} onCompactThread={handleCompactThread} sendHolding={isCompactSendHolding} snoozed={activeThreadSnoozed} thread={activeThread} />}
         />
       ) : null}
     </ThreadComposer>

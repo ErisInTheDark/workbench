@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - HoldToConfirmHandlers: the button events a hold-to-confirm control composes with its own handlers.
+ * - holdProgressStyle: the `transform` style that fills a hold's progress over `holdMs` while holding and empties at once.
  * - default useHoldToConfirm: turn a button's click into a press-and-hold (pointer, Enter or Space) that confirms when its
  *   progress transition finishes; letting go early, leaving focus or Escape cancels.
  */
@@ -21,6 +22,13 @@ export interface HoldToConfirmHandlers {
   onPointerCancel?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onPointerUp?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+}
+
+export function holdProgressStyle(holding: boolean, holdMs: number | null) {
+  return {
+    transform: holding ? "scaleX(1)" : "scaleX(0)",
+    transitionDuration: holding ? `${holdMs ?? 0}ms` : "0ms",
+  };
 }
 
 function isConfirmationKey(key: string) {
@@ -150,10 +158,7 @@ export default function useHoldToConfirm(holdMs: number | null | undefined, disa
       dispatchConfirmedClick();
       cancelHold("keyboard");
     },
-    style: {
-      transform: holding ? "scaleX(1)" : "scaleX(0)",
-      transitionDuration: holding ? `${confirmationMs}ms` : "0ms",
-    },
+    style: holdProgressStyle(holding !== null, confirmationMs),
   };
 
   return { buttonProps, confirmationMs, enabled, holding, progressProps };
