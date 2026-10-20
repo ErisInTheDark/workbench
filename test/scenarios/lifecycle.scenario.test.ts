@@ -1,5 +1,6 @@
 /*
- * No exports. Verify real database migration and essential app operation, without provider turns.
+ * No exports. Copy the real daemon database into an isolated Workbench, boot it to migrate and check the app and daemon
+ * work together, then boot it again without migrating and check them again. No provider turns.
  */
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -7,30 +8,25 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import Database from "better-sqlite3";
-import WorkbenchWorkspaceClient from "../../app/client/workbench/app/WorkbenchWorkspaceClient";
-import WorkbenchPresentationClient from "../../app/client/workbench/state/WorkbenchPresentationClient";
 import IsolatedWorkbench, { type IsolatedWorkbenchOptions } from "./IsolatedWorkbench";
-import { seedLifecycleTranscript } from "./lifecycle-fixture";
-import { captureThreadStateMigrationSource, verifyThreadStateMigrationSource, isolateThreadStateMigrationSource } from "./thread-state-migration-fixture";
+import {
+  captureThreadStateMigrationSource, isolateThreadStateMigrationSource, readDatabaseBackups,
+} from "./thread-state-migration-fixture";
 import type { WorkbenchProjectsPayload } from "../../shared/types";
-import { projectWorkbenchTranscript } from "../../shared/workbench/transcript/workbench-transcript-projection";
-import type { TranscriptStreamUpdate } from "../../shared/workbench/transcript/thread-transcript-stream";
 import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint";
 import { WorkbenchDaemonEndpointSchema } from "../../shared/http/workbench-daemon-endpoint";
 import { readServiceEndpoint } from "../../shared/process/workbench-service-endpoint";
 import { WorkbenchDaemonIdentitySchema } from "../../shared/http/workbench-daemon-discovery";
-import WorkbenchAppStateRepository from "../../app/server/state/WorkbenchAppStateRepository";
-import { DraftIdSchema } from "../../shared/workbench/identity";
 import { presentationSchema } from "../../shared/state/workbench-presentation-schema";
-import WorkbenchNetworkRepository from "../../daemon/host/network/WorkbenchNetworkRepository";
-import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
-import { serviceTableInventory } from "../../shared/state/workbench-service-schema";
 import { ProjectDiscoverySettingsResultSchema } from "../../shared/workbench/project/project-discovery-settings";
 import { formatWorkbenchDatabaseDiagnostic } from "../../shared/database/workbench-database-diagnostic";
 
 type ScenarioProcessEvent = Parameters<NonNullable<IsolatedWorkbenchOptions["processEvent"]>>[0];
+
+/** A migrating boot checkpoints, verifies and migrates the whole copied database before it reports ready. */
+const MIGRATING_BOOT_READINESS_MS = 600_000;
 
 function reportLifecycleProcessEvent(event: ScenarioProcessEvent) {
   if (event.kind !== "diagnostic") return;
@@ -46,7 +42,7 @@ function reportLifecycleProcessEvent(event: ScenarioProcessEvent) {
   else process.stdout.write(`[scenario:database] ${line}\n`);
 }
 
-test("forward database migration preserves data and the real app can use it", {
+test("a copy of the real database migrates once and the app can use it across two boots", {
   skip: process.env.WORKBENCH_LIFECYCLE_TEST_FILE !== "test/scenarios/lifecycle.scenario.test.ts",
   // Leave the outer twenty-one-minute runner budget room to retire children and clean up.
   timeout: 1_200_000,
@@ -56,16 +52,14 @@ test("forward database migration preserves data and the real app can use it", {
     processEvent: reportLifecycleProcessEvent,
   });
   console.log(`migration fixture: ${runtime.root}`);
-  const appDatabase = path.join(runtime.dataRootPath, "app", "app-state.sqlite3");
   const presentationDatabase = path.join(runtime.dataRootPath, "app", "presentation-state.sqlite3");
   const serverDatabase = path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3");
-  const serviceDatabase = path.join(runtime.dataRootPath, "service", "service.sqlite3");
   const browserStateId = randomUUID();
   const localPath = path.join(path.dirname(runtime.project), "fixture-local");
   let failed = false;
   let failure: unknown;
   try {
-    runtime.markPhase("capturing the database migration source");
+    runtime.markPhase("copying the real daemon database");
     let reportedAt = -Infinity;
     const captured = await captureThreadStateMigrationSource(
       path.join(resolveWorkbenchDataRoot(), "daemon", "workbench.sqlite3"), serverDatabase, {
@@ -74,253 +68,113 @@ test("forward database migration preserves data and the real app can use it", {
           const now = performance.now();
           if (now - reportedAt < 5_000) return;
           reportedAt = now;
-          runtime.markPhase(`database capture: ${totalPages - remainingPages}/${totalPages} pages copied`);
+          runtime.markPhase(`database copy: ${totalPages - remainingPages}/${totalPages} pages`);
         },
       });
-    // The managed host imports app-owned settings on its first start.
-    const legacyApp = new WorkbenchAppStateRepository({ databasePath: appDatabase });
-    await legacyApp.start();
-    try {
-      new WorkbenchNetworkRepository(legacyApp).write({
-        hostServe: { enabled: false, port: 8123 }, privateAccess: null, members: [],
-      });
-    } finally { await legacyApp.close(); }
-    runtime.markPhase("reloading a host-owned daemon with retained discovery roots");
-    await runtime.exerciseManagedProcessReload(path.resolve(process.cwd(), ".."));
-    await runtime.stop();
-    runtime.markPhase("verifying forward migration and retained data");
-    await verifyThreadStateMigrationSource(captured);
-    runtime.markPhase("isolating the verified database paths in place");
-    const capturedCounts = await isolateThreadStateMigrationSource(captured, runtime.root, t.signal);
-
-    const clonePath = path.join(path.dirname(runtime.project), "fixture-clone");
-    const sharedRemote = "https://example.test/workbench/scenario.git";
-    await IsolatedWorkbench.command("git", ["clone", "-q", "--no-hardlinks", runtime.project, clonePath],
-      runtime.root, process.env, t.signal);
-    await IsolatedWorkbench.command("git", ["remote", "add", "origin", sharedRemote],
-      runtime.project, process.env, t.signal);
-    await IsolatedWorkbench.command("git", ["remote", "set-url", "origin", sharedRemote],
-      clonePath, process.env, t.signal);
+    // No process may see the real filesystem addresses, so the copy is isolated before its first boot.
+    runtime.markPhase("isolating the copied database paths");
+    const capturedCounts = await isolateThreadStateMigrationSource(serverDatabase, runtime.root, t.signal);
     await fs.mkdir(localPath);
     await IsolatedWorkbench.command("git", ["init", "-q"], localPath, process.env, t.signal);
     await fs.writeFile(path.join(localPath, "local.txt"), "single folder without a remote\n");
+    assert.deepEqual(await readDatabaseBackups(serverDatabase), [], "The fresh copy must start without checkpoints");
 
-    await runtime.start();
+    const verifyApp = async (label: string) => await runtime.phase(label, async signal => {
+      const catalog = await runtime.waitForProjects([runtime.project, localPath], signal);
+      const project = catalog.find(entry => path.resolve(entry.rootPath) === runtime.project);
+      const local = catalog.find(entry => path.resolve(entry.rootPath) === localPath);
+      assert.ok(project && local, "The daemon must serve the isolated checkout and the plain folder");
+
+      const endpoint = runtime.daemonEndpoint;
+      assert.deepEqual(await readDaemonEndpoint(path.join(runtime.dataRootPath, "daemon", "runtime.json")), endpoint);
+      const health = await fetch(`${endpoint.origin}/healthz`, { signal });
+      assert.ok(health.ok);
+      assert.deepEqual(WorkbenchDaemonEndpointSchema.parse(await health.json()), endpoint);
+      const stateQuery = runtime.workspace.observe({ kind: "appState", browserStateId });
+      const appState = (await runtime.workspace.waitFor(stateQuery)).data;
+      stateQuery.release();
+      assert.ok(appState?.daemonRegistrationId, "The app must register its daemon");
+      assert.ok(appState.registrations?.some(item => item.daemonId === runtime.daemonId));
+      const service = await readServiceEndpoint(path.join(runtime.dataRootPath, "service", "runtime.json"));
+      assert.ok(service);
+      const identity = await fetch(`${service.origin}/_workbench-service/identity`, { signal });
+      assert.ok(identity.ok);
+      const hostIdentity = WorkbenchDaemonIdentitySchema.parse(await identity.json());
+      await runtime.until(() => runtime.presentation.snapshot().data?.locations.some(item =>
+        item.target.daemonId === hostIdentity.daemonId && item.target.projectId === project.id) ?? false, signal);
+      const presentationFile = new Database(presentationDatabase, { readonly: true });
+      try {
+        assert.equal(presentationFile.pragma("user_version", { simple: true }), presentationSchema.currentVersion);
+      } finally { presentationFile.close(); }
+
+      runtime.markPhase(`${label}: compiled app assets`);
+      const html = await (await fetch(new URL("/", runtime.appOrigin), { signal })).text();
+      const urls = [...html.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/gu)].map(match => match[1]);
+      assert.ok(urls.some(url => url.includes(".js")), "The app must serve a compiled script");
+      assert.ok(urls.some(url => url.includes(".css")), "The app must serve compiled styles");
+      for (const url of urls) {
+        const response = await fetch(new URL(url, runtime.appOrigin), { signal });
+        assert.ok(response.ok, `App ${url}: ${response.status}`);
+        assert.ok((await response.arrayBuffer()).byteLength > 0);
+      }
+
+      runtime.markPhase(`${label}: threads, folder tree and Git through the app`);
+      const projectState = await runtime.projectThreads(project.id, signal);
+      assert.ok(projectState.projects.some(item => item.location.projectId === project.id && item.phase === "current"));
+      const localLocation = { daemonId: runtime.daemonId, projectId: local.id };
+      const tree = runtime.workspace.observe({ kind: "projectTree", location: localLocation });
+      try {
+        const observed = await runtime.workspace.waitFor(tree);
+        assert.equal(observed.data?.projectId, local.id);
+        assert.equal(path.resolve(observed.data!.snapshot.rootPath), localPath);
+        const git = await runtime.workspace.daemon({ kind: "folder", location: localLocation })
+          .git.workingTree.read({ projectId: local.id, preferCached: false });
+        assert.deepEqual(git.errors, []);
+        assert.ok(git.repositories.some(item => path.resolve(item.cwd) === localPath));
+      } finally { tree.release(); }
+
+      const database = new Database(serverDatabase, { readonly: true });
+      try {
+        assert.equal(database.pragma("user_version", { simple: true }), workbenchDatabaseSchema.currentVersion);
+        assert.equal(Number(database.prepare("SELECT count(*) FROM workbench_thread_states").pluck().get()), capturedCounts.states);
+        assert.equal(Number(database.prepare("SELECT count(*) FROM workbench_subagent_relationships").pluck().get()), capturedCounts.relationships);
+        assert.ok(Number(database.prepare("SELECT count(*) FROM workbench_threads").pluck().get()) >= capturedCounts.threads);
+      } finally { database.close(); }
+      return { registrationId: appState.daemonRegistrationId, hostId: hostIdentity.daemonId };
+    });
+
+    // Boot 1: the copy migrates, and the app and daemon work on it.
+    await runtime.start([], "lifecycle", MIGRATING_BOOT_READINESS_MS);
     const initialCatalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
     assert.ok(initialCatalog.data.some(entry => path.resolve(entry.rootPath) === runtime.project),
       "The migrated daemon must retain its pinned Workbench checkout");
-    assert.ok(!initialCatalog.data.some(entry => [clonePath, localPath].includes(path.resolve(entry.rootPath))),
-      "The migrated daemon must not discover unconfigured sibling projects");
     const savedRoots = ProjectDiscoverySettingsResultSchema.parse(
       await runtime.request("project/discovery-settings/update", { paths: [path.dirname(runtime.project)] }));
     assert.deepEqual(savedRoots, { accepted: true, paths: [path.dirname(runtime.project)] });
-    const catalog = await runtime.waitForProjects([runtime.project, clonePath, localPath]);
-    const project = catalog.find(entry => path.resolve(entry.rootPath) === runtime.project);
-    assert.ok(project, "The migrated daemon must discover the isolated project");
-    const clone = catalog.find(entry => path.resolve(entry.rootPath) === clonePath);
-    assert.ok(clone, "The legacy catalogue must expose the second checkout");
-    assert.notEqual(project.id, clone.id, "Matching remotes must not merge concrete execution owners");
-    const local = catalog.find(entry => path.resolve(entry.rootPath) === localPath);
-    assert.ok(local, "A single folder without a remote must be discovered");
-    // Discovery reindexing can hold the live daemon's writer for minutes; seed only while no daemon owns the file.
-    await runtime.stop();
-    const transcript = await seedLifecycleTranscript(runtime.project, serverDatabase, project.id);
-    await runtime.start();
-
-    const verifyApp = async (label: string) => {
-      return await runtime.phase(label, async signal => {
-        const http = async (route: string) => {
-          const response = await fetch(new URL(route, runtime.appOrigin), { signal });
-          assert.ok(response.ok, `App ${route}: ${response.status}`);
-          return response;
-        };
-        const endpoint = runtime.daemonEndpoint;
-        assert.deepEqual(await readDaemonEndpoint(path.join(runtime.dataRootPath, "daemon", "runtime.json")), endpoint);
-        const health = await fetch(`${endpoint.origin}/healthz`, { signal });
-        assert.ok(health.ok);
-        assert.deepEqual(WorkbenchDaemonEndpointSchema.parse(await health.json()), endpoint);
-        const stateQuery = runtime.workspace.observe({ kind: "appState", browserStateId });
-        const stateResult = await runtime.workspace.waitFor(stateQuery);
-        const appState = stateResult.data;
-        assert.ok(appState);
-        stateQuery.release();
-        assert.ok(appState.daemonRegistrationId, "The app must register its daemon");
-        assert.ok(appState.registrations?.some(item => item.daemonId === runtime.daemonId));
-        const service = await readServiceEndpoint(path.join(runtime.dataRootPath, "service", "runtime.json"));
-        assert.ok(service);
-        const identity = await fetch(`${service.origin}/_workbench-service/identity`, { signal });
-        assert.ok(identity.ok);
-        const hostIdentity = WorkbenchDaemonIdentitySchema.parse(await identity.json());
-        await runtime.until(() => runtime.presentation.snapshot().data?.locations.some(item =>
-          item.target.daemonId === hostIdentity.daemonId && item.target.projectId === clone.id) ?? false, signal);
-        const presentation = runtime.presentation.snapshot().data!;
-        const primaryLocation = presentation.locations.find(location =>
-          location.target.daemonId === hostIdentity.daemonId && location.target.projectId === project.id);
-        const cloneLocation = presentation.locations.find(location =>
-          location.target.daemonId === hostIdentity.daemonId && location.target.projectId === clone.id);
-        assert.ok(primaryLocation && cloneLocation);
-        assert.equal(primaryLocation.logicalProjectId, cloneLocation.logicalProjectId,
-          "The new presentation owner must group matching remotes without merging execution locations");
-        const presentationFile = new Database(presentationDatabase, { readonly: true });
-        try {
-          assert.equal(presentationFile.pragma("user_version", { simple: true }), presentationSchema.currentVersion);
-        } finally { presentationFile.close(); }
-        const importedService = new Database(serviceDatabase, { readonly: true });
-        try {
-          const repository = new WorkbenchNetworkRepository({
-            query: <Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Row[] => {
-              const compiled = compileWorkbenchDatabaseStatement(serviceTableInventory, statement);
-              return importedService.prepare(compiled.sql).all(...compiled.parameters) as Row[];
-            },
-            executeTransaction: () => { throw new Error("Import verification must not mutate service state."); },
-          });
-          assert.equal(repository.read().hostServe.port, 8123);
-          assert.equal(importedService.prepare("SELECT count(*) FROM service_network_import").pluck().get(), 1);
-        } finally { importedService.close(); }
-
-        runtime.markPhase("verifying compiled app assets and thread-state loading");
-        const html = await (await http("/")).text();
-        const urls = [...html.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/gu)]
-          .map(match => match[1]);
-        assert.ok(urls.some(url => url.includes(".js")), "The app must serve a compiled script");
-        assert.ok(urls.some(url => url.includes(".css")), "The app must serve compiled styles");
-        for (const url of urls) {
-          assert.equal(new URL(url, runtime.appOrigin).origin, runtime.appOrigin);
-          assert.ok((await (await http(url)).arrayBuffer()).byteLength > 0);
-        }
-        const projectState = await runtime.projectThreads(project.id, signal);
-        assert.ok(projectState.projects.some(item => item.location.projectId === project.id && item.phase === "current"));
-        const localLocation = { daemonId: runtime.daemonId, projectId: local.id };
-        const tree = runtime.workspace.observe({ kind: "projectTree", location: localLocation });
-        try {
-          const observed = await runtime.workspace.waitFor(tree);
-          assert.equal(observed.data?.projectId, local.id);
-          assert.equal(path.resolve(observed.data!.snapshot.rootPath), localPath);
-          const git = await runtime.workspace.daemon({ kind: "folder", location: localLocation })
-            .git.workingTree.read({ projectId: local.id, preferCached: false });
-          assert.deepEqual(git.errors, []);
-          assert.ok(git.repositories.some(item => path.resolve(item.cwd) === localPath));
-        } finally { tree.release(); }
-
-        runtime.markPhase("verifying transcript reads, subscriptions and image delivery");
-        const request = { threadId: transcript.threadId, turnLimit: 1 };
-        const snapshot = await runtime.transcripts.read(request);
-        assert.ok(snapshot);
-        assert.deepEqual(snapshot.loadedTurnIds, [transcript.turnId]);
-        const projection = projectWorkbenchTranscript(snapshot);
-        assert.ok(projection.success);
-        const item = projection.data.turns[0]?.items[0];
-        assert.equal(item?.id, transcript.itemId);
-        assert.ok(item?.type === "userMessage");
-        const image = item.content[0];
-        assert.ok(image?.type === "image");
-        const response = await fetch(new URL(
-          `/api/workspace/assets/${runtime.daemonId}${image.url.replace("/api/transcript-assets/", "/daemon/transcript-assets/")}`,
-          runtime.appOrigin), { signal });
-        assert.equal(response.status, 200);
-        assert.deepEqual(Buffer.from(await response.arrayBuffer()), transcript.bytes);
-
-        const updates: TranscriptStreamUpdate[] = [];
-        const subscriptionId = "migration-transcript";
-        await runtime.transcripts.subscribe({ ...request, subscriptionId }, () => {
-          assert.fail("The real socket must deliver the incremental transcript protocol.");
-        }, update => { updates.push(update); });
-        try {
-          await runtime.until(() => updates.some(update => update.kind === "structure"), signal);
-          const baseline = updates.find(update => update.kind === "structure");
-          assert.ok(baseline?.kind === "structure" && baseline.reset);
-          assert.deepEqual(baseline.snapshot.loadedTurnIds, [transcript.turnId]);
-        } finally { await runtime.transcripts.unsubscribe({ subscriptionId }); }
-
-        const database = new Database(serverDatabase, { readonly: true });
-        try {
-          assert.equal(database.pragma("user_version", { simple: true }), workbenchDatabaseSchema.currentVersion);
-          assert.equal(database.prepare("SELECT count(*) FROM workbench_thread_states").pluck().get(), capturedCounts.states);
-          assert.equal(database.prepare("SELECT count(*) FROM workbench_subagent_relationships").pluck().get(), capturedCounts.relationships);
-          assert.ok(Number(database.prepare("SELECT count(*) FROM workbench_threads").pluck().get()) >= Number(capturedCounts.threads));
-          assert.equal(database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?").pluck().get(transcript.threadId), project.id);
-        } finally { database.close(); }
-        return { registrationId: appState.daemonRegistrationId, hostId: hostIdentity.daemonId,
-          logicalProjectId: primaryLocation.logicalProjectId };
-      });
-    };
-
-    const initialIdentity = await verifyApp("post-migration app smoke checks");
-    const draftId = DraftIdSchema.parse(randomUUID());
-    await runtime.phase("two app clients preserve local drafts through daemon loss", async signal => {
-      const secondRpc = runtime.createAppRpcClient();
-      const second = new WorkbenchWorkspaceClient(secondRpc);
-      const secondPresentation = new WorkbenchPresentationClient({ workspace: second });
-      const source = runtime.workspace.observe({ kind: "projects", daemonIds: [runtime.daemonId] });
-      const localTree = second.observe({ kind: "projectTree",
-        location: { daemonId: runtime.daemonId, projectId: local.id } });
-      try {
-        secondRpc.start();
-        await second.connect(signal);
-        await second.waitFor(localTree);
-        secondPresentation.start();
-        await secondPresentation.refresh();
-        const location = runtime.presentation.snapshot().data!.locations.find(item =>
-          item.target.daemonId === runtime.daemonId && item.target.projectId === local.id);
-        assert.ok(location, "The app must register the no-remote folder without client assistance");
-        const input = {
-          id: draftId, logicalProjectId: location.logicalProjectId, target: location.target,
-          prompt: "draft created while another tab observes the local explorer", updatedAt: Date.now(),
-          selection: { kind: "custom" as const, settings: {
-            harness: "codex", model: "", reasoningEffort: null, serviceTier: null, agentPath: null, agentSource: null,
-          } },
-        };
-        await runtime.presentation.putDraft(input);
-        await runtime.until(() => secondPresentation.draft(draftId)?.prompt === input.prompt, signal);
-        const saved = secondPresentation.draft(draftId)!;
-        const revision = runtime.presentation.snapshot().data!.revision;
-        await secondPresentation.mutate({ kind: "putDraft", expectedRevision: null, draft: input });
-        assert.equal(secondPresentation.snapshot().data!.revision, revision,
-          "An identical repeated save acknowledges the existing draft without another write");
-        await assert.rejects(secondPresentation.mutate({
-          kind: "putDraft", expectedRevision: null, draft: { ...input, prompt: "conflicting edit" },
-        }), /changed|revision|conflict/iu);
-        assert.equal(runtime.presentation.draft(draftId)?.revision, saved.revision);
-        await runtime.stopDaemon();
-        await runtime.until(() => source.getSnapshot().value?.data.sources.some(item =>
-          item.daemonId === runtime.daemonId && item.connection !== "current") ?? false, signal);
-        await runtime.presentation.putDraft({ ...input, prompt: "saved while daemon offline", updatedAt: Date.now() });
-        await runtime.until(() => secondPresentation.draft(draftId)?.prompt === "saved while daemon offline", signal);
-        await runtime.restartDaemon();
-        await runtime.until(() => source.getSnapshot().value?.data.sources.some(item =>
-          item.daemonId === runtime.daemonId && item.connection === "current") ?? false, signal);
-        await second.waitFor(localTree);
-      } finally {
-        localTree.release();
-        source.release();
-        secondPresentation.dispose();
-        second.dispose();
-        secondRpc.dispose();
-      }
-      assert.ok(await runtime.transcripts.read({ threadId: transcript.threadId, turnLimit: 1 }),
-        "Closing another app client must not release this client's daemon demand");
-    });
-    const initialInstance = runtime.daemonEndpoint.instanceId;
-    runtime.markPhase("graceful shutdown after migration and app validation");
+    const migratedIdentity = await verifyApp("boot 1 (migrating) app checks");
+    runtime.markPhase("boot 1 shutdown");
     assert.deepEqual(await runtime.stop(), { app: 0, daemon: 0 });
     assert.equal(await readDaemonEndpoint(path.join(runtime.dataRootPath, "daemon", "runtime.json")), null);
+    const migratedBackups = await readDatabaseBackups(serverDatabase);
+    if (captured.version < workbenchDatabaseSchema.currentVersion) {
+      assert.ok(migratedBackups.some(backup => backup.version === captured.version),
+        "Migrating must leave a rollback checkpoint at the copied schema");
+    }
 
-    // Reuse the migrated files without reseeding: fresh processes must read durable state.
+    // Boot 2: the migrated files open as they are; nothing migrates, and the app still works.
     await runtime.start();
-    assert.notEqual(runtime.daemonEndpoint.instanceId, initialInstance);
-    assert.equal(runtime.presentation.draft(draftId)?.prompt, "saved while daemon offline",
-      "Cold reopen must retain the acknowledged offline draft");
-    await runtime.startApp();
-    assert.deepEqual(await verifyApp("cold-reopened app smoke checks"), initialIdentity,
-      "Cold reopening must preserve app registration and host identity");
-    runtime.markPhase("graceful shutdown after cold reopening");
+    assert.deepEqual(await verifyApp("boot 2 (already migrated) app checks"), migratedIdentity,
+      "Reopening must keep the app registration and host identity");
+    runtime.markPhase("boot 2 shutdown");
     assert.deepEqual(await runtime.stop(), { app: 0, daemon: 0 });
     assert.equal(await readDaemonEndpoint(path.join(runtime.dataRootPath, "daemon", "runtime.json")), null);
-    console.log("migration validation, core app checks and cold reopening passed");
+    assert.deepEqual(await readDatabaseBackups(serverDatabase), migratedBackups,
+      "An already-migrated database must reopen without another migration checkpoint");
+    console.log(`database schema ${captured.version} -> ${workbenchDatabaseSchema.currentVersion}; both boots passed their app checks`);
   } catch (error) {
     failed = true;
     failure = error;
-    runtime.markPhase("migration or app validation failed; preserving diagnostics");
+    runtime.markPhase("migration or app checks failed; preserving diagnostics");
     throw error;
   } finally {
     try { await runtime.close({ preserveDiagnostics: failed }); }

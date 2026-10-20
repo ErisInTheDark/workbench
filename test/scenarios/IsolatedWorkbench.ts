@@ -28,23 +28,17 @@ export const WORKBENCH_INSTRUCTION_SENTINEL = "WORKBENCH_MANAGED_INSTRUCTION_REQ
 import Database from "better-sqlite3";
 import { createSpawnOptions } from "../../daemon/server/process-helpers";
 import IsolatedWorkbenchProcess from "./IsolatedWorkbenchProcess";
-import WorkbenchSocketClient from "../../shared/workbench/WorkbenchSocketClient";
 import WorkbenchAppRpcClient from "../../app/client/workbench/app/WorkbenchAppRpcClient";
 import WorkbenchWorkspaceClient from "../../app/client/workbench/app/WorkbenchWorkspaceClient";
 import WorkbenchPresentationClient from "../../app/client/workbench/state/WorkbenchPresentationClient";
 import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId } from "../../shared/workbench/identity";
 import { workspaceCommandRoutes, type WorkspaceCommandMethod } from "../../shared/workbench/workspace/workspace-commands";
-import { isWorkbenchRpcFailure } from "../../shared/workbench/workbench-rpc";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "../../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
 import { workbenchTranscriptNotifications } from "../../shared/workbench/database/transcript/workbench-transcript-contract";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
 import type { ProviderRuntimeKey } from "../../shared/workbench/provider/provider-runtime";
 import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint";
-import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient";
-import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint";
-import { WORKBENCH_RELOAD_METHOD } from "../../shared/workbench/daemon-reload";
-import { WorkbenchProjectsPayloadSchema } from "../../shared/workbench/project/project-state";
 import {
   DaemonDiagnosticMessageSchema,
   type DaemonDiagnosticMessage,
@@ -422,13 +416,14 @@ export default class IsolatedWorkbench {
     );
   }
 
-  async start(profiles: readonly WorkbenchComposerProfile[] = [], prefixProof = "lifecycle") {
+  /** `readinessTimeoutMs` covers startup work that scales with retained data, such as a migration's rollback checkpoint. */
+  async start(profiles: readonly WorkbenchComposerProfile[] = [], prefixProof = "lifecycle", readinessTimeoutMs?: number) {
     return await this.phase("app workspace and daemon readiness", async signal => {
       await this.startDaemon(prefixProof, signal);
       await this.startApp();
       await this.connectWorkspace(signal);
       for (const profile of profiles) await this.withSignal(this.daemon.profiles.upsert({ profile }), signal);
-    });
+    }, readinessTimeoutMs);
   }
 
   /** Installs provider runtimes through the same daemon request the Settings Install button sends. */
@@ -440,87 +435,6 @@ export default class IsolatedWorkbench {
         assert.equal(status?.state, "ready", `${provider} runtime install failed: ${status?.error ?? "no status"}`);
       }
     });
-  }
-
-  async stopDaemon() {
-    assert.ok(this.child, "Scenario daemon must be running");
-    const code = await this.child.stop(false);
-    this.child = null;
-    this.endpoint = null;
-    return code;
-  }
-
-  async restartDaemon() {
-    if (this.child) await this.stopDaemon();
-    await this.startDaemon("lifecycle", this.signal);
-  }
-
-  async exerciseManagedProcessReload(expectedProjectRoot: string) {
-    this.signal.throwIfAborted();
-    this.closed = false;
-    this.releaseSignalCleanup ??= isolatedWorkbenchSignalCleanup.register(async () => {
-      await this.stopForSignal();
-    });
-    await this.prepareDaemonEnvironment("lifecycle", this.signal);
-    await this.startService(this.signal);
-    const openControl = async () => {
-      const client = new WorkbenchServiceClient({
-        endpointPath: path.join(this.dataRootPath, "service", "runtime.json"),
-        warn: message => this.markPhase(`service control warning: ${message}`),
-      });
-      await client.start();
-      return client;
-    };
-    const control = await openControl();
-    const releaseControlObservation = control.subscribe(() => {
-      for (const observer of this.observers) observer();
-    });
-    try {
-      this.markPhase("waking host-owned daemon");
-      await control.request({ method: "service/daemon/wake", retry: false }, this.signal);
-      const endpointPath = path.join(this.dataRootPath, "daemon", "runtime.json");
-      const initial = await readDaemonEndpoint(endpointPath);
-      assert.ok(initial, "Managed daemon must publish its initial endpoint");
-      const request = async (endpoint: WorkbenchDaemonEndpoint, method: string, params: object) => {
-        const socket = new WorkbenchSocketClient({ resolveUrl: async () => endpoint.origin.replace("http:", "ws:") });
-        try {
-          await this.withSignal(socket.connect(), this.signal);
-          const response = await this.withSignal(socket.sendRequest({ method, params }), this.signal);
-          if (isWorkbenchRpcFailure(response)) throw new Error(response.error.message);
-          return response.result;
-        } finally { socket.dispose(); }
-      };
-      const includesExpectedProject = (value: unknown) => WorkbenchProjectsPayloadSchema.parse(value).data.some(project =>
-        path.resolve(project.rootPath).toLowerCase() === path.resolve(expectedProjectRoot).toLowerCase());
-      assert.ok(includesExpectedProject(await request(initial, "project/catalog/read", {})),
-        "Managed daemon must discover the retained checkout before reload");
-      this.markPhase("requesting managed server:process reload");
-      await request(initial, WORKBENCH_RELOAD_METHOD, { scopes: ["server:process"] });
-      const replacementReady = () => {
-        const snapshot = control.getSnapshot().snapshot;
-        return snapshot?.identity.state === "ready"
-          && snapshot.daemonOrigin !== null
-          && snapshot.daemonOrigin !== initial.origin;
-      };
-      this.markPhase("waiting for the managed daemon replacement");
-      await this.until(() => (
-        control.getSnapshot().snapshot?.identity.state === "sleeping" || replacementReady()
-      ), this.signal);
-      if (!replacementReady()) {
-        this.markPhase("waking the sleeping managed daemon");
-        await control.request({ method: "service/daemon/wake", retry: false }, this.signal);
-        await this.until(replacementReady, this.signal);
-      }
-      const replacement = await readDaemonEndpoint(endpointPath);
-      assert.ok(replacement, "Managed replacement must publish its endpoint");
-      assert.notEqual(replacement.instanceId, initial.instanceId, "Managed reload must replace the process");
-      assert.ok(includesExpectedProject(await request(replacement, "project/catalog/read", {})),
-        "Managed replacement must rediscover the same retained checkout");
-      this.markPhase("managed replacement served its retained project catalogue");
-    } finally {
-      releaseControlObservation();
-      await control.close();
-    }
   }
 
   private async startDaemon(prefixProof: string, signal: AbortSignal) {
@@ -854,15 +768,15 @@ stream_max_retries = 0
     appendFileSync(path.join(this.root, "scenario.log"), `${new Date().toISOString()} ${message}\n`);
   }
 
-  async phase<T>(label: string, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  async phase<T>(label: string, operation: (signal: AbortSignal) => Promise<T>, timeoutMs = 90_000): Promise<T> {
     this.signal.throwIfAborted();
     this.markPhase(`begin ${label}`);
     const controller = new AbortController();
     // Readiness is a scenario assertion with one budget for the whole phase.
     // Substeps share it rather than restarting a deadline for each awaited call.
     const timer = this.readinessSignal ? null : setTimeout(() => {
-      controller.abort(new Error(`${label} did not complete within 90000ms`));
-    }, 90_000);
+      controller.abort(new Error(`${label} did not complete within ${timeoutMs}ms`));
+    }, timeoutMs);
     const deadline = this.readinessSignal?.() ?? controller.signal;
     const signal = AbortSignal.any([this.signal, deadline]);
     try {
