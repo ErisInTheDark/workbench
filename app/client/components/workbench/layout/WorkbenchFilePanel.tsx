@@ -4,12 +4,11 @@
  *   markdown toolbar ending in the folder index, save (Save as with Shift, or for a new file, opening the path row
  *   above it) and hold-to-confirm reset, and the editor (or its markdown source)
  *   with its comment margin, suggestion originals and code block and table controls, followed by a row stepping between
- *   the folder's documents; mosaic panels add a titled
- *   header instead of the index and steps.
+ *   the folder's documents.
  */
 "use client";
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import createFilePanelClient, { type WorkbenchFilePanelClient, type WorkbenchFilePanelSnapshot } from "../../../workbench/WorkbenchFilePanelClient";
@@ -17,8 +16,6 @@ import useFileDocument from "../../../workbench/file/use-file-document";
 import { WORKBENCH_STICKY_CHROME_ATTRIBUTE, type WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, type WorkbenchEditorFontFamily } from "../../../workbench/state/workbench-settings";
 import { MARK_TAG_SCOPE_ATTRIBUTE, markTagStyleSheet } from "../../../workbench/editor/mark-tag-styles";
-import type { WorkbenchMainPanelDragPayload } from "../../../workbench/layout/workbench-drag";
-import { useWorkbenchDrag } from "../drag/workbench-drag-context";
 import { useSettings } from "../use-settings";
 import type MobileShellHeaderVisibilityController from "../MobileShellHeaderVisibilityController";
 import IconButton from "../../ui/IconButton";
@@ -27,7 +24,6 @@ import { useWorkbenchSwapTab } from "../../../workbench/navigation/use-workbench
 import { withFileDestination, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import DocumentPager from "../markdown-editor/DocumentPager";
 import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
-import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import DraftResetButton from "../markdown-editor/DraftResetButton";
 import MarkdownCodeBlockChrome from "../markdown-editor/MarkdownCodeBlockChrome";
 import MarkdownCommentMargin from "../markdown-editor/MarkdownCommentMargin";
@@ -45,12 +41,7 @@ import {
   WorkbenchDialog,
 } from "../workbench-dialogs";
 import { dialogButtonClassName } from "../workbench-dialog-styles";
-import {
-  BookBookmarkIcon,
-  PanelCloseIcon,
-  PanelExpandIcon,
-  PanelMinimizeIcon,
-} from "../workbench-icons";
+import { BookBookmarkIcon } from "../workbench-icons";
 
 const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
   mono: "font-mono", sans: "font-sans", serif: "font-serif",
@@ -107,26 +98,14 @@ const markdownProseClassName = `
 `;
 
 interface WorkbenchFilePanelProps {
-  contained?: boolean;
   fontSizePreview?: number | null;
-  sidebarToggleInset?: "collapsed" | "expanded";
-  isFocused: boolean;
-  isMinimized?: boolean;
-  isMinimizedVertical?: boolean;
   location: ProjectLocationReference | null;
-  onFocus: () => void;
-  onClose?: () => void;
-  headerDrag?: WorkbenchMainPanelDragPayload;
-  onMinimizeToggle?: () => void;
-  onPanelZoomDeltaChange?: (zoomDelta: number) => void;
-  panelZoomDelta?: number;
   path: string;
-  /** The main pane's file tab; with it the panel offers the folder index and steps between the folder's documents. */
-  route?: WorkbenchRoute;
+  /** The file tab; the panel offers its folder index and steps between the folder's documents. */
+  route: WorkbenchRoute;
   /** The main pane's shell header slides away on mobile scroll; the toolbar below it slides with it. */
   shellHeaderVisibility?: MobileShellHeaderVisibilityController;
   showManualFileActions?: boolean;
-  titleLabel?: string;
 }
 
 const noSubscription = () => () => {};
@@ -166,23 +145,11 @@ function useStickyTopBelowChrome(enabled: boolean) {
 
 export default function WorkbenchFilePanel ({
   fontSizePreview,
-  contained = false,
-  sidebarToggleInset,
-  isFocused,
-  isMinimized = false,
-  isMinimizedVertical = false,
   location,
-  onClose,
-  onFocus,
-  headerDrag,
-  onMinimizeToggle,
-  onPanelZoomDeltaChange,
-  panelZoomDelta = 0,
   path,
   route,
   shellHeaderVisibility,
   showManualFileActions = true,
-  titleLabel,
 }: WorkbenchFilePanelProps) {
   const shellHeaderVisible = useSyncExternalStore(
     shellHeaderVisibility?.subscribe ?? noSubscription,
@@ -192,9 +159,8 @@ export default function WorkbenchFilePanel ({
   const settings = useSettings.forLocation(location);
   const editorFontClassName = EDITOR_FONT_CLASS_NAMES[settings.get("editorFontFamily")];
   const spellCheck = settings.get("editorSpellCheck");
-  const panelBaseFontSize = fontSizePreview ?? settings.get("editorFontSize");
   const fontSizeRem = Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE,
-    Number((panelBaseFontSize + panelZoomDelta * 0.08).toFixed(2))));
+    Number((fontSizePreview ?? settings.get("editorFontSize")).toFixed(2))));
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
@@ -219,9 +185,7 @@ export default function WorkbenchFilePanel ({
   const file = useFileDocument(location, path);
   const isNewFile = snapshot?.isNewFile ?? false;
   const loading = !file.snapshot.data && !file.snapshot.failure && !isNewFile;
-  /** Save as opens its copy in this tab, so only the main pane's file tab offers it. */
-  const canSaveAs = Boolean(route);
-  const stickyToolbar = useStickyTopBelowChrome(!contained && !loading);
+  const stickyToolbar = useStickyTopBelowChrome(!loading);
 
   const panelIdSuffix = useMemo(() => path.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 48) || "file", [path]);
 
@@ -281,7 +245,7 @@ export default function WorkbenchFilePanel ({
 
     const nextClient = createFilePanelClient({
       document: file.document,
-      onSaveAsRequest: canSaveAs ? () => setSaveAsOpen(true) : undefined,
+      onSaveAsRequest: () => setSaveAsOpen(true),
       surfaces,
     });
     setClient(nextClient);
@@ -330,20 +294,15 @@ export default function WorkbenchFilePanel ({
     client?.setSuggestionLayout(marginLayout.suggestion);
   }, [client, marginLayout.suggestion]);
 
-  const usesPanelZoom = Boolean(onPanelZoomDeltaChange);
-  const previewZoom = useCallback((value: number | null) => {
-    client?.previewFontSize(value === null ? null : usesPanelZoom ? panelBaseFontSize + value * 0.08 : value);
-  }, [client, usesPanelZoom, panelBaseFontSize]);
-
   const swapTab = useWorkbenchSwapTab();
   useEffect(() => { setSaveAsOpen(false); }, [path]);
   /** A discarded new file leaves its tab on the folder it was started in. */
   const discardNewFile = useCallback(async () => {
     if (!client) return;
     await client.discardNewFile();
-    if (route) swapTab(withFileDestination(route, route.filePath, true));
+    swapTab(withFileDestination(route, route.filePath, true));
   }, [client, route, swapTab]);
-  const saveAsRow = saveAsOpen && client && route ? (
+  const saveAsRow = saveAsOpen && client ? (
     <WorkbenchSaveAsRow
       initialPath={path}
       location={file.document?.location ?? location}
@@ -359,24 +318,22 @@ export default function WorkbenchFilePanel ({
   /** The folder index, save and reset sit at the toolbar's end, beside undo and redo. */
   const fileActions = client && snapshot ? (
     <>
-      {route ? (
-        <Tooltip placement="bottom" delayMs={350} content="Folder index">
-          <IconButton
-            type="button"
-            title=""
-            label="Folder index"
-            size="small"
-            display="hover-border"
-            onClick={() => swapTab(withFileDestination(route, route.filePath, true))}
-          >
-            <BookBookmarkIcon size={16} />
-          </IconButton>
-        </Tooltip>
-      ) : null}
+      <Tooltip placement="bottom" delayMs={350} content="Folder index">
+        <IconButton
+          type="button"
+          title=""
+          label="Folder index"
+          size="small"
+          display="hover-border"
+          onClick={() => swapTab(withFileDestination(route, route.filePath, true))}
+        >
+          <BookBookmarkIcon size={16} />
+        </IconButton>
+      </Tooltip>
       <WorkbenchSaveButton
         invalid={snapshot.hasSaveIssue}
         onSave={() => { void client.save(); }}
-        onSaveAs={canSaveAs ? () => setSaveAsOpen(true) : undefined}
+        onSaveAs={() => setSaveAsOpen(true)}
         saveAsDisabled={!snapshot.currentPath}
         saveAsOnly={snapshot.isNewFile}
         saveDisabled={!snapshot.currentPath}
@@ -390,150 +347,49 @@ export default function WorkbenchFilePanel ({
       />
     </>
   ) : null;
-  /** Header rows own their inset, so the toolbar can scroll edge to edge with its controls still inset. */
-  const headerInsetClassName = sidebarToggleInset === "collapsed" ? "pl-32 pr-5 md:pr-6"
-    : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pr-6"
-      : "px-5 md:px-6";
-
-  const beginDrag = useWorkbenchDrag.mainPanel();
-  function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
-    if (
-      !headerDrag
-      || (
-        event.target instanceof HTMLElement
-        && event.target.closest("button,a,input,textarea,select,[role='toolbar'],[contenteditable='true']")
-      )
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    beginDrag(event, headerDrag);
-  }
 
   return (
-    <div
-      className="flex min-h-full min-w-0 flex-col"
-      data-focused={isFocused ? "true" : "false"}
-      onFocusCapture={onFocus}
-      onPointerDownCapture={onFocus}
-    >
+    <div className="flex min-h-full min-w-0 flex-col">
       {file.snapshot.failure && !isNewFile ? <p role="alert">{file.snapshot.failure}</p> : null}
       {file.snapshot.data && file.snapshot.phase !== "current" && !file.snapshot.failure
         ? <p role="status">Waiting for current disk data...</p> : null}
-      {contained ? (
-        <header
-          className={`
-            sticky top-0 z-10 -mx-5 py-3 md:-mx-6
-            ${headerDrag ? "cursor-grab active:cursor-grabbing" : ""}
-            ${isMinimizedVertical ? "flex h-full items-center justify-center" : ""}
-          `}
-          {...{ [WORKBENCH_STICKY_CHROME_ATTRIBUTE]: "" }}
-          onPointerDown={handleHeaderPointerDown}
+      {loading ? null : <div
+        ref={stickyToolbar.ref}
+        className={`
+          sticky z-[9] -mx-5 md:-mx-6
+          transition-[top,translate,opacity] duration-200 ease-out motion-reduce:transition-none
+          ${shellHeaderVisible ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-[calc(100%+1.5rem)] opacity-0"}
+        `}
+        style={{ top: shellHeaderVisible ? stickyToolbar.top : 0 }}
+        inert={!shellHeaderVisible}
+        {...{ [WORKBENCH_STICKY_CHROME_ATTRIBUTE]: "" }}
+      >
+        {/* Reaches up under the shell header, whose own fade would otherwise let scrolled text show between the two, and fades out below like it. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 -top-6 -bottom-6 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)]"
+        />
+        {/* Spans the pane edge to edge; the toolbar's own padding lines its controls up with the text column. */}
+        <div
+          className="mx-auto md:max-w-[calc(var(--container-content)+5.5rem)]"
+          style={marginLayout.shellOffset === null ? undefined : { marginLeft: marginLayout.shellOffset, marginRight: 0 }}
         >
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)] md:backdrop-blur-none"
+          {saveAsRow ? <div className="px-5 md:pr-6 md:pl-[3.5rem]">{saveAsRow}</div> : null}
+          <MarkdownEditorToolbar
+            client={client}
+            className="px-5 md:pr-6 md:pl-[3.5rem]"
+            markTags={markTags}
+            trailing={showManualFileActions ? fileActions : null}
           />
-          <div className={`flex flex-col gap-2 md:flex-row md:items-start md:justify-between ${headerInsetClassName} ${isMinimizedVertical ? "rotate-90 whitespace-nowrap" : ""}`}>
-            <div className="order-2 min-w-0 md:order-1">
-              <p ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
-                {titleLabel ?? snapshot?.currentPath ?? path}
-              </p>
-              <p ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted" hidden={isMinimized} />
-            </div>
-            <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
-              {onMinimizeToggle ? (
-                <IconButton
-                  type="button"
-                  title={isMinimized ? "Expand panel" : "Minimize panel"}
-                  label={isMinimized ? "Expand panel" : "Minimize panel"}
-                  display="hover-border"
-                  onClick={onMinimizeToggle}
-                >
-                  {isMinimized ? <PanelExpandIcon size={20} /> : <PanelMinimizeIcon size={20} />}
-                  <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
-                </IconButton>
-              ) : null}
-              {onPanelZoomDeltaChange ? (
-                <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
-                  <WorkbenchZoomButton
-                    label="Editor text size"
-                    disabled={isMinimized || !showManualFileActions || !snapshot}
-                    min={Math.floor(Number(((MIN_EDITOR_FONT_SIZE - panelBaseFontSize) / 0.08).toFixed(6)))}
-                    max={Math.ceil(Number(((MAX_EDITOR_FONT_SIZE - panelBaseFontSize) / 0.08).toFixed(6)))}
-                    step={1}
-                    value={panelZoomDelta}
-                    onPreview={previewZoom}
-                    format={value => `${Math.max(MIN_EDITOR_FONT_SIZE, Math.min(MAX_EDITOR_FONT_SIZE, panelBaseFontSize + value * 0.08)).toFixed(2)}rem`}
-                    onChange={onPanelZoomDeltaChange}
-                  />
-                </div>
-              ) : null}
-              {onClose ? (
-                <IconButton
-                  type="button"
-                  title="Close panel"
-                  label="Close panel"
-                  display="hover-border"
-                  onClick={onClose}
-                >
-                  <PanelCloseIcon size={16} />
-                  <span className="sr-only">Close panel</span>
-                </IconButton>
-              ) : null}
-            </div>
-          </div>
-          {isMinimized || loading ? null : (
-            <MarkdownEditorToolbar
-              client={client}
-              className={`mt-1.5 ${headerInsetClassName}`}
-              markTags={markTags}
-              trailing={showManualFileActions ? fileActions : null}
-            />
-          )}
-        </header>
-      ) : (
-        <>
-          {loading ? null : <div
-            ref={stickyToolbar.ref}
-            className={`
-              sticky z-[9] -mx-5 md:-mx-6
-              transition-[top,translate,opacity] duration-200 ease-out motion-reduce:transition-none
-              ${shellHeaderVisible ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-[calc(100%+1.5rem)] opacity-0"}
-            `}
-            style={{ top: shellHeaderVisible ? stickyToolbar.top : 0 }}
-            inert={!shellHeaderVisible}
-            {...{ [WORKBENCH_STICKY_CHROME_ATTRIBUTE]: "" }}
-          >
-            {/* Reaches up under the shell header, whose own fade would otherwise let scrolled text show between the two, and fades out below like it. */}
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-x-0 -top-6 -bottom-6 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)]"
-            />
-            {/* Spans the pane edge to edge; the toolbar's own padding lines its controls up with the text column. */}
-            <div
-              className="mx-auto md:max-w-[calc(var(--container-content)+5.5rem)]"
-              style={marginLayout.shellOffset === null ? undefined : { marginLeft: marginLayout.shellOffset, marginRight: 0 }}
-            >
-              {saveAsRow ? <div className="px-5 md:pr-6 md:pl-[3.5rem]">{saveAsRow}</div> : null}
-              <MarkdownEditorToolbar
-                client={client}
-                className="px-5 md:pr-6 md:pl-[3.5rem]"
-                markTags={markTags}
-                trailing={showManualFileActions ? fileActions : null}
-              />
-            </div>
-          </div>}
-          {/* In the main pane the shell tab names the file and the toolbar holds save and reset; status is announced only. */}
-          <p ref={filePathLabelRef} className="sr-only" />
-          <p ref={statusLineRef} className="sr-only" aria-live="polite" />
-        </>
-      )}
+        </div>
+      </div>}
+      {/* The shell tab names the file and the toolbar holds save and reset; status is announced only. */}
+      <p ref={filePathLabelRef} className="sr-only" />
+      <p ref={statusLineRef} className="sr-only" aria-live="polite" />
 
-      {loading && !isMinimized ? <WorkbenchLoadingSpinner label="Loading file" /> : null}
+      {loading ? <WorkbenchLoadingSpinner label="Loading file" /> : null}
       {/* The editor mounts while loading, hidden, so its client is ready the moment content arrives. */}
-      <div className="relative min-h-0 flex-1 pt-3" hidden={isMinimized || loading}>
+      <div className="relative min-h-0 flex-1 pt-3" hidden={loading}>
         {markTagStyles ? <style>{markTagStyles}</style> : null}
         <div
           ref={editorShellRef}
@@ -549,7 +405,7 @@ export default function WorkbenchFilePanel ({
           <div
             ref={editorRef}
             className={`
-              editor-content col-start-2 row-start-1 ${contained ? "min-h-[18rem]" : "min-h-[calc(100vh-6rem)]"}
+              editor-content col-start-2 row-start-1 min-h-[calc(100vh-6rem)]
               pb-16 ${editorFontClassName} ${markdownProseClassName} outline-none
               data-[custom-caret-visible=true]:caret-transparent
               empty:before:(text-fg/muted content-[attr(data-placeholder)])
@@ -582,8 +438,7 @@ export default function WorkbenchFilePanel ({
             aria-label="Markdown source"
             className={`
               editor-source col-start-2 row-start-1 block w-full resize-none overflow-hidden bg-transparent p-0 pb-16
-              ${contained ? "min-h-[18rem]" : "min-h-[calc(100vh-6rem)]"}
-              font-mono leading-[1.65] text-text whitespace-pre-wrap wrap-anywhere outline-none
+              min-h-[calc(100vh-6rem)] font-mono leading-[1.65] text-text whitespace-pre-wrap wrap-anywhere outline-none
             `}
             spellCheck={spellCheck}
           />
@@ -643,7 +498,7 @@ export default function WorkbenchFilePanel ({
             aria-hidden="true"
             hidden
           />
-          {route ? <div className="col-start-2 pb-10"><DocumentPager location={location} route={route} /></div> : null}
+          <div className="col-start-2 pb-10"><DocumentPager location={location} route={route} /></div>
         </div>
       </div>
 

@@ -17,13 +17,11 @@ import {
   createStatsRoute,
   createThreadHref,
   createWorkbenchHref,
-  getWorkbenchMosaicThreadRootIds,
   isWorkbenchRouteOwnerOfThread,
   isWorkbenchThreadTargetSelected,
   parseWorkbenchRouteFromPath,
   withProjectSelection,
 } from "./workbench-route.ts";
-import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget, parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -35,7 +33,6 @@ const fixtureIdentityValues = {
   },
   WorkbenchThreadId: {
     "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
-    "one": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("one"),
     "parent": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
     "provider": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("provider"),
   },
@@ -55,7 +52,6 @@ test("/ and /@/ select projects with unarchived threads", () => {
   const expected = {
     error: "",
     filePath: "",
-    mosaicNode: null,
     projectId: "",
     selectedProjectIds: null,
     threadId: "",
@@ -290,20 +286,4 @@ test("missing or malformed draft routes never fall through to provider identity"
   assert.equal(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub").view, "invalid");
   assert.equal(parseWorkbenchRouteFromPath("/p/@/folder/not-a-uuid/thread/new").view, "invalid");
   assert.equal(parseWorkbenchRouteFromPath("/p/@/folder/00000000-0000-4000-8000-000000000010/thread/provider").view, "invalid");
-});
-
-test("mosaic routes canonicalise parent-owned subagents to UUID targets", () => {
-  const node = parseWorkbenchMosaicRouteExpression("[thread/parent/sub/child]");
-  assert.equal(node.ok, true);
-  if (node.ok) assert.equal(serializeWorkbenchMosaicRouteExpression(node.node), "[thread/id/parent/sub/child]");
-});
-
-test("mosaic materialization projects every durable root and excludes non-provider panels", () => {
-  const node = createWorkbenchMosaicSplit([
-    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["one"] } }),
-    createWorkbenchMosaicTarget({ filePath: "src/index.ts", kind: "file" }),
-    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"] } }),
-    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "new" } }),
-  ]);
-  assert.deepEqual([...getWorkbenchMosaicThreadRootIds(node)].sort(), ["one", "parent"]);
 });

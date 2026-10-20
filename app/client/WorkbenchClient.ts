@@ -18,7 +18,7 @@ import {
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
   createHomeRoute, createLogicalThreadRoute, createLogicalExistingThreadRoute,
-  createLogicalProjectRoute, createLogicalMosaicRoute, createMosaicRoute, getWorkbenchMosaicThreadRootIds,
+  createLogicalProjectRoute,
   createThreadRoute, getWorkbenchThreadTargetRootId, isSameWorkbenchRoute, isWorkbenchRouteOwnerOfThread,
   withProjectSelection, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
@@ -290,17 +290,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     return next;
   }
 
-  function prepareMosaicRenderers(node: WorkbenchRoute["mosaicNode"]) {
-    if (!node) return;
-    if (node.type === "split") {
-      for (const child of node.children) prepareMosaicRenderers(child);
-      return;
-    }
-    const location = node.target.source?.location;
-    if (location && node.target.kind === "thread"
-      && (node.target.target.kind === "new" || node.target.target.kind === "draft")) warmOpenCode(location);
-    if (location && threadProject(location)) rendererFor(location);
-  }
   const projectClient = WorkbenchProjectClient({
     clientStateController: state,
     onError: message => warn(message),
@@ -605,7 +594,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       if (member.ref.kind === "thread" && member.ref.identity.harness === "opencode"
         && member.homeKey && !settledKeys.has(member.homeKey)) warmOpenCode(member.location);
     }
-    prepareMosaicRenderers(route.mosaicNode);
     routeIntents.factsChanged();
     for (const listener of factListeners) listener();
     emit();
@@ -682,7 +670,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (route.view !== "thread" || target?.kind !== "new" && target?.kind !== "draft") draftRoute = null;
     const root = target && (target.kind === "provider" || target.kind === "subagent")
       ? getWorkbenchThreadTargetRootId(target) : null;
-    retainOwners(route.mosaicNode ? [...getWorkbenchMosaicThreadRootIds(route.mosaicNode)] : root ? [root] : []);
+    retainOwners(root ? [root] : []);
     const logicalId = route.logical?.projectId;
     const explicit = route.logical?.browseLocation ?? route.logical?.location;
     // The url folder owns the browse scope; the draft channel keeps its own folder intent.
@@ -759,12 +747,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       else if (candidates.length > 1) return { ok: false, error: "This old project address names more than one daemon folder." };
     }
     if (draftRouteTarget && location) warmOpenCode(location);
-    if (route.view === "mosaic") {
-      // Each pane consumes its own owner and transcript facts. A slow pane cannot block its siblings.
-      selectFolder(browseFolder ?? location);
-      prepareMosaicRenderers(route.mosaicNode);
-      return { ok: true };
-    }
     if (root && target && (target.kind === "provider" || target.kind === "subagent")) {
       const owner = owners.get(root)?.getSnapshot();
       const data = owner?.value?.data;
@@ -894,32 +876,14 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const renderer = rendererFor(location);
       const draft = renderer.getThreadStore(location.projectId, { kind: "draft", draftId }).getSlice("summary").draftDocument;
       if (!draft) return null;
-      let nextRoute: WorkbenchRoute;
-      if (route.view === "mosaic" && route.mosaicNode) {
-        let found = false;
-        const replace = (node: NonNullable<WorkbenchRoute["mosaicNode"]>): NonNullable<WorkbenchRoute["mosaicNode"]> => {
-          if (node.type === "split") return { ...node, children: node.children.map(replace) };
-          if (node.target.kind !== "thread" || node.target.target.kind !== "draft"
-            || node.target.target.draftId !== draftId) return node;
-          found = true;
-          return { ...node, target: { ...node.target, target: { kind: "draft", draftId: nextDraftId } } };
-        };
-        const node = replace(route.mosaicNode);
-        if (!found) return null;
-        nextRoute = route.logical?.projectId
-          ? createLogicalMosaicRoute(route.logical.projectId, node)
-          : createMosaicRoute(route.projectId, node);
-        createDraft(location, draft.harness, { threadId: nextDraftId, select: false });
-      } else {
-        if (!route.logical || !isWorkbenchRouteOwnerOfThread(route, draftId, true)
-          || threadClient.getSnapshot().currentThread?.id !== draftId) return null;
-        const owner = route.logical.threadOwnerProjectId ?? logicalFor(location)?.id;
-        if (!owner) return null;
-        nextRoute = createLogicalThreadRoute(route.logical.projectId, owner, location,
-          route.threadTarget?.kind === "new" ? route.threadTarget : { kind: "new" });
-        draftRoute = nextRoute;
-        createDraft(location, draft.harness, { threadId: nextDraftId });
-      }
+      if (!route.logical || !isWorkbenchRouteOwnerOfThread(route, draftId, true)
+        || threadClient.getSnapshot().currentThread?.id !== draftId) return null;
+      const owner = route.logical.threadOwnerProjectId ?? logicalFor(location)?.id;
+      if (!owner) return null;
+      const nextRoute = createLogicalThreadRoute(route.logical.projectId, owner, location,
+        route.threadTarget?.kind === "new" ? route.threadTarget : { kind: "new" });
+      draftRoute = nextRoute;
+      createDraft(location, draft.harness, { threadId: nextDraftId });
       return withProjectSelection(nextRoute, route.selectedProjectIds);
     },
     getSelectedThreadDraft: () => navigation.readPinnedDraft((projectId, draftId) =>
@@ -973,7 +937,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       if (rowSelection !== undefined) selectRows(rowSelection, true);
     },
     listModels: (...args) => threadClient.listModels(...args),
-    watchRateLimits: () => threadClient.watchRateLimits(),
     setEditorFontSize: () => {},
     setCurrentThreadModel: (id, model) => rendererForThread(id).setCurrentThreadModel(id, model),
     setCurrentThreadAgent: (id, agent) => rendererForThread(id).setCurrentThreadAgent(id, agent),
@@ -981,7 +944,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     setCurrentThreadReasoningEffort: (id, effort) => rendererForThread(id).setCurrentThreadReasoningEffort(id, effort),
     setCurrentThreadServiceTier: (id, tier) => rendererForThread(id).setCurrentThreadServiceTier(id, tier),
     setDraftThreadHarness: harness => threadClient.setDraftThreadHarness(harness),
-    setDraftThreadHarnessAt: (location, harness) => rendererFor(location).setDraftThreadHarness(harness),
     toggleDirectory: path => { projectClient.toggleDirectory(path); },
     updateThreadState: async request => { await mutateThread(request); },
     updateThreadStateWithAcceptance: mutateThread,

@@ -22,7 +22,7 @@
  * - ChevronLeftIcon/BackArrowIcon: left chevron and its mobile back-navigation alias.
  * - ChevronRightIcon/CornerLeftUpIcon: next and up-a-level glyphs.
  * - SidebarCollapseIcon/SidebarExpandIcon: sidebar visibility controls.
- * - PanelMinimizeIcon/PanelExpandIcon/PanelCloseIcon: mosaic panel controls.
+ * - PanelCloseIcon: close glyph for dismissable panes and pickers.
  * - HomeIcon/StatsIcon/GearIcon: main navigation glyphs.
  * - ProjectIcon: project section glyph.
  * - BrowserSessionIcon: browser session glyph.
@@ -46,7 +46,7 @@
  * - ListEndIcon: create another thread without following the launched thread.
  * - SquareIcon: outlined square.
  * - PanelLeftCloseIcon/PanelLeftOpenIcon: panel visibility glyphs.
- * - SquareMinusIcon/SquarePlusIcon/XIcon: geometric panel-action glyphs.
+ * - XIcon: geometric close glyph.
  * - SettingsIcon/ChartNoAxesCombinedIcon: settings and chart glyphs.
  * - EyeIcon/EyeOffIcon/SearchIcon: visibility and search glyphs.
  * - FilePlusIcon/ExternalLinkIcon: file creation and external navigation glyphs.
@@ -447,24 +447,6 @@ export function ImageIcon(props: IconProps) {
     <circle cx="9" cy="9" r="2" />
     <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
   </OutlinedIcon>;
-}
-
-export function SquareMinusIcon(props: IconProps) {
-  return (
-    <OutlinedIcon {...props}>
-      <rect width="18" height="18" x="3" y="3" rx="2" />
-      <path d="M8 12h8" />
-    </OutlinedIcon>
-  );
-}
-
-export function SquarePlusIcon(props: IconProps) {
-  return (
-    <OutlinedIcon {...props}>
-      <rect width="18" height="18" x="3" y="3" rx="2" />
-      <path d="M8 12h8" /><path d="M12 8v8" />
-    </OutlinedIcon>
-  );
 }
 
 export function XIcon(props: IconProps) {
@@ -1240,8 +1222,6 @@ export function GitArcIcon({ action, ...props }: IconProps & { action: GitArcCom
 export const BinIcon = Trash2Icon;
 export const SidebarCollapseIcon = PanelLeftCloseIcon;
 export const SidebarExpandIcon = PanelLeftOpenIcon;
-export const PanelMinimizeIcon = SquareMinusIcon;
-export const PanelExpandIcon = SquarePlusIcon;
 export const PanelCloseIcon = XIcon;
 export const GearIcon = SettingsIcon;
 export const ProjectIcon = FolderGit2Icon;

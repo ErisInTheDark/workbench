@@ -19,7 +19,6 @@
 | profile | Composer settings plus optional stored-profile id. Saved settings provide a fallback, not a frozen composer preview |
 | stored profile | Named reusable settings. Linked composers and new turns resolve its current definition |
 | profile ribbon | The composer controls immediately to the left of the send button, regardless of their visual treatment |
-| mosaic | A desktop-only Workbench route/view that renders a URL-encoded split tree of file and thread panels, separate from normal single file/thread routes so the single-route app shell and scroll behavior remain stable fallback paths |
 | steer admittance | The point when Workbench or the underlying harness accepts a steer for an active turn. Admittance associates the steer with that turn, but does not mean that the running agent has received it in model context |
 | steer delivery | The later point when an admitted steer is supplied to the running agent at an input boundary. Delivery makes the steer available to the agent's reasoning and can occur after a pending tool call completes |
 | held steer | An admitted steer awaiting delivery (pending) or never delivered (undelivered). Stored outside the transcript and shown as an overlay at the thread bottom until delivered, dismissed, or resent |

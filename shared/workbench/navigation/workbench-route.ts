@@ -10,12 +10,12 @@
  * - createSettledThreadExitRoute: leave a settled viewed thread while keeping the project selection.
  * - createDiscardedDraftExitRoute: leave only the draft still viewed when deletion completes.
  * - WORKBENCH_STATS_TABS/WorkbenchStatsTab: stats view tabs carried in the url.
- * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createNewProjectRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
- * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
- * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
+ * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createNewProjectRoute/createStatsRoute/createGitRoute/createInvalidWorkbenchRoute: construct routes.
+ * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute: internal project, target and UUID routes.
+ * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
  * - salvageWorkbenchPath: the nearest valid path to a broken one, keeping its valid tabs, selection and folder.
- * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref/createMosaicHref: build hrefs.
+ * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref: build hrefs.
  * - isSameWorkbenchRoute/isSameDraftRouteIntent/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare and fence route-owned transitions.
  */
 
@@ -23,7 +23,6 @@ import {
   encodeWorkbenchRoutePath,
 } from "../../navigation/workbench-route-path.ts";
 
-import { type WorkbenchMosaicNode } from "./workbench-mosaic-route.ts";
 import { WorkbenchTabStrip } from "./workbench-tabs.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import { z } from "zod";
@@ -41,7 +40,7 @@ const LEGACY_THREAD_SEARCH_PARAM = "thread";
 const RouteThreadReferenceSchema = z.string().brand<"ThreadReference">();
 const RouteProjectIdSchema = z.string().brand<"ProjectId">();
 
-export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "stats" | "git" | "mosaic" | "new-project" | "invalid";
+export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "stats" | "git" | "new-project" | "invalid";
 
 export const WORKBENCH_STATS_TABS = ["usage", "workspaces", "tools"] as const;
 export type WorkbenchStatsTab = typeof WORKBENCH_STATS_TABS[number];
@@ -63,7 +62,6 @@ export interface WorkbenchRoute {
   fileIndex?: boolean;
   /** Sidebar folder selection from the `*` url slot. Absent means inherit; null means explicitly no folder. */
   folderAddress?: string[] | null;
-  mosaicNode: WorkbenchMosaicNode | null;
   projectId: ProjectId | "";
   selectedProjectIds: readonly string[] | null;
   /** Stats view tab; absent means usage. */
@@ -95,7 +93,6 @@ export function createHomeRoute(): WorkbenchRoute {
   return {
     error: "",
     filePath: "",
-    mosaicNode: null,
     projectId: "",
     selectedProjectIds: null,
     threadId: "",
@@ -109,7 +106,6 @@ export function createProjectRoute(projectId: string): WorkbenchRoute {
   return {
     error: "",
     filePath: "",
-    mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
     selectedProjectIds: projectId ? [projectId] : [],
     threadId: "",
@@ -229,24 +225,6 @@ export function createLogicalExistingThreadRoute(
   } };
 }
 
-function mosaicPanesHaveSources(node: WorkbenchMosaicNode): boolean {
-  if (node.type === "split") return node.children.every(mosaicPanesHaveSources);
-  if (node.target.kind === "thread"
-    && (node.target.target.kind === "provider" || node.target.target.kind === "subagent")) return true;
-  const source = node.target.source;
-  return Boolean(source && (node.target.kind === "thread" || source.location));
-}
-
-export function createLogicalMosaicRoute(logicalProjectId: string, mosaicNode: WorkbenchMosaicNode): WorkbenchRoute {
-  if (!mosaicPanesHaveSources(mosaicNode)) throw new Error("Logical mosaic panes require source addresses.");
-  return { ...createMosaicRoute("", mosaicNode), selectedProjectIds: [logicalProjectId], logical: {
-    projectId: LogicalProjectIdSchema.parse(logicalProjectId),
-    threadOwnerProjectId: null,
-    location: null,
-    browseLocation: null,
-  } };
-}
-
 export function createGitRoute(projectId: string): WorkbenchRoute {
   return { ...createProjectRoute(projectId), view: "git" };
 }
@@ -255,7 +233,6 @@ export function createFileRoute(projectId: string, filePath: string): WorkbenchR
   return {
     error: "",
     filePath,
-    mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
     selectedProjectIds: projectId ? [projectId] : null,
     threadId: "",
@@ -323,7 +300,6 @@ export function createThreadRoute(projectId: string, target: string | WorkbenchT
   return {
     error: "",
     filePath: "",
-    mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
     selectedProjectIds: projectId ? [projectId] : null,
     threadId: getWorkbenchThreadTargetRootId(threadTarget),
@@ -363,24 +339,6 @@ export function getWorkbenchThreadTargetSelectedId(target: WorkbenchThreadRouteT
   return target.kind === "subagent" ? target.threadId : getWorkbenchThreadTargetRootId(target);
 }
 
-export function getWorkbenchMosaicThreadRootIds(node: WorkbenchMosaicNode | null) {
-  const threadIds = new Set<string>();
-  const visit = (current: WorkbenchMosaicNode | null) => {
-    if (!current) return;
-    if (current.type === "split") {
-      current.children.forEach(visit);
-      return;
-    }
-    if (current.target.kind !== "thread") return;
-    const target = current.target.target;
-    if (target.kind === "provider" || target.kind === "subagent") {
-      threadIds.add(getWorkbenchThreadTargetRootId(target));
-    }
-  };
-  visit(node);
-  return threadIds;
-}
-
 export function isWorkbenchThreadTargetSelected(
   target: WorkbenchThreadRouteTarget,
   currentTarget: WorkbenchThreadRouteTarget | null,
@@ -414,7 +372,6 @@ export function createSettingsRoute(projectId: string): WorkbenchRoute {
   return {
     error: "",
     filePath: "",
-    mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
     selectedProjectIds: projectId ? [projectId] : null,
     threadId: "",
@@ -435,25 +392,10 @@ export function createStatsRoute(projectId: string | null = null, tab: Workbench
   };
 }
 
-export function createMosaicRoute(projectId: string, mosaicNode: WorkbenchMosaicNode): WorkbenchRoute {
-  return {
-    error: "",
-    filePath: "",
-    mosaicNode,
-    projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
-    selectedProjectIds: projectId ? [projectId] : null,
-    threadId: "",
-    threadOwnerProjectId: "",
-    threadTarget: null,
-    view: "mosaic",
-  };
-}
-
 export function createInvalidWorkbenchRoute(error: string, projectId = ""): WorkbenchRoute {
   return {
     error,
     filePath: "",
-    mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
     selectedProjectIds: projectId ? [projectId] : null,
     threadId: "",
@@ -712,9 +654,6 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
       }
       return createPinnedThreadRoute(projectId, pinnedRoute.projectId, pinnedRoute.threadTarget);
     }
-    if (mode === "mosaic") {
-      return createInvalidWorkbenchRoute("Mosaic routes are unavailable.", projectId);
-    }
 
     const valueSegments = decodeRouteSegments(segments.slice(markerIndex + 2));
     if (valueSegments.ok === false) {
@@ -877,7 +816,6 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
   const markedPath = projectPath ? `/${projectPath}/${folderPath}${WORKBENCH_ROUTE_MARKER}` : `/${folderPath}${WORKBENCH_ROUTE_MARKER}`;
   if (route.logical) throw new Error("Logical routes need project-address resolution before serialisation.");
   if (route.view === "home") return "/";
-  if (route.view === "mosaic") throw new Error("Mosaic routes are unavailable.");
   const active = formatWorkbenchTab(route);
   if (!active) return `${markedPath}/`;
   const strip = route.tabStrip ? WorkbenchTabStrip.open(route.tabStrip, active) : { tabs: [active], preview: null };
@@ -942,10 +880,6 @@ export function createStatsHref(projectId: string | null = null) {
   return createWorkbenchHref(createStatsRoute(projectId));
 }
 
-export function createMosaicHref(projectId: string, mosaicNode: WorkbenchMosaicNode) {
-  return createWorkbenchHref(createMosaicRoute(projectId, mosaicNode));
-}
-
 export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute) {
   return left.view === right.view
     && left.projectId === right.projectId
@@ -955,7 +889,6 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
     && Boolean(left.fileIndex) === Boolean(right.fileIndex)
     && areDeeplyEqual(left.fileTabs ?? null, right.fileTabs ?? null)
     && (left.fileTabIndex ?? 0) === (right.fileTabIndex ?? 0)
-    && areDeeplyEqual(left.mosaicNode, right.mosaicNode)
     && left.threadId === right.threadId
     && (left.statsTab ?? "usage") === (right.statsTab ?? "usage")
     && left.threadOwnerProjectId === right.threadOwnerProjectId
@@ -980,5 +913,5 @@ export function isSameDraftRouteIntent(before: WorkbenchRoute, current: Workbenc
 }
 
 export function routeHasSelection(route: WorkbenchRoute) {
-  return route.view === "file" || route.view === "thread" || route.view === "mosaic";
+  return route.view === "file" || route.view === "thread";
 }

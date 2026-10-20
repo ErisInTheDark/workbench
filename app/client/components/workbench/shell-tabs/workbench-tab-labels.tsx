@@ -146,7 +146,7 @@ function ThreadTab({ frame, route }: WorkbenchTabKindProps) {
   );
 }
 
-/** Views that are tabs; home and project views are the selection itself, and mosaic has no address. */
+/** Views that are tabs; home and project views are the selection itself. */
 export const workbenchTabKinds: Partial<Record<WorkbenchRouteView, ComponentType<WorkbenchTabKindProps>>> = {
   file: FileTab,
   git: staticTab("Git", GitGraphIcon),

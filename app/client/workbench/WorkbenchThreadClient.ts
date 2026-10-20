@@ -78,8 +78,6 @@ interface WorkbenchThreadClient {
   openThread: (threadId: string, options: { harness?: WorkbenchHarness; project: WorkbenchThreadProject; isCurrent?: () => boolean }) => Promise<WorkbenchThreadOpenOutcome>;
   requestWorkbench: <TResponse>(method: string, params: unknown) => Promise<TResponse>;
   acceptSourceGeneration: (generation: number) => void;
-  /** Show the selected draft's (or the default) provider's daemon-pushed limits. */
-  watchRateLimits: () => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadComposerSettings: (threadId: string, settings: WorkbenchComposerSettings) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
@@ -507,7 +505,6 @@ function WorkbenchThreadClient(
     openThread,
     requestWorkbench,
     acceptSourceGeneration,
-    watchRateLimits: () => account.watchRateLimits(drafts.getSelectedDocument()?.harness ?? defaultProviderKey),
     setCurrentThreadAgent,
     setCurrentThreadComposerSettings,
     setCurrentThreadModel,

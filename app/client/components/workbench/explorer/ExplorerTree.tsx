@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ExplorerTree: the selected folder's recursive file tree with current, modified, change-count and new-draft
- *   state; files drag onto the main panel, folders and files carry their context menus.
+ *   state; folders and files carry their context menus.
  */
 "use client";
 
@@ -11,7 +11,6 @@ import type { ChangeSummary, TreeNode } from "workbench-shared/types";
 import IconButton from "../../ui/IconButton";
 import ChevronIcon from "../ChevronIcon";
 import ContextMenuCapability from "../ContextMenuCapability";
-import { useWorkbenchDrag } from "../drag/workbench-drag-context";
 import FileKindIcon from "../file-kind-icon";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import {
@@ -110,7 +109,6 @@ export default function ExplorerTree({
 }) {
   const explorer = useWorkbenchExplorer();
   const controls = useWorkbenchClientController().controls;
-  const beginDrag = useWorkbenchDrag.mainPanel();
   const expandedDirectories = useMemo(() => new Set(explorer.expandedDirectories), [explorer.expandedDirectories]);
   const derived = useMemo(() => deriveTreeState(nodes, explorer.changes, new Set(explorer.locallyModifiedPaths)),
     [explorer.changes, explorer.locallyModifiedPaths, nodes]);
@@ -184,11 +182,6 @@ export default function ExplorerTree({
                       ${isCurrent ? `${workbenchOptionSelectedClassName} font-semibold text-text`
                         : `border-transparent text-fg/muted ${isOpenable ? `${workbenchOptionHoverClassName} hover:text-text` : ""}`}
                     `}
-                    onPointerDown={(event) => {
-                      if (!isOpenable || isNewDraft) return;
-                      event.stopPropagation();
-                      beginDrag(event, { target: { filePath: node.path, kind: "file" }, type: "panel-target" });
-                    }}
                     onClick={() => { if (isOpenable) onOpenFile(node.path); }}
                   >
                     <span data-role="tree-spacer" aria-hidden="true" className="flex size-[1.1rem] shrink-0 items-center justify-center">

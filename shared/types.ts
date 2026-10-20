@@ -1373,8 +1373,6 @@ export interface WorkbenchControls {
   continueThreadCreation: (draftId: DraftId, nextDraftId: DraftId) => WorkbenchRoute | null;
   getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   daemonRuntime: WorkbenchDaemonRuntimeStore;
-  /** Show the selected (or default) provider's daemon-pushed limits; the daemon decides when they are reread. */
-  watchRateLimits: () => void;
   refreshProjectCatalog: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   moveThreadDraft: (sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) => Promise<void>;
@@ -1447,7 +1445,6 @@ export interface WorkbenchControls {
       | { kind: "rename"; folderId: string; title: string },
   ) => Promise<void>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
-  setDraftThreadHarnessAt: (location: ProjectLocationReference, harness: WorkbenchHarness) => void;
 }
 
 export interface WorkbenchBindings {

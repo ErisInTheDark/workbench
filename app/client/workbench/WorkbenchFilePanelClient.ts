@@ -105,7 +105,6 @@ export interface WorkbenchFilePanelClient {
   setReviewMode: (mode: ReviewMode) => void;
   setShowGitMarkers: (show: boolean) => void;
   setSuggestionLayout: (layout: SuggestionLayout) => void;
-  previewFontSize: (fontSize: number | null) => void;
   subscribe: (listener: WorkbenchFilePanelListener) => () => void;
   subscribeToolbarState: (listener: () => void) => () => void;
 }
@@ -574,7 +573,6 @@ function WorkbenchFilePanelClient(
     setReviewMode: editorClient.setReviewMode,
     setShowGitMarkers: editorClient.setShowGitMarkers,
     setSuggestionLayout: editorClient.setSuggestionLayout,
-    previewFontSize: editorClient.previewFontSize,
     subscribe,
     subscribeToolbarState: editorClient.subscribeToolbarState,
   };

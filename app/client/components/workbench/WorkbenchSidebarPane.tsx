@@ -35,10 +35,10 @@ type ThreadSidebarProps = ComponentProps<typeof WorkbenchThreadSidebar>;
 type ActionsProps = ComponentProps<typeof WorkbenchThreadSidebarActionsProvider>;
 export default function WorkbenchSidebarPane({
   activeProjectId, appRuntime, askAgentWithReferences,
-  browseSessionController, collapsed, createThread, currentFilePath, harness,
+  browseSessionController, collapsed, createThread, currentFilePath,
   onAttachFeedback, onFileDeleted, onOpenQualifiedThread, onOpenThread,
   onPresentationDraftDeleted, onThreadSettled, projectSourceError,
-  renderThreadTooltipDetails, route, showGitView, showMosaicView,
+  renderThreadTooltipDetails, route, showGitView,
   viewedProjectId,
 }: {
   activeProjectId: ActionsProps["projectId"];
@@ -49,7 +49,6 @@ export default function WorkbenchSidebarPane({
   createThread: ThreadSidebarProps["onCreateThread"];
   /** The file the main pane shows, highlighted in the explorer. */
   currentFilePath: string;
-  harness: ThreadSidebarProps["harness"];
   onAttachFeedback: ThreadSidebarProps["onAttachFeedback"];
   /** Close the views of a file the explorer deleted or a new file it discarded. */
   onFileDeleted: (path: string) => void;
@@ -62,7 +61,6 @@ export default function WorkbenchSidebarPane({
   renderThreadTooltipDetails: ThreadSidebarProps["renderThreadTooltipDetails"];
   route: WorkbenchRoute;
   showGitView: boolean;
-  showMosaicView: boolean;
   viewedProjectId: string;
 }) {
   const client = useWorkbenchClientController();
@@ -173,7 +171,6 @@ export default function WorkbenchSidebarPane({
                   controls={client.controls}
                   selectedLocation={browseLocation}
                   currentTarget={route.view === "thread" ? route.threadTarget : null}
-                  harness={harness}
                   onCreateThread={createThread}
                   projectId={browseProjectId}
                   projects={physicalProjects}
@@ -182,7 +179,6 @@ export default function WorkbenchSidebarPane({
                     ? route.logical?.threadOwnerProjectId ?? (route.threadOwnerProjectId || route.projectId)
                     : viewedProjectId}
                   selectedProjectIds={selection.selectionProjectIds}
-                  showMosaicView={showMosaicView}
                 />
               </WorkbenchSidebarSectionDisclosure>
             </section>

@@ -23,8 +23,8 @@ interface ThreadIdentity {
 }
 
 function sourceIdentity(payload: WorkbenchThreadRowDragPayload): ThreadIdentity | null {
-  const target = payload.target.kind === "thread" ? payload.target.target : null;
-  return target?.kind === "provider" && target.harness
+  const { target } = payload;
+  return target.kind === "provider" && target.harness
     ? { harness: target.harness, threadId: target.threadId }
     : null;
 }

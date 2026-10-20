@@ -286,7 +286,6 @@ interface WorkbenchEditorClient {
   scheduleDiffGutterRefresh: () => void;
   setHoveredRevisionNode: (node: HTMLElement | null) => void;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
-  previewFontSize: (fontSize: number | null) => void;
   setStatusMessage: (message: string) => void;
   showSaveConflict: (conflict: SaveConflictPayload) => void;
   subscribe: (listener: EditorUIStateListener) => () => void;
@@ -739,7 +738,6 @@ function WorkbenchEditorClient(
 ): WorkbenchEditorClient {
   const listeners = new Set<EditorUIStateListener>();
   const state = createInitialEditorState();
-  let fontSizePreview: number | null = null;
   const signal = lifecycle.getSignal();
   const editor = surfaces.editor.editor;
   const source = surfaces.editor.source;
@@ -842,13 +840,13 @@ function WorkbenchEditorClient(
   }
 
   function applyEditorFontSize() {
-    editor.style.fontSize = `${fontSizePreview ?? state.fontSize}rem`;
+    editor.style.fontSize = `${state.fontSize}rem`;
     sourceController.setFontSize(editor.style.fontSize);
   }
 
   function getMinimumToolbarTop(viewport = getVisualViewportMetrics()) {
     let minimumTop = viewport.top + 12;
-    // Sticky chrome (the shell tab strip, a mosaic panel's header) sits above the editor wherever it scrolls.
+    // Sticky chrome (the shell tab strip, the file toolbar) sits above the editor wherever it scrolls.
     const headerChromeElements = editor.ownerDocument.querySelectorAll<HTMLElement>(`[${WORKBENCH_STICKY_CHROME_ATTRIBUTE}]`);
 
     for (const element of headerChromeElements) {
@@ -1791,11 +1789,6 @@ function WorkbenchEditorClient(
     emit();
   }
 
-  function previewFontSize(fontSize: number | null) {
-    fontSizePreview = fontSize === null ? null : Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number(fontSize.toFixed(2))));
-    applyEditorFontSize();
-  }
-
   const preserveToolbarSelection = (event: Event) => {
     scheduleToolbarInteractionReset();
     captureToolbarSelection();
@@ -2258,7 +2251,6 @@ function WorkbenchEditorClient(
     scheduleDiffGutterRefresh,
     setHoveredRevisionNode,
     setFontSize,
-    previewFontSize,
     setStatusMessage,
     showSaveConflict,
     subscribe,

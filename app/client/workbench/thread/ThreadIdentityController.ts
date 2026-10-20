@@ -10,8 +10,6 @@ import type { WorkbenchThreadTarget, WorkbenchThreadRouteTarget } from "workbenc
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { getWorkbenchThreadTargetRootId } from "workbench-shared/workbench/navigation/workbench-route";
-import type { WorkbenchMosaicNode } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
-
 export default class ThreadIdentityController {
   private requests: Map<string, Promise<WorkbenchThreadIdentityResolution | null>> | null = new Map();
 
@@ -56,9 +54,6 @@ export default class ThreadIdentityController {
   }
 
   async resolveRoute(route: WorkbenchRoute): Promise<WorkbenchRoute> {
-    if (route.view === "mosaic" && route.mosaicNode) {
-      return { ...route, mosaicNode: await this.resolveMosaic(route.projectId, route.mosaicNode) };
-    }
     if (route.view !== "thread" || !route.threadTarget) return route;
     const threadTarget = await this.resolveTarget(route.threadOwnerProjectId || route.projectId, route.threadTarget);
     return { ...route, threadTarget, threadId: getWorkbenchThreadTargetRootId(threadTarget) };
@@ -66,12 +61,6 @@ export default class ThreadIdentityController {
 
   dispose() {
     this.requests = null;
-  }
-
-  private async resolveMosaic(projectId: string, node: WorkbenchMosaicNode): Promise<WorkbenchMosaicNode> {
-    if (node.type === "split") return { ...node, children: await Promise.all(node.children.map((child) => this.resolveMosaic(projectId, child))) };
-    if (node.target.kind !== "thread") return node;
-    return { ...node, target: { ...node.target, target: await this.resolveTarget(projectId, node.target.target) } };
   }
 
   private key(request: WorkbenchThreadIdentityResolveRequest) {

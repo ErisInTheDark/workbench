@@ -237,7 +237,6 @@ function useBackgroundProjectFilePathDisambiguationIndex (
 export default memo(function ThreadViewContent ({
   approvalModeSettings = null,
   composerSpellCheck,
-  contained = false,
   draftLeadingContent = null,
   draftTargetControl = null,
   threadOwnerContent = null,
@@ -248,7 +247,6 @@ export default memo(function ThreadViewContent ({
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = true,
-  isFocused = true,
   onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
   onThreadSettled,
@@ -279,7 +277,6 @@ export default memo(function ThreadViewContent ({
   /** Daemon projects replace the folder picker with an approval mode menu on drafts and threads. */
   approvalModeSettings?: { onOpenSettings: () => void } | null;
   composerSpellCheck: boolean;
-  contained?: boolean;
   draftLeadingContent?: ReactNode;
   draftTargetControl?: ReactNode;
   threadOwnerContent?: ReactNode;
@@ -290,7 +287,6 @@ export default memo(function ThreadViewContent ({
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
-  isFocused?: boolean;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onThreadSettled?: (target: WorkbenchThreadTarget, ownerProjectId: string) => void;
@@ -1011,10 +1007,10 @@ export default memo(function ThreadViewContent ({
     ? <ApprovalReviewerSetupNotice onOpenSettings={approvalModeSettings.onOpenSettings} /> : null;
   const bottomPaddingClassName = mobileFullBleed
     ? "pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]"
-    : contained ? "pb-8" : "pb-16";
+    : "pb-16";
   const renderComposer = (bottomBefore?: ReactNode) => activeThread ? (
     <ThreadComposer
-      autoFocusOnEntry={isFocused && entryMotionOwnerRef.current?.initialThreadId === activeThreadId}
+      autoFocusOnEntry={entryMotionOwnerRef.current?.initialThreadId === activeThreadId}
       onDraftSessionChange={trackDraftSession}
       targetControl={approvalModeControl ?? (showDraftComposer ? draftTargetControl : null)}
       controlNotice={approvalNotice}
@@ -1229,7 +1225,7 @@ export default memo(function ThreadViewContent ({
         </div>
         {activeThread ? (
           <div className={showDraftComposer
-            ? joinClasses("flex w-full flex-1 items-center", contained && "py-4")
+            ? "flex w-full flex-1 items-center"
             : "contents"}>
             <div className={showDraftComposer ? "w-full" : "contents"}>
               {showDraftComposer ? <header className="pb-4">

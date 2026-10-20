@@ -21,15 +21,6 @@ import type {
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
-import WorkbenchMainLayout, {
-    type WorkbenchDropPlacement,
-    type WorkbenchMainLayout as WorkbenchMainLayoutState,
-    type WorkbenchPanelTarget,
-} from "workbench-shared/workbench/layout/workbench-layout";
-import {
-    type WorkbenchMosaicNode,
-    type WorkbenchMosaicPanelTarget,
-} from "workbench-shared/workbench/navigation/workbench-mosaic-route";
 import {
     createFileRoute,
     createDiscardedDraftExitRoute,
@@ -37,16 +28,13 @@ import {
     createHomeThreadRoute,
     createLogicalExistingThreadRoute,
     createLogicalFileRoute,
-    createLogicalMosaicRoute,
     createLogicalProjectRoute,
     createLogicalThreadRoute,
-    createMosaicRoute,
     createPinnedThreadRoute,
     createProjectRoute,
     createSettingsRoute,
     createSettledThreadExitRoute,
     createThreadRoute,
-    getWorkbenchMosaicThreadRootIds,
     getWorkbenchThreadTargetRootId,
     getWorkbenchThreadTargetSelectedId,
     isSameDraftRouteIntent,
@@ -73,10 +61,7 @@ import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uu
 import {
   FileActionContext, FileScopeContext, useFileActions,
 } from "../workbench/file/use-file";
-import type { WorkbenchDragPayload, WorkbenchMainPanelDragPayload } from "../workbench/layout/workbench-drag";
-import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosaic-layout";
 import useMediaQuery from "../workbench/dom/layout/use-media-query";
-import WorkbenchWorkspaceController from "../workbench/layout/WorkbenchWorkspaceController";
 import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
 import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
 import { useWorkbenchTabs } from "../workbench/navigation/use-workbench-tabs";
@@ -109,14 +94,11 @@ import { useSettings } from "./workbench/use-settings";
 import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
-import { useWorkbenchDrag } from "./workbench/drag/workbench-drag-context";
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFileView from "./workbench/layout/WorkbenchFileView";
-import WorkbenchSvgEditorView from "./workbench/svg/WorkbenchSvgEditorView";
 import WorkbenchSvgFileView from "./workbench/svg/WorkbenchSvgFileView";
 import WorkbenchShellTabs from "./workbench/shell-tabs/WorkbenchShellTabs";
-import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import MobilePaneTrack from "./workbench/MobilePaneTrack";
 import type { MobileShellHeaderEvent } from "./workbench/mobile-shell-header-visibility";
 import MobileShellHeaderVisibilityController from "./workbench/MobileShellHeaderVisibilityController";
@@ -145,7 +127,6 @@ import {
     BackArrowIcon,
     SidebarCollapseIcon,
     SidebarExpandIcon,
-    SparkleIcon,
 } from "./workbench/workbench-icons";
 import WorkbenchAmbientCanvas, { getAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
@@ -165,7 +146,6 @@ import WorkbenchTabIcon from "./workbench/WorkbenchTabIcon";
 import WorkbenchSidebarPane from "./workbench/WorkbenchSidebarPane";
 import { isThreadStatusActive } from "./workbench/thread-attention";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
-import WorkbenchWorkspace from "./workbench/WorkbenchWorkspace";
 import { WorkbenchDaemonAssetOriginContext, WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "./workbench/WorkbenchWorkspaceContext";
 import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 
@@ -238,43 +218,6 @@ function createProjectFileLinkRoots (
 function formatWorkbenchPageTitle (projectName: string | null | undefined) {
   const normalizedProjectName = projectName?.trim();
   return normalizedProjectName ? `${normalizedProjectName} / Workbench` : "Workbench";
-}
-
-function getFirstMosaicTarget (node: WorkbenchMosaicNode | null): WorkbenchMosaicPanelTarget | null {
-  if (!node) {
-    return null;
-  }
-
-  if (node.type === "target") {
-    return node.target;
-  }
-
-  for (const child of node.children) {
-    const target = getFirstMosaicTarget(child);
-    if (target) {
-      return target;
-    }
-  }
-
-  return null;
-}
-
-function getRouteMosaicFallbackTarget (routeNode: WorkbenchMosaicNode | null, isMobile: boolean): WorkbenchMosaicPanelTarget | null {
-  return isMobile ? getFirstMosaicTarget(routeNode) : null;
-}
-
-function mosaicContainsThreadTarget (node: WorkbenchMosaicNode | null, threadId: string): boolean {
-  if (!node) {
-    return false;
-  }
-
-  if (node.type === "target") {
-    return node.target.kind === "thread"
-      && (node.target.target.kind === "draft" && node.target.target.draftId === threadId
-        || node.target.target.kind === "provider" && node.target.target.threadId === threadId);
-  }
-
-  return node.children.some((child) => mosaicContainsThreadTarget(child, threadId));
 }
 
 const noSubscription = (_listener: () => void) => () => {};
@@ -387,14 +330,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   // A composer shortcut asks settings to open on one section; ordinary settings visits start fresh.
   const [settingsTarget, setSettingsTarget] = useState<{ section: string; daemonId: DaemonId } | null>(null);
   const globalSettings = useSettings();
-  const [workspaceController] = useState(() => new WorkbenchWorkspaceController({
-    createDraft: () => {
-      throw new Error("Workspace draft creation is not connected.");
-    },
-    navigateMosaic: () => undefined,
-    navigatePanel: () => undefined,
-    navigateProject: () => undefined,
-  }));
   const mainPaneRef = useRef<HTMLElement>(null);
   const directThreadScrollViewportRef = useRef<HTMLDivElement>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
@@ -402,10 +337,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const search = useWorkbenchSearch();
   const sidebarPreferences = useWorkbenchSidebarPreferences.global();
   const isEffectiveDesktopSidebarCollapsed = !isMobile && sidebarPreferences.preferences.sidebarCollapsed;
-  const drag = useWorkbenchDrag();
-  const activeDragPayload = useWorkbenchDrag.activePayload();
-  const beginMainPanelDrag = useWorkbenchDrag.mainPanel();
-  useEffect(() => () => { workspaceController.dispose(); }, [workspaceController]);
 
   const selectedThreadProjectId = route.view === "thread"
     ? route.threadOwnerProjectId || explorer.currentProjectId || route.projectId
@@ -425,22 +356,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const threadComposerDraftsByThreadId = useMemo(() => projectComposerDrafts(composerDraftRecords, composerDraftIdentityFor),
     [composerDraftRecords, composerDraftIdentityFor, resolvedComposerDrafts]);
 
-  const isMobileMosaicRoute = isMobile && route.view === "mosaic";
-  const routeMosaicNodeForControls = isMobileMosaicRoute ? route.mosaicNode : null;
   const routeToApplyToControls = useMemo(() => {
     if (route.logical) return route;
-    if (route.view === "mosaic") {
-      const mobileMosaicTarget = getRouteMosaicFallbackTarget(routeMosaicNodeForControls, isMobileMosaicRoute);
-      if (mobileMosaicTarget?.kind === "file") {
-        return createFileRoute(route.projectId, mobileMosaicTarget.filePath);
-      }
-      if (mobileMosaicTarget?.kind === "thread") {
-        return createThreadRoute(route.projectId, mobileMosaicTarget.target);
-      }
-
-      return createProjectRoute(route.projectId);
-    }
-
     if (route.view === "file") {
       return createFileRoute(route.projectId, route.filePath);
     }
@@ -464,7 +381,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
     return route;
   }, [
-    isMobileMosaicRoute,
     route.error,
     route.filePath,
     route.logical?.projectId,
@@ -478,7 +394,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     route.threadId,
     route.threadTarget,
     route.view,
-    routeMosaicNodeForControls,
   ]);
 
   useWorkbenchRouteIntent(workbenchClient, routeToApplyToControls, navigateToRoute);
@@ -560,18 +475,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0])?.id ?? null
       : null);
   const shellSettings = useSettings(settingsLogicalProjectId);
-  const settingsFallbackTarget = route.view === "mosaic"
-    ? getRouteMosaicFallbackTarget(routeMosaicNodeForControls, isMobileMosaicRoute) : null;
-  const settingsFileLocation = settingsFallbackTarget?.kind === "file" ? settingsFallbackTarget.source?.location ?? null
-    : route.view === "file" ? workbenchClient.mounted?.projectNavigator.fileLocationFor(route) ?? null : null;
+  const settingsFileLocation = route.view === "file"
+    ? workbenchClient.mounted?.projectNavigator.fileLocationFor(route) ?? null : null;
   const fileSettings = useSettings.forLocation(settingsFileLocation, workbenchClient);
-  const settingsThreadTarget = settingsFallbackTarget?.kind === "thread" ? settingsFallbackTarget.target : route.threadTarget;
-  const threadSettings = useSettings.forThread(settingsThreadTarget?.kind === "new" && currentThread?.isDraft
-    ? { kind: "draft", draftId: DraftIdSchema.parse(currentThread.id) } : settingsThreadTarget,
-  settingsFallbackTarget?.kind === "thread" ? settingsFallbackTarget.source?.location ?? null
-    : routeLaunchLocation ?? route.logical?.location ?? browseLocation, workbenchClient);
-  const activeSettings = route.view === "file" || settingsFallbackTarget?.kind === "file" ? fileSettings
-    : route.view === "thread" || settingsFallbackTarget?.kind === "thread" ? threadSettings : shellSettings;
+  const threadSettings = useSettings.forThread(route.threadTarget?.kind === "new" && currentThread?.isDraft
+    ? { kind: "draft", draftId: DraftIdSchema.parse(currentThread.id) } : route.threadTarget,
+  routeLaunchLocation ?? route.logical?.location ?? browseLocation, workbenchClient);
+  const activeSettings = route.view === "file" ? fileSettings
+    : route.view === "thread" ? threadSettings : shellSettings;
   const fontSizeScopeKey = activeSettings.unavailable("editorFontSize") ? "unavailable" : activeSettings.projectId ?? "global";
   const [editorFontSizePreview, setEditorFontSizePreview] = useState<{ scope: string; value: number } | null>(null);
   const previewEditorFontSize = useCallback((value: number | null) => {
@@ -768,36 +679,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
     const submittedOptions = isActiveSteer
       ? { ...options, composerProfileSlot: undefined } : options;
-    const replaceMosaicDraftThread = (materializedThread: Pick<ThreadPayload, "id" | "harness">) => {
-      workspaceController.removeDraftThreads(thread.id);
-
-      const currentRoute = currentRouteRef.current;
-      if (currentRoute.view === "mosaic"
-        && currentRoute.mosaicNode
-        && materializedThread.id !== thread.id
-        && mosaicContainsThreadTarget(currentRoute.mosaicNode, thread.id)
-      ) {
-        const nextNode = replaceWorkbenchMosaicTarget(
-            currentRoute.mosaicNode,
-            { kind: "thread", target: { kind: "draft", draftId: DraftIdSchema.parse(thread.id) } },
-            { kind: "thread", target: { harness: materializedThread.harness, kind: "provider", threadId: ThreadReferenceSchema.parse(materializedThread.id) } },
-          );
-        navigateToRoute(currentRoute.logical?.projectId
-          ? createLogicalMosaicRoute(currentRoute.logical.projectId, nextNode)
-          : createMosaicRoute(currentRoute.projectId, nextNode), { replace: true });
-        return true;
-      }
-
-      return false;
-    };
-
     const replaceCurrentDraftThreadRoute = (materializedThread: Pick<ThreadPayload, "id" | "harness">) => {
       if (materializedThread.id === thread.id) {
         return false;
-      }
-
-      if (replaceMosaicDraftThread(materializedThread)) {
-        return true;
       }
 
       const currentRoute = currentRouteRef.current;
@@ -829,17 +713,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         onThreadLaunched: (materializedThread) => {
           if (options?.stayInCreate) {
             const current = currentRouteRef.current;
-            const ownsDraft = current.view === "mosaic"
-              ? Boolean(current.mosaicNode && mosaicContainsThreadTarget(current.mosaicNode, thread.id))
-              : isWorkbenchRouteOwnerOfThread(current, thread.id, true)
-                && workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id === thread.id;
+            const ownsDraft = isWorkbenchRouteOwnerOfThread(current, thread.id, true)
+              && workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id === thread.id;
             if (ownsDraft) {
               const nextId = DraftIdSchema.parse(crypto.randomUUID());
               threadViewInstanceKeysByThreadIdRef.current.set(nextId,
                 threadViewInstanceKeysByThreadIdRef.current.get(thread.id) ?? thread.id);
               const nextRoute = controls.continueThreadCreation(DraftIdSchema.parse(thread.id), nextId);
               if (nextRoute) {
-                workspaceController.removeDraftThreads(thread.id);
                 navigateToRoute(nextRoute, { replace: true });
               } else {
                 threadViewInstanceKeysByThreadIdRef.current.delete(nextId);
@@ -859,7 +740,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       : submittedOptions;
     // Drafts launch with their saved attachments; existing threads send through their own store.
     return await controls.sendThreadMessage(thread, input, materializedOptions);
-  }, [composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted, workspaceController]);
+  }, [composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted]);
 
   const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
     ? route.threadTarget.draftId
@@ -897,81 +778,62 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     const draftId = originTarget.kind === "draft" ? originTarget.draftId : DraftIdSchema.parse(threadId);
     if (!draftId || !controls) throw new Error("The new-thread draft owner is unavailable.");
     const isNew = originTarget.kind === "new";
-    {
-      const findPaneSource = (node: WorkbenchMosaicNode | null): WorkbenchMosaicPanelTarget["source"] | null => {
-        if (!node) return null;
-        if (node.type === "split") {
-          for (const child of node.children) {
-            const found = findPaneSource(child);
-            if (found) return found;
-          }
-          return null;
-        }
-        return node.target.kind === "thread" && node.target.target.kind === "draft"
-          && node.target.target.draftId === draftId
-          ? node.target.source ?? null : null;
-      };
-      const paneSource = findPaneSource(route.mosaicNode);
-      const owner = workbenchClient.mounted?.presentationClient;
-      const location = paneSource?.location
-        ?? workbenchClient.mounted?.draftLocationFor(draftId)
-        ?? route.logical?.location;
-      if (!location || !owner) throw new Error("The selected draft location is unavailable.");
-      const logicalProjectId = paneSource?.logicalProjectId ?? route.logical?.threadOwnerProjectId
-        ?? owner.snapshot().data?.locations.find(item => item.target.daemonId === location.daemonId
-          && item.target.projectId === location.projectId)?.logicalProjectId;
-      if (!logicalProjectId) throw new Error("This folder is waiting for its app project identity. Draft text remains local.");
-      const draftThread = workspaceController.getSnapshot().draftThreadsById[draftId] ?? currentThread;
-      const draftProfiles = profileControllerFor(location.daemonId);
-      let placement: Extract<ComposerDraftTarget, { kind: "presentation" }>["placement"];
-      if (originTarget.kind === "new" && originTarget.folderId && !owner.draft(draftId)) {
-        const presentation = owner.snapshot().data;
-        const folder = presentation && projectLogicalThreadDisplayOrder(
-          logicalProjectId, workbenchClient.mounted?.threadSidebar.getListing?.().rows ?? [], presentation,
-        ).folders?.find(item => item.folderId === originTarget.folderId);
-        if (!folder || folder.section === "settled") throw new Error("The draft folder is unavailable. Draft text remains local.");
-        placement = { folderId: folder.folderId, priority: folder.section };
-      }
-      return {
-        kind: "presentation", draftId, isNew, logicalProjectId, location, owner, placement,
-        selection: async () => {
-          const slot = isNew
-            ? { kind: "new-thread" as const, projectId: ownerProjectId }
-            : { kind: "draft" as const, projectId: ownerProjectId, draftId,
-              harness: draftThread?.harness ?? defaultProviderKey };
-          await draftProfiles.waitForSelection(slot);
-          return draftProfiles.getDraftSelection(slot, {
-            agentPath: draftThread?.agentPath ?? null, agentSource: null,
-            harness: draftThread?.harness ?? defaultProviderKey, model: draftThread?.model ?? "",
-            reasoningEffort: draftThread?.reasoningEffort ?? null,
-            serviceTier: draftThread?.serviceTier === "fast" ? "fast" : null,
-            contextWindowTokens: draftThread?.contextWindowTokens ?? null,
-          });
-        },
-        materialize: () => {
-          const current = currentRouteRef.current;
-          if (current.view !== "thread" || current.threadTarget?.kind !== "new"
-            || !current.logical
-            || (current.logical.threadOwnerProjectId
-              ? current.logical.threadOwnerProjectId !== logicalProjectId
-              : current.logical.location?.daemonId !== location.daemonId
-                || current.logical.location.projectId !== location.projectId)
-            || workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id !== draftId) return;
-          navigateToRoute(createLogicalThreadRoute(current.logical.threadOwnerProjectId
-            ? current.logical.projectId : logicalProjectId,
-            logicalProjectId, null, { draftId, kind: "draft" }), { replace: true });
-        },
-        dematerialize: () => {
-          const current = currentRouteRef.current;
-          if (current.view !== "thread" || current.threadTarget?.kind !== "draft"
-            || current.threadTarget.draftId !== draftId || !current.logical
-            || current.logical.threadOwnerProjectId !== logicalProjectId) return;
-          navigateToRoute(createLogicalThreadRoute(current.logical.projectId,
-            logicalProjectId, current.logical.location ?? location, { kind: "new" }), { replace: true });
-        },
-      };
+    const owner = workbenchClient.mounted?.presentationClient;
+    const location = workbenchClient.mounted?.draftLocationFor(draftId) ?? route.logical?.location;
+    if (!location || !owner) throw new Error("The selected draft location is unavailable.");
+    const logicalProjectId = route.logical?.threadOwnerProjectId
+      ?? owner.snapshot().data?.locations.find(item => item.target.daemonId === location.daemonId
+        && item.target.projectId === location.projectId)?.logicalProjectId;
+    if (!logicalProjectId) throw new Error("This folder is waiting for its app project identity. Draft text remains local.");
+    const draftProfiles = profileControllerFor(location.daemonId);
+    let placement: Extract<ComposerDraftTarget, { kind: "presentation" }>["placement"];
+    if (originTarget.kind === "new" && originTarget.folderId && !owner.draft(draftId)) {
+      const presentation = owner.snapshot().data;
+      const folder = presentation && projectLogicalThreadDisplayOrder(
+        logicalProjectId, workbenchClient.mounted?.threadSidebar.getListing?.().rows ?? [], presentation,
+      ).folders?.find(item => item.folderId === originTarget.folderId);
+      if (!folder || folder.section === "settled") throw new Error("The draft folder is unavailable. Draft text remains local.");
+      placement = { folderId: folder.folderId, priority: folder.section };
     }
-  }, [controls, currentThread, navigateToRoute, profileControllerFor, route, workbenchClient, workspaceController]);
+    return {
+      kind: "presentation", draftId, isNew, logicalProjectId, location, owner, placement,
+      selection: async () => {
+        const slot = isNew
+          ? { kind: "new-thread" as const, projectId: ownerProjectId }
+          : { kind: "draft" as const, projectId: ownerProjectId, draftId,
+            harness: currentThread?.harness ?? defaultProviderKey };
+        await draftProfiles.waitForSelection(slot);
+        return draftProfiles.getDraftSelection(slot, {
+          agentPath: currentThread?.agentPath ?? null, agentSource: null,
+          harness: currentThread?.harness ?? defaultProviderKey, model: currentThread?.model ?? "",
+          reasoningEffort: currentThread?.reasoningEffort ?? null,
+          serviceTier: currentThread?.serviceTier === "fast" ? "fast" : null,
+          contextWindowTokens: currentThread?.contextWindowTokens ?? null,
+        });
+      },
+      materialize: () => {
+        const current = currentRouteRef.current;
+        if (current.view !== "thread" || current.threadTarget?.kind !== "new"
+          || !current.logical
+          || (current.logical.threadOwnerProjectId
+            ? current.logical.threadOwnerProjectId !== logicalProjectId
+            : current.logical.location?.daemonId !== location.daemonId
+              || current.logical.location.projectId !== location.projectId)
+          || workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id !== draftId) return;
+        navigateToRoute(createLogicalThreadRoute(current.logical.threadOwnerProjectId
+          ? current.logical.projectId : logicalProjectId,
+          logicalProjectId, null, { draftId, kind: "draft" }), { replace: true });
+      },
+      dematerialize: () => {
+        const current = currentRouteRef.current;
+        if (current.view !== "thread" || current.threadTarget?.kind !== "draft"
+          || current.threadTarget.draftId !== draftId || !current.logical
+          || current.logical.threadOwnerProjectId !== logicalProjectId) return;
+        navigateToRoute(createLogicalThreadRoute(current.logical.projectId,
+          logicalProjectId, current.logical.location ?? location, { kind: "new" }), { replace: true });
+      },
+    };
+  }, [controls, currentThread, navigateToRoute, profileControllerFor, route, workbenchClient]);
 
   const handleThreadComposerDraftChange = useCallback(async (
     projectId: string, threadId: string, update: (draft: WorkbenchComposerInputDraft) => WorkbenchComposerInputDraft,
@@ -1026,12 +888,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     controls?.setCurrentThreadComposerSettings(threadId, settings);
   }, [clientStateController, controls, currentThread]);
 
-  const mobileMosaicFallbackTarget = route.view === "mosaic"
-    ? getRouteMosaicFallbackTarget(route.mosaicNode, isMobile)
-    : null;
-  const showMosaicView = route.view === "mosaic" && !mobileMosaicFallbackTarget;
-  const showThreadView = route.view === "thread" || mobileMosaicFallbackTarget?.kind === "thread";
-  const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
+  const showThreadView = route.view === "thread";
+  const showFileView = route.view === "file";
   // New full-page views belong in workbenchRouteViews, not new show* booleans; settings/stats/git should migrate there.
   const routeView = workbenchRouteViews[route.view] ?? null;
   const showSettingsView = route.view === "settings";
@@ -1045,12 +903,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     : displayedLogicalProjects ?? [];
   const showStatsView = route.view === "stats";
   const showGitView = route.view === "git";
-  const showFullBleedMainView = showMosaicView;
   const createThreadFromSidebar = useCallback((ownerProjectId: string, options?: {
     folderId?: FolderId;
     location?: ProjectLocationReference;
   }) => {
-    if (showMosaicView || !controls) return;
+    if (!controls) return;
     const target = options?.folderId
       ? { folderId: options.folderId, kind: "new" as const }
       : { kind: "new" as const };
@@ -1092,7 +949,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     navigateToRoute(!route.projectId
       ? createHomeThreadRoute(ownerProjectId, target)
       : createThreadRoute(ownerProjectId, target));
-  }, [controls, logicalProjects, navigateToRoute, route, selectedLogicalProjects, showMosaicView, workbenchClient.mounted]);
+  }, [controls, logicalProjects, navigateToRoute, route, selectedLogicalProjects, workbenchClient.mounted]);
   const handleThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget, ownerProjectId?: string) => {
     const currentRoute = currentRouteRef.current;
     if (currentRoute.view !== "thread"
@@ -1113,31 +970,28 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
     createThreadFromSidebar(ownerProjectId);
   }, [createThreadFromSidebar]);
-  const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;
-  const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
-  const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
-  const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
+  const effectiveThreadId = route.threadTarget ? getWorkbenchThreadTargetRootId(route.threadTarget) : route.threadId;
+  const effectiveSelectedThreadId = route.threadTarget ? getWorkbenchThreadTargetSelectedId(route.threadTarget) : effectiveThreadId;
   // A folder index named by an svg (one discarded from its editor) is the folder's index, not the svg editor.
-  const showSvgFileView = showFileView && isSvgFile(effectiveFilePath) && !route.fileIndex;
+  const showSvgFileView = showFileView && isSvgFile(route.filePath) && !route.fileIndex;
   const svgFileLocation = showSvgFileView
-    ? (mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.source?.location : undefined)
-      ?? workbenchClient.mounted?.projectNavigator.fileLocationFor(route) ?? null
+    ? workbenchClient.mounted?.projectNavigator.fileLocationFor(route) ?? null
     : null;
-  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView && !routeView;
-  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView && !routeView;
+  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showGitView && !routeView;
+  const showRouteError = Boolean(selectionError) && showEmptyState;
   if (currentThread) {
     retainedThreadRef.current = currentThread;
   }
   const retainedThread = retainedThreadRef.current;
-  const effectiveThreadRoute = effectiveThreadTarget
-    ? route.logical && (effectiveThreadTarget.kind === "provider" || effectiveThreadTarget.kind === "subagent")
-      ? createLogicalExistingThreadRoute(route.logical.projectId, effectiveThreadTarget,
+  const effectiveThreadRoute = route.threadTarget
+    ? route.logical && (route.threadTarget.kind === "provider" || route.threadTarget.kind === "subagent")
+      ? createLogicalExistingThreadRoute(route.logical.projectId, route.threadTarget,
         route.logical.browseLocation ?? null)
       : route.view === "thread" && !route.projectId && route.threadOwnerProjectId
-      ? createHomeThreadRoute(route.threadOwnerProjectId, effectiveThreadTarget)
+      ? createHomeThreadRoute(route.threadOwnerProjectId, route.threadTarget)
       : route.view === "thread" && route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
-        ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, effectiveThreadTarget)
-        : createThreadRoute(activeProjectId, effectiveThreadTarget)
+        ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, route.threadTarget)
+        : createThreadRoute(activeProjectId, route.threadTarget)
     : route;
   const getThreadViewInstanceKey = (threadId: string) => threadViewInstanceKeysByThreadIdRef.current.get(threadId) ?? threadId;
   const isThreadOwnedByEffectiveRoute = (thread: ThreadPayload | null) => Boolean(
@@ -1155,13 +1009,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ?? (isThreadOwnedByEffectiveRoute(currentThread)
       ? currentThread
       : null)
-    ?? (effectiveThreadTarget?.kind !== "new" && isThreadOwnedByEffectiveRoute(retainedThread)
+    ?? (route.threadTarget?.kind !== "new" && isThreadOwnedByEffectiveRoute(retainedThread)
       ? retainedThread
       : null);
   const handleSelectedThreadChange = useCallback((selectedThreadId: string) => {
-    if (!effectiveThreadTarget || effectiveThreadTarget.kind === "new" || effectiveThreadTarget.kind === "draft") return;
-    const rootThreadId = effectiveThreadTarget.kind === "subagent" ? effectiveThreadTarget.parentThreadId : effectiveThreadTarget.threadId;
-    const harness = effectiveThreadTarget.harness ?? threadForThreadView?.harness;
+    if (!route.threadTarget || route.threadTarget.kind === "new" || route.threadTarget.kind === "draft") return;
+    const rootThreadId = route.threadTarget.kind === "subagent" ? route.threadTarget.parentThreadId : route.threadTarget.threadId;
+    const harness = route.threadTarget.harness ?? threadForThreadView?.harness;
     const target = selectedThreadId === rootThreadId
       ? { harness, kind: "provider" as const, threadId: rootThreadId }
       : { harness, kind: "subagent" as const, parentThreadId: rootThreadId, threadId: ThreadReferenceSchema.parse(selectedThreadId) };
@@ -1176,23 +1030,23 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       : ownerProjectId === activeProjectId
         ? createThreadRoute(activeProjectId, target)
         : createPinnedThreadRoute(activeProjectId, ownerProjectId, target));
-  }, [activeProjectId, effectiveThreadTarget, navigateToRoute, route, threadForThreadView?.harness]);
+  }, [activeProjectId, route.threadTarget, navigateToRoute, route, threadForThreadView?.harness]);
   const threadProjectId = routeThreadContext?.project.id ?? routeDraftContext?.project.id
     ?? (route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId);
   // Existing threads load inside their own view (thread store); only drafts and new threads wait for a document.
   const isThreadViewReady = showThreadView && (Boolean(threadForThreadView)
-    || effectiveThreadTarget?.kind === "provider" || effectiveThreadTarget?.kind === "subagent");
+    || route.threadTarget?.kind === "provider" || route.threadTarget?.kind === "subagent");
   const isSelectionPending = !selectionError && showThreadView && !isThreadViewReady;
   const viewedThreadId = threadForThreadView?.id ?? effectiveThreadId;
   const threadViewInstanceKey = getThreadViewInstanceKey(viewedThreadId);
-  const selectedThreadIdForView = effectiveThreadTarget?.kind === "new" && threadForThreadView
+  const selectedThreadIdForView = route.threadTarget?.kind === "new" && threadForThreadView
     ? threadForThreadView.id
     : effectiveSelectedThreadId;
   const activeThreadId = showThreadView ? threadViewInstanceKey : "";
-  const activeFilePath = showFileView ? effectiveFilePath : "";
+  const activeFilePath = showFileView ? route.filePath : "";
   // A thread launched from a draft keeps that draft's surface, even before its own document loads, so the view
   // instance (and its launch handoff) survives the route change.
-  const retainsDraftSurface = effectiveThreadTarget?.kind === "new" || effectiveThreadTarget?.kind === "draft"
+  const retainsDraftSurface = route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft"
     || threadViewInstanceKey !== viewedThreadId;
   const threadSurfaceKey = retainsDraftSurface
     ? `draft:${threadViewInstanceKey}`
@@ -1296,17 +1150,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     [explorer.projects, threadProjectId, threadProjectRoots],
   );
   const materializedThreadRootIds = useMemo(() => {
-    if (showMosaicView) return getWorkbenchMosaicThreadRootIds(route.mosaicNode);
     const threadIds = new Set<string>();
     if (
       isThreadViewReady
-      && effectiveThreadTarget
-      && (effectiveThreadTarget.kind === "provider" || effectiveThreadTarget.kind === "subagent")
+      && route.threadTarget
+      && (route.threadTarget.kind === "provider" || route.threadTarget.kind === "subagent")
     ) {
-      threadIds.add(getWorkbenchThreadTargetRootId(effectiveThreadTarget));
+      threadIds.add(getWorkbenchThreadTargetRootId(route.threadTarget));
     }
     return threadIds;
-  }, [effectiveThreadTarget, isThreadViewReady, route.mosaicNode, showMosaicView]);
+  }, [route.threadTarget, isThreadViewReady]);
   const renderThreadTooltipDetails = useCallback((entry: WorkbenchThreadSidebarEntry) => {
     if (entry.entryKind === "draft") return null;
     const threadId = entry.identity.threadId;
@@ -1326,7 +1179,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     materializedThreadRootIds,
   ]);
   const ambientCanvasVariant = getAmbientCanvasVariant(theme);
-  const shouldShowShellHeader = !showFullBleedMainView && (!isMobile || mobilePane === "editor");
+  const shouldShowShellHeader = !isMobile || mobilePane === "editor";
   const mainPaneScrollKey = showThreadView
     ? `thread:${activeThreadId}`
     : showFileView
@@ -1338,143 +1191,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         : routeView
           ? `route:${route.view}`
         : "";
-  const routePanelTarget = useMemo<WorkbenchPanelTarget>(() => {
-    if (showFileView) {
-      return { filePath: effectiveFilePath, kind: "file" };
-    }
-    if (showThreadView) {
-      return { kind: "thread", target: effectiveThreadTarget ?? { kind: "new" } };
-    }
-    if (showSettingsView) {
-      return { kind: "settings" };
-    }
-
-    return { kind: "empty" };
-  }, [effectiveFilePath, effectiveThreadTarget, showFileView, showSettingsView, showThreadView]);
-  const navigateToPanelTarget = useCallback((target: WorkbenchPanelTarget, options?: { replace?: boolean }) => {
-    if (target.kind === "file") {
-      navigateToRoute(route.logical?.projectId
-        ? createLogicalFileRoute(route.logical.projectId, browseLocation, target.filePath)
-        : createFileRoute(explorer.currentProjectId || route.projectId, target.filePath), options);
-      return;
-    }
-    if (target.kind === "thread") {
-      navigateToRoute(route.logical?.projectId
-        ? target.target.kind === "provider" || target.target.kind === "subagent"
-          ? createLogicalExistingThreadRoute(route.logical.projectId, target.target, browseLocation ?? null)
-          : createLogicalThreadRoute(route.logical.projectId, route.logical.projectId,
-            null, target.target)
-        : createThreadRoute(explorer.currentProjectId || route.projectId, target.target), options);
-      return;
-    }
-    if (target.kind === "settings") {
-      navigateToRoute(createSettingsRoute(""), options);
-      return;
-    }
-
-    navigateToRoute(route.logical?.projectId
-      ? createLogicalProjectRoute(route.logical.projectId)
-      : createProjectRoute(explorer.currentProjectId || route.projectId), options);
-  }, [browseLocation, explorer.currentProjectId, navigateToRoute, route]);
-  const navigateToMosaicNode = useCallback((mosaicNode: WorkbenchMosaicNode, options?: { replace?: boolean }) => {
-    if (!route.logical?.projectId) {
-      navigateToRoute(createMosaicRoute(explorer.currentProjectId || route.projectId, mosaicNode), options);
-      return;
-    }
-    const logicalProjectId = route.logical.projectId;
-    const browseLocation = route.logical.browseLocation ?? route.logical.location;
-    const withTargets = (node: WorkbenchMosaicNode): WorkbenchMosaicNode => {
-      if (node.type === "split") return { ...node, children: node.children.map(withTargets) };
-      if (node.target.kind === "thread"
-        && (node.target.target.kind === "provider" || node.target.target.kind === "subagent")) {
-        return { ...node, target: { ...node.target, source: undefined } };
-      }
-      if (node.target.source) return node;
-      return { ...node, target: { ...node.target, source: {
-        logicalProjectId, location: browseLocation ?? null,
-      } } };
-    };
-    navigateToRoute(createLogicalMosaicRoute(logicalProjectId, withTargets(mosaicNode)), options);
-  }, [explorer.currentProjectId, navigateToRoute, route]);
-  workspaceController.setOptions({
-    createDraft: (draftHarness) => {
-      if (!controls) throw new Error("The Workbench client is not ready.");
-      if (route.logical) {
-        if (!browseLocation) throw new Error("Choose a daemon folder before creating a mosaic draft.");
-        return controls.createThreadDraftAt(browseLocation, draftHarness, { select: false });
-      }
-      return controls.createThreadDraft(draftHarness);
-    },
-    navigateMosaic: navigateToMosaicNode,
-    navigatePanel: navigateToPanelTarget,
-    navigateProject: () => {
-      navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
-    },
-  });
-  useEffect(() => {
-    workspaceController.select({
-      isMobile,
-      isPanelTargetDragActive: activeDragPayload?.type === "panel-target",
-      mosaicNode: route.view === "mosaic" ? route.mosaicNode : null,
-      routeTarget: routePanelTarget,
-      showMosaic: showMosaicView,
-    });
-  }, [
-    activeDragPayload?.type,
-    isMobile,
-    route.mosaicNode,
-    route.view,
-    routePanelTarget,
-    showMosaicView,
-    workspaceController,
-  ]);
-  const workspaceSnapshot = useSyncExternalStore(
-    workspaceController.subscribe,
-    workspaceController.getSnapshot,
-    workspaceController.getSnapshot,
-  );
-  const routeMosaicProjection = workspaceSnapshot.routeProjection;
-  const mosaicDraftThreadsById = workspaceSnapshot.draftThreadsById;
-  const mainLayoutForRender = workspaceSnapshot.renderLayout;
-  const topLeftMosaicPanelId = showMosaicView && mainLayoutForRender
-    ? WorkbenchMainLayout.panels(mainLayoutForRender)[0]?.id
-    : null;
-  const shouldRenderMainLayout = Boolean(mainLayoutForRender);
-  const isDirectThreadSurface = showThreadView && !shouldRenderMainLayout;
-  const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
-
-  useEffect(() => {
-    if (showMosaicView) controls?.watchRateLimits();
-  }, [controls, showMosaicView]);
-
-  const updateMainLayout = useCallback((nextLayout: WorkbenchMainLayoutState) => {
-    workspaceController.updateLayout(nextLayout);
-  }, [workspaceController]);
-
-  const focusMainPanel = useCallback((panelId: string) => {
-    workspaceController.focusPanel(panelId);
-  }, [workspaceController]);
-
-  const handleMainLayoutPanelDrop = useCallback((drop: { panelId: string; placement: WorkbenchDropPlacement }, payload: Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" | "thread-row" }>) => {
-    if (payload.type !== "new-thread" || controls) workspaceController.dropPanel(drop, payload);
-  }, [controls, workspaceController]);
-
-  const updateMosaicPanelOptions = useCallback((panelId: string, options: { minimized?: boolean; zoomDelta?: number }) => {
-    workspaceController.updatePanelOptions(panelId, options);
-  }, [workspaceController]);
-
-  const resizeMosaicSplit = useCallback((splitId: string, firstPercent: number) => {
-    workspaceController.resizeSplit(splitId, firstPercent);
-  }, [workspaceController]);
-
-  const closeMosaicPanel = useCallback((target: WorkbenchPanelTarget) => {
-    workspaceController.closePanel(target);
-  }, [workspaceController]);
+  const isDirectMobileThreadSurface = isMobile && showThreadView;
 
   const tabs = useWorkbenchTabs(newThreadRoute);
   /** Paths are per folder, so only the browsed folder's tabs of that path close; the rest of the strip stays. */
   const closeDeletedFileViews = useCallback((filePath: string) => {
-    workspaceController.closeFile(filePath);
     const folder = explorer.browseLocation;
     const navigator = workbenchClient.mounted?.projectNavigator;
     if (!folder || !navigator) return;
@@ -1483,10 +1204,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       const location = navigator.fileLocationFor(tab);
       return location?.daemonId === folder.daemonId && location.projectId === folder.projectId;
     });
-  }, [explorer.browseLocation, tabs, workbenchClient, workspaceController]);
+  }, [explorer.browseLocation, tabs, workbenchClient]);
 
   useEffect(() => {
-    if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey || isDirectThreadSurface) {
+    if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey || showThreadView) {
       return;
     }
 
@@ -1499,7 +1220,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [isDirectThreadSurface, isMobile, mainPaneScrollKey, mobilePane]);
+  }, [showThreadView, isMobile, mainPaneScrollKey, mobilePane]);
 
   const applyMobileShellHeaderEvent = useCallback((event: MobileShellHeaderEvent) => {
     if (!isMobile || !shouldShowShellHeader) return;
@@ -1518,7 +1239,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [applyMobileShellHeaderEvent]);
 
   useEffect(() => {
-    const scrollTarget = isDirectThreadSurface
+    const scrollTarget = showThreadView
       ? directThreadScrollViewportRef.current
       : mainPaneRef.current;
     mobileShellHeaderVisibility.reset(scrollTarget ? {
@@ -1539,7 +1260,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     };
     scrollTarget.addEventListener("scroll", handleScroll, { passive: true });
 
-    if (isDirectThreadSurface) {
+    if (showThreadView) {
       return () => {
         scrollTarget.removeEventListener("scroll", handleScroll);
       };
@@ -1610,12 +1331,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       scrollTarget.removeEventListener("wheel", handleWheel);
       scrollTarget.removeEventListener("keydown", handleKeyDown);
     };
-  }, [activeFilePath, applyMobileShellHeaderEvent, isDirectThreadSurface, isMobile, mobileShellHeaderVisibility,
+  }, [activeFilePath, applyMobileShellHeaderEvent, showThreadView, isMobile, mobileShellHeaderVisibility,
     selectedThreadIdForView, shouldShowShellHeader, threadSurfaceKey]);
 
-  const handleHarnessChange = (nextHarness: WorkbenchHarness,
-    location?: ProjectLocationReference | null) => {
-    if (!location && nextHarness === harness && currentThread?.harness === nextHarness) {
+  const handleHarnessChange = (nextHarness: WorkbenchHarness) => {
+    if (nextHarness === harness && currentThread?.harness === nextHarness) {
       return;
     }
 
@@ -1624,8 +1344,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       preference: { key: "harness", value: nextHarness },
     }).catch((error: Error) => setSelectionError(error.message));
     setHarness(nextHarness);
-    if (location) controls?.setDraftThreadHarnessAt(location, nextHarness);
-    else controls?.setDraftThreadHarness(nextHarness);
+    controls?.setDraftThreadHarness(nextHarness);
   };
 
   return (
@@ -1665,27 +1384,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               <span className="sr-only">{isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</span>
             </IconButton>
           ) : null}
-          {isEffectiveDesktopSidebarCollapsed && showMosaicView ? (
-            <IconButton
-              type="button"
-              label="Drag to create a new thread panel"
-              display="hover-border"
-              title="Drag to create a new thread panel"
-              className="fixed left-14 top-3 z-40 hidden cursor-grab active:cursor-grabbing md:inline-flex"
-              onClick={(event) => {
-                event.preventDefault();
-              }}
-              onPointerDown={(event) => {
-                beginMainPanelDrag(event, {
-                  harness,
-                  type: "new-thread",
-                });
-              }}
-            >
-              <SparkleIcon size={20} />
-              <span className="sr-only">Drag to create a new thread panel</span>
-            </IconButton>
-          ) : null}
           <MobilePaneTrack
             pane={mobilePane}
             route={route}
@@ -1699,7 +1397,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               collapsed={isEffectiveDesktopSidebarCollapsed}
               createThread={createThreadFromSidebar}
               currentFilePath={activeFilePath}
-              harness={harness}
               onAttachFeedback={schemaVersion >= appStateReleases.composerDraftReferences.version
                 ? handleAttachFeedbackToThread
                 : undefined}
@@ -1712,7 +1409,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               renderThreadTooltipDetails={renderThreadTooltipDetails}
               route={route}
               showGitView={showGitView}
-              showMosaicView={showMosaicView}
               viewedProjectId={viewedProjectId}
             />
 
@@ -1722,17 +1418,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               className={`
                 scrollbar-hover-reveal flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto
                 px-(--main-pad-x)
-                ${isDirectThreadSurface ? "" : "[scrollbar-gutter:stable]"}
+                ${showThreadView ? "" : "[scrollbar-gutter:stable]"}
                 ${showGitView
                   ? "min-h-0 overflow-hidden pb-0 md:h-screen [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:calc(var(--spacing)*6)]"
                   : showSvgFileView
                   ? "overflow-y-auto md:h-screen md:min-h-0 md:overflow-hidden [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:calc(var(--spacing)*6)]"
                   : showSettingsView || showStatsView || routeView || showFileView
                   ? "overflow-y-auto md:h-screen md:min-h-0 md:overflow-y-auto [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:calc(var(--spacing)*6)]"
-                  : isDirectThreadSurface
+                  : showThreadView
                   ? "overflow-hidden pb-0 md:h-screen md:min-h-0 md:overflow-hidden [--main-pad-x:0px]"
-                  : showFullBleedMainView
-                    ? "overflow-y-auto md:h-screen md:min-h-0 md:overflow-hidden md:pb-0 [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:0px]"
                     : "overflow-y-auto md:h-auto md:min-h-screen md:overflow-visible [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:calc(var(--spacing)*6)]"
                 }
               `}
@@ -1741,7 +1435,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ref={directThreadScrollViewportRef}
                 className="h-full"
                 contentClassName="flex flex-col"
-                enabled={isDirectThreadSurface}
+                enabled={showThreadView}
                 onScrollIntent={handleThreadScrollIntent}
                 onTouchActivityChange={handleThreadTouchActivity}
                 resetKey={`${threadSurfaceKey}:${getThreadViewInstanceKey(selectedThreadIdForView || activeThreadId)}`}
@@ -1795,12 +1489,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
               <section
                 className={`
-                  relative ${isDirectThreadSurface || showGitView ? "min-h-0 flex-1" : "md:min-h-0 md:flex-1"}
-                  ${showFullBleedMainView || showGitView ? "min-h-0 overflow-hidden" : ""}
+                  relative ${showThreadView || showGitView ? "min-h-0 flex-1" : "md:min-h-0 md:flex-1"}
+                  ${showGitView ? "min-h-0 overflow-hidden" : ""}
                 `}
                 aria-busy={isSelectionPending}
               >
-                {showThreadView && !shouldRenderMainLayout ? (
+                {showThreadView ? (
                   <WorkbenchDaemonClientContext.Provider value={selectedDaemon ?? null}>
                   <WorkbenchDaemonAssetOriginContext.Provider value={selectedAssetSource}>
                     <FileScopeContext.Provider value={threadFileScope}>
@@ -1863,8 +1557,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ) : null}
                       onDraftSessionChange={session => { activeDraftSessionRef.current = session; }}
                       fontSizeRem={displayedFontSizePreview}
-                      settingsLocation={settingsFallbackTarget?.kind === "thread"
-                        ? settingsFallbackTarget.source?.location ?? null : routeLaunchLocation ?? browseLocation}
+                      settingsLocation={routeLaunchLocation ?? browseLocation}
                       getThreadHref={(target) => route.logical
                         && (target.kind === "provider" || target.kind === "subagent")
                         ? projectHref(createLogicalExistingThreadRoute(route.logical.projectId, target,
@@ -1888,7 +1581,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       selectedThreadId={selectedThreadIdForView}
                       onSelectedThreadChange={handleSelectedThreadChange}
                       projectId={threadProjectId}
-                      threadTarget={effectiveThreadTarget ?? null}
+                      threadTarget={route.threadTarget ?? null}
                       projectFileCandidates={isForeignThreadProject ? [] : explorer.projectFileCandidates}
                       projectFileIndexId={isForeignThreadProject ? `${threadProjectId}:foreign-pin:no-index` : explorer.projectFileIndexId}
                       useOwnerFileIndex={Boolean(route.logical && isForeignThreadProject)}
@@ -1907,7 +1600,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   </WorkbenchDaemonAssetOriginContext.Provider>
                   </WorkbenchDaemonClientContext.Provider>
                 ) : null}
-                {showSettingsView && !shouldRenderMainLayout ? (
+                {showSettingsView ? (
                   <WorkbenchSettingsView
                     attachedDaemonId={DaemonIdSchema.safeParse(
                       workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId,
@@ -1938,10 +1631,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ? presentationState.error ?? "Project identity is unavailable." : null}
                   />
                 ) : null}
-                {showGitView && selectionError && !shouldRenderMainLayout ? (
+                {showGitView && selectionError ? (
                   <p role="alert" className="mx-auto max-w-content px-5 py-8 text-danger">{selectionError}</p>
                 ) : null}
-                {showGitView && !selectionError && !shouldRenderMainLayout ? (
+                {showGitView && !selectionError ? (
                   !browseLocation ? (
                     <p className="mx-auto max-w-content px-5 py-8 text-fg/muted">Choose a folder to see its working tree and files.</p>
                   ) : (
@@ -1952,10 +1645,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     </WorkbenchDaemonClientContext.Provider>
                   )
                 ) : null}
-                {routeView && !shouldRenderMainLayout ? (
+                {routeView ? (
                   <routeView.Component key={route.view} route={route} />
                 ) : null}
-                {showStatsView && !shouldRenderMainLayout ? (
+                {showStatsView ? (
                   <WorkbenchStatsView
                     onAddressFeedback={askAgentWithReferences}
                     threadRoute={statsThreadRoute}
@@ -1964,7 +1657,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     tab={statsTab}
                   />
                 ) : null}
-                {showRouteError && !shouldRenderMainLayout ? (
+                {showRouteError ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
                     <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color: color-mix(in srgb, var(--bg) 94%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 94%, var(--app-bg-solid))] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Route</p>
@@ -1978,7 +1671,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ) : null}
                     </div>
                   </div>
-                ) : showEmptyState && !shouldRenderMainLayout ? (
+                ) : showEmptyState ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
                     {!selectionProjectIds.length ? (
                       <p className="m-0 w-full max-w-[42rem] px-4 text-[0.9rem] text-fg/muted">
@@ -1989,192 +1682,18 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     ) : null}
                   </div>
                 ) : null}
-                {shouldRenderMainLayout && mainLayoutForRender ? (
-                  <WorkbenchWorkspace
-                    controller={workspaceController}
-                    getPanelViewKey={target => target.kind === "thread"
-                      && (target.target.kind === "draft" || target.target.kind === "provider")
-                      ? `thread:${getThreadViewInstanceKey(getWorkbenchThreadTargetRootId(target.target))}`
-                      : undefined}
-                    onFocusPanel={() => { }}
-                    onLayoutChange={updateMainLayout}
-                    onPanelDrop={handleMainLayoutPanelDrop}
-                    onPointerDrop={() => drag.cancel()}
-                    onSplitResize={resizeMosaicSplit}
-                    renderPanel={({ isFocused, mosaicPanel, panelId, target }) => {
-                      const mosaicTarget = workspaceController.mosaicTargetForPanel(panelId);
-                      const panelZoomDelta = mosaicPanel?.zoomDelta ?? 0;
-                      const isMinimized = Boolean(mosaicPanel?.minimized);
-                      const isMinimizedVertical = isMinimized && mosaicPanel?.parentDirection === "horizontal";
-                      const sidebarToggleInset = showMosaicView && panelId === topLeftMosaicPanelId
-                        ? isEffectiveDesktopSidebarCollapsed ? "collapsed" : "expanded"
-                        : undefined;
-                      const updatePanelZoomDelta = (zoomDelta: number) => {
-                        updateMosaicPanelOptions(panelId, { zoomDelta: zoomDelta || undefined });
-                      };
-                      const togglePanelMinimized = () => {
-                        updateMosaicPanelOptions(panelId, { minimized: !isMinimized || undefined });
-                      };
-                      const headerDrag: WorkbenchMainPanelDragPayload | undefined = showMosaicView
-                        ? { sourcePanelId: panelId, target: mosaicTarget ?? target, type: "panel-target" }
-                        : undefined;
-                      if (target.kind === "file" && isSvgFile(target.filePath)) {
-                        return (
-                          <WorkbenchSvgEditorView
-                            key={target.filePath}
-                            contained={showMosaicView}
-                            controls={controls}
-                            location={mosaicTarget?.source?.location ?? null}
-                            onClose={showMosaicView ? () => { closeMosaicPanel(mosaicTarget ?? target); } : undefined}
-                            headerDrag={headerDrag}
-                            path={target.filePath}
-                            sidebarToggleInset={sidebarToggleInset}
-                          />
-                        );
-                      }
-
-                      if (target.kind === "file") {
-                        return (
-                          <WorkbenchFileView
-                            contained={showMosaicView}
-                            route={route}
-                            fontSizePreview={!showMosaicView ? displayedFontSizePreview : undefined}
-                            sidebarToggleInset={sidebarToggleInset}
-                            isFocused={isFocused}
-                            isMinimized={isMinimized}
-                            isMinimizedVertical={isMinimizedVertical}
-                            location={mosaicTarget?.source?.location}
-                            onClose={showMosaicView ? () => {
-                              closeMosaicPanel(mosaicTarget ?? target);
-                            } : undefined}
-                            onFocus={() => { }}
-                            headerDrag={headerDrag}
-                            onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
-                            onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
-                            panelZoomDelta={panelZoomDelta}
-                            path={target.filePath}
-                          />
-                        );
-                      }
-
-                      if (target.kind === "thread") {
-                        return (
-                          <WorkbenchThreadPanel
-                            routeOwned
-                            getThreadHref={threadTarget => route.logical
-                              && (threadTarget.kind === "provider" || threadTarget.kind === "subagent")
-                              ? projectHref(createLogicalExistingThreadRoute(route.logical.projectId, threadTarget,
-                                route.logical.browseLocation ?? null))
-                              : undefined}
-                            fontSizePreview={!showMosaicView ? displayedFontSizePreview : undefined}
-                            sidebarToggleInset={sidebarToggleInset}
-                            isFocused={isFocused}
-                            isMinimized={isMinimized}
-                            isMinimizedVertical={isMinimizedVertical}
-                            onDraftHarnessChange={nextHarness =>
-                              handleHarnessChange(nextHarness, mosaicTarget?.source?.location)}
-                            onCreateDraftThread={() => {
-                              if (!controls || !route.mosaicNode || target.target.kind !== "new") return null;
-                              if (route.logical && !mosaicTarget?.source?.location) {
-                                setSelectionError("Choose a daemon folder before creating this thread.");
-                                return null;
-                              }
-                              const draft = route.logical && mosaicTarget?.source?.location
-                                ? controls.createThreadDraftAt(mosaicTarget.source.location, harness, { select: false })
-                                : controls.createThreadDraft(harness, { select: false });
-                              const nextTarget: WorkbenchMosaicPanelTarget = {
-                                kind: "thread", target: { kind: "draft", draftId: DraftIdSchema.parse(draft.id) },
-                                ...(mosaicTarget?.source ? { source: mosaicTarget.source } : {}),
-                              };
-                              const nextNode = replaceWorkbenchMosaicTarget(
-                                route.mosaicNode, mosaicTarget ?? target, nextTarget,
-                              );
-                              navigateToRoute(route.logical?.projectId
-                                ? createLogicalMosaicRoute(route.logical.projectId, nextNode)
-                                : createMosaicRoute(route.projectId, nextNode), { replace: true });
-                              return draft;
-                            }}
-                            onSendMessage={sendThreadMessage}
-                            onThreadComposerDraftChange={handleThreadComposerDraftChange}
-                            onThreadComposerDraftClear={handleThreadComposerDraftClear}
-                            onQuestionnaireError={setSelectionError}
-                            onThreadSettingsChange={setThreadComposerSettings}
-                            selectedThreadId={getWorkbenchThreadTargetSelectedId(target.target)}
-                            onSelectedThreadChange={(selectedThreadId) => {
-                              if (!route.mosaicNode || target.target.kind === "new" || target.target.kind === "draft") return;
-                              const rootThreadId = target.target.kind === "subagent" ? target.target.parentThreadId : target.target.threadId;
-                              const nextTarget: WorkbenchMosaicPanelTarget = {
-                                kind: "thread",
-                                target: selectedThreadId === rootThreadId
-                                  ? { harness: target.target.harness, kind: "provider", threadId: rootThreadId }
-                                  : { harness: target.target.harness, kind: "subagent", parentThreadId: rootThreadId, threadId: ThreadReferenceSchema.parse(selectedThreadId) },
-                              };
-                              const nextNode = replaceWorkbenchMosaicTarget(route.mosaicNode, mosaicTarget ?? target, nextTarget);
-                              navigateToRoute(route.logical?.projectId
-                                ? createLogicalMosaicRoute(route.logical.projectId, nextNode)
-                                : createMosaicRoute(route.projectId, nextNode));
-                            }}
-                            profileController={profileControllerFor(
-                              target.target.kind === "provider" || target.target.kind === "subagent"
-                                ? workbenchClient.mounted?.threadOwnerFor(getWorkbenchThreadTargetRootId(target.target))
-                                  ?.daemonId ?? profileScopeKey
-                                : mosaicTarget?.source?.location?.daemonId ?? profileScopeKey)}
-                            projectId={route.projectId}
-                            projectFileCandidates={explorer.projectFileCandidates}
-                            projectFileIndexId={explorer.projectFileIndexId}
-                            useOwnerFileIndex={Boolean(route.logical)}
-                            projectFilePaths={explorer.projectFilePaths}
-                            projectRootPath={explorer.rootPath}
-                            projectRoots={explorer.roots}
-                            threadTarget={target.target}
-                            threadComposerDraft={getThreadComposerDraftForTarget(target.target)}
-                            threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                            onClose={showMosaicView ? () => {
-                              closeMosaicPanel(mosaicTarget ?? target);
-                            } : undefined}
-                            headerDrag={headerDrag}
-                            onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
-                            onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
-                            panelZoomDelta={panelZoomDelta}
-                            location={mosaicTarget?.source?.location}
-                            thread={target.target.kind === "provider" || target.target.kind === "subagent"
-                              ? getThreadDocumentFromSnapshot(threadDocuments, getWorkbenchThreadTargetRootId(target.target))
-                                ?? (currentThread?.id === getWorkbenchThreadTargetRootId(target.target) ? currentThread : null)
-                              : target.target.kind === "draft"
-                                ? mosaicDraftThreadsById[target.target.draftId] ?? null
-                                : null}
-                            threadId={getWorkbenchThreadTargetRootId(target.target)}
-                            viewInstanceKey={getThreadViewInstanceKey(getWorkbenchThreadTargetRootId(target.target))}
-                          />
-                        );
-                      }
-
-                      return (
-                        <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                          <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-[color: color-mix(in srgb, var(--bg) 94%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 94%, var(--app-bg-solid))] px-5 py-4 text-left">
-                            <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">Workbench</p>
-                            <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Drop a file or thread here</p>
-                          </div>
-                        </div>
-                      );
-                    }}
-                  />
-                ) : null}
-                {showSvgFileView && !shouldRenderMainLayout ? (
+                {showSvgFileView ? (
                   <WorkbenchSvgFileView
                     controls={controls}
                     location={svgFileLocation}
-                    path={effectiveFilePath}
+                    path={route.filePath}
                     route={route}
                   />
-                ) : showFileView && !shouldRenderMainLayout ? (
+                ) : showFileView ? (
                   <WorkbenchFileView
                     route={route}
                     fontSizePreview={displayedFontSizePreview}
-                    isFocused
-                    location={mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.source?.location : undefined}
-                    onFocus={() => { }}
-                    path={effectiveFilePath}
+                    path={route.filePath}
                     shellHeaderVisibility={mobileShellHeaderVisibility}
                   />
                 ) : null}

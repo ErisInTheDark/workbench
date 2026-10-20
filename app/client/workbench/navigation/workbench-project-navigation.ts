@@ -229,11 +229,11 @@ export default class WorkbenchProjectNavigation {
 
   /**
    * The tab a destination's href writes, without the project selection and sidebar folder (they stay ambient), so the
-   * same tab opens under any selection. Home and project views are the selection itself, and mosaic and invalid routes
-   * have no address, so none of them are tabs.
+   * same tab opens under any selection. Home and project views are the selection itself, and invalid routes have no
+   * address, so none of them are tabs.
    */
   tabFor(route: WorkbenchRoute, current?: WorkbenchRoute): string | undefined {
-    if (route.view === "mosaic" || route.view === "invalid" || route.view === "home" || route.view === "project") {
+    if (route.view === "invalid" || route.view === "home" || route.view === "project") {
       return undefined;
     }
     const destination = this.publicRoute(route, current, "inherit");
@@ -266,7 +266,7 @@ export default class WorkbenchProjectNavigation {
       }
     }
     const resolved = this.resolveRoute(withFolder);
-    if (resolved.view === "invalid" || resolved.view === "mosaic") return undefined;
+    if (resolved.view === "invalid") return undefined;
     if (resolved.logical) {
       const logical = resolved.logical;
       const selected = logical.projectId ? this.logicalById.get(logical.projectId) : undefined;

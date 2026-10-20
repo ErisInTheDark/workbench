@@ -797,7 +797,7 @@ test("project thread drag exposes group outcomes and folder targets only in fold
     projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:source"),
     section: "main",
     sourceKey: "codex:source",
-    target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["source"] } },
+    target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["source"] },
     type: "thread-row",
   }, {
     folders: [{
@@ -898,7 +898,7 @@ test("home renders one combined priority list with project-owned folders and for
       projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:beta-pinned"),
       section: "pinned",
       sourceKey: "beta/codex%3Abeta-pinned",
-      target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["beta-pinned"] } },
+      target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["beta-pinned"] },
       type: "home-thread-row",
     },
     projectThreadSidebars,

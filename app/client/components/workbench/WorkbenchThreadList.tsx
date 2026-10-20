@@ -175,7 +175,6 @@ function mergeDisplayItems (
 
 export default function WorkbenchThreadList ({
   actions,
-  allowMainPanelDrop = false,
   attachedDaemonId = null,
   canCreateThread,
   controls,
@@ -187,7 +186,6 @@ export default function WorkbenchThreadList ({
   logicalProjects,
   onAttachFeedback,
   onCreateThread,
-  onCreateThreadPointerDragStart,
   presentation,
   projectId,
   projects,
@@ -196,7 +194,6 @@ export default function WorkbenchThreadList ({
   selectedProjectIds,
 }: {
   actions: ThreadActions;
-  allowMainPanelDrop?: boolean;
   attachedDaemonId?: string | null;
   canCreateThread?: boolean;
   controls?: WorkbenchControls | null;
@@ -225,7 +222,6 @@ export default function WorkbenchThreadList ({
     folderId?: FolderId;
     location?: ProjectLocationReference;
   }) => void;
-  onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
   presentation?: PresentationSnapshot | null;
   projectId?: string;
   projects: readonly (WorkbenchProjectOption | WorkbenchLogicalProject)[];
@@ -394,7 +390,7 @@ export default function WorkbenchThreadList ({
     if (nextEntry) rowRefs.current.get(nextEntry.threadKey)?.focus();
   };
   const rowContext: ThreadListRowContext = {
-    actions, allowMainPanelDrop, attachedDaemonId, controls, currentTarget, focusRow, getThreadHref, hasSelectedEntry,
+    actions, attachedDaemonId, controls, currentTarget, focusRow, getThreadHref, hasSelectedEntry,
     firstThreadKey: navigableEntries[0]?.threadKey ?? null, homeDisplayOrderSupported, isShiftPressed, logicalProjects,
     onAttachFeedback, projectHref, projectsById, readRowForPayload: rowForPayload,
     registerRow: (threadKey, node) => { if (node) rowRefs.current.set(threadKey, node); else rowRefs.current.delete(threadKey); },
@@ -624,10 +620,7 @@ export default function WorkbenchThreadList ({
           event.preventDefault();
           onCreateThread(createProjectId, createLocation ? { location: createLocation } : undefined);
         }}
-        onPointerDown={(event) => {
-          event.stopPropagation();
-          onCreateThreadPointerDragStart?.(event);
-        }}
+        onPointerDown={(event) => { event.stopPropagation(); }}
       >
         <span className="inline-flex min-w-0 items-center gap-2">
           <SparkleIcon className="shrink-0" size={16} />

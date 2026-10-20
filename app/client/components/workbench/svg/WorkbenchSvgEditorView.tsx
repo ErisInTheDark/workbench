@@ -6,7 +6,7 @@
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
 import type { WorkbenchControls } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -23,14 +23,12 @@ import { buildSvgPreview, readSvgViewBox } from "../../../workbench/svg/svg-prev
 import { getSvgSegments, groupSvgSelection, svgElementSelectionKeys, SVG_SEGMENT_TAGS } from "../../../workbench/svg/svg-segments";
 import { formatSvgSource } from "../../../workbench/svg/svg-source-edits";
 import { findSvgElementAt, getSvgAttribute, parseSvgSource, type SvgSourceElement } from "../../../workbench/svg/svg-source";
-import type { WorkbenchMainPanelDragPayload } from "../../../workbench/layout/workbench-drag";
 import IconButton from "../../ui/IconButton";
-import { useWorkbenchDrag } from "../drag/workbench-drag-context";
 import PlaintextEditable from "../thread-view/PlaintextEditable";
 import WorkbenchSaveAsRow from "../file-actions/WorkbenchSaveAsRow";
 import WorkbenchSaveButton from "../file-actions/WorkbenchSaveButton";
 import DraftResetButton from "../markdown-editor/DraftResetButton";
-import { PanelCloseIcon, Redo2Icon, ResetIcon, Undo2Icon, WandSparklesIcon } from "../workbench-icons";
+import { Redo2Icon, ResetIcon, Undo2Icon, WandSparklesIcon } from "../workbench-icons";
 import WorkbenchSvgCanvas, { type SvgCanvasAction, type SvgCanvasTool } from "./WorkbenchSvgCanvas";
 import WorkbenchSvgToolbar, { type SvgViewOptions } from "./WorkbenchSvgToolbar";
 
@@ -118,27 +116,19 @@ function RealSizePreviews({ root }: { root: SvgSourceElement }) {
 }
 
 export default function WorkbenchSvgEditorView({
-  contained = false,
   controls,
   location = null,
-  onClose,
-  headerDrag,
   onDiscarded,
   onOpenCopy,
   path,
-  sidebarToggleInset,
 }: {
-  contained?: boolean;
   controls: WorkbenchControls | null;
   location?: ProjectLocationReference | null;
-  onClose?: () => void;
-  headerDrag?: WorkbenchMainPanelDragPayload;
   /** An unsaved new file was discarded; leave this view. Without it, new files cannot be discarded here. */
   onDiscarded?: () => void;
   /** Show the copy Save as wrote in place of this file. Without it, Save as is not offered. */
   onOpenCopy?: (path: string) => void;
   path: string;
-  sidebarToggleInset?: "collapsed" | "expanded";
 }) {
   const daemonId = location?.daemonId ?? null;
   const projectId = location?.projectId ?? null;
@@ -163,7 +153,6 @@ export default function WorkbenchSvgEditorView({
   const [view, setView] = useState<SvgViewOptions>(DEFAULT_VIEW);
   const [action, setAction] = useState<SvgCanvasAction | null>(null);
   const sourceRef = useRef<HTMLDivElement>(null);
-  const beginDrag = useWorkbenchDrag.mainPanel();
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const openSaveAs = onOpenCopy && state.status === "ready" ? () => setSaveAsOpen(true) : undefined;
 
@@ -243,12 +232,6 @@ export default function WorkbenchSvgEditorView({
     }
   }
 
-  function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
-    if (!headerDrag || (event.target instanceof HTMLElement && event.target.closest("button,a,input,[contenteditable]"))) return;
-    event.preventDefault();
-    beginDrag(event, headerDrag);
-  }
-
   const status = portError || state.error
     || (state.saving ? "Saving..." : state.isNew ? "Not saved yet. Name it with Save as."
       : state.dirty ? "Unsaved changes. Save with Ctrl/Cmd+S." : state.status === "ready" ? "Saved" : "");
@@ -259,28 +242,7 @@ export default function WorkbenchSvgEditorView({
       segments.has(segment.index) && segment.kind === "arc" && segment.circle));
 
   return (
-    <div
-      className={`
-        flex min-w-0 flex-col
-        ${contained ? "h-full min-h-[24rem]" : "min-h-0 flex-1"}
-      `}
-      data-svg-editor-path={path}
-      onKeyDown={handleKeyDown}
-    >
-      {/* In the main pane the shell tab names the file; mosaic panels carry their own draggable title. */}
-      {!contained ? null : (
-        <header
-          className={`
-            flex items-center gap-2 pt-3
-            ${sidebarToggleInset === "collapsed" ? "md:pl-28" : sidebarToggleInset === "expanded" ? "md:pl-14" : ""}
-            ${headerDrag ? "cursor-grab active:cursor-grabbing" : ""}
-          `}
-          onPointerDown={handleHeaderPointerDown}
-        >
-          <p className="m-0 min-w-0 flex-1 truncate text-base font-semibold leading-tight">{path}</p>
-          {onClose ? <IconButton label="Close panel" display="hover-border" onClick={onClose}><PanelCloseIcon size={16} /></IconButton> : null}
-        </header>
-      )}
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-svg-editor-path={path} onKeyDown={handleKeyDown}>
       {saveAsOpen && controller && onOpenCopy ? (
         <WorkbenchSaveAsRow
           initialPath={path}

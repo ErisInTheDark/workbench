@@ -32,7 +32,7 @@ export function mobileSidebarHref(location: Pick<Location, "pathname" | "search"
 /** Whether a navigation leaves the main pane's content as it is, changing only sidebar state such as project selection. */
 export function keepsMobileMainPane(current: WorkbenchRoute, next: WorkbenchRoute) {
   return current.view === next.view && current.filePath === next.filePath && current.statsTab === next.statsTab
-    && areDeeplyEqual(current.threadTarget, next.threadTarget) && areDeeplyEqual(current.mosaicNode, next.mosaicNode);
+    && areDeeplyEqual(current.threadTarget, next.threadTarget);
 }
 
 export function getPreferredMobilePane (isMobileViewport: boolean, route: WorkbenchRoute, sidebarRequested = false): MobilePane {
@@ -41,5 +41,5 @@ export function getPreferredMobilePane (isMobileViewport: boolean, route: Workbe
   }
   if (sidebarRequested) return "explorer";
 
-  return route.view === "file" || route.view === "thread" || route.view === "settings" || route.view === "stats" || route.view === "mosaic" || route.view === "git" || route.view === "new-project" ? "editor" : "explorer";
+  return route.view === "file" || route.view === "thread" || route.view === "settings" || route.view === "stats" || route.view === "git" || route.view === "new-project" ? "editor" : "explorer";
 }

@@ -517,8 +517,8 @@ function WorkbenchThreadSidebarActionsProvider({
       }), "Unable to group the dragged pinned thread.", folderId);
     },
     onSetPriority: (payload, priority) => {
-      if (!controls || payload.target.kind !== "thread") return;
-      const target = payload.target.target;
+      if (!controls) return;
+      const { target } = payload;
       runDragMutation(async () => {
         if (target.kind === "draft") return controls.setPresentationDraftPriority(target.draftId, {
           pinned: priority === "pinned", snoozed: priority === "snoozed",
@@ -528,8 +528,8 @@ function WorkbenchThreadSidebarActionsProvider({
       }, "Unable to change the dragged thread priority.");
     },
     onSnoozeUntil: (payload, targetProjectId, targetIdentity) => {
-      const source = payload.target.kind === "thread" ? payload.target.target : null;
-      if (source?.kind !== "provider" || !controls) return;
+      const source = payload.target;
+      if (source.kind !== "provider" || !controls) return;
       runDragMutation(() => controls.threadAction(source.threadId, {
         kind: "snoozeUntil", targetThreadId: targetIdentity.threadId,
       }), "Unable to change the dragged thread's wait target.");

@@ -25,7 +25,6 @@ import type {
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import {
   isWorkbenchThreadRowDragPayload,
-  WORKBENCH_MAIN_PANEL_DROP_TARGET_ID,
   WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
   WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
   WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
@@ -52,7 +51,6 @@ export type ThreadListRowEntry =
 
 export interface ThreadListRowContext {
   actions: ThreadActions;
-  allowMainPanelDrop: boolean;
   /** Folder-sidebar rows on this daemon resolve their listed row through it. */
   attachedDaemonId: string | null;
   controls: WorkbenchControls | null | undefined;
@@ -217,11 +215,11 @@ export default function WorkbenchThreadListRow({
             return;
           }
           const source = ctx.readRowForPayload(payload);
-          if (!source || !qualified || payload.target.target.kind !== "provider") {
+          if (!source || !qualified || payload.target.kind !== "provider") {
             ctx.setLayoutError("Dependent snooze needs two existing threads.");
             return;
           }
-          void ctx.controls?.threadAction(payload.target.target.threadId, {
+          void ctx.controls?.threadAction(payload.target.threadId, {
             kind: "snoozeUntil", targetThreadId: targetIdentity.threadId,
           }).catch(error => {
             const message = error instanceof Error ? error.message.slice(0, 500) : "Dependent snooze failed.";
@@ -295,21 +293,18 @@ export default function WorkbenchThreadListRow({
         ...(ctx.homeDisplayOrderSupported ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
         WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
         WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
-        ...(ctx.allowMainPanelDrop ? [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID] : []),
       ]}
       label={entry.title}
-      payload={archived || readOnly
-        ? { target: { kind: "thread", target }, type: "panel-target" }
-        : {
-          ownerProjectId: ProjectIdSchema.parse(entryProjectId),
-          projectSourceKey,
-          section: dragSection,
-          sourceKey: threadKey,
-          target: { kind: "thread", target },
-          type: "home-thread-row",
-          waitingOnThreadIds: entry.entryKind === "thread"
-            ? entry.waitingOnThreads?.map(wait => wait.identity.threadId) ?? [] : [],
-        }}
+      payload={{
+        ownerProjectId: ProjectIdSchema.parse(entryProjectId),
+        projectSourceKey,
+        section: dragSection,
+        sourceKey: threadKey,
+        target,
+        type: "home-thread-row",
+        waitingOnThreadIds: entry.entryKind === "thread"
+          ? entry.waitingOnThreads?.map(wait => wait.identity.threadId) ?? [] : [],
+      }}
     >
       {renderRow}
     </Draggable>
