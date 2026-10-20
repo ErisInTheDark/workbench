@@ -90,6 +90,22 @@ test("keeps exact fill text, including an empty clear", () => {
   }
 });
 
+test("routes targeted type and element screenshots to the driver, rejecting options they cannot honour", () => {
+  const base = { session: "research", threadId: "thread-1" };
+  const params = (request: Parameters<typeof normalizeWorkbenchBrowseAgentRequest>[0]) => {
+    const normalized = normalizeWorkbenchBrowseAgentRequest(request);
+    assert.ok(normalized.ok && "runtimeRequest" in normalized.command && normalized.command.runtimeRequest.kind === "command");
+    return normalized.command.runtimeRequest.params;
+  };
+  assert.equal(params({ ...base, action: "type", ref: "0-4", text: "hi" }).selector, "@0-4");
+  assert.equal(params({ ...base, action: "type", text: " padded " }).text, " padded ");
+  assert.equal(normalizeWorkbenchBrowseAgentRequest({ ...base, action: "type", text: "" }).ok, false);
+  assert.equal(params({ ...base, action: "screenshot", selector: ".compact" }).target, ".compact");
+  assert.equal(normalizeWorkbenchBrowseAgentRequest({ ...base, action: "type", delayMs: 25, ref: "0-4", text: "hi" }).ok, false);
+  assert.equal(normalizeWorkbenchBrowseAgentRequest({ ...base, action: "type", mistakes: true, ref: "0-4", text: "hi" }).ok, false);
+  assert.equal(normalizeWorkbenchBrowseAgentRequest({ ...base, action: "screenshot", fullPage: true, ref: "0-4" }).ok, false);
+});
+
 test("preserves scoped snapshots and batched pointer input", () => {
   const snapshot = normalizeWorkbenchBrowseAgentRequest({
     action: "snapshot",

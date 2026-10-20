@@ -189,6 +189,87 @@ test("reports performed click and fill actions", async () => {
   assert.deepEqual(keys, ["Enter"]);
 });
 
+test("types into a target through the selector action and fails when it was not performed", async () => {
+  const acts: object[] = [];
+  let success = true;
+  class FakeManager {
+    async activePage() {
+      return {};
+    }
+    async close() {}
+    async execute(command: string, _params?: object) {
+      return { command };
+    }
+    resolveSelector(selector: string) {
+      return selector;
+    }
+    async stagehandInstance() {
+      return { act: async (request: object) => { acts.push(request); return { success }; } };
+    }
+  }
+  patchBrowseDriverExtensions({ DriverSessionManager: FakeManager });
+  const manager = new FakeManager();
+  assert.deepEqual(await manager.execute("type", { selector: "@0-4", text: "hi" }), { typed: true });
+  assert.deepEqual(acts, [{ arguments: ["hi"], description: "type element", method: "type", selector: "@0-4" }]);
+  success = false;
+  await assert.rejects(manager.execute("type", { selector: "#missing", text: "hi" }), /type #missing failed/u);
+  assert.deepEqual(await manager.execute("type", { text: "at focus" }), { command: "type" });
+});
+
+function createScreenshotManager(element: { inMainFrame?: boolean; rect?: object | null }) {
+  const screenshots: object[] = [];
+  const released: string[] = [];
+  class FakeManager {
+    async activePage() {
+      return {
+        mainFrame: () => ({
+          locator: (selector: string) => ({
+            frame: {
+              session: {
+                send: async (method: string, params: { objectId: string }) => {
+                  if (method === "Runtime.releaseObject") released.push(params.objectId);
+                  return method === "Runtime.callFunctionOn" ? { result: { value: element.rect } } : {};
+                },
+              },
+            },
+            resolveNode: async () => {
+              if (element.inMainFrame === false) throw new Error(`Could not find an element for ${selector}`);
+              return { objectId: `node:${selector}` };
+            },
+          }),
+        }),
+      };
+    }
+    async close() {}
+    async execute(command: string, params?: object) {
+      screenshots.push({ command, params });
+      return { base64: "AAAA" };
+    }
+    resolveSelector(selector: string) {
+      return selector;
+    }
+  }
+  patchBrowseDriverExtensions({ DriverSessionManager: FakeManager });
+  return { manager: new FakeManager(), released, screenshots };
+}
+
+test("clips a targeted screenshot to the element's document box", async () => {
+  const rect = { height: 32, width: 96, x: 10, y: 1_200 };
+  const { manager, released, screenshots } = createScreenshotManager({ rect });
+  assert.deepEqual(await manager.execute("screenshot", { fullPage: false, target: ".compact", type: "png" }), { base64: "AAAA" });
+  assert.deepEqual(screenshots, [{ command: "screenshot", params: { clip: rect, fullPage: false, type: "png" } }]);
+  assert.deepEqual(released, ["node:.compact"]);
+});
+
+test("rejects element screenshots that match nothing in the main frame or have no visible box", async () => {
+  const framed = createScreenshotManager({ inMainFrame: false });
+  await assert.rejects(framed.manager.execute("screenshot", { target: "@0-16" }), /no main-frame element matched/u);
+  const hidden = createScreenshotManager({ rect: { height: 0, width: 40, x: 0, y: 0 } });
+  await assert.rejects(hidden.manager.execute("screenshot", { target: "#hidden" }), /no visible box/u);
+  assert.deepEqual(hidden.released, ["node:#hidden"]);
+  assert.deepEqual([...framed.screenshots, ...hidden.screenshots], []);
+});
+
 test("batches wheel input and parks the pointer in one driver command", async () => {
   const cdpCalls: Array<{ method: string; params: object }> = [];
   class FakeManager {

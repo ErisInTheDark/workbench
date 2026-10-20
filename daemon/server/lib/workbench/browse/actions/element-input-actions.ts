@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - elementInputActionBuilders: validate and build element, text-input, evaluation, snapshot, and selection Browse actions.
+ * - elementInputActionBuilders: validate and build element, text-input (at focus or into a target), evaluation, snapshot,
+ *   and selection Browse actions.
  */
 import type { WorkbenchBrowseAgentAction } from "workbench-shared/types";
 import {
@@ -76,14 +77,22 @@ export const elementInputActionBuilders: readonly BrowseActionBuilder[] = [
   },
   (action) => {
     if (action.action !== "type") return null;
-    const text = normalizeRequiredActionString(action.text, BROWSE_ACTION_TEXT_MAX_LENGTH, "Browse type requires text.");
-    if (!text.ok) return { error: text.error };
+    const text = normalizeActionText(action.text, BROWSE_ACTION_TEXT_MAX_LENGTH, "Browse type requires text.");
+    if (!text.ok || !text.value) return { error: "Browse type requires text." };
     const delay = normalizePositiveActionInteger(action.delayMs);
+    const selector = normalizeActionSelector(action);
+    if (selector && (delay || action.mistakes)) {
+      return { error: "Browse type into a target cannot use --delay or --mistakes; click the target, then type at focus." };
+    }
     return buildBrowserAction("type", action, "type", {
       delay: delay ?? undefined,
       mistakes: action.mistakes === true,
+      selector: selector ?? undefined,
       text: text.value,
-    }, ["type", text.value, ...(delay ? ["--delay", String(delay)] : []), ...(action.mistakes ? ["--mistakes"] : [])]);
+    }, [
+      "type", ...(selector ? [selector] : []), text.value,
+      ...(delay ? ["--delay", String(delay)] : []), ...(action.mistakes ? ["--mistakes"] : []),
+    ]);
   },
   (action) => {
     if (action.action !== "key") return null;

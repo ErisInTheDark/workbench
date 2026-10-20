@@ -4,7 +4,8 @@
  * - formatRuntimeException: surface useful bounded JavaScript exception detail.
  * - patchBrowseDriverCommandSchema: admit Workbench commands through Browse's closed daemon protocol.
  * - patchBrowseDriverExtensions: add Workbench browser commands behind the upstream driver boundary;
- *   eval returns script completion values, click/fill fail when the selector action fails.
+ *   eval returns script completion values, click/fill/targeted type fail when the selector action fails, and a targeted
+ *   screenshot clips to one main-frame element.
  */
 const MAX_ERROR_LENGTH = 8_000;
 const MAX_TRACE_EVENT_NAMES = 100;
@@ -259,6 +260,31 @@ async function actOnSelector(manager, method, selector, args) {
   }
 }
 
+// CDP screenshot clips are in document coordinates; scroll first so the element is rendered.
+const ELEMENT_DOCUMENT_RECT = `function () {
+  this.scrollIntoView({ block: "nearest", inline: "nearest" });
+  const rect = this.getBoundingClientRect();
+  return { height: rect.height, width: rect.width, x: rect.left + window.scrollX, y: rect.top + window.scrollY };
+}`;
+
+async function elementScreenshotClip(manager, page, target) {
+  // A main-frame locator, unlike deepLocator, never hops into an iframe the target names.
+  const locator = page.mainFrame().locator(manager.resolveSelector(target));
+  const session = locator.frame.session;
+  const { objectId } = await locator.resolveNode().catch((error) => {
+    throw new Error(`screenshot ${target}: no main-frame element matched; element screenshots cannot reach inside iframes.`, { cause: error });
+  });
+  try {
+    const response = await session.send("Runtime.callFunctionOn", { functionDeclaration: ELEMENT_DOCUMENT_RECT, objectId, returnByValue: true });
+    if (response.exceptionDetails) throw new Error(`screenshot ${target}: ${formatRuntimeException(response.exceptionDetails)}`);
+    const clip = response.result?.value;
+    if (!clip || !(clip.width > 0) || !(clip.height > 0)) throw new Error(`screenshot ${target}: element has no visible box.`);
+    return clip;
+  } finally {
+    await session.send("Runtime.releaseObject", { objectId });
+  }
+}
+
 async function emulateDevice(page, preset) {
   if (preset === "clear") {
     await page.sendCDP("Emulation.clearDeviceMetricsOverride");
@@ -381,6 +407,14 @@ export function patchBrowseDriverExtensions(sessionManagerModule) {
       await actOnSelector(this, "fill", String(params.selector ?? ""), [String(params.value ?? "")]);
       if (params.pressEnter) await (await page()).keyPress("Enter");
       return { filled: true, pressedEnter: params.pressEnter === true };
+    }
+    if (command === "type" && params.selector) {
+      await actOnSelector(this, "type", String(params.selector), [String(params.text ?? "")]);
+      return { typed: true };
+    }
+    if (command === "screenshot" && params.target) {
+      const { target, ...screenshot } = params;
+      return await originalExecute.call(this, command, { ...screenshot, clip: await elementScreenshotClip(this, await page(), String(target)) });
     }
     if (command === "snapshot" && params.target) {
       const result = await originalExecute.call(this, command, {});

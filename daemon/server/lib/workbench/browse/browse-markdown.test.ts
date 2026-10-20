@@ -64,6 +64,28 @@ test("rejects unquoted multi-word selectors instead of dropping the remainder", 
   assert.equal(actions[0]?.action === "click" ? actions[0].selector : null, "[aria-label=\"Remove attached image 2\"]");
 });
 
+test("types at focus or into a target without folding the target into the text", () => {
+  const { actions } = compileWorkbenchBrowseMarkdown(
+    "type 'hello world'\ntype '[aria-label=\"Message thread\"]' 'hello world'\ntype @0-4 ' padded '",
+    { cwd: ".", threadId: "thread" },
+  );
+  assert.deepEqual(actions.map((action) => action.action === "type"
+    ? { ref: action.ref ?? null, selector: action.selector ?? null, text: action.text } : null), [
+    { ref: null, selector: null, text: "hello world" },
+    { ref: null, selector: "[aria-label=\"Message thread\"]", text: "hello world" },
+    { ref: "0-4", selector: null, text: " padded " },
+  ]);
+  assert.throws(
+    () => compileWorkbenchBrowseMarkdown("type text=Message box hello", { cwd: ".", threadId: "thread" }),
+    /type takes at most 2 arguments but got 3/u,
+  );
+});
+
+test("screenshots one element when given a target", () => {
+  const { actions } = compileWorkbenchBrowseMarkdown("screenshot @0-35\nscreenshot", { cwd: ".", threadId: "thread" });
+  assert.deepEqual(actions.map((action) => action.action === "screenshot" ? action.ref ?? null : undefined), ["0-35", null]);
+});
+
 test("fills explicit empty and whitespace-preserving values", () => {
   const { actions } = compileWorkbenchBrowseMarkdown("fill @e1 \"\"\nfill @e2 \"  padded \"", { cwd: ".", threadId: "thread" });
   assert.deepEqual(actions.map((action) => action.action === "fill" ? action.value : null), ["", "  padded "]);

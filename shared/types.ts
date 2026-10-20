@@ -541,6 +541,9 @@ export interface WorkbenchBrowseAgentTypeRequest extends WorkbenchBrowseAgentBro
   action: "type";
   delayMs?: number | null;
   mistakes?: boolean | null;
+  /** Focus this element and type into it; otherwise text goes to the current focus. */
+  ref?: string | null;
+  selector?: string | null;
   text: string;
 }
 
@@ -649,6 +652,9 @@ export interface WorkbenchBrowseAgentScreenshotRequest extends WorkbenchBrowseAg
   action: "screenshot";
   animations?: "allow" | "disabled" | null;
   fullPage?: boolean | null;
+  /** Capture only this main-frame element. */
+  ref?: string | null;
+  selector?: string | null;
   type?: "jpeg" | "png" | null;
 }
 

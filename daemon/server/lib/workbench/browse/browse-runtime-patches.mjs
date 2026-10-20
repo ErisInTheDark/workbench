@@ -1,7 +1,8 @@
 /*
- * Runtime helpers:
+ * Exports:
  * - installHiddenChildProcessDefaults: keep helper windows hidden without suppressing deliberate headed browser windows.
  * - patchBrowseRuntime: install Workbench driver, download, profile, and graceful-close behaviour.
+ * - patchStagehandOptions: turn off LLM self-heal for every session and add managed-local download/profile launch options.
  */
 import childProcess from "node:child_process";
 import fs from "node:fs";
@@ -61,20 +62,24 @@ export async function patchBrowseRuntime() {
   const contextModule = await import(pathToFileURL(path.join(stagehandRoot, "dist", "esm", "lib", "v3", "understudy", "context.js")).href);
   patchBrowseDriverCommandSchema(commandTypesModule);
   patchBrowseDriverExtensions(sessionManagerModule);
-  patchLaunchOptions(sessionManagerModule);
+  patchStagehandOptions(sessionManagerModule, {
+    downloadsPath: process.env.WORKBENCH_BROWSE_DOWNLOADS_PATH?.trim(),
+    userDataDir: process.env.WORKBENCH_BROWSE_USER_DATA_DIR?.trim(),
+  });
   patchPersistentProfileShutdown(contextModule);
   return { browseRequire, browseRoot };
 }
 
-function patchLaunchOptions(sessionManagerModule) {
-  const downloadsPath = process.env.WORKBENCH_BROWSE_DOWNLOADS_PATH?.trim();
-  const userDataDir = process.env.WORKBENCH_BROWSE_USER_DATA_DIR?.trim();
-  if (!downloadsPath && !userDataDir) return;
+/**
+ * Self-heal asks an LLM Workbench never configures to re-pick a missed element, hiding the real miss (or acting on an
+ * element nobody named), so it is always off.
+ */
+export function patchStagehandOptions(sessionManagerModule, { downloadsPath, userDataDir } = {}) {
   const prototype = sessionManagerModule.DriverSessionManager?.prototype;
   if (!prototype || typeof prototype.stagehandOptions !== "function" || prototype.stagehandOptions.workbenchPatched) return;
   const original = prototype.stagehandOptions;
   const patched = async function stagehandOptions(...args) {
-    const options = await original.apply(this, args);
+    const options = { ...(await original.apply(this, args)), selfHeal: false };
     const [target] = args;
     if (target?.kind === "managed-local" && options?.env === "LOCAL") {
       if (userDataDir) fs.mkdirSync(userDataDir, { recursive: true });

@@ -43,7 +43,7 @@ export const BROWSE_COMMAND_SPECS: readonly WorkbenchBrowseCommandSpec[] = [
   { flags: browser(), key: "press", maxArgs: null, usage: "press <name|chord>" },
   { flags: browser(), key: "refs", maxArgs: 0, usage: "refs" },
   { flags: browser("wait"), key: "reload", maxArgs: 0, usage: "reload [--wait <state>]" },
-  { flags: browser("animations", "full-page", "type"), key: "screenshot", maxArgs: 0, usage: "screenshot [--full-page] [--type <png|jpeg>]" },
+  { flags: browser("animations", "full-page", "type"), key: "screenshot", maxArgs: 1, usage: "screenshot [selector|@ref] [--full-page] [--type <png|jpeg>]" },
   { flags: browser(), key: "select", maxArgs: 2, usage: "select <selector|@ref> <value>" },
   { flags: browser("compact", "filter", "max-depth"), key: "snapshot", maxArgs: 1, usage: "snapshot [selector|@ref] [--compact] [--filter <text|\"/regex/\">] [--max-depth <n>]" },
   { flags: sessionFlags, key: "status", maxArgs: 0, usage: "status" },
@@ -52,7 +52,7 @@ export const BROWSE_COMMAND_SPECS: readonly WorkbenchBrowseCommandSpec[] = [
   { flags: browser(), key: "throttle network", maxArgs: 1, usage: "throttle network <slow-3g|fast-3g|offline|clear>" },
   { flags: browser("fling", "interval", "repeat", "speed"), key: "touch scroll", maxArgs: 4, usage: "touch scroll <x> <y> <dx> <dy> [--speed <n>] [--repeat <n>] [--interval <ms>] [--fling]" },
   { flags: browser(), key: "trace", maxArgs: 1, usage: "trace <start|stop>" },
-  { flags: browser("delay", "mistakes"), key: "type", maxArgs: null, usage: "type <text> [--delay <ms>] [--mistakes]" },
+  { flags: browser("delay", "mistakes"), key: "type", maxArgs: 2, usage: "type [selector|@ref] <text> [--delay <ms>] [--mistakes]" },
   { flags: browser("scale"), key: "viewport", maxArgs: 2, usage: "viewport <width> <height> [--scale <n>]" },
   { flags: browser("state"), key: "wait", maxArgs: 3, usage: "wait <timeout|selector|load> ..." },
 ] as const;

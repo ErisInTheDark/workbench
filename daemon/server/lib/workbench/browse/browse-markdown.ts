@@ -289,6 +289,7 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
     case "screenshot":
       return {
         ...createBrowserActionBase(context.options, tokens),
+        ...(args[0] ? createTargetField(args[0]) : {}),
         action: "screenshot",
         animations: readChoiceFlag(tokens, ["animations"], BROWSE_MARKDOWN_SCREENSHOT_ANIMATIONS, "screenshot animations", context.lineNumber) as "allow" | "disabled" | null,
         fullPage: hasFlag(tokens, ["full-page"]),
@@ -339,10 +340,11 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
     case "type":
       return {
         ...createBrowserActionBase(context.options, tokens),
+        ...(args.length > 1 ? createTargetField(requireArgument(args, 0, "type requires a selector or ref before its text.", context.lineNumber)) : {}),
         action: "type",
         delayMs: readPositiveIntegerFlag(tokens, ["delay"], "delay", context.lineNumber),
         mistakes: hasFlag(tokens, ["mistakes"]),
-        text: requireRest(args, 0, "type requires text.", context.lineNumber),
+        text: requireToken(args, args.length - 1, "type requires text.", context.lineNumber),
       };
     case "viewport":
       return {
