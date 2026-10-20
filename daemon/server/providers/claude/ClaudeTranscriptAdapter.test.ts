@@ -139,6 +139,56 @@ test("commentary tool input streams live as decoded text and settles in place to
   assert.deepEqual([bodies.at(-1)?.item?.type, bodies.at(-1)?.item?.phase, bodies.at(-1)?.item?.text], ["agentMessage", "commentary", exact]);
 });
 
+const workbenchCallStream = async (adapter: ClaudeTranscriptAdapter, id: string) => {
+  await adapter.recordStreamEvent(threadId, turnId, stream({ type: "message_start", message: { id: "msg_1" } }));
+  await adapter.recordStreamEvent(threadId, turnId, stream({
+    type: "content_block_start", index: 0, content_block: { type: "tool_use", id, name: "mcp__wb__git_plan_start", input: {} },
+  }));
+  await adapter.recordStreamEvent(threadId, turnId, stream({
+    type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{\"inherit\":true}" },
+  }));
+  await adapter.recordStreamEvent(threadId, turnId, stream({ type: "content_block_stop", index: 0 }));
+};
+const callOrder = (items: () => Recorded[]) => [...new Set(items().map(record => record.publicItemId))];
+
+test("a Workbench call keeps its authored place above commentary that starts streaming before its request lands", async () => {
+  const { adapter, items } = fixture();
+  await workbenchCallStream(adapter, "start");
+  await adapter.recordStreamEvent(threadId, turnId, commentaryStart("say"));
+  const call = await adapter.startToolTranscript({ threadId, turnId, tool: "git_plan_start", arguments: { inherit: true }, toolUseId: "start" });
+  await adapter.finishToolTranscript(call, { content: [{ type: "text", text: "ok" }] });
+  assert.deepEqual(callOrder(items), ["item:tool:start", "item:tool:say"]);
+  const last = items().filter(record => record.publicItemId === "item:tool:start").at(-1);
+  assert.deepEqual([last?.item?.status, last?.lifecycle], ["completed", "completed"]);
+});
+
+test("a request that lands before the stream reserves its call is never overwritten by that late reservation", async () => {
+  const { adapter, items } = fixture();
+  const call = await adapter.startToolTranscript({ threadId, turnId, tool: "git_plan_start", arguments: { inherit: true }, toolUseId: "start" });
+  await adapter.finishToolTranscript(call, { content: [{ type: "text", text: "ok" }] });
+  await workbenchCallStream(adapter, "start");
+  await adapter.recordAssistant(threadId, turnId, assistant([{ type: "tool_use", id: "start", name: "mcp__wb__git_plan_start", input: { inherit: true } }]));
+  assert.equal(items().at(-1)?.item?.status, "completed");
+});
+
+test("a Workbench call that never reached its tool settles from its result, and one with no result fails with the turn", async () => {
+  const previous = fixture();
+  await previous.adapter.startTurn({ threadId, sessionId: "session", cwd: "C:/repo", clientMessageId: turnId, content: [] });
+  await previous.adapter.recordAssistant(threadId, turnId, assistant([
+    { type: "tool_use", id: "invalid", name: "mcp__wb__git_arc_start", input: { ref: 1 } },
+    { type: "tool_use", id: "lost", name: "mcp__wb__git_arc_status", input: {} },
+  ]));
+  await previous.adapter.recordNativeToolResults(threadId, toolResult("invalid", true));
+  const status = (items: () => Recorded[], id: string) => items().filter(record => record.publicItemId === `item:tool:${id}`).at(-1)?.item?.status;
+  assert.equal(status(previous.items, "invalid"), "failed");
+  assert.equal(status(previous.items, "lost"), "inProgress");
+  // The reservation outlives a bridge reload, so the next generation still settles it.
+  const next = fixture();
+  next.adapter.restoreTurn(previous.adapter.captureTurn(turnId)!);
+  await next.adapter.settleTurn(turnId, "completed");
+  assert.equal(status(next.items, "lost"), "failed");
+});
+
 test("commentary cut off across a bridge reload settles with the text that streamed", async () => {
   const previous = fixture();
   await previous.adapter.startTurn({ threadId, sessionId: "session", cwd: "C:/repo", clientMessageId: turnId, content: [] });

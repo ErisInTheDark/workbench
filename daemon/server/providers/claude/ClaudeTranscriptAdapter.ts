@@ -2,7 +2,8 @@
  * Exports:
  * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
  * - ClaudeTranscriptTurnState: plain in-flight transcript state of one live turn, handed across bridge reloads.
- * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage to canonical history, recover a settled turn from its session log, expose which turns this daemon still owns, and report compaction start and end to Workbench.
+ * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, wb call
+ *   (placed where the model wrote it, its request recording over that place), native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage to canonical history, recover a settled turn from its session log, expose which turns this daemon still owns, and report compaction start and end to Workbench.
  */
 import path from "node:path";
 import type {
@@ -51,16 +52,49 @@ interface TurnStream {
   threadId: WorkbenchThreadId;
   messageId: string | null;
   open: Map<number, StreamedBlock>;
+  /** Not carried across bridge reloads: the assistant message reserves any call cut off mid-block. */
+  tools: Map<number, StreamedWorkbenchCall>;
   streamedMessageIds: Set<string>;
 }
 
 type NativeToolCall = { turnId: WorkbenchTurnId; itemId: string; tool: string; arguments: ProviderToolMetadata };
+/** A wb tool_use whose input is still streaming; on stop it reserves the call's place. */
+interface StreamedWorkbenchCall { id: string; name: string; partialJson: string }
+/**
+ * A wb call's place in the transcript, by tool_use id. `reserved`: the model's block holds its place; `claimed`: its
+ * request reached Workbench (or its result settled it), which now owns its body. `written` orders a start after a
+ * reservation already in flight.
+ */
+type WorkbenchCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
+type WorkbenchCallState = {
+  threadId: WorkbenchThreadId; turnId: WorkbenchTurnId; item: WorkbenchCallItem; phase: "reserved" | "claimed"; written: Promise<unknown>;
+};
+
+const WORKBENCH_TOOL_PREFIX = "mcp__wb__";
+
+/** A wb call as the transcript holds it while it runs, named by its tool_use block as live and recovered calls share. */
+function workbenchCallItem(reference: string, tool: string, args: WorkbenchCallItem["arguments"]): WorkbenchCallItem {
+  return {
+    type: "mcpToolCall", id: reference, server: "wb", tool,
+    arguments: args, status: "inProgress", toolCallGroupId: reference,
+    appContext: null, pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null,
+  };
+}
+
+function parseToolInput(json: string): ProviderToolMetadata {
+  try {
+    return ProviderToolMetadataSchema.parse(json ? JSON.parse(json) : {});
+  } catch {
+    return {};
+  }
+}
 
 export interface ClaudeTranscriptTurnState {
   scope: TurnScope;
   stream: { threadId: WorkbenchThreadId; messageId: string | null; open: [number, StreamedBlock][]; streamedMessageIds: string[] } | null;
   nativeTools: [string, NativeToolCall][];
   denials: string[];
+  workbenchCalls?: [string, Omit<WorkbenchCallState, "written">][];
 }
 
 type ClaudeUsage = SDKAssistantMessage["message"]["usage"];
@@ -127,6 +161,7 @@ export default class ClaudeTranscriptAdapter {
   private readonly nativeTools = new Map<string, NativeToolCall>();
   /** Claim denials arrive from the in-process hook, independently of when the tool_use message is consumed. */
   private readonly nativeToolDenials = new Map<string, WorkbenchTurnId>();
+  private readonly workbenchCalls = new Map<string, WorkbenchCallState>();
 
   constructor(private readonly owners: {
     threads: Pick<WorkbenchThreadIdentityController, "observe" | "observeTurn">;
@@ -149,6 +184,8 @@ export default class ClaudeTranscriptAdapter {
       } : null,
       nativeTools: [...this.nativeTools].filter(([, call]) => call.turnId === turnId).map(([id, call]) => [id, { ...call }]),
       denials: [...this.nativeToolDenials].filter(([, owner]) => owner === turnId).map(([id]) => id),
+      workbenchCalls: [...this.workbenchCalls].filter(([, call]) => call.turnId === turnId)
+        .map(([id, { written: _written, ...call }]) => [id, call]),
     };
   }
 
@@ -160,11 +197,13 @@ export default class ClaudeTranscriptAdapter {
       this.streams.set(turnId, {
         threadId: state.stream.threadId, messageId: state.stream.messageId,
         open: new Map(state.stream.open.map(([index, block]) => [index, { ...block }])),
+        tools: new Map(),
         streamedMessageIds: new Set(state.stream.streamedMessageIds),
       });
     }
     for (const [id, call] of state.nativeTools) this.nativeTools.set(id, { ...call });
     for (const id of state.denials) this.nativeToolDenials.set(id, turnId);
+    for (const [id, call] of state.workbenchCalls ?? []) this.workbenchCalls.set(id, { ...call, written: Promise.resolve() });
   }
 
   async create(sessionId: string, cwd: string, project: { id: string; rootPath: string; launchId?: string }) {
@@ -257,7 +296,7 @@ export default class ClaudeTranscriptAdapter {
   async recordStreamEvent(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, message: SDKPartialAssistantMessage) {
     if (message.parent_tool_use_id) return;
     const stream = this.streams.get(turnId)
-      ?? { threadId, messageId: null, open: new Map(), streamedMessageIds: new Set<string>() };
+      ?? { threadId, messageId: null, open: new Map(), tools: new Map(), streamedMessageIds: new Set<string>() };
     this.streams.set(turnId, stream);
     const event = message.event;
     if (event.type === "message_start") {
@@ -267,6 +306,10 @@ export default class ClaudeTranscriptAdapter {
     if (!stream.messageId) return;
     if (event.type === "content_block_start") {
       const block = event.content_block;
+      if (block.type === "tool_use" && block.name.startsWith(WORKBENCH_TOOL_PREFIX)) {
+        stream.tools.set(event.index, { id: block.id, name: block.name, partialJson: "" });
+        return;
+      }
       const opened = block.type === "text" ? { kind: "text" as const, text: block.text, reference: `assistant:${stream.messageId}:${event.index}` }
         : block.type === "thinking" ? { kind: "thinking" as const, text: block.thinking, reference: `assistant:${stream.messageId}:${event.index}` }
         : block.type === "tool_use" && block.name === CLAUDE_COMMENTARY_TOOL_NAME
@@ -276,6 +319,11 @@ export default class ClaudeTranscriptAdapter {
       const itemId = await this.recordItem(threadId, turnId, opened.reference, blockItem(opened.kind, opened.text), Date.now(), "provider", "streaming");
       stream.open.set(event.index, { ...opened, itemId, ...(opened.kind === "commentary" ? { partialJson: "" } : {}) });
     } else if (event.type === "content_block_delta") {
+      const tool = stream.tools.get(event.index);
+      if (tool) {
+        if (event.delta.type === "input_json_delta") tool.partialJson += event.delta.partial_json;
+        return;
+      }
       const block = stream.open.get(event.index);
       if (!block) return;
       let text = "";
@@ -295,6 +343,13 @@ export default class ClaudeTranscriptAdapter {
         index: block.kind === "thinking" ? 0 : null, text, append: true,
       });
     } else if (event.type === "content_block_stop") {
+      const tool = stream.tools.get(event.index);
+      if (tool) {
+        stream.tools.delete(event.index);
+        // Complete input, and stream order: the call takes its place before any block the model wrote after it.
+        await this.reserveWorkbenchCall(threadId, turnId, tool.id, tool.name, parseToolInput(tool.partialJson));
+        return;
+      }
       const block = stream.open.get(event.index);
       if (!block) return;
       stream.open.delete(event.index);
@@ -314,7 +369,9 @@ export default class ClaudeTranscriptAdapter {
         // The parsed input is the exact authored text; it settles any streamed copy under the same reference.
         const text = record(block.input)?.text;
         if (typeof text === "string") await this.recordItem(threadId, turnId, `tool:${block.id}`, blockItem("commentary", text));
-      } else if (block.type === "tool_use" && !block.name.startsWith("mcp__wb__")) {
+      } else if (block.type === "tool_use" && block.name.startsWith(WORKBENCH_TOOL_PREFIX)) {
+        await this.reserveWorkbenchCall(threadId, turnId, block.id, block.name, ProviderToolMetadataSchema.parse(block.input));
+      } else if (block.type === "tool_use") {
         const itemId = await this.recordItem(threadId, turnId, `tool:${block.id}`, {
           type: "dynamicToolCall", id: block.id, namespace: "claude", tool: block.name,
           arguments: ProviderToolMetadataSchema.parse(block.input), status: "inProgress",
@@ -328,6 +385,28 @@ export default class ClaudeTranscriptAdapter {
     }
   }
 
+  /** Hold a wb call's place where the model wrote it; its request, once it lands, records over this in place. */
+  private async reserveWorkbenchCall(
+    threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, toolUseId: string, name: string, args: ProviderToolMetadata,
+  ) {
+    if (this.workbenchCalls.has(toolUseId)) return;
+    const item = workbenchCallItem(`tool:${toolUseId}`, name.slice(WORKBENCH_TOOL_PREFIX.length), args);
+    const written = this.recordItem(threadId, turnId, `tool:${toolUseId}`, item);
+    this.workbenchCalls.set(toolUseId, { threadId, turnId, item, phase: "reserved", written });
+    await written;
+  }
+
+  /** A reserved call whose request never reached its tool (rejected input, an unobserved listing) ends with its result. */
+  private async settleReservedWorkbenchCall(toolUseId: string, status: "completed" | "failed", text: string) {
+    const call = this.workbenchCalls.get(toolUseId);
+    if (call?.phase !== "reserved") return;
+    call.phase = "claimed";
+    await call.written;
+    await this.recordItem(call.threadId, call.turnId, `tool:${toolUseId}`, {
+      ...call.item, status, result: { content: text ? [{ type: "text", text }] : [], structuredContent: null, _meta: null },
+    });
+  }
+
   /** Mark a native file call Workbench denied for missing claims; its errored result carries the marker. */
   recordNativeToolDenial(turnId: WorkbenchTurnId, toolUseId: string) {
     this.nativeToolDenials.set(toolUseId, turnId);
@@ -337,10 +416,11 @@ export default class ClaudeTranscriptAdapter {
     if (!Array.isArray(message.message.content)) return;
     for (const block of message.message.content) {
       if (block.type !== "tool_result") continue;
-      const pending = this.nativeTools.get(block.tool_use_id);
-      if (!pending) continue;
       const text = typeof block.content === "string" ? block.content
         : Array.isArray(block.content) ? block.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n") : "";
+      await this.settleReservedWorkbenchCall(block.tool_use_id, block.is_error ? "failed" : "completed", text);
+      const pending = this.nativeTools.get(block.tool_use_id);
+      if (!pending) continue;
       const denied = this.nativeToolDenials.delete(block.tool_use_id);
       const fileChange = block.is_error ? null : claudeFileChange(pending.tool, pending.arguments, message.tool_use_result);
       const metadata: ClaudeFileChangeMetadata = {
@@ -424,6 +504,12 @@ export default class ClaudeTranscriptAdapter {
       await this.recordItem(scope.threadId, turnId, block.reference, blockItem(block.kind, block.text));
     }
     this.streams.delete(turnId);
+    // A call the model wrote that neither ran nor got a result ended with the turn.
+    for (const [toolUseId, call] of this.workbenchCalls) {
+      if (call.turnId !== turnId) continue;
+      if (call.phase === "reserved") await this.settleReservedWorkbenchCall(toolUseId, "failed", "");
+      this.workbenchCalls.delete(toolUseId);
+    }
     const endedAt = Date.now();
     await this.owners.transcript.record([{
       kind: "turn", ...scope, harnessId: "claude", state, endedAt,
@@ -469,18 +555,27 @@ export default class ClaudeTranscriptAdapter {
     }], { source: "workbench" });
   }
 
+  /**
+   * A request naming its tool_use takes over the place that block reserved, or reserves it now; one without a name
+   * lands where it arrives.
+   */
   async startToolTranscript(input: {
     threadId: WorkbenchThreadId; turnId: WorkbenchTurnId; tool: string;
     arguments: WorkbenchToolTranscriptReference["arguments"];
+    toolUseId?: string | null;
   }): Promise<WorkbenchToolTranscriptReference> {
+    const { toolUseId, ...reference } = input;
     const startedAt = Date.now();
-    const sourceId = `mcp:${crypto.randomUUID()}`;
-    const itemId = await this.recordItem(input.threadId, input.turnId, sourceId, {
-      type: "mcpToolCall", id: sourceId, server: "wb", tool: input.tool,
-      arguments: input.arguments, status: "inProgress", toolCallGroupId: sourceId,
-      appContext: null, pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null,
-    }, startedAt, "workbench");
-    return { ...input, itemId, sourceId, parentId: sourceId, startedAt };
+    const sourceId = toolUseId ? `tool:${toolUseId}` : `mcp:${crypto.randomUUID()}`;
+    const item = workbenchCallItem(sourceId, input.tool, input.arguments);
+    const reserved = toolUseId ? this.workbenchCalls.get(toolUseId) : undefined;
+    const written = (async () => {
+      await reserved?.written.catch(() => undefined);
+      return this.recordItem(input.threadId, input.turnId, sourceId, item, startedAt, "workbench");
+    })();
+    if (toolUseId) this.workbenchCalls.set(toolUseId, { threadId: input.threadId, turnId: input.turnId, item, phase: "claimed", written });
+    const itemId = await written;
+    return { ...reference, itemId, sourceId, parentId: sourceId, startedAt };
   }
 
   /**
@@ -547,14 +642,10 @@ export default class ClaudeTranscriptAdapter {
             if (typeof text === "string") entries.set(reference, { observedAt: occurredAt, item: blockItem("commentary", text) });
             continue;
           }
-          const mcp = block.name.startsWith("mcp__wb__");
+          const mcp = block.name.startsWith(WORKBENCH_TOOL_PREFIX);
           const args = ProviderToolMetadataSchema.parse(block.input ?? {});
           tools.set(block.id, { reference, mcp });
-          entries.set(reference, { observedAt: occurredAt, item: mcp ? {
-            type: "mcpToolCall", id: reference, server: "wb", tool: block.name.slice("mcp__wb__".length),
-            arguments: args, status: "inProgress", toolCallGroupId: reference,
-            appContext: null, pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null,
-          } : {
+          entries.set(reference, { observedAt: occurredAt, item: mcp ? workbenchCallItem(reference, block.name.slice(WORKBENCH_TOOL_PREFIX.length), args) : {
             type: "dynamicToolCall", id: block.id, namespace: "claude", tool: block.name,
             arguments: args, status: "inProgress", contentItems: null, success: null, durationMs: null,
           } });

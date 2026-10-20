@@ -1,11 +1,15 @@
 /*
  * Exports:
- * - default ClaudeToolsController: resolve server-owned Claude MCP scopes, say where requests name their tool_use, and prepare admitted commands;
- *   Workbench hosts the shell tool and may run marked shells in parallel.
+ * - default ClaudeToolsController: resolve server-owned Claude MCP scopes, say where requests name their tool_use (which
+ *   also places each call's transcript item), and prepare admitted commands; Workbench hosts the shell tool and may run
+ *   marked shells in parallel.
  */
 import type { WorkbenchProviderTools } from "../../provider-execution";
 import type ClaudeThreadOperations from "./ClaudeThreadOperations";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
+
+/** The request `_meta` key under which Claude names each MCP call's tool_use. */
+const CLAUDE_TOOL_USE_ID_META = "claudecode/toolUseId";
 
 export default class ClaudeToolsController implements WorkbenchProviderTools {
   readonly prepareExecution: NonNullable<WorkbenchProviderTools["prepareExecution"]>;
@@ -21,9 +25,12 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
       start: async (input, signal, context) => {
         signal.throwIfAborted();
         const runtime = this.scope(context);
+        const toolUseId = input.metadata[CLAUDE_TOOL_USE_ID_META];
         return options.transcript.startToolTranscript({
           threadId: runtime.threadId, turnId: runtime.turnId,
           tool: input.tool, arguments: input.arguments,
+          // The call takes the place its tool_use block holds, so it stays where the model wrote it.
+          toolUseId: typeof toolUseId === "string" && toolUseId ? toolUseId : null,
         });
       },
       finish: (reference, result) => options.transcript.finishToolTranscript(reference, result),
@@ -48,7 +55,7 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
       shellDescription: "Run a shell command in the managed Workbench sandbox, or request Workbench approval for one outside-sandbox command.",
       shellEscalation: true,
       // Claude names each MCP request's tool_use; the session host declares the same ids as its batches.
-      toolUseIdMeta: "claudecode/toolUseId",
+      toolUseIdMeta: CLAUDE_TOOL_USE_ID_META,
     };
   }
 
