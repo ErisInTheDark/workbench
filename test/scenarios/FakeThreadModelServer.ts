@@ -19,6 +19,8 @@ export type FakeThreadAction = {
   hold?: boolean;
   tool?: { nameSuffix: string; arguments: Record<string, unknown> }
     | { nameSuffix: string; input: string };
+  /** Text the newest message of the request this action answers must carry, such as hidden context the previous step earned. */
+  requiredPromptText?: readonly string[];
 };
 
 /** Responses, chat completions, Anthropic Messages, and Gemini streamGenerateContent respectively. */
@@ -239,13 +241,14 @@ export default class FakeThreadModelServer {
       }
       this.nextClaudeImages.shift();
     }
+    const missingFrom = (source: unknown, expected: readonly string[]) => {
+      const sourceText = JSON.stringify(source ?? null);
+      return expected.filter(text => !sourceText.includes(JSON.stringify(text).slice(1, -1))).map(text => text.slice(0, 80)).join(", ");
+    };
     const expected = this.nextPromptText[0];
     if (expected) {
-      const requestText = JSON.stringify(body);
-      const missing = expected.filter(text => !requestText.includes(JSON.stringify(text).slice(1, -1)));
-      if (missing.length) {
-        throw new Error(`Hidden Workbench context missing from next model request: ${missing.map(text => text.slice(0, 80)).join(", ")}`);
-      }
+      const missing = missingFrom(body, expected);
+      if (missing) throw new Error(`Hidden Workbench context missing from next model request: ${missing}`);
       this.nextPromptText.shift();
     }
     const action = this.actions[0];
@@ -253,6 +256,8 @@ export default class FakeThreadModelServer {
       const system = JSON.stringify(body.messages?.[0] ?? body.system ?? body.systemInstruction ?? "").slice(0, 160);
       throw new Error(`Unexpected fake model request on ${provider} (tools: ${body.tools?.length ?? 0}, system: ${system}).`);
     }
+    const missingRequired = missingFrom(body.messages?.at(-1) ?? body.input?.at(-1), action.requiredPromptText ?? []);
+    if (missingRequired) throw new Error(`Scripted fake model step missing required prompt text: ${missingRequired}`);
     if (action.hold && (action.reasoning === undefined || action.tool || action.text !== undefined || provider === "codex")) {
       throw new Error("A held fake response streams reasoning only, on a chat, Anthropic, or Gemini wire.");
     }

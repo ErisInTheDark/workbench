@@ -38,6 +38,7 @@ import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentit
 import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import { createClaudeSessionHooks } from "./claude-session-hooks";
+import ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import { claudeEnvironment } from "./claude-process-options";
 import {
     appendClaudePrompt, claudeImageBlock, claudePromptContent, prefixClaudePrompt, type ClaudePromptContent,
@@ -420,9 +421,11 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
     const { sessions } = this.options;
     let session: Awaited<ReturnType<ClaudeSessionHost["launch"]>>;
+    const nudge = new ClaudeCommentaryNudge();
     try {
       session = await sessions.launch({
         scope, captureStderr: Boolean(fakeEndpoint),
+        observe: message => nudge.observe(message),
         options: viewEnv => ({
           cwd: binding.nativeLocation,
           pathToClaudeCodeExecutable: executable,
@@ -443,10 +446,10 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           ],
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
-          // Hooks still run under bypassPermissions; they inject compact recovery and gate edits with shared claim policy.
-          // They outlive this bridge generation, so claim collaborators are reached through the host.
+          // Hooks still run under bypassPermissions; they inject compact recovery, hint after plain text, and gate edits
+          // with shared claim policy. They outlive this bridge generation, so claim collaborators are reached through the host.
           hooks: createClaudeSessionHooks({
-            cwd: binding.nativeLocation,
+            cwd: binding.nativeLocation, nudge,
             check: paths => sessions.call(handlers => handlers.checkFileClaims({
               cwd: binding.nativeLocation, threadId: identity.threadId, paths,
             })),

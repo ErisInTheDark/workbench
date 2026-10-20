@@ -63,7 +63,7 @@ function fixture(
   const liveUsage: Array<{ input: number | null; window: number | null }> = [];
   const session = new ClaudeProcessSession("scope", query as never, queue, {
     exit: async () => undefined, stderr: () => "", release: async () => undefined,
-  });
+  }, () => undefined);
   let turn!: ClaudeLiveTurn;
   const collaborators: ClaudeLiveTurnCollaborators = {
     session,

@@ -7,6 +7,8 @@
  * - fakeOpenCodeTool: script a Workbench tool through OpenCode's execute tool.
  * - createProviderBoundaryJourney: build one ordered behavioural journey for every real provider.
  */
+import { WORKBENCH_TURN_END_MARKER } from "../../shared/workbench/thread/thread-recovery-message";
+import { CLAUDE_COMMENTARY_HINT } from "../../daemon/server/providers/claude/ClaudeCommentaryNudge";
 import type { FakeThreadAction } from "./FakeThreadModelServer";
 
 export const PROVIDER_SEARCH_PROOF = "workbench-provider-search-proof";
@@ -93,12 +95,19 @@ export function createProviderBoundaryJourney(
           command: `node -e "require('fs').writeFileSync('${shellProofFile}-approved','${finalProof}')"`,
           outside_sandbox: true,
         })]),
-        call("task_get", {}),
-        call("rg", { args: ["-n", PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE] }),
+        // Claude's plain text earns a hint after its tool batch and at a prose stop, which continues the turn once.
+        provider === "claude" ? { ...call("task_get", {}), text: "Checking the task.", bare: true } : call("task_get", {}),
+        {
+          ...call("rg", { args: ["-n", PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE] }),
+          ...(provider === "claude" ? { requiredPromptText: [CLAUDE_COMMENTARY_HINT] } : {}),
+        },
         call("shell", { command: `node -e "require('fs').writeFileSync('${shellProofFile}','${finalProof}')"` }),
         call("task_completed", {}, provider !== "codex" ? `${finalProof} ${prefixProof} ${title}` : undefined),
         call("shell", { command: holdCommand(completionProof) }),
-        { text: provider === "codex" ? `${finalProof} ${prefixProof} ${title}` : provider === "claude" ? "Done." : "" },
+        ...(provider === "claude" ? [
+          { text: "Done.", bare: true },
+          { text: WORKBENCH_TURN_END_MARKER, bare: true, requiredPromptText: [CLAUDE_COMMENTARY_HINT] },
+        ] : [{ text: provider === "codex" ? `${finalProof} ${prefixProof} ${title}` : "" }]),
       ],
     },
     active: (prefixProof: string, activeProof: string) => [

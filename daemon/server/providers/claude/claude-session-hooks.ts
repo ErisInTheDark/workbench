@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - ClaudeFileClaimCheck: shared claim policy bound to one Claude thread.
- * - createClaudeSessionHooks: inject compact recovery context after Claude Code's own compaction and deny native edits whose path no active claim covers or a pending proposal holds.
+ * - createClaudeSessionHooks: inject compact recovery context after Claude Code's own compaction, hint after plain assistant text, and deny native edits whose path no active claim covers or a pending proposal holds.
  */
 import path from "node:path";
 import type { HookCallbackMatcher, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { describePendingProposalDenial, type WorkbenchFileClaimCheckResult } from "../../lib/workbench/file-claim-check";
+import type ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import { CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
 
 export type ClaudeFileClaimCheck = (paths: string[]) => Promise<WorkbenchFileClaimCheckResult>;
@@ -20,8 +21,24 @@ export function createClaudeSessionHooks(options: {
   cwd: string;
   check: ClaudeFileClaimCheck;
   onDenied(toolUseId: string): void;
-}): { PreToolUse: HookCallbackMatcher[]; SessionStart: HookCallbackMatcher[] } {
+  nudge: ClaudeCommentaryNudge;
+}): Record<"PreToolUse" | "SessionStart" | "PostToolBatch" | "Stop", HookCallbackMatcher[]> {
+  const { nudge } = options;
   return {
+    PostToolBatch: [{
+      hooks: [async input => {
+        if (input.hook_event_name !== "PostToolBatch") return {};
+        const hint = nudge.afterToolBatch();
+        return hint ? { hookSpecificOutput: { hookEventName: "PostToolBatch", additionalContext: hint } } : {};
+      }],
+    }],
+    Stop: [{
+      hooks: [async input => {
+        if (input.hook_event_name !== "Stop") return {};
+        const hint = nudge.beforeStop(input.last_assistant_message);
+        return hint ? { hookSpecificOutput: { hookEventName: "Stop", additionalContext: hint } } : {};
+      }],
+    }],
     SessionStart: [{
       matcher: "compact",
       hooks: [async input => {

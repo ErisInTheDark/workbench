@@ -1,7 +1,9 @@
-/* No production exports. Tests protect compact recall directive injection and the Claude Edit/Write claim gate. */
+/* No production exports. Tests protect compact recall directive injection, commentary hint delivery, and the Claude Edit/Write claim gate. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import ClaudeCommentaryNudge, { CLAUDE_COMMENTARY_HINT } from "./ClaudeCommentaryNudge";
 import { CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
 import { createClaudeSessionHooks, type ClaudeFileClaimCheck } from "./claude-session-hooks";
 
@@ -11,7 +13,7 @@ function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit") {
   const denied: string[] = [];
   const checked: string[][] = [];
   const hooks = createClaudeSessionHooks({
-    cwd, onDenied: id => denied.push(id),
+    cwd, onDenied: id => denied.push(id), nudge: new ClaudeCommentaryNudge(),
     check: async paths => { checked.push(paths); return check(paths); },
   });
   const hook = hooks.PreToolUse[0]!.hooks[0]!;
@@ -25,9 +27,34 @@ function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit") {
 const decision = (result: unknown) =>
   (result as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision;
 
+test("plain assistant text reaches Claude as hint context after its tool batch and at a prose stop", async () => {
+  const nudge = new ClaudeCommentaryNudge();
+  const hooks = createClaudeSessionHooks({
+    cwd, onDenied: () => undefined, nudge,
+    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
+  });
+  const base = { session_id: "session", transcript_path: "", cwd };
+  const context = (result: unknown) =>
+    (result as { hookSpecificOutput?: { hookEventName?: string; additionalContext?: string } }).hookSpecificOutput;
+  const batch = () => hooks.PostToolBatch[0]!.hooks[0]!(
+    { ...base, hook_event_name: "PostToolBatch", tool_calls: [] } as never, undefined, { signal: new AbortController().signal });
+  const stop = (text: string) => hooks.Stop[0]!.hooks[0]!(
+    { ...base, hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: text } as never,
+    undefined, { signal: new AbortController().signal });
+
+  assert.deepEqual(await batch(), {});
+  nudge.observe({
+    type: "assistant", parent_tool_use_id: null,
+    message: { content: [{ type: "text", text: "Checking." }, { type: "tool_use", id: "t", name: "Read", input: {} }] },
+  } as unknown as SDKMessage);
+  assert.deepEqual(context(await batch()), { hookEventName: "PostToolBatch", additionalContext: CLAUDE_COMMENTARY_HINT });
+  assert.deepEqual(await stop("<wb:end />"), {});
+  assert.deepEqual(context(await stop("Done.")), { hookEventName: "Stop", additionalContext: CLAUDE_COMMENTARY_HINT });
+});
+
 test("only native compaction injects the recall directive", async () => {
   const hooks = createClaudeSessionHooks({
-    cwd, onDenied: () => undefined,
+    cwd, onDenied: () => undefined, nudge: new ClaudeCommentaryNudge(),
     check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
   });
   const hook = hooks.SessionStart[0]!.hooks[0]!;

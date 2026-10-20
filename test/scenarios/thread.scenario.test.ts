@@ -26,6 +26,7 @@ import {
   fakeCodexTool, fakeOpenCodeDirectTool, type ProviderBoundaryToolNames,
 } from "./provider-boundary-journey";
 import { OPENCODE_COMMENTARY_TOOL_NAME } from "../../daemon/server/providers/opencode/opencode-workbench-rpc";
+import { CLAUDE_COMMENTARY_TOOL_NAME } from "../../daemon/server/providers/claude/claude-commentary-tool";
 import { OPENCODE_COMMENTARY_HINT } from "../../daemon/server/providers/opencode/workbench-plugin/open-code-commentary-tool";
 
 const modelId = "opencode-go/muse-spark-1.3-contributor";
@@ -424,7 +425,8 @@ test("selected providers complete the shared thread boundary journey in one clon
     for (const provider of selectedProviders) {
       if (selectedSelection[provider] === "fake") {
         fakeModels[provider] = await FakeThreadModelServer.start(
-          provider === "opencode" ? { commentaryTool: OPENCODE_COMMENTARY_TOOL_NAME } : {});
+          provider === "opencode" ? { commentaryTool: OPENCODE_COMMENTARY_TOOL_NAME }
+            : provider === "claude" ? { commentaryTool: CLAUDE_COMMENTARY_TOOL_NAME } : {});
       }
     }
   } catch (error) {
@@ -871,6 +873,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     await journeyGate.release(completionProof);
     durableProjection = { success: true, data: await waitTurn(finalTurn) };
     console.log(`[${provider} live] final turn completed`);
+    assert.equal(fakeModel?.queuedActions ?? 0, 0, "The final turn must consume its whole script, including hinted continuations");
     const finalItems = durableProjection.data.turns.find(turn => turn.id === finalTurn)?.items ?? [];
     if (provider !== "codex") {
       const approvedShell = finalItems.find(item => item.type === "mcpToolCall"

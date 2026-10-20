@@ -84,6 +84,8 @@ export interface ClaudeSessionHandlers {
 export interface ClaudeSessionLaunch {
   scope: string;
   captureStderr: boolean;
+  /** Sees each output message as the SDK yields it, before buffering, so hooks that follow it see its effect. */
+  observe(message: SDKMessage): void;
   /** SDK options for this process; the host owns process spawning and stderr capture. */
   options(viewEnv: NodeJS.ProcessEnv | undefined): Omit<Options, "spawnClaudeCodeProcess" | "stderr">;
 }
@@ -100,6 +102,7 @@ export class ClaudeProcessSession implements ClaudeSession {
     private readonly sdkQuery: Query,
     private readonly queue: ClaudePromptQueue,
     private readonly runtime: { exit(): Promise<void>; stderr(): string; release(): Promise<void> },
+    private readonly observe: ClaudeSessionLaunch["observe"],
   ) {
     void this.pump();
   }
@@ -108,6 +111,7 @@ export class ClaudeProcessSession implements ClaudeSession {
   private async pump() {
     try {
       for await (const message of this.sdkQuery as AsyncIterable<SDKMessage>) {
+        this.observe(message);
         this.buffered.push(message);
         this.notify();
       }
@@ -230,7 +234,7 @@ export default class ClaudeSessionHost {
       await view?.dispose();
       throw error;
     }
-    return await this.start(input.scope, input.captureStderr, options, view);
+    return await this.start(input.scope, input.captureStderr, input.observe, options, view);
   }
 
   /**
@@ -240,6 +244,7 @@ export default class ClaudeSessionHost {
   private async start(
     scope: string,
     captureStderr: boolean,
+    observe: ClaudeSessionLaunch["observe"],
     sdkOptions: ReturnType<ClaudeSessionLaunch["options"]>,
     view: ClaudeConfigView | null,
   ) {
@@ -263,7 +268,7 @@ export default class ClaudeSessionHost {
           if (this.sessions.get(scope) === session) this.sessions.delete(scope);
           await view?.dispose();
         },
-      });
+      }, observe);
     } catch (error) {
       await view?.dispose();
       throw error;
