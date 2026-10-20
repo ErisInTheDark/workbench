@@ -9,7 +9,7 @@
  */
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { WorkbenchBrowseResultEntry, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -97,9 +97,13 @@ useTranscript.presentedText = function useTranscriptPresentedText({
     () => key ? controller?.getSnapshot(key) ?? canonicalText : canonicalText,
     [canonicalText, controller, key],
   );
+  // Streamed text grows the item in place, so re-renders see longer text; resubscribing on it would drop the field's
+  // reveal and snap to the whole text. The subscription follows the field identity and reads the latest text.
+  const canonicalTextRef = useRef(canonicalText);
+  useLayoutEffect(() => { canonicalTextRef.current = canonicalText; });
   const subscribe = useCallback((listener: () => void) => (
-    key && controller ? controller.subscribe(key, canonicalText, listener) : EMPTY_SUBSCRIBE(listener)
-  ), [canonicalText, controller, key]);
+    key && controller ? controller.subscribe(key, canonicalTextRef.current, listener) : EMPTY_SUBSCRIBE(listener)
+  ), [controller, key]);
   return useSyncExternalStore(subscribe, getSnapshot, () => canonicalText);
 };
 

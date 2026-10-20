@@ -69,7 +69,6 @@ export default class StandaloneThreadController {
           threadId: update.threadId, turnId: update.turnId, itemId: update.itemId, field: update.field, index: update.index,
         };
         this.text.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
-        if (!update.append) this.text.complete(key, canonicalText, { snap: true });
       },
     });
     this.#stops = [

@@ -167,6 +167,24 @@ test("long unbroken tokens reveal whole without stalling", () => {
   assert.equal(testHarness.controller.getSnapshot(field), text);
 });
 
+test("a whole-text restatement keeps revealing: unchanged text waits, longer text reveals only its tail", () => {
+  const testHarness = harness();
+  const field = key("json");
+  testHarness.controller.subscribe(field, "", () => undefined);
+  testHarness.controller.acceptDelta({ canonicalText: WORDS, delta: WORDS, key: field });
+  testHarness.play(100);
+  const revealed = () => testHarness.controller.getSnapshot(field)?.length;
+  const before = revealed();
+
+  // Providers close a streamed field by restating its whole text.
+  testHarness.controller.acceptDelta({ canonicalText: WORDS, delta: WORDS, key: field });
+  assert.equal(revealed(), before);
+  testHarness.controller.acceptDelta({ canonicalText: `${WORDS}tail`, delta: `${WORDS}tail`, key: field });
+  assert.equal(revealed(), before);
+  testHarness.drain();
+  assert.equal(testHarness.controller.getSnapshot(field), `${WORDS}tail`);
+});
+
 test("canonical mismatch and reduced motion fail closed to canonical text", () => {
   const mismatchHarness = harness();
   const field = key("json");

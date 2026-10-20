@@ -140,11 +140,14 @@ export default class ThreadTextPresentationController {
       this.#fields.set(identity, state);
       return;
     }
-    const appends = canonicalText === `${current.canonicalText}${delta}`;
+    // Canonical text decides what is new, so a provider restating the whole field adds only its unseen tail.
+    const appends = canonicalText.startsWith(current.canonicalText);
+    const addition = canonicalText.slice(current.canonicalText.length);
+    if (appends && !addition) return;
     if (!current.listeners.size) {
       if (current.fresh && appends && now - current.createdAt <= FRESH_FIELD_WINDOW_MS) {
         current.canonicalText = canonicalText;
-        current.pendingText += delta;
+        current.pendingText += addition;
         return;
       }
       Object.assign(current, settledState(canonicalText, now), { listeners: current.listeners });
@@ -156,7 +159,7 @@ export default class ThreadTextPresentationController {
     }
 
     current.canonicalText = canonicalText;
-    current.pendingText += delta;
+    current.pendingText += addition;
     if (current.pendingText.length > MAX_FIELD_PENDING_CHARACTERS) {
       this.#snap(identity, canonicalText);
       return;

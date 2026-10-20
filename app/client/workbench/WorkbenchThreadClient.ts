@@ -418,7 +418,6 @@ function WorkbenchThreadClient(
               source: { kind: "sqlite" as const, sourceKey: `${harness}:${update.threadId}` },
             };
             textPresentation.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
-            if (!update.append) textPresentation.complete(key, canonicalText, { snap: true });
           },
           messageContext: ({ workflowIds, instructionInjections, activatedSkillPaths }) => ({
             workbenchOrigin: readLocalWorkbenchOrigin(), instructionScope: "full", instructionInjections,
