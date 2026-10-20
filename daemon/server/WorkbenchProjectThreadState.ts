@@ -68,6 +68,10 @@ export default class WorkbenchProjectThreadState {
     return this.recordStore.entries;
   }
 
+  get entriesVersion() {
+    return this.recordStore.version;
+  }
+
   get newThreadProfile() {
     return this.draftStore.newThreadProfile;
   }

@@ -220,6 +220,15 @@ export type WorkbenchObservedLifecycleEvent =
   | { kind: "pendingInput"; questionnaire: WorkbenchDurableQuestionnaire | null; requestKey: string; turnId: WorkbenchTurnId | null };
 
 type ProjectState = WorkbenchProjectThreadState;
+interface NaturalOrder {
+  entriesVersion: number;
+  waitingVersion: number;
+  ordered: readonly WorkbenchThreadSidebarEntry[];
+  resolved?: {
+    displayOrder: ProjectState["displayOrder"];
+    value: ReturnType<typeof resolveWorkbenchThreadDisplayOrder<WorkbenchThreadSidebarEntry>>;
+  };
+}
 
 function entryKey(entry: WorkbenchThreadStateEntry | WorkbenchThreadSidebarEntry) {
   if (entry.entryKind === "draft") return getThreadDisplayDraftKey(entry.draft.draftId);
@@ -277,6 +286,10 @@ export default class WorkbenchThreadStateController {
   private readonly subscribers = new Set<(projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) => void>();
   private readonly projectSubscribers = new Set<(projectId: ProjectId) => void>();
   private readonly waitingByThreadKey = new Map<string, "subagents" | "other">();
+  /** Bumped with every `waitingByThreadKey` write; natural orders embed waiting flags. */
+  private waitingVersion = 0;
+  /** Entries are replaced, never mutated, so an order stays valid until the entries or waiting flags are written. */
+  private readonly naturalOrders = new WeakMap<ProjectState, NaturalOrder>();
   /** Process-wide serial chain: at most one commit-time backfill chunk reads Git at once. */
   private gitCommitTimeBackfill: Promise<void> = Promise.resolve();
   /** Observed threads whose untimed commits were already sent to Git this process. */
@@ -488,6 +501,7 @@ export default class WorkbenchThreadStateController {
     if (this.waitingByThreadKey.get(key) === waitingFor || (!waitingFor && !this.waitingByThreadKey.has(key))) return;
     if (waitingFor) this.waitingByThreadKey.set(key, waitingFor);
     else this.waitingByThreadKey.delete(key);
+    this.waitingVersion++;
     for (const [projectId, state] of this.projects) {
       if (state.entries.has(key)) this.publish(projectId, state);
     }
@@ -1415,6 +1429,7 @@ export default class WorkbenchThreadStateController {
     this.active = false;
     this.projectSubscribers.clear();
     this.waitingByThreadKey.clear();
+    this.waitingVersion++;
     for (const state of this.projects.values()) {
       state.generation += 1;
       state.abort?.abort();
@@ -1729,14 +1744,26 @@ export default class WorkbenchThreadStateController {
     };
   }
 
-  private naturallyOrderedEntries(state: ProjectState) {
+  private naturalOrder(state: ProjectState): NaturalOrder {
+    const cached = this.naturalOrders.get(state);
+    if (cached?.entriesVersion === state.entriesVersion && cached.waitingVersion === this.waitingVersion) return cached;
     const entries = [...state.entries.values()].flatMap((entry) => {
       const projected = projectWorkbenchThreadStateEntry(entry);
       if (!projected || projected.entryKind === "draft") return projected ? [projected] : [];
       const waitingFor = this.waitingByThreadKey.get(entryKey(projected));
       return [waitingFor ? { ...projected, waitingFor } : projected];
     });
-    return sortThreadSidebarEntries(entries).filter((entry) => getThreadSidebarGroup(entry) !== "hidden");
+    const order: NaturalOrder = {
+      entriesVersion: state.entriesVersion,
+      waitingVersion: this.waitingVersion,
+      ordered: sortThreadSidebarEntries(entries).filter((entry) => getThreadSidebarGroup(entry) !== "hidden"),
+    };
+    this.naturalOrders.set(state, order);
+    return order;
+  }
+
+  private naturallyOrderedEntries(state: ProjectState): readonly WorkbenchThreadSidebarEntry[] {
+    return this.naturalOrder(state).ordered;
   }
 
   private logStorageRepairs(projectId: string, entryId: string, repairedPaths: PropertyKey[][]) {
@@ -1764,8 +1791,11 @@ export default class WorkbenchThreadStateController {
     this.options.log?.(`Conformed stored home thread display order: repairedPaths=${paths || "none"}`);
   }
   private snapshot(projectId: ProjectId, state: ProjectState): WorkbenchThreadSidebarSnapshot {
-    const naturallyOrdered = this.naturallyOrderedEntries(state);
-    const resolved = resolveWorkbenchThreadDisplayOrder(naturallyOrdered, state.displayOrder);
+    const order = this.naturalOrder(state);
+    if (order.resolved?.displayOrder !== state.displayOrder) {
+      order.resolved = { displayOrder: state.displayOrder, value: resolveWorkbenchThreadDisplayOrder(order.ordered, state.displayOrder) };
+    }
+    const resolved = order.resolved.value;
     return {
       ...resolved,
       error: state.error,

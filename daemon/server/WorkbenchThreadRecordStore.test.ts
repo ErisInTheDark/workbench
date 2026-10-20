@@ -1,40 +1,33 @@
 /*
- * Exports: none. Tests protect canonical record membership and clone isolation.
+ * No production exports. Tests protect the record store's write version, which derived sidebar orders trust instead of rescanning entries.
  */
-
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "node:test";
 
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
-import { WorkbenchThreadDraftSchema } from "workbench-shared/workbench/thread/thread-state";
-import { projectWorkbenchThreadDraft } from "./WorkbenchThreadDraftStore";
-import WorkbenchThreadRecordStore from "./WorkbenchThreadRecordStore";
+import WorkbenchThreadRecordStore from "./WorkbenchThreadRecordStore.ts";
+import type { WorkbenchThreadStateEntry } from "./workbench-thread-state-record.ts";
 
-test("record store clones membership without sharing later mutations", () => {
-  const draft = WorkbenchThreadDraftSchema.parse({
-    attachments: [],
-    clientUpdatedAt: 1,
-    composerSettings: {
-      agentPath: null,
-      agentSource: null,
-      harness: "codex",
-      model: "",
-      reasoningEffort: null,
-      serviceTier: null,
-    },
-    createdAt: 1,
-    draftId: "eb83014c-5b6c-4bd0-963b-27c5641a0f93",
-    profileId: null,
-    projectId: ProjectIdSchema.parse("project"),
-    prompt: "draft",
-    updatedAt: 1,
-  });
-  const entry = projectWorkbenchThreadDraft(draft);
-  const store = new WorkbenchThreadRecordStore([["draft:key", entry]]);
-  const clone = store.clone();
+test("every effective entry write moves the version, and identical writes do not", () => {
+  const first = { entryKind: "thread", title: "first" } as unknown as WorkbenchThreadStateEntry;
+  const second = { entryKind: "thread", title: "second" } as unknown as WorkbenchThreadStateEntry;
+  const store = new WorkbenchThreadRecordStore([["a", first]]);
+  const seen = new Set([store.version]);
+  const expectMoved = (write: () => unknown) => {
+    write();
+    assert.equal(seen.has(store.version), false);
+    seen.add(store.version);
+  };
+  const expectStill = (write: () => unknown) => {
+    const before = store.version;
+    write();
+    assert.equal(store.version, before);
+  };
 
-  store.delete("draft:key");
-  assert.equal(store.get("draft:key"), undefined);
-  assert.equal(clone.get("draft:key"), entry);
-  assert.deepEqual([...clone.snapshot()], [["draft:key", entry]]);
+  expectStill(() => store.set("a", first));
+  expectMoved(() => store.set("a", second));
+  expectMoved(() => store.entries.set("b", first));
+  expectStill(() => store.entries.delete("missing"));
+  expectMoved(() => store.delete("b"));
+  expectMoved(() => store.entries.clear());
+  expectStill(() => store.entries.clear());
 });
