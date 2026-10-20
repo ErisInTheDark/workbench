@@ -38,6 +38,7 @@ import {
   parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
   type CommandShell,
   type ThreadCommandExecutionOutcome,
+  type WorkbenchSpecializedOperation,
   type WorkbenchThreadRecallOperation,
 } from "../../../workbench/thread/thread-command-matchers";
 import type { WorkbenchSubagentCommandTarget } from "../../../workbench/thread/command-matchers/workbench-cli";
@@ -524,6 +525,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
       if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) continue;
       if (route?.kind === "simple") { commands(item); continue; }
+      if (route?.kind === "specialized" && isRunStepMcpOperation(route.operation)) { commands(item); continue; }
     }
     if (item.type === "reasoning") {
       const visible = omitThreadReasoningStep(item, hidden.reasoningStep);
@@ -590,13 +592,31 @@ export type CommandSequenceRenderSegment =
   | { action: NonNullable<ReturnType<typeof getGitArcMatcherAction>>; item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "message" }
   /** A command its dedicated renderer draws, which no grouped summary could name. */
-  | { item: CommandItem; kind: "ownRow" }
+  | { claimedBy: string | null; item: CommandItem; kind: "ownRow" }
   | { item: CommandItem; kind: "subagent" }
   | { item: CommandSequenceItem; kind: "subagentQueueCheck" }
   | { item: CommandItem; kind: "threadContext"; operation: WorkbenchThreadRecallOperation }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
   | { item: CommandItem; kind: "threadStatus"; status: "blocked" | "completed" }
   | { item: CommandItem; kind: "threadTitle"; title: string };
+
+/** Arc reads that are steps of the work around them; plans, proposals and other lifecycle changes stay their own cards. */
+const RUN_STEP_GIT_ARC_ACTIONS: ReadonlySet<string> = new Set(["claims", "compare", "continue", "diff"]);
+
+/** Dedicated rows that join the surrounding run as steps: arc reads, vis sessions, history recall and queue checks. */
+export function isRunStepSegment(segment: CommandSequenceRenderSegment): segment is Extract<
+  CommandSequenceRenderSegment, { kind: "gitArc" | "ownRow" | "subagentQueueCheck" | "threadContext" }
+> {
+  return segment.kind === "threadContext" || segment.kind === "subagentQueueCheck"
+    || (segment.kind === "gitArc" && RUN_STEP_GIT_ARC_ACTIONS.has(segment.action))
+    || (segment.kind === "ownRow" && segment.claimedBy === "workbench-cli.vis");
+}
+
+/** The same rule for MCP calls, whose specialized routes would otherwise render as standalone items. */
+function isRunStepMcpOperation(operation: WorkbenchSpecializedOperation) {
+  return operation.kind === "threadRecall" || operation.kind === "vis"
+    || (operation.kind === "gitArc" && RUN_STEP_GIT_ARC_ACTIONS.has(operation.operation.action));
+}
 
 export function buildCommandSequenceRenderSegments({ items, ...context }: CommandContext & { items: CommandSequenceItem[] }) {
   const segments: CommandSequenceRenderSegment[] = [];
@@ -646,7 +666,7 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     if (gitArcAction) { flushCommands(); flushWaits(); segments.push({ action: gitArcAction, kind: "gitArc", item }); continue; }
     // A grouped label is built only from stats, so a dedicated row joins a group only when a stat names it.
     if (display.ownRow && !countKnownCommandSummaryStats(display.summaryStats)) {
-      flushCommands(); flushWaits(); segments.push({ item, kind: "ownRow" }); continue;
+      flushCommands(); flushWaits(); segments.push({ claimedBy: display.claimedBy ?? null, item, kind: "ownRow" }); continue;
     }
     const message = parseWorkbenchMessageCommand(display.unwrappedCommand, item.commandActions);
     if (message) { flushCommands(); flushWaits(); segments.push({ kind: "message", item }); continue; }

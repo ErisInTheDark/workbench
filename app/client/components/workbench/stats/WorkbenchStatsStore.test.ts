@@ -105,7 +105,10 @@ test("a feedback report observes the narrowed feedback section on its thread's f
   assert.equal(query!.request.feedbackId, 53);
   const item = testFeedbackItem();
   query!.publish(testFeedbackReportSection(item));
-  assert.deepEqual(store.getFeedbackReportSnapshot(report), { status: "ready", item });
+  // A report without its own machine is stored on its thread's.
+  assert.deepEqual(store.getFeedbackReportSnapshot(report), {
+    status: "ready", item, daemonId: TEST_STATS_THREAD_LOCATION.daemonId, workbenchProjectId: null,
+  });
   assert.deepEqual(notified, ["first", "second"]);
   // Stats re-read after deletion; the narrowed answer then lacks the report.
   query!.publish(testFeedbackReportSection(null));

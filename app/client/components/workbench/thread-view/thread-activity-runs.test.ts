@@ -85,7 +85,6 @@ test("conversation and lifecycle rows break runs and keep their own blocks", () 
     [command("boundary", 'wb task set --title "new title"'), "commandSequence"],
     [command("boundary", "wb task completed"), "commandSequence"],
     [command("boundary", "wb todo --required -- fix it"), "commandSequence"],
-    [command("boundary", "wb vis start mockups/a.tsx"), "commandSequence"],
     [command("boundary", "wb subagent create --profile luna --name luna --title task --message hello"), "commandSequence"],
     [command("boundary", "wb task blocked"), "commandSequence"],
     [mcp("boundary", "task_set", { title: "new" }), "item"],
@@ -103,6 +102,27 @@ test("conversation and lifecycle rows break runs and keep their own blocks", () 
       ["run", [["commands", ["after"]]]],
     ], JSON.stringify(boundary));
   }
+});
+
+test("arc reads, vis, recall and queue checks are steps inside the surrounding command group, while proposals stay cards", () => {
+  const steps = [
+    command("before"),
+    command("compare-cli", "wb git arc compare"), mcp("diff-mcp", "git_arc_diff", {}), mcp("claims-mcp", "git_arc_claims", { inherit: true, addPaths: ["a.ts"] }),
+    command("continue-cli", "wb git arc continue"),
+    command("vis-cli", "wb vis start mockups/a.tsx"),
+    command("recall-cli", "wb thread recall"), mcp("recall-mcp", "thread_recall", {}),
+    command("queue-cli", "wb subagent queue machine"), mcp("queue-mcp", "subagent_queue", { queue: "machine" }),
+    command("after"),
+  ];
+  assert.deepEqual(shape(steps), [["run", [["commands", steps.map(step => step.id)]]]]);
+  assert.deepEqual(shape([command("before"), mcp("propose", "git_arc_propose", { title: "Keep this visible" }), command("after")]).map(([kind]) => kind),
+    ["run", "item", "run"]);
+});
+
+test("reasoning with nothing to show adds no step, and a run of only that renders nothing", () => {
+  const blank = (id: string): ThreadItem => ({ type: "reasoning", id, summary: [""], content: [] });
+  assert.deepEqual(shape([blank("hidden")]), []);
+  assert.deepEqual(shape([blank("hidden"), command("one")]), [["run", [["commands", ["one"]]]]]);
 });
 
 test("matcher-named vis checks group like other commands while unnamed dedicated rows stand alone", () => {

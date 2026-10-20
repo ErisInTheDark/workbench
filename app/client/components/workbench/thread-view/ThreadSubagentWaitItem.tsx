@@ -16,6 +16,7 @@ import ThreadDurationText from "./ThreadDurationText";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
+import { GitArcWaitIcon } from "../workbench-icons";
 
 interface ThreadSubagentWaitEntry {
   content?: ReactNode;
@@ -87,24 +88,7 @@ export default function ThreadSubagentWaitItem ({
     </span>
   );
 
-  if (outcome === "completed" && !disclosureContent) {
-    return (
-      <DisclosureStaticRow
-        summary={summary}
-        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      />
-    );
-  }
-
-  return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
-      defaultOpen={active}
-      summary={summary}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    >
-      {disclosureContent ? disclosureContent : multiplexed && active ? (
+  const body = disclosureContent ? disclosureContent : multiplexed && active ? (
         <>
           <div
             aria-label="Watched subagents"
@@ -164,7 +148,29 @@ export default function ThreadSubagentWaitItem ({
         >
           {selectedEntry.content}
         </ThreadPreviewFrame>
-      ) : null}
+      ) : null;
+
+  if (outcome === "completed" && !disclosureContent) {
+    return (
+      <DisclosureStaticRow
+        marker={<GitArcWaitIcon size={16} />}
+        summary={summary}
+        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+      />
+    );
+  }
+
+  return (
+    <Disclosure
+      className="py-2"
+      contentClassName="mt-2 pl-6"
+      defaultOpen={active}
+      hideChevron
+      leading={<GitArcWaitIcon size={16} />}
+      summary={summary}
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+    >
+      {body}
     </Disclosure>
   );
 }

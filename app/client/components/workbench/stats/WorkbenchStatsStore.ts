@@ -71,7 +71,14 @@ export interface StatsFeedbackReport {
 
 export type StatsFeedbackReportSnapshot =
   | { readonly status: "loading" }
-  | { readonly status: "ready"; readonly item: WorkbenchFeedbackItem }
+  | {
+    readonly status: "ready";
+    readonly item: WorkbenchFeedbackItem;
+    /** The machine storing the report, which resolves, reopens and deletes it. */
+    readonly daemonId: string;
+    /** That machine's Workbench project, where wb reports are addressed. */
+    readonly workbenchProjectId: string | null;
+  }
   | { readonly status: "deleted" }
   | { readonly status: "failed"; readonly failure: string };
 
@@ -169,9 +176,12 @@ function reportSnapshot(
   const ownerFailure = owner.failure ?? (ownerData && ownerData.phase !== "current" && ownerData.phase !== "pending" ? ownerData.failure : null);
   if (ownerFailure) return { status: "failed", failure: ownerFailure };
   const data = section?.value?.data;
-  if (data?.section === "feedback") {
-    const item = data.feedback.items.find(({ id }) => id === feedbackId);
-    return item ? { status: "ready", item } : { status: "deleted" };
+  const location = ownerData?.phase === "current" ? ownerData.location : null;
+  if (data?.section === "feedback" && location) {
+    const item = data.feedback.items.find(({ id }) => id === feedbackId) ?? data.feedback.resolved.find(({ id }) => id === feedbackId);
+    return item
+      ? { status: "ready", item, daemonId: item.daemonId ?? location.daemonId, workbenchProjectId: data.feedback.workbenchProjectId }
+      : { status: "deleted" };
   }
   const failure = section?.failure ?? section?.value?.failure;
   return failure ? { status: "failed", failure } : REPORT_LOADING;
@@ -179,7 +189,9 @@ function reportSnapshot(
 
 function sameReportSnapshot(left: StatsFeedbackReportSnapshot, right: StatsFeedbackReportSnapshot) {
   if (left.status !== right.status) return false;
-  if (left.status === "ready" && right.status === "ready") return left.item === right.item;
+  if (left.status === "ready" && right.status === "ready") {
+    return left.item === right.item && left.daemonId === right.daemonId && left.workbenchProjectId === right.workbenchProjectId;
+  }
   if (left.status === "failed" && right.status === "failed") return left.failure === right.failure;
   return true;
 }

@@ -126,6 +126,7 @@ import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope"
 import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
 import { draftSessionOwner } from "./workbench/thread-view/DraftSessionController";
 import { seedNewThreadReferences } from "../workbench/thread/new-thread-reference-seeds";
+import { WorkbenchFeedbackAddressingContext } from "./workbench/address-feedback-context";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import { readWorkbenchLaunchSelection } from "workbench-shared/state/workbench-client-state";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
@@ -614,6 +615,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     seedNewThreadReferences(projectId, references);
     navigateToRoute(createThreadRoute(projectId, { kind: "new" }));
   }, [navigateToRoute]);
+  const feedbackAddressing = useMemo(() => ({ here: null, inNewThread: askAgentWithReferences }), [askAgentWithReferences]);
 
   const onInvalidFileLocation = useCallback(() => {
     setSelectionError("The thread's file location is invalid.");
@@ -1628,6 +1630,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   };
 
   return (
+    <WorkbenchFeedbackAddressingContext.Provider value={feedbackAddressing}>
     <WorkbenchExplorerContext.Provider value={explorer}>
     <FileActionContext.Provider value={openFileByPolicy}>
     <FileScopeContext.Provider value={browseFileScope}>
@@ -2192,5 +2195,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     </FileScopeContext.Provider>
     </FileActionContext.Provider>
     </WorkbenchExplorerContext.Provider>
+    </WorkbenchFeedbackAddressingContext.Provider>
   );
 }

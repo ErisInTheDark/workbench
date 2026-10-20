@@ -17,7 +17,7 @@ import { isProjectDirectoryPath } from "../../../workbench/project/project-file-
 
 import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
-import { EllipsisIcon, SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
+import { BotIcon, EllipsisIcon, SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
 import ThreadAgentName from "./ThreadAgentName";
 import Disclosure from "../../ui/Disclosure";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
@@ -50,16 +50,19 @@ export function ThreadAgentMessageTarget({
 export function ThreadAgentMessageBubble({
   children,
   recipient,
+  verb = "Messaged",
 }: {
   children: ReactNode;
   recipient?: ReactNode;
+  /** What the message did to its recipient, such as creating it. */
+  verb?: string;
 }) {
   return (
     <ThreadSubagentUserMessage>
       {recipient ? (
         <div className="space-y-1.5">
           <p className="m-0 flex flex-wrap items-center gap-x-1.5 text-[0.78em] font-medium leading-[1.5] text-fg/muted">
-            <span>Messaged</span>
+            <span>{verb}</span>
             {recipient}
           </p>
           {children}
@@ -128,6 +131,8 @@ export default function ThreadAgentMessageItem ({
     <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
+      hideChevron
+      leading={<BotIcon size={16} />}
       summary={(
         <span className="inline-flex flex-wrap items-center gap-x-1.5">
           <span>Messaged</span>

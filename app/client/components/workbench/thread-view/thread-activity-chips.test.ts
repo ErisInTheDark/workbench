@@ -54,6 +54,19 @@ test("Browse calls count their steps, then the screenshots the agent explicitly 
   ]);
 });
 
+test("arc reads merged into a command group count as arc steps beside the commands", () => {
+  const wb = (id: string, tool: string, args: Extract<ThreadItem, { type: "mcpToolCall" }>["arguments"]): Extract<ThreadItem, { type: "mcpToolCall" }> => ({
+    id, type: "mcpToolCall", server: "wb", tool, arguments: args, status: "completed", result: null,
+    error: null, durationMs: 1, appContext: null, pluginId: null, readOnlyHint: null,
+  });
+  assert.deepEqual(chips([{ items: [
+    command("one", "node build.js"),
+    wb("compare", "git_arc_compare", {}),
+    wb("claims", "git_arc_claims", { inherit: true, addPaths: ["src/a.ts"] }),
+    command("two", "node test.js"),
+  ], kind: "commands" }]), [["arc", 2, null, null], ["ran", 2, null, null]]);
+});
+
 test("web searches count with matched web requests and a reasoning-only run has no chips", () => {
   assert.deepEqual(chips([{ items: [
     { action: null, id: "web", query: "workbench", type: "webSearch" } as Extract<ThreadItem, { type: "webSearch" }>,

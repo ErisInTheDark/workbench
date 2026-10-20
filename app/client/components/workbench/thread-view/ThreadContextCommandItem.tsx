@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default ThreadContextCommandItem: render a Thread Recall command or context alias as a semantic tagged-record disclosure. Keywords: thread recall, context, records, disclosure.
+ * - default ThreadContextCommandItem: a Thread Recall command or context alias as one step line (its recall glyph, summary,
+ *   exit and duration) that opens into the recalled records. Keywords: thread recall, context, records, step.
  * - ThreadContextCommandSource: transport-neutral Thread Recall lifecycle and output data. Keywords: thread recall, CLI, MCP, source.
- * - Local helpers: select recall result icons and format execution metadata for the disclosure summary. Keywords: status, duration, exit code.
  */
 "use client";
 
@@ -28,8 +28,8 @@ import {
   BookSearchDashedIcon,
   BookSearchIcon,
 } from "../workbench-icons";
-import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRecallOutput from "./ThreadRecallOutput";
 import ThreadSummaryText from "./ThreadSummaryText";
@@ -43,47 +43,6 @@ export interface ThreadContextCommandSource {
   id: string;
   outcome: ThreadCommandExecutionOutcome;
   output: string;
-}
-
-function ThreadContextCommandMetaParts({
-  source,
-}: {
-  source: ThreadContextCommandSource;
-}) {
-  const metaParts: ReactNode[] = [];
-
-  if (source.outcome === "failed" && source.exitCode !== null && source.exitCode !== 0) {
-    metaParts.push(
-      <ThreadSummaryText
-        key={`${source.id}:exit`}
-        text={`exit ${source.exitCode}`}
-      />,
-    );
-  }
-
-  if (source.durationMs !== null) {
-    metaParts.push(
-      <ThreadDurationText
-        key={`${source.id}:duration`}
-        durationMs={source.durationMs}
-      />,
-    );
-  }
-
-  if (!metaParts.length) {
-    return null;
-  }
-
-  return (
-    <span className="ml-2 text-[0.78em] text-fg/muted">
-      {metaParts.map((part, index) => (
-        <span key={`${source.id}:meta:${index}`}>
-          {index ? <span className="text-fg/muted"> | </span> : null}
-          {part}
-        </span>
-      ))}
-    </span>
-  );
 }
 
 function ThreadRecallIcon({
@@ -130,19 +89,16 @@ export default function ThreadContextCommandItem ({
       : "Thread Recall";
 
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2"
+    <ThreadStepRow
       defaultOpen={defaultOpen}
-      leading={<ThreadRecallIcon empty={emptyResult} operation={operation} />}
-      leadingLabel={iconLabel}
-      summary={(
-        <>
-          <ThreadCommandSummary display={summaryDisplay} />
-          <ThreadContextCommandMetaParts source={{ ...source, durationMs: visibleDurationMs ?? null }} />
-        </>
-      )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+      icon={<ThreadRecallIcon empty={emptyResult} operation={operation} />}
+      iconLabel={iconLabel}
+      meta={[
+        source.outcome === "failed" && source.exitCode !== null && source.exitCode !== 0
+          ? <ThreadSummaryText key="exit" text={`exit ${source.exitCode}`} /> : null,
+        visibleDurationMs === null || visibleDurationMs === undefined ? null : <ThreadDurationText durationMs={visibleDurationMs} key="duration" />,
+      ]}
+      summary={<ThreadCommandSummary display={summaryDisplay} />}
     >
       <ThreadPreviewFrame
         backgroundClassName="before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)]"
@@ -159,6 +115,6 @@ export default function ThreadContextCommandItem ({
           <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No Thread Recall output captured.</p>
         )}
       </ThreadPreviewFrame>
-    </Disclosure>
+    </ThreadStepRow>
   );
 }

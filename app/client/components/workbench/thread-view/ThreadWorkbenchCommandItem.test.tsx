@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Children, cloneElement, createElement, isValidElement, type ComponentProps, type ReactElement } from "react";
+import { cloneElement, createElement, Fragment, isValidElement, useContext, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -23,7 +23,10 @@ import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 import ContextualProjectProvider from "../ContextualProjectProvider";
 import ThreadGitArcItem from "./ThreadGitArcItem";
-import Disclosure from "../../ui/Disclosure";
+import ThreadGitArcCardBody from "./ThreadGitArcCardBody";
+import ThreadGitArcProposalItem from "./ThreadGitArcProposalItem";
+import ThreadGitArcWaitItem from "./ThreadGitArcWaitItem";
+import { buildGitArcCard } from "./thread-git-arc-card";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { createFakeStatsWorkspace, TEST_STATS_THREAD_LOCATION, testFeedbackItem, testFeedbackReportSection } from "../stats/stats-test-store";
@@ -34,19 +37,38 @@ const pendingFacts = { getSnapshot: () => ({ phase: "pending" as const, failure:
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
-// Detail assertions explicitly open only the outer disclosure; nested inventories remain closed.
+/** A Git arc card's line followed by the real body it opens into, derived from the same props the card received. */
+function OpenedGitArcCard(props: ComponentProps<typeof ThreadGitArcItem>) {
+  const presentation = useContext(ThreadGitArcPresentationContext);
+  const card = buildGitArcCard({
+    asRunStep: false, currentPlan: presentation?.gitArcPlan ?? null, editResult: props.editResult ?? null,
+    failureReason: props.failureReason ?? null, intent: props.commandIntent, interruptedBySteer: props.interruptedBySteer ?? false,
+    name: props.name ?? null, outcome: props.outcome, receipt: props.receipt,
+    statusFacts: props.statusFacts, statusOutput: props.statusOutput, typedFailure: props.typedFailure ?? null,
+  });
+  return createElement(Fragment, null,
+    createElement(ThreadGitArcItem, props),
+    createElement(ThreadGitArcCardBody, {
+      card, editResult: props.editResult ?? null, operationDetails: props.operationDetails,
+      statusIncomplete: props.statusIncomplete ?? false, statusOutput: props.statusOutput,
+    }),
+  );
+}
+
+// Detail assertions open the card: feedback through its disclosure, Git arc cards through their real body.
 function OpenedSpecialized(props: ComponentProps<typeof ThreadWorkbenchCommandItem>) {
   const rendered = ThreadWorkbenchCommandItem(props);
   if (isValidElement<ComponentProps<typeof ThreadFeedbackCommandItem>>(rendered) && rendered.type === ThreadFeedbackCommandItem) {
-    return cloneElement(ThreadFeedbackCommandItem(rendered.props), { open: true });
+    return cloneElement(rendered, { defaultOpen: true });
   }
-  if (!isValidElement<ComponentProps<typeof ThreadGitArcItem>>(rendered) || rendered.type !== ThreadGitArcItem) return rendered;
-  const card = ThreadGitArcItem(rendered.props);
-  return cloneElement(card, {}, Children.map(card.props.children, child => (
-    isValidElement(child) && child.type === Disclosure
-      ? cloneElement(child as ReactElement<ComponentProps<typeof Disclosure>>, { open: true })
-      : child
-  )));
+  // Settled waits and proposals wrap a plain Git arc card.
+  const card = isValidElement<ComponentProps<typeof ThreadGitArcWaitItem>>(rendered) && rendered.type === ThreadGitArcWaitItem
+    ? ThreadGitArcWaitItem(rendered.props)
+    : isValidElement<ComponentProps<typeof ThreadGitArcProposalItem>>(rendered) && rendered.type === ThreadGitArcProposalItem
+      ? ThreadGitArcProposalItem(rendered.props)
+      : rendered;
+  if (!isValidElement<ComponentProps<typeof ThreadGitArcItem>>(card) || card.type !== ThreadGitArcItem) return card;
+  return createElement(OpenedGitArcCard, card.props);
 }
 
 test("an opened feedback call shows the report stored under its acknowledged id", () => {
@@ -58,18 +80,19 @@ test("an opened feedback call shows the report stored under its acknowledged id"
     title: "Queues vanish after reload",
   }, stats);
   assert.match(html, /Reported/u);
-  assert.match(html, /Queues vanish after reload/u);
-  assert.match(html, /Stored report title/u);
+  // The line names the stored report once, so the opened body never repeats its title.
+  assert.equal(html.match(/Stored report title/gu)?.length, 1);
   assert.match(html, /Stored report text\./u);
   assert.match(html, /gpt-5\.6/u);
+  assert.match(html, />Delete</u);
+  assert.match(html, />Resolve</u);
   assert.doesNotMatch(html, /Recorded wb\/bug feedback|&quot;channel&quot;/u);
 });
 
-test("historical feedback without a title summarises with a placeholder and still opens its stored report", () => {
-  const stats = statsWithReport(testFeedbackItem());
-  const html = renderFeedback({ category: "bug", channel: "wb", report: "Queue declarations vanished after reload." }, stats);
+test("historical feedback without a title summarises with a placeholder until its stored report names it", () => {
+  const html = renderFeedback({ category: "bug", channel: "wb", report: "Queue declarations vanished after reload." }, statsWithReport(null));
   assert.match(html, /Feedback report/u);
-  assert.match(html, /Stored report title/u);
+  assert.match(renderFeedback({ category: "bug", channel: "wb", report: "Queue declarations vanished after reload." }, statsWithReport(testFeedbackItem())), /Stored report title/u);
 });
 
 test("a feedback call whose stored report is gone shows what it filed", () => {
@@ -586,8 +609,9 @@ test("failed Git arc starts compose drift evidence into one named failure card",
     false,
   );
 
-  assert.match(closedHtml, /Failed to claim drifted file.*drifted\.ts.*\+15.*-1/u);
-  assert.doesNotMatch(closedHtml, />Edited</u);
+  // Closed, a failed start is one line: what failed and how much drifted; the evidence waits inside.
+  assert.match(closedHtml, /Failed to start.*improve arc start card UX.*\+15.*-1/u);
+  assert.doesNotMatch(closedHtml, /drifted\.ts|data-thread-git-arc-failure/u);
   assert.match(html, /Failed to start.*improve arc start card UX/u);
   assert.match(html, /Failed to claim drifted file.*drifted\.ts.*\+15.*-1/u);
   assert.doesNotMatch(html, />Edited</u);

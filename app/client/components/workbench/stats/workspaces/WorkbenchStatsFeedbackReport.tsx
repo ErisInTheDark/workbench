@@ -2,8 +2,11 @@
 
 /*
  * Exports:
- * - WorkbenchFeedbackReportDisplay: category tag, title, and clampable report text, for stored reports and reports known only from their filing call.
- * - WorkbenchFeedbackReportBody: one stored report with its importance flame, and its author's profile, time, resolution, and optional thread in one footer row.
+ * - WorkbenchFeedbackReportDisplay: category tag, title, and clampable report text, for stored reports and reports known only from their filing call;
+ *   the heading can be left to a host that shows it.
+ * - WorkbenchFeedbackImportance: a stored report's importance flame and score.
+ * - WorkbenchFeedbackReportBody: one stored report with its importance flame, and its author's profile, time, resolution, and optional thread or
+ *   actions in one footer row.
  * - WorkbenchFeedbackReportSkeleton: loading placeholder shaped like one report.
  * - default WorkbenchStatsFeedbackReport: one selectable report in the stats view's feedback list.
  */
@@ -45,6 +48,7 @@ function useClampOverflow(enabled: boolean, expanded: boolean) {
 export function WorkbenchFeedbackReportDisplay({
   category,
   clamp = true,
+  heading = true,
   meta,
   projectId,
   report,
@@ -52,6 +56,8 @@ export function WorkbenchFeedbackReportDisplay({
 }: {
   category: WorkbenchFeedbackCategory;
   clamp?: boolean;
+  /** Off where the host already shows the tag, title and meta, such as a card's line. */
+  heading?: boolean;
   meta?: ReactNode;
   projectId?: string | null;
   report: string;
@@ -61,14 +67,16 @@ export function WorkbenchFeedbackReportDisplay({
   const { overflowing, ref } = useClampOverflow(clamp, expanded);
   return (
     <>
-      <div className="flex min-w-0 items-center gap-2 text-[0.74rem] text-fg/muted">
-        <WorkbenchStatsFeedbackTag category={category} size="compact" />
-        <span className="min-w-0 truncate font-semibold text-text">{title}</span>
-        {meta}
-      </div>
+      {heading ? (
+        <div className="flex min-w-0 items-center gap-2 text-[0.74rem] text-fg/muted">
+          <WorkbenchStatsFeedbackTag category={category} size="compact" />
+          <span className="min-w-0 truncate font-semibold text-text">{title}</span>
+          {meta}
+        </div>
+      ) : null}
       <div
         className={`
-          mt-1 min-w-0 text-[0.84rem] text-text [overflow-wrap:anywhere]
+          ${heading ? "mt-1" : ""} min-w-0 text-[0.84rem] text-text [overflow-wrap:anywhere]
           ${clamp && !expanded ? "max-h-[6.9em] overflow-hidden" : ""}
           ${clamp && !expanded && overflowing ? "[mask-image:linear-gradient(to_bottom,black_65%,transparent)]" : ""}
         `}
@@ -100,9 +108,33 @@ export function WorkbenchFeedbackReportSkeleton({ index = 0 }: { index?: number 
   );
 }
 
+/** A stored report's importance flame, toned by how much it matters and whether its model is scored. */
+export function WorkbenchFeedbackImportance({ className = "", item }: { className?: string; item: Pick<WorkbenchFeedbackItem, "importance" | "scored"> }) {
+  const importance = Math.round(item.importance * 100);
+  return (
+    <span
+      className={`
+        inline-flex shrink-0 items-center gap-1 font-semibold tabular-nums
+        ${feedbackImportanceTone(item.importance, item.scored)} ${className}
+      `}
+      title={item.scored
+        ? `Importance ${importance}: weighs the author's model, reasoning effort, and the report's category`
+        : `Importance ${importance}: this model is not in the trust registry yet, so it scored at the registry median`}
+    >
+      {item.scored ? null : <span className="font-normal">unscored model</span>}
+      <FlameIcon className={item.scored ? "" : "opacity-60"} size={14} />
+      {importance}
+    </span>
+  );
+}
+
 /** One stored report as the stats view shows it: importance, report, and its author's model, time, and thread. */
-export function WorkbenchFeedbackReportBody({ clamp, item, modelName, showThread = true }: {
+export function WorkbenchFeedbackReportBody({ actions, clamp, heading = true, item, modelName, showThread = true }: {
+  /** Controls for this report, right-aligned on the footer row in place of the thread link. */
+  actions?: ReactNode;
   clamp?: boolean;
+  /** Off where the host already shows the tag, title and importance. */
+  heading?: boolean;
   item: WorkbenchFeedbackItem;
   /** Catalogue display name, or the stored id when the catalogue does not know it. */
   modelName: string | null;
@@ -110,30 +142,18 @@ export function WorkbenchFeedbackReportBody({ clamp, item, modelName, showThread
   showThread?: boolean;
 }) {
   const thread = statsThreadIdentity(item);
-  const importance = Math.round(item.importance * 100);
   return (
     <>
       <WorkbenchFeedbackReportDisplay
         category={item.category}
         clamp={clamp}
-        meta={<span
-          className={`
-            ml-auto inline-flex shrink-0 items-center gap-1 font-semibold tabular-nums
-            ${feedbackImportanceTone(item.importance, item.scored)}
-          `}
-          title={item.scored
-            ? `Importance ${importance}: weighs the author's model, reasoning effort, and the report's category`
-            : `Importance ${importance}: this model is not in the trust registry yet, so it scored at the registry median`}
-        >
-          {item.scored ? null : <span className="font-normal">unscored model</span>}
-          <FlameIcon className={item.scored ? "" : "opacity-60"} size={14} />
-          {importance}
-        </span>}
+        heading={heading}
+        meta={<WorkbenchFeedbackImportance className="ml-auto" item={item} />}
         projectId={item.projectId}
         report={item.report}
         title={item.title}
       />
-      <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[0.72rem] text-fg/muted">
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[0.72rem] text-fg/muted">
         {item.harness ? <HarnessIcon className="shrink-0" harness={item.harness} size={14} /> : null}
         <span className="min-w-0 shrink truncate">
           <span className="font-semibold text-text">{modelName ?? "Unknown model"}</span>
@@ -156,6 +176,7 @@ export function WorkbenchFeedbackReportBody({ clamp, item, modelName, showThread
             ) : <span className="text-fg/muted">Thread removed</span>}
           </span>
         ) : null}
+        {actions ? <span className="ml-auto flex shrink-0 items-center gap-1.5">{actions}</span> : null}
       </div>
     </>
   );

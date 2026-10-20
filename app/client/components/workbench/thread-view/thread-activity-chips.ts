@@ -5,7 +5,8 @@
  * - getCommandIcon: one command step row's kind icon, from the same categories as the chips.
  * - getCommandBlockItems: command items in the shape the command matchers summarise.
  * - getCommandItemDisplay: one command's matcher display.
- * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then its matched command categories, with Browse screenshots beside browser steps.
+ * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then its matched command categories (including
+ *   merged steps with their own renderer), with Browse screenshots beside browser steps.
  */
 import type { ComponentType } from "react";
 
@@ -14,6 +15,7 @@ import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
   getWorkbenchMcpCommandDisplay,
+  getWorkbenchMcpCommandRoute,
   type ThreadCommandSummaryDisplay,
   type ThreadCommandSummaryStats,
 } from "../../../workbench/thread/thread-command-matchers";
@@ -118,12 +120,23 @@ export function getActivityChips(segments: readonly ActivitySegment[], context: 
   const stats = commands.length
     ? getThreadCommandBlockDisplay({ items: getCommandBlockItems(commands, context), ...context }).summaryStats
     : null;
+  const ownRowStats = dedicatedRendererStats(commands);
   const commandChips = COMMAND_CHIPS.flatMap(({ Icon, key, stats: statKeys, verb }) => {
-    const count = (stats ? statKeys.reduce((total, stat) => total + stats[stat], 0) : 0) + (key === "web" ? searches : 0);
+    const count = statKeys.reduce((total, stat) => total + (stats?.[stat] ?? 0) + ownRowStats.reduce((sum, entry) => sum + (entry[stat] ?? 0), 0), 0)
+      + (key === "web" ? searches : 0);
     const chip = count ? [{ Icon, count, key, verb }] : [];
     return key === "browse" ? [...chip, ...screenshotChip(commands, context)] : chip;
   });
   return [...fileChips(segments), ...commandChips];
+}
+
+/** wb MCP calls drawn by their own renderer (arc reads, vis, recall) have no summary display, yet still count what they did. */
+function dedicatedRendererStats(commands: readonly CommandSequenceItem[]): Partial<ThreadCommandSummaryStats>[] {
+  return commands.flatMap(item => {
+    if (item.type !== "mcpToolCall") return [];
+    const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
+    return route?.kind === "specialized" && route.rendering.result.summaryStats ? [route.rendering.result.summaryStats] : [];
+  });
 }
 
 /** Screenshots Browse steps captured, next to the browser steps that took them. */

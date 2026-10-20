@@ -12,6 +12,7 @@ import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { getSubagentSummary } from "../../../workbench/thread/thread-subagents";
 import ThreadAgentName from "./ThreadAgentName";
 import Disclosure from "../../ui/Disclosure";
+import { BotIcon } from "../workbench-icons";
 import { getUserMessageDeliveryState, type IncomingAgentMessageItem } from "./thread-render-blocks";
 
 function countLabel(count: number, noun: string) {
@@ -70,15 +71,16 @@ export default function ThreadIncomingAgentMessageGroup({
 }) {
   return (
     <Disclosure
-      chevronSide="end"
       className="py-2"
       contentClassName="mt-1"
+      hideChevron
       // Agent chatter is rarely relevant to the user, so every group starts closed.
       // Collapsed messages stay in the DOM so find-in-page still reaches them.
       keepMounted
       summary={(
-        <span className="block text-right">
-          <ThreadIncomingAgentMessageGroupLabel items={items} state={state} subagents={subagents} />
+        <span className="flex items-center justify-end gap-2 text-right">
+          <span><ThreadIncomingAgentMessageGroupLabel items={items} state={state} subagents={subagents} /></span>
+          <BotIcon className="shrink-0" size={16} />
         </span>
       )}
       summaryClassName="ml-auto w-fit text-[0.92em] leading-[1.6]"

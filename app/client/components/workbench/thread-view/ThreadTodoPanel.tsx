@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadTodoPanel: a thread's goal and todos as always-live plain-text fields; todos can be picked for the next message, marked required or removed, and a trailing blank row becomes a new todo once it holds text.
+ * - default ThreadTodoPanel: a thread's goal and todos as always-live plain-text fields, and a trailing blank row that becomes a new todo once it holds text.
+ * - ThreadTodoRow: one live todo that can be picked for the next message, edited, marked required or removed; shared with transcript todo cards.
  * - threadTodoRowClassNames: todo row geometry for sibling rows in the same panel.
  */
 "use client";
@@ -14,7 +15,7 @@ import {
 import IconButton from "../../ui/IconButton";
 import { AsteriskIcon, AsteriskOffIcon, FlagFilledIcon, FlagIcon, XIcon } from "../workbench-icons";
 import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
-import type { ThreadReferenceSelection } from "./use-thread-reference-selection";
+import type { ThreadTodoControls } from "./thread-todo-controls";
 
 const rowClassName = "group/row flex min-w-0 items-start gap-1 rounded-[0.6rem] px-1 transition-colors";
 const textClassName = "min-w-0 flex-1 py-1 text-[0.86em] leading-[1.6] text-text";
@@ -135,42 +136,87 @@ function RowButtons ({ onRemove, onToggleRequired, removeLabel, required }: {
   );
 }
 
+/** Runs a todo mutation, reporting its failure (and clearing the last one) through `onError`. */
+function todoRunner(onError: (message: string) => void) {
+  return {
+    run(operation: () => Promise<void>, fallback: string) {
+      onError("");
+      void operation().catch((failure: unknown) => onError(failure instanceof Error ? failure.message : fallback));
+    },
+    tooLong(text: string, limit: number) {
+      if (text.length <= limit) return false;
+      onError(`Over ${limit.toLocaleString()} characters.`);
+      return true;
+    },
+  };
+}
+
+/** One live todo: its #id picks it for the next message, its text edits in place, and it can be marked required or removed. */
+export function ThreadTodoRow ({ controls, onError, todo }: {
+  controls: ThreadTodoControls;
+  onError: (message: string) => void;
+  todo: WorkbenchThreadTodo;
+}) {
+  const { run, tooLong } = todoRunner(onError);
+  const reference = workbenchThreadTodoReference(todo);
+  const selected = controls.selection.isSelected(reference);
+  return (
+    <li
+      className={`
+        ${rowClassName}
+        ${selected ? "bg-accent-soft/60 ring-1 ring-inset ring-accent" : "hover:bg-fg/4 focus-within:bg-fg/5"}
+      `}
+    >
+      <button
+        aria-label={`Attach todo ${todo.id}`}
+        aria-pressed={selected}
+        className={`
+          ${markerClassName} cursor-pointer rounded-md transition
+          hover:bg-fg/7 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
+          ${selected ? "text-accent" : ""}
+        `}
+        onClick={() => controls.selection.toggle(reference)}
+        type="button"
+      >
+        <span className={serialClassName}>#{todo.id}</span>
+      </button>
+      <LiveTextField
+        ariaLabel={`Todo ${todo.id}`}
+        onSave={(text) => {
+          if (!text) run(() => controls.remove(todo.id), "Unable to remove the todo.");
+          else if (!tooLong(text, WORKBENCH_THREAD_TODO_MAX_LENGTH)) run(() => controls.setText(todo.id, text), "Unable to save the todo.");
+        }}
+        placeholder="Todo"
+        value={todo.text}
+      />
+      <RowButtons
+        onRemove={() => run(() => controls.remove(todo.id), "Unable to remove the todo.")}
+        onToggleRequired={() => run(() => controls.setRequired(todo.id, !todo.required), "Unable to update the todo.")}
+        removeLabel={`Remove todo ${todo.id}`}
+        required={todo.required}
+      />
+    </li>
+  );
+}
+
 export default function ThreadTodoPanel ({
+  controls,
   goal,
-  selection,
-  threadId,
-  todos,
   onAddTodo,
   onClearGoal,
-  onRemoveTodo,
   onSetGoal,
-  onSetTodoRequired,
-  onSetTodoText,
 }: {
+  controls: ThreadTodoControls;
   goal: WorkbenchThreadGoal | null;
-  selection: ThreadReferenceSelection;
-  threadId: string;
-  todos: readonly WorkbenchThreadTodo[];
   onAddTodo: (text: string, required: boolean) => Promise<void>;
   onClearGoal: () => Promise<void>;
-  onRemoveTodo: (id: number) => Promise<void>;
   onSetGoal: (objective: string) => Promise<void>;
-  onSetTodoRequired: (id: number, required: boolean) => Promise<void>;
-  onSetTodoText: (id: number, text: string) => Promise<void>;
 }) {
   const [error, setError] = useState("");
   const [blank, setBlank] = useState({ key: 0, text: "", refocus: false });
+  const { todos } = controls;
   const nextNumber = todos.reduce((highest, todo) => Math.max(highest, todo.id), 0) + 1;
-
-  const run = (operation: () => Promise<void>, fallback: string) => {
-    setError("");
-    void operation().catch((failure: unknown) => setError(failure instanceof Error ? failure.message : fallback));
-  };
-  const tooLong = (text: string, limit: number) => {
-    if (text.length <= limit) return false;
-    setError(`Over ${limit.toLocaleString()} characters.`);
-    return true;
-  };
+  const { run, tooLong } = todoRunner(setError);
   /** Text makes the blank row real; a fresh blank row takes its place, focused when Enter made it. */
   const commitBlank = (refocus: boolean) => {
     const text = blank.text.trim();
@@ -197,48 +243,7 @@ export default function ThreadTodoPanel ({
         />
       </div>
       <ul aria-label="Todos" className="m-0 list-none space-y-0.5 p-0">
-        {todos.map((todo) => {
-          const reference = workbenchThreadTodoReference(todo);
-          const selected = selection.isSelected(reference);
-          return (
-            <li
-              className={`
-                ${rowClassName}
-                ${selected ? "bg-accent-soft/60 ring-1 ring-inset ring-accent" : "hover:bg-fg/4 focus-within:bg-fg/5"}
-              `}
-              key={todo.id}
-            >
-              <button
-                aria-label={`Attach todo ${todo.id}`}
-                aria-pressed={selected}
-                className={`
-                  ${markerClassName} cursor-pointer rounded-md transition
-                  hover:bg-fg/7 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
-                  ${selected ? "text-accent" : ""}
-                `}
-                onClick={() => selection.toggle(reference)}
-                type="button"
-              >
-                <span className={serialClassName}>#{todo.id}</span>
-              </button>
-              <LiveTextField
-                ariaLabel={`Todo ${todo.id}`}
-                onSave={(text) => {
-                  if (!text) run(() => onRemoveTodo(todo.id), "Unable to remove the todo.");
-                  else if (!tooLong(text, WORKBENCH_THREAD_TODO_MAX_LENGTH)) run(() => onSetTodoText(todo.id, text), "Unable to save the todo.");
-                }}
-                placeholder="Todo"
-                value={todo.text}
-              />
-              <RowButtons
-                onRemove={() => run(() => onRemoveTodo(todo.id), "Unable to remove the todo.")}
-                onToggleRequired={() => run(() => onSetTodoRequired(todo.id, !todo.required), "Unable to update the todo.")}
-                removeLabel={`Remove todo ${todo.id}`}
-                required={todo.required}
-              />
-            </li>
-          );
-        })}
+        {todos.map(todo => <ThreadTodoRow controls={controls} key={todo.id} onError={setError} todo={todo} />)}
         <li
           className={`${rowClassName} focus-within:bg-fg/5`}
           key={`new-${blank.key}`}

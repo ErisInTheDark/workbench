@@ -75,6 +75,9 @@ import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadStatusArea from "./ThreadStatusArea";
 import ThreadTodoPanel from "./ThreadTodoPanel";
+import { ThreadTodoControlsContext, type ThreadTodoControls } from "./thread-todo-controls";
+import { WorkbenchFeedbackAddressingContext, type WorkbenchFeedbackAddressing } from "../address-feedback-context";
+import { attachComposerDraftReference } from "../../../workbench/state/draft-persistence";
 import ThreadAddressedFeedback from "./ThreadAddressedFeedback";
 import { workbenchThreadTodoReference } from "workbench-shared/workbench/thread/thread-todo";
 import useThreadLiveActivity from "./use-thread-live-activity";
@@ -556,6 +559,25 @@ export default memo(function ThreadViewContent ({
     [headFeedback, headTodos],
   );
   const referenceSelection = useThreadReferenceSelection(activeThread?.id ?? "", pickableReferences);
+  const { removeTodo, setTodoRequired, setTodoText } = active.actions;
+  const todoControls = useMemo<ThreadTodoControls>(() => ({
+    todos: headTodos ?? [], selection: referenceSelection, remove: removeTodo, setRequired: setTodoRequired, setText: setTodoText,
+  }), [headTodos, referenceSelection, removeTodo, setTodoRequired, setTodoText]);
+  // The composer's live draft session, so feedback addressed here joins its next message as an ordinary edit.
+  const composerSessionRef = useRef<DraftSessionController<WorkbenchComposerInputDraft> | null>(null);
+  const trackDraftSession = useCallback((session: DraftSessionController<WorkbenchComposerInputDraft> | null) => {
+    composerSessionRef.current = session;
+    onDraftSessionChange?.(session);
+  }, [onDraftSessionChange]);
+  const appFeedbackAddressing = useContext(WorkbenchFeedbackAddressingContext);
+  const feedbackAddressing = useMemo<WorkbenchFeedbackAddressing>(() => ({
+    ...appFeedbackAddressing,
+    here: isDraftThreadView ? null : (report) => {
+      const session = composerSessionRef.current;
+      if (!session) throw new Error("This thread's composer is unavailable.");
+      session.edit(draft => attachComposerDraftReference(draft, report));
+    },
+  }), [appFeedbackAddressing, isDraftThreadView]);
   const projectFilePathDisambiguationIndex = useBackgroundProjectFilePathDisambiguationIndex(
     projectFilePaths,
     projectFileIndexId,
@@ -987,7 +1009,7 @@ export default memo(function ThreadViewContent ({
   const renderComposer = (bottomBefore?: ReactNode) => activeThread ? (
     <ThreadComposer
       autoFocusOnEntry={isFocused && entryMotionOwnerRef.current?.initialThreadId === activeThreadId}
-      onDraftSessionChange={onDraftSessionChange}
+      onDraftSessionChange={trackDraftSession}
       targetControl={approvalModeControl ?? (showDraftComposer ? draftTargetControl : null)}
       controlNotice={approvalNotice}
       header={fileIndexError}
@@ -1157,6 +1179,8 @@ export default memo(function ThreadViewContent ({
                   <TranscriptBodiesContext.Provider value={active.store?.transcriptBodies ?? null}>
                   <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
                   <ThreadItemActionsContext.Provider value={activeItemActions}>
+                  <ThreadTodoControlsContext.Provider value={active.entry && !isDraftThreadView ? todoControls : null}>
+                  <WorkbenchFeedbackAddressingContext.Provider value={feedbackAddressing}>
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={null}
@@ -1170,6 +1194,8 @@ export default memo(function ThreadViewContent ({
                     relatedThreadsById={relatedThreadsById}
                     subagents={subagents}
                   />
+                  </WorkbenchFeedbackAddressingContext.Provider>
+                  </ThreadTodoControlsContext.Provider>
                   </ThreadItemActionsContext.Provider>
                   </ThreadItemApprovalsContext.Provider>
                   </TranscriptBodiesContext.Provider>
@@ -1228,16 +1254,11 @@ export default memo(function ThreadViewContent ({
               renderPanel: () => (
                 <>
                   <ThreadTodoPanel
+                    controls={todoControls}
                     goal={active.head?.goal ?? null}
-                    selection={referenceSelection}
-                    threadId={activeThread.id}
-                    todos={headTodos ?? []}
                     onAddTodo={active.actions.addTodo}
                     onClearGoal={active.actions.clearGoal}
-                    onRemoveTodo={active.actions.removeTodo}
                     onSetGoal={active.actions.setGoal}
-                    onSetTodoRequired={active.actions.setTodoRequired}
-                    onSetTodoText={active.actions.setTodoText}
                   />
                   <ThreadAddressedFeedback
                     feedback={headFeedback ?? []}

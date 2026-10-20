@@ -135,7 +135,8 @@ test("transcript proposals are collapsed git arc cards named by their proposal; 
         assert.match(html, /Clean finished thread tail/u, transport);
         assert.doesNotMatch(html, /data-thread-git-arc-failure=/u);
       } else {
-        if (outcome !== "timedOut") assert.match(html, /data-thread-git-arc-failure=/u, transport);
+        // Closed, the failure is the line itself; its typed detail waits inside the card.
+        assert.match(html, outcome === "timedOut" ? /Timed out proposing/u : /Failed to propose/u, transport);
         assert.doesNotMatch(html, /agent-only-detail/u, transport);
       }
     }

@@ -7,6 +7,7 @@
 import { Fragment, type ReactNode } from "react";
 
 import Disclosure from "../../ui/Disclosure";
+import { BotIcon } from "../workbench-icons";
 import ThreadDurationText from "./ThreadDurationText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 
@@ -28,7 +29,9 @@ export default function ThreadSubagentCoordinationItem({
     <Disclosure
       className="py-2"
       contentClassName="mt-1"
+      hideChevron
       keepMounted
+      leading={<BotIcon size={16} />}
       summary={(
         <span>
           {active ? "Coordinating with " : "Coordinated with "}

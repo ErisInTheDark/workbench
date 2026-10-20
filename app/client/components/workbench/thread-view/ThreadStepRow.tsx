@@ -13,6 +13,7 @@ const ROW_CLASS = "py-2";
 const SUMMARY_CLASS = "text-[0.92em] leading-[1.6]";
 
 export default function ThreadStepRow({
+  bodyInset = true,
   children,
   defaultOpen = false,
   icon,
@@ -22,6 +23,8 @@ export default function ThreadStepRow({
   renderContent,
   summary,
 }: {
+  /** Off for a body that brings its own row geometry (a todo row), so it is not indented under the icon. */
+  bodyInset?: boolean;
   children?: ReactNode;
   defaultOpen?: boolean;
   icon: ReactNode;
@@ -45,7 +48,7 @@ export default function ThreadStepRow({
       ) : null}
     </span>
   );
-  if (children === undefined && !renderContent) {
+  if ((children === undefined || children === null) && !renderContent) {
     return (
       <DisclosureStaticRow
         marker={icon}
@@ -59,7 +62,7 @@ export default function ThreadStepRow({
   return (
     <Disclosure
       className={ROW_CLASS}
-      contentClassName="mt-1.5 space-y-2 pl-6"
+      contentClassName={bodyInset ? "mt-1.5 space-y-2 pl-6" : "mt-1 space-y-2"}
       defaultOpen={defaultOpen}
       hideChevron
       leading={icon}

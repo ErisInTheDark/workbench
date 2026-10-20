@@ -12,13 +12,14 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import ChevronIcon from "../ChevronIcon";
 import { LoaderIcon } from "../workbench-icons";
-import { isNativeFileOperation } from "../../../workbench/thread/thread-command-matchers";
+import { getNativeFileChanges, isNativeFileOperation } from "../../../workbench/thread/thread-command-matchers";
 import { getActivityChips, getCommandItemDisplay, type ActivityChip, type CommandChipContext } from "./thread-activity-chips";
 import { describeBrowseStep, getBrowseItemSteps, getCurrentBrowseStep } from "./thread-browse-steps";
 import type { ActivitySegment, CommandSequenceItem, ThreadRenderableBlock } from "./thread-render-blocks";
 import { getThreadFileChangeEntries, ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ProjectFilePath from "../ProjectFilePath";
+import { ThreadRowChromeContext } from "./thread-row-chrome";
 import { ThreadEntryAnimation } from "./ThreadRevealText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 import useThreadActivityRun from "./use-thread-activity-run";
@@ -66,6 +67,15 @@ function useThrottledSentence(sentence: string) {
     return () => window.clearTimeout(timer);
   }, [sentence, shown]);
   return shown;
+}
+
+/** File operations on one path stitch into one row (a retried edit is one step), so files count by path. */
+function countVisibleSteps(segments: readonly ActivitySegment[]) {
+  return segments.reduce((count, segment) => count + (segment.kind === "files"
+    ? new Set(segment.items.flatMap(item => item.type === "fileChange"
+      ? item.changes.map(change => change.path)
+      : getNativeFileChanges(item).map(({ change }) => change.path))).size
+    : getActivitySegmentItems(segment).length), 0);
 }
 
 function ChipRow({ chips }: { chips: ActivityChip[] }) {
@@ -162,7 +172,11 @@ export default function ThreadActivityRun({
     const last = index === block.segments.length - 1;
     switch (segment.kind) {
       case "reasoning": return <div className={gap} key={key}>{renderers.reasoning(segment.item, last)}</div>;
-      case "commands": return <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>{renderers.commands(segment.items, last)}</div>;
+      case "commands": return (
+        <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>
+          <ThreadRowChromeContext.Provider value="step">{renderers.commands(segment.items, last)}</ThreadRowChromeContext.Provider>
+        </div>
+      );
       case "code": return <div className={`rounded-lg bg-fg/4 px-3 ${gap}`} key={key}>{renderers.code(segment.item)}</div>;
       case "files": return <div className={gap} key={key}>{renderers.files(segment.items)}</div>;
       case "webSearch": return <div className={gap} key={key}>{renderers.webSearch(segment.items)}</div>;
@@ -170,7 +184,7 @@ export default function ThreadActivityRun({
   });
 
   // A run that settled holding one step is just that step; the card only earns its place summarising several.
-  if (!live && block.segments.flatMap(getActivitySegmentItems).length === 1) {
+  if (!live && countVisibleSteps(block.segments) === 1) {
     return <div className="my-1.5">{steps}</div>;
   }
 
@@ -186,7 +200,8 @@ export default function ThreadActivityRun({
           <span className="min-w-0 flex-1 overflow-hidden">
             {chips.length ? <ChipRow chips={chips} /> : status
               ? <span className="flex min-w-0 items-center gap-2 font-medium"><LoaderIcon className="shrink-0" />{status}</span>
-              : <span>Reasoned</span>}
+              // Nothing countable (only reasoning, or only failed steps): name what the run actually held.
+              : <span>{block.segments.every(segment => segment.kind === "reasoning") ? "Reasoned" : "Worked"}</span>}
           </span>
           {durationMs ? <ThreadDurationText className="shrink-0" durationMs={durationMs} /> : null}
           <ChevronIcon

@@ -29,6 +29,16 @@ test("a settled run holding one step unwraps into that step, while longer runs s
   assert.match(html, /lone title/u, "the lone reasoning shows as its own step");
 });
 
+test("repeated failed edits of one file are one stitched step, so their settled run unwraps into it", () => {
+  const failedEdit = (id: string): ThreadItem => ({
+    arguments: { file_path: "C:/repo/a.ts", new_string: "b", old_string: "a" }, contentItems: null, durationMs: 1, id,
+    namespace: "claude", status: "failed", success: false, tool: "Edit", type: "dynamicToolCall",
+  });
+  const html = render([failedEdit("one"), failedEdit("two"), failedEdit("three"), agentMessage("message")], "completed");
+  assert.equal(cards(html), 0);
+  assert.match(html, /×3/u);
+});
+
 test("a live run is a card even with one step, so its status row never jumps", () => {
   assert.equal(cards(render([reasoning("thinking")], "inProgress")), 1);
 });

@@ -1,14 +1,17 @@
 /*
  * Exports:
  * - default ThreadGitArcCollapsedSummary: compose established result rows beneath a closed Git arc card.
- * - ThreadGitArcCollapsedSummaryContent: typed commit, file, claim, or count preview content.
+ * - ThreadGitArcCollapsedSummaryContent: typed file, claim, count or status-count preview content.
+ * - createThreadGitArcStatusCounts: a status read compressed to one count per non-empty group.
  * - createThreadGitArcCompareSummaryRows/createThreadGitArcDiffSummaryRows/createThreadGitArcEditSummaryRows: normalise parsed operation changes for file-row presentation.
  */
+import type { ReactNode } from "react";
 import type { GitArcEditFile } from "workbench-shared/workbench/git/git-arc-edit-contracts";
+import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
+import { ArchiveIcon, CheckCheckIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
 import type { FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
-import ThreadCheckpointCommitCard, { type ThreadCommitSummary } from "./ThreadCheckpointCommitCard";
 import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import { DisclosureStaticRow } from "../../ui/Disclosure";
 import {
@@ -18,11 +21,29 @@ import {
 import ThreadSummaryText from "./ThreadSummaryText";
 
 export type ThreadGitArcCollapsedSummaryContent =
-  /** Every commit is listed: a stack card's commits are its whole message, never a preview. Null summaries load. */
-  | { commits: Array<{ key: string; summary: ThreadCommitSummary | null }>; kind: "commits" }
   | { changes: ThreadFileChangeListChange[]; kind: "files" }
   | { kind: "claims"; label: string; marker: ThreadClaimMarker; paths: string[]; totalCount: number }
-  | { kind: "counts"; rows: Array<{ label: string; marker: ThreadClaimMarker }> };
+  | { kind: "counts"; rows: Array<{ label: string; marker: ThreadClaimMarker }> }
+  /** Everything a status read knows, compressed to one line of counts whatever the agent asked to expand. */
+  | { kind: "status"; counts: Array<{ count: number; icon: ReactNode; label: string }> };
+
+const count = (value: number | readonly unknown[] | undefined) => typeof value === "number" ? value : value?.length ?? 0;
+
+/** One count per non-empty status group, in the order the status details list them. */
+export function createThreadGitArcStatusCounts(facts: Partial<GitArcStatusPresentation>) {
+  const stashedPaths = count(facts.stashedClaims);
+  const lost = (facts.recovery ?? []).filter(entry => entry.kind !== "restored").reduce((total, entry) => total + count(entry.paths), 0);
+  return [
+    { count: facts.stacked?.length ?? 0, icon: <GitArcStackIcon size={14} />, label: "stacked" },
+    { count: facts.pending?.length ?? 0, icon: <GitArcProposalIcon size={14} />, label: "pending" },
+    { count: facts.accepted?.length ?? 0, icon: <CheckCheckIcon size={14} />, label: "accepted" },
+    { count: count(facts.dirtyClaims), icon: <ThreadClaimMarkerIcon marker="dirty" />, label: "dirty" },
+    { count: count(facts.cleanClaims), icon: <ThreadClaimMarkerIcon marker="clean" />, label: "clean" },
+    { count: stashedPaths, icon: <ArchiveIcon size={14} />, label: "stashed" },
+    { count: count(facts.unclaimedDirt), icon: <ThreadClaimMarkerIcon marker="unclaimed" />, label: "unclaimed dirt" },
+    { count: lost, icon: <ThreadClaimMarkerIcon marker="unclaimed" />, label: "lost claims" },
+  ].filter(entry => entry.count > 0);
+}
 
 /** Edit session rows; moved files render at their new path with their source as the move origin. */
 export function createThreadGitArcEditSummaryRows (files: readonly GitArcEditFile[]): ThreadFileChangeListChange[] {
@@ -83,36 +104,31 @@ export default function ThreadGitArcCollapsedSummary ({
 }: {
   content: ThreadGitArcCollapsedSummaryContent;
 }) {
-  const visibleCount = content.kind === "commits"
-    ? content.commits.length
-    : content.kind === "files"
-      ? Math.min(content.changes.length, 2)
-      : content.kind === "claims"
-        ? Math.min(content.paths.length, 2)
-        : Math.min(content.rows.length, 2);
-  const totalCount = content.kind === "commits"
-    ? content.commits.length
-    : content.kind === "files"
-      ? content.changes.length
-      : content.kind === "claims" ? content.totalCount : content.rows.length;
-  const remainingCount = totalCount - visibleCount;
+  if (content.kind === "status") {
+    return (
+      <div
+        className="flex flex-wrap items-center gap-x-3.5 gap-y-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] py-2 text-[0.86em] text-fg/muted"
+        data-thread-git-arc-collapsed-summary="true"
+      >
+        {content.counts.length ? content.counts.map(entry => (
+          <span className="inline-flex items-center gap-1" key={entry.label}>
+            <span aria-hidden="true" className="inline-flex [&_svg]:size-3.5">{entry.icon}</span>
+            <b className="font-semibold text-text">{entry.count}</b>{entry.label}
+          </span>
+        )) : <span>Nothing claimed, pending or dirty</span>}
+      </div>
+    );
+  }
+  const totalCount = content.kind === "files" ? content.changes.length
+    : content.kind === "claims" ? content.totalCount : content.rows.length;
+  const remainingCount = totalCount - Math.min(totalCount, 2);
 
   return (
     <div
       className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"
       data-thread-git-arc-collapsed-summary="true"
     >
-      {content.kind === "commits" ? (
-        <div className="py-1.5">
-          {content.commits.map(({ key, summary }) => (
-            <ThreadCheckpointCommitCard
-              key={key}
-              sourceItemId={`collapsed-commit:${key}`}
-              state={summary ? { status: "summary", summary } : { status: "pending" }}
-            />
-          ))}
-        </div>
-      ) : content.kind === "files" ? (
+      {content.kind === "files" ? (
         <ThreadFileChangePreviewList
           changes={content.changes.slice(0, 2)}
         />

@@ -1217,7 +1217,10 @@ export function GitArcIcon({ action, ...props }: IconProps & { action: GitArcCom
   if (action === "edit") return <FileUpdateIcon {...props} />;
   // Proposals share the commit glyph every commit display uses.
   if (action === "propose") return <GitArcProposalIcon {...props} />;
-  if (action === "rescind" || action === "unknown") {
+  if (action === "rescind") {
+    return <OutlinedIcon {...props}><path d="M13.657 8H15" /><path d="m2 2 20 20" /><path d="M20.414 20.414A2 2 0 0 1 19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 .586-1.414" /><path d="M7 12h5" /><path d="M7 16h6" /><path d="M7 8h1" /><path d="M8.657 3H19a2 2 0 0 1 2 2v10.343" /></OutlinedIcon>;
+  }
+  if (action === "unknown") {
     return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 8h8" /><path d="M7 12h10" /><path d="M7 16h6" /></OutlinedIcon>;
   }
   if (action === "compare" || action === "diff") {

@@ -1,20 +1,21 @@
 /*
  * Exports:
- * - default ThreadVisCommandItem: render a vis start or end call as a closed disclosure that shows the document snapshotted at that
- *   moment, an answer read or browser snapshot as one that shows what the agent read, and a screenshot as one that shows the
- *   image the agent saw (its delivery is transcript-hidden, so this is its only place).
- * - ThreadVisSnapshotRow: the completed start or end row over its snapshot, shared with the user's card-end item.
+ * - default ThreadVisCommandItem: a vis call as one step line: a start or end opens into the document snapshotted at that
+ *   moment, a state read or browser snapshot into what the agent read, and a screenshot into the image the agent saw (its
+ *   delivery is transcript-hidden, so this is its only place).
+ * - ThreadVisSnapshotRow: the completed start or end step over its snapshot, shared with the user's card-end item.
  */
 "use client";
 
-import { useContext, useMemo } from "react";
+import { useContext, useMemo, type ReactNode } from "react";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { parseVisScreenshotImage, parseVisSessionResult } from "workbench-shared/workbench/vis/vis-contract";
 import type { WorkbenchVisOperation } from "../../../workbench/thread/thread-command-matchers";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
-import Disclosure from "../../ui/Disclosure";
+import { LoaderIcon, WallpaperIcon } from "../workbench-icons";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadStepRow from "./ThreadStepRow";
 import ThreadUserImage from "./ThreadUserImage";
 import ThreadVisFrame from "./ThreadVisFrame";
 
@@ -49,17 +50,35 @@ const VERBS: Record<WorkbenchVisOperation["action"], Record<"completed" | "faile
   screenshot: { inProgress: "Checking vis appearance", failed: "Could not check vis appearance", completed: "Checked vis appearance" },
 };
 
-function VisSummary({ durationMs, path, verb }: { durationMs: number | null; path: string; verb: string }) {
+/** One vis step: the vis glyph (as the status row shows live vis), what happened to which file, then progress. */
+function VisStep({ children, durationMs, failed = false, path, renderContent, running = false, verb }: {
+  children?: ReactNode;
+  durationMs: number | null;
+  failed?: boolean;
+  path: string;
+  renderContent?: () => ReactNode;
+  running?: boolean;
+  verb: string;
+}) {
   return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0">{verb}</span>
-      <span className="min-w-0 truncate font-mono text-[0.92em] text-text">{path}</span>
-      {durationMs === null ? null : <ThreadDurationText className="shrink-0 text-[0.78em] text-fg/muted" durationMs={durationMs} />}
-    </span>
+    <ThreadStepRow
+      icon={<WallpaperIcon size={16} />}
+      iconClassName={failed ? "text-danger" : undefined}
+      meta={[running ? <LoaderIcon key="running" size={14} /> : durationMs === null ? null : <ThreadDurationText durationMs={durationMs} key="duration" />]}
+      renderContent={renderContent}
+      summary={(
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className={`shrink-0 ${failed ? "text-danger" : ""}`}>{verb}</span>
+          <span className="min-w-0 truncate font-mono text-[0.92em] text-text">{path}</span>
+        </span>
+      )}
+    >
+      {children}
+    </ThreadStepRow>
   );
 }
 
-/** A completed vis start or end: a closed disclosure over the document snapshotted at that moment. */
+/** A completed vis start or end, opening into the document snapshotted at that moment. */
 export function ThreadVisSnapshotRow({ durationMs, path, sessionId, snapshotKind, threadId }: {
   durationMs: number | null;
   path: string;
@@ -68,12 +87,11 @@ export function ThreadVisSnapshotRow({ durationMs, path, sessionId, snapshotKind
   threadId: string;
 }) {
   return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
+    <VisStep
+      durationMs={durationMs}
+      path={path}
       renderContent={() => <VisSnapshotContent sessionId={sessionId} snapshotKind={snapshotKind} threadId={threadId} />}
-      summary={<VisSummary durationMs={durationMs} path={path} verb={VERBS[snapshotKind].completed} />}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+      verb={VERBS[snapshotKind].completed}
     />
   );
 }
@@ -87,37 +105,17 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
   threadId: string;
 }) {
   const result = parseVisSessionResult(output);
-  const summary = <VisSummary durationMs={durationMs} path={operation.path} verb={VERBS[operation.action][outcome]} />;
+  const step = { durationMs, path: operation.path, running: outcome === "inProgress", verb: VERBS[operation.action][outcome] };
   const screenshot = operation.action === "screenshot" && outcome === "completed" ? parseVisScreenshotImage(output) : null;
-  if (screenshot) {
-    return (
-      <Disclosure
-        className="py-2"
-        contentClassName="mt-2 pl-6"
-        renderContent={() => <ThreadUserImage alt={`Screenshot of ${operation.path}`} src={screenshot} />}
-        summary={summary}
-        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      />
-    );
-  }
+  if (screenshot) return <VisStep {...step} renderContent={() => <ThreadUserImage alt={`Screenshot of ${operation.path}`} src={screenshot} />} />;
   if ((operation.action === "read" || operation.action === "snapshot") && outcome === "completed") {
-    return (
-      <Disclosure
-        className="py-2"
-        contentClassName="mt-2 pl-6"
-        renderContent={() => <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[0.8em] text-fg/muted">{output.trim()}</pre>}
-        summary={summary}
-        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      />
-    );
+    return <VisStep {...step} renderContent={() => <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[0.8em] text-fg/muted">{output.trim()}</pre>} />;
   }
-  if (!result || outcome !== "completed") {
-    return (
-      <div className="py-2 text-[0.92em] leading-[1.6] text-fg/muted">
-        {summary}
-        {outcome === "failed" && output ? <p className="m-0 mt-1 pl-6 text-[0.86em]">{output.trim().slice(0, 500)}</p> : null}
-      </div>
-    );
+  if (outcome === "failed") {
+    return output.trim()
+      ? <VisStep {...step} failed><p className="m-0 text-[0.86em] text-fg/muted">{output.trim().slice(0, 500)}</p></VisStep>
+      : <VisStep {...step} failed />;
   }
+  if (!result || outcome !== "completed") return <VisStep {...step} />;
   return <ThreadVisSnapshotRow durationMs={durationMs} path={operation.path} sessionId={result.sessionId} snapshotKind={result.kind} threadId={threadId} />;
 }

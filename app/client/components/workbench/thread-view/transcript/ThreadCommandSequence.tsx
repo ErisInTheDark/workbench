@@ -3,6 +3,7 @@
  * - default ThreadCommandSequence: consecutive command-family items split into their render segments: recall, title, status,
  *   lifecycle and approval rows keep their own renderers, plain commands share one group.
  * - ThreadRegularCommandItem: one shell, MCP or native tool call through its renderer.
+ * - ThreadMcpItem: one MCP call: Workbench calls through their specialized renderer, anything else as a tool row.
  * Keep runtime exports component-only for React Refresh.
  */
 "use client";
@@ -15,6 +16,7 @@ import {
   getThreadCommandExecutionOutcome,
   getWorkbenchCommandRouteSummaryDisplay,
   getWorkbenchMcpCommandRoute,
+  shouldUseWorkbenchMcpSpecializedRenderer,
 } from "../../../../workbench/thread/thread-command-matchers";
 import { ThreadItemApprovalsContext, useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
 import Disclosure from "../../../ui/Disclosure";
@@ -27,6 +29,8 @@ import ThreadDynamicToolCallItem from "../ThreadDynamicToolCallItem";
 import ThreadMcpToolCallItem from "../ThreadMcpToolCallItem";
 import ThreadStatusCommandItem from "../ThreadStatusCommandItem";
 import ThreadTitleCommandItem from "../ThreadTitleCommandItem";
+import ThreadWorkbenchCommandItem from "../ThreadWorkbenchCommandItem";
+import { SubagentActivitySlot } from "./subagent-activity-slot";
 import { getBrowseItemSteps } from "../thread-browse-steps";
 import {
   buildCommandSequenceRenderSegments, type CommandItem, type CommandSequenceItem,
@@ -41,12 +45,34 @@ import { getActiveItemStartedAtMs } from "./transcript-blocks";
 type McpItem = Extract<CommandSequenceItem, { type: "mcpToolCall" }>;
 type Timeline = readonly WorkbenchThreadItemTimelineEntry[] | undefined;
 
-function ThreadApprovalAwareMcpToolCallItem ({ itemTimeline, item }: { item: McpItem; itemTimeline: Timeline }) {
+/** One MCP call: Workbench calls through their specialized renderer, anything else as a tool row (Browse with its steps). */
+export function ThreadMcpItem ({ itemTimeline, item }: { item: McpItem; itemTimeline: Timeline }) {
+  const transcript = useTranscript();
   const turn = useTranscript.turn();
   const project = useProject.contextual();
-  const durationMs = useThreadItemLiveDuration(item.durationMs, getActiveItemStartedAtMs(item, itemTimeline));
+  const SubagentActivity = useContext(SubagentActivitySlot);
+  const activeStartedAtMs = getActiveItemStartedAtMs(item, itemTimeline);
+  const durationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
   const approval = useThreadItemApproval(item.id);
   const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context: project?.mcpMatcherContext, server: item.server, tool: item.tool });
+  const isMcpFailure = item.status === "failed" || Boolean(item.error);
+  if (shouldUseWorkbenchMcpSpecializedRenderer(route, isMcpFailure) && route?.kind === "specialized" && (
+    project?.cwd || route.operation.kind === "feedback" || route.operation.kind === "todo"
+    || route.operation.kind === "gitArc" || route.operation.kind === "gitArcWait"
+  )) {
+    return (
+      <ThreadWorkbenchCommandItem
+        activeStartedAtMs={activeStartedAtMs}
+        item={item}
+        relatedThreadsById={transcript.relatedThreadsById}
+        renderRecallRecord={(record) => <ThreadRecallItem record={record} />}
+        renderSubagentActivity={({ subagent, thread }) => <SubagentActivity fallbackThread={thread} subagent={subagent} />}
+        route={route}
+        subagents={transcript.subagents}
+        threadId={transcript.threadId}
+      />
+    );
+  }
   const browseSteps = getBrowseItemSteps(item, getWorkbenchCommandRouteSummaryDisplay(route), turn.browseResultEntries);
   return (
     <ThreadMcpToolCallItem
@@ -66,7 +92,7 @@ export function ThreadRegularCommandItem ({
   item: CommandSequenceItem;
   itemTimeline: Timeline;
 }) {
-  if (item.type === "mcpToolCall") return <ThreadApprovalAwareMcpToolCallItem item={item} itemTimeline={itemTimeline} />;
+  if (item.type === "mcpToolCall") return <ThreadMcpItem item={item} itemTimeline={itemTimeline} />;
   if (item.type === "dynamicToolCall") {
     return <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />;
   }
