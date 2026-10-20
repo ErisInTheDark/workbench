@@ -47,6 +47,7 @@ const COMMAND_LABELS: Readonly<Record<string, string>> = {
 
 /** Recorded results name the agent action, which splits some BrowseMD commands by their subcommand. */
 const RECORDED_ACTIONS: Readonly<Record<string, BrowseActionInfo>> = {
+  emulateColorScheme: { action: "emulate", label: "Emulate color scheme" },
   emulateDevice: { action: "emulate", label: "Emulate device" },
   initScript: { action: "init-js", label: "Install page script" },
   mouseClick: { action: "mouse", label: "Mouse click" },

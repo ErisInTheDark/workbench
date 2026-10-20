@@ -31,7 +31,7 @@ Keep one cohesive sequence in each Browse call. Use `help` or `help <command>` f
 | pointer input | `mouse click`, `mouse hover`, `mouse drag`, `mouse scroll ... [--repeat <n>] [--interval <ms>] [--park]` |
 | touch input | `touch scroll ... [--speed <n>] [--repeat <n>] [--interval <ms>] [--fling]` |
 | wait | `wait timeout <ms>`, `wait selector <target> [state]`, `wait load [state]` |
-| display | `viewport <width> <height> [--scale <n>]`, `emulate device <preset\|clear>` |
+| display | `viewport <width> <height> [--scale <n>]`, `emulate device <preset\|clear>`, `emulate color-scheme <light\|dark\|clear>` |
 | performance | `throttle cpu <rate\|clear>`, `throttle network <preset\|clear>`, `trace <start\|stop>` |
 | lifecycle | `status`, `doctor`, `stop` |
 

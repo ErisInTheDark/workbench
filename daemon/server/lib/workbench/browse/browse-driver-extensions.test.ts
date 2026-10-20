@@ -76,6 +76,20 @@ test("admits Workbench commands through the upstream closed command schema", () 
   assert.throws(() => DriverCommandNameSchema.parse("workbench.notReal"));
 });
 
+test("emulates prefers-color-scheme and clears the override", async () => {
+  const DriverCommandNameSchema = z.enum(["open"]);
+  patchBrowseDriverCommandSchema({ DriverCommandNameSchema });
+  assert.equal(DriverCommandNameSchema.parse("workbench.emulateColorScheme"), "workbench.emulateColorScheme");
+
+  const { cdpCalls, manager } = createTouchManager();
+  assert.deepEqual(await manager.execute("workbench.emulateColorScheme", { scheme: "dark" }), { colorScheme: "dark" });
+  assert.deepEqual(await manager.execute("workbench.emulateColorScheme", { scheme: "clear" }), { colorScheme: "clear" });
+  assert.deepEqual(cdpCalls, [
+    { method: "Emulation.setEmulatedMedia", params: { features: [{ name: "prefers-color-scheme", value: "dark" }] } },
+    { method: "Emulation.setEmulatedMedia", params: { features: [{ name: "prefers-color-scheme", value: "" }] } },
+  ]);
+});
+
 test("extracts one snapshot subtree without retaining siblings", () => {
   const tree = [
     "- document",

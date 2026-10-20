@@ -38,7 +38,11 @@
  * - WorkbenchBrowseAgentEvalRequest: Browse evaluation request.
  * - WorkbenchBrowseAgentInitScriptRequest: Browse pre-navigation script request.
  * - WorkbenchBrowseAgentHelpRequest: Browse command-help request.
+ * - WorkbenchBrowseDevicePreset: Browse device-emulation preset.
+ * - WorkbenchBrowseNetworkPreset: Browse network-throttling preset.
+ * - WorkbenchBrowseColorScheme: Browse prefers-color-scheme override.
  * - WorkbenchBrowseAgentEmulateDeviceRequest: Browse device-emulation request.
+ * - WorkbenchBrowseAgentEmulateColorSchemeRequest: Browse color-scheme emulation request.
  * - WorkbenchBrowseAgentThrottleCpuRequest: Browse CPU-throttling request.
  * - WorkbenchBrowseAgentThrottleNetworkRequest: Browse network-throttling request.
  * - WorkbenchBrowseAgentTraceRequest: Browse trace-lifecycle request.
@@ -340,6 +344,7 @@ export type WorkbenchBrowseAgentAction =
   | WorkbenchBrowseAgentCleanupRequest
   | WorkbenchBrowseAgentCursorRequest
   | WorkbenchBrowseAgentDoctorRequest
+  | WorkbenchBrowseAgentEmulateColorSchemeRequest
   | WorkbenchBrowseAgentEmulateDeviceRequest
   | WorkbenchBrowseAgentEvalRequest
   | WorkbenchBrowseAgentFillRequest
@@ -387,6 +392,7 @@ export type WorkbenchBrowseAgentActionName =
   | "doctor"
   | "cursor"
   | "eval"
+  | "emulateColorScheme"
   | "emulateDevice"
   | "fill"
   | "forget"
@@ -481,9 +487,18 @@ export interface WorkbenchBrowseAgentHelpRequest extends WorkbenchBrowseAgentBas
   topic?: string | null;
 }
 
+export type WorkbenchBrowseDevicePreset = "clear" | "iphone-14" | "pixel-7";
+export type WorkbenchBrowseNetworkPreset = "clear" | "fast-3g" | "offline" | "slow-3g";
+export type WorkbenchBrowseColorScheme = "clear" | "dark" | "light";
+
 export interface WorkbenchBrowseAgentEmulateDeviceRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "emulateDevice";
-  preset: "clear" | "iphone-14" | "pixel-7";
+  preset: WorkbenchBrowseDevicePreset;
+}
+
+export interface WorkbenchBrowseAgentEmulateColorSchemeRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "emulateColorScheme";
+  scheme: WorkbenchBrowseColorScheme;
 }
 
 export interface WorkbenchBrowseAgentThrottleCpuRequest extends WorkbenchBrowseAgentBrowserRequest {
@@ -493,7 +508,7 @@ export interface WorkbenchBrowseAgentThrottleCpuRequest extends WorkbenchBrowseA
 
 export interface WorkbenchBrowseAgentThrottleNetworkRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "throttleNetwork";
-  preset: "clear" | "fast-3g" | "offline" | "slow-3g";
+  preset: WorkbenchBrowseNetworkPreset;
 }
 
 export interface WorkbenchBrowseAgentTraceRequest extends WorkbenchBrowseAgentBrowserRequest {

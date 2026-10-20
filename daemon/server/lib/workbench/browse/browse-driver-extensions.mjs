@@ -10,6 +10,7 @@ const MAX_ERROR_LENGTH = 8_000;
 const MAX_TRACE_EVENT_NAMES = 100;
 const traceStates = new WeakMap();
 const WORKBENCH_DRIVER_COMMANDS = [
+  "workbench.emulateColorScheme",
   "workbench.emulateDevice",
   "workbench.initScript",
   "workbench.throttleCpu",
@@ -278,6 +279,13 @@ async function emulateDevice(page, preset) {
   return { device: preset };
 }
 
+async function emulateColorScheme(page, scheme) {
+  await page.sendCDP("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-color-scheme", value: scheme === "clear" ? "" : scheme }],
+  });
+  return { colorScheme: scheme };
+}
+
 async function throttleNetwork(page, preset) {
   const conditions = preset === "clear"
     ? { downloadThroughput: -1, latency: 0, offline: false, uploadThroughput: -1 }
@@ -396,6 +404,7 @@ export function patchBrowseDriverExtensions(sessionManagerModule) {
       return await dispatchTouchScroll(await page(), params);
     }
     if (command === "workbench.emulateDevice") return await emulateDevice(await page(), params.preset);
+    if (command === "workbench.emulateColorScheme") return await emulateColorScheme(await page(), params.scheme);
     if (command === "workbench.throttleCpu") {
       await (await page()).sendCDP("Emulation.setCPUThrottlingRate", { rate: params.rate });
       return { cpuRate: params.rate };

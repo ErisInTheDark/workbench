@@ -5,14 +5,18 @@
  * - compileWorkbenchBrowseMarkdown: compile BrowseMD text into a typed Browse action sequence.
  * - tokenizeWorkbenchBrowseMarkdownLine: split a BrowseMD command line with shell-ish quotes.
  */
-import { findWorkbenchBrowseCommandSpec } from "./browse-command-specs";
 import type {
   WorkbenchBrowseAgentAction,
   WorkbenchBrowseAgentSequenceRequest,
   WorkbenchBrowseAgentWaitSelectorState,
   WorkbenchBrowseAgentWaitState,
+  WorkbenchBrowseColorScheme,
+  WorkbenchBrowseDevicePreset,
+  WorkbenchBrowseNetworkPreset,
   WorkbenchBrowseSessionMode,
 } from "workbench-shared/types";
+import { BROWSE_COLOR_SCHEMES, BROWSE_DEVICE_PRESETS, BROWSE_NETWORK_PRESETS } from "./actions/performance-actions";
+import { findWorkbenchBrowseCommandSpec } from "./browse-command-specs";
 
 export interface WorkbenchBrowseMarkdownCompileOptions {
   cwd: string;
@@ -73,8 +77,6 @@ const BROWSE_MARKDOWN_SCREENSHOT_ANIMATIONS = new Set(["allow", "disabled"]);
 const BROWSE_MARKDOWN_SCREENSHOT_TYPES = new Set(["jpeg", "png"]);
 const BROWSE_MARKDOWN_JAVASCRIPT_LANGUAGES = new Set(["js", "javascript"]);
 const BROWSE_MARKDOWN_INIT_JAVASCRIPT_LANGUAGES = new Set(["init-js", "init-javascript"]);
-const BROWSE_MARKDOWN_DEVICE_PRESETS = new Set(["clear", "iphone-14", "pixel-7"]);
-const BROWSE_MARKDOWN_NETWORK_PRESETS = new Set(["clear", "fast-3g", "offline", "slow-3g"]);
 
 export function compileWorkbenchBrowseMarkdown(
   script: string,
@@ -358,19 +360,34 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
 }
 
 function compileEmulateCommand(context: LineContext, subcommand: string, args: string[]): WorkbenchBrowseAgentAction {
-  if (subcommand !== "device") {
-    throw new WorkbenchBrowseMarkdownParseError("emulate only supports `emulate device <preset|clear>`.", context.lineNumber);
+  if (subcommand === "device") {
+    return {
+      ...createBrowserActionBase(context.options, context.tokens),
+      action: "emulateDevice",
+      preset: requireChoice(
+        requireArgument(args, 0, "emulate device requires a preset or clear.", context.lineNumber),
+        BROWSE_DEVICE_PRESETS,
+        "device preset",
+        context.lineNumber,
+      ) as WorkbenchBrowseDevicePreset,
+    };
   }
-  return {
-    ...createBrowserActionBase(context.options, context.tokens),
-    action: "emulateDevice",
-    preset: requireChoice(
-      requireArgument(args, 0, "emulate device requires a preset or clear.", context.lineNumber),
-      BROWSE_MARKDOWN_DEVICE_PRESETS,
-      "device preset",
-      context.lineNumber,
-    ) as "clear" | "iphone-14" | "pixel-7",
-  };
+  if (subcommand === "color-scheme") {
+    return {
+      ...createBrowserActionBase(context.options, context.tokens),
+      action: "emulateColorScheme",
+      scheme: requireChoice(
+        requireArgument(args, 0, "emulate color-scheme requires light, dark, or clear.", context.lineNumber),
+        BROWSE_COLOR_SCHEMES,
+        "color scheme",
+        context.lineNumber,
+      ) as WorkbenchBrowseColorScheme,
+    };
+  }
+  throw new WorkbenchBrowseMarkdownParseError(
+    "emulate only supports `emulate device <preset|clear>` and `emulate color-scheme <light|dark|clear>`.",
+    context.lineNumber,
+  );
 }
 
 function compileThrottleCommand(context: LineContext, subcommand: string, args: string[]): WorkbenchBrowseAgentAction {
@@ -386,7 +403,7 @@ function compileThrottleCommand(context: LineContext, subcommand: string, args: 
     return {
       ...createBrowserActionBase(context.options, context.tokens),
       action: "throttleNetwork",
-      preset: requireChoice(value, BROWSE_MARKDOWN_NETWORK_PRESETS, "network preset", context.lineNumber) as "clear" | "fast-3g" | "offline" | "slow-3g",
+      preset: requireChoice(value, BROWSE_NETWORK_PRESETS, "network preset", context.lineNumber) as WorkbenchBrowseNetworkPreset,
     };
   }
   throw new WorkbenchBrowseMarkdownParseError("throttle supports cpu or network.", context.lineNumber);

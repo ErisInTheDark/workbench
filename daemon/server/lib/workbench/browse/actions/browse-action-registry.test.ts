@@ -156,6 +156,10 @@ test("normalizes performance and touch controls into driver-owned commands", () 
       command: "workbench.emulateDevice",
     },
     {
+      action: { action: "emulateColorScheme" as const, scheme: "dark" as const, session: "research", threadId: "thread-1" },
+      command: "workbench.emulateColorScheme",
+    },
+    {
       action: { action: "throttleCpu" as const, rate: 4, session: "research", threadId: "thread-1" },
       command: "workbench.throttleCpu",
     },
@@ -179,4 +183,11 @@ test("normalizes performance and touch controls into driver-owned commands", () 
     if (!normalized.ok || !("runtimeRequest" in normalized.command) || normalized.command.runtimeRequest.kind !== "command") continue;
     assert.equal(normalized.command.runtimeRequest.command, example.command);
   }
+  const unsupported = normalizeWorkbenchBrowseAgentRequest({
+    action: "emulateColorScheme",
+    scheme: "sepia" as "dark",
+    session: "research",
+    threadId: "thread-1",
+  });
+  assert.equal(unsupported.ok, false);
 });

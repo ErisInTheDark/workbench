@@ -80,6 +80,7 @@ test("compiles init scripts and performance controls", () => {
       "globalThis.__started = performance.now();",
       "```",
       "emulate device iphone-14",
+      "emulate color-scheme dark",
       "throttle cpu 4",
       "throttle network fast-3g",
       "touch scroll 195 500 0 -900 --speed 800 --fling",
@@ -90,9 +91,14 @@ test("compiles init scripts and performance controls", () => {
   assert.deepEqual(actions.map(({ action }) => action), [
     "initScript",
     "emulateDevice",
+    "emulateColorScheme",
     "throttleCpu",
     "throttleNetwork",
     "touchScroll",
     "trace",
   ]);
+  assert.throws(
+    () => compileWorkbenchBrowseMarkdown("emulate color-scheme sepia", { cwd: ".", threadId: "thread" }),
+    /color scheme/u,
+  );
 });

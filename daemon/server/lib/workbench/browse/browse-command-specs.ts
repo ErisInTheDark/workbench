@@ -24,6 +24,7 @@ export const BROWSE_COMMAND_SPECS: readonly WorkbenchBrowseCommandSpec[] = [
   { flags: ["force"], key: "cleanup", maxArgs: null, usage: "cleanup [session ...] [--force]" },
   { flags: browser(), key: "cursor", maxArgs: 0, usage: "cursor" },
   { flags: sessionFlags, key: "doctor", maxArgs: 0, usage: "doctor" },
+  { flags: browser(), key: "emulate color-scheme", maxArgs: 1, usage: "emulate color-scheme <light|dark|clear>" },
   { flags: browser(), key: "emulate device", maxArgs: 1, usage: "emulate device <iphone-14|pixel-7|clear>" },
   { flags: browser("press-enter"), key: "fill", maxArgs: 2, usage: "fill <selector|@ref> <value|\"\"> [--press-enter]" },
   { flags: sessionFlags, key: "forget", maxArgs: 0, usage: "forget" },
