@@ -45,7 +45,8 @@ CRITICAL INSTRUCTION EDITING RULES:
 
 ### Allowed Validation
 do not apply timeouts for validation command runs! they own their own timeouts
-**READ VALIDATION OUTPUT RAW.** never pipe, grep, `Select-String`, `Select-Object`, head/tail, truncate or redirect `pnpm typecheck` or test output. noisy, slow or timing-out output is a project defect relevant to your work: fix its source, or propose the fix. DO NOT FILTER OUTPUT; FIX OUTPUT
+<!-- Agents read "or propose the fix" as permission to file feedback instead of fixing, and treated scenario output that overflowed tool limits as outside "test output", so they redirected it to a file. Naming every validation command, "oversized", and in-task ownership closes both routes. -->
+**READ VALIDATION OUTPUT RAW.** never pipe, grep, `Select-String`, `Select-Object`, head/tail, truncate or redirect any validation command's output. noisy, oversized, slow or timing-out output is a defect in your current task: fix its source before continuing; no brief or approval needed. feedback and todos are not fixes. DO NOT FILTER OUTPUT; FIX OUTPUT
 
 1. `pnpm typecheck [--app] [--daemon] [--host] [--shared] [--test]`; no flags checks all
 
