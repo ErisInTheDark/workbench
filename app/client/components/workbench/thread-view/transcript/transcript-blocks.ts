@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - TranscriptEntry: one rendered turn entry: a renderable block, or a generic item that renders alone.
- * - buildTranscriptEntries: the one pipeline from turn items to entries: renderable blocks folded into activity runs, then
- *   retried Git arc starts folded into their success.
+ * - buildTranscriptEntries: the one pipeline from turn items to entries: an ended turn's running calls ended, renderable
+ *   blocks folded into activity runs, then retried Git arc starts folded into their success.
  * - withInteractionTimeline: a turn's item timeline with relational questionnaire and approval resolution times.
  * - useStableRenderableBlocks: keep unchanged blocks' identities across renders so memoised block views skip them.
  * - getMostRecentDeliveredIndex: the newest entry actually in the turn, skipping trailing undelivered steers and held messages.
@@ -16,6 +16,7 @@ import {
   findWorkbenchThreadItemTimelineEntry, upsertWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry,
 } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { WORKBENCH_QUESTIONNAIRE_TOOL_NAME } from "workbench-shared/workbench/thread/thread-questionnaire-history";
+import { endTurnItem } from "workbench-shared/workbench/thread/thread-turn-settlement";
 import type {
   WorkbenchProjectedGenericItem,
   WorkbenchProjectedInteractionItem,
@@ -68,12 +69,14 @@ export function withInteractionTimeline(
 }
 
 export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscriptItem[], {
-  browseResultEntries, codeDetails, hiddenReasoningStep, project,
+  browseResultEntries, codeDetails, hiddenReasoningStep, project, turnLive,
 }: {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
   codeDetails: boolean;
   hiddenReasoningStep: ThreadReasoningStepReference | null;
   project: ContextualProject | null;
+  /** An ended turn runs nothing: a call whose finish never arrived still shows as over. */
+  turnLive: boolean;
 }): TranscriptEntry[] {
   const matchers = project?.matcherContext;
   const browseScreenshotUrls = getBrowseScreenshotUrls(items.flatMap(item => item.type === "commandExecution" ? [item] : []), browseResultEntries);
@@ -92,7 +95,8 @@ export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscr
       flush();
       entries.push({ item, kind: "generic" });
     } else {
-      pending.push(isProjectedInteractionItem(item) ? adaptProjectedInteractionItem(item) : item);
+      const threadItem = isProjectedInteractionItem(item) ? adaptProjectedInteractionItem(item) : item;
+      pending.push(turnLive ? threadItem : endTurnItem(threadItem));
     }
   }
   flush();

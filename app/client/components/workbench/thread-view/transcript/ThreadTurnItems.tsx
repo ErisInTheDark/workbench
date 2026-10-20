@@ -85,8 +85,8 @@ export default memo(function ThreadTurnItems({
   const codeDetails = useThreadCodeDetails();
   const project = useProject.contextual();
   const entries = useMemo(
-    () => buildTranscriptEntries(items, { browseResultEntries, codeDetails, hiddenReasoningStep, project }),
-    [browseResultEntries, codeDetails, hiddenReasoningStep, items, project],
+    () => buildTranscriptEntries(items, { browseResultEntries, codeDetails, hiddenReasoningStep, project, turnLive: turnStatus === "inProgress" }),
+    [browseResultEntries, codeDetails, hiddenReasoningStep, items, project, turnStatus],
   );
   const stableBlocks = useStableRenderableBlocks(entries.flatMap(entry => entry.kind === "block" ? [entry.block] : []), "identity");
   let stableBlockIndex = 0;

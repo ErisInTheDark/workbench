@@ -123,13 +123,13 @@ function countVisibleSteps(segments: readonly ActivitySegment[]) {
 }
 
 /**
- * A run is a card summarising several steps. Settled with one step it is just that step. A lone step showing its own
- * progress (a sleep's countdown, a running command's timer) shows bare even while live; a card would only repeat it.
+ * A run is a card summarising several steps. Settled with one step it is just that step. A lone sleep or command shows
+ * its own progress, so it stays bare even while live: one row from start to finish, until a second step joins it.
  */
 export function getActivityRunPresentation(segments: readonly ActivitySegment[], live: boolean): "bare" | "card" {
   if (countVisibleSteps(segments) !== 1) return "card";
-  const [step] = segments;
-  return !live || step?.kind === "sleep" || (step?.kind === "commands" && step.items.every(isRunning)) ? "bare" : "card";
+  const kind = segments[0]?.kind;
+  return !live || kind === "sleep" || kind === "commands" ? "bare" : "card";
 }
 
 export function getActivitySegmentItems(segment: ActivitySegment): ThreadItem[] {

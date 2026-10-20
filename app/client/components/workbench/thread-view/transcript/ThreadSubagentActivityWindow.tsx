@@ -90,12 +90,13 @@ function ThreadSubagentActivityTail ({ thread }: { thread: RelatedThread | undef
     status: currentTurn.status,
   } : null, [currentTurn]);
   const turnItems = currentTurn?.items;
+  const turnLive = currentTurn?.status === "inProgress";
   const codeDetails = useThreadCodeDetails();
   const recentBlocks = useMemo(() => turnItems
-    ? buildTranscriptEntries(turnItems, { browseResultEntries: NO_BROWSE_RESULTS, codeDetails, hiddenReasoningStep: null, project })
+    ? buildTranscriptEntries(turnItems, { browseResultEntries: NO_BROWSE_RESULTS, codeDetails, hiddenReasoningStep: null, project, turnLive })
       .flatMap(entry => entry.kind === "block" ? [entry.block] : [])
       .slice(-SUBAGENT_ACTIVITY_WINDOW_BLOCKS)
-    : NO_BLOCKS, [codeDetails, project, turnItems]);
+    : NO_BLOCKS, [codeDetails, project, turnItems, turnLive]);
   const blocks = useStableRenderableBlocks(recentBlocks);
   if (!thread || !currentTurn || !turnScope) {
     return <ThreadContentLoadingSkeleton />;

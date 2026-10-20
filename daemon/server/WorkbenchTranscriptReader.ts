@@ -10,6 +10,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { projectWorkbenchTranscript, projectWorkbenchTranscriptTurnRow } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import { endTurnItem } from "workbench-shared/workbench/thread/thread-turn-settlement";
 import { isTranscriptSideEntryItem, projectTranscriptSideEntries } from "workbench-shared/workbench/transcript/transcript-side-entries";
 import type { WorkbenchThreadPage, WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchTranscriptRecoveryRequiredError } from "workbench-shared/workbench/thread/thread-actions";
@@ -186,19 +187,12 @@ export default class WorkbenchTranscriptReader {
       startedAt: current.started_at, endedAt, durationMs: current.started_at === null ? null : endedAt - current.started_at,
     }];
     for (const item of this.content(snapshot).turns.find(candidate => candidate.id === current.id)?.items ?? []) {
-      if (!("status" in item) || item.status !== "inProgress") continue;
-      switch (item.type) {
-        case "commandExecution":
-        case "dynamicToolCall":
-        case "fileChange":
-        case "mcpToolCall":
-        case "collabAgentToolCall":
-          observations.push({
-            kind: "item", threadId: ownerThreadId, turnId, publicItemId: WorkbenchItemIdSchema.parse(item.id),
-            item: item.type === "collabAgentToolCall" ? { ...item, status: "interrupted" } : { ...item, status: "completed" },
-            lifecycle: "completed", observedAt: endedAt,
-          });
-      }
+      const ended = endTurnItem(item);
+      if (ended === item) continue;
+      observations.push({
+        kind: "item", threadId: ownerThreadId, turnId, publicItemId: WorkbenchItemIdSchema.parse(item.id),
+        item: ended, lifecycle: "completed", observedAt: endedAt,
+      });
     }
     return observations;
   }
