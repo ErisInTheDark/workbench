@@ -625,12 +625,24 @@ test("composer and questionnaire draft children hydrate with their owning draft"
       },
     },
   });
+  await controller.mutate({
+    action: "put",
+    record: {
+      daemonRegistrationId,
+      kind: "composerDraft",
+      projectId: "project",
+      threadId: "other-thread",
+      value: { attachments: [{ id: "other", url: "asset://other" }, { id: "second", url: "asset://second" }], text: "other", updatedAt: 30 },
+    },
+  });
   const snapshot = controller.read();
   const records = projectedRecords(snapshot);
-  assert.ok(snapshot.kind === "snapshot" && records.some((record) => (
-    record.kind === "composerDraft"
-    && record.value.attachments[0]?.url === "asset://image"
-  )));
+  assert.equal(snapshot.kind, "snapshot");
+  assert.deepEqual(records.flatMap(record => record.kind === "composerDraft"
+    ? [[record.threadId, record.value.attachments.map(attachment => attachment.url)]] : []).sort(), [
+    ["other-thread", ["asset://other", "asset://second"]],
+    ["thread", ["asset://image"]],
+  ]);
   assert.ok(snapshot.kind === "snapshot" && records.some((record) => (
     record.kind === "questionnaireDraft"
     && record.value.customValues.question === "custom"

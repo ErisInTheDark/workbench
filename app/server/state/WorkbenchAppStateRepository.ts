@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAppStateRepositoryOptions: app-state data root, database path, and clock seams.
- * - default WorkbenchAppStateRepository: own app-state SQLite recovery, connection, transactions, and local registration.
+ * - default WorkbenchAppStateRepository: own app-state SQLite recovery, connection, prepared statements, transactions, and local registration.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -36,6 +36,8 @@ import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/iden
 import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
+const MAX_CACHED_STATEMENTS = 256;
+
 export interface WorkbenchAppStateRepositoryOptions {
   dataRootPath?: string;
   databasePath?: string;
@@ -52,6 +54,7 @@ export default class WorkbenchAppStateRepository {
   #opening: Promise<string> | null = null;
   #closing: Promise<void> | null = null;
   readonly #backups = new Set<Promise<void>>();
+  readonly #statements = new WeakMap<Database.Database, Map<string, Database.Statement>>();
 
   constructor(options: WorkbenchAppStateRepositoryOptions = {}) {
     const dataRootPath = options.dataRootPath ?? resolveWorkbenchDataRoot();
@@ -139,7 +142,7 @@ export default class WorkbenchAppStateRepository {
 
   query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Row[] {
     const compiled = compileWorkbenchDatabaseStatement(appStateTableInventory, statement);
-    return this.#requireDatabase().prepare(compiled.sql).all(...compiled.parameters) as Row[];
+    return this.#prepare(compiled.sql).all(...compiled.parameters) as Row[];
   }
 
   currentVersion() {
@@ -310,8 +313,21 @@ export default class WorkbenchAppStateRepository {
     const database = this.#requireDatabase();
     return statements.reduce((changes, statement) => {
       const compiled = compileWorkbenchDatabaseStatement(appStateTableInventory, statement);
-      return changes + database.prepare(compiled.sql).run(...compiled.parameters).changes;
+      return changes + this.#prepare(compiled.sql).run(...compiled.parameters).changes;
     }, 0);
+  }
+
+  /** Statements belong to their connection, so the cache dies with it; SQL with varying `IN` lists cannot grow it without bound. */
+  #prepare(sql: string) {
+    const database = this.#requireDatabase();
+    let statements = this.#statements.get(database);
+    if (!statements) this.#statements.set(database, statements = new Map());
+    let statement = statements.get(sql);
+    if (!statement) {
+      if (statements.size >= MAX_CACHED_STATEMENTS) statements.clear();
+      statements.set(sql, statement = database.prepare(sql));
+    }
+    return statement;
   }
 
   #requireDatabase() {

@@ -369,12 +369,26 @@ export default class WorkbenchAppStateController {
     const changed = <Row extends { revision: number }>(rows: Row[]) => (
       rows.filter((row) => row.revision > sinceRevision)
     );
+    // A full read hydrates every owner, so one table read filtered by owner replaces a query per owner.
+    const fullRead = sinceRevision < 0;
+    const owned = <Owner, Row extends Owner>(
+      owners: readonly Owner[], key: (owner: Owner) => string, all: () => Row[], one: (owner: Owner) => Row[],
+    ): Row[] => {
+      // Children carry no revision; a put rewrites them and bumps their owner, so only changed owners' children ride along.
+      if (!owners.length) return [];
+      if (!fullRead) return owners.flatMap(one);
+      const keys = new Set(owners.map(key));
+      return all().filter(row => keys.has(key(row)));
+    };
+    type ThreadOwner = { daemon_registration_id: string; project_id: string; thread_id: string };
+    const threadKey = (row: ThreadOwner) => `${row.daemon_registration_id}\0${row.project_id}\0${row.thread_id}`;
+    const threadOwner = ({ daemon_registration_id, project_id, thread_id }: ThreadOwner) => ({ daemon_registration_id, project_id, thread_id });
+    type FileOwner = { daemon_registration_id: string; project_id: string; path: string };
+    const fileKey = (row: FileOwner) => `${row.daemon_registration_id}\0${row.project_id}\0${row.path}`;
+    const fileOwner = ({ daemon_registration_id, project_id, path }: FileOwner) => ({ daemon_registration_id, project_id, path });
     const composerDrafts = changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts)));
     const fileDrafts = changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts)));
-    // Like other draft children, history rides along only for drafts that changed.
-    const fileDraftOwners = fileDrafts.filter(draft => !draft.deleted).map(draft => ({
-      where: { daemon_registration_id: draft.daemon_registration_id, project_id: draft.project_id, path: draft.path },
-    }));
+    const fileDraftOwners: FileOwner[] = fileDrafts.filter(draft => !draft.deleted);
     const lastProjectSelections = changed(
       this.#repository.query(selectRows(appStateClientTables.lastProjectSelections)),
     );
@@ -382,11 +396,9 @@ export default class WorkbenchAppStateController {
     // Mark tags carry no revision either; a put rewrites them and bumps their preference, so they ride along with it.
     const globalPreferences = changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences)));
     const logicalProjectPreferences = changed(this.#repository.query(selectRows(appStateClientTables.logicalProjectPreferences)));
-    // Children carry no revision; a put rewrites them and bumps their draft, so only changed drafts' children ride along.
     type QuestionnaireOwner = { daemon_registration_id: string; project_id: string; thread_id: string; request_key: string };
-    const ownerKey = (row: QuestionnaireOwner) => `${row.daemon_registration_id}\0${row.project_id}\0${row.thread_id}\0${row.request_key}`;
-    const changedQuestionnaires = new Set(questionnaireDrafts.map(ownerKey));
-    const questionnaireChildren = <Row extends QuestionnaireOwner>(rows: Row[]) => rows.filter(row => changedQuestionnaires.has(ownerKey(row)));
+    const questionnaireKey = (row: QuestionnaireOwner) => `${threadKey(row)}\0${row.request_key}`;
+    const questionnaireOwner = (row: QuestionnaireOwner) => ({ ...threadOwner(row), request_key: row.request_key });
     const imageUrl = (identity: WorkbenchClientStateAttachmentIdentity, id: string, stored: string) => {
       if (projection?.attachmentsAsUrls
         && (stored === STORED_IMAGE || /^data:image\/(?:png|jpeg|webp|gif);base64,/u.test(stored))) {
@@ -398,32 +410,25 @@ export default class WorkbenchAppStateController {
       return `data:${image.mediaType};base64,${Buffer.from(image.content).toString("base64")}`;
     };
     return {
-      composerDraftAttachments: composerDrafts.flatMap(draft => this.#repository.query(selectRows(
-        appStateClientTables.composerDraftAttachments, {
-          where: {
-            daemon_registration_id: draft.daemon_registration_id,
-            project_id: draft.project_id,
-            thread_id: draft.thread_id,
-          },
-        }))).map(row => ({
+      composerDraftAttachments: owned(composerDrafts, threadKey,
+        () => this.#repository.query(selectRows(appStateClientTables.composerDraftAttachments)),
+        draft => this.#repository.query(selectRows(appStateClientTables.composerDraftAttachments, { where: threadOwner(draft) })),
+      ).map(row => ({
           ...row, url: imageUrl({
             kind: "composerDraft", daemonRegistrationId: row.daemon_registration_id,
             projectId: row.project_id, threadId: row.thread_id,
           }, row.id, row.url),
         })),
-      composerDraftReferences: composerDrafts.flatMap(draft => this.#repository.query(selectRows(
-        appStateClientTables.composerDraftReferences, {
-          where: {
-            daemon_registration_id: draft.daemon_registration_id,
-            project_id: draft.project_id,
-            thread_id: draft.thread_id,
-          },
-        }))),
+      composerDraftReferences: owned(composerDrafts, threadKey,
+        () => this.#repository.query(selectRows(appStateClientTables.composerDraftReferences)),
+        draft => this.#repository.query(selectRows(appStateClientTables.composerDraftReferences, { where: threadOwner(draft) }))),
       composerDrafts,
-      fileDraftHistories: fileDraftOwners.flatMap(owner => this.#repository.query(selectRows(
-        appStateClientTables.fileDraftHistories, owner))),
-      fileDraftHistoryFrames: fileDraftOwners.flatMap(owner => this.#repository.query(selectRows(
-        appStateClientTables.fileDraftHistoryFrames, owner))),
+      fileDraftHistories: owned(fileDraftOwners, fileKey,
+        () => this.#repository.query(selectRows(appStateClientTables.fileDraftHistories)),
+        draft => this.#repository.query(selectRows(appStateClientTables.fileDraftHistories, { where: fileOwner(draft) }))),
+      fileDraftHistoryFrames: owned(fileDraftOwners, fileKey,
+        () => this.#repository.query(selectRows(appStateClientTables.fileDraftHistoryFrames)),
+        draft => this.#repository.query(selectRows(appStateClientTables.fileDraftHistoryFrames, { where: fileOwner(draft) }))),
       fileDrafts,
       globalMarkTags: globalPreferences.some(row => row.key === "markTags" && !row.deleted)
         ? this.#repository.query(selectRows(appStateClientTables.globalMarkTags))
@@ -445,23 +450,21 @@ export default class WorkbenchAppStateController {
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
       projectSidebarFolders: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarFolders))),
       projectSidebarPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarPreferences))),
-      questionnaireDraftAnswers: questionnaireChildren(this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAnswers))),
-      // Attachments can hold inline image data, so they are read per changed draft rather than filtered from every row.
-      questionnaireDraftAttachments: questionnaireDrafts.flatMap(draft => this.#repository.query(selectRows(
-        appStateClientTables.questionnaireDraftAttachments, {
-          where: {
-            daemon_registration_id: draft.daemon_registration_id,
-            project_id: draft.project_id,
-            thread_id: draft.thread_id,
-            request_key: draft.request_key,
-          },
-        }))).map(row => ({
+      questionnaireDraftAnswers: owned(questionnaireDrafts, questionnaireKey,
+        () => this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAnswers)),
+        draft => this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAnswers, { where: questionnaireOwner(draft) }))),
+      questionnaireDraftAttachments: owned(questionnaireDrafts, questionnaireKey,
+        () => this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAttachments)),
+        draft => this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAttachments, { where: questionnaireOwner(draft) })),
+      ).map(row => ({
           ...row, url: imageUrl({
             kind: "questionnaireDraft", daemonRegistrationId: row.daemon_registration_id,
             projectId: row.project_id, threadId: row.thread_id, requestKey: row.request_key,
           }, row.key, row.url),
         })),
-      questionnaireDraftSelections: questionnaireChildren(this.#repository.query(selectRows(appStateClientTables.questionnaireDraftSelections))),
+      questionnaireDraftSelections: owned(questionnaireDrafts, questionnaireKey,
+        () => this.#repository.query(selectRows(appStateClientTables.questionnaireDraftSelections)),
+        draft => this.#repository.query(selectRows(appStateClientTables.questionnaireDraftSelections, { where: questionnaireOwner(draft) }))),
       questionnaireDrafts,
     };
   }
