@@ -213,6 +213,69 @@ test("a thread without history takes its first live baseline as the browser base
   assert.equal(browser.projection?.hasPreviousTurns, false);
 });
 
+/** `turnCount` turns of one item each, oldest first; the newest turn is live and still empty. */
+function longHistory(turnCount: number) {
+  const base = history(0);
+  const turns = Array.from({ length: turnCount }, (_, index) => ({
+    ...base.catalog.turns[0]!, id: `turn-${index}`, native_turn_id: `turn-${index}`, turn_index: index,
+    state: index === turnCount - 1 ? "inProgress" as const : "completed" as const,
+  }));
+  const catalog = { ...base.catalog, turns };
+  const envelopes = turns.slice(0, -1).map((turn, index) => {
+    const rows = emptyTranscriptSnapshotRows();
+    rows.threadItems.push({
+      created_at: index, id: index + 1, item_position: 0, public_id: `item-${index}`,
+      thread_id: threadId, turn_id: turn.id, type: "assistantMessage", updated_at: index,
+    });
+    rows.itemIdentities.push({ id: `item-${index}`, thread_id: threadId });
+    rows.threadItemAssistantMessages.push({
+      item_id: index + 1, item_type: "assistantMessage", phase: "commentary", state: "completed", text: `message ${index}`,
+    });
+    const value = {
+      cursor: { itemId: `item-${index}`, itemPosition: 0, turnIndex: index },
+      itemId: `item-${index}`,
+      snapshot: { ...catalog, turns: [turn], loadedTurnIds: [turn.id], rows },
+    };
+    return { ...value, retainedBytes: JSON.stringify(value).length * 2 };
+  });
+  return { catalog, envelopes };
+}
+
+test("browsers receive turn rows only for loaded turns, the turn before them and the newest turn", () => {
+  const source = longHistory(10);
+  const window = new WorkbenchDeliveredTranscriptWindow();
+  const browser = new Browser();
+  const baseline = window.deliver(page(source, 6, 9, true));
+  assert.deepEqual(baseline?.snapshot.turns.map(turn => turn.id), ["turn-5", "turn-6", "turn-7", "turn-8", "turn-9"]);
+  browser.apply(baseline);
+  assert.deepEqual(browser.itemIds, ["item-6", "item-7", "item-8"]);
+  assert.equal(browser.projection?.turnHistory.find(entry => entry.loadState === "unloaded")?.turnId, "turn-5",
+    "the older-turn anchor is the turn right before the window");
+
+  const older = window.deliver(page(source, 3, 6, true));
+  assert.deepEqual(older?.snapshot.turns.map(turn => turn.id), ["turn-2", "turn-3", "turn-4", "turn-5"]);
+  browser.apply(older);
+  assert.deepEqual(browser.itemIds, ["item-3", "item-4", "item-5", "item-6", "item-7", "item-8"]);
+});
+
+test("browsers receive source aliases only for provisional items, and project the same identity kinds", () => {
+  const source = history(2);
+  const alias = (itemId: string, sourceKind: "provisional" | "stable", id: number) => ({
+    component_index: 0, component_kind: "item" as const, id, item_identity_id: itemId, reference: `${sourceKind}-${itemId}`,
+    source_kind: sourceKind, thread_id: threadId, turn_id: turnId,
+  });
+  source.envelopes[0]!.snapshot.rows.itemSourceAliases.push(alias("item-0", "provisional", 1), alias("item-0", "stable", 2));
+  source.envelopes[1]!.snapshot.rows.itemSourceAliases.push(alias("item-1", "provisional", 3), { ...alias("item-1", "provisional", 4), reference: "again" });
+  const window = new WorkbenchDeliveredTranscriptWindow();
+  const browser = new Browser();
+  const baseline = window.deliver(page(source, 0, 2, false));
+  assert.deepEqual(baseline?.snapshot.rows.itemSourceAliases.map(row => row.id), [3]);
+  browser.apply(baseline);
+  const identityKind = (id: string) => (browser.item(id) as { workbenchIdentityKind?: string } | undefined)?.workbenchIdentityKind;
+  assert.equal(identityKind("item-0"), undefined);
+  assert.equal(identityKind("item-1"), "provisional");
+});
+
 test("recovered older items reopen exhausted paging without crossing the delivered boundary", () => {
   const source = history(3);
   const window = new WorkbenchDeliveredTranscriptWindow();

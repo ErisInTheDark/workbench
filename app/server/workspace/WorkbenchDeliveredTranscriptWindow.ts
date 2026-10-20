@@ -38,6 +38,34 @@ type Turn = WorkbenchTranscriptSnapshot["turns"][number];
 function signature({ snapshot }: WorkbenchTranscriptItemEnvelope) {
   return JSON.stringify([snapshot.rows, snapshot.approvalOutcomes ?? [], snapshot.expiredItemPayloads ?? []]);
 }
+
+/**
+ * The browser reads turn rows only for loaded turns, the one just before them (the older-turn anchor and paging boundary)
+ * and the newest turn (the thread's cwd); every other turn stays in the reservoir until a page loads it.
+ */
+function browserTurns(turns: readonly Turn[], loaded: ReadonlySet<string>) {
+  const ordered = [...turns].sort((left, right) => left.turn_index - right.turn_index);
+  const kept = new Set(loaded);
+  const first = ordered.findIndex(turn => loaded.has(turn.id));
+  if (first > 0) kept.add(ordered[first - 1]!.id);
+  const newest = ordered.at(-1);
+  if (newest) kept.add(newest.id);
+  return turns.filter(turn => kept.has(turn.id));
+}
+
+/** The browser reads source aliases only to mark items whose every alias is provisional; an item without any reads as stable. */
+function withoutStableAliases(snapshot: WorkbenchTranscriptSnapshot): WorkbenchTranscriptSnapshot {
+  const aliases = snapshot.rows.itemSourceAliases;
+  if (!aliases.length) return snapshot;
+  const stable = new Set(aliases.flatMap(alias => alias.source_kind === "provisional" ? [] : [alias.item_identity_id]));
+  const marked = new Set<string>();
+  const itemSourceAliases = aliases.filter(alias => {
+    if (stable.has(alias.item_identity_id) || marked.has(alias.item_identity_id)) return false;
+    marked.add(alias.item_identity_id);
+    return true;
+  });
+  return itemSourceAliases.length === aliases.length ? snapshot : { ...snapshot, rows: { ...snapshot.rows, itemSourceAliases } };
+}
 interface DeliveredRoot {
   cursor: WorkbenchTranscriptItemCursor;
   turnId: string;
@@ -137,7 +165,8 @@ export default class WorkbenchDeliveredTranscriptWindow {
         return root && liveTurns.has(root.turn_id) && (root.type !== "operation" || eager.has(envelope.itemId))
           ? envelope : this.#defer(envelope);
       });
-      return this.#apply(composeWorkbenchTranscriptWindow(result.catalog, envelopes, {
+      const loaded = new Set(envelopes.flatMap(envelope => envelope.snapshot.loadedTurnIds));
+      return this.#apply(composeWorkbenchTranscriptWindow({ ...result.catalog, turns: browserTurns(result.catalog.turns, loaded) }, envelopes, {
         hasPreviousItems: result.hasMore,
       }), [], true);
     }
@@ -145,13 +174,13 @@ export default class WorkbenchDeliveredTranscriptWindow {
     const envelopes = fresh.map(envelope => this.#defer(envelope));
     if (!envelopes.length && hadPrevious === result.hasMore) return null;
     // Reservoir catalogues can predate live state: live turns, thread and held steers stay authoritative.
-    // The browser already holds every known turn, so a page carries only its own and newly seen ones.
+    // A page carries its own turns and its new older-turn anchor; the browser already holds the rest it reads.
     const pageTurnIds = new Set(envelopes.flatMap(envelope => envelope.snapshot.loadedTurnIds));
     const catalog: WorkbenchTranscriptSnapshot = {
       ...result.catalog,
       rows: emptyTranscriptSnapshotRows(),
       thread: this.#thread,
-      turns: result.catalog.turns
+      turns: browserTurns(result.catalog.turns, pageTurnIds)
         .filter(turn => pageTurnIds.has(turn.id) || !this.#turns.has(turn.id))
         .map(turn => this.#turns.get(turn.id) ?? turn),
     };
@@ -208,7 +237,7 @@ export default class WorkbenchDeliveredTranscriptWindow {
       return envelope;
     });
     const turnIds = new Set(envelopes.flatMap(envelope => envelope.snapshot.loadedTurnIds));
-    return composeWorkbenchTranscriptWindow({
+    return withoutStableAliases(composeWorkbenchTranscriptWindow({
       hasPreviousTurns: false,
       loadedTurnIds: [],
       rows: emptyTranscriptSnapshotRows(),
@@ -217,7 +246,7 @@ export default class WorkbenchDeliveredTranscriptWindow {
         const turn = this.#turns.get(id);
         return turn ? [turn] : [];
       }),
-    }, envelopes, { hasPreviousItems: false });
+    }, envelopes, { hasPreviousItems: false }));
   }
 
   /** Same rule as the daemon live view: item-free changes matter when they carry turn, approval or thread facts. */
@@ -261,7 +290,8 @@ export default class WorkbenchDeliveredTranscriptWindow {
     };
   }
 
-  #apply(snapshot: WorkbenchTranscriptSnapshot, removed: readonly string[], reset: boolean): TranscriptStructureUpdate {
+  #apply(source: WorkbenchTranscriptSnapshot, removed: readonly string[], reset: boolean): TranscriptStructureUpdate {
+    const snapshot = withoutStableAliases(source);
     const incoming = projectWorkbenchTranscript(snapshot);
     if (!incoming.success) {
       const issue = incoming.issues[0];
