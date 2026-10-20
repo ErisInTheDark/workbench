@@ -108,9 +108,10 @@ test("a pending steer is not delivered yet, so the run before it stays the live 
     threadId: "thread",
     turn: { completedAt: null, durationMs: null, error: null, id: "turn", items, itemsView: "full", startedAt: 1, status: "inProgress" },
   })));
+  // A live card's status shows its last step under the counts; a settled card shows only the counts.
   const work = [user("initial"), ran("one"), ran("two")];
-  assert.match(render(work), /Thinking/u);
-  assert.match(render([...work, withWorkbenchInputState(user("steer"), { kind: "steer", status: "pending" })]), /Thinking/u);
+  assert.match(render(work), /2ranecho two/u);
+  assert.match(render([...work, withWorkbenchInputState(user("steer"), { kind: "steer", status: "pending" })]), /2ranecho two/u);
 });
 
 test("active command families derive a live duration from canonical item timing", () => {

@@ -7,7 +7,7 @@ import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 
 import { getThreadCommandDisplay, getWorkbenchMcpCommandDisplay } from "../../../workbench/thread/thread-command-matchers";
 import {
-  describeBrowseStep, getBrowseItemSteps, getBrowseScreenshotUrls, getBrowseSteps, getCurrentBrowseStep, getLiftedBrowseSteps,
+  getBrowseItemSteps, getBrowseScreenshotUrls, getBrowseSteps, getCurrentBrowseStep, getLiftedBrowseSteps,
 } from "./thread-browse-steps";
 import type { CommandItem } from "./thread-render-blocks";
 
@@ -33,7 +33,8 @@ test("a live CLI call reports the step it is on from streamed progress", () => {
   ].join("\n"), "inProgress");
   const rows = steps(live);
   assert.deepEqual(rows.map(row => row.state), ["completed", "inProgress", "queued"]);
-  assert.equal(describeBrowseStep(getCurrentBrowseStep(rows)!), "Click text=Save");
+  const current = getCurrentBrowseStep(rows);
+  assert.deepEqual([current?.label, current?.target?.text], ["Click", "text=Save"]);
 });
 
 test("without streamed progress, a live call is on the first step without a recorded result", () => {
@@ -85,7 +86,7 @@ test("fenced page scripts read as an evaluate step naming the script's first lin
     context: {}, server: "wb", tool: "browse_run",
   });
   const [step] = getBrowseSteps({ outcome: "inProgress", output: null, rows: display?.detailRows });
-  assert.equal(describeBrowseStep(step!), "Evaluate return document.title;");
+  assert.deepEqual([step?.label, step?.target?.text.split("\n")[0]], ["Evaluate", "return document.title;"]);
 });
 
 test("lifted steps keep data answers, drop acknowledgements, and a failure no step explains keeps its call row", () => {

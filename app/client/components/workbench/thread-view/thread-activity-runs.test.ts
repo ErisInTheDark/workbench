@@ -7,7 +7,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 import {
-  buildActivityRuns, getActivityRunPresentation, getActivitySegmentItems, getSettledActivitySegments,
+  buildActivityRuns, getActivityRunPresentation, getActivitySegmentItems, getActivityStatusStep, getSettledActivitySegments,
 } from "./thread-activity-runs";
 import { buildRenderableBlocks, getRenderableBlockItems, type CommandItem, type ThreadRenderableBlock } from "./thread-render-blocks";
 
@@ -154,6 +154,22 @@ test("a run is a card summarising several steps, and otherwise its one step", ()
 test("a run's summary counts only finished steps", () => {
   const settled = getSettledActivitySegments(runOf([command("done"), running("busy", "node build.js")]).segments);
   assert.deepEqual(settled.flatMap(segment => getActivitySegmentItems(segment).map(item => item.id)), ["done"]);
+});
+
+test("a card's status is the newest step actually running, else the newest that happened", () => {
+  const status = (items: ThreadItem[], queued: readonly string[] = []) => {
+    const step = getActivityStatusStep(runOf(items).segments, id => queued.includes(id));
+    return step ? [step.kind, getActivitySegmentItems(step).map(item => item.id)] : null;
+  };
+  // A running step wins over anything that finished after it in the run.
+  assert.deepEqual(status([command("done"), running("busy", "cargo build"), reasoning("after")]), ["commands", ["busy"]]);
+  // Queued shells have not started, so the newest admitted one is what runs.
+  assert.deepEqual(status([running("first", "cargo build"), running("waiting", "cargo test")], ["waiting"]), ["commands", ["first"]]);
+  // With nothing running, the newest step stands in, narrowed to its one item.
+  assert.deepEqual(status([command("one"), command("two"), reasoning("why")]), ["reasoning", ["why"]]);
+  assert.deepEqual(status([reasoning("why"), command("one"), command("two")]), ["commands", ["two"]]);
+  // Everything still queued: the newest finished step, not a call that has not begun.
+  assert.deepEqual(status([command("one"), running("waiting", "cargo test")], ["waiting"]), ["commands", ["one"]]);
 });
 
 test("reasoning with nothing to show adds no step, and a run of only that renders nothing", () => {

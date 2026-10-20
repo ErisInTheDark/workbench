@@ -6,7 +6,6 @@
  * - getBrowseItemSteps: steps for a CLI or MCP command item when its matcher display claims Browse, else null.
  * - getLiftedBrowseSteps: a call's steps when they can replace its row as ordinary command rows; null keeps the call row.
  * - getCurrentBrowseStep: the step a live call is on.
- * - describeBrowseStep: one step as plain text, for single-line status.
  * - getBrowseScreenshotUrls: every screenshot asset Browse steps already show, so duplicate screenshot steers can fold into them.
  */
 import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
@@ -186,12 +185,6 @@ export function getLiftedBrowseSteps(...args: Parameters<typeof getBrowseItemSte
 
 export function getCurrentBrowseStep(steps: readonly ThreadCommandDetailRow[]) {
   return steps.find((step) => step.state === "inProgress") ?? steps.find((step) => step.state === "queued") ?? null;
-}
-
-export function describeBrowseStep(step: ThreadCommandDetailRow) {
-  const label = step.label ?? "Browse step";
-  const target = step.target?.text.trim().split("\n")[0];
-  return target ? `${label} ${target}` : label;
 }
 
 /** Screenshots captured by Browse calls, read from recorded entries and streamed CLI progress. */

@@ -6,6 +6,7 @@
  * - getSettledActivitySegments: a run's steps without the running ones, for its summary.
  * - getActivityRunPresentation: whether a run shows as a card or as its one step.
  * - getActivitySegmentItems: the items one run segment shows.
+ * - getActivityStatusStep: the one step an activity card's status shows.
  * - pushActivitySegment: add one step to a segment list under the kind's merge rule.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -130,6 +131,25 @@ export function getActivityRunPresentation(segments: readonly ActivitySegment[],
   if (countVisibleSteps(segments) !== 1) return "card";
   const kind = segments[0]?.kind;
   return !live || kind === "sleep" || kind === "commands" ? "bare" : "card";
+}
+
+/** One item of a segment as a segment of its own kind. */
+function narrowSegment(segment: ActivitySegment, item: ThreadItem): ActivitySegment {
+  // The item came from this segment's list, so it has the list's item type.
+  return "items" in segment ? { ...segment, items: [item] } as ActivitySegment : segment;
+}
+
+/**
+ * The step an activity card's status shows: the newest one actually running, else the newest that happened. A call
+ * still waiting in a queue has not started, so it is neither.
+ */
+export function getActivityStatusStep(
+  segments: readonly ActivitySegment[], isQueued: (itemId: string) => boolean,
+): ActivitySegment | null {
+  const steps = segments.flatMap(segment => getActivitySegmentItems(segment).map(item => ({ item, segment })));
+  const running = steps.findLast(({ item }) => isRunning(item) && !isQueued(item.id));
+  const shown = running ?? steps.findLast(({ item }) => !isRunning(item));
+  return shown ? narrowSegment(shown.segment, shown.item) : null;
 }
 
 export function getActivitySegmentItems(segment: ActivitySegment): ThreadItem[] {

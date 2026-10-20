@@ -26,7 +26,7 @@ import ThreadSleepItem from "../ThreadSleepItem";
 import ThreadToolOutputItem from "../ThreadToolOutputItem";
 import ThreadWebSearchItem, { ThreadWebSearchSequence } from "../ThreadWebSearchItem";
 import { getCommandItemDisplay } from "../thread-activity-chips";
-import { getLiftedBrowseSteps } from "../thread-browse-steps";
+import { getCurrentBrowseStep, getLiftedBrowseSteps } from "../thread-browse-steps";
 import { hasSameBlockTimeline, type ThreadRenderableBlock } from "../thread-render-blocks";
 import { ThreadAgentCommentarySequence, ThreadAgentMessageItem, ThreadIncomingAgentMessageRuns } from "./ThreadAgentMessageItems";
 import ThreadCommandSequence, { ThreadMcpItem } from "./ThreadCommandSequence";
@@ -59,10 +59,12 @@ function useActivityRunRenderers(animateEntries: boolean, isMostRecent: boolean,
   const project = useProject.contextual();
   return {
     code: ({ item }) => <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />,
-    commands: ({ items }) => items.map((item) => {
+    commands: ({ items }, _isLastSegment, mode) => items.map((item) => {
       const browseSteps = getLiftedBrowseSteps(item, getCommandItemDisplay(item, { ...project?.matcherContext, cwd: project?.cwd }), turn.browseResultEntries);
-      return browseSteps
-        ? <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id} rows={browseSteps} />
+      // A status shows only the step the call is on, or its last once it is done.
+      const shownSteps = browseSteps && mode === "status" ? [getCurrentBrowseStep(browseSteps) ?? browseSteps.at(-1)!] : browseSteps;
+      return shownSteps
+        ? <ThreadCommandDetailRows icon={row => <ThreadBrowseStepIcon row={row} />} key={item.id} rows={shownSteps} />
         : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;
     }),
     files: ({ items }) => <ThreadFileChangeItem animateEntries={animateEntries} items={items} />,
