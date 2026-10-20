@@ -6,6 +6,7 @@
 import type CodexExecServer from "./CodexExecServer";
 import executeApprovedCommand from "./WorkbenchApprovedCommandExecutor";
 import type WorkbenchCommandCapacity from "./WorkbenchCommandCapacity";
+import type { WorkbenchCommandQueueTicket } from "./WorkbenchCommandCapacity";
 import type { WorkbenchShellRun, WorkbenchShellRunResult } from "./provider-execution";
 
 export interface WorkbenchShellRunnerOptions {
@@ -19,10 +20,22 @@ export interface WorkbenchShellRunnerOptions {
 export default class WorkbenchShellRunner {
   constructor(private readonly options: WorkbenchShellRunnerOptions) {}
 
-  /** Expensive commands wait for a shared slot before starting, so their own timeout measures only running time. */
-  async run(run: WorkbenchShellRun, signal: AbortSignal): Promise<WorkbenchShellRunResult> {
+  /**
+   * Expensive commands wait for a shared slot before starting, so their own timeout measures only running time.
+   * A command that waited reports its queue time as `queuedMs`.
+   */
+  async run(run: WorkbenchShellRun, signal: AbortSignal, ticket?: WorkbenchCommandQueueTicket): Promise<WorkbenchShellRunResult> {
     const start = () => this.start(run, signal);
-    return run.expensive && this.options.capacity ? await this.options.capacity.run(run.label, signal, start) : await start();
+    if (!run.expensive || !this.options.capacity) return await start();
+    const queue: { queuedAt: number | null; admittedAt: number | null } = { queuedAt: null, admittedAt: null };
+    const result = await this.options.capacity.run(run.label, signal, start, {
+      queued: at => { queue.queuedAt = at; ticket?.queued(at); },
+      admitted: at => { queue.admittedAt = at; ticket?.admitted(at); },
+      ...(ticket?.skip ? { skip: ticket.skip } : {}),
+    });
+    return queue.queuedAt === null || queue.admittedAt === null
+      ? result
+      : { ...result, queuedMs: Math.max(0, queue.admittedAt - queue.queuedAt) };
   }
 
   private async start(run: WorkbenchShellRun, signal: AbortSignal): Promise<WorkbenchShellRunResult> {

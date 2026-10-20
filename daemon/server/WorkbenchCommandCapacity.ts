@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - WorkbenchCommandCapacityOptions: slot count, machine memory, scheduling and log ports.
+ * - WorkbenchCommandCapacityOptions: slot count, machine memory, clock, scheduling and log ports.
+ * - WorkbenchCommandQueueTicket: one command's queue observer and its start-now signal.
  * - expensiveCommandSlots: hardware-derived concurrent expensive-command limit.
  * - default WorkbenchCommandCapacity: machine-wide FIFO admission for expensive agent commands, gated on memory pressure.
  */
@@ -12,7 +13,17 @@ export interface WorkbenchCommandCapacityOptions {
   log(message: string): void;
   /** Below this free-memory share, no additional expensive command starts while another runs. */
   minimumFreeShare?: number;
+  now?: () => number;
   schedule?: (recheck: () => void, delayMs: number) => () => void;
+}
+
+export interface WorkbenchCommandQueueTicket {
+  /** The command must wait; called once, before it can be admitted. */
+  queued(at: number): void;
+  /** The waiting command leaves the queue to start, by slot or skip, synchronously before anything else can run. */
+  admitted(at: number): void;
+  /** Aborting while queued starts the command at once without taking a slot; later aborts do nothing. */
+  skip?: AbortSignal;
 }
 
 interface Waiter {
@@ -42,7 +53,8 @@ function defaultSchedule(recheck: () => void, delayMs: number) {
  * Builds and test suites from many agents at once starve the machine (and the daemon with it). Expensive commands
  * take one of a few shared slots and start in arrival order; while another runs, a free slot also waits for memory
  * to recover. One expensive command can always run, so pressure never blocks expensive work entirely. Waiting
- * happens before the command starts, so its own timeout only measures running time.
+ * happens before the command starts, so its own timeout only measures running time. A skipped waiter runs beside
+ * the slots, as if it had never been expensive.
  */
 export default class WorkbenchCommandCapacity {
   private running = 0;
@@ -54,16 +66,23 @@ export default class WorkbenchCommandCapacity {
     if (!Number.isSafeInteger(options.slots) || options.slots < 1) throw new Error("Expensive command slots must be a positive integer.");
   }
 
-  async run<Result>(command: string, signal: AbortSignal, task: () => Promise<Result>): Promise<Result> {
+  async run<Result>(command: string, signal: AbortSignal, task: () => Promise<Result>, ticket?: WorkbenchCommandQueueTicket): Promise<Result> {
     signal.throwIfAborted();
     if (this.disposed) throw new Error("The expensive command queue was retired.");
+    let slotted = true;
     if (!this.waiting.length && this.canStart()) this.running += 1;
-    else await this.wait(command, signal);
+    else slotted = await this.wait(command, signal, ticket);
     try { return await task(); }
     finally {
-      this.running -= 1;
-      this.pump();
+      if (slotted) {
+        this.running -= 1;
+        this.pump();
+      }
     }
+  }
+
+  private now() {
+    return (this.options.now ?? Date.now)();
   }
 
   /** Stops rechecking; commands already admitted finish normally. */
@@ -82,22 +101,44 @@ export default class WorkbenchCommandCapacity {
     return memory.free < memory.total * (this.options.minimumFreeShare ?? DEFAULT_MINIMUM_FREE_SHARE) ? memory : null;
   }
 
-  private wait(command: string, signal: AbortSignal) {
-    return new Promise<void>((resolve, reject) => {
-      const waiter: Waiter = {
-        command, queuedAt: Date.now(), reportedPressure: false,
-        admit: () => { signal.removeEventListener("abort", abort); resolve(); },
+  /** Resolves true once admitted to a slot, or false when skipped to run unslotted. */
+  private wait(command: string, signal: AbortSignal, ticket: WorkbenchCommandQueueTicket | undefined) {
+    return new Promise<boolean>((resolve, reject) => {
+      const detach = () => {
+        signal.removeEventListener("abort", abort);
+        ticket?.skip?.removeEventListener("abort", skip);
       };
-      const abort = () => {
+      const leave = () => {
+        detach();
         const index = this.waiting.indexOf(waiter);
         if (index >= 0) this.waiting.splice(index, 1);
         this.pump();
+      };
+      const waiter: Waiter = {
+        command, queuedAt: this.now(), reportedPressure: false,
+        admit: () => {
+          detach();
+          ticket?.admitted(this.now());
+          resolve(true);
+        },
+      };
+      const abort = () => {
+        leave();
         reject(signal.reason);
       };
+      const skip = () => {
+        leave();
+        this.options.log(` CMD expensive command started now, skipping the queue ${dim(`(${label(command)})`)}`);
+        ticket?.admitted(this.now());
+        resolve(false);
+      };
       signal.addEventListener("abort", abort, { once: true });
+      ticket?.skip?.addEventListener("abort", skip, { once: true });
       this.options.log(` CMD expensive command queued ${dim(`(${this.waiting.length} ahead, ${this.running} running: ${label(command)})`)}`);
+      ticket?.queued(waiter.queuedAt);
       this.waiting.push(waiter);
-      this.pump();
+      if (ticket?.skip?.aborted) skip();
+      else this.pump();
     });
   }
 
@@ -107,7 +148,7 @@ export default class WorkbenchCommandCapacity {
     while (this.waiting.length && this.canStart()) {
       const next = this.waiting.shift()!;
       this.running += 1;
-      this.options.log(` CMD expensive command started after ${Math.round((Date.now() - next.queuedAt) / 1_000)}s in queue ${dim(`(${label(next.command)})`)}`);
+      this.options.log(` CMD expensive command started after ${Math.round((this.now() - next.queuedAt) / 1_000)}s in queue ${dim(`(${label(next.command)})`)}`);
       next.admit();
     }
     const head = this.waiting[0];

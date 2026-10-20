@@ -5,7 +5,7 @@
  * - ProviderToolRequestContext/WorkbenchProviderTools: server-read MCP scope, provider caller identity, and provider-prepared sandbox execution.
  * - WorkbenchAdmittedExecution: daemon-owned caller and resolved one-command permissions.
  * - WorkbenchShellRun/WorkbenchPreparedShell: plain prepared commands the exec node runs outside every provider generation.
- * - WorkbenchShellRunResult: command exit status and captured output.
+ * - WorkbenchShellRunResult: command exit status, captured output, and expensive-queue wait.
  * - WorkbenchPatchClaimCheck: shared claim policy called with validated WB ownership.
  * - ProviderToolResultSchema/ProviderToolResult: complete JSON-safe MCP result evidence.
  * - WorkbenchToolTranscriptReference/WorkbenchToolTranscript: pinned tool capture across provider generations.
@@ -80,7 +80,7 @@ export type WorkbenchShellRun = { label: string; expensive: boolean } & (
   | { kind: "approved"; request: WorkbenchAdmittedExecution & { permissions: { mode: "approved-unrestricted" } } }
 );
 
-export type WorkbenchShellRunResult = Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr">;
+export type WorkbenchShellRunResult = Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr" | "queuedMs">;
 
 export interface WorkbenchPreparedShell {
   run: WorkbenchShellRun;

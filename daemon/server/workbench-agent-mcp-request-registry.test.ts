@@ -1,4 +1,4 @@
-/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user shell stops, steer races, and reload-stable cancellation. */
+/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user shell stops and queue skips, shell queue steers, steer races, and reload-stable cancellation. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -73,6 +73,71 @@ test("user shell stops abort only the shell its thread's item names, once, with 
   } finally {
     for (const registration of [recorded, native, unrecorded, ordinary]) registration.unregister();
   }
+});
+
+test("a shell's queue wait is published by thread, and only a still-queued shell starts now", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const otherThreadId = WorkbenchThreadIdSchema.parse("other-thread");
+  const changed: string[] = [];
+  const stop = registry.subscribeShellQueue(changedThreadId => changed.push(changedThreadId));
+  const shell = registry.register("client-1", 1, { owner, toolName: "shell", shellItem: { threadId, references: ["item-1", "call_1"] } });
+  const ticket = shell.shellQueue!;
+  try {
+    assert.deepEqual(registry.readShellQueue(threadId), [], "a shell that never waited has no queue entry");
+    ticket.queued(100);
+    assert.deepEqual(registry.readShellQueue(threadId), [{ admittedAt: null, itemReferences: ["item-1", "call_1"], queuedAt: 100 }]);
+    assert.deepEqual(registry.readShellQueue(otherThreadId), []);
+    assert.equal(registry.startShellNow(otherThreadId, ["item-1"]), false, "another thread's view cannot skip this shell");
+    assert.equal(registry.startShellNow(threadId, ["call_1"]), true);
+    assert.equal(ticket.skip?.aborted, true);
+    assert.equal(registry.startShellNow(threadId, ["item-1"]), false, "a skip is requested once");
+    ticket.admitted(160);
+    assert.deepEqual(registry.readShellQueue(threadId), [{ admittedAt: 160, itemReferences: ["item-1", "call_1"], queuedAt: 100 }]);
+  } finally {
+    shell.unregister();
+    stop();
+  }
+  assert.deepEqual(registry.readShellQueue(threadId), []);
+  assert.deepEqual(changed, [threadId, threadId, threadId], "queued, admitted and unregistered each publish");
+
+  const admitted = registry.register("client-1", 2, { owner, toolName: "shell", shellItem: { threadId, references: ["item-2"] } });
+  admitted.shellQueue!.queued(200);
+  admitted.shellQueue!.admitted(210);
+  assert.equal(registry.startShellNow(threadId, ["item-2"]), false, "an admitted shell is no longer queued");
+  admitted.unregister();
+  assert.equal(registry.register("client-1", 3, registrationOptions(owner)).shellQueue, undefined, "only shells get a queue ticket");
+});
+
+test("steers interrupt a shell only while it waits in the expensive queue", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const waits: string[][] = [];
+  const stop = registry.subscribeThreadWaits(state => waits.push(state.toolNames));
+  const queued = registry.register("client-1", 1, { owner, toolName: "shell", shellItem: { threadId, references: ["queued"] } });
+  const running = registry.register("client-1", 2, { owner, toolName: "shell", shellItem: { threadId, references: ["running"] } });
+  running.shellQueue!.queued(0);
+  running.shellQueue!.admitted(5);
+  assert.equal(registry.interruptThreadWaits(threadId), 0, "an unqueued or admitted shell is real work, never a wait");
+  queued.shellQueue!.queued(10);
+  assert.deepEqual(waits.at(-1), ["shell"], "a queued shell shows as a thread wait");
+  assert.equal(registry.interruptThreadWaits(threadId), 1);
+  assert.equal(isWorkbenchAgentMcpSteerInterruption(queued.signal.reason), true);
+  assert.equal(running.signal.aborted, false);
+  queued.unregister();
+  running.unregister();
+  assert.deepEqual(waits.at(-1), []);
+
+  const late = registry.register("client-1", 3, { owner, toolName: "shell", shellItem: { references: ["late"] } });
+  late.shellQueue!.queued(20);
+  assert.equal(registry.interruptThreadWaits(threadId), 0, "a steer waits for the shell's thread identity");
+  late.shellQueue!.admitted(30);
+  late.setWorkbenchThreadId(threadId);
+  assert.equal(late.signal.aborted, false, "a deferred steer never reaches a shell admitted since");
+  late.unregister();
+  stop();
 });
 
 test("thread steers interrupt only declared waits for the matching thread across clients and owners", () => {

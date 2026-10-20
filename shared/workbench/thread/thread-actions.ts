@@ -127,6 +127,7 @@ export const WorkbenchThreadSteerTargetSchema = WorkbenchThreadTargetSchema.exte
   itemId: z.string().min(1),
 });
 export type WorkbenchThreadSteerTarget = z.infer<typeof WorkbenchThreadSteerTargetSchema>;
+/** One live wb shell item, for the user to stop or start now past the expensive queue. */
 export const WorkbenchThreadShellTargetSchema = WorkbenchThreadTargetSchema.extend({
   itemId: z.string().min(1),
 });
@@ -234,6 +235,7 @@ export const workbenchThreadActions = {
   "thread/steer/resend": { params: WorkbenchThreadSteerTargetSchema, result: WorkbenchThreadMessageSubmitResultSchema },
   "thread/steer/dismiss": { params: WorkbenchThreadSteerTargetSchema, result: ok },
   "thread/shell/stop": { params: WorkbenchThreadShellTargetSchema, result: ok },
+  "thread/shell/start": { params: WorkbenchThreadShellTargetSchema, result: ok },
   "thread/goal/set": { params: WorkbenchThreadTargetSchema.extend({ objective: WorkbenchThreadGoalObjectiveSchema }), result: goalResult },
   "thread/goal/clear": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/todo/add": {

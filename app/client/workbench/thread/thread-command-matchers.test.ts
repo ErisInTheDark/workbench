@@ -644,6 +644,25 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
   }), PROJECT_ROOT), null);
 });
 
+test("wb shell evidence keeps the expensive mark and the queue time its result recorded", () => {
+  assert.equal(getWorkbenchMcpShellCommandItem(shellMcpItem(), PROJECT_ROOT)?.expensive, undefined);
+  const queued = getWorkbenchMcpShellCommandItem(shellMcpItem({ arguments: { command: "cargo build", expensive: true } }), PROJECT_ROOT);
+  assert.equal(queued?.expensive, true);
+  assert.equal(queued?.queuedMs, undefined);
+  const finished = getWorkbenchMcpShellCommandItem(shellMcpItem({
+    arguments: { command: "cargo build", expensive: true },
+    durationMs: 90_000,
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "Exit code: 0" }],
+      structuredContent: { cwd: PROJECT_ROOT, exitCode: 0, queuedMs: 30_000, shell: "pwsh", stderr: "", stdout: "" },
+    },
+    status: "completed",
+  }), PROJECT_ROOT);
+  assert.equal(finished?.expensive, true);
+  assert.equal(finished?.queuedMs, 30_000);
+});
+
 test("explicit shell launchers override command display hints", () => {
   const display = getThreadCommandDisplay({
     command: "bash -lc 'find src -type f'",

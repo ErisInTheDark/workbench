@@ -58,7 +58,10 @@ function fixture(providerWarning?: string) {
     reconciliation: { reconcile: unused },
     transcripts: { readPage: unused, history: unused },
     transcript: { record: async observations => { recorded.push(...observations); return undefined as never; }, read: unused },
-    shells: { stopShell: () => { throw new Error("Unexpected shell stop."); } },
+    shells: {
+      stopShell: () => { throw new Error("Unexpected shell stop."); },
+      startShellNow: () => { throw new Error("Unexpected shell start."); },
+    },
     settlement: { settleIfOrphaned: async () => { stopOrder.push("settle"); return false; } },
     continuations: { cancel: async () => undefined },
     providers: { get: key => { assert.equal(key, "codex"); return provider; }, submitWithinAdmission: unused },
@@ -116,6 +119,20 @@ test("shell stops reach Codex call ids through item source aliases and reject co
   assert.deepEqual(stops, [{ threadId: "wb-thread", references: ["shell-item", "call_native"] }]);
   running = false;
   await assert.rejects(f.controller.handle("thread/shell/stop", { threadId: "wb-thread", itemId: "shell-item" }), /no longer running/);
+});
+
+test("starting a queued shell now reaches it through the same aliases and rejects one that already left the queue", async () => {
+  const f = fixture();
+  const starts: Array<{ threadId: string; references: readonly string[] }> = [];
+  let queued = true;
+  f.owners.shells.startShellNow = (threadId, references) => { starts.push({ threadId, references }); return queued; };
+  f.owners.transcript.read = async () => ({ rows: { itemSourceAliases: [
+    { item_identity_id: "shell-item", reference: "call_native" },
+  ] } }) as never;
+  assert.deepEqual(await f.controller.handle("thread/shell/start", { threadId: "native-thread", itemId: "shell-item" }), { ok: true });
+  assert.deepEqual(starts, [{ threadId: "wb-thread", references: ["shell-item", "call_native"] }]);
+  queued = false;
+  await assert.rejects(f.controller.handle("thread/shell/start", { threadId: "wb-thread", itemId: "shell-item" }), /no longer queued/);
 });
 
 test("a user ending a vis from its card records a Workbench vis end item in the thread's latest turn", async () => {

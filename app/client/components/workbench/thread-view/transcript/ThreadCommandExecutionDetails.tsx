@@ -31,6 +31,7 @@ import {
   parseWorkbenchVisCommand,
 } from "../../../../workbench/thread/thread-command-matchers";
 import { useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
+import { getShellQueueTiming, useThreadItemShellQueue } from "../../../../workbench/thread/thread-item-shell-queue";
 import { resolveWorkbenchSubagentCommandTargets } from "../../../../workbench/thread/thread-subagents";
 import MarkdownRender from "../../../ui/MarkdownRender";
 import { TerminalIcon } from "../../workbench-icons";
@@ -62,7 +63,7 @@ import type { CommandItem } from "../thread-render-blocks";
 import type { ThreadSubagentWaitTiming } from "../thread-subagent-wait-groups";
 import { ThreadCommandSummary } from "../thread-view-primitives";
 import { useThreadItemLiveDuration } from "../use-thread-live-duration";
-import { ThreadShellStopAction } from "./ThreadItemActionControls";
+import { ThreadShellStartNowAction, ThreadShellStopAction } from "./ThreadItemActionControls";
 import { SubagentActivitySlot } from "./subagent-activity-slot";
 
 type ThreadCommandDisplayValue = ReturnType<typeof getThreadCommandDisplay>;
@@ -114,7 +115,13 @@ export default function ThreadCommandExecutionDetails ({
   const commandInput = { command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell };
   const commandDisplay = project ? project.commandDisplay(commandInput) : getThreadCommandDisplay(commandInput);
   const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
-  const visibleDurationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
+  const shellQueue = useThreadItemShellQueue(item.id);
+  const liveShellQueue = item.status === "inProgress" ? shellQueue : null;
+  const queueTiming = getShellQueueTiming({
+    activeStartedAtMs, durationMs: item.durationMs, live: liveShellQueue, queuedMs: item.queuedMs,
+  });
+  const queuedDurationMs = useThreadItemLiveDuration(queueTiming.queued?.durationMs, queueTiming.queued?.activeStartedAtMs);
+  const visibleDurationMs = useThreadItemLiveDuration(queueTiming.run?.durationMs, queueTiming.run?.activeStartedAtMs);
   const outcomeCommandDisplay = useMemo(() => {
     const display = commandDisplay.summaryParts.length || !item.resultExpiredAt ? commandDisplay : {
       ...commandDisplay,
@@ -140,7 +147,7 @@ export default function ThreadCommandExecutionDetails ({
       <ThreadStepRow
         icon={<TerminalIcon size={16} />}
         meta={["Result expired after 1 day."]}
-        summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} line />}
+        summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} expensive={Boolean(item.expensive)} line />}
       />
     );
   }
@@ -367,8 +374,12 @@ export default function ThreadCommandExecutionDetails ({
       command={item.command}
       detailRows={commandDetailRows}
       display={commandDisplay}
+      expensive={Boolean(item.expensive)}
       meta={[
         commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0 ? <ThreadSummaryText text={`exit ${item.exitCode}`} /> : null,
+        queuedDurationMs !== null && queuedDurationMs !== undefined
+          ? <span>queued <ThreadDurationText className="inline" durationMs={queuedDurationMs} /></span>
+          : null,
         visibleDurationMs !== null && visibleDurationMs !== undefined ? <ThreadDurationText durationMs={visibleDurationMs} /> : null,
       ]}
       output={item.aggregatedOutput}
@@ -380,10 +391,16 @@ export default function ThreadCommandExecutionDetails ({
     </ThreadCommandDisplay>
   );
   if (!item.workbenchShell || item.status !== "inProgress") return commandDisplayView;
+  const actions = liveShellQueue?.admittedAt === null ? (
+    <>
+      <ThreadShellStartNowAction itemId={item.id} />
+      <ThreadShellStopAction itemId={item.id} />
+    </>
+  ) : <ThreadShellStopAction itemId={item.id} />;
   return (
     <div className="group/thread-bubble relative">
       {commandDisplayView}
-      <ThreadBubbleCopyButton actions={<ThreadShellStopAction itemId={item.id} />} markdown="" side="right" touchVisible />
+      <ThreadBubbleCopyButton actions={actions} markdown="" side="right" touchVisible />
     </div>
   );
 }

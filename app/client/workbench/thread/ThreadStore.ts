@@ -24,7 +24,9 @@ import type { WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thre
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchShellQueueEntry, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget,
+} from "workbench-shared/workbench/thread/thread-state";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DraftId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -61,6 +63,8 @@ interface ThreadHeadFields {
   todos?: readonly WorkbenchThreadTodo[];
   /** Feedback the thread was launched to address, until the user deletes or clears it. */
   addressedFeedback?: readonly WorkbenchThreadAddressedFeedback[];
+  /** Live wb shells that waited in the expensive queue; drafts and older daemons have none. */
+  shellQueue?: readonly WorkbenchShellQueueEntry[];
 }
 
 /** A child or linked thread as renderers see it: its head, plus turns when they are loaded. */
@@ -136,6 +140,8 @@ export interface ThreadStoreActions {
   resendSteer(itemId: string): Promise<void>;
   dismissSteer(itemId: string): Promise<void>;
   stopShell(itemId: string): Promise<void>;
+  /** Start a wb shell waiting in the expensive queue now, as though it was never expensive. */
+  startShellNow(itemId: string): Promise<void>;
   submitQuestionnaire(response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions): Promise<void>;
   snooze(requestKey?: string): Promise<void>;
   changeAgent(value: string | null): void;

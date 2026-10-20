@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchCoreTranscript: the transcript registration surface core owners use.
  * - default WorkbenchTurnRuntimeFeature: build turn admission, liveness, compaction, auto-compaction, context rollover, transcript reading and
- *   reconciliation, unfinished-turn continuation and orphaned-turn settlement, and own runtime fact fan-out plus the `threadRuntime` registration.
+ *   reconciliation, unfinished-turn continuation and orphaned-turn settlement, and own runtime fact fan-out (including live shell queues)
+ *   plus the `threadRuntime` registration.
  */
 import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import providerRegistrations, { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -14,6 +15,7 @@ import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchSer
 import type { ReloadableNodeBuild } from "../ReloadableNode";
 import type WorkbenchProjectCatalogController from "../WorkbenchProjectCatalogController";
 import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
+import type { WorkbenchAgentMcpRequestRegistry } from "../workbench-agent-mcp-request-registry";
 import WorkbenchThreadAdmissionController from "../WorkbenchThreadAdmissionController";
 import WorkbenchThreadAutoCompactController from "../WorkbenchThreadAutoCompactController";
 import WorkbenchThreadCompactionController from "../WorkbenchThreadCompactionController";
@@ -51,6 +53,7 @@ export default class WorkbenchTurnRuntimeFeature {
   readonly threadRuntime: DaemonRuntimeObjects["threadRuntime"];
   /** Threads whose runtime facts (token usage, auto-compaction) changed; thread observations reread them. */
   readonly #listeners = new Set<RuntimeListener>();
+  readonly #shells: Pick<WorkbenchAgentMcpRequestRegistry, "readShellQueue" | "subscribeShellQueue">;
 
   constructor(ports: {
     context: Pick<DaemonProcessContext, "logTurnRecovery">;
@@ -67,8 +70,11 @@ export default class WorkbenchTurnRuntimeFeature {
     setSummaryFacts(threadId: string, facts: ThreadSummaryFacts): void;
     /** The thread's shown approval prompt; approvals are live provider facts, never durable thread state. */
     readPendingApproval(threadId: string): ThreadRuntime["pendingApproval"];
+    /** Live wb shells' expensive-queue timing, owned by the process-wide MCP request registry. */
+    shells: Pick<WorkbenchAgentMcpRequestRegistry, "readShellQueue" | "subscribeShellQueue">;
     warn(message: string): void;
   }) {
+    this.#shells = ports.shells;
     const { context, database, transcript, identities, lookup, providers, warn } = ports;
     const admission = this.admission;
     const turnLiveness = this.turnLiveness = new WorkbenchThreadTurnLiveness({
@@ -222,7 +228,9 @@ export default class WorkbenchTurnRuntimeFeature {
           return [threadId, {
             tokenUsage, willAutoCompact: willAutoCompact.get(threadId) ?? false,
             ...(live !== undefined ? { turnLive: live } : {}),
-            pendingApproval: ports.readPendingApproval(threadId), goal, skills, todos, addressedFeedback,
+            pendingApproval: ports.readPendingApproval(threadId),
+            shellQueue: ports.shells.readShellQueue(WorkbenchThreadIdSchema.parse(threadId)),
+            goal, skills, todos, addressedFeedback,
           }];
         }));
       },
@@ -239,5 +247,10 @@ export default class WorkbenchTurnRuntimeFeature {
   /** Tell thread observations that one thread's runtime facts changed. */
   publish(threadId: string, change: Partial<ThreadRuntime>) {
     for (const listener of this.#listeners) listener(threadId, change);
+  }
+
+  /** Publishes each thread's shell queue as it changes; returns the stop. */
+  observeShellQueue() {
+    return this.#shells.subscribeShellQueue(threadId => this.publish(threadId, { shellQueue: this.#shells.readShellQueue(threadId) }));
   }
 }

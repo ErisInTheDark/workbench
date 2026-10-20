@@ -2,7 +2,8 @@
  * Exports:
  * - ThreadTextBlock: render wrapped plain thread text with optional monospace styling.
  * - ThreadApprovalGlyph: shield marking a tool's approval request or outcome.
- * - ThreadCommandSummary: render the compact command summary label used in thread turns, led by any approval glyph; `line` fits one step-row line.
+ * - ThreadExpensiveGlyph: weight marking a wb shell command that queues for a machine-wide expensive slot.
+ * - ThreadCommandSummary: render the compact command summary label used in thread turns, led by any approval and expensive glyphs; `line` fits one step-row line.
  */
 "use client";
 
@@ -15,7 +16,7 @@ import type {
 
 import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 import ProjectFilePath from "../ProjectFilePath";
-import { ArrowRightIcon, ShieldCheckIcon, ShieldCogCornerIcon, ShieldMinusIcon, ShieldQuestionIcon } from "../workbench-icons";
+import { ArrowRightIcon, ShieldCheckIcon, ShieldCogCornerIcon, ShieldMinusIcon, ShieldQuestionIcon, WeightIcon } from "../workbench-icons";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadSummaryText from "./ThreadSummaryText";
 
@@ -214,8 +215,7 @@ const APPROVAL_GLYPHS: Record<ThreadItemApprovalState, { Icon: typeof ShieldChec
   denied: { Icon: ShieldMinusIcon, label: "Denied" },
 };
 
-export function ThreadApprovalGlyph ({ state }: { state: ThreadItemApprovalState }) {
-  const { Icon, label } = APPROVAL_GLYPHS[state];
+function ThreadSummaryGlyph ({ Icon, label }: { Icon: typeof ShieldCheckIcon; label: string }) {
   return (
     <span className="inline-flex shrink-0 items-center text-fg/muted" role="img" aria-label={label} title={label}>
       <Icon size={16} />
@@ -223,14 +223,24 @@ export function ThreadApprovalGlyph ({ state }: { state: ThreadItemApprovalState
   );
 }
 
+export function ThreadApprovalGlyph ({ state }: { state: ThreadItemApprovalState }) {
+  return <ThreadSummaryGlyph {...APPROVAL_GLYPHS[state]} />;
+}
+
+export function ThreadExpensiveGlyph () {
+  return <ThreadSummaryGlyph Icon={WeightIcon} label="Expensive: queued for a machine-wide slot" />;
+}
+
 /** `line` fits the summary on one clipped step-row line: no shell label, and an unmatched command reads as its own text. */
 export function ThreadCommandSummary ({
   approval = null,
   display,
+  expensive = false,
   line = false,
 }: {
   approval?: ThreadItemApprovalState | null;
   display: ThreadCommandSummaryDisplay;
+  expensive?: boolean;
   line?: boolean;
 }) {
   const stages = splitCommandSummaryStages(display.summaryParts);
@@ -245,6 +255,7 @@ export function ThreadCommandSummary ({
       `}
     >
       {approval ? <ThreadApprovalGlyph state={approval} /> : null}
+      {expensive ? <ThreadExpensiveGlyph /> : null}
       {!line && display.showShell && display.shell ? (
         <span className="shrink-0 font-mono text-[0.78em] leading-[1.6] text-fg/muted">
           {display.shell}:

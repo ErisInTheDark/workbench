@@ -3,7 +3,7 @@
  * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route wb calls, including deferred tools run through `mcp_call`, and retain dedicated Git, title, and status failure presentation.
  * - getWorkbenchMcpCommandDisplay: match simple wb calls to shared summary presentation.
  * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive ordinary command presentation from wb shell evidence,
- *   including failures whose reason is only result text.
+ *   including failures whose reason is only result text, the expensive mark and its recorded queue wait.
  * - readMcpTextContent: one MCP result content part's text.
  * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes.
  */
@@ -35,7 +35,13 @@ interface WorkbenchMcpCommandInput {
 
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 type CommandExecutionItem = Extract<ThreadItem, { type: "commandExecution" }>;
-export type WorkbenchMcpShellCommandItem = CommandExecutionItem & { shell: CommandShell; workbenchShell: true };
+export type WorkbenchMcpShellCommandItem = CommandExecutionItem & {
+  expensive?: true;
+  /** Time the expensive command waited for a slot, once its result records it. */
+  queuedMs?: number;
+  shell: CommandShell;
+  workbenchShell: true;
+};
 
 function isWorkbenchMcpServer(server: string) {
   return server === "wb" || server === "wbex";
@@ -98,6 +104,8 @@ export function getWorkbenchMcpShellCommandItem(
     status: item.status,
     type: "commandExecution",
     workbenchShell: true,
+    ...(input.data.expensive ? { expensive: true as const } : {}),
+    ...(result.success && result.data.queuedMs !== undefined ? { queuedMs: result.data.queuedMs } : {}),
   };
 }
 

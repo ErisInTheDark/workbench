@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - UndeliveredSteerActions: resend or dismiss every undelivered stored steer of one bubble, in order.
+ * - ThreadShellStartNowAction: start a wb shell call waiting in the expensive queue now, without taking a slot.
  * - ThreadShellStopAction: stop a running wb shell call; the transcript then shows the agent's stopped result.
  * Keep runtime exports component-only for React Refresh.
  */
@@ -10,7 +11,7 @@ import { useContext, useState } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { RefreshCwIcon, StopIcon, XIcon } from "../../workbench-icons";
+import { PlayIcon, RefreshCwIcon, StopIcon, XIcon } from "../../workbench-icons";
 import { threadBubbleControlClassName } from "../ThreadBubbleCopyButton";
 import ThreadItemActionsContext from "../ThreadItemActionsContext";
 
@@ -86,6 +87,28 @@ export function UndeliveredSteerActions({ items }: { items: readonly UserMessage
         title={`Dismiss ${label}`}
       >
         <XIcon size={16} />
+      </button>
+      <ThreadItemActionError error={error} />
+    </>
+  );
+}
+
+export function ThreadShellStartNowAction({ itemId }: { itemId: string }) {
+  const actions = useContext(ThreadItemActionsContext);
+  const { busy, error, run } = useThreadItemActionRun();
+  if (!actions) return null;
+  const label = "Start now, skipping the expensive queue";
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={label}
+        className={`${threadBubbleControlClassName} disabled:opacity-50`}
+        disabled={busy}
+        onClick={() => run(() => actions.startShellNow(itemId))}
+        title={label}
+      >
+        <PlayIcon size={14} />
       </button>
       <ThreadItemActionError error={error} />
     </>

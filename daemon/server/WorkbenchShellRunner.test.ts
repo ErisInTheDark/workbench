@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect where prepared agent commands run: expensive slots, the sandbox executor, and approved spawns.
+ * No exports. Tests protect where prepared agent commands run: expensive slots and their queue time, the sandbox executor, and approved spawns.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -36,4 +36,26 @@ test("expensive runs take a machine-wide slot before starting; approved runs spa
   assert.deepEqual(admitted, ["cargo build", "pnpm test"]);
   assert.deepEqual(executed, ["cargo build", "git status"]);
   assert.deepEqual(approved, ["other"]);
+});
+
+test("an expensive run that waited reports its queue time, passing the wait on to the caller's ticket", async () => {
+  const heard: string[] = [];
+  const skip = new AbortController().signal;
+  let waits = true;
+  const runner = new WorkbenchShellRunner({
+    executor: { execute: async () => ({ exitCode: 0, stdout: "", stderr: "" }) },
+    capacity: {
+      run: async (_label, _signal, task, ticket) => {
+        assert.strictEqual(ticket?.skip, skip);
+        if (waits) { ticket?.queued(100); ticket?.admitted(250); }
+        return await task();
+      },
+    },
+  });
+  const signal = new AbortController().signal;
+  const ticket = { queued: (at: number) => heard.push(`queued ${at}`), admitted: (at: number) => heard.push(`admitted ${at}`), skip };
+  assert.deepEqual(await runner.run(sandboxedRun("cargo build", true), signal, ticket), { exitCode: 0, stdout: "", stderr: "", queuedMs: 150 });
+  assert.deepEqual(heard, ["queued 100", "admitted 250"]);
+  waits = false;
+  assert.deepEqual(await runner.run(sandboxedRun("cargo build", true), signal, ticket), { exitCode: 0, stdout: "", stderr: "" });
 });

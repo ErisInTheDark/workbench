@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchAgentMcpPendingRequest: describe one active request for runtime-drain diagnostics.
  * - WorkbenchAgentMcpThreadWaitState: describe active waits owned by one Workbench thread.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, user shell stops, wait observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
+ * - WorkbenchAgentMcpShellQueueEntry: one live shell's expensive-queue timing and the transcript references naming it.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, user shell stops and queue skips, wait and shell-queue observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
  * - isWorkbenchAgentMcpUserStop: identify a user's stop of one shell command across module generations.
@@ -22,6 +23,7 @@ import {
 } from "./lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchMcpToolGeneration } from "./workbench-mcp-ingress";
 import type { WorkbenchShellRun, WorkbenchShellRunResult } from "./provider-execution";
+import type { WorkbenchCommandQueueTicket } from "./WorkbenchCommandCapacity";
 
 type WorkbenchAgentMcpRequestId = number | string;
 type WorkbenchAgentMcpClientScope = string;
@@ -46,7 +48,10 @@ interface WorkbenchAgentMcpRequestEntry {
   policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
   /** Transcript references of the shell item this request runs; absent on requests the user cannot stop. */
   shellItemReferences?: readonly string[];
+  /** Set once the shell waits for an expensive slot; kept after admission so the run timer starts there. */
+  shellQueue?: { admittedAt: number | null; queuedAt: number; skip: AbortController };
   startedAt: number;
+  /** Fixed for long waits; a shell is interruptible only while it waits in the expensive queue. */
   steerInterruptible?: boolean;
   /** Pre-patch process state retained only until its live request unregisters. */
   threadId?: string;
@@ -64,7 +69,9 @@ interface WorkbenchAgentMcpToolGenerationSlot {
   owner: object;
 }
 
-type WorkbenchAgentMcpShellRunner = (run: WorkbenchShellRun, signal: AbortSignal) => Promise<WorkbenchShellRunResult>;
+type WorkbenchAgentMcpShellRunner = (
+  run: WorkbenchShellRun, signal: AbortSignal, ticket?: WorkbenchCommandQueueTicket,
+) => Promise<WorkbenchShellRunResult>;
 
 interface WorkbenchAgentMcpRequestRegistryState {
   commandGeneration: WorkbenchAgentMcpCommandGeneration | null;
@@ -77,6 +84,7 @@ interface WorkbenchAgentMcpRequestRegistryState {
   disposed: boolean;
   exitHookInstalled: boolean;
   threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState | WorkbenchAgentMcpLegacyThreadWaitState) => void>;
+  shellQueueListeners: Set<(threadId: WorkbenchThreadId) => void>;
   ownerStates: WeakMap<WorkbenchAgentMcpRuntimeOwner, WorkbenchAgentMcpRuntimeOwnerState>;
   requestsByClient: Map<WorkbenchAgentMcpClientScope, Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>>;
 }
@@ -100,6 +108,12 @@ export interface WorkbenchAgentMcpThreadWaitState {
   identityKind: "workbench";
   threadId: WorkbenchThreadId;
   toolNames: string[];
+}
+
+export interface WorkbenchAgentMcpShellQueueEntry {
+  admittedAt: number | null;
+  itemReferences: string[];
+  queuedAt: number;
 }
 
 interface WorkbenchAgentMcpLegacyThreadWaitState {
@@ -136,6 +150,7 @@ function createState(): WorkbenchAgentMcpRequestRegistryState {
     disposed: false,
     exitHookInstalled: false,
     threadWaitListeners: new Set(),
+    shellQueueListeners: new Set(),
     ownerStates: new WeakMap(),
     requestsByClient: new Map(),
   };
@@ -157,6 +172,7 @@ function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: stri
   }
   state.requestsByClient.clear();
   state.threadWaitListeners.clear();
+  state.shellQueueListeners.clear();
   state.ownerStates = new WeakMap();
 }
 
@@ -173,6 +189,7 @@ function getProcessState() {
   state.shellRunner ??= null;
   state.shellRunnerWaiters ??= new Set();
   state.threadWaitListeners ??= new Set();
+  state.shellQueueListeners ??= new Set();
   if (!state.exitHookInstalled) {
     state.exitHookInstalled = true;
     process.once("exit", () => disposeState(state, "Workbench daemon is shutting down."));
@@ -226,11 +243,14 @@ export class WorkbenchAgentMcpRequestRegistry {
         entry.workbenchThreadId = workbenchThreadId;
         const deferredInterruption = entry.deferredSteerInterruptions?.get(workbenchThreadId);
         entry.deferredSteerInterruptions = undefined;
-        if (deferredInterruption && !entry.controller.signal.aborted) {
+        // A queued shell may have been admitted since the steer; only a still-interruptible request takes it.
+        if (deferredInterruption && entry.steerInterruptible && !entry.controller.signal.aborted) {
           entry.controller.abort(deferredInterruption);
         }
         if (entry.steerInterruptible && !entry.controller.signal.aborted) this.notifyThreadWaits(workbenchThreadId);
+        if (entry.shellQueue) this.notifyShellQueue(workbenchThreadId);
       },
+      ...(options.shellItem ? { shellQueue: this.shellQueueTicket(entry) } : {}),
       signal: entry.controller.signal,
       unregister: () => {
         if (requests.get(requestId) !== entry) return;
@@ -239,7 +259,31 @@ export class WorkbenchAgentMcpRequestRegistry {
           this.state.requestsByClient.delete(clientScope);
         }
         if (entry.steerInterruptible && entry.workbenchThreadId) this.notifyThreadWaits(entry.workbenchThreadId);
+        if (entry.shellQueue && entry.workbenchThreadId) this.notifyShellQueue(entry.workbenchThreadId);
       },
+    };
+  }
+
+  /** Records a shell's expensive-queue wait; while it waits, the shell is a long wait that steers interrupt. */
+  private shellQueueTicket(entry: WorkbenchAgentMcpRequestEntry): WorkbenchCommandQueueTicket {
+    const skip = new AbortController();
+    const changed = () => {
+      if (!entry.workbenchThreadId) return;
+      this.notifyThreadWaits(entry.workbenchThreadId);
+      this.notifyShellQueue(entry.workbenchThreadId);
+    };
+    return {
+      queued: at => {
+        entry.shellQueue = { admittedAt: null, queuedAt: at, skip };
+        entry.steerInterruptible = true;
+        changed();
+      },
+      admitted: at => {
+        if (entry.shellQueue) entry.shellQueue.admittedAt = at;
+        entry.steerInterruptible = false;
+        changed();
+      },
+      skip: skip.signal,
     };
   }
 
@@ -288,8 +332,8 @@ export class WorkbenchAgentMcpRequestRegistry {
   }
 
   /** Runs a prepared shell through the exec node, waiting through its reload gap; only the caller's signal cancels. */
-  async executeShell(run: WorkbenchShellRun, signal: AbortSignal) {
-    return await (await this.awaitSlot(() => this.state.shellRunner, this.state.shellRunnerWaiters, signal)).run(run, signal);
+  async executeShell(run: WorkbenchShellRun, signal: AbortSignal, ticket?: WorkbenchCommandQueueTicket) {
+    return await (await this.awaitSlot(() => this.state.shellRunner, this.state.shellRunnerWaiters, signal)).run(run, signal, ticket);
   }
 
   private async awaitSlot<T>(read: () => T | null, waiters: Set<() => void>, signal?: AbortSignal): Promise<T> {
@@ -395,6 +439,32 @@ export class WorkbenchAgentMcpRequestRegistry {
     for (const listener of this.state.threadWaitListeners) listener(state);
   }
 
+  /** Every live shell of `threadId` that has waited in the expensive queue, oldest first. */
+  readShellQueue(threadId: WorkbenchThreadId): WorkbenchAgentMcpShellQueueEntry[] {
+    const queue: WorkbenchAgentMcpShellQueueEntry[] = [];
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (!entry.shellQueue || entry.workbenchThreadId !== threadId) continue;
+        queue.push({
+          admittedAt: entry.shellQueue.admittedAt,
+          itemReferences: [...entry.shellItemReferences ?? []],
+          queuedAt: entry.shellQueue.queuedAt,
+        });
+      }
+    }
+    return queue.sort((left, right) => left.queuedAt - right.queuedAt);
+  }
+
+  /** Calls `listener` with a thread whose shell queue changed; read it with `readShellQueue`. */
+  subscribeShellQueue(listener: (threadId: WorkbenchThreadId) => void) {
+    this.state.shellQueueListeners.add(listener);
+    return () => { this.state.shellQueueListeners.delete(listener); };
+  }
+
+  private notifyShellQueue(threadId: WorkbenchThreadId) {
+    for (const listener of this.state.shellQueueListeners) listener(threadId);
+  }
+
   private threadWaitState(threadId: WorkbenchThreadId): WorkbenchAgentMcpThreadWaitState {
     const toolNames = new Set<string>();
     for (const requests of this.state.requestsByClient.values()) {
@@ -452,18 +522,33 @@ export class WorkbenchAgentMcpRequestRegistry {
    * A shell registered without thread identity matches on its references alone.
    */
   stopShell(threadId: WorkbenchThreadId, references: readonly string[]) {
+    const entry = this.findLiveShell(threadId, references);
+    if (!entry) return false;
+    const error = new Error(`The user stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`);
+    Reflect.set(error, USER_STOP_KEY, true);
+    entry.controller.abort(error);
+    return true;
+  }
+
+  /** Start the matching shell now if it still waits in the expensive queue, as though it was never expensive. */
+  startShellNow(threadId: WorkbenchThreadId, references: readonly string[]) {
+    const queue = this.findLiveShell(threadId, references)?.shellQueue;
+    if (!queue || queue.admittedAt !== null || queue.skip.signal.aborted) return false;
+    queue.skip.abort();
+    return true;
+  }
+
+  /** The unaborted shell whose transcript item any of `references` names; one without thread identity matches on references alone. */
+  private findLiveShell(threadId: WorkbenchThreadId, references: readonly string[]) {
     const workbenchThreadId = WorkbenchThreadIdSchema.parse(threadId);
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
         if (entry.controller.signal.aborted || !entry.shellItemReferences?.some(reference => references.includes(reference))) continue;
         if (entry.workbenchThreadId && entry.workbenchThreadId !== workbenchThreadId) continue;
-        const error = new Error(`The user stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`);
-        Reflect.set(error, USER_STOP_KEY, true);
-        entry.controller.abort(error);
-        return true;
+        return entry;
       }
     }
-    return false;
+    return null;
   }
 
   interruptThreadWaits(

@@ -788,7 +788,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.match(ripgrep.description ?? "", /without shell quoting.*no matches/u);
     const shell = inventory.tools.find(({ name }) => name === "shell");
     assert.ok(shell);
-    assert.deepEqual(Object.keys(shell.outputSchema?.properties ?? {}).sort(), ["cwd", "exitCode", "shell", "stderr", "stdout"]);
+    assert.deepEqual(Object.keys(shell.outputSchema?.properties ?? {}).sort(), ["cwd", "exitCode", "queuedMs", "shell", "stderr", "stdout"]);
 
     for (const [toolName, action, responseKind] of [
       ["git_arc_compare", "compare", "git-arc-compare"],
@@ -1478,6 +1478,40 @@ test("a user-stopped shell answers only the stop sentence, found through its Cod
   assert.deepEqual(result, { content: [{ type: "text", text: "The user stopped this command after 12s." }], isError: true });
   assert.deepEqual(recorded[0]?.content, result.content);
   assert.deepEqual(errors, [], "an expected stop is not logged as a failure");
+});
+
+test("a steer interrupting a queued expensive shell answers only that the command never started", async () => {
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const errors: string[] = [];
+  const reference = {
+    threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: "turn", itemId: "item",
+    sourceId: "source", parentId: "source", tool: "shell", arguments: {}, startedAt: 0,
+  } as WorkbenchToolTranscriptReference;
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "claude", threadId: reference.threadId, cwd: "C:/workspace" }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+    patchClaims: async () => "",
+    prepareShell: async () => preparedShell("C:/workspace"),
+    transcript: { start: async () => reference, finish: async () => undefined },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", requestRegistry,
+    lifecycleLogError: (_name, message) => { errors.push(message); },
+    executeShell: async () => await new Promise<never>(() => {}),
+  });
+  const scope = { clientScope: "client", projectLocal: false, provider: "claude", subagent: false };
+  const step = await controller.call(scope, {
+    arguments: { command: "cargo build", expensive: true }, detachableShell: true, meta: {},
+    name: "shell", requestId: 1, signal: new AbortController().signal,
+  });
+  assert.ok(step.kind === "detached");
+  step.call.shellQueue!.queued(0);
+  assert.equal(requestRegistry.interruptThreadWaits(reference.threadId), 1);
+  const result = await controller.finish(scope, step.call, { error: step.call.signal.reason });
+  step.call.unregister();
+  assert.equal(result.isError, true, "the row stays a readable failed command");
+  assert.match(responseText(result), /^Queued command interrupted before it started/u);
+  assert.deepEqual(errors, [], "an expected steer is not logged as a failure");
 });
 
 test("thread steer interruption ends declared waits but preserves questionnaires and ordinary MCP calls", { timeout: 5_000 }, async () => {

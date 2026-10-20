@@ -97,6 +97,7 @@ function headOf(entry: ThreadEntry, runtime: ThreadRuntime | undefined, cwd: str
     skills: runtime?.skills ?? [],
     todos: runtime?.todos ?? [],
     addressedFeedback: runtime?.addressedFeedback ?? [],
+    shellQueue: runtime?.shellQueue ?? [],
   };
 }
 
@@ -342,6 +343,10 @@ export default function createObservedThreadSource(
       async stopShell(itemId) {
         try { await ports.daemon.threads.shell.stop({ threadId, itemId }); }
         catch (error) { throw new Error(`The command could not be stopped: ${sanitize(error instanceof Error ? error.message : String(error)).slice(0, 300)}`); }
+      },
+      async startShellNow(itemId) {
+        try { await ports.daemon.threads.shell.start({ threadId, itemId }); }
+        catch (error) { throw new Error(`The command could not be started: ${sanitize(error instanceof Error ? error.message : String(error)).slice(0, 300)}`); }
       },
       async submitQuestionnaire(response, options = {}) {
         const durable = readPending();

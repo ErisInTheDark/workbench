@@ -10,7 +10,7 @@ import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-sc
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import {
   ProviderToolMetadataSchema, ProviderToolResultSchema,
-  type ProviderToolRequestContext, type WorkbenchPreparedShell, type WorkbenchShellRun, type WorkbenchShellRunResult,
+  type ProviderToolRequestContext, type WorkbenchPreparedShell, type WorkbenchShellRunResult,
   type WorkbenchToolTranscriptReference, type WorkbenchProviderTools,
 } from "./provider-execution";
 import { ErrorCode, McpError, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -67,6 +67,7 @@ const LEGACY_MCP_CLIENT_SCOPE = "legacy";
 /** McpServer's schema for tools without an object input, so hand-served lists match what it served before. */
 const EMPTY_OBJECT_JSON_SCHEMA = { type: "object" as const, properties: {} };
 const STEER_INTERRUPTION_TEXT = "Wait interrupted: a new message arrived for this thread. Read it, then call this tool again if you still need to wait.";
+const QUEUED_SHELL_STEER_INTERRUPTION_TEXT = "Queued command interrupted before it started: a new message arrived for this thread. Read it, then call shell again if it still needs to run.";
 const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 type WorkbenchAgentMcpRequestId = number | string;
 type WorkbenchAgentMcpRegisteredCommand = {
@@ -82,7 +83,7 @@ export interface WorkbenchAgentMcpControllerOptions {
   /** Defaults to the registry's generation-reentrant executor; tests inject their own. */
   executeCommand?: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
   /** Defaults to the registry's exec-node shell runner; tests inject their own. */
-  executeShell?: (run: WorkbenchShellRun, signal: AbortSignal) => Promise<WorkbenchShellRunResult>;
+  executeShell?: WorkbenchMcpDetachedCall["executeShell"];
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   /** Read per request so the catalogue follows the virtual repository runtime as it appears or disappears. */
   virtualReposAvailable?: () => boolean;
@@ -505,6 +506,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       ...(this.injectedScheduleProgress ? { scheduleProgress: this.injectedScheduleProgress } : {}),
       keepalive: true, shell: prepared, signal, toolName: "shell", transcript: started.reference,
       unregister: registration.unregister,
+      ...(registration.shellQueue ? { shellQueue: registration.shellQueue } : {}),
     };
     if (call.detachableShell) {
       stopProgress?.();
@@ -513,8 +515,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     let outcome: WorkbenchMcpCallOutcome;
     try {
       const shellResult = this.injectedExecuteShell
-        ? await this.injectedExecuteShell(prepared.run, signal)
-        : await this.requestRegistry.executeShell(prepared.run, signal);
+        ? await this.injectedExecuteShell(prepared.run, signal, registration.shellQueue)
+        : await this.requestRegistry.executeShell(prepared.run, signal, registration.shellQueue);
       outcome = signal.aborted ? { error: signal.reason } : { shellResult };
     } catch (error) {
       outcome = { error };
@@ -559,6 +561,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     // Expected, not a failure: the user's stop already names what happened, so it is the whole result.
     if (signal.aborted && isWorkbenchAgentMcpUserStop(signal.reason)) {
       return { content: [{ type: "text", text: (signal.reason as Error).message }], isError: true };
+    }
+    // Only a queued shell is steer-interruptible, so the command never ran; an error keeps it a readable failed command.
+    if (signal.aborted && isWorkbenchAgentMcpSteerInterruption(signal.reason)) {
+      return { content: [{ type: "text", text: QUEUED_SHELL_STEER_INTERRUPTION_TEXT }], isError: true };
     }
     const message = sanitizeError(error) || "Workbench shell tool call failed.";
     if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);

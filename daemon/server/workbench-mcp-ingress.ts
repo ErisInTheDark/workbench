@@ -25,6 +25,7 @@ import {
 import type { WorkbenchAgentCommandRequest } from "./lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import type { WorkbenchPreparedShell, WorkbenchShellRun, WorkbenchShellRunResult } from "./provider-execution";
+import type { WorkbenchCommandQueueTicket } from "./WorkbenchCommandCapacity";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -57,10 +58,12 @@ export type WorkbenchMcpDetachedCall = {
   /** Test-injected executor; production re-enters the registry's current command generation. */
   execute?: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
   /** Test-injected shell runner; production runs through the registry's exec-node runner. */
-  executeShell?: (run: WorkbenchShellRun, signal: AbortSignal) => Promise<WorkbenchShellRunResult>;
+  executeShell?: (run: WorkbenchShellRun, signal: AbortSignal, ticket?: WorkbenchCommandQueueTicket) => Promise<WorkbenchShellRunResult>;
   keepalive: boolean;
   /** Test-injected keepalive scheduler; production uses `scheduleWorkbenchMcpProgress`. */
   scheduleProgress?: (pulse: () => Promise<void>, signal: AbortSignal) => () => void;
+  /** The registry's record of this shell's expensive-queue wait. */
+  shellQueue?: WorkbenchCommandQueueTicket;
   signal: AbortSignal;
   toolName: string;
   transcript: object | null;
@@ -239,8 +242,8 @@ async function callTool(options: WorkbenchMcpIngressOptions, call: WorkbenchMcpT
     if (detached.shell) {
       const { run } = detached.shell;
       const shellResult = detached.executeShell
-        ? await detached.executeShell(run, detached.signal)
-        : await registry.executeShell(run, detached.signal);
+        ? await detached.executeShell(run, detached.signal, detached.shellQueue)
+        : await registry.executeShell(run, detached.signal, detached.shellQueue);
       outcome = detached.signal.aborted ? { error: detached.signal.reason } : { shellResult };
     } else {
       const response = detached.execute

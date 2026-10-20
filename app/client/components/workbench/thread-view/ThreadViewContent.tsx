@@ -38,6 +38,7 @@ import resolveThreadComposerProfileSlot from "../../../workbench/thread/thread-c
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { ThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
 import { deriveThreadItemApprovals, ThreadItemApprovalsContext } from "../../../workbench/thread/thread-item-approvals";
+import { deriveThreadItemShellQueue, ThreadItemShellQueueContext } from "../../../workbench/thread/thread-item-shell-queue";
 import ThreadItemActionsContext, { type ThreadItemActions } from "./ThreadItemActionsContext";
 import type {
   WorkbenchGitArcLifecycleState,
@@ -491,10 +492,13 @@ export default memo(function ThreadViewContent ({
     () => deriveThreadItemApprovals(activeThread ? activeApprovalEntries : [], activePendingUserInputRequest),
     [activeApprovalEntries, activePendingUserInputRequest, activeThread],
   );
+  const activeShellQueue = activeThread?.shellQueue;
+  const activeItemShellQueue = useMemo(() => deriveThreadItemShellQueue(activeShellQueue), [activeShellQueue]);
   const activeItemActions = useMemo<ThreadItemActions>(() => ({
     resendSteer: itemId => active.actions.resendSteer(itemId),
     dismissSteer: itemId => active.actions.dismissSteer(itemId),
     stopShell: itemId => active.actions.stopShell(itemId),
+    startShellNow: itemId => active.actions.startShellNow(itemId),
   }), [active.actions]);
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const isLaunchingDraft = isDraftThreadView && loadedTurns.length > 0;
@@ -1178,6 +1182,7 @@ export default memo(function ThreadViewContent ({
                   ) : null}
                   <TranscriptBodiesContext.Provider value={active.store?.transcriptBodies ?? null}>
                   <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
+                  <ThreadItemShellQueueContext.Provider value={activeItemShellQueue}>
                   <ThreadItemActionsContext.Provider value={activeItemActions}>
                   <ThreadTodoControlsContext.Provider value={active.entry && !isDraftThreadView ? todoControls : null}>
                   <WorkbenchFeedbackAddressingContext.Provider value={feedbackAddressing}>
@@ -1197,6 +1202,7 @@ export default memo(function ThreadViewContent ({
                   </WorkbenchFeedbackAddressingContext.Provider>
                   </ThreadTodoControlsContext.Provider>
                   </ThreadItemActionsContext.Provider>
+                  </ThreadItemShellQueueContext.Provider>
                   </ThreadItemApprovalsContext.Provider>
                   </TranscriptBodiesContext.Provider>
                 </>

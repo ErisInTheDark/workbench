@@ -4,7 +4,7 @@
  * - WorkbenchShellSchema/WorkbenchShell: define the shell families selected by the sandboxed shell owner.
  * - WorkbenchShellInputSchema/WorkbenchShellInput: define the sandbox-only MCP shell request.
  * - WorkbenchEscalatingShellInputSchema/WorkbenchEscalatingShellInput: shell request for providers whose escalation goes through Workbench approval.
- * - WorkbenchShellResultSchema/WorkbenchShellResult: define resolved command output and shell evidence shared by the daemon and transcript renderer.
+ * - WorkbenchShellResultSchema/WorkbenchShellResult: define resolved command output, queue wait and shell evidence shared by the daemon and transcript renderer.
  * - getWorkbenchShellAggregatedOutput: combine stdout and stderr with one boundary rule. */
 import { z } from "zod";
 
@@ -17,7 +17,7 @@ export const WorkbenchShellInputSchema = z.object({
   login: z.boolean().optional().describe("Use login-shell semantics. Defaults to true."),
   timeout_ms: z.number().int().nonnegative().optional().describe("Maximum command runtime in milliseconds. Codex's command default applies when omitted."),
   workdir: z.string().min(1).optional().describe("Working directory. Relative paths resolve from the current turn sandbox cwd."),
-  expensive: z.boolean().optional().describe("Set true when running known-expensive tasks. DO NOT set for builds or tests already optimised to be good citizens. This queues tasks machine-wide. Mixing long, serial, low-cpu work with marking as expensive means a LOT of burnt time."),
+  expensive: z.boolean().optional().describe("Set true when running known-expensive tasks. DO NOT set for builds or tests already optimised to be good citizens. This queues tasks machine-wide. Mixing long, serial, low-cpu work with marking as expensive means a LOT of burnt time. Queue time is a Workbench Long Wait; steers interrupt it before the command starts."),
 });
 
 export type WorkbenchShellInput = z.infer<typeof WorkbenchShellInputSchema>;
@@ -32,6 +32,8 @@ export type WorkbenchEscalatingShellInput = z.infer<typeof WorkbenchEscalatingSh
 export const WorkbenchShellResultSchema = z.object({
   cwd: z.string().min(1),
   exitCode: z.number().int(),
+  /** Time an expensive command waited for a machine-wide slot; absent when it never waited. */
+  queuedMs: z.number().nonnegative().optional(),
   shell: WorkbenchShellSchema.nullable().default(null),
   stderr: z.string(),
   stdout: z.string(),

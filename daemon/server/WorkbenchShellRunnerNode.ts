@@ -19,8 +19,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       registrations: { shellRunner },
       // Agent shells run here, leasing only this node, so reloads above it never wait on a running command.
       afterCommit: () => {
-        requestRegistry.activateShellRunner(runnerOwner, async (run, signal) => (
-          await build.run("shellRunner", runner => runner.run(run, signal), "shell run")
+        requestRegistry.activateShellRunner(runnerOwner, async (run, signal, ticket) => (
+          await build.run("shellRunner", runner => runner.run(run, signal, ticket), "shell run")
         ));
       },
       start: () => undefined,

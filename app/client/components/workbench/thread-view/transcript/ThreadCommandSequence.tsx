@@ -123,8 +123,9 @@ function ThreadRegularCommandSequence ({
   if (items.length === 1) return <ThreadRegularCommandItem item={items[0]} itemTimeline={itemTimeline} />;
   if (!commandBlockDisplay) return null;
   const Icon = getCommandIcon(commandBlockDisplay.summaryStats);
+  const expensive = items.some(item => item.type === "commandExecution" && item.expensive);
   return (
-    <ThreadStepRow icon={<Icon size={16} />} summary={<ThreadCommandSummary display={commandBlockDisplay} />}>
+    <ThreadStepRow icon={<Icon size={16} />} summary={<ThreadCommandSummary display={commandBlockDisplay} expensive={expensive} />}>
       {items.map((item) => (
         <ThreadRegularCommandItem
           item={item}

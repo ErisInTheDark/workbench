@@ -121,6 +121,7 @@ class WorkbenchDaemonClient {
     },
     shell: {
       stop: (params: WorkbenchDaemonParams<"thread/shell/stop">) => this.request("thread/shell/stop", params),
+      start: (params: WorkbenchDaemonParams<"thread/shell/start">) => this.request("thread/shell/start", params),
     },
     goal: {
       set: (params: WorkbenchDaemonParams<"thread/goal/set">) => this.request("thread/goal/set", params),

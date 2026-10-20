@@ -13,9 +13,11 @@ import { getCommandIcon } from "./thread-activity-chips";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 
-export default function ThreadCommandDisplay({ approval = null, command, display, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, output, previewHeight }: {
+export default function ThreadCommandDisplay({ approval = null, command, display, expensive = false, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, output, previewHeight }: {
   approval?: ThreadItemApprovalState | null;
   command: string;
+  /** A wb shell command marked expensive, queueing for a machine-wide slot. */
+  expensive?: boolean;
   display: CommandDisplay;
   summaryDisplay?: ThreadCommandSummaryDisplay;
   detailRows?: ThreadCommandDetailRow[];
@@ -30,7 +32,7 @@ export default function ThreadCommandDisplay({ approval = null, command, display
     <ThreadStepRow
       icon={createElement(getCommandIcon(summaryDisplay.summaryStats), { size: 16 })}
       meta={meta}
-      summary={<ThreadCommandSummary approval={approval} display={summaryDisplay} line />}
+      summary={<ThreadCommandSummary approval={approval} display={summaryDisplay} expensive={expensive} line />}
     >
       {display.cwdDisplay && !display.hideCommandCwd ? (
         <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">

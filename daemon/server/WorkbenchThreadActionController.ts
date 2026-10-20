@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project, virtual-steer and transcript owners.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire hold, virtual-steer routing, compaction-queue adoption and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops and queue skips, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire hold, virtual-steer routing, compaction-queue adoption and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -52,7 +52,7 @@ export interface WorkbenchThreadActionOwners {
   /** Canonical transcript writes for Workbench-owned steer decisions and vis ends; latest-turn reads for shell stops and vis ends. */
   transcript: Pick<DaemonTranscriptRegistration, "record" | "read">;
   /** Running wb shell calls the user can stop. */
-  shells: Pick<WorkbenchAgentMcpRequestRegistry, "stopShell">;
+  shells: Pick<WorkbenchAgentMcpRequestRegistry, "startShellNow" | "stopShell">;
   /** Settles a stopped turn whose runtime is already gone. */
   settlement: Pick<WorkbenchTurnSettlementController, "settleIfOrphaned">;
   /** Workbench-started hidden turns (refresh, unfinished continuation) that a stop must win against. */
@@ -241,6 +241,7 @@ export default class WorkbenchThreadActionController {
     "thread/steer/resend": input => this.resendSteer(input),
     "thread/steer/dismiss": input => this.dismissSteer(input),
     "thread/shell/stop": input => this.stopShell(input),
+    "thread/shell/start": input => this.startShellNow(input),
   };
 
   async handle<Method extends keyof WorkbenchThreadActionMap>(method: Method, params: object, connectionId?: string) {
@@ -456,13 +457,24 @@ export default class WorkbenchThreadActionController {
   }
 
   /** A running shell sits in the latest turn; Codex names its own shell items, reached only through their source aliases. */
-  private async stopShell({ threadId, itemId }: WorkbenchThreadShellTarget) {
+  private async shellReferences({ threadId, itemId }: WorkbenchThreadShellTarget) {
     const { identity } = await this.target(threadId);
     const snapshot = await this.owners.transcript.read({ threadId: identity.threadId, turnLimit: 1 });
     const references = [itemId, ...(snapshot?.rows.itemSourceAliases ?? [])
       .filter(alias => alias.item_identity_id === itemId)
       .map(alias => alias.reference)];
-    if (!this.owners.shells.stopShell(identity.threadId, references)) throw new Error("This command is no longer running.");
+    return { threadId: identity.threadId, references };
+  }
+
+  private async stopShell(target: WorkbenchThreadShellTarget) {
+    const { threadId, references } = await this.shellReferences(target);
+    if (!this.owners.shells.stopShell(threadId, references)) throw new Error("This command is no longer running.");
+    return { ok: true as const };
+  }
+
+  private async startShellNow(target: WorkbenchThreadShellTarget) {
+    const { threadId, references } = await this.shellReferences(target);
+    if (!this.owners.shells.startShellNow(threadId, references)) throw new Error("This command is no longer queued.");
     return { ok: true as const };
   }
 

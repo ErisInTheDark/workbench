@@ -85,6 +85,7 @@
  * - GitMergeIcon/GitRebaseIcon/GitFastForwardIcon: device sync history modes.
  * - ShieldQuestionIcon/ShieldCheckIcon/ShieldCogCornerIcon/ShieldMinusIcon: tool approval requested, approved, auto-approved and denied glyphs.
  * - ShieldAlertIcon: skip-approvals mode glyph.
+ * - WeightIcon: expensive wb shell command glyph.
  * - ComputerIcon: daemon project glyph.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -109,6 +110,13 @@ export function ShieldQuestionIcon(props: IconProps) {
 
 export function ShieldCheckIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="m9 12 2 2 4-4" /></OutlinedIcon>;
+}
+
+export function WeightIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <circle cx="12" cy="5" r="3" />
+    <path d="M6.5 8a2 2 0 0 0-1.905 1.46L2.1 18.5A2 2 0 0 0 4 21h16a2 2 0 0 0 1.925-2.54L19.4 9.5A2 2 0 0 0 17.48 8Z" />
+  </OutlinedIcon>;
 }
 
 export function ShieldCogCornerIcon(props: IconProps) {

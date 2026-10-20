@@ -7,7 +7,8 @@
  * - WorkbenchGitArcProposalState/WorkbenchGitArcProposalSummary: one observed lifecycle proposal and its Git-derived message and totals.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
  * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
- * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, goal, skills, todos, addressed feedback) on thread observations.
+ * - WorkbenchShellQueueEntrySchema/WorkbenchShellQueueEntry: one live wb shell's expensive-queue timing.
+ * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, shell queue, goal, skills, todos, addressed feedback) on thread observations.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts, plus the subagent refinement they reapply.
  * - settleWorkbenchQuestionnaireWait/withWorkbenchThreadLifecycle: repair entries so a questionnaire exists only with its pendingInput wait, and move lifecycles under that rule.
@@ -485,6 +486,15 @@ export const WorkbenchPendingApprovalSchema = z.object({
   turnId: z.string().nullable(),
 }).strict();
 
+/** A live wb shell that waited for an expensive slot: queue start, and admission once it starts. */
+export const WorkbenchShellQueueEntrySchema = z.object({
+  admittedAt: z.number().nullable(),
+  /** Every transcript reference naming the shell's item. */
+  itemReferences: z.array(z.string()),
+  queuedAt: z.number(),
+}).strict();
+export type WorkbenchShellQueueEntry = z.infer<typeof WorkbenchShellQueueEntrySchema>;
+
 /** Live provider facts per family thread that thread state does not own; unknown keys are dropped so older browsers survive newer servers. */
 export const ThreadRuntimeSchema = z.object({
   tokenUsage: ThreadTokenUsageSchema.nullable(),
@@ -492,6 +502,8 @@ export const ThreadRuntimeSchema = z.object({
   /** Whether the provider runs the thread's latest turn; absent from daemons that predate it. */
   turnLive: z.boolean().optional(),
   pendingApproval: WorkbenchPendingApprovalSchema.nullable().optional(),
+  /** Live shells that waited in the expensive queue; absent from daemons that predate it. */
+  shellQueue: z.array(WorkbenchShellQueueEntrySchema).optional(),
   /** The user-set Workbench goal; absent from daemons that predate goals. */
   goal: WorkbenchThreadGoalSchema.nullable().optional(),
   skills: z.array(WorkbenchThreadSkillSchema).optional(),

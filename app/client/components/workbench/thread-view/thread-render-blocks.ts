@@ -65,8 +65,16 @@ import { formatToolCallOutput } from "./format-thread-tool-call";
 
 const TASK_TITLE_ALREADY_MATCHES_OUTPUT = "Task title already matches";
 
-/** `workbenchShell` marks a command derived from a wb shell call, which Workbench owns and the user can stop. */
-export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell; workbenchShell?: true };
+/**
+ * `workbenchShell` marks a command derived from a wb shell call, which Workbench owns and the user can stop; such a call
+ * may also be `expensive`, recording its slot wait as `queuedMs`.
+ */
+export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & {
+  expensive?: true;
+  queuedMs?: number;
+  shell?: CommandShell;
+  workbenchShell?: true;
+};
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" | "dynamicToolCall" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 export type IncomingAgentMessageItem = UserMessageItem | Extract<ThreadItem, { type: "functionCallOutput" }>;
