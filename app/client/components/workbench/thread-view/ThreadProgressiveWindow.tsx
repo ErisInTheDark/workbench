@@ -97,7 +97,7 @@ export default function ThreadProgressiveWindow({
   const visibleChunks = chunks.slice(boundedStart);
   return (
     <div
-      className="space-y-2"
+      className="space-y-rendered-2"
       data-thread-progressive-window={identity}
       data-thread-progressive-hidden={boundedStart > 0 ? "true" : undefined}
     >
