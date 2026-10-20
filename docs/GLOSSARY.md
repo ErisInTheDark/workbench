@@ -10,6 +10,7 @@
 | Active Skill | A skill recorded for one thread after user activation or agent Skill Load, until the user deactivates it |
 | Keyed delta | Upserted/removed items plus changed field names against an observation's previous revision; see `shared/workbench/workspace/observation-patch.ts` |
 | thread status row | Row under a thread's transcript: live title plus skills, vis, Git arc and todo pills, each opening one shared animated panel area; `ThreadStatusRow`, composed by `ThreadStatusArea` |
+| activity card (activity run card, activity card status) | Tinted transcript card summarising consecutive agent work (reasoning, commands, edits, searches, sleeps) as counted chips plus duration; opens into its steps. Its status, while live, is the step actually running (else the last done) drawn as its own row under the chips. A lone step shows bare instead; `ThreadActivityRun` |
 | thread state | Durable daemon thread state owned by `WorkbenchThreadStateController`: thread records, new-thread profile selection, legacy drafts and legacy project display order. Pins, snoozes, folders and layout are app presentation state |
 | thread priority | App-owned sidebar placement: pinned, main, or snoozed. Settled is lifecycle, not priority. |
 | arc edit session | Per-thread previewable, revertible batch of ordered moves/regex replacements run via `wb git arc edit`; claims Git-visible touched files in the active arc; stored at the thread's `edit-session` ref |
