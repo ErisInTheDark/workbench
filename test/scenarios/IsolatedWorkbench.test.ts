@@ -302,6 +302,22 @@ test("caller cancellation aborts readiness without waiting for its deadline", as
   await fixture.close();
 });
 
+test("a failure inside nested phases is reported once, by the innermost phase", async context => {
+  const fixture = await runtime(context, context.signal, () => new AbortController().signal);
+  const reason = new Error("listener never came up");
+  const outer = fixture.phase("outer readiness", async () => {
+    await fixture.phase("inner readiness", async () => { throw reason; });
+  });
+  await assert.rejects(outer, error => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.cause, reason);
+    assert.match(error.message, /inner readiness/u);
+    assert.doesNotMatch(error.message, /outer readiness/u);
+    return true;
+  });
+  await fixture.close();
+});
+
 test("a completed phase's deadline cannot cancel later readiness", async context => {
   const first = new AbortController();
   const second = new AbortController();

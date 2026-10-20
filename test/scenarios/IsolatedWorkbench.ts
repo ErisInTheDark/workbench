@@ -65,6 +65,9 @@ export async function stopIsolatedWorkbenchProcesses(processes: {
   return results;
 }
 
+/** A failed scenario phase that already carries process evidence; enclosing phases pass it through unchanged. */
+class ScenarioPhaseError extends Error {}
+
 const NodeWebSocket = createRequire(new URL("../../app/package.json", import.meta.url))("ws") as
   new (url: string, options: { origin: string }) => WebSocket;
 
@@ -767,8 +770,9 @@ stream_max_retries = 0
     await this.until(() => {
       const output = this.appLog.slice(offset);
       owned.assertRunning();
-      if (output.includes("failed to start:")) {
-        throw new Error(`Isolated app failed\n${output.slice(-12000)}`);
+      const failure = output.indexOf("failed to start:");
+      if (failure >= 0) {
+        throw new Error(`Isolated app failed to start\n${output.slice(failure).split(/\r?\n/u).slice(0, 12).join("\n")}`);
       }
       const match = output.match(/listening at (http:\/\/[^\s]+)/u);
       if (!match) return false;
@@ -869,9 +873,12 @@ stream_max_retries = 0
       return result;
     } catch (error) {
       if (signal.aborted) this.cancellation.abort(signal.reason);
+      // The innermost phase already attached process evidence; outer phases must not print it again.
+      if (error instanceof ScenarioPhaseError) throw error;
       const evidence = [this.child, this.serviceChild, this.appChild]
-        .filter(process => process !== null).map(process => process.evidence).join("\n");
-      throw new Error(`Scenario phase failed: ${label}\n${error instanceof Error ? error.message : String(error)}\n${evidence}`, { cause: error });
+        .filter(process => process !== null).map(process => process.evidence).join("\n\n");
+      // The cause prints the underlying failure once; full process logs are retained with the scenario diagnostics.
+      throw new ScenarioPhaseError(`Scenario phase failed: ${label}\n\n${evidence}`, { cause: error });
     } finally {
       if (timer) clearTimeout(timer);
     }

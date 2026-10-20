@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default IsolatedWorkbenchProcess: own one scenario process, its evidence and retirement.
+ * - default IsolatedWorkbenchProcess: own one scenario process, its compact failure evidence and retirement.
  * - IsolatedWorkbenchProcessOptions: inject output observation and shutdown mechanics.
  */
 import type { ChildProcess } from "node:child_process";
@@ -11,6 +11,23 @@ export interface IsolatedWorkbenchProcessOptions {
   onChange?: () => void;
   gracefulSignal?: () => AbortSignal;
   retire?: (pid: number | undefined) => Promise<void>;
+}
+
+const EVIDENCE_LINES = 30;
+const EVIDENCE_LINE_LENGTH = 240;
+
+/** The last lines of a log as failure evidence: runs of one repeated line collapse, long lines clip. */
+function compactLogTail(text: string) {
+  const runs: Array<{ line: string; count: number }> = [];
+  for (const raw of text.split(/\r?\n/u)) {
+    const line = raw.trimEnd();
+    if (!line) continue;
+    const clipped = line.length > EVIDENCE_LINE_LENGTH ? `${line.slice(0, EVIDENCE_LINE_LENGTH)}…` : line;
+    const last = runs.at(-1);
+    if (last?.line === clipped) last.count += 1;
+    else runs.push({ line: clipped, count: 1 });
+  }
+  return runs.slice(-EVIDENCE_LINES).map(run => run.count > 1 ? `${run.line} (×${run.count})` : run.line).join("\n");
 }
 
 export default class IsolatedWorkbenchProcess {
@@ -40,7 +57,7 @@ export default class IsolatedWorkbenchProcess {
   get pid() { return this.child.pid; }
   get exitCode() { return this.child.exitCode; }
   get exited() { return this.child.exitCode !== null || this.child.signalCode !== null; }
-  get evidence() { return `${this.label} pid ${this.pid ?? "unstarted"}\n${this.tail || "(no output captured)"}`; }
+  get evidence() { return `${this.label} pid ${this.pid ?? "unstarted"}\n${compactLogTail(this.tail) || "(no output captured)"}`; }
 
   assertRunning() {
     if (this.processError) throw new Error(`${this.evidence}\nProcess failed`, { cause: this.processError });

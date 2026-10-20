@@ -157,6 +157,21 @@ test("spawn failure and early exit report the owning process and bounded output"
   assert.throws(() => stopped.assertRunning(), /exited 1/u);
 });
 
+test("failure evidence collapses repeated log lines and keeps only the recent ones", () => {
+  const owned = child();
+  const process = new IsolatedWorkbenchProcess("daemon", owned.process);
+  const repeated = Array.from({ length: 15 }, () => "[project-catalog] project icon refresh failed").join("\n");
+  const older = Array.from({ length: 40 }, (_, index) => `older line ${index}`).join("\n");
+  owned.process.stderr!.emit("data", Buffer.from(`${older}\n${repeated}\nlast daemon phase\n`));
+
+  const lines = process.evidence.split("\n");
+  assert.ok(lines.length <= 31, `evidence must stay bounded, got ${lines.length} lines`);
+  assert.equal(lines.filter(line => line.includes("icon refresh failed")).length, 1);
+  assert.ok(lines.includes("[project-catalog] project icon refresh failed (×15)"));
+  assert.equal(lines.at(-1), "last daemon phase");
+  assert.ok(!lines.includes("older line 0"));
+});
+
 test("expired shutdown actually retires a real child and its descendant", async context => {
   const descendant = `
     const http = require("node:http");
