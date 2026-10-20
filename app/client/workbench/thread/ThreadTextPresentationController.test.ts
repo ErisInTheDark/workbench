@@ -207,6 +207,22 @@ test("an item's first text reveals from empty once promptly watched", () => {
   assert.equal(testHarness.controller.getSnapshot(field), "hello world");
 });
 
+test("text nobody watched in time shows whole when it is finally watched, and only later text reveals", () => {
+  const testHarness = harness();
+  const field = key("json");
+  testHarness.controller.acceptDelta({ canonicalText: "hello world", delta: "hello world", key: field });
+  // The message finished before anyone looked: no later delta ever arrives to settle it.
+  testHarness.wait(2_000);
+  testHarness.controller.subscribe(field, "hello world", () => undefined);
+  assert.equal(testHarness.controller.getSnapshot(field), "hello world");
+  assert.equal(testHarness.scheduled(), false);
+
+  testHarness.controller.acceptDelta({ canonicalText: "hello world again", delta: " again", key: field });
+  assert.equal(testHarness.controller.getSnapshot(field), "hello world");
+  testHarness.drain();
+  assert.equal(testHarness.controller.getSnapshot(field), "hello world again");
+});
+
 test("an item's first text settles to canonical when nobody watches it in time", () => {
   const testHarness = harness();
   const field = key("json");

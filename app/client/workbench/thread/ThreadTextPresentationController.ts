@@ -188,9 +188,13 @@ export default class ThreadTextPresentationController {
     if (this.#disposed) return () => undefined;
     const identity = fieldKey(key);
     let state = this.#fields.get(identity);
+    const now = this.#now();
     if (!state) {
-      state = settledState(canonicalText, this.#now());
+      state = settledState(canonicalText, now);
       this.#fields.set(identity, state);
+    } else if (state.fresh && now - state.createdAt > FRESH_FIELD_WINDOW_MS) {
+      // Text that arrived while nobody watched is already there: show it whole, so only later text reveals.
+      Object.assign(state, settledState(state.canonicalText, now), { listeners: state.listeners });
     } else if (
       !state.pendingText
       && state.canonicalText !== canonicalText
