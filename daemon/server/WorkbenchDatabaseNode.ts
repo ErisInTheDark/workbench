@@ -13,7 +13,7 @@ import WorkbenchCommandApprovalController from "./WorkbenchCommandApprovalContro
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
-import WorkbenchDatabaseRetentionController from "./database/retention/WorkbenchDatabaseRetentionController";
+import WorkbenchDatabaseRetentionController, { fileRetentionRecord } from "./database/retention/WorkbenchDatabaseRetentionController";
 import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
 import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
 import WorkbenchMemoryReporter from "./WorkbenchMemoryReporter";
@@ -67,7 +67,8 @@ export default ReloadableNode.define<
       },
     });
     const transcript = new WorkbenchTranscriptController(database, captureGaps);
-    const retention = new WorkbenchDatabaseRetentionController(database, undefined, undefined, () => transcript.observedThreadIds);
+    const retention = new WorkbenchDatabaseRetentionController(database, undefined, undefined, () => transcript.observedThreadIds,
+      fileRetentionRecord(join(context.dataRootPath, "daemon", "workbench-retention.json")));
     // The database owns the worker isolates, so their heaps are reported from here.
     const memory = new WorkbenchMemoryReporter({
       readWorkerHeaps: () => database.readWorkerHeaps(),

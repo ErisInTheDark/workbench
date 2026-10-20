@@ -7,6 +7,43 @@ import { test } from "node:test";
 import WorkbenchDatabaseRetentionController from "./WorkbenchDatabaseRetentionController.ts";
 
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const passResult = {
+  expiredResults: 0, expiredTurns: 0, expiredAssets: 0, expiredProposalCaches: 0, expiredResolvedFeedback: 0,
+  fullCompaction: false, reclaimedPages: 0,
+};
+
+test("retention runs only once its last completed pass is a day old, however often the daemon restarts", async () => {
+  let now = 10 * DAY_MS;
+  let completedAt: number | null = now - HOUR_MS;
+  let passes = 0;
+  const record = {
+    readCompletedAt: () => completedAt,
+    writeCompletedAt: (at: number) => { completedAt = at; },
+  };
+  const fake = createScheduler();
+  const controller = new WorkbenchDatabaseRetentionController({
+    runRetention: async () => { passes += 1; return passResult; },
+  }, () => now, fake.scheduling, () => [], record);
+  controller.start();
+  await Promise.resolve();
+  assert.equal(passes, 0, "a restart soon after a pass skips retention");
+
+  now += DAY_MS - 2 * HOUR_MS;
+  fake.callback?.();
+  await Promise.resolve();
+  assert.equal(passes, 0);
+
+  now += HOUR_MS;
+  fake.callback?.();
+  for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+  assert.equal(passes, 1, "the hourly check runs a due pass");
+  assert.equal(completedAt, now);
+  fake.callback?.();
+  for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+  assert.equal(passes, 1, "a fresh completion is not due again");
+  await controller.dispose();
+});
 
 test("retention delegates live observation sampling for each expiry dispatch", async () => {
   let observed = ["first"];
@@ -45,7 +82,7 @@ function createScheduler() {
         cleared = true;
       },
       every(received: () => void, intervalMs: number) {
-        assert.equal(intervalMs, DAY_MS);
+        assert.equal(intervalMs, HOUR_MS);
         callback = received;
         return handle;
       },
