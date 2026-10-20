@@ -622,6 +622,39 @@ const globalPreferencesV16 = defineTable("global_preferences", {
   `)],
 }));
 
+const globalPreferencesV17 = defineTable("global_preferences", {
+  ...globalPreferencesV16.columns,
+  key: enumText(
+    "appPort", "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "harness", "projectStatusCountsExpanded", "projectsOpen", "projectTimeGroupCount",
+    "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
+    "theme", "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen",
+    "transcriptProjectionMode", "voiceInputEnabled", "gitPeerSyncMode",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName", "markTags", "threadAnimationStyle",
+    "threadAnimationPerParagraph",
+  ).primaryKey(),
+}, table => ({
+  constraints: [unique([table.key, table.deleted]), check(sql`
+    (${table.deleted} = ${literal(1)} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+    OR (${table.deleted} = ${literal(0)} AND (
+      (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("projectStatusCountsExpanded")}, ${literal("projectsOpen")}, ${literal("reactDevelopmentMode")}, ${literal("reloadNecessaryOpen")}, ${literal("showUnopenableFiles")}, ${literal("sidebarCollapsed")}, ${literal("threadAnimationPerParagraph")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}, ${literal("threadGitArcProposalsOpen")}, ${literal("threadVisOpen")}, ${literal("voiceInputEnabled")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("appPort")}, ${literal("editorFontSize")}, ${literal("projectTimeGroupCount")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("harness")}, ${literal("theme")}, ${literal("transcriptProjectionMode")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      OR (${table.key} = ${literal("gitPeerSyncMode")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("merge")}, ${literal("rebase")}))
+      OR (${table.key} IN (${literal("openMarkdownFilesWith")}, ${literal("openSvgFilesWith")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("workbench")}, ${literal("vscode")}))
+      OR (${table.key} = ${literal("openOtherFilesWith")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("vscode")}, ${literal("none")}))
+      OR (${table.key} = ${literal("userName")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND length(${table.text_value}) <= ${literal(40)})
+      OR (${table.key} = ${literal("markTags")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} = ${literal("threadAnimationStyle")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("soft")}, ${literal("calm")}, ${literal("ink")}, ${literal("pop")}, ${literal("glide")}, ${literal("glow")}, ${literal("typewriter")}))
+    ))
+  `)],
+}));
+
 const globalPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({ migration: createTable(globalPreferencesV1), schemaVersion: appStateReleases.initialAppState.version, table: globalPreferencesV1 }),
@@ -706,8 +739,13 @@ const globalPreferencesHistory = defineTableHistory({
       schemaVersion: appStateReleases.threadAnimationStyle.version,
       table: globalPreferencesV16,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: globalPreferencesV16, to: globalPreferencesV17 }),
+      schemaVersion: appStateReleases.threadAnimationPerParagraph.version,
+      table: globalPreferencesV17,
+    }),
   ],
-  current: globalPreferencesV16,
+  current: globalPreferencesV17,
 });
 
 /** One row per tag of the live global `markTags` preference, in keybind order. */

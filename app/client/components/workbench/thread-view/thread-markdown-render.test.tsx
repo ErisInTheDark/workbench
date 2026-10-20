@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect SVG preview policy/laziness, ordered-list ordinals, agent-authored inline markers, notice blocks, Markdown bodies, literal fallback, and streamed reveal/frontier rendering.
+ * No production exports. Regression wards protect SVG preview policy/laziness, ordered-list ordinals, agent-authored inline markers, notice blocks, Markdown bodies, literal fallback, streamed reveal/frontier rendering, and per-paragraph holding.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -426,4 +426,19 @@ test("streaming text renders its frontier: hidden partial tokens, optimistic clo
   assert.match(html, /data-thread-notice-color="yellow"/u);
   assert.match(html, /body <strong>bold so far <\/strong><\/p>/u);
   assert.doesNotMatch(html, /&lt;icon/u);
+});
+
+test("per-paragraph streaming shows complete blocks whole, including their last word", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    "### Tracing",
+    "",
+    "Words land softly as the agent streams.",
+    "",
+    '<notice title="Heads up" color="yellow">',
+    "Inner still arriv",
+  ].join("\n"), { holdIncompleteBlocks: true, partial: true })));
+
+  assert.match(html, /Tracing<\/h3>/u);
+  assert.match(html, /as the agent streams\.<\/p>/u);
+  assert.doesNotMatch(html, /data-thread-notice/u);
 });

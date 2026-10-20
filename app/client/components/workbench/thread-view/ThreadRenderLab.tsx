@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import ThreadRenderSurface from "./ThreadRenderSurface";
 import { parseThreadRenderInput } from "./thread-render-lab-input";
@@ -45,6 +45,8 @@ export default function ThreadRenderLab() {
   const [theme, setTheme] = useState("default");
   const [controlsVisible, setControlsVisible] = useState(true);
   const [animationStyle, setAnimationStyle] = useState<WorkbenchThreadAnimationStyle>("soft");
+  const [perParagraph, setPerParagraph] = useState(false);
+  const animation = useMemo(() => ({ ...THREAD_ANIMATION_STYLES[animationStyle], perParagraph }), [animationStyle, perParagraph]);
   const [textOwner] = useState(() => new ThreadTextPresentationController());
   const [streamTurn, setStreamTurn] = useState("");
   const [streamItem, setStreamItem] = useState("");
@@ -137,6 +139,8 @@ export default function ThreadRenderLab() {
               ?.find(option => option.value === event.target.value)?.value ?? current)}>
             {WORKBENCH_SETTING_DEFINITIONS.threadAnimationStyle.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select></label>
+          <label className="flex items-center gap-2 self-end text-sm"><input type="checkbox" aria-label="Preview per-paragraph reveal" checked={perParagraph}
+            onChange={event => setPerParagraph(event.target.checked)} />Per paragraph</label>
         </fieldset>
         <details>
           <summary className="cursor-pointer text-sm">Streaming text</summary>
@@ -170,7 +174,7 @@ export default function ThreadRenderLab() {
       <section aria-label="Thread preview" className="min-w-0 overflow-x-auto">
         <div className="border border-fg-15" style={{ width: width || "100%", height }} data-thread-render-lab-preview>
           <ThreadRenderLabBoundary revision={revision}>
-            <ThreadAnimationStyleContext value={THREAD_ANIMATION_STYLES[animationStyle]}>
+            <ThreadAnimationStyleContext value={animation}>
             <ThreadTextPresentationContext value={textOwner}>
               <ThreadItemActionsContext.Provider value={labItemActions}>
                 <ThreadRenderSurface key={mount} thread={thread} context={fixture.context} flags={flags} fontSizeRem={fontSize} emptyMessage="No fixture applied."

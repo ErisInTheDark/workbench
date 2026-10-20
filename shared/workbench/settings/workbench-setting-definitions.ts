@@ -28,14 +28,15 @@ export type WorkbenchFileOpenSettingKey = "openMarkdownFilesWith" | "openSvgFile
 export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
   | "editorFontSize" | WorkbenchFileOpenSettingKey | "gitPeerSyncMode"
-  | "showUnopenableFiles" | "threadAnimationStyle" | "threadCodeBlockWrap" | "threadCodeDetails" | "userName" | "markTags";
+  | "showUnopenableFiles" | "threadAnimationStyle" | "threadAnimationPerParagraph" | "threadCodeBlockWrap" | "threadCodeDetails"
+  | "userName" | "markTags";
 
 /** Personal preferences that projects never override. */
-export type WorkbenchGlobalOnlySettingKey = "threadAnimationStyle";
+export type WorkbenchGlobalOnlySettingKey = "threadAnimationStyle" | "threadAnimationPerParagraph";
 export type WorkbenchProjectSettingKey = Exclude<WorkbenchSettingKey, WorkbenchGlobalOnlySettingKey>;
 
 export function isWorkbenchGlobalOnlySettingKey(key: WorkbenchSettingKey): key is WorkbenchGlobalOnlySettingKey {
-  return key === "threadAnimationStyle";
+  return key === "threadAnimationStyle" || key === "threadAnimationPerParagraph";
 }
 
 export const WORKBENCH_FILE_OPEN_SETTING_KEYS = {
@@ -58,6 +59,8 @@ export interface WorkbenchGlobalSettings {
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
   threadAnimationStyle: WorkbenchThreadAnimationStyle;
+  /** Streaming text reveals block by block: each block shows once complete, headings and containers with their first complete content. */
+  threadAnimationPerParagraph: boolean;
   threadCodeBlockWrap: boolean;
   threadCodeDetails: boolean;
   /** Signs new markdown comments; empty leaves them unsigned. */
@@ -126,9 +129,11 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     ],
   },
   showUnopenableFiles: { description: "Controls whether the project sidebar shows files Workbench cannot open directly.", key: "showUnopenableFiles", label: "Show unsupported files", type: "boolean" },
+  threadAnimationPerParagraph: {
+    description: "Hold streaming text until each block is complete.", key: "threadAnimationPerParagraph", label: "Per paragraph", type: "boolean",
+  },
   threadAnimationStyle: {
-    columns: "two", description: "Controls how streamed thread text, new thread items and new blocks animate in.",
-    key: "threadAnimationStyle", label: "Thread animation", type: "select",
+    description: "", key: "threadAnimationStyle", label: "Thread animation", type: "select",
     options: [
       { description: "Words lift and unblur; blocks open their space first.", label: "Soft rise", value: "soft" },
       { description: "Plain fades with minimal motion.", label: "Calm", value: "calm" },
@@ -144,7 +149,7 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
   editorSpellCheck: { description: "Controls browser spellcheck in the rich markdown editor.", key: "editorSpellCheck", label: "Editor spellcheck", type: "boolean" },
   userName: { description: "", key: "userName", label: "Name", maxLength: USER_NAME_MAX_LENGTH, placeholder: "User", type: "text" },
   theme: {
-    columns: "two", description: "Controls Workbench colors and font personality.", key: "theme", label: "Theme", type: "select",
+    description: "", key: "theme", label: "Theme", type: "select",
     options: [
       { description: "Quiet Workbench colors and fonts.", label: "Default", value: "default" },
       { description: "Pink sparkles with Sour Gummy and Comic Code Light.", label: "Magical girl mode", value: "magical-girl" },

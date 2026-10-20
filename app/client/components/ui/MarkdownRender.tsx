@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default MarkdownRender: render cached thread markdown with the contextual project's file, workspace and mention links plus external absolute file links; live text fades in and streaming text renders its frontier. Keywords: thread markdown, file links, external git roots, streaming.
+ * - default MarkdownRender: render cached thread markdown with the contextual project's file, workspace and mention links plus external absolute file links; live text fades in and streaming text renders its frontier, or only complete blocks under per-paragraph reveal. Keywords: thread markdown, file links, external git roots, streaming.
  * - Local helpers: bound rendered Markdown and external-root caches, and own one reveal timeline per live render context. Keywords: cache, markdown, reveal.
  */
 "use client";
@@ -308,11 +308,14 @@ export default memo(function MarkdownRender ({
   const timeline = useRevealTimeline(live, streaming, contextKey);
   const animationStyle = useContext(ThreadAnimationStyleContext);
   const caret = streaming && animationStyle.caret;
+  const holdIncompleteBlocks = animationStyle.perParagraph;
   const presentation = useMemo(() => {
     if (!live) return { cursor: null, rendered: renderCachedThreadMarkdown(markdown, renderOptions, cacheKey) };
     const cursor = timeline?.cursor(performance.now()) ?? null;
-    return { cursor, rendered: renderThreadMarkdown(markdown, { ...renderOptions, caret, partial: streaming, reveal: cursor ?? undefined }) };
-  }, [cacheKey, caret, live, markdown, renderOptions, streaming, timeline]);
+    return { cursor, rendered: renderThreadMarkdown(markdown, {
+      ...renderOptions, caret, holdIncompleteBlocks, partial: streaming, reveal: cursor ?? undefined,
+    }) };
+  }, [cacheKey, caret, holdIncompleteBlocks, live, markdown, renderOptions, streaming, timeline]);
 
   useLayoutEffect(() => {
     if (presentation.cursor) timeline?.commit(presentation.cursor);

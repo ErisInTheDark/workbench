@@ -35,6 +35,7 @@ const KEY_RELEASES: Partial<Record<WorkbenchSettingKey, number>> = {
   openOtherFilesWith: appStateReleases.fileOpenDestinations.version,
   openSvgFilesWith: appStateReleases.fileOpenDestinations.version,
   threadAnimationStyle: appStateReleases.threadAnimationStyle.version,
+  threadAnimationPerParagraph: appStateReleases.threadAnimationPerParagraph.version,
   threadCodeDetails: appStateReleases.threadCodeDetails.version,
   userName: appStateReleases.userName.version,
 };

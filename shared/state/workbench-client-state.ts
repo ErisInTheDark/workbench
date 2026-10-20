@@ -97,6 +97,7 @@ export type WorkbenchGlobalPreference =
       | "showUnopenableFiles"
       | "sidebarCollapsed"
       | "threadCodeBlockWrap"
+      | "threadAnimationPerParagraph"
       | "threadCodeDetails"
       | "threadGitArcProposalsOpen"
       | "threadVisOpen"
@@ -264,7 +265,8 @@ const preferenceBoolean = z.object({
   key: z.enum([
     "composerSpellCheck", "editorSpellCheck", "projectStatusCountsExpanded", "projectsOpen",
     "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
-    "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen", "voiceInputEnabled",
+    "threadAnimationPerParagraph", "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen",
+    "voiceInputEnabled",
   ]),
   value: z.boolean(),
 });
@@ -386,6 +388,7 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
     "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
     "harness", "theme", "transcriptProjectionMode", "gitPeerSyncMode",
     "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName", "markTags", "threadAnimationStyle",
+    "threadAnimationPerParagraph",
   ]) }),
   z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
     key: z.enum(logicalProjectPreferenceKeys) }),

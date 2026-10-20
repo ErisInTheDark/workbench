@@ -28,6 +28,7 @@ import WorkbenchRepoPrerequisiteSettings from "./WorkbenchRepoPrerequisiteSettin
 import WorkbenchSettingsPreferences from "./WorkbenchSettingsPreferences";
 import WorkbenchProjectPreferenceSettings from "./WorkbenchProjectPreferenceSettings";
 import WorkbenchThemeSetting from "./WorkbenchThemeSetting";
+import WorkbenchThreadAnimationSetting from "./WorkbenchThreadAnimationSetting";
 import { WorkbenchOperationsContext } from "./WorkbenchWorkspaceContext";
 import ChevronIcon from "./ChevronIcon";
 import { ComputerIcon } from "./workbench-icons";
@@ -230,7 +231,8 @@ export default function WorkbenchSettingsView({
       {place.kind === "app" && place.page === "general" ? <>
         <FormSection id="settings-appearance" title="Appearance">
           <WorkbenchThemeSetting logicalProjectId={null} onError={onError} />
-          {preferences(["editorFontSize", "threadAnimationStyle"])}
+          {preferences(["editorFontSize"])}
+          <WorkbenchThreadAnimationSetting onError={onError} />
         </FormSection>
         <WorkbenchProjectPreferenceSettings id="settings-editing" projects={projects} onError={onError} />
         <FormSection id="settings-git" title="Git">

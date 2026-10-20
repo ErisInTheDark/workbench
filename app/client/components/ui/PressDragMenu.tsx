@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default PressDragMenu: fit-content anchored menu (centred by default, opening above or below by room) with press-drag, click, touch and keyboard selection, and an optional heading.
+ * - default PressDragMenu: fit-content anchored menu (centred by default, opening above or below by room) with press-drag, click, touch and keyboard selection, an optional heading, and optional edge-to-edge item rows.
  * - PressDragMenuItem/PressDragMenuGroup: stable action and optional grouped navigation content.
  * - getPressDragGroupItems: items available from a saved-open group.
  */
@@ -33,7 +33,7 @@ export function getPressDragGroupItems (group: PressDragMenuGroup): readonly Pre
 }
 
 const menuMaxWidth = 440;
-const menuMaxHeight = 480;
+const flushItemClassName = "p-0! overflow-hidden";
 
 function viewportBounds () {
   const viewport = window.visualViewport;
@@ -47,13 +47,17 @@ type MenuPlacement = { style: CSSProperties; below: boolean };
 
 export default function PressDragMenu ({
   children, label, heading, getItems, items: suppliedItems, groups, groupNavigationLabel = "Menu sections", onOpen, onSelect, onActivate, triggerAppearance = "default", triggerClassName, align = "center", disabled = false,
+  flushItems = false, maxHeight = 480,
 }: {
   children: ReactNode;
   label: string;
   /** Title shown above an ungrouped item list. */
   heading?: string;
-  align?: "center" | "end";
+  align?: "start" | "center" | "end";
   disabled?: boolean;
+  /** Item content fills its row edge to edge, for rich previews that own their own padding. */
+  flushItems?: boolean;
+  maxHeight?: number;
   getItems?: () => readonly PressDragMenuItem[];
   items?: readonly PressDragMenuItem[];
   groups?: readonly PressDragMenuGroup[];
@@ -120,7 +124,7 @@ export default function PressDragMenu ({
     if (event.kind === "press") trigger.current.blur();
     const items = groups?.flatMap(getPressDragGroupItems) ?? suppliedItems ?? getItems?.() ?? [];
     // Render unplaced and hidden first; the layout effect measures natural size, then places it.
-    setPlacement({ style: { left: 0, top: 0, width: "max-content", maxWidth: Math.min(menuMaxWidth, viewportBounds().width - 24), maxHeight: menuMaxHeight, visibility: "hidden" }, below: false });
+    setPlacement({ style: { left: 0, top: 0, width: "max-content", maxWidth: Math.min(menuMaxWidth, viewportBounds().width - 24), maxHeight, visibility: "hidden" }, below: false });
     setMenu({ interaction: transitionPressDragMenu(menu.interaction, event).state, items });
     hoveredGroup.current = null;
     if (event.kind === "open") trigger.current.focus({ preventScroll: true });
@@ -179,7 +183,7 @@ export default function PressDragMenu ({
     if ((unplaced || suppliedItems || groups) && trigger.current) {
       const next = place(trigger.current, {
         width: element.getBoundingClientRect().width,
-        height: Math.min(menuMaxHeight, element.scrollHeight),
+        height: Math.min(maxHeight, element.scrollHeight),
       });
       below = next.below;
       setPlacement(next);
@@ -330,7 +334,7 @@ export default function PressDragMenu ({
         dispatch({ kind: "cancel" });
       }}
       style={{ ...placement?.style, zIndex: 60 }}
-      className={groups ? "scrollbar-hover-reveal grid min-h-0 grid-cols-[2.5rem_minmax(0,1fr)] items-start overflow-y-auto overscroll-contain outline-none" : "overflow-y-auto overscroll-contain outline-none"}
+      className={groups ? "scrollbar-hover-reveal grid min-h-0 grid-cols-[2.5rem_minmax(0,1fr)] items-start overflow-y-auto overscroll-contain outline-none" : `overflow-y-auto overscroll-contain outline-none ${flushItems ? "scrollbar-hover-reveal space-y-1" : ""}`}
     >
       {groups ? <>
         <div className="h-[calc(100%+var(--spacing)*4)] bg-fg/3 -ml-1 -my-2 col-1 row-1"></div>
@@ -359,6 +363,7 @@ export default function PressDragMenu ({
                 role={item.checked === undefined ? "menuitem" : "menuitemradio"}
                 aria-checked={item.checked}
                 tabIndex={-1}
+                className={flushItems ? flushItemClassName : undefined}
                 highlighted={activeId === item.id}
                 onPointerDown={event => { if (event.pointerType !== "touch") event.preventDefault(); }}
                 onPointerMove={event => { if (event.pointerType !== "touch" && menu.interaction.kind === "open") dispatch({ kind: "highlight", id: item.id }); }}
@@ -383,6 +388,7 @@ export default function PressDragMenu ({
         role={item.checked === undefined ? "menuitem" : "menuitemradio"}
         aria-checked={item.checked}
         tabIndex={-1}
+        className={flushItems ? flushItemClassName : undefined}
         highlighted={activeId === item.id}
         onPointerDown={event => { if (event.pointerType !== "touch") event.preventDefault(); }}
         onPointerMove={event => { if (event.pointerType !== "touch" && menu.interaction.kind === "open") dispatch({ kind: "highlight", id: item.id }); }}

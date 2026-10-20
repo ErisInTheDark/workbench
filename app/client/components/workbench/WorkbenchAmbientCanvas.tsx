@@ -1,12 +1,16 @@
 /*
  * Exports:
  * - WorkbenchAmbientCanvasVariant: supported ambient canvas theme variants.
- * - default WorkbenchAmbientCanvas: reusable animated theme background canvas.
+ * - WorkbenchAmbientCanvasDensity: the app backdrop, or a small preview such as a theme swatch.
+ * - getAmbientCanvasVariant: the ambient canvas a theme shows, if any.
+ * - default WorkbenchAmbientCanvas: animated theme particles filling the parent box, coloured by the theme in scope where it renders.
  */
 "use client";
 import { useEffect, useRef } from "react";
+import type { WorkbenchTheme } from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
 export type WorkbenchAmbientCanvasVariant = "magical-girl" | "winter";
+export type WorkbenchAmbientCanvasDensity = "backdrop" | "preview";
 
 type Particle = {
   bornAt: number;
@@ -29,6 +33,16 @@ type AmbientPreset = {
   minCount: number;
 };
 
+/** How densely and brightly particles fill a box; previews are small, so they need far more per area to read. */
+type AmbientDensity = {
+  countScale: number;
+  maxCount: number | null;
+  minCount: number | null;
+  opacityScale: number;
+  /** Small boxes wrap drift vertically so particles stay visible for their whole life. */
+  wrap: boolean;
+};
+
 const AMBIENT_PRESETS: Record<WorkbenchAmbientCanvasVariant, AmbientPreset> = {
   "magical-girl": {
     colorSource: "theme",
@@ -48,9 +62,18 @@ const AMBIENT_PRESETS: Record<WorkbenchAmbientCanvasVariant, AmbientPreset> = {
   },
 };
 
-function getParticleCount(width: number, height: number, preset: AmbientPreset) {
-  const area = width * height;
-  return Math.min(preset.maxCount, Math.max(preset.minCount, Math.floor(area / preset.countDivisor)));
+const AMBIENT_DENSITIES: Record<WorkbenchAmbientCanvasDensity, AmbientDensity> = {
+  backdrop: { countScale: 1, maxCount: null, minCount: null, opacityScale: 1, wrap: false },
+  preview: { countScale: 5.5, maxCount: 60, minCount: 12, opacityScale: 2.2, wrap: true },
+};
+
+export function getAmbientCanvasVariant(theme: WorkbenchTheme): WorkbenchAmbientCanvasVariant | null {
+  return theme === "magical-girl" || theme === "winter" ? theme : null;
+}
+
+function getParticleCount(width: number, height: number, preset: AmbientPreset, density: AmbientDensity) {
+  const count = Math.floor((width * height * density.countScale) / preset.countDivisor);
+  return Math.min(density.maxCount ?? preset.maxCount, Math.max(density.minCount ?? preset.minCount, count));
 }
 
 function createParticle(
@@ -81,49 +104,36 @@ function createParticle(
   };
 }
 
-function createParticles(
-  width: number,
-  height: number,
-  colorCount: number,
-  timestamp: number,
-  variant: WorkbenchAmbientCanvasVariant,
-): Particle[] {
-  const preset = AMBIENT_PRESETS[variant];
-  return Array.from({ length: getParticleCount(width, height, preset) }, () => (
-    createParticle(width, height, colorCount, timestamp, true, variant)
-  ));
-}
-
-function readCanvasColors(variant: WorkbenchAmbientCanvasVariant) {
+/** Theme colours resolve from the canvas itself, so a swatch inside `data-workbench-theme-preview` sparkles in its own theme. */
+function readCanvasColors(canvas: HTMLCanvasElement, variant: WorkbenchAmbientCanvasVariant) {
   const preset = AMBIENT_PRESETS[variant];
   if (preset.colorSource === "preset") {
     return preset.colors;
   }
 
-  const styles = window.getComputedStyle(document.documentElement);
+  const styles = window.getComputedStyle(canvas);
   const accent = styles.getPropertyValue("--accent").trim() || "#ff86d5";
   const text = styles.getPropertyValue("--text").trim() || "#ffe4f6";
   const selection = styles.getPropertyValue("--selection").trim() || "#ff86d54d";
   return [accent, text, selection, ...preset.colors];
 }
 
-function getParticleFrame(particle: Particle, timestamp: number) {
+function getParticleFrame(particle: Particle, timestamp: number, height: number, density: AmbientDensity) {
   const age = Math.max(0, timestamp - particle.bornAt);
   const phase = Math.min(1, age / particle.duration);
   const fadePortion = 0.28;
   const fadeIn = Math.min(1, phase / fadePortion);
   const fadeOut = Math.min(1, (1 - phase) / fadePortion);
-  const opacity = Math.max(0, Math.min(fadeIn, fadeOut)) * particle.maxOpacity;
+  const opacity = Math.min(1, Math.max(0, Math.min(fadeIn, fadeOut)) * particle.maxOpacity * density.opacityScale);
   const ageSeconds = age / 1000;
   const x = particle.x + particle.vx * ageSeconds + Math.sin(ageSeconds * 0.55 + particle.x) * 2.4;
   const y = particle.y + particle.vy * ageSeconds;
 
-  return { opacity, x, y };
+  return { opacity, x, y: density.wrap ? y % (height + 8) : y };
 }
 
-function drawSparkle(context: CanvasRenderingContext2D, particle: Particle, color: string, timestamp: number) {
-  const frame = getParticleFrame(particle, timestamp);
-  const radius = particle.radius * (0.76 + frame.opacity * 0.75);
+function drawSparkle(context: CanvasRenderingContext2D, color: string, frame: { opacity: number; x: number; y: number }, baseRadius: number) {
+  const radius = baseRadius * (0.76 + frame.opacity * 0.75);
 
   context.save();
   context.globalAlpha = frame.opacity;
@@ -143,78 +153,75 @@ function drawSparkle(context: CanvasRenderingContext2D, particle: Particle, colo
   context.restore();
 }
 
-function drawSnow(context: CanvasRenderingContext2D, particle: Particle, color: string, timestamp: number) {
-  const frame = getParticleFrame(particle, timestamp);
-
+function drawSnow(context: CanvasRenderingContext2D, color: string, frame: { opacity: number; x: number; y: number }, radius: number) {
   context.save();
   context.globalAlpha = frame.opacity;
   context.fillStyle = color;
   context.beginPath();
-  context.arc(frame.x, frame.y, particle.radius, 0, Math.PI * 2);
+  context.arc(frame.x, frame.y, radius, 0, Math.PI * 2);
   context.fill();
   context.globalAlpha = frame.opacity * 0.32;
   context.beginPath();
-  context.arc(frame.x, frame.y, particle.radius * 2.2, 0, Math.PI * 2);
+  context.arc(frame.x, frame.y, radius * 2.2, 0, Math.PI * 2);
   context.fill();
   context.restore();
 }
 
-export default function WorkbenchAmbientCanvas({ variant }: { variant: WorkbenchAmbientCanvasVariant }) {
+export default function WorkbenchAmbientCanvas({
+  className = "",
+  density: densityName = "backdrop",
+  variant,
+}: {
+  className?: string;
+  density?: WorkbenchAmbientCanvasDensity;
+  variant: WorkbenchAmbientCanvasVariant;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    const context = canvas.getContext("2d");
-    if (!context) {
+    const box = canvas?.parentElement;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !box || !context) {
       return;
     }
 
     const preset = AMBIENT_PRESETS[variant];
+    const density = AMBIENT_DENSITIES[densityName];
     let animationFrameId = 0;
     let particles: Particle[] = [];
-    let colors = readCanvasColors(variant);
+    let colors = readCanvasColors(canvas, variant);
     let width = 0;
     let height = 0;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     const resizeCanvas = () => {
       const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-      width = Math.max(1, window.innerWidth);
-      height = Math.max(1, window.innerHeight);
+      width = Math.max(1, box.clientWidth);
+      height = Math.max(1, box.clientHeight);
       canvas.width = Math.floor(width * pixelRatio);
       canvas.height = Math.floor(height * pixelRatio);
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      colors = readCanvasColors(variant);
-      particles = createParticles(width, height, colors.length, window.performance.now(), variant);
-    };
-
-    const drawParticle = (particle: Particle, timestamp: number) => {
-      const color = colors[particle.colorIndex % colors.length];
-      if (preset.draw === "snow") {
-        drawSnow(context, particle, color, timestamp);
-        return;
-      }
-
-      drawSparkle(context, particle, color, timestamp);
+      colors = readCanvasColors(canvas, variant);
+      const now = window.performance.now();
+      particles = Array.from({ length: getParticleCount(width, height, preset, density) }, () => (
+        createParticle(width, height, colors.length, now, true, variant)
+      ));
     };
 
     const renderFrame = (timestamp: number) => {
       animationFrameId = 0;
       context.clearRect(0, 0, width, height);
-      colors = readCanvasColors(variant);
+      colors = readCanvasColors(canvas, variant);
       for (let index = 0; index < particles.length; index += 1) {
-        const particle = particles[index];
-        const age = timestamp - particle.bornAt;
-        if (!reducedMotion.matches && age > particle.duration) {
+        if (!reducedMotion.matches && timestamp - particles[index]!.bornAt > particles[index]!.duration) {
           particles[index] = createParticle(width, height, colors.length, timestamp, false, variant);
         }
-        drawParticle(particles[index], timestamp);
+        const particle = particles[index]!;
+        const color = colors[particle.colorIndex % colors.length]!;
+        const frame = getParticleFrame(particle, timestamp, height, density);
+        if (preset.draw === "snow") drawSnow(context, color, frame, particle.radius);
+        else drawSparkle(context, color, frame, particle.radius);
       }
 
       if (!reducedMotion.matches) {
@@ -222,29 +229,28 @@ export default function WorkbenchAmbientCanvas({ variant }: { variant: Workbench
       }
     };
 
-    const handleResize = () => {
+    const restart = () => {
       window.cancelAnimationFrame(animationFrameId);
       resizeCanvas();
       renderFrame(window.performance.now());
     };
 
-    resizeCanvas();
-    renderFrame(window.performance.now());
-    window.addEventListener("resize", handleResize);
-    reducedMotion.addEventListener("change", handleResize);
+    const resizeObserver = new ResizeObserver(restart);
+    resizeObserver.observe(box);
+    reducedMotion.addEventListener("change", restart);
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
-      window.removeEventListener("resize", handleResize);
-      reducedMotion.removeEventListener("change", handleResize);
+      resizeObserver.disconnect();
+      reducedMotion.removeEventListener("change", restart);
     };
-  }, [variant]);
+  }, [densityName, variant]);
 
   return (
     <canvas
       ref={canvasRef}
       aria-hidden="true"
-      className="pointer-events-none fixed inset-0 -z-10 opacity-70"
+      className={`pointer-events-none absolute inset-0 size-full ${className}`}
     />
   );
 }

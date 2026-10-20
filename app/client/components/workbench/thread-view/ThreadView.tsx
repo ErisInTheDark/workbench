@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default ThreadView: hold a launched draft until canonical content is renderable, gate ordinary thread loads, and provide the thread animation style.
+ * - default ThreadView: hold a launched draft until canonical content is renderable, gate ordinary thread loads, and provide the thread animation style and per-paragraph reveal.
  */
 "use client";
 
-import { useCallback, useState, type ComponentProps } from "react";
+import { useCallback, useMemo, useState, type ComponentProps } from "react";
 import type { ThreadPayload } from "workbench-shared/types";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { useThread } from "../use-thread";
@@ -54,6 +54,9 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   if (display !== previousDisplay) setPreviousDisplay(display);
   const holdingDraft = display?.target.kind === "draft" && target?.kind === "provider";
   const settings = useSettings.forThread(display?.target ?? target, settingsLocation);
+  const animationStyle = settings.get("threadAnimationStyle");
+  const perParagraph = settings.get("threadAnimationPerParagraph");
+  const animation = useMemo(() => ({ ...THREAD_ANIMATION_STYLES[animationStyle], perParagraph }), [animationStyle, perParagraph]);
   const [settingsFailure, setSettingsFailure] = useState<{ owner: string | null; message: string } | null>(null);
   const reportError = props.onQuestionnaireError;
   const setCodeWrap = useCallback((value: boolean) => {
@@ -88,7 +91,7 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
     {settingsFailure?.owner === settings.projectId && settingsFailure
       ? <p role="alert" className="px-6 py-3 text-danger">{settingsFailure.message}</p> : null}
     {holdingDraft && error ? <p role="alert" className="px-6 py-3 text-danger">{error}</p> : null}
-    <ThreadAnimationStyleContext value={THREAD_ANIMATION_STYLES[settings.get("threadAnimationStyle")]}>
+    <ThreadAnimationStyleContext value={animation}>
     <ThreadViewContent {...props}
       composerSpellCheck={settings.get("composerSpellCheck")}
       threadCodeBlockWrap={settings.get("threadCodeBlockWrap")}

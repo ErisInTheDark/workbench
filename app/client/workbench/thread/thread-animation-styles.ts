@@ -2,6 +2,7 @@
  * Exports:
  * - ThreadMotion: one Web Animations entrance, or null for none.
  * - ThreadAnimationStyle: the text, item and block motions one user-facing style picks together.
+ * - ThreadAnimation: a style plus whether streaming text reveals block by block.
  * - THREAD_ANIMATION_STYLES: every style by setting value.
  */
 import type { WorkbenchThreadAnimationStyle } from "workbench-shared/workbench/settings/workbench-setting-definitions";
@@ -24,6 +25,11 @@ export interface ThreadAnimationStyle {
   caret: boolean;
 }
 
+export interface ThreadAnimation extends ThreadAnimationStyle {
+  /** Streaming text holds each block until it is complete; headings and containers wait for their first complete content. */
+  perParagraph: boolean;
+}
+
 const SETTLE = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 const motions = {
@@ -38,6 +44,13 @@ const motions = {
     { filter: "blur(0.08em)", opacity: 0, top: "0.2em" }, { offset: 0.7, opacity: 1, top: "-0.04em" }, { filter: "blur(0)", opacity: 1, top: "0" },
   ] },
   slide: { duration: 220, easing: SETTLE, keyframes: () => [{ left: "-0.4em", opacity: 0 }, { left: "0", opacity: 1 }] },
+  slideBlock: { duration: 260, easing: SETTLE, keyframes: () => [{ opacity: 0, transform: "translateX(-0.75rem)" }, { opacity: 1, transform: "none" }] },
+  /** drop-shadow follows the block's own rounded shape, unlike box-shadow on the reveal wrapper. */
+  glowBlock: { duration: 800, easing: "ease-out", keyframes: () => [
+    { filter: "drop-shadow(0 0 0.45em var(--accent))", opacity: 0 },
+    { filter: "drop-shadow(0 0 0.35em var(--accent))", offset: 0.2, opacity: 1 },
+    { filter: "drop-shadow(0 0 0 transparent)", opacity: 1 },
+  ] },
   glow: { duration: 700, easing: "ease-out", keyframes: () => [
     { color: "var(--accent)", opacity: 0, textShadow: "0 0 0.6em var(--accent)" },
     { color: "var(--accent)", offset: 0.2, opacity: 1 },
@@ -59,7 +72,7 @@ export const THREAD_ANIMATION_STYLES = {
   calm: { block: motions.fade, caret: false, item: motions.rise, text: motions.fade },
   ink: { block: motions.blur, caret: false, item: motions.blur, text: motions.ink },
   pop: { block: motions.scale, caret: false, item: motions.scale, text: motions.pop },
-  glide: { block: motions.wipe, caret: false, item: motions.wipe, text: motions.slide },
-  glow: { block: motions.expand, caret: false, item: motions.rise, text: motions.glow },
+  glide: { block: motions.slideBlock, caret: false, item: motions.wipe, text: motions.slide },
+  glow: { block: motions.glowBlock, caret: false, item: motions.rise, text: motions.glow },
   typewriter: { block: null, caret: true, item: null, text: null },
 } satisfies Record<WorkbenchThreadAnimationStyle, ThreadAnimationStyle>;

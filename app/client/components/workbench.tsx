@@ -146,7 +146,7 @@ import {
     SidebarExpandIcon,
     SparkleIcon,
 } from "./workbench/workbench-icons";
-import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
+import WorkbenchAmbientCanvas, { getAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
@@ -1324,9 +1324,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     activeProjectId,
     materializedThreadRootIds,
   ]);
-  const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = theme === "magical-girl" || theme === "winter"
-    ? theme
-    : null;
+  const ambientCanvasVariant = getAmbientCanvasVariant(theme);
   const shouldShowShellHeader = !showFullBleedMainView && (!isMobile || mobilePane === "editor");
   const mainPaneScrollKey = showThreadView
     ? `thread:${activeThreadId}`
@@ -1647,7 +1645,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             : " md:grid-cols-[minmax(16rem, 21rem) 1fr]"
             }`}
         >
-          {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
+          {ambientCanvasVariant ? <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10">
+            <WorkbenchAmbientCanvas className="opacity-70" variant={ambientCanvasVariant} />
+          </div> : null}
           <WorkbenchTabIcon />
           <WorkbenchSearchDialog />
           {!isMobile ? (

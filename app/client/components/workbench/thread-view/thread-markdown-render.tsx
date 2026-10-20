@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - createSvgCodeBlockPreviewSrcDoc: build the sandboxed SVG preview document and its content policy.
- * - ThreadRenderOptions: parse options plus the live reveal cursor that animates newly streamed text and framed blocks in document order, and the frontier caret.
+ * - ThreadRenderOptions: parse options plus the live reveal cursor that animates newly streamed text and framed blocks in document order, the frontier caret, and per-paragraph holding.
  * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers; top-level section breaks host section-action slots; partial text renders its stream frontier.
  * - renderThreadInlineMarkdown: render inline markdown without a block container.
  */
@@ -25,6 +25,7 @@ import {
   type ParsedTableAlignment,
   type ParsedTableCell,
 } from "../../../workbench/markdown/markdown-parse";
+import { holdsInside, holdStreamingBlocks } from "../../../workbench/markdown/markdown-hold";
 import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
 import type { MarkdownRevealCursor } from "../../../workbench/markdown/MarkdownRevealTimeline";
 import {
@@ -83,6 +84,8 @@ interface ThreadCodeBlockHeader {
 export type ThreadRenderOptions = MarkdownParseOptions & {
   /** The stream frontier draws a typewriter caret after its last visible character. */
   caret?: boolean;
+  /** Per-paragraph reveal: partial text shows only complete blocks (see holdStreamingBlocks). */
+  holdIncompleteBlocks?: boolean;
   reveal?: MarkdownRevealCursor;
 };
 
@@ -326,16 +329,20 @@ export function renderThreadInlineMarkdown (
 
 /** Only the last content block is at the stream frontier; everything before it is settled. */
 function renderThreadBlockSequence (
-  blocks: readonly ParsedBlock[],
+  parsedBlocks: readonly ParsedBlock[],
   options: ThreadRenderOptions,
   keyFor: (index: number) => string,
   sectionActionsFor?: (block: ParsedBlock) => ReactNode,
 ) {
+  const holding = Boolean(options.partial && options.holdIncompleteBlocks);
+  const blocks = holding ? holdStreamingBlocks(parsedBlocks, (markdown) => parseBlocks(markdown, options)) : parsedBlocks;
   const frontierIndex = lastContentBlockIndex(blocks);
   const settled = settledOptions(options);
+  // Held text shows only complete blocks, so the last one must not hide its final token as unfinished; it keeps the caret.
+  const frontierOptions = holding && frontierIndex >= 0 && !holdsInside(blocks[frontierIndex]!) ? { ...options, partial: false } : options;
   return blocks.map((block, index) => renderEnteringBlock(block, options, `${keyFor(index)}-entry`, () => renderThreadBlock(
     block,
-    index === frontierIndex ? options : settled,
+    index === frontierIndex ? frontierOptions : settled,
     keyFor(index),
     sectionActionsFor?.(block),
   )));
