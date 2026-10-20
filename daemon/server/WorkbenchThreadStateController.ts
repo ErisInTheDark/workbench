@@ -19,7 +19,7 @@ function threadStateLockKey(key: string) {
 }
 
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchUserInputResponse } from "workbench-shared/types";
-import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { areDeeplyEqual, firstDeepDifference } from "workbench-shared/workbench/deep-equality";
 import { resolveLinkedProfileSelection } from "workbench-shared/workbench/thread/thread-profile";
 import { DraftIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, type DraftId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import {
@@ -1535,7 +1535,10 @@ export default class WorkbenchThreadStateController {
         ...record,
         titleHistory: histories.get(entryKey(record)) ?? [],
       }));
-      if (stored === null || !areDeeplyEqual(stored, decoded)) {
+      // A full project rewrite holds the database writer, so it should only follow a real repair; name what forced it.
+      const difference = stored === null ? "missing" : firstDeepDifference(stored, decoded);
+      if (difference !== null) {
+        if (stored !== null) this.options.log?.(`Rewriting stored thread state project=${sanitizeLogValue(projectId)} at=${sanitizeLogValue(difference)}`);
         await this.options.threadStateStore.writeProject(projectId, decoded, records.map((record) => ({
           identity: record.identity, titles: record.titleHistory,
         })));
