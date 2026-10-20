@@ -3,13 +3,13 @@
  * - VisBrowsePort: run a Browse script or stop a session as a vis session's thread.
  * - VisBrowseTarget: the vis session, its thread and the render to show.
  * - default WorkbenchVisBrowse: own each vis session's headless Browse session: write its current render as a framed
- *   page, open it, return a snapshot or screenshot of it, and stop it with the vis.
+ *   page seeded with the user's control state, open it, return a snapshot or screenshot of it, and stop it with the vis.
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { WorkbenchBrowseAgentScriptInlineRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
-import { formatVisScreenshotResult } from "workbench-shared/workbench/vis/vis-contract";
+import { formatVisScreenshotResult, type VisControls } from "workbench-shared/workbench/vis/vis-contract";
 import { frameVisDocument } from "workbench-shared/workbench/vis/vis-frame";
 
 export interface VisBrowsePort {
@@ -23,6 +23,8 @@ export interface VisBrowseTarget {
   cwd: string;
   path: string;
   document: string;
+  /** The file's synced control state, so checks see what the user sees. */
+  controls: VisControls;
 }
 
 /** Close to the card's frame width, so layouts break where the user sees them break. */
@@ -92,7 +94,7 @@ export default class WorkbenchVisBrowse {
   async #load(target: VisBrowseTarget, summary: string) {
     const page = this.#page(target.sessionId);
     await mkdir(this.#directory, { recursive: true });
-    await writeFile(page, frameVisDocument(target.document));
+    await writeFile(page, frameVisDocument(target.document, target.controls));
     await this.#script(target, `open ${pathToFileURL(page).href} --headless\n${VIEWPORT}`, summary);
   }
 

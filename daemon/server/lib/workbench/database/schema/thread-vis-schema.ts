@@ -1,10 +1,12 @@
 /*
  * Exports:
  * - threadVisSchemaHistory: a thread's vis sessions, their build contexts, the documents captured when each started
- *   and ended, and the answers each sent back.
+ *   and ended, and each vis file's synced control state (which retired the answers sessions sent back).
  */
 import { defineTable, enumText, evolveTable, index, integer, primaryKey, sql, text } from "workbench-shared/database/schema/schema-definition";
-import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "workbench-shared/database/schema/schema-history";
+import {
+  addColumns, createTable, defineSubsystemHistory, defineTableHistory, retireTableHistory, tableVersion,
+} from "workbench-shared/database/schema/schema-history";
 import releases from "workbench-shared/workbench/database/schema/releases";
 
 const sessions = defineTable("workbench_thread_vis_sessions", {
@@ -32,13 +34,25 @@ const sessionsWithContext = evolveTable(sessionsWithEnder, {
   add: { build_kind: enumText("caller", "folder", "default"), build_root: text() },
 });
 
-/** JSON values a vis sent through `wb.send`; the store keeps each session's newest 100. */
+/** JSON values a vis sent through `wb.send`, before synced control state replaced them. */
 const answers = defineTable("workbench_thread_vis_answers", {
   session_id: text().notNull().references("workbench_thread_vis_sessions", "id", { onDelete: "CASCADE" }),
   sequence: integer().notNull().nonNegative(),
   sent_at: integer().notNull().nonNegative(),
   value: text().notNull(),
 }, (table) => ({ constraints: [primaryKey([table.session_id, table.sequence])] }));
+
+/**
+ * A vis file's synced control state, as JSON text by control id. Keyed by thread and file rather than session, so the
+ * user's choices survive rebuilds and restarted sessions; the store keeps each file's most recently changed controls.
+ */
+const controls = defineTable("workbench_thread_vis_controls", {
+  thread_id: text().notNull().references("workbench_threads", "id", { onDelete: "CASCADE" }),
+  path: text().notNull(),
+  control_id: text().notNull(),
+  value: text().notNull(),
+  updated_at: integer().notNull().nonNegative(),
+}, (table) => ({ constraints: [primaryKey([table.thread_id, table.path, table.control_id])] }));
 
 const snapshots = defineTable("workbench_thread_vis_snapshots", {
   session_id: text().notNull().references("workbench_thread_vis_sessions", "id", { onDelete: "CASCADE" }),
@@ -63,12 +77,16 @@ export const threadVisSchemaHistory = defineSubsystemHistory([
       }),
     ],
   }),
-  defineTableHistory({
+  retireTableHistory(defineTableHistory({
     current: answers,
     versions: [tableVersion({ schemaVersion: releases.threadVisContextsAndAnswers.version, table: answers, migration: createTable(answers) })],
-  }),
+  }), releases.threadVisControls.version),
   defineTableHistory({
     current: snapshots,
     versions: [tableVersion({ schemaVersion: releases.threadVis.version, table: snapshots, migration: createTable(snapshots) })],
+  }),
+  defineTableHistory({
+    current: controls,
+    versions: [tableVersion({ schemaVersion: releases.threadVisControls.version, table: controls, migration: createTable(controls) })],
   }),
 ]);

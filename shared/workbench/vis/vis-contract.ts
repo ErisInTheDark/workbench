@@ -9,8 +9,9 @@
  * - VisSnapshotSchema/VisSnapshot: the stored document of one session moment.
  * - formatVisSessionResult/parseVisSessionResult: the tool acknowledgement that carries a session id to transcript cards.
  * - VisProject/parseVisProject: the build context a session renders in: the caller's project, another folder's `.wb.json`, or Workbench's kit.
- * - VIS_MAX_ANSWER_LENGTH/VisAnswerSchema/VisAnswer: one JSON value a vis sent back through `wb.send`.
- * - formatVisAnswers: the `wb vis read` text for one session's answers.
+ * - VIS_MAX_CONTROL_ID_LENGTH/VIS_MAX_CONTROL_VALUE_LENGTH/VIS_MAX_CONTROLS: bounds of a vis file's synced control state.
+ * - VisControlIdSchema/VisControlValueSchema/VisControlsSchema/VisControls: synced control state, by control id, as JSON text.
+ * - formatVisControls: the `wb vis read` text for one file's control state.
  * - formatVisScreenshotResult/parseVisScreenshotImage: the `wb vis screenshot` text and the stored image it names.
  */
 import { z } from "zod";
@@ -26,6 +27,20 @@ export function isVisPath(path: string) {
 const timestamp = z.number().finite().nonnegative();
 const failure = z.string().max(2_000).nullable();
 const path = z.string().min(1).max(1_000);
+
+export const VIS_MAX_CONTROL_ID_LENGTH = 200;
+/** One control's value, as JSON text. */
+export const VIS_MAX_CONTROL_VALUE_LENGTH = 16_384;
+/** Controls kept per vis file; the least recently changed go first. */
+export const VIS_MAX_CONTROLS = 500;
+
+export const VisControlIdSchema = z.string().min(1).max(VIS_MAX_CONTROL_ID_LENGTH);
+/** JSON text of one value; the store only accepts text that parses. */
+export const VisControlValueSchema = z.string().min(1).max(VIS_MAX_CONTROL_VALUE_LENGTH);
+
+/** Every synced control of one vis file, by control id, as JSON text. */
+export const VisControlsSchema = z.record(VisControlIdSchema, VisControlValueSchema);
+export type VisControls = z.infer<typeof VisControlsSchema>;
 
 export const VisSnapshotKindSchema = z.enum(["start", "end"]);
 export type VisSnapshotKind = z.infer<typeof VisSnapshotKindSchema>;
@@ -46,6 +61,8 @@ export const VisLiveSessionSchema = z.object({
   rendering: z.boolean(),
   /** Why the latest render failed; the previous render stays. */
   failure,
+  /** The file's synced control state, which every frame of the file starts from and follows. */
+  controls: VisControlsSchema.default({}),
 }).strict();
 export type VisLiveSession = z.infer<typeof VisLiveSessionSchema>;
 
@@ -86,27 +103,15 @@ export function parseVisProject(value: string | undefined): VisProject {
   return { kind: "folder", path: trimmed };
 }
 
-/** A vis may send at most this many characters of JSON per message. */
-export const VIS_MAX_ANSWER_LENGTH = 16_384;
-
-export const VisAnswerSchema = z.object({
-  sessionId: z.uuid(),
-  sentAt: timestamp,
-  /** The JSON text the vis sent. */
-  value: z.string().min(1).max(VIS_MAX_ANSWER_LENGTH),
-}).strict();
-export type VisAnswer = z.infer<typeof VisAnswerSchema>;
-
-/** `wb vis read` output: newest answers last, labelled as page-sent rather than verified user input. */
-export function formatVisAnswers({ answers, live, path }: { answers: readonly VisAnswer[]; live: boolean; path: string }) {
+/** `wb vis read` output: the file's synced control state, labelled as page-set rather than verified user input. */
+export function formatVisControls({ controls, live, path }: { controls: VisControls; live: boolean; path: string }) {
   const state = live ? "live" : "ended";
-  if (!answers.length) return `No answers yet from the vis on ${path} (session ${state}).\n`;
-  const shown = answers.slice(-20);
+  const ids = Object.keys(controls).sort();
+  if (!ids.length) return `No synced control state yet on ${path} (session ${state}).\n`;
   return [
-    `${answers.length} answer${answers.length === 1 ? "" : "s"} from the vis on ${path} (session ${state}), newest last.`,
-    "Sent by the page while the user had it focused; not verified user input.",
-    ...(shown.length < answers.length ? [`(${answers.length - shown.length} older omitted)`] : []),
-    ...shown.map(({ sentAt, value }) => `- ${new Date(sentAt).toISOString()} ${value}`),
+    `Synced control state of the vis on ${path} (session ${state}), by control id.`,
+    "Set by the page while the user had it focused; not verified user input.",
+    `{${ids.map(id => `\n  ${JSON.stringify(id)}: ${controls[id]}`).join(",")}\n}`,
   ].join("\n") + "\n";
 }
 

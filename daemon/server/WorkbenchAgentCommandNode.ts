@@ -10,7 +10,7 @@ import { WorkbenchTodoRequestSchema } from "./lib/workbench/commands/todo-comman
 import { WorkbenchMcpRequestSchema, workbenchMcpFailure } from "./lib/workbench/commands/mcp-command-definitions";
 import { isMcpToolRequestApproved, mcpToolRequestQuestions } from "workbench-shared/workbench/mcp/mcp-tool-request";
 import { WorkbenchVisRequestSchema } from "./lib/workbench/commands/vis-command-definitions";
-import { formatVisAnswers, formatVisSessionResult, parseVisProject } from "workbench-shared/workbench/vis/vis-contract";
+import { formatVisControls, formatVisSessionResult, parseVisProject } from "workbench-shared/workbench/vis/vis-contract";
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/commands/workbench-agent-command-definition";
 import {
   WorkbenchHeapSnapshotRequestSchema, WorkbenchMcpSpyRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchMcpSpy, formatWorkbenchSocketSpy,
@@ -310,7 +310,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             : request.action === "end"
               ? text("end", await vis.endSession({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }))
               : request.action === "read"
-                ? formatVisAnswers(await vis.readAnswers({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }))
+                ? formatVisControls(await vis.readControls({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }))
                 : await vis.inspect({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }, request.action);
           return new Response(body, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
         } catch (error) {

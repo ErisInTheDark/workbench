@@ -75,7 +75,7 @@ function fixture(providerWarning?: string) {
     goals: { set: unused, clear: unused },
     todos: { add: unused, remove: unused, setRequired: unused, setText: unused },
     addressedFeedback: { detach: unused },
-    vis: { answer: unused, endById: unused },
+    vis: { setControl: unused, endById: unused },
     readSkills: async () => [review],
     state: {
       getCanonicalThreadEntry: async () => null,

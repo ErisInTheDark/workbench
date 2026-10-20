@@ -1,14 +1,13 @@
 /*
  * Exports:
  * - VisBridge: the `window.wb` object Workbench injects into every vis frame.
- * - sendVisAnswer: send one JSON value to the agent, which reads it with `wb vis read`.
- * - useVisAnswer: send a named answer and remember what was last sent, for "sent" feedback.
+ * - useVisState: state the user sets in a vis, synced by id: it survives the agent's edits and `wb vis read` returns it.
  */
-import { useState } from "react";
+import { useControlState, type ControlStateStore } from "../ui/control-state";
 
 export interface VisBridge {
-  /** Delivers `value` (JSON, at most 16 KB) while the user has the vis focused; otherwise it is dropped. */
-  send(value: unknown): void;
+  /** The file's synced control state; `set` only reaches Workbench while the user has the vis focused. */
+  state: ControlStateStore;
 }
 
 declare global {
@@ -17,19 +16,8 @@ declare global {
   }
 }
 
-export function sendVisAnswer(value: unknown) {
-  if (!window.wb) throw new Error("This page is not running inside a Workbench vis.");
-  window.wb.send(value);
-}
-
-/** Sends `{ name, value }`; `sent` holds the last value sent from this hook. */
-export function useVisAnswer<T>(name: string) {
-  const [sent, setSent] = useState<{ value: T } | null>(null);
-  return {
-    sent,
-    send(value: T) {
-      sendVisAnswer({ name, value });
-      setSent({ value });
-    },
-  };
+/** Like `useState`, keyed by a control id; outside a vis it is ordinary local state. Rename the id only to reset it. */
+export function useVisState<Value>(id: string, initial: Value) {
+  const [value, set] = useControlState(id, initial);
+  return [value, set] as const;
 }

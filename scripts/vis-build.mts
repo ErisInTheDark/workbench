@@ -25,6 +25,7 @@ const file = kit ? args[1] : args[0];
 if (!file) throw new Error("Usage: vis-build.mts [--kit] <file>");
 const entry = path.resolve(file);
 const visKit = path.join(app, "client", "components", "vis-kit", "index.ts");
+const visStateRoot = path.join(app, "client", "components", "vis-kit", "VisStateRoot.tsx");
 
 /** Kit mockups resolve `workbench/kit` to the kit, and React to the app's single copy even beside a project's own. */
 const kitPlugin: import("esbuild").Plugin = {
@@ -63,7 +64,9 @@ const bundled = await esbuild.build({
       `import { createElement } from "react";`,
       `import { createRoot } from "react-dom/client";`,
       `import Mockup from ${JSON.stringify(entry.replaceAll("\\", "/"))};`,
-      `createRoot(document.getElementById("root")).render(createElement(Mockup));`,
+      // Under the root, id'd controls and `useVisState` sync through the frame's `wb.state`.
+      `import VisStateRoot from ${JSON.stringify(visStateRoot.replaceAll("\\", "/"))};`,
+      `createRoot(document.getElementById("root")).render(createElement(VisStateRoot, null, createElement(Mockup)));`,
     ].join("\n"),
     loader: "tsx",
     resolveDir: path.dirname(entry),

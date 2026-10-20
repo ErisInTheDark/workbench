@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default Disclosure: render a styled details/summary disclosure with controlled or uncontrolled open state and a leading or trailing chevron.
+ * - default Disclosure: render a styled details/summary disclosure with controlled or uncontrolled open state and a leading or trailing chevron;
+ *   uncontrolled open state syncs to a control-state store (a vis page) by `stateId` or a plain-text summary.
  * - DisclosureStaticRow: disclosure-aligned static row or optional accessible action with a supplied marker.
  */
 "use client";
@@ -8,6 +9,7 @@
 import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../workbench/ChevronIcon";
+import { useControlState } from "./control-state";
 import { useThreadWindowPin } from "../workbench/thread-view/ThreadMeasuredContent";
 
 function joinClasses (...values: Array<string | undefined>) {
@@ -29,6 +31,8 @@ type DisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   leadingLabel?: string;
   renderContent?: () => ReactNode;
   keepMounted?: boolean;
+  /** Under a control-state store (a vis page), syncs the open state by this id; a plain-text summary is the default id. */
+  stateId?: string;
   summary: ReactNode;
   summaryClassName?: string;
   summaryContentClassName?: string;
@@ -63,6 +67,7 @@ export default function Disclosure ({
   onToggle,
   open,
   renderContent,
+  stateId,
   summary,
   summaryClassName,
   summaryContentClassName,
@@ -71,7 +76,10 @@ export default function Disclosure ({
   const isControlled = typeof open === "boolean";
   const defaultIsOpen = Boolean(defaultOpen ?? initialOpen);
   const [hasUserToggled, setHasUserToggled] = useState(false);
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? defaultIsOpen));
+  const [uncontrolledOpen, setUncontrolledOpen, isSynced] = useControlState(
+    isControlled ? undefined : stateId ?? (typeof summary === "string" ? summary : undefined),
+    Boolean(open ?? defaultIsOpen),
+  );
   const isOpen = isControlled ? Boolean(open) : uncontrolledOpen;
   const [hasMountedContent, setHasMountedContent] = useState(isOpen);
   // Only user-changed disclosures pin their windowed ancestors. Untouched controlled/default state remounts identically.
@@ -121,10 +129,11 @@ export default function Disclosure ({
       return;
     }
 
-    if (!hasUserToggled) {
+    // A synced disclosure's state is the user's, never reset to a default.
+    if (!hasUserToggled && !isSynced) {
       setUncontrolledOpen(defaultIsOpen);
     }
-  }, [defaultIsOpen, hasUserToggled, isControlled, open]);
+  }, [defaultIsOpen, hasUserToggled, isControlled, isSynced, open, setUncontrolledOpen]);
 
   useEffect(() => {
     if (isOpen) {

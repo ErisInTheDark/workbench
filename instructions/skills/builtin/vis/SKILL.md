@@ -33,26 +33,38 @@ Project context without needed `.wb.json` command fails with a clear error: conf
 - `.html`/`.svg`: add `<link rel="workbench-css">` in `<head>` for project CSS. No network: inline everything; images/fonts only as `data:`.
 - Kit (`workbench/kit`):
   - layout: `Section`, `Compare` (columns 2-4), `Stat`, `Table`, `Swatch`, `Callout` (Markdown in thread notice style)
-  - choice: `Choices name multiple? submitLabel?` wrapping `Option title value description?` (children = preview, any depth)
+  - options: `Options label id?` wrapping direct `Option title value?` children (children = that option's preview)
   - Workbench UI: `Disclosure`, `MarkdownRender`, `IconButton`, `PrimaryButton`, `RadioRow`, `Tooltip`, `PressDragMenu`, `PressDragSlider`, `StepSlider`, `OptionCards`/`OptionCard`, `FormSection`, `Tabs`/`Tab`, `ShareList`, `Sparkline`, `StreamChart`, `LineChart`, `Skeleton`, all icons (`XIcon`, ...)
-  - bridge: `useVisAnswer(name)`, `sendVisAnswer(value)`
+  - state: `useVisState(id, initial)`
+- Project context (Workbench): `Options`, `Option`, `useVisState` from `app/client/components/vis-kit`.
 
-## Ask the user to choose
+## Show options
 
-<!-- In-page Choices left users scrolling stacked previews and answering twice (in the page, then "Picked in the vis");
-tabs keep one full-size preview in view and the questionnaire the agent needs anyway carries the answer. -->
-1. Build 2-5 genuinely different options in one vis, switched by `Tabs`/`Tab` at the top, one full-size preview at a time; previews real, not placeholder boxes. Use tabs the same way for states of one design (empty, error, held key).
-2. Tell user in chat what differs between tabs.
-3. Ask via questionnaire, one option per tab plus freeform.
+<!-- Agents invented their own layouts for "pick between options": side-by-side grids squashed every preview to a column,
+one tab per component hid the comparison, and send buttons made users answer twice. These three shapes cover every case;
+naming them stops the improvising. -->
+**Hard rule: alternatives are always tabs, one full-size preview at a time.**
 
-Custom controls: `window.wb.send(jsonValue)` (≤16 KB JSON); read with `wb vis read <path>`. Use only when a questionnaire cannot carry the answer.
+- One thing, 2-5 alternatives: one `Options` set. Previews real, not placeholder boxes.
+- Several similar things, each with alternatives: list the things one after another down the page, each with its own `Options`. Never grid alternatives side by side; never make the things themselves tabs.
+- Outer tabs (an `Options` around the page) only for genuinely separate mockups or states (empty, error, held key).
+- Tell user in chat what differs between options.
+
+## User state
+
+<!-- A vis rebuilds its frame on every edit, so page-local state resets; synced controls are what lets the agent keep
+iterating without wiping the user's picks, and lets the agent read picks without a send step. -->
+- What the user sets syncs to Workbench and survives your edits: `Options` picks (id = `label`), plain-text-summary `Disclosure`s (or `stateId`), and `useVisState(id, initial)` for anything else. Plain `useState` resets on every edit.
+- Ids hold the user's state: keep them stable; rename one only to reset it.
+- No send buttons. `wb vis read <path>` returns the state as JSON by control id. Ask via questionnaire whether they're done (plus freeform notes), then read.
+- Builds without the kit: `window.wb.state` with `get(id)`, `set(id, json)` (≤16 KB), `subscribe(fn)`.
 
 ## Verify before handoff
 
 **Hard rule: check every render against your intent before pointing user at it.**
 
 - `wb vis screenshot <path>`: full-page image of current render, sent to you; user sees it only inside that call's row. `wb vis snapshot <path>`: accessibility tree.
-- Both run in the session's headless Browse session (`vis-…`, 960px wide), opened with the vis, stopped when it ends. Clicks there send no answers.
+- Both run in the session's headless Browse session (`vis-…`, 960px wide) with the user's synced state, opened with the vis, stopped when it ends. Clicks there change nothing.
 - Blank render means a runtime error: wrap frames in an error boundary that prints it.
 - Fix layout, content or styling gaps, then check again.
 

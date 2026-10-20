@@ -3,8 +3,8 @@
  * - Workbench UI: Disclosure/DisclosureStaticRow, MarkdownRender, IconButton, PrimaryButton, RadioRow, Tooltip,
  *   PressDragMenu, PressDragSlider, StepSlider, OptionCards/OptionCard, FormSection, Tabs/Tab, ShareList, Sparkline,
  *   StreamChart, LineChart, Skeleton, and every Workbench icon.
- * - Kit: Choices/Option (selection sent to the agent), Section, Compare, Stat, Callout, Table, Swatch.
- * - Bridge: sendVisAnswer/useVisAnswer over the injected `window.wb.send`.
+ * - Kit: Options/Option (tabs over alternatives, the pick synced), Section, Compare, Stat, Callout, Table, Swatch.
+ * - Bridge: useVisState over the injected `window.wb.state`.
  */
 export { default as Disclosure, DisclosureStaticRow } from "../ui/Disclosure";
 export { default as FormSection } from "../ui/FormSection";
@@ -24,6 +24,6 @@ export { default as StreamChart, type StatsStreamSeries as StreamSeries } from "
 export { default as Tabs, Tab } from "../ui/Tabs";
 export { default as Tooltip } from "../ui/Tooltip";
 export * from "../workbench/workbench-icons";
-export { default as Choices, Option } from "./Choices";
-export { sendVisAnswer, useVisAnswer, type VisBridge } from "./vis-bridge";
+export { default as Options, Option } from "./Options";
+export { useVisState, type VisBridge } from "./vis-bridge";
 export { Callout, Compare, Section, Stat, Swatch, Table } from "./vis-layout";

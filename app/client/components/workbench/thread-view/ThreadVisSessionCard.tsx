@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - default ThreadVisSessionCard: show each live vis session's latest render under a summary row, keeping it while
- *   a new render is in flight, with frame-reload and end buttons and the outcome of the latest answer the page sent through
- *   `wb.send`. With several sessions each is an open disclosure whose summary row carries its buttons. Frameless and
+ *   a new render is in flight, with frame-reload and end buttons; control changes its page makes through `wb.state` are
+ *   saved, and only a failed save is reported. With several sessions each is an open disclosure whose summary row carries its buttons. Frameless and
  *   presentational: its host frames it, and the thread view observes the sessions.
  * - getVisSessionsUpdatedAt: latest render time across sessions.
  */
@@ -14,7 +14,7 @@ import LoaderIcon from "../LoaderIcon";
 import Disclosure from "../../ui/Disclosure";
 import IconButton from "../../ui/IconButton";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
-import { CheckIcon, RefreshCwIcon, XIcon } from "../workbench-icons";
+import { RefreshCwIcon, XIcon } from "../workbench-icons";
 import ThreadVisFrame from "./ThreadVisFrame";
 
 function Spinner({ label }: { label: string }) {
@@ -38,37 +38,27 @@ function SessionActions({ onEnd, onReload, session }: {
   );
 }
 
-type AnswerStatus = { kind: "sent"; at: number } | { kind: "failed"; message: string };
-
-function AnswerStatusLine({ status }: { status: AnswerStatus | undefined }) {
-  if (!status) return null;
-  if (status.kind === "failed") return <p className="m-0 text-[0.74rem] text-danger" role="alert">Answer not sent: {status.message}</p>;
-  return (
-    <p className="m-0 flex items-center gap-1 text-[0.74rem] text-fg/muted" role="status">
-      <CheckIcon size={14} /> Answer sent to the agent <WorkbenchRelativeTime timestampMs={status.at} />
-    </p>
-  );
-}
-
 type VisSessionProps = {
-  answerStatus: AnswerStatus | undefined;
-  onAnswer: (value: string) => void;
+  /** Why the latest control change was not saved; saved changes need no word, the page already shows them. */
+  controlFailure: string | undefined;
+  onControl: (id: string, value: string) => void;
   /** Bumping this remounts the frame, rerunning the same document from scratch. */
   reloads: number;
   session: VisLiveSession;
 };
 
-function VisSessionBody({ answerStatus, onAnswer, reloads, session }: VisSessionProps) {
+function VisSessionBody({ controlFailure, onControl, reloads, session }: VisSessionProps) {
   return (
     <>
       {session.failure ? <p className="m-0 whitespace-pre-wrap text-[0.74rem] text-danger" role="alert">{session.failure}</p> : null}
-      <AnswerStatusLine status={answerStatus} />
+      {controlFailure ? <p className="m-0 text-[0.74rem] text-danger" role="alert">Your choice was not saved: {controlFailure}</p> : null}
       {session.render ? (
         <ThreadVisFrame
           className="rounded-[0.65rem] bg-fg/4"
+          controls={session.controls}
           document={session.render.document}
           key={reloads}
-          onAnswer={onAnswer}
+          onControl={onControl}
           title={`Live vis of ${session.path}`}
         />
       ) : (
@@ -101,19 +91,19 @@ function CollapsibleVisSession({ actions, ...props }: VisSessionProps & { action
   );
 }
 
-export default function ThreadVisSessionCard({ onAnswer, onEnd, sessions }: {
-  /** Forwards one answer from a session's frame; rejects when Workbench did not record it. */
-  onAnswer: (sessionId: string, value: string) => Promise<void>;
+export default function ThreadVisSessionCard({ onControl, onEnd, sessions }: {
+  /** Forwards one control change from a session's frame; rejects when Workbench did not save it. */
+  onControl: (sessionId: string, id: string, value: string) => Promise<void>;
   onEnd: (sessionId: string) => void;
   sessions: readonly VisLiveSession[];
 }) {
   const [reloads, setReloads] = useState<Readonly<Record<string, number>>>({});
-  const [answers, setAnswers] = useState<Readonly<Record<string, AnswerStatus>>>({});
-  const answer = (sessionId: string) => (value: string) => {
-    onAnswer(sessionId, value).then(
-      () => setAnswers((current) => ({ ...current, [sessionId]: { kind: "sent", at: Date.now() } })),
-      (error: unknown) => setAnswers((current) => ({
-        ...current, [sessionId]: { kind: "failed", message: error instanceof Error ? error.message.slice(0, 200) : "Workbench did not record it." },
+  const [failures, setFailures] = useState<Readonly<Record<string, string | undefined>>>({});
+  const control = (sessionId: string) => (id: string, value: string) => {
+    onControl(sessionId, id, value).then(
+      () => setFailures((current) => current[sessionId] === undefined ? current : { ...current, [sessionId]: undefined }),
+      (error: unknown) => setFailures((current) => ({
+        ...current, [sessionId]: error instanceof Error ? error.message.slice(0, 200) : "Workbench did not save it.",
       })),
     );
   };
@@ -134,8 +124,8 @@ export default function ThreadVisSessionCard({ onAnswer, onEnd, sessions }: {
       {lone ? (
         <div className="space-y-1.5 px-3 py-2">
           <VisSessionBody
-            answerStatus={answers[lone.sessionId]}
-            onAnswer={answer(lone.sessionId)}
+            controlFailure={failures[lone.sessionId]}
+            onControl={control(lone.sessionId)}
             reloads={reloads[lone.sessionId] ?? 0}
             session={lone}
           />
@@ -145,9 +135,9 @@ export default function ThreadVisSessionCard({ onAnswer, onEnd, sessions }: {
           {sessions.map((session) => (
             <CollapsibleVisSession
               actions={{ onEnd, onReload, session }}
-              answerStatus={answers[session.sessionId]}
+              controlFailure={failures[session.sessionId]}
               key={session.sessionId}
-              onAnswer={answer(session.sessionId)}
+              onControl={control(session.sessionId)}
               reloads={reloads[session.sessionId] ?? 0}
               session={session}
             />

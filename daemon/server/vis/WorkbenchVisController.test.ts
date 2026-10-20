@@ -1,10 +1,10 @@
-/* No production exports. Protect vis session snapshots, render-in-flight publication, coalesced re-renders, CSS failures keeping the last render, build contexts, answers, browser checks, ending and resuming. */
+/* No production exports. Protect vis session snapshots, render-in-flight publication, coalesced re-renders, CSS failures keeping the last render, build contexts, synced control state, browser checks, ending and resuming. */
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
-import type { VisAnswer } from "workbench-shared/workbench/vis/vis-contract";
+import type { VisControls } from "workbench-shared/workbench/vis/vis-contract";
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
 import WorkbenchVisController from "./WorkbenchVisController";
 
@@ -20,7 +20,7 @@ async function fixture(context: TestContext) {
   const root = temporary.path;
   const sessions = new Map<string, ThreadVisStoredSession>();
   const snapshots = new Map<string, { document: string | null; failure: string | null }>();
-  const answers: VisAnswer[] = [];
+  const controls = new Map<string, VisControls>();
   const store = async (command: ThreadVisCommand): Promise<ThreadVisResult> => {
     switch (command.kind) {
       case "start": sessions.set(command.session.sessionId, { ...command.session, endedAt: null });
@@ -30,13 +30,14 @@ async function fixture(context: TestContext) {
         snapshots.set(`${value.sessionId}:end`, command.snapshot);
       } break;
       case "readActive": return { sessions: [...sessions.values()].filter(({ endedAt }) => endedAt === null), snapshot: null };
-      case "answer": {
+      case "setControl": {
         const live = sessions.get(command.sessionId);
         if (!live || live.endedAt !== null || live.threadId !== command.threadId) break;
-        answers.push({ sessionId: command.sessionId, sentAt: command.sentAt, value: command.value });
+        const key = `${live.threadId}:${live.path}`;
+        controls.set(key, { ...controls.get(key), [command.controlId]: command.value });
         return { sessions: [live], snapshot: null };
       }
-      case "readAnswers": return { sessions: [], snapshot: null, answers };
+      case "readControls": return { sessions: [], snapshot: null, controls: controls.get(`${command.threadId}:${command.path}`) ?? {} };
       default: break;
     }
     return { sessions: [], snapshot: null };
@@ -50,9 +51,11 @@ async function fixture(context: TestContext) {
   const workbenchRoot = path.join(root, "workbench-checkout");
   const browse = {
     calls: [] as string[],
+    controls: [] as VisControls[],
     open: async (target: { sessionId: string; document: string }) => { browse.calls.push(`open ${target.document}`); },
-    inspect: async (target: { document: string }, kind: "snapshot" | "screenshot") => {
+    inspect: async (target: { document: string; controls: VisControls }, kind: "snapshot" | "screenshot") => {
       browse.calls.push(`${kind} ${target.document}`);
+      browse.controls.push(target.controls);
       return `${kind} of ${target.document}`;
     },
     end: async (target: { sessionId: string }) => { browse.calls.push(`end ${target.sessionId}`); },
@@ -249,14 +252,36 @@ test("a session builds in its chosen context, and a resumed session keeps it", a
   }), /no \.wb\.json/u);
 });
 
-test("answers are JSON from a live session and read back for its file", async context => {
+test("control changes are JSON from a live session, reach every frame of it, and read back for its file", async context => {
   const f = await fixture(context);
   await writeFile(f.file, "<p>x</p>");
   const controller = f.create();
   const { sessionId } = await f.start(controller);
-  await assert.rejects(controller.answer("thread", sessionId, "not json"), /must be JSON/u);
-  await controller.answer("thread", sessionId, "{\"pick\":\"a\"}");
-  const read = await controller.readAnswers({ threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" });
-  assert.deepEqual(read, { path: "mock.html", live: true, answers: [{ sessionId, sentAt: 100, value: "{\"pick\":\"a\"}" }] });
+  const target = { threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" };
+  await assert.rejects(controller.setControl("thread", sessionId, "tab", "not json"), /must be JSON/u);
+  const published = until(controller, session => session.controls.tab === "\"card\"");
+  await controller.setControl("thread", sessionId, "tab", "\"card\"");
+  await published;
+  assert.deepEqual(await controller.readControls(target), { path: "mock.html", live: true, controls: { tab: "\"card\"" } });
+  await controller.inspect(target, "screenshot");
+  assert.deepEqual(f.browse.controls.at(-1), { tab: "\"card\"" }, "the agent's browser sees the user's state");
+  await assert.rejects(controller.setControl("thread", "00000000-0000-4000-8000-000000000000", "tab", "1"), /no longer live/u);
   controller.dispose();
+});
+
+test("a restarted session, or a resumed one, starts from the file's stored control state", async context => {
+  const f = await fixture(context);
+  await writeFile(f.file, "<p>x</p>");
+  const first = f.create();
+  const { sessionId } = await f.start(first);
+  await first.setControl("thread", sessionId, "tab", "\"step\"");
+  await first.endSession({ threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" });
+  await f.start(first);
+  assert.deepEqual(first.read("thread").sessions[0]?.controls, { tab: "\"step\"" });
+  first.dispose();
+
+  const resumed = f.create();
+  await resumed.start();
+  assert.deepEqual(resumed.read("thread").sessions[0]?.controls, { tab: "\"step\"" });
+  resumed.dispose();
 });

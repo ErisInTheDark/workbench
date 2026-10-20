@@ -36,7 +36,7 @@ import {
   WorkbenchThreadGitCommitRefSchema, WorkbenchThreadGitCommitSchema,
 } from "./thread-state.ts";
 import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
-import { VIS_MAX_ANSWER_LENGTH } from "../vis/vis-contract.ts";
+import { VisControlIdSchema, VisControlValueSchema } from "../vis/vis-contract.ts";
 
 const threadId = z.string().trim().min(1);
 export const WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED = -32011;
@@ -254,8 +254,8 @@ export const workbenchThreadActions = {
     result: ok,
   },
   "thread/vis/end": { params: WorkbenchThreadTargetSchema.extend({ sessionId: z.uuid() }), result: ok },
-  "thread/vis/answer": {
-    params: WorkbenchThreadTargetSchema.extend({ sessionId: z.uuid(), value: z.string().min(1).max(VIS_MAX_ANSWER_LENGTH) }),
+  "thread/vis/control": {
+    params: WorkbenchThreadTargetSchema.extend({ sessionId: z.uuid(), controlId: VisControlIdSchema, value: VisControlValueSchema }),
     result: ok,
   },
   "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },

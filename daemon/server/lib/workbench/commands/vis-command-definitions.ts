@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchVisRequestSchema: validate one managed caller's vis session start, end, answer read or browser check.
+ * - WorkbenchVisRequestSchema: validate one managed caller's vis session start, end, control state read or browser check.
  * - WORKBENCH_VIS_COMMANDS: `wb vis start|end|read|snapshot|screenshot`, deferred: most threads never use vis, so its
  *   tools stay out of every thread's preloaded MCP list and the /vis skill teaches them when needed.
  */
@@ -62,7 +62,7 @@ const start = defineWorkbenchAgentCommand({
 export const WORKBENCH_VIS_COMMANDS = [
   start,
   visCommand("end", "End a live vis session and snapshot its final content.", false),
-  visCommand("read", "Read what the user sent from a vis (wb.send), newest last.", true),
+  visCommand("read", "Read a vis file's synced control state (tab picks and other controls the user set), by control id.", true),
   visCommand("snapshot", "Accessibility snapshot of a live vis's current render, from its headless browser.", true),
   visCommand("screenshot", "Full-page screenshot of a live vis's current render, from its headless browser; the image is sent to you.", true),
 ] as const;

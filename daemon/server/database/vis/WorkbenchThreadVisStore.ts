@@ -2,15 +2,13 @@
  * Exports:
  * - ThreadVisStoredBuild: the build context a stored session renders in.
  * - ThreadVisStoredSession: one stored vis session and who it runs as.
- * - ThreadVisCommand: atomic vis session starts, ends, answers, reads and retention deletes.
- * - ThreadVisResult: the sessions, snapshot or answers one command produced.
- * - default WorkbenchThreadVisStore: own vis sessions, their start and end snapshots, and their answers in SQLite.
+ * - ThreadVisCommand: atomic vis session starts, ends, control changes, reads and retention deletes.
+ * - ThreadVisResult: the sessions, snapshot or control state one command produced.
+ * - default WorkbenchThreadVisStore: own vis sessions, their start and end snapshots, and each vis file's synced control
+ *   state in SQLite.
  */
 import type Database from "better-sqlite3";
-import type { VisAnswer, VisSnapshot, VisSnapshotKind } from "workbench-shared/workbench/vis/vis-contract";
-
-/** Answers kept per session; older ones are dropped as new ones arrive. */
-const ANSWERS_PER_SESSION = 100;
+import { VIS_MAX_CONTROLS, type VisControls, type VisSnapshot, type VisSnapshotKind } from "workbench-shared/workbench/vis/vis-contract";
 
 export type ThreadVisStoredBuild = { kind: "caller" } | { kind: "folder"; root: string } | { kind: "kit" };
 
@@ -34,17 +32,17 @@ export type ThreadVisCommand =
   | { kind: "end"; threadId: string; path: string; endedBy: "agent" | "user"; snapshot: CapturedDocument }
   | { kind: "readActive" }
   | { kind: "readSnapshot"; sessionId: string; snapshotKind: VisSnapshotKind }
-  /** Records one answer for a live session of the thread; returns no sessions when it is not live. */
-  | { kind: "answer"; threadId: string; sessionId: string; sentAt: number; value: string }
-  /** Answers of the thread's newest session on `path`, live or ended, oldest first. */
-  | { kind: "readAnswers"; threadId: string; path: string }
+  /** Sets one control of the live session's file; returns no sessions when that session is not live in the thread. */
+  | { kind: "setControl"; threadId: string; sessionId: string; controlId: string; value: string; updatedAt: number }
+  /** The thread's control state for `path`, whichever session set it. */
+  | { kind: "readControls"; threadId: string; path: string }
   | { kind: "delete"; threadIds: readonly string[] };
 
 export interface ThreadVisResult {
   sessions: ThreadVisStoredSession[];
   snapshot: VisSnapshot | null;
-  /** Filled only by `readAnswers`. */
-  answers?: VisAnswer[];
+  /** Filled only by `readControls`. */
+  controls?: VisControls;
 }
 
 interface SessionRow {
@@ -112,29 +110,30 @@ export default class WorkbenchThreadVisStore {
             } : null,
           };
         }
-        case "answer": {
+        case "setControl": {
           const row = this.database.prepare("SELECT * FROM workbench_thread_vis_sessions WHERE id = ? AND thread_id = ? AND ended_at IS NULL")
             .get(command.sessionId, command.threadId) as SessionRow | undefined;
           if (!row) return { sessions: [], snapshot: null };
-          const { next } = this.database.prepare(`SELECT COALESCE(MAX(sequence), -1) + 1 AS next
-            FROM workbench_thread_vis_answers WHERE session_id = ?`).get(row.id) as { next: number };
-          this.database.prepare("INSERT INTO workbench_thread_vis_answers (session_id, sequence, sent_at, value) VALUES (?, ?, ?, ?)")
-            .run(row.id, next, command.sentAt, command.value);
-          this.database.prepare("DELETE FROM workbench_thread_vis_answers WHERE session_id = ? AND sequence <= ?")
-            .run(row.id, next - ANSWERS_PER_SESSION);
+          this.database.prepare(`INSERT INTO workbench_thread_vis_controls (thread_id, path, control_id, value, updated_at)
+            VALUES (?, ?, ?, ?, ?) ON CONFLICT (thread_id, path, control_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+            .run(row.thread_id, row.path, command.controlId, command.value, command.updatedAt);
+          this.database.prepare(`DELETE FROM workbench_thread_vis_controls WHERE thread_id = ? AND path = ? AND control_id NOT IN (
+            SELECT control_id FROM workbench_thread_vis_controls WHERE thread_id = ? AND path = ? ORDER BY updated_at DESC, control_id LIMIT ?)`)
+            .run(row.thread_id, row.path, row.thread_id, row.path, VIS_MAX_CONTROLS);
           return { sessions: [session(row)], snapshot: null };
         }
-        case "readAnswers": {
-          const row = this.database.prepare(`SELECT id FROM workbench_thread_vis_sessions
-            WHERE thread_id = ? AND path = ? ORDER BY started_at DESC LIMIT 1`).get(command.threadId, command.path) as { id: string } | undefined;
-          const answers = row ? (this.database.prepare(`SELECT sent_at, value FROM workbench_thread_vis_answers
-            WHERE session_id = ? ORDER BY sequence`).all(row.id) as Array<{ sent_at: number; value: string }>)
-            .map(({ sent_at, value }) => ({ sessionId: row.id, sentAt: sent_at, value })) : [];
-          return { sessions: [], snapshot: null, answers };
+        case "readControls": {
+          const rows = this.database.prepare("SELECT control_id, value FROM workbench_thread_vis_controls WHERE thread_id = ? AND path = ?")
+            .all(command.threadId, command.path) as Array<{ control_id: string; value: string }>;
+          return { sessions: [], snapshot: null, controls: Object.fromEntries(rows.map(({ control_id, value }) => [control_id, value])) };
         }
         case "delete": {
-          const remove = this.database.prepare("DELETE FROM workbench_thread_vis_sessions WHERE thread_id = ?");
-          for (const threadId of command.threadIds) remove.run(threadId);
+          const removeSessions = this.database.prepare("DELETE FROM workbench_thread_vis_sessions WHERE thread_id = ?");
+          const removeControls = this.database.prepare("DELETE FROM workbench_thread_vis_controls WHERE thread_id = ?");
+          for (const threadId of command.threadIds) {
+            removeSessions.run(threadId);
+            removeControls.run(threadId);
+          }
           return { sessions: [], snapshot: null };
         }
       }

@@ -5,15 +5,16 @@
  *   rendered file; between them a change to the file (or, for built components, any file the build read) keeps the
  *   last render and marks one in flight, and only a finished render replaces it. Live sessions survive reloads
  *   through storage and resume on start. Each session builds in its caller's project, another folder's `.wb.json`,
- *   or Workbench's kit, stores the answers its vis sends back, and has a headless browser agents check it in.
+ *   or Workbench's kit, keeps its file's synced control state (which outlives the session), and has a headless browser
+ *   agents check it in with that state.
  */
 import { randomUUID } from "node:crypto";
 import { watch as watchDirectory } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
-  isVisPath, VIS_MAX_ANSWER_LENGTH, VIS_MAX_DOCUMENT_LENGTH, VIS_MAX_SOURCE_BYTES,
-  type VisLiveSession, type VisProject, type VisSnapshotKind, type VisThread,
+  isVisPath, VIS_MAX_DOCUMENT_LENGTH, VIS_MAX_SOURCE_BYTES, VisControlIdSchema, VisControlValueSchema,
+  type VisControls, type VisLiveSession, type VisProject, type VisSnapshotKind, type VisThread,
 } from "workbench-shared/workbench/vis/vis-contract";
 import { renderVisDocument, visWantsCss } from "workbench-shared/workbench/vis/vis-document";
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredBuild, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
@@ -127,10 +128,11 @@ export default class WorkbenchVisController {
     if (rendered.document === null) throw new Error(rendered.failure ?? `Unable to read ${display}.`);
     const { endedAt: _, ...session } = stored;
     await this.#options.store({ kind: "start", session, snapshot: { capturedAt: stored.startedAt, document: rendered.document, failure: rendered.failure } });
-    const live = this.#begin(stored, file, input.rootPath, context, { document: rendered.document, renderedAt: stored.startedAt }, rendered.failure);
+    const controls = await this.#controls(stored);
+    const live = this.#begin(stored, file, input.rootPath, context, { document: rendered.document, renderedAt: stored.startedAt }, rendered.failure, controls);
     this.#watch(live, rendered.inputs);
     // Warms the session's browser without holding up the start; it never rejects.
-    void this.#options.browse?.open({ ...stored, document: rendered.document });
+    void this.#options.browse?.open({ ...stored, document: rendered.document, controls });
     return { sessionId: stored.sessionId, path: display, failure: rendered.failure };
   }
 
@@ -142,7 +144,7 @@ export default class WorkbenchVisController {
     if (!live) throw new Error(`No vis session is live on ${display}.`);
     if (!live.state.render) throw new Error(`${display} has not rendered yet; try again once it has.`);
     if (!this.#options.browse) throw new Error("Vis browser checks are unavailable.");
-    return await this.#options.browse.inspect({ ...live.stored, document: live.state.render.document }, kind);
+    return await this.#options.browse.inspect({ ...live.stored, document: live.state.render.document, controls: live.state.controls }, kind);
   }
 
   async endSession(input: { threadId: string; cwd: string; rootPath: string; path: string }) {
@@ -181,20 +183,27 @@ export default class WorkbenchVisController {
     return await this.#end(live, "user");
   }
 
-  /** A value the user's vis sent through `wb.send`; the card only forwards messages from its own focused frame. */
-  async answer(threadId: string, sessionId: string, value: string) {
-    if (value.length > VIS_MAX_ANSWER_LENGTH) throw new Error("Vis answers are limited to 16 KB of JSON.");
+  /**
+   * One control the user's vis set through `wb.state`; the card only forwards changes from its own focused frame. Every
+   * frame of the session follows the published state, so other devices and later rebuilds start from it.
+   */
+  async setControl(threadId: string, sessionId: string, controlId: string, value: string) {
+    if (!VisControlIdSchema.safeParse(controlId).success) throw new Error("Vis control ids are 1-200 characters.");
+    if (!VisControlValueSchema.safeParse(value).success) throw new Error("Vis control values are limited to 16 KB of JSON.");
     try { JSON.parse(value); }
-    catch { throw new Error("Vis answers must be JSON."); }
-    const { sessions } = await this.#options.store({ kind: "answer", threadId, sessionId, sentAt: this.#now(), value });
-    if (!sessions.length) throw new Error("That vis session is no longer live.");
+    catch { throw new Error("Vis control values must be JSON."); }
+    const { sessions } = await this.#options.store({ kind: "setControl", threadId, sessionId, controlId, value, updatedAt: this.#now() });
+    const live = this.#live.get(sessionId);
+    if (!sessions.length || !live) throw new Error("That vis session is no longer live.");
+    live.state = { ...live.state, controls: { ...live.state.controls, [controlId]: value } };
+    this.#publish(threadId);
   }
 
-  /** Answers of the caller's newest session on `path`, live or ended. */
-  async readAnswers(input: { threadId: string; cwd: string; rootPath: string; path: string }) {
+  /** The control state of the caller's file, live or from an ended session. */
+  async readControls(input: { threadId: string; cwd: string; rootPath: string; path: string }) {
     const { display } = await this.#resolve(input.rootPath, input.cwd, input.path, false);
-    const { answers = [] } = await this.#options.store({ kind: "readAnswers", threadId: input.threadId, path: display });
-    return { path: display, answers, live: this.#findLive(input.threadId, display) !== null };
+    const { controls = {} } = await this.#options.store({ kind: "readControls", threadId: input.threadId, path: display });
+    return { path: display, controls, live: this.#findLive(input.threadId, display) !== null };
   }
 
   read(threadId: string): VisThread {
@@ -232,7 +241,9 @@ export default class WorkbenchVisController {
       if (this.#lifetime.signal.aborted) return;
       const rootPath = await this.#options.resolveRoot(stored);
       if (!rootPath) continue;
-      const live = this.#begin(stored, path.resolve(rootPath, stored.path), rootPath, this.#context(stored.build, rootPath), null, null);
+      const controls = await this.#controls(stored);
+      if (this.#lifetime.signal.aborted) return;
+      const live = this.#begin(stored, path.resolve(rootPath, stored.path), rootPath, this.#context(stored.build, rootPath), null, null, controls);
       this.#watch(live, null);
       this.#changed(live);
     }
@@ -265,11 +276,19 @@ export default class WorkbenchVisController {
     return [...this.#live.values()].find(({ stored }) => stored.threadId === threadId && stored.path === display) ?? null;
   }
 
-  #begin(stored: ThreadVisStoredSession, file: string, rootPath: string, context: VisBuildContext, render: VisLiveSession["render"], failure: string | null) {
+  /** The file's stored control state; it outlives sessions, so a new one starts where the user left off. */
+  async #controls(stored: ThreadVisStoredSession) {
+    return (await this.#options.store({ kind: "readControls", threadId: stored.threadId, path: stored.path })).controls ?? {};
+  }
+
+  #begin(
+    stored: ThreadVisStoredSession, file: string, rootPath: string, context: VisBuildContext,
+    render: VisLiveSession["render"], failure: string | null, controls: VisControls,
+  ) {
     const live: Live = {
       stored, file, rootPath, context, running: null, again: false, watched: new Map(),
       cancel: new AbortController(),
-      state: { sessionId: stored.sessionId, path: stored.path, startedAt: stored.startedAt, render, rendering: false, failure },
+      state: { sessionId: stored.sessionId, path: stored.path, startedAt: stored.startedAt, render, rendering: false, failure, controls },
     };
     this.#live.set(stored.sessionId, live);
     this.#publish(stored.threadId);

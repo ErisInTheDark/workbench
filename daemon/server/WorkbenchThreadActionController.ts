@@ -69,7 +69,7 @@ export interface WorkbenchThreadActionOwners {
   goals: Pick<WorkbenchThreadGoalController, "set" | "clear">;
   todos: Pick<WorkbenchThreadTodoController, "add" | "remove" | "setRequired" | "setText">;
   addressedFeedback: Pick<WorkbenchThreadAddressedFeedbackController, "detach">;
-  vis: Pick<import("./vis/WorkbenchVisController").default, "answer" | "endById">;
+  vis: Pick<import("./vis/WorkbenchVisController").default, "setControl" | "endById">;
   /** Skills the thread's messages can activate; claimed activations are checked against them. */
   readSkills(threadId: string): Promise<readonly WorkbenchSkillSummary[]>;
   warn(message: string): void;
@@ -229,8 +229,8 @@ export default class WorkbenchThreadActionController {
       return { ok: true };
     },
     "thread/vis/end": input => this.endVis(input.threadId, input.sessionId),
-    "thread/vis/answer": async input => {
-      await this.owners.vis.answer(input.threadId, input.sessionId, input.value);
+    "thread/vis/control": async input => {
+      await this.owners.vis.setControl(input.threadId, input.sessionId, input.controlId, input.value);
       return { ok: true };
     },
     "thread/skills/read": async input => ({ skills: await this.owners.skills.read(input.threadId) }),

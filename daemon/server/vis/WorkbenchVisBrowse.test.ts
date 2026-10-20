@@ -22,7 +22,7 @@ async function fixture(context: TestContext, reply: (request: WorkbenchBrowseAge
     },
     log: message => logs.push(message),
   });
-  const target = { sessionId: "0123456789abcdef", threadId: "thread", cwd: temporary.path, path: "mock.tsx", document: "<p>hi</p>" };
+  const target = { sessionId: "0123456789abcdef", threadId: "thread", cwd: temporary.path, path: "mock.tsx", document: "<p>hi</p>", controls: {} };
   return { browse, requests, stops, logs, target };
 }
 

@@ -137,7 +137,7 @@ class WorkbenchDaemonClient {
     },
     vis: {
       end: (params: WorkbenchDaemonParams<"thread/vis/end">) => this.request("thread/vis/end", params),
-      answer: (params: WorkbenchDaemonParams<"thread/vis/answer">) => this.request("thread/vis/answer", params),
+      control: (params: WorkbenchDaemonParams<"thread/vis/control">) => this.request("thread/vis/control", params),
     },
     skills: {
       read: (params: WorkbenchDaemonParams<"thread/skills/read">) => this.request("thread/skills/read", params),

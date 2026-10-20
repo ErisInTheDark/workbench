@@ -78,7 +78,7 @@ export default function ThreadStatusArea({
   threadLifecycle: WorkbenchThreadLifecycle | null;
   /** Absent where a thread has no goal or todos to manage; the panel also lists the feedback the thread addresses. */
   todos: { count: number; feedbackCount: number; goalSet: boolean; renderPanel(): ReactNode } | null;
-  vis: { onAnswer: (sessionId: string, value: string) => Promise<void>; onEnd: (sessionId: string) => void; sessions: readonly VisLiveSession[] } | null;
+  vis: { onControl: (sessionId: string, controlId: string, value: string) => Promise<void>; onEnd: (sessionId: string) => void; sessions: readonly VisLiveSession[] } | null;
 }) {
   const { intersections, logicalProjectId, ownerProjectId } = useThread.claimIntersections(threadId, harness, "plan");
   const overlapCount = intersections.hasScope ? intersections.activeEntries.length : 0;

@@ -1,4 +1,4 @@
-/* No production exports. Protect one live vis session per file, start and end snapshots, stored build contexts, bounded answers, resumable active sessions and retention deletes. */
+/* No production exports. Protect one live vis session per file, start and end snapshots, stored build contexts, bounded per-file control state that outlives sessions, resumable active sessions and retention deletes. */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import { VIS_MAX_CONTROLS } from "workbench-shared/workbench/vis/vis-contract";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchThreadVisStore, { type ThreadVisStoredBuild } from "./WorkbenchThreadVisStore";
@@ -32,7 +33,7 @@ async function fixture(context: TestContext) {
     },
     snapshot: { capturedAt: at, document: `<p>${file} start</p>`, failure: null },
   }).sessions[0]!;
-  return { store, start, threadId: threadId!, otherThreadId: otherThreadId! };
+  return { database, store, start, threadId: threadId!, otherThreadId: otherThreadId! };
 }
 
 test("a file holds one live session per thread until it ends, and both moments keep their documents", async context => {
@@ -52,14 +53,14 @@ test("a file holds one live session per thread until it ends, and both moments k
     ["two:a.html", "one:a.html"]);
 });
 
-test("retention deletes a thread's sessions with their snapshots and answers, and leaves other threads", async context => {
+test("retention deletes a thread's sessions with their snapshots and control state, and leaves other threads", async context => {
   const { store, start, threadId, otherThreadId } = await fixture(context);
   const mine = start(threadId, "a.svg");
   start(otherThreadId, "b.svg");
-  store.execute({ kind: "answer", threadId, sessionId: mine.sessionId, sentAt: 2, value: "1" });
+  store.execute({ kind: "setControl", threadId, sessionId: mine.sessionId, controlId: "tab", value: "1", updatedAt: 2 });
   store.execute({ kind: "delete", threadIds: [threadId] });
   assert.equal(store.execute({ kind: "readSnapshot", sessionId: mine.sessionId, snapshotKind: "start" }).snapshot, null);
-  assert.deepEqual(store.execute({ kind: "readAnswers", threadId, path: "a.svg" }).answers, []);
+  assert.deepEqual(store.execute({ kind: "readControls", threadId, path: "a.svg" }).controls, {});
   assert.deepEqual(store.execute({ kind: "readActive" }).sessions.map(({ path: file }) => file), ["b.svg"]);
 });
 
@@ -72,19 +73,36 @@ test("build contexts survive storage, so resumed sessions build where they start
     [{ kind: "kit" }, { kind: "folder", root: "/elsewhere" }, { kind: "caller" }]);
 });
 
-test("answers belong to a live session of their own thread, read from the newest session on a path, keeping the latest 100", async context => {
+test("control state belongs to a thread's file, set only through its live session, and outlives the session", async context => {
   const { store, start, threadId, otherThreadId } = await fixture(context);
   const first = start(threadId, "a.html");
-  assert.deepEqual(store.execute({ kind: "answer", threadId: otherThreadId, sessionId: first.sessionId, sentAt: 2, value: "\"x\"" }).sessions, [],
-    "another thread cannot answer into this session");
-  for (let index = 0; index < 102; index++) store.execute({ kind: "answer", threadId, sessionId: first.sessionId, sentAt: index, value: `${index}` });
-  const kept = store.execute({ kind: "readAnswers", threadId, path: "a.html" }).answers ?? [];
-  assert.deepEqual([kept.length, kept[0]?.value, kept.at(-1)?.value], [100, "2", "101"]);
+  const set = (thread: string, sessionId: string, controlId: string, value: string, at = 2) =>
+    store.execute({ kind: "setControl", threadId: thread, sessionId, controlId, value, updatedAt: at }).sessions;
+  assert.deepEqual(set(otherThreadId, first.sessionId, "tab", "\"x\""), [], "another thread cannot set this file's controls");
+  set(threadId, first.sessionId, "tab", "\"card\"");
+  set(threadId, first.sessionId, "tab", "\"step\"", 3);
+  set(threadId, first.sessionId, "open", "true", 4);
+  const read = (file = "a.html") => store.execute({ kind: "readControls", threadId, path: file }).controls;
+  assert.deepEqual(read(), { open: "true", tab: "\"step\"" });
+  assert.deepEqual(read("b.html"), {});
 
   store.execute({ kind: "end", threadId, path: "a.html", endedBy: "agent", snapshot: { capturedAt: 5, document: null, failure: null } });
-  assert.deepEqual(store.execute({ kind: "answer", threadId, sessionId: first.sessionId, sentAt: 6, value: "1" }).sessions, [],
-    "an ended session takes no more answers");
-  assert.equal(store.execute({ kind: "readAnswers", threadId, path: "a.html" }).answers?.length, 100, "an ended session's answers stay readable");
+  assert.deepEqual(set(threadId, first.sessionId, "tab", "\"late\""), [], "an ended session takes no more changes");
   start(threadId, "a.html", 7);
-  assert.deepEqual(store.execute({ kind: "readAnswers", threadId, path: "a.html" }).answers, [], "a restarted file reads its new session");
+  assert.deepEqual(read(), { open: "true", tab: "\"step\"" }, "a restarted file starts from the state the user left");
+});
+
+test("a file keeps its most recently changed controls", async context => {
+  const { database, store, start, threadId } = await fixture(context);
+  const { sessionId } = start(threadId, "a.html");
+  // One outer transaction keeps hundreds of changes from syncing to disk one by one.
+  database.transaction(() => {
+    for (let index = 0; index <= VIS_MAX_CONTROLS; index++) {
+      store.execute({ kind: "setControl", threadId, sessionId, controlId: `c${index}`, value: `${index}`, updatedAt: index });
+    }
+  })();
+  const controls = store.execute({ kind: "readControls", threadId, path: "a.html" }).controls ?? {};
+  assert.equal(Object.keys(controls).length, VIS_MAX_CONTROLS);
+  assert.equal(controls.c0, undefined, "the oldest change goes first");
+  assert.equal(controls[`c${VIS_MAX_CONTROLS}`], `${VIS_MAX_CONTROLS}`);
 });
