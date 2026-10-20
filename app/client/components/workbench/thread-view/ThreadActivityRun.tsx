@@ -184,9 +184,9 @@ export default function ThreadActivityRun({
         type="button"
       >
         <span className="flex min-w-0 items-center gap-2 py-2 leading-[1.6]">
-          <span className="min-w-0 flex-1 overflow-hidden">
+          <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap">
             {chips.length ? <ChipRow chips={chips} /> : status
-              ? <span className="flex min-w-0 items-center gap-2 font-medium"><LoaderIcon className="shrink-0" />{status}</span>
+              ? <span className="flex min-w-0 items-center gap-2 font-medium"><LoaderIcon className="shrink-0" /><span className="min-w-0 truncate">{status}</span></span>
               // Nothing countable (only reasoning, or only failed steps): name what the run actually held.
               : <span>{block.segments.every(segment => segment.kind === "reasoning") ? "Reasoned" : "Worked"}</span>}
           </span>
