@@ -7,6 +7,7 @@
 
 @custom-variant coarse-touch (@media (hover: none) and (pointer: coarse));
 @custom-variant code-wrap (&:where([data-thread-codeblock-wrap=true] *));
+@custom-variant thread-rows (& > li[data-thread-status-tone]);
 @custom-variant stuck {
   &:where([data-sticky-stuck="true"] *) {
     @slot;
@@ -103,6 +104,12 @@
     background-color: color-mix(in srgb, var(--attention) 30%, transparent);
     color: var(--text);
   }
+}
+
+/* Long lists skip layout and paint for rows off screen; `auto` remembers each row's real height once it has rendered. */
+@utility content-visibility-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.75rem;
 }
 
 @utility bg-checkerboard {

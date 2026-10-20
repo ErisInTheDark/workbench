@@ -513,7 +513,7 @@ export default function WorkbenchThreadList ({
   };
 
   const renderSection = (items: ListDisplayItem[], section: WorkbenchThreadDisplaySection) => (
-    <ul className="m-0 flex flex-col gap-0.5 p-0">
+    <ul className={`m-0 flex flex-col gap-0.5 p-0 ${section === "settled" ? "thread-rows:content-visibility-row" : ""}`}>
       {items.flatMap((item) => {
         const key = itemKey(item);
         const beforeKey = item.threadKeys[0] ?? null;
@@ -684,7 +684,7 @@ export default function WorkbenchThreadList ({
             {displayedHistoryItems.some(item => item.itemKind === "thread" && archivedPlacementKeys.has(item.entry.threadKey)) ? (
               <h3 className="mt-4 mb-1 text-[0.72rem] font-medium text-fg/muted">Archived threads</h3>
             ) : null}
-            <ul className="m-0 flex flex-col gap-1 p-0">
+            <ul className="m-0 flex flex-col gap-1 p-0 thread-rows:content-visibility-row">
               {displayedHistoryItems.flatMap(item => item.itemKind === "thread" && archivedPlacementKeys.has(item.entry.threadKey) ? [renderEntry(item.entry, undefined, null, "archived")] : [])}
             </ul>
             {remainingSettledThreadCount > 0 ? (
