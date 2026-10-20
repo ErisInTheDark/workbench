@@ -35,6 +35,29 @@ test("claim discovery admits future providers independently of thread admission 
   } finally { database.close(); }
 });
 
+test("rediscovering unchanged completed checkpoints leaves their rows untouched while changed ones requeue", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  try {
+    const repository = new WorkbenchStatsImportRepository(database);
+    const discovery = (name: string) => ({
+      checkpointCommit: "a".repeat(40), checkpointRef: `refs/worktree/agents/codex/thread/checkpoints/${name}`,
+      harness: "codex", observedAt: 1, projectId: testProjectIds.project,
+      repositoryRoot: "C:/project", rootId: "root", threadId: "thread", workspaceRoot: "C:/project",
+    });
+    repository.addClaimDiscoveries("first", [discovery("same"), discovery("moved")], 1);
+    for (let claim = repository.claimClaims("first", 2); claim; claim = repository.claimClaims("first", 2)) {
+      repository.settleClaims("first", claim, { paths: ["src/file.ts"], state: "completed" }, 3);
+    }
+    repository.addClaimDiscoveries("second", [discovery("same"), { ...discovery("moved"), checkpointCommit: "b".repeat(40) }], 10);
+    assert.deepEqual(database.prepare("SELECT checkpoint_ref, state, updated_at FROM git_claim_imports ORDER BY checkpoint_ref").all(), [
+      { checkpoint_ref: discovery("moved").checkpointRef, state: "pending", updated_at: 10 },
+      { checkpoint_ref: discovery("same").checkpointRef, state: "completed", updated_at: 3 },
+    ]);
+  } finally { database.close(); }
+});
+
 test("usage and claim imports resume safely and isolate failed work", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");

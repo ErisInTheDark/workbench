@@ -133,7 +133,15 @@ export default class WorkbenchStatsImportRepository {
         run_id = NULL,
         updated_at = excluded.updated_at,
         error_text = NULL
+      WHERE git_claim_imports.checkpoint_commit != excluded.checkpoint_commit
+        OR git_claim_imports.repository_root != excluded.repository_root
+        OR git_claim_imports.workspace_root != excluded.workspace_root
+        OR git_claim_imports.harness_id != excluded.harness_id
+        OR git_claim_imports.thread_id != excluded.thread_id
+        OR git_claim_imports.observed_at != excluded.observed_at
     `);
+    const admitHarness = this.database.prepare("INSERT INTO workbench_harnesses(id) VALUES (?) ON CONFLICT(id) DO NOTHING");
+    const projects = new WorkbenchProjectRepository(this.database);
     this.database.transaction(() => {
       this.database.prepare(`
         DELETE FROM git_claim_imports
@@ -144,10 +152,13 @@ export default class WorkbenchStatsImportRepository {
               AND root.root_id = git_claim_imports.root_id
           )
       `).run();
+      // Every run rediscovers all checkpoints ever seen, so per-row admission work multiplies by thousands.
+      for (const harness of new Set(discoveries.map(discovery => discovery.harness))) admitHarness.run(harness);
+      const projectIds = new Map([...new Set(discoveries.map(discovery => discovery.projectId))]
+        .map(projectId => [projectId, projects.admitStoredReference(projectId)]));
       for (const discovery of discoveries) {
-        this.database.prepare("INSERT INTO workbench_harnesses(id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(discovery.harness);
         insert.run(
-          new WorkbenchProjectRepository(this.database).admitStoredReference(discovery.projectId),
+          projectIds.get(discovery.projectId),
           discovery.rootId,
           discovery.repositoryRoot,
           discovery.workspaceRoot,
