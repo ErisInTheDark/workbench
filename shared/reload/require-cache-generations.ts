@@ -1,9 +1,12 @@
 /*
  * Exports:
  * - collectRequireCacheSubtree: list the cached repository modules beneath one module, excluding node_modules.
+ * - collectUnchangedModules: the part of a cached subtree that may stay cached: unchanged candidates whose repository imports all stay too.
  * - releaseRetiredModules: cut every surviving path to retired module generations so they can be collected.
+ * - readSourceSignatureSync: one source file's modification signature, for reloads that decide synchronously.
  * - createSourceTrackedModule: load one module subtree, reusing it until a source file changes, then swap in a fresh generation without leaking the old one.
  */
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 
 export function collectRequireCacheSubtree(loader: NodeRequire, moduleId: string, visited = new Set<string>()) {
@@ -15,6 +18,20 @@ export function collectRequireCacheSubtree(loader: NodeRequire, moduleId: string
     if (child?.id && !/[\\/]node_modules[\\/]/u.test(child.id)) collectRequireCacheSubtree(loader, child.id, visited);
   }
   return visited;
+}
+
+/** A kept module must never call into a retired copy of something it imports, so one dropped import drops its importers. */
+export function collectUnchangedModules(loader: NodeRequire, subtree: ReadonlySet<string>, isUnchanged: (moduleId: string) => boolean) {
+  const kept = new Set([...subtree].filter(isUnchanged));
+  for (let dropped = true; dropped;) {
+    dropped = false;
+    for (const moduleId of kept) {
+      if (!loader.cache[moduleId]!.children.some(child => subtree.has(child.id) && !kept.has(child.id))) continue;
+      kept.delete(moduleId);
+      dropped = true;
+    }
+  }
+  return kept;
 }
 
 /**
@@ -39,14 +56,21 @@ export function releaseRetiredModules(loader: NodeRequire, retired: ReadonlySet<
 
 const UNSETTLED = "unsettled";
 
+const MISSING_SOURCE = { modifiedAtMs: 0, signature: "missing" };
+const sourceSignature = (stat: { mtimeMs: number; size: number }) => ({ modifiedAtMs: stat.mtimeMs, signature: `${stat.mtimeMs}:${stat.size}` });
+
 async function readSourceSignature(path: string) {
   try {
-    const stat = await fs.stat(path);
-    return { modifiedAtMs: stat.mtimeMs, signature: `${stat.mtimeMs}:${stat.size}` };
+    return sourceSignature(await fs.stat(path));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { modifiedAtMs: 0, signature: "missing" };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return MISSING_SOURCE;
     throw error;
   }
+}
+
+export function readSourceSignatureSync(path: string) {
+  const stat = statSync(path, { throwIfNoEntry: false });
+  return stat ? sourceSignature(stat) : MISSING_SOURCE;
 }
 
 interface SourceTrackedGeneration<T> {

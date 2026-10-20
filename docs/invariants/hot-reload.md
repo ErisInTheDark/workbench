@@ -1,6 +1,7 @@
 - STRONGLY prefer putting product behaviour in the reload graph. Keep non-reloadable process shells limited to bootstrapping, reload/restart control, and shutdown.
 - Reload ownership comes from imports. Nodes declare only `entries` (code run outside the process module graph: workers, child processes, plugins) and `assets` (non-module runtime inputs); never list imported modules.
 - Retired reload generations must become garbage. Non-reloadable code, including Node's `module.children`, must not keep references to retired modules or node objects.
+- Unchanged `shared/` modules can outlive daemon reloads. Keep their module-level state constant or derived from inputs; mutable runtime state belongs to reloadable owners.
 - Long-lived work must not hold reloadable owners in closures; resolve owners through graph tools (`get`/`run`/leases) at each step.
 - Queued or coalesced work a leased caller awaits must enter its lease from that caller's async context; a shared worker loop's own context cannot pass a draining gate. Drain admission flows only from operations admitted before the drain; work they leave running is forced to retire once they finish.
 - Nodes owning external processes are `destructive`, never dependants of non-destructive nodes, and keep churny orchestration in reloadable children.
