@@ -6,6 +6,7 @@
  * - default WorkbenchCodexInstructionAdapter: adapt model-filtered thread instructions, skills, settings and project-local MCP config into Codex requests.
  */
 import path from "node:path";
+import { isSamePath } from "workbench-shared/same-path";
 import buildWorkbenchOwnedPromptFields from "./codex-owned-prompt";
 import type { WorkbenchComposerSettings, WorkbenchProjectRoot, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import { contextCompactionThreshold } from "workbench-shared/workbench/thread/thread-profile";
@@ -69,14 +70,6 @@ function buildWorkbenchOwnedPromptParams(params: Record<string, unknown>, prompt
   };
 }
 
-function pathsEqual(left: string, right: string) {
-  const normalizedLeft = path.resolve(left);
-  const normalizedRight = path.resolve(right);
-  return process.platform === "win32"
-    ? normalizedLeft.toLocaleLowerCase() === normalizedRight.toLocaleLowerCase()
-    : normalizedLeft === normalizedRight;
-}
-
 function readDefaultInstructionTools(): Promise<readonly WorkbenchInstructionTool[]> {
   return Promise.resolve(listWorkbenchInstructionTools(listWorkbenchAgentCommands()));
 }
@@ -95,7 +88,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
 
   private withMcpConfig(params: Record<string, unknown>, cwd?: string | null, subagentName?: string | null) {
     return withWorkbenchCodexMcpConfig(params, this.bridgeUrl, {
-      projectLocal: typeof cwd === "string" && cwd.trim() !== "" && pathsEqual(cwd, this.workbenchRoot),
+      projectLocal: typeof cwd === "string" && cwd.trim() !== "" && isSamePath(cwd, this.workbenchRoot),
       subagent: Boolean(subagentName?.trim()),
     });
   }

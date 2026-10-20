@@ -8,6 +8,7 @@
 import path from "node:path";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import { isSamePath } from "workbench-shared/same-path";
 import { WorkbenchCommandArgumentError } from "../commands/workbench-agent-command-arguments";
 import { TRANSCRIPT_QUERY_KINDS } from "../../../database/transcript/transcript-query-contract";
 
@@ -365,12 +366,7 @@ export async function parseWorkbenchAgentCliCommand(
     allowStoreRead?: boolean;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
-  const resolvedCwd = path.resolve(cwd);
-  const isWorkbenchRoot = projectRoot !== null && (
-    process.platform === "win32"
-      ? resolvedCwd.toLocaleLowerCase() === path.resolve(projectRoot).toLocaleLowerCase()
-      : resolvedCwd === path.resolve(projectRoot)
-  );
+  const isWorkbenchRoot = projectRoot !== null && isSamePath(cwd, projectRoot);
   const commands = listWorkbenchAgentCommands(reloadCatalog, "cli", { virtualRepos }).filter((command) => (
     (!command.managedThreadRootOnly || callerThreadId === null || isWorkbenchRoot)
     && isWorkbenchCommandVisibleTo(getWorkbenchAgentCommandToolName(command), {

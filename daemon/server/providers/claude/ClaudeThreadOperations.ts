@@ -10,6 +10,8 @@ import {
     type Query,
 } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
+import { isSamePath } from "workbench-shared/same-path";
+import { createWorkbenchMcpEndpointUrl } from "workbench-shared/workbench/mcp/workbench-mcp-endpoint";
 import {
     NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema,
     WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
@@ -66,6 +68,8 @@ export interface ClaudeInstructionInput {
 
 export interface ClaudeThreadOperationsOptions {
   daemonOrigin: string;
+  /** Workbench repository root; turns there list its root-only MCP tools. */
+  workbenchRoot: string;
   /** Harness-owned live processes; they outlive this bridge generation. */
   sessions: ClaudeSessionHost;
   /** Request-scoped compaction query factory; live turns launch through `sessions`. */
@@ -455,10 +459,11 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     });
     mark("turn-start");
     const scope = randomUUID();
-    const endpoint = new URL("/daemon/mcp", this.options.daemonOrigin);
-    endpoint.searchParams.set("provider", "claude");
-    endpoint.searchParams.set("client", scope);
-    if (instructionInput.subagentName) endpoint.searchParams.set("subagent", "true");
+    const endpoint = createWorkbenchMcpEndpointUrl(this.options.daemonOrigin, {
+      provider: "claude", client: scope,
+      projectLocal: isSamePath(binding.nativeLocation, this.options.workbenchRoot),
+      subagent: Boolean(instructionInput.subagentName),
+    });
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
     const { sessions } = this.options;
     let session: Awaited<ReturnType<ClaudeSessionHost["launch"]>>;

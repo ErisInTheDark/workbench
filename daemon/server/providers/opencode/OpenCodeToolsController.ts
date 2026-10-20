@@ -89,6 +89,8 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
       experimental: {},
       shellDescription: "Run a shell command in the managed Workbench sandbox, or request Workbench approval for one outside-sandbox command.",
       shellEscalation: true,
+      // The companion plugin opens one connection per OpenCode process; session permissions hide each audience's tools.
+      connectionSpansThreads: true,
     };
   }
 

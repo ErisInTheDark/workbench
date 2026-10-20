@@ -1,10 +1,12 @@
 /*
  * Exports:
- * - tests: protect managed OpenCode metadata, permissions, fresh instruction entries, and prompt-bound activated skills.
+ * - tests: protect managed OpenCode metadata, parent-only and root-only permissions, fresh instruction entries, and prompt-bound activated skills.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import { listWorkbenchAgentCommands } from "../../lib/workbench/commands/workbench-agent-command-registry";
+import { listWorkbenchInstructionTools } from "../../lib/workbench/instructions/instruction-tool-reference";
 import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 
 test("marks managed sessions and refreshes filtered instructions before each prompt", async () => {
@@ -36,6 +38,7 @@ test("marks managed sessions and refreshes filtered instructions before each pro
     }),
     readInstructionTools: async () => [],
     readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
+    workbenchRoot: "C:/project",
   });
 
   assert.deepEqual(controller.creation(), {
@@ -85,4 +88,31 @@ test("marks managed sessions and refreshes filtered instructions before each pro
       value: "base-3-opencode\n\ndeveloper-opencode/model",
     },
   ]);
+});
+
+test("sessions outside the Workbench repository root are denied its root-only tools", async () => {
+  const updates: Array<{ permissions: Array<{ action: string }> }> = [];
+  const controller = new OpenCodeManagedSessionController({
+    acquire: async () => ({
+      session: {
+        update: async (input: { permissions: Array<{ action: string }> }) => { updates.push(input); },
+        instructions: { entry: { put: async () => undefined } },
+      },
+    } as never),
+    build: async () => ({ baseInstructions: null, developerInstructions: null, activatedSkills: null }),
+    readInstructionTools: async () => listWorkbenchInstructionTools(listWorkbenchAgentCommands()),
+    readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
+    workbenchRoot: "C:/workbench",
+  });
+  const context = {
+    sessionID: "session", projectId: "project", threadId: "thread", model: null, agentPath: null,
+    workflowIds: [], activatedSkillPaths: [],
+  };
+  await controller.refresh({ ...context, cwd: "C:/elsewhere" });
+  await controller.refresh({ ...context, cwd: "C:/workbench" });
+  const denied = updates.map(({ permissions }) => new Set(permissions.map(({ action }) => action)));
+  for (const action of ["wb_tokens_instructions", "wbex_tokens_instructions"]) {
+    assert.equal(denied[0]!.has(action), true, `${action} should be denied outside the root`);
+    assert.equal(denied[1]!.has(action), false, `${action} should stay available at the root`);
+  }
 });

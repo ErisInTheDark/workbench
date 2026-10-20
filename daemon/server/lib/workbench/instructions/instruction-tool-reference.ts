@@ -20,6 +20,8 @@ export interface WorkbenchInstructionTool {
   readonly codeModeEligible: boolean;
   /** Not preloaded: reached through the `wb` CLI or `mcp_call` on server `wb`, so no direct MCP name exists to reference. */
   readonly deferred?: boolean;
+  /** Usable only by threads at the Workbench repository root. */
+  readonly rootOnly?: boolean;
   /** Usable only while this local capability is enabled. */
   readonly requiresCapability?: WorkbenchLocalCapability;
 }
@@ -31,6 +33,7 @@ export function listWorkbenchInstructionTools(definitions: readonly WorkbenchAge
       id: getWorkbenchAgentCommandToolName(definition),
       codeModeEligible: definition.mcpCodeModeEligible === true,
       ...(definition.mcpDeferred ? { deferred: true } : {}),
+      ...(definition.managedThreadRootOnly ? { rootOnly: true } : {}),
       ...(definition.requiresCapability ? { requiresCapability: definition.requiresCapability } : {}),
     })),
   ];

@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { listWorkbenchAgentCodeModeToolNames } from "./lib/workbench/commands/workbench-agent-command-registry";
 import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
 import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import { createWorkbenchMcpEndpointUrl } from "workbench-shared/workbench/mcp/workbench-mcp-endpoint";
 
 const WORKBENCH_CODE_MODE_MCP_TOOL_TIMEOUT_SECONDS = 6 * 60 * 60;
 const WORKBENCH_DIRECT_MCP_TOOL_TIMEOUT_SECONDS = 30 * 60;
@@ -24,12 +25,9 @@ function getWorkbenchMcpUrl(bridgeUrl: string, projectLocal: boolean, subagent: 
   }
   const protocol = url.protocol === "wss:" ? "https:" : "http:";
   const port = url.port || (url.protocol === "wss:" ? "443" : "80");
-  const mcpUrl = new URL(`/daemon/mcp`, `${protocol}//127.0.0.1:${port}`);
-  mcpUrl.searchParams.set("provider", "codex");
-  mcpUrl.searchParams.set("client", randomUUID());
-  if (projectLocal) mcpUrl.searchParams.set("project-local", "true");
-  if (subagent) mcpUrl.searchParams.set("subagent", "true");
-  return mcpUrl.toString();
+  return createWorkbenchMcpEndpointUrl(`${protocol}//127.0.0.1:${port}`, {
+    provider: "codex", client: randomUUID(), projectLocal, subagent,
+  }).toString();
 }
 
 export function withWorkbenchCodexMcpConfig(

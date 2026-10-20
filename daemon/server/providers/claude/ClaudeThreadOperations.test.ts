@@ -43,7 +43,9 @@ function messageText(content: unknown) {
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
   captured, hold, subagentName, interrupt, compactQuery, signal, compactionReports = [], missingRuntime = false,
+  workbenchRoot = "C:/workbench",
 }: {
+  workbenchRoot?: string;
   failNative?: boolean;
   missingRuntime?: boolean;
   failUsage?: boolean;
@@ -110,6 +112,7 @@ function fixture({
   }
   const owner = new ClaudeThreadOperations({
     daemonOrigin: "http://127.0.0.1:1",
+    workbenchRoot,
     sessions,
     createQuery: compactQuery,
     signal: signal ?? new AbortController().signal,
@@ -301,6 +304,18 @@ test("Claude child turns carry canonical audience into their prompt and MCP cata
         input: [{ type: "text", text: "work", text_elements: [] }] });
       assert.deepEqual(captured.instructionNames, [subagentName ?? null]);
       assert.equal(new URL(captured.mcpUrls![0]!).searchParams.get("subagent"), subagentName ? "true" : null);
+    } finally { await owner.dispose(); }
+  }
+});
+
+test("Claude turns at the Workbench repository root list its root-only MCP tools", async () => {
+  for (const workbenchRoot of ["C:/repo", "C:/workbench"]) {
+    const captured: Captured = { systemPrompts: [], pushed: [], collected: [], mcpUrls: [] };
+    const owner = fixture({ usage: [], captured, workbenchRoot });
+    try {
+      await owner.submit({ threadId, clientMessageId: "root", intent: "newTurn",
+        input: [{ type: "text", text: "work", text_elements: [] }] });
+      assert.equal(new URL(captured.mcpUrls![0]!).searchParams.get("project-local"), workbenchRoot === "C:/repo" ? "true" : null);
     } finally { await owner.dispose(); }
   }
 });

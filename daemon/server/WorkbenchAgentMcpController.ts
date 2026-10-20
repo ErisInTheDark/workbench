@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, cancellation, hosted-shell approval, and command execution ports.
- * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, plus the served tool specs for prompt-cost accounting.
+ * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, caller audience, cancellation, hosted-shell approval, and command execution ports.
+ * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, per-caller parent-only and root-only gates, plus the served tool specs for prompt-cost accounting.
  */
 import type http from "node:http";
 
@@ -17,6 +17,7 @@ import { ErrorCode, McpError, type CallToolResult, type Tool } from "@modelconte
 
 import { z } from "zod";
 import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
+import { readWorkbenchMcpEndpointUrl } from "workbench-shared/workbench/mcp/workbench-mcp-endpoint";
 import { adaptWorkbenchAgentCliResponse } from "./lib/workbench/cli/workbench-agent-cli-responses";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_MCP_COMMANDS } from "./lib/workbench/commands/mcp-command-definitions";
@@ -92,6 +93,8 @@ function readToolUseKey(description: { toolUseIdMeta?: string }, call: Workbench
 
 export interface WorkbenchAgentMcpControllerOptions {
   isSubagentCaller?: (caller: WorkbenchProviderCaller) => Promise<boolean>;
+  /** Whether the caller works at the Workbench repository root, the only audience of root-only commands. */
+  isWorkbenchRootCaller?: (caller: WorkbenchProviderCaller) => boolean;
   tools: (provider: string) => WorkbenchProviderTools;
   /** Workbench approval for outside-sandbox commands on the Workbench-hosted shell. */
   approveHostedShell?: WorkbenchToolAdmissionOptions["approve"];
@@ -163,8 +166,7 @@ function toolJsonSchema(schema: AnySchema, pipeStrategy: "input" | "output") {
   return object ? toJsonSchemaCompat(object, { strictUnions: true, pipeStrategy }) : EMPTY_OBJECT_JSON_SCHEMA;
 }
 
-function readClientScope(url: URL) {
-  const value = url.searchParams.get("client")?.trim();
+function readClientScope(value: string | null) {
   if (!value) return LEGACY_MCP_CLIENT_SCOPE;
   if (!MCP_CLIENT_SCOPE_PATTERN.test(value)) throw new Error("Workbench MCP client scope is invalid.");
   return value.toLowerCase();
@@ -186,6 +188,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   private readonly injectedExecuteShell: WorkbenchAgentMcpControllerOptions["executeShell"];
   private readonly runtimeOwner = {};
   private readonly isSubagentCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isSubagentCaller"]>;
+  private readonly isWorkbenchRootCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isWorkbenchRootCaller"]>;
 
   constructor({
     executeCommand,
@@ -199,6 +202,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
     scheduleProgress,
     isSubagentCaller = async () => false,
+    isWorkbenchRootCaller = () => false,
   }: WorkbenchAgentMcpControllerOptions) {
     this.injectedExecuteCommand = executeCommand;
     this.executeCommand = executeCommand ?? (async (request, signal) => await requestRegistry.executeCommand(request, signal));
@@ -212,6 +216,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     this.approveHostedShell = approveHostedShell;
     this.injectedExecuteShell = executeShell;
     this.isSubagentCaller = isSubagentCaller;
+    this.isWorkbenchRootCaller = isWorkbenchRootCaller;
   }
 
   beginRuntimeDrain() {
@@ -254,18 +259,14 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       return;
     }
 
-    const url = new URL(request.url ?? "/", "http://localhost");
+    const endpoint = readWorkbenchMcpEndpointUrl(new URL(request.url ?? "/", "http://localhost"));
     let scope: WorkbenchMcpScope;
     try {
-      const clientScope = readClientScope(url);
-      const provider = url.searchParams.get("provider");
+      const clientScope = readClientScope(endpoint.client);
+      const { provider } = endpoint;
       if (!provider) throw new Error("Workbench MCP requires a provider selector.");
       this.tools(provider);
-      scope = {
-        clientScope, provider,
-        projectLocal: url.searchParams.get("project-local") === "true",
-        subagent: url.searchParams.get("subagent") === "true",
-      };
+      scope = { clientScope, provider, projectLocal: endpoint.projectLocal, subagent: endpoint.subagent };
     } catch (error) {
       sendJsonRpcError(response, 400, sanitizeError(error) || "Workbench MCP client scope is invalid.");
       return;
@@ -275,7 +276,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   }
 
   /**
-   * Commands one request may use, in catalogue order: preloaded tools, and deferred ones found and run through
+   * Commands one audience may use, in catalogue order: preloaded tools, and deferred ones found and run through
    * `mcp_tools`/`mcp_call` on server `wb`. Deferred search mirrors CLI help, so root-help-hidden commands stay out.
    * Duplicate names are a catalogue defect.
    */
@@ -297,6 +298,21 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       (definition.mcpDeferred ? deferred : direct).set(name, definition);
     }
     return { deferred, direct };
+  }
+
+  /** The preloaded audience: a connection serving many threads lists every thread's tools and gates each caller. */
+  private listingScope(scope: WorkbenchMcpScope, description: { connectionSpansThreads?: boolean }): WorkbenchMcpScope {
+    return description.connectionSpansThreads ? { ...scope, projectLocal: true } : scope;
+  }
+
+  /** Deferred commands the resolved caller may find, whatever audience its connection declared. */
+  private async callerDeferredCommands(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, tools: WorkbenchProviderTools) {
+    const caller = await tools.caller(ProviderToolMetadataSchema.parse(call.meta ?? {}), call.signal, { clientScope: scope.clientScope });
+    return this.visibleCommands({
+      ...scope,
+      projectLocal: this.isWorkbenchRootCaller(caller),
+      subagent: scope.subagent || await this.isSubagentCaller(caller),
+    }).deferred;
   }
 
   private toolSpec(name: string, definition: WorkbenchAgentCommandDefinition): Tool & { description: string } {
@@ -328,7 +344,9 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       outputSchema: toolJsonSchema(WorkbenchShellResultSchema, "output") as Tool["outputSchema"],
       _meta: CODE_MODE_META,
     }];
-    for (const [name, definition] of this.visibleCommands(scope).direct) tools.push(this.toolSpec(name, definition));
+    for (const [name, definition] of this.visibleCommands(this.listingScope(scope, description)).direct) {
+      tools.push(this.toolSpec(name, definition));
+    }
     return { experimental: description.experimental, tools };
   }
 
@@ -350,7 +368,9 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         }
         return await this.callShell(scope, call, input, tools, description.shellEscalation);
       }
-      const { deferred, direct } = this.visibleCommands(scope);
+      const { direct } = this.visibleCommands(this.listingScope(scope, await tools.describe()));
+      // `mcp_call` reaches root-only commands from any connection; `prepareCommand` gates each caller.
+      const { deferred } = this.visibleCommands({ ...scope, projectLocal: true });
       const definition = direct.get(call.name);
       if (!definition) throw new McpError(ErrorCode.InvalidParams, `Tool ${call.name} not found`);
       const input = await validateToolInput(definition.inputSchema, call.arguments, call.name) as object;
@@ -358,7 +378,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       const workbenchServer = routing.server === WORKBENCH_MCP_SERVER_NAME;
       const transcript = { tool: call.name, input };
       if (definition === MCP_TOOLS_COMMAND && (workbenchServer || (!routing.server && deferred.size))) {
-        const section = formatWorkbenchToolSection([...deferred].map(([name, tool]) => this.toolSpec(name, tool)), routing.query);
+        const findable = await this.callerDeferredCommands(scope, call, tools);
+        const section = formatWorkbenchToolSection([...findable].map(([name, tool]) => this.toolSpec(name, tool)), routing.query);
         const result = workbenchServer
           ? await this.observeTool(call.name, input, call.meta, scope.clientScope, call.signal, tools, async () => textResult(section))
           : await this.callTool(definition, input, call.meta, scope.clientScope, call.requestId, call.signal, tools, {
@@ -758,6 +779,15 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
           result: {
             isError: true,
             content: [{ type: "text" as const, text: "Subagents leave claims for parent adoption; the parent creates commit proposals." }],
+          },
+        };
+      }
+      if (definition.managedThreadRootOnly && !this.isWorkbenchRootCaller(caller)) {
+        return {
+          kind: "result", unregister,
+          result: {
+            isError: true,
+            content: [{ type: "text" as const, text: `${toolName} is available only to threads at the Workbench repository root.` }],
           },
         };
       }

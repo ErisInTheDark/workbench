@@ -108,6 +108,8 @@ export interface WorkbenchProviderTools {
      * the client overlaps calls, which grants nothing since Workbench still admits every command.
      */
     toolUseIdMeta?: string;
+    /** One connection serves every thread, so its preloaded list carries every audience's tools and each call is gated. */
+    connectionSpansThreads?: boolean;
   }>;
   caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
   /** Prepare the provider-native shell, required only when `describe().shellEscalation` is false. */

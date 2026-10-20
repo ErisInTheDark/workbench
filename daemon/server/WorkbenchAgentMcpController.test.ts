@@ -686,6 +686,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];
   const controller = codexController({
+    isWorkbenchRootCaller: caller => caller.cwd === "C:/authoritative",
     executeCommand: async (request) => {
       executed.push(request);
       return Response.json({ title: "Typed Workbench" });
@@ -1043,6 +1044,68 @@ test("stale parent-only tools cannot dispatch for a canonical child caller", asy
       assert.equal(result.isError, true, `${name} should reject a canonical child caller`);
     }
     assert.equal(dispatches, 0);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("root-only tools follow the resolved caller, not the connection's flags", async () => {
+  const executed: WorkbenchAgentCommandRequest[] = [];
+  const controller = codexController({
+    isWorkbenchRootCaller: caller => caller.cwd === "C:/root",
+    executeCommand: async request => { executed.push(request); return Response.json({}); },
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    lifecycleLogError: () => {},
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: {
+      cwd: (request.params as { threadId?: string }).threadId === "root-thread" ? "C:/root" : "C:/elsewhere",
+    } } }),
+  });
+  const server = await startController(controller);
+  const flagless = await connectClient(server.url);
+  const flaggedUrl = new URL(server.url);
+  flaggedUrl.searchParams.set("project-local", "true");
+  const flagged = await connectClient(flaggedUrl);
+  const call = (client: Client, threadId: string, name: string, args: Record<string, unknown>) => (
+    client.callTool({ name, arguments: args, _meta: { threadId } }));
+  const transcriptCall = { server: "wb", tool: "transcript_projects", arguments: { action: "projects" } };
+  try {
+    const found = responseText(await call(flagless, "root-thread", "mcp_tools", { server: "wb", query: "transcript" }));
+    assert.match(found, /^wb\/transcript_projects$/mu);
+    const ran = await call(flagless, "root-thread", "mcp_call", transcriptCall);
+    assert.equal(ran.isError, false, responseText(ran));
+    assert.equal(executed.at(-1)?.path, "/internal/transcript");
+
+    const dispatches = executed.length;
+    const hidden = responseText(await call(flagged, "other-thread", "mcp_tools", { server: "wb", query: "transcript" }));
+    assert.doesNotMatch(hidden, /wb\/transcript_/u);
+    assert.equal((await call(flagged, "other-thread", "mcp_call", transcriptCall)).isError, true);
+    assert.equal((await call(flagged, "other-thread", "tokens_instructions", {})).isError, true);
+    assert.equal(executed.length, dispatches);
+  } finally {
+    await Promise.all([flagless.close(), flagged.close()]);
+    await server.close();
+  }
+});
+
+test("a connection serving many threads preloads root-only tools for per-caller gating", async () => {
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true, connectionSpansThreads: true }),
+    patchClaims: async () => { throw new Error("unexpected patch"); },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools,
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    lifecycleLogError: () => {},
+  });
+  const server = await startController(controller);
+  server.url.searchParams.set("provider", "opencode");
+  const client = await connectClient(server.url);
+  try {
+    assert.equal((await client.listTools()).tools.some(({ name }) => name === "tokens_instructions"), true);
   } finally {
     await client.close();
     await server.close();

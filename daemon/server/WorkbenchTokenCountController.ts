@@ -3,6 +3,7 @@
  * - default WorkbenchTokenCountController: own local GPT-5 counting and source-aware Workbench/project instruction reports.
  */
 import path from "node:path";
+import { isSamePath } from "workbench-shared/same-path";
 
 import {
   buildProjectInstructionTokenCorpus,
@@ -20,14 +21,6 @@ interface ProjectInstructionResolution {
 interface WorkbenchTokenCountControllerOptions {
   projectRoot: string;
   resolveProjectFromCwd(cwd: string): Promise<ProjectInstructionResolution>;
-}
-
-function pathsEqual(left: string, right: string) {
-  const normalizedLeft = path.resolve(left);
-  const normalizedRight = path.resolve(right);
-  return process.platform === "win32"
-    ? normalizedLeft.toLocaleLowerCase() === normalizedRight.toLocaleLowerCase()
-    : normalizedLeft === normalizedRight;
 }
 
 function boundedErrorMessage(error: unknown) {
@@ -73,7 +66,7 @@ export default class WorkbenchTokenCountController {
     if (
       parsed.data.kind === "instructions"
       && parsed.data.callerThreadId !== null
-      && !pathsEqual(parsed.data.cwd, this.projectRoot)
+      && !isSamePath(parsed.data.cwd, this.projectRoot)
     ) {
       return new Response("Managed threads can count Workbench instructions only from the running Workbench repository root.\n", { status: 403 });
     }

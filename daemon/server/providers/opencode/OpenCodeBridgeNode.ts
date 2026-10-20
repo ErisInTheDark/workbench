@@ -63,6 +63,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       acquire,
       readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "OpenCode instruction tool catalogue"),
       readLocalCapabilities: () => settings.readLocalCapabilities(),
+      workbenchRoot: context.legacyMigrationProjectRoot,
       workbenchOrigin: context.localDaemonOrigin,
     });
     const threads = new OpenCodeThreadOperations({

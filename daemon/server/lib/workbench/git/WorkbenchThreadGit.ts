@@ -7,6 +7,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isSamePath } from "workbench-shared/same-path";
 
 import { isPathWithinRoot, normalizeRelativePath } from "../../project";
 import { readRegisteredGitWorktrees } from "../../git";
@@ -87,15 +88,11 @@ function parsePerson(value: string, label: string) {
   return { email: match[2]!.trim(), name: match[1] };
 }
 
-function pathsEqual(left: string, right: string) {
-  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
-}
-
 async function resolveRegisteredWorktree(controlRepoRoot: string, targetWorktree: string) {
   if (!path.isAbsolute(targetWorktree)) throw new Error("Explicit Git worktree must be an absolute path.");
   const requestedRoot = path.resolve(targetWorktree);
   const registeredRoots = await readRegisteredGitWorktrees(controlRepoRoot);
-  const registeredRoot = registeredRoots.find((candidate) => pathsEqual(candidate, requestedRoot));
+  const registeredRoot = registeredRoots.find((candidate) => isSamePath(candidate, requestedRoot));
   if (!registeredRoot) throw new Error("Explicit Git target is not a registered Git worktree of the control repository.");
   return registeredRoot;
 }

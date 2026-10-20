@@ -55,6 +55,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     });
     const threads = new ClaudeThreadOperations({
       daemonOrigin: context.localDaemonOrigin,
+      workbenchRoot: context.legacyMigrationProjectRoot,
       sessions,
       observe: facts => build.get("providerObservations").observe("claude", facts),
       broadcast: notification => context.broadcastProviderNotification("claude", notification),

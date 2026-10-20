@@ -2,11 +2,12 @@
  * Exports:
  * - OpenCodeManagedSessionContext: provider-local instruction refresh input.
  * - OpenCodeManagedSessionControllerOptions: injectable managed-session boundaries.
- * - default OpenCodeManagedSessionController: own OpenCode session marking, native command denial, fresh instructions, and activated skill builds.
+ * - default OpenCodeManagedSessionController: own OpenCode session marking, native command and per-audience tool denial, fresh instructions, and activated skill builds.
  */
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
 import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import { isSamePath } from "workbench-shared/same-path";
 import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import { OPENCODE_WORKBENCH_DIRECT_NAMESPACE, OPENCODE_WORKBENCH_NAMESPACE } from "./opencode-workbench-rpc";
@@ -17,11 +18,17 @@ import {
 
 const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
 // A tool's permission action is its effective name, which carries its code-mode or direct namespace.
-const PARENT_ONLY_ACTIONS = WORKBENCH_PARENT_ONLY_TOOLS.flatMap(id =>
+const toolActions = (ids: readonly string[]) => ids.flatMap(id =>
   [OPENCODE_WORKBENCH_NAMESPACE, OPENCODE_WORKBENCH_DIRECT_NAMESPACE].map(namespace => `${namespace}_${id}`));
+const PARENT_ONLY_ACTIONS = toolActions(WORKBENCH_PARENT_ONLY_TOOLS);
 
-function managedPermissions(subagent = false) {
-  return [...NATIVE_COMMAND_ACTIONS, ...(subagent ? PARENT_ONLY_ACTIONS : [])].map(action => ({
+/** `rootOnlyTools` are denied outside the Workbench repository root. */
+function managedPermissions({ subagent = false, rootOnlyTools = [] }: { subagent?: boolean; rootOnlyTools?: readonly string[] } = {}) {
+  return [
+    ...NATIVE_COMMAND_ACTIONS,
+    ...(subagent ? PARENT_ONLY_ACTIONS : []),
+    ...toolActions(rootOnlyTools),
+  ].map(action => ({
     action,
     resource: "*",
     effect: "deny" as const,
@@ -52,6 +59,8 @@ export interface OpenCodeManagedSessionControllerOptions {
   build?: (context: OpenCodeManagedSessionContext & { harness: "opencode" }) => Promise<BuiltInstructions>;
   readInstructionTools: () => Promise<readonly WorkbenchInstructionTool[]>;
   readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>;
+  /** Workbench repository root; sessions elsewhere are denied its root-only tools. */
+  workbenchRoot: string;
   workbenchOrigin?: string;
 }
 
@@ -78,13 +87,24 @@ export default class OpenCodeManagedSessionController {
       input.workingStatus ? WORKBENCH_THREAD_WORKING_STATUS_MESSAGE : null,
     ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
     const session = (await this.options.acquire()).session;
-    await session.update({ sessionID: input.sessionID, permissions: managedPermissions(Boolean(input.subagentName)) });
+    await session.update({
+      sessionID: input.sessionID,
+      permissions: managedPermissions({
+        subagent: Boolean(input.subagentName),
+        rootOnlyTools: isSamePath(input.cwd, this.options.workbenchRoot) ? [] : await this.directRootOnlyTools(),
+      }),
+    });
     await session.instructions.entry.put({
       sessionID: input.sessionID,
       key: "workbench",
       value,
     });
     return { activatedSkills: built.activatedSkills?.trim() ? built.activatedSkills : null };
+  }
+
+  /** Deferred root-only tools run through `mcp_call`, which the MCP server gates per caller instead. */
+  private async directRootOnlyTools() {
+    return (await this.options.readInstructionTools()).filter(tool => tool.rootOnly && !tool.deferred).map(tool => tool.id);
   }
 
   private async build(context: OpenCodeManagedSessionContext & { harness: "opencode" }): Promise<BuiltInstructions> {
