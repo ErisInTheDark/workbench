@@ -3,6 +3,7 @@
  * - default ProjectTestRunner: validate test discovery and own fixtures and Node test-runner children.
  * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup, cleanup, process spawning, concurrency, and optional timeout.
  * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse explicit discovery inputs.
+ * - chunkTestFileArguments: split a test process's file arguments into runs that fit one command line.
  * - runProjectTests: apply parsed CLI settings to one complete project test run.
  */
 import { spawn, type ChildProcess } from "node:child_process";
@@ -27,6 +28,26 @@ const ORDINARY_TEST_CONCURRENCY = 8;
 const TEST_CONCURRENCY = Math.max(1, Math.min(8, availableParallelism()));
 const TEST_TIMEOUT_MS = 30_000;
 const FILE_TIMEOUT_MS = 300_000;
+/** Windows rejects command lines past 32,767 characters (spawn ENAMETOOLONG); file arguments stay well under it. */
+const MAX_FILE_ARGUMENT_CHARS = 24_000;
+
+/** Consecutive runs of files whose arguments fit one command line; every file appears once, in order. */
+export function chunkTestFileArguments(files: readonly string[], maxChars = MAX_FILE_ARGUMENT_CHARS) {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let length = 0;
+  for (const file of files) {
+    if (current.length && length + file.length + 1 > maxChars) {
+      chunks.push(current);
+      current = [];
+      length = 0;
+    }
+    current.push(file);
+    length += file.length + 1;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}
 
 /**
  * Ambient agent identity belongs to the invoking shell, not to the tests it runs.
@@ -176,12 +197,28 @@ export default class ProjectTestRunner {
     concurrency = this.testConcurrency,
     fixtureEnvironment: Record<string, string> = {},
   ) {
-    if (this.signal.aborted) return { exitCode: 130, signal: null };
     const testProcessRoot = path.join(this.projectRoot, "daemon");
+    const relativeFiles = files.map(file => path.relative(testProcessRoot, file).replaceAll("\\", "/"));
+    let result: ProjectTestProcessResult = { exitCode: 0, signal: null };
+    for (const chunk of chunkTestFileArguments(relativeFiles)) {
+      const chunkResult = await this.runTestProcess(chunk, concurrency, fixtureEnvironment, testProcessRoot);
+      if (chunkResult.signal !== null) return chunkResult;
+      if (chunkResult.exitCode !== 0 && result.exitCode === 0) result = chunkResult;
+    }
+    return result;
+  }
+
+  private async runTestProcess(
+    files: readonly string[],
+    concurrency: number,
+    fixtureEnvironment: Record<string, string>,
+    testProcessRoot: string,
+  ): Promise<ProjectTestProcessResult> {
+    if (this.signal.aborted) return { exitCode: 130, signal: null };
     const reporter = pathToFileURL(path.join(this.projectRoot, "test", "concise-test-reporter.mjs")).href;
     const budget = Math.ceil(files.length / concurrency) * this.fileTimeoutMs;
     const label = files.length === 1
-      ? path.relative(this.projectRoot, files[0]!).replaceAll("\\", "/")
+      ? path.relative(this.projectRoot, path.resolve(testProcessRoot, files[0]!)).replaceAll("\\", "/")
       : `${files.length} test files`;
     const services = await WorkbenchTestProcessResources.create(true, this.projectRoot);
     try {
@@ -195,7 +232,7 @@ export default class ProjectTestRunner {
         `--test-concurrency=${concurrency}`,
         ...(this.testTimeoutMs === null ? [] : [`--test-timeout=${this.testTimeoutMs}`]),
         `--test-reporter=${reporter}`,
-        ...files.map(file => path.relative(testProcessRoot, file).replaceAll("\\", "/")),
+        ...files,
       ], {
         cwd: testProcessRoot,
         env: { ...withoutAmbientAgentIdentity(process.env), ...fixtureEnvironment, ...services.environment },

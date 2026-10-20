@@ -7,16 +7,20 @@ import { createRequire } from "node:module";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, type DaemonId } from "workbench-shared/workbench/identity";
 import { GitPeerTransferSchema, type GitBranchPosition } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { DaemonWorkspaceQuery, WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
 import WorkbenchGitPeerRelay, { GitPeerUnsupportedError, type GitPeerLocation } from "./WorkbenchGitPeerRelay";
 import WorkbenchGitPeerSync from "./WorkbenchGitPeerSync";
+import { PEER_SYNC_DIVERGED_FIXTURE } from "./WorkbenchGitPeerSync.test.fixtures";
 
-const { default: WorkbenchGitPeerController } = createRequire(import.meta.url)(
+const daemonRequire = createRequire(import.meta.url);
+const { default: WorkbenchGitPeerController } = daemonRequire(
   "../../../daemon/server/WorkbenchGitPeerController",
 ) as typeof import("../../../daemon/server/WorkbenchGitPeerController");
+const { default: GitTestFixtureCache } = daemonRequire(
+  "../../../daemon/server/lib/workbench/git/GitTestFixtureCache.ts",
+) as typeof import("../../../daemon/server/lib/workbench/git/GitTestFixtureCache");
 
 const desktop = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const server = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000002");
@@ -84,9 +88,10 @@ const settled = () => new Promise(resolve => setImmediate(resolve));
 const sha = (digit: string) => digit.repeat(40);
 
 async function checkouts(t: test.TestContext) {
-  const temporary = await WorkbenchTemporaryDirectory.create("peer-sync-");
-  t.after(() => temporary.dispose());
-  const roots = new Map([[desktop, path.join(temporary.path, "desktop")], [server, path.join(temporary.path, "server")]]);
+  const fixture = await new GitTestFixtureCache().copy(PEER_SYNC_DIVERGED_FIXTURE);
+  t.after(fixture.dispose);
+  const roots = new Map([[desktop, fixture.root], [server, path.join(fixture.bundleRoot, "server")]]);
+  const { local, incoming } = fixture.state;
   const execute = promisify(execFile);
   const git = async (id: DaemonId, ...args: string[]) => (await execute("git", args, {
     cwd: roots.get(id)!, windowsHide: true, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
@@ -98,18 +103,6 @@ async function checkouts(t: test.TestContext) {
     await git(id, "commit", "-m", file);
     return git(id, "rev-parse", "HEAD");
   };
-  for (const [id, root] of roots) {
-    await fs.mkdir(root, { recursive: true });
-    await git(id, "init", "-b", "main");
-    for (const [key, value] of [["user.name", "Sync test"], ["user.email", "sync@workbench.invalid"],
-      ["commit.gpgsign", "false"], ["core.autocrlf", "false"]] as const) await git(id, "config", key, value);
-  }
-  const base = await commit(desktop, "base.txt", "base\n");
-  await git(server, "fetch", roots.get(desktop)!, "main");
-  await git(server, "reset", "--hard", base);
-  const local = await commit(desktop, "local.txt", "local\n");
-  const incoming = await commit(server, "incoming.txt", "incoming\n");
-  await git(desktop, "update-ref", "refs/remotes/published/main", local);
   const origins = new Map<DaemonId, string>();
   for (const [id, root] of roots) {
     const controller = new WorkbenchGitPeerController({

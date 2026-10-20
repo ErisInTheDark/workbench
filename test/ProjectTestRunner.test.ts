@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import type { ChildProcess } from "node:child_process";
 
 import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/server/lib/workbench/WorkbenchTemporaryDirectory";
-import ProjectTestRunner from "./ProjectTestRunner";
+import ProjectTestRunner, { chunkTestFileArguments } from "./ProjectTestRunner";
 
 const outerRegistry = process.env.WORKBENCH_TEST_SERVICE_RECORDS;
 // Mocked nested runners must not retire resources registered by sibling real workers.
@@ -116,6 +116,15 @@ test("cleans up child-registered scenario workspaces owned by the runner's proje
 
   assert.deepEqual(await runner.run([fileURLToPath(import.meta.url)]), { exitCode: 0, signal: null });
   await assert.rejects(stat(scenarioRoot), { code: "ENOENT" });
+});
+
+test("a full-suite file list splits across command lines that fit, passing every file once in order", () => {
+  const files = Array.from({ length: 500 }, (_, index) => `../app/client/components/workbench/thread-view/case-${index}.test.tsx`);
+  const chunks = chunkTestFileArguments(files);
+  assert.ok(chunks.length > 1);
+  assert.deepEqual(chunks.flat(), files);
+  for (const chunk of chunks) assert.ok(chunk.join(" ").length <= 24_000);
+  assert.deepEqual(chunkTestFileArguments(["x".repeat(30_000)]), [["x".repeat(30_000)]], "an oversized single file still runs alone");
 });
 
 test("live runners can omit the test timeout without changing the ordinary default", async () => {

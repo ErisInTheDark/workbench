@@ -23,6 +23,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { APP_RELOAD_DIRT_FIXTURE } from "../../../../../app/server/runtime/AppReloadDirt.test.fixtures";
+import { PEER_SYNC_DIVERGED_FIXTURE } from "../../../../../app/server/workspace/WorkbenchGitPeerSync.test.fixtures";
 import { RELOAD_DIRT_FIXTURE } from "../../../../../shared/reload/ReloadDirt.test.fixtures";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitArcRegistry from "./GitArcRegistry";
@@ -338,6 +339,9 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ], nested: false }],
   ["WorkbenchAppReloadDirtController.test.ts", { fixtures: [
     demand(APP_RELOAD_DIRT_FIXTURE, 1),
+  ], nested: false }],
+  ["WorkbenchGitPeerSync.test.ts", { fixtures: [
+    demand(PEER_SYNC_DIVERGED_FIXTURE, 10),
   ], nested: false }],
   ["GitArcLifecycleController.test.ts", { fixtures: [
     demand(SRC_ARC_READY_FIXTURE, 1),
