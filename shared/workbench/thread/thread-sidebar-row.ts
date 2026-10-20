@@ -26,7 +26,7 @@ const paths = z.array(z.string().min(1));
 export const WorkbenchSidebarGitArcPlanSchema = z.object({ checkpointCommit: commit, scopePaths: paths }).strict();
 export type WorkbenchSidebarGitArcPlan = z.infer<typeof WorkbenchSidebarGitArcPlanSchema>;
 
-const heavy = { questionnaireHistory: true, previousTitles: true, gitArc: true, gitArcPlan: true, gitCommits: true } as const;
+const heavy = { questionnaireHistory: true, previousTitles: true, gitArc: true, gitArcPlan: true, gitCommits: true, profile: true } as const;
 const lean = {
   gitArc: WorkbenchSidebarGitArcSchema.nullable().optional(),
   gitArcPlan: WorkbenchSidebarGitArcPlanSchema.nullable().optional(),
@@ -84,7 +84,7 @@ export const coarseActivity = (ms: number) => ms - ms % ACTIVITY_GRANULARITY_MS;
 
 const isLean = (entry: Exclude<RowSource, { entryKind: "draft" }>) => entry.activityAt % 1_000 === 0
   && !("questionnaireHistory" in entry)
-  && !("previousTitles" in entry) && !("gitCommits" in entry) && !(entry.gitArc && "intentName" in entry.gitArc)
+  && !("previousTitles" in entry) && !("gitCommits" in entry) && !("profile" in entry) && !(entry.gitArc && "intentName" in entry.gitArc)
   && !(entry.gitArcPlan && "intentName" in entry.gitArcPlan)
   && nullableOptional.every(field => !(field in entry) || entry[field] !== null)
   && !("compacting" in entry);
@@ -94,7 +94,7 @@ export function projectSidebarRow(entry: RowSource): WorkbenchThreadSidebarRow {
   if (entry.entryKind === "draft") return entry;
   if (isLean(entry)) return entry as WorkbenchThreadSidebarRow;
   const {
-    questionnaireHistory: _history, previousTitles: _titles, gitArc, gitArcPlan, gitCommits: _commits,
+    questionnaireHistory: _history, previousTitles: _titles, gitArc, gitArcPlan, gitCommits: _commits, profile: _profile,
     pendingQuestionnaire, compacting: _compacting, ...rest
   } = entry as Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> & { compacting?: boolean };
   return {
