@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchProjectThreadStateOptions: initial durable and lifecycle facts for one project.
- * - default WorkbenchProjectThreadState: own one project's stores, revision, and reconciliation lifecycle.
+ * - default WorkbenchProjectThreadState: own one project's stores, revision, reconciliation lifecycle, and what storage last
+ *   durably holds, so a failed write restores it.
  */
 
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -23,7 +24,6 @@ import type {
 
 interface ProjectCommitOptions {
   layout?: boolean;
-  previousEntries?: ReadonlyMap<string, WorkbenchThreadStateEntry>;
   profile?: boolean;
 }
 
@@ -45,11 +45,15 @@ export default class WorkbenchProjectThreadState {
   readonly recordStore: WorkbenchThreadRecordStore;
   revision = 0;
   #writeQueue = { tail: Promise.resolve<unknown>(undefined) };
+  /** Each entry as storage last held it; shared with staged copies, which write through the same storage. */
+  #durable: { entries: Map<string, WorkbenchThreadStateEntry> };
 
+  /** `entries` are taken as already durable: they were loaded from storage. */
   constructor(options: WorkbenchProjectThreadStateOptions = {}) {
     this.display = new WorkbenchThreadDisplayController(options.displayOrder);
     this.draftStore = new WorkbenchThreadDraftStore(options.drafts, options.newThreadProfile);
     this.recordStore = new WorkbenchThreadRecordStore(options.entries);
+    this.#durable = { entries: this.recordStore.snapshot() };
   }
 
   get displayOrder() {
@@ -88,6 +92,7 @@ export default class WorkbenchProjectThreadState {
       newThreadProfile: this.newThreadProfile,
     });
     staged.#writeQueue = this.#writeQueue;
+    staged.#durable = this.#durable;
     return staged;
   }
 
@@ -129,6 +134,19 @@ export default class WorkbenchProjectThreadState {
     };
   }
 
+  /** Writes the selected entries as they are when their queued turn comes, and only then records them as durable. */
+  async #writeDurably(
+    keys: ReadonlySet<string>,
+    write: () => Promise<void>,
+  ) {
+    const written = new Map([...keys].map(key => [key, this.entries.get(key)] as const));
+    await write();
+    for (const [key, entry] of written) {
+      if (entry) this.#durable.entries.set(key, entry);
+      else this.#durable.entries.delete(key);
+    }
+  }
+
   async commit(
     projectId: ProjectId,
     keys: Iterable<string>,
@@ -140,7 +158,6 @@ export default class WorkbenchProjectThreadState {
     },
   ) {
     const beforeDerived = this.recordStore.snapshot();
-    const previousEntries = options.previousEntries ?? beforeDerived;
     const previousOrder = this.displayOrder;
     ports.prepare();
     const selectedKeys = new Set([...keys, ...this.changedEntryKeys(beforeDerived)]);
@@ -149,15 +166,16 @@ export default class WorkbenchProjectThreadState {
     const operation = this.#writeQueue.tail.catch(() => undefined).then(async () => {
       ports.beforeWrite();
       try {
-        await ports.write(this.selectedCommit(projectId, selectedKeys, {
+        await this.#writeDurably(selectedKeys, () => ports.write(this.selectedCommit(projectId, selectedKeys, {
           ...options,
           layout: options.layout || !areDeeplyEqual(previousOrder, installedOrder),
-        }));
+        })));
       } catch (error) {
+        // Callers change entries before committing, so only the durable record knows what storage still holds.
         for (const key of selectedKeys) {
           if (this.entries.get(key) !== installedEntries.get(key)) continue;
-          const previous = previousEntries.get(key);
-          if (previous) this.entries.set(key, previous);
+          const durable = this.#durable.entries.get(key);
+          if (durable) this.entries.set(key, durable);
           else this.entries.delete(key);
         }
         if (this.displayOrder === installedOrder) this.displayOrder = previousOrder;
@@ -177,9 +195,10 @@ export default class WorkbenchProjectThreadState {
       write: (changes: Omit<WorkbenchThreadStateCommit, "projectId">) => Promise<void>;
     },
   ) {
+    const selectedKeys = new Set(keys);
     const operation = this.#writeQueue.tail.catch(() => undefined).then(async () => {
       ports.beforeWrite();
-      await ports.write(this.selectedCommit(projectId, keys, options));
+      await this.#writeDurably(selectedKeys, () => ports.write(this.selectedCommit(projectId, selectedKeys, options)));
     });
     this.#writeQueue.tail = operation;
     await operation;

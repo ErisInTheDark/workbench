@@ -1433,6 +1433,36 @@ test("independent project subscribers and warm reads do not own background recon
   await controller.dispose();
 });
 
+test("a failed write restores the last durably written state, not the failed change", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  await persistence.writeProject("project", { drafts: [], records: [pinnedRecord("thread", "Thread")], version: 4 });
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "failed-write-rollback", threadStateStore: persistence,
+    getProjectCatalog: projectCatalog, reconcileProject: async () => [],
+  });
+  const identity = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
+  const lifecycle = async () => {
+    const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(candidate => candidate.entryKind === "thread");
+    return entry?.entryKind === "thread" ? entry.lifecycle.kind : null;
+  };
+  const setStatus = (status: "completed" | "stopped") => controller.handleRequest("observer", {
+    method: "workbench/thread-state/status/set", projectId: fixtureProjectIds["project"], identity, status,
+  });
+  try {
+    await controller.readProject(fixtureProjectIds["project"]);
+    const writeChanges = persistence.writeChanges.bind(persistence);
+    persistence.writeChanges = async () => { throw new Error("Project persistence unavailable."); };
+    await assert.rejects(setStatus("completed"), /Project persistence unavailable/u);
+    assert.equal(await lifecycle(), "needsAttention", "a failed first write returns to the loaded state");
+
+    persistence.writeChanges = writeChanges;
+    await setStatus("completed");
+    persistence.writeChanges = async () => { throw new Error("Project persistence unavailable."); };
+    await assert.rejects(setStatus("stopped"), /Project persistence unavailable/u);
+    assert.equal(await lifecycle(), "completed", "a failed later write returns to the last successful write");
+  } finally { await controller.dispose(); }
+});
+
 test("reconciled project thread state persists authoritatively in SQLite across controller restart", async () => {
   const projectId = testProjectIds.project;
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-sqlite-authority-");

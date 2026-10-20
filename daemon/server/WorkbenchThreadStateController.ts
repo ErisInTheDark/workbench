@@ -411,7 +411,7 @@ export default class WorkbenchThreadStateController {
             const previous = new Map(state.entries);
             if (!this.active || !this.synchronizeSettlementTimestamps(state)) return;
             try {
-              await this.persist(projectId, state, this.changedEntryKeys(previous, state), { previousEntries: previous });
+              await this.persist(projectId, state, this.changedEntryKeys(previous, state));
               this.publish(projectId, state);
             } catch (error) {
               state.error = `thread-archive: ${sanitizeError(error)}`;
@@ -626,7 +626,7 @@ export default class WorkbenchThreadStateController {
       if (existing?.entryKind === "subagent" && providerEntry.entryKind === "thread") return existing;
       const previousEntries = new Map(state.entries);
       const changed = this.installProviderSnapshot(state, providerEntry.identity.harness, [providerEntry], { complete: false }, previousEntries);
-      if (changed) await this.persist(projectId, state, [key], { previousEntries });
+      if (changed) await this.persist(projectId, state, [key]);
       const entry = state.entries.get(key);
       return entry?.entryKind === "draft" ? null : entry ?? null;
     });
@@ -1054,7 +1054,6 @@ export default class WorkbenchThreadStateController {
         if (!current || current.entryKind === "draft") {
           throw new Error("The questionnaire response was delivered but its thread was removed before settlement.");
         }
-        const previousEntries = new Map(state.entries);
         const clearsPendingQuestionnaire = matches(current.pendingQuestionnaire);
         const lifecycle = clearsPendingQuestionnaire && areDeeplyEqual(current.lifecycle, context.lifecycle)
           ? reduceWorkbenchThreadLifecycle(
@@ -1076,7 +1075,7 @@ export default class WorkbenchThreadStateController {
         });
         if (next.entryKind === "draft") throw new Error("Questionnaire completion cannot produce a draft entry.");
         state.entries.set(key, next);
-        await this.persist(input.projectId, state, [key], { previousEntries });
+        await this.persist(input.projectId, state, [key]);
         this.publish(input.projectId, state, next);
         await this.publishWorkingTransition(current, next, true);
         return { delivery: accepted.delivery, historyEntry };
@@ -1443,7 +1442,7 @@ export default class WorkbenchThreadStateController {
       const originalEntries = new Map(state.entries);
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state, { loaded: true });
       this.projects.set(projectId, state);
-      if (repairedSettlementTimestamps) await this.persist(projectId, state, this.changedEntryKeys(originalEntries, state), { previousEntries: originalEntries });
+      if (repairedSettlementTimestamps) await this.persist(projectId, state, this.changedEntryKeys(originalEntries, state));
       this.archives.reschedule();
       setTimeout(() => {
         if (this.active) void this.reconcile(projectId, state);
@@ -1729,7 +1728,7 @@ export default class WorkbenchThreadStateController {
           if (!this.active || generation !== state.generation) return;
           const previousEntries = new Map(state.entries);
           if (this.installProviderSnapshot(state, harness, entries, options, startEntries)) {
-            await this.persist(projectId, state, this.changedEntryKeys(previousEntries, state), { previousEntries });
+            await this.persist(projectId, state, this.changedEntryKeys(previousEntries, state));
           }
           if (!this.active || generation !== state.generation) return;
           state.error = null;
@@ -1739,7 +1738,7 @@ export default class WorkbenchThreadStateController {
           if (!this.active || generation !== state.generation) return;
           const previousEntries = new Map(state.entries);
           if (!this.installGitArcSnapshot(state, snapshot)) return;
-          await this.persist(projectId, state, this.changedEntryKeys(previousEntries, state), { previousEntries });
+          await this.persist(projectId, state, this.changedEntryKeys(previousEntries, state));
           if (!this.active || generation !== state.generation) return;
           this.publish(projectId, state);
         });
@@ -2058,7 +2057,7 @@ export default class WorkbenchThreadStateController {
     projectId: ProjectId,
     state: ProjectState,
     keys: Iterable<string>,
-    options: { previousEntries?: ReadonlyMap<string, WorkbenchThreadStateEntry>; layout?: boolean; profile?: boolean } = {},
+    options: { layout?: boolean; profile?: boolean } = {},
   ) {
     return state.commit(projectId, keys, options, {
       beforeWrite: () => this.assertActive(),
@@ -2071,7 +2070,7 @@ export default class WorkbenchThreadStateController {
       },
       write: async (changes) => {
         await this.options.threadStateStore.writeChanges(projectId, changes);
-      this.archives.reschedule();
+        this.archives.reschedule();
       },
     });
   }
