@@ -11,7 +11,7 @@ const facts = () => ({
   filePaths: ["src/a.ts", "src/b.ts"],
   id: "project",
   rootPath: "C:/repo",
-  skills: [{ description: "", name: "react", path: "C:/skills/react/SKILL.md" }],
+  skills: [{ description: "", name: "react", path: "C:/skills/react/SKILL.md", relativePath: "react/SKILL.md" }],
   workspaceRoots: [{ id: "root", rootPath: "C:/repo" }],
 });
 

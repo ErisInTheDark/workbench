@@ -48,7 +48,7 @@ test("a child's relative paths resolve against the child's working directory, no
         pluginId: null, readOnlyHint: true, result: { _meta: null, content: [], structuredContent: null }, server: "wb",
         status: "completed", tool: "rg", type: "mcpToolCall",
       },
-      { id: "child-answer", memoryCitation: null, phase: "final_answer", text: "done", type: "agentMessage" },
+      { delivery: null, id: "child-answer", memoryCitation: null, phase: "final_answer", questions: null, text: "done", type: "agentMessage" },
     ])],
   };
   const html = renderToStaticMarkup(createElement(ThreadTestTurn, {
