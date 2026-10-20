@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
+import { isWorkbenchSidebarThreadCompletionAvailable, withWorkbenchThreadLifecycle, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema, WorkbenchThreadSidebarEntrySchema } from "./thread-state.ts";
 import { countDraftPromptTokens, createDraftTitle, createWorkbenchPinnedThreadSummaryEntry, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { projectSidebarRow } from "./thread-sidebar-row";
@@ -60,7 +60,7 @@ test("observations carry a complete entry without admitting a different thread f
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
     metadata: { archived: false, pinned: true, snoozed: false },
-    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false },
     previousTitles: [{ title: "Earlier", usedAt: 1 }],
     pendingQuestionnaire: {
       itemId: "743c92b1-b79c-49d4-98a4-5b402bf6de6f", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
@@ -93,6 +93,41 @@ test("observations carry a complete entry without admitting a different thread f
   }).success, false);
 });
 
+test("a questionnaire exists only while its thread waits on it, wherever the entry came from", () => {
+  const question = {
+    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
+    request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [
+      { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+    ] },
+  };
+  const stored = (lifecycle: unknown) => WorkbenchThreadSidebarEntrySchema.parse({
+    activityAt: 1, title: "Task", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+    metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: question, lifecycle,
+  });
+  const waiting = {
+    kind: "needsAttention" as const, reason: "pendingInput" as const, requestKey: "request", settled: false as const, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
+  };
+  for (const reason of ["noActiveTurn", "interrupted", "providerFailed"]) {
+    const lifecycle = { kind: "needsAttention", reason, settled: false, ...(reason === "noActiveTurn" ? {} : { turnId: "turn" }), ...(reason === "providerFailed" ? { error: "x" } : {}) };
+    const repaired = stored(lifecycle);
+    assert.deepEqual(repaired.entryKind === "thread" && [repaired.lifecycle, repaired.pendingQuestionnaire], [waiting, question], reason);
+  }
+  for (const lifecycle of [
+    { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working" } },
+    { kind: "completed", reason: "userCompleted", settled: false },
+    { kind: "stopped", reason: "userMarkedStopped", settled: false },
+  ]) {
+    const repaired = stored(lifecycle);
+    assert.deepEqual(repaired.entryKind === "thread" && [repaired.lifecycle.kind, repaired.pendingQuestionnaire ?? null], [lifecycle.kind, null]);
+  }
+
+  const held = stored(waiting);
+  assert.ok(held.entryKind === "thread");
+  assert.deepEqual(withWorkbenchThreadLifecycle(held, { ...waiting, agent: { agentStatus: "blocked" } }).pendingQuestionnaire, question);
+  assert.equal(withWorkbenchThreadLifecycle(held, { kind: "completed", reason: "userCompleted", settled: false }).pendingQuestionnaire ?? null, null);
+  assert.equal(withWorkbenchThreadLifecycle(held, { ...waiting, requestKey: "other" }).pendingQuestionnaire ?? null, null);
+});
+
 test("sidebar completion and pinned eligibility exclude working threads", () => {
   const question = {
     itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
@@ -106,7 +141,8 @@ test("sidebar completion and pinned eligibility exclude working threads", () => 
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable(entry), true);
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable({ ...entry, pendingQuestionnaire: null }), false);
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable({
-    ...entry, lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, settled: false },
+    ...entry, pendingQuestionnaire: null,
+    lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, settled: false },
   }), false);
   const pin = createWorkbenchPinnedThreadSummaryEntry(entry)!;
   assert.equal(pin.entryKind === "thread" && pin.canCompleteQuestionnaire, true);

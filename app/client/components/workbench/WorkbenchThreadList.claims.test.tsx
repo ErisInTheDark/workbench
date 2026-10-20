@@ -54,7 +54,7 @@ const fixtureIdentityValues = {
   },
 };
 
-type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
+type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread"; pendingQuestionnaire?: null }>;
 
 function createThreadEntry({
   claimedPaths,

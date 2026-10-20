@@ -58,6 +58,7 @@ import {
   isWorkbenchThreadStatusProviderOwned,
   isWorkbenchSidebarThreadCompletionAvailable,
   reduceWorkbenchThreadLifecycle,
+  withWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
   workbenchThreadGitCommitKey,
   type WorkbenchLifecycleEvent,
@@ -837,30 +838,19 @@ export default class WorkbenchThreadStateController {
       const ownedEvent = existing.entryKind === "subagent" && event.kind === "turnCompleted" && event.status === "completed"
         ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
         : validatedEvent;
-      // A held questionnaire still waits on the user, however the turn around it moves.
-      const reducedLifecycle = ownedEvent.kind === "providerTurnActive" && existing.pendingQuestionnaire
-        ? existing.lifecycle
-        : reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent, existing.entryKind);
-      const heldQuestionnaire = this.heldQuestionnaire(existing, questionnaireMutation);
-      const retainedQuestionnaire = existing.entryKind === "thread"
-        && existing.lifecycle.kind === "needsAttention"
-        && existing.lifecycle.reason === "pendingInput"
-        && event.kind === "turnCompleted";
-      // The lifecycle is the only input the shared recovery gate reads, so a thread that is
-      // waiting on a questionnaire must never be left in the state that gate treats as resumable,
-      // and a turn boundary must not end the wait.
-      const recoverableLifecycle = reducedLifecycle.kind === "needsAttention"
-        && (reducedLifecycle.reason === "noActiveTurn" || reducedLifecycle.reason === "interrupted" || reducedLifecycle.reason === "providerFailed");
-      const lifecycle = heldQuestionnaire && (retainedQuestionnaire || recoverableLifecycle)
-        ? this.waitOnQuestionnaire(existing.lifecycle, heldQuestionnaire)
-        : reducedLifecycle;
       const shouldClearQuestionnaire = questionnaireMutation?.kind === "clear"
         && existing.pendingQuestionnaire?.requestKey === questionnaireMutation.requestKey;
       const shouldSetQuestionnaire = questionnaireMutation?.kind === "set"
         && !areDeeplyEqual(existing.pendingQuestionnaire, questionnaireMutation.questionnaire);
-      const shouldDropQuestionnaire = event.kind === "acceptedIntent"
-        && existing.entryKind === "thread"
-        && Boolean(existing.pendingQuestionnaire);
+      const reducedLifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent, existing.entryKind);
+      const keepsQuestionnaire = existing.pendingQuestionnaire && !shouldClearQuestionnaire && questionnaireMutation?.kind !== "set";
+      // A turn ending never ends a held questionnaire's wait: the recovery gate reads only the lifecycle, so it must
+      // not look resumable. A subagent's question ends only when its parent's message settles it, so a turn admitted
+      // around that question changes nothing. The entry schema owns every other questionnaire shape.
+      const lifecycle = keepsQuestionnaire && (
+        (reducedLifecycle.kind === "needsAttention" && reducedLifecycle.reason !== "pendingInput")
+        || (existing.entryKind === "subagent" && ownedEvent.kind === "acceptedIntent")
+      ) ? existing.lifecycle : reducedLifecycle;
       if (
         event.kind !== "acceptedIntent"
         && areDeeplyEqual(existing.lifecycle, lifecycle)
@@ -882,7 +872,7 @@ export default class WorkbenchThreadStateController {
         };
       const next = questionnaireMutation?.kind === "set"
         ? { ...lifecycleEntry, pendingQuestionnaire: questionnaireMutation.questionnaire }
-        : shouldClearQuestionnaire || shouldDropQuestionnaire
+        : shouldClearQuestionnaire
           ? { ...lifecycleEntry, pendingQuestionnaire: null }
           : lifecycleEntry;
       const parsedNext = parseWorkbenchThreadStateEntry({
@@ -915,19 +905,6 @@ export default class WorkbenchThreadStateController {
     } catch {
       this.options.log?.("Working status was saved, but agent context admission failed.");
     }
-  }
-
-  private heldQuestionnaire(
-    existing: WorkbenchThreadStateEntry,
-    mutation: QuestionnaireStateMutation | undefined,
-  ): WorkbenchDurableQuestionnaire | null {
-    if (existing.entryKind !== "thread") return null;
-    const held = mutation?.kind === "set"
-      ? mutation.questionnaire
-      : mutation?.kind === "clear" && existing.pendingQuestionnaire?.requestKey === mutation.requestKey
-        ? null
-        : existing.pendingQuestionnaire ?? null;
-    return held;
   }
 
   private waitOnQuestionnaire(
@@ -1166,12 +1143,12 @@ export default class WorkbenchThreadStateController {
       const existing = state.entries.get(key);
       if (!existing || existing.entryKind === "draft") return null;
       const shouldClear = mutation.kind === "clear" && existing.pendingQuestionnaire?.requestKey === mutation.requestKey;
-      const heldQuestionnaire = this.heldQuestionnaire(existing, mutation);
       const next = parseWorkbenchThreadStateEntry({
         ...existing,
-        ...(mutation.kind === "set" ? { pendingQuestionnaire: mutation.questionnaire } : shouldClear ? { pendingQuestionnaire: null } : {}),
         // Storing a question without an owning turn must still assert the wait that recovery reads.
-        ...(heldQuestionnaire ? { lifecycle: this.waitOnQuestionnaire(existing.lifecycle, heldQuestionnaire) } : {}),
+        ...(mutation.kind === "set"
+          ? { pendingQuestionnaire: mutation.questionnaire, lifecycle: this.waitOnQuestionnaire(existing.lifecycle, mutation.questionnaire) }
+          : shouldClear ? { pendingQuestionnaire: null } : {}),
       });
       if (next.entryKind === "draft" || areDeeplyEqual(existing, next)) return existing;
       state.entries.set(key, next);
@@ -2002,24 +1979,23 @@ export default class WorkbenchThreadStateController {
       }
       let next = entry;
       if (heldQuestionnaire && entry.entryKind === "thread") {
-        next = {
-          ...entry,
-          lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: heldQuestionnaire.requestKey, settled: false },
-        };
+        next = withWorkbenchThreadLifecycle(entry, {
+          kind: "needsAttention", reason: "pendingInput", requestKey: heldQuestionnaire.requestKey, settled: false,
+        });
       }
       if (request.method === "workbench/thread-state/pin/set") {
         if (entry.entryKind !== "subagent") return { accepted: false, revision: state.revision };
         next = { ...entry, pinned: request.pinned };
       }
       if (request.method === "workbench/thread-state/settle") {
-        const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle", entryKind: entry.entryKind });
-        next = entry.entryKind === "subagent" ? { ...entry, lifecycle, pinned: false } : { ...entry, lifecycle };
+        const settled = withWorkbenchThreadLifecycle(entry, reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle", entryKind: entry.entryKind }));
+        next = settled.entryKind === "subagent" ? { ...settled, pinned: false } : settled;
       }
-      if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = {
-        ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }),
-        ...(entry.entryKind === "thread" && entry.metadata.archived
-          ? { metadata: { archived: false as const, pinned: false, snoozed: false } } : {}),
-      };
+      if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) {
+        const restored = withWorkbenchThreadLifecycle(entry, reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }));
+        next = restored.entryKind === "thread" && restored.metadata.archived
+          ? { ...restored, metadata: { archived: false as const, pinned: false, snoozed: false } } : restored;
+      }
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/status/set" && entry.lifecycle.kind !== request.status) {
         // Questionnaire completion has stopped its owning turn. Do not retain
         // that turn's agent marker and let a late provider event reopen it.
@@ -2031,7 +2007,8 @@ export default class WorkbenchThreadStateController {
               ? { kind: "userStopped" }
               : { kind: "userCompleted" },
         );
-        next = { ...entry, lifecycle };
+        // Completing dismisses a questionnaire exactly as stopping does.
+        next = withWorkbenchThreadLifecycle(entry, lifecycle);
       }
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: { archived: request.archived, pinned: false, snoozed: false } };
       if (request.method === "workbench/thread-state/stop") {

@@ -158,28 +158,27 @@ test("questionnaire snooze interrupts its turn before recording, then wakes only
   assert.deepEqual(desktop.interrupts, [{ threadId, requestKey: "q" }]);
   assert.equal(f.controller.read().snoozes.get(threadId)?.basis.questionnaireKey, "q");
 
-  desktop.put(row(threadId, working("t9"), { pendingQuestionnaire: question }));
+  desktop.put(row(threadId, { kind: "needsAttention", reason: "pendingInput", requestKey: "q", settled: false, turnId: "t9" }, { pendingQuestionnaire: question }));
   assert.ok(f.controller.read().snoozes.has(threadId), "turn movement keeps a held question snoozed");
   desktop.put(row(threadId, working("t9")));
   assert.equal(f.controller.read().snoozes.has(threadId), false);
 });
 
-test("a held questionnaire with no turn snoozes from the sidebar without interrupting", async context => {
+test("sidebar snooze without a named questionnaire still snoozes the one the thread waits on", async context => {
   const desktop = daemon("desktop");
   const threadId = randomUUID();
   const question = { itemId: null, requestKey: "q", turnId: null, request: {
     id: "q", title: "Choose", summary: "", submitLabel: "Send",
     questions: [{ id: "c", header: "c", question: "Go?", options: [], allowOther: true, isSecret: false }],
   } };
-  const idle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
-  desktop.put(row(threadId, idle, { pendingQuestionnaire: question }));
+  desktop.put(row(threadId, { kind: "needsAttention", reason: "pendingInput", requestKey: "q", settled: false }, { pendingQuestionnaire: question }));
   const f = await fixture(context, [desktop]);
 
   assert.equal(await f.controller.snooze(threadId, true), true);
-  assert.deepEqual(desktop.interrupts, []);
+  assert.deepEqual(desktop.interrupts, [{ threadId, requestKey: "q" }]);
   assert.equal(f.controller.read().snoozes.get(threadId)?.basis.questionnaireKey, "q");
 
-  desktop.put(row(threadId, idle));
+  desktop.put(row(threadId, { kind: "needsAttention", reason: "noActiveTurn", settled: false }));
   assert.equal(f.controller.read().snoozes.has(threadId), false);
 });
 

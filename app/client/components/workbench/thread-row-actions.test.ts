@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkbenchPinnedThreadSummaryEntry, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import { createWorkbenchPinnedThreadSummaryEntry, withWorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import { getThreadRowActions, getThreadStopIntent } from "./thread-row-actions";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -20,12 +20,13 @@ const fixtureIdentityValues = {
   },
 };
 
-const stopped: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
+const stopped: ThreadEntry = {
   activityAt: 1, title: "Task", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
   metadata: { archived: false, pinned: false, snoozed: false },
   lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: false },
 };
-const pending: typeof stopped = {
+const pending: ThreadEntry = {
   ...stopped,
   lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], settled: false },
   pendingQuestionnaire: {
@@ -116,7 +117,7 @@ test("subagent pending input retains its existing action restrictions", () => {
     profileId: "profile", profileName: "profile", projectId: fixtureIdentityValues.ProjectId["project"],
   };
   assert.deepEqual(getThreadRowActions(subagent, "main"), { baseAction: null, shiftAction: null });
-  assert.deepEqual(getThreadRowActions({ ...subagent, lifecycle: stopped.lifecycle }, "main"), { baseAction: "settle", shiftAction: null });
+  assert.deepEqual(getThreadRowActions(withWorkbenchThreadLifecycle(subagent, stopped.lifecycle), "main"), { baseAction: "settle", shiftAction: null });
 });
 
 test("settled rows archive only through shift while archived rows restore", () => {

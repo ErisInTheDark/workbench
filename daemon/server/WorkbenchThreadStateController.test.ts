@@ -15,7 +15,7 @@ import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController"
 import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import { normalizeProviderSidebarEntry as normalizeSidebarEntry } from "./WorkbenchThreadStateFeature";
 import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
-import { createWorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
+import { createWorkbenchProjectThreadSummary, withWorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { projectWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 
 import { ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -993,7 +993,7 @@ test("task status requires every direct child to be settled without changing rej
       const unrelated = pinnedRecord("target", "Unrelated");
       await controller.ensureProviderEntry(fixtureProjectIds.project, parent);
       await controller.ensureProviderEntry(fixtureProjectIds.project, unrelated);
-      const { metadata: _metadata, ...common } = parent;
+      const { metadata: _metadata, pendingQuestionnaire: _question, ...common } = parent;
       const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
         ...common, entryKind: "subagent", identity: { harness: "opencode", threadId: fixtureThreadIds.child },
         lifecycle: { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working" } },
@@ -1135,7 +1135,7 @@ test("questionnaire completion revalidates the captured item after interruption 
       assert.equal(interrupts, outcome === "subagent" ? 0 : 1);
       const current = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === "thread");
       assert.equal(current?.entryKind !== "draft" && current?.lifecycle.kind, outcome === "complete" ? "completed" : "needsAttention");
-      assert.ok(current && current.entryKind !== "draft" && current.pendingQuestionnaire);
+      assert.equal(Boolean(current && current.entryKind !== "draft" && current.pendingQuestionnaire), outcome !== "complete", "completion dismisses the question like stop");
     } finally { await controller.dispose(); }
   }
 });
@@ -3002,7 +3002,7 @@ test("provider reconciliation cannot release a questionnaire its turn still owns
 
   // A provider list can call the waiting turn idle; only that turn's events (or the cold-start sweep) end the wait.
   providerEntries = [
-    { ...working("top"), lifecycle: { kind: "completed", reason: "providerInactive", settled: true } },
+    withWorkbenchThreadLifecycle(working("top"), { kind: "completed", reason: "providerInactive", settled: true }),
     { ...child, lifecycle: { kind: "completed", reason: "providerInactive", settled: false } },
   ];
   const beforeRefresh = freshRevision;
@@ -3729,7 +3729,7 @@ test("provider completion auto-completes subagents while top-level turns still n
     lifecycle: { agent: { agentStatus: "working", turnId: fixtureTurnIds["child-turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
     name: "Child", parentThreadId: fixtureThreadIds["parent"], pinned: false, profileId: "default", profileName: "Default", projectId: fixtureProjectIds["project"], title: "Child", updatedAt: 1,
   };
-  const parent: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = { ...working("parent"), lifecycle: { kind: "completed", reason: "providerInactive", settled: true } };
+  const parent = withWorkbenchThreadLifecycle(working("parent"), { kind: "completed", reason: "providerInactive", settled: true });
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {

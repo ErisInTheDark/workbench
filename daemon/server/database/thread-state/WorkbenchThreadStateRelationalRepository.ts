@@ -12,6 +12,7 @@ import {
   WorkbenchComposerProfileSelectionSchema,
   WorkbenchThreadDraftSchema,
   WorkbenchHarnessSchema,
+  settleWorkbenchQuestionnaireWait,
   WorkbenchThreadLifecycleSchema,
   getWorkbenchLifecycleTurnId,
   createWorkbenchProjectThreadSummary,
@@ -675,23 +676,23 @@ export default class WorkbenchThreadStateRelationalRepository {
     };
     if (row.thread_kind === "topLevel") {
       if (row.archived === null) throw new Error("Top-level thread metadata is incomplete.");
-      return {
-        ...common, entryKind: "thread", ...(row.order_at === null ? {} : { orderAt: row.order_at }),
+      return settleWorkbenchQuestionnaireWait({
+        ...common, entryKind: "thread" as const, ...(row.order_at === null ? {} : { orderAt: row.order_at }),
         metadata: row.archived
-          ? { archived: true, pinned: false, snoozed: false }
-          : { archived: false, pinned: false, snoozed: false },
-      };
+          ? { archived: true as const, pinned: false as const, snoozed: false as const }
+          : { archived: false as const, pinned: false, snoozed: false },
+      });
     }
     if (row.parent_thread_id === null || row.cwd === null || row.name === null || row.profile_id === null
       || row.profile_name === null || row.direct_subagent_index === null || row.created_at === null
       || row.updated_at === null || row.child_pinned === null) throw new Error("Subagent thread metadata is incomplete.");
     if (lifecycle.settled && row.child_pinned) throw new Error("Settled subagent cannot remain pinned.");
-    return {
-      ...common, entryKind: "subagent", parentThreadId: row.parent_thread_id, projectId: row.project_id,
+    return settleWorkbenchQuestionnaireWait({
+      ...common, entryKind: "subagent" as const, parentThreadId: row.parent_thread_id, projectId: row.project_id,
       cwd: row.cwd, name: row.name, profileId: row.profile_id, profileName: row.profile_name,
       directSubagentIndex: row.direct_subagent_index, createdAt: row.created_at,
       updatedAt: row.updated_at, pinned: Boolean(row.child_pinned),
-    };
+    });
   }
 
   private insert(table: string, row: SqlRow) {

@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
-import type { WorkbenchDurableQuestionnaire, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { withWorkbenchThreadLifecycle, type WorkbenchDurableQuestionnaire, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateFeature, { normalizeProviderSidebarEntry as normalizeSidebar, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
 import { mapProviderLifecycleNotification as mapLifecycle, mapProviderTurnStartedNotification as mapTurnStarted } from "./CodexProviderObservations";
@@ -192,9 +192,8 @@ test("project reads reject unknown owners before loading or writing state", asyn
     await feature.controller.readProject(fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"));
     const sidebar = normalizeProviderSidebarEntry("codex", { id: "thread", status: { type: "idle" }, name: "Idle", updatedAt: 1 });
     assert.ok(sidebar?.entryKind === "thread");
-    await feature.controller.ensureProviderEntry(projectId, {
-      ...sidebar, lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-    });
+    await feature.controller.ensureProviderEntry(projectId,
+      withWorkbenchThreadLifecycle(sidebar, { kind: "needsAttention", reason: "noActiveTurn", settled: false }));
     const completed = await feature.controller.handleRequest("observer", {
       method: "workbench/thread-state/status/set", projectId, identity: sidebar.identity, status: "completed",
     });
@@ -317,8 +316,8 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
   options.database.admitRecord({ ...storedRecordDefaults, ...provider, providerObserved: true });
   for (const turnId of ["new-turn", "resumed"]) {
     options.database.admitRecord({ ...storedRecordDefaults, ...provider, providerObserved: true,
-      lifecycle: { kind: "working", reason: "acceptedIntent", settled: false,
-        agent: { agentStatus: "working", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId) } },
+      lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: questionnaire.requestKey, settled: false,
+        turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId) },
     });
   }
   await options.database.identities.threads.start();
@@ -364,7 +363,7 @@ test("answered provider evidence publishes context for the canonical thread and 
   } finally { await h.feature.dispose(); }
 });
 
-test("manual questionnaire completion preserves its question and survives a late interrupted notification", async () => {
+test("manual questionnaire completion dismisses its question like stop and survives a late interrupted notification", async () => {
   const h = await questionnaireHarness();
   try {
     const response = await h.complete();
@@ -378,7 +377,7 @@ test("manual questionnaire completion preserves its question and survives a late
     const entry = await h.read();
     assert.ok(entry && entry.entryKind === "thread");
     assert.equal(entry.lifecycle.kind, "completed");
-    assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
+    assert.equal(entry.pendingQuestionnaire ?? null, null);
   } finally { await h.feature.dispose(); }
 });
 
@@ -444,22 +443,6 @@ test("questionnaire hold preserves provider questionnaires and fences failures o
       } finally { await h.feature.dispose(); }
     });
   }
-});
-
-test("a retained questionnaire can be held after its thread was marked complete", async () => {
-  const h = await questionnaireHarness();
-  try {
-    await h.complete();
-    const response = await h.feature.controller.handleRequest("observer", {
-      method: "workbench/thread-state/questionnaire/hold", projectId: fixtureIdentityValues.ProjectId.project,
-      identity: h.provider.identity, requestKey: h.questionnaire.requestKey,
-    });
-    assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
-    const entry = await h.read();
-    assert.ok(entry?.entryKind === "thread");
-    assert.equal(entry.lifecycle.kind, "needsAttention");
-    assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
-  } finally { await h.feature.dispose(); }
 });
 
 test("questionnaire completion interrupts current work rather than its historical turn", async () => {

@@ -9,7 +9,8 @@
  * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
  * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, goal, skills, todos, addressed feedback) on thread observations.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
- * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts.
+ * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts, plus the subagent refinement they reapply.
+ * - settleWorkbenchQuestionnaireWait/withWorkbenchThreadLifecycle: repair entries so a questionnaire exists only with its pendingInput wait, and move lifecycles under that rule.
  * - WorkbenchThreadWaitTargetSchema/WorkbenchThreadWaitTarget: project-qualified dependent-wait references.
  * - WorkbenchThreadSidebarSnapshot/WorkbenchProjectThreadSidebars: project and aggregate sidebar types.
  * - WorkbenchReloadDirtSnapshotSchema: reload ownership and pending-scope diagnostics.
@@ -512,6 +513,48 @@ export const WorkbenchQuestionnaireHistoryEntrySchema = WorkbenchDurableQuestion
 }).strict();
 export type WorkbenchQuestionnaireHistoryEntryState = z.infer<typeof WorkbenchQuestionnaireHistoryEntrySchema>;
 
+type PendingInputLifecycle = Extract<WorkbenchThreadLifecycle, { reason: "pendingInput" }>;
+/** A durable questionnaire exists only while its thread waits on it in pendingInput. */
+type WorkbenchQuestionnaireWait =
+  | { lifecycle: PendingInputLifecycle; pendingQuestionnaire: WorkbenchDurableQuestionnaire }
+  | { lifecycle: WorkbenchThreadLifecycle; pendingQuestionnaire?: null };
+type WithQuestionnaireWait<Entry> = Entry extends unknown
+  ? Omit<Entry, "lifecycle" | "pendingQuestionnaire"> & WorkbenchQuestionnaireWait
+  : never;
+/** Lifecycle is optional only because non-strict consumers (the daemon) see every zod field as optional. */
+type QuestionnaireWaitSource = { lifecycle?: WorkbenchThreadLifecycle; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null };
+
+function dismissQuestionnaire<Entry extends QuestionnaireWaitSource>(entry: Entry, lifecycle: WorkbenchThreadLifecycle) {
+  return { ...entry, lifecycle, pendingQuestionnaire: null } as unknown as WithQuestionnaireWait<Entry>;
+}
+
+/**
+ * Repairs any stored or received entry into a legal questionnaire wait. Other attention keeps waiting on the
+ * question; working, completed and stopped mean a new turn, completion or stop already dismissed it.
+ */
+export function settleWorkbenchQuestionnaireWait<Entry extends QuestionnaireWaitSource>(entry: Entry): WithQuestionnaireWait<Entry> {
+  const { lifecycle, pendingQuestionnaire } = entry;
+  if (!pendingQuestionnaire || !lifecycle || (lifecycle.kind === "needsAttention" && lifecycle.reason === "pendingInput")) {
+    return entry as unknown as WithQuestionnaireWait<Entry>;
+  }
+  if (lifecycle.kind !== "needsAttention") return dismissQuestionnaire(entry, lifecycle);
+  const turnId = getWorkbenchLifecycleTurnId(lifecycle) ?? pendingQuestionnaire.turnId;
+  return {
+    ...entry,
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: pendingQuestionnaire.requestKey, settled: false, ...(turnId ? { turnId } : {}) },
+  } as unknown as WithQuestionnaireWait<Entry>;
+}
+
+/** Moves an entry to `lifecycle`; its questionnaire survives only while that lifecycle still waits on it. */
+export function withWorkbenchThreadLifecycle<Entry extends QuestionnaireWaitSource>(
+  entry: Entry, lifecycle: WorkbenchThreadLifecycle,
+): WithQuestionnaireWait<Entry> {
+  const question = entry.pendingQuestionnaire;
+  return !question || (lifecycle.kind === "needsAttention" && lifecycle.reason === "pendingInput" && lifecycle.requestKey === question.requestKey)
+    ? { ...entry, lifecycle } as unknown as WithQuestionnaireWait<Entry>
+    : dismissQuestionnaire(entry, lifecycle);
+}
+
 const VisibleMetadataSchema = z.object({ archived: z.literal(false), pinned: z.boolean(), snoozed: z.boolean() }).strict();
 const ArchivedMetadataSchema = z.object({ archived: z.literal(true), pinned: z.literal(false), snoozed: z.literal(false) }).strict();
 const TopLevelMetadataSchema = z.union([VisibleMetadataSchema, ArchivedMetadataSchema]);
@@ -566,16 +609,21 @@ const SubagentEntryBaseSchema = SidebarCommonSchema.extend({
 const refineSubagent = (value: { lifecycle?: { settled: boolean }; pinned?: boolean }, context: z.RefinementCtx) => {
   if (value.lifecycle?.settled && value.pinned) context.addIssue({ code: "custom", message: "Settled subagents cannot remain locked." });
 };
-const SubagentEntrySchema = SubagentEntryBaseSchema.superRefine(refineSubagent);
+const SubagentEntrySchema = SubagentEntryBaseSchema.superRefine(refineSubagent).transform(settleWorkbenchQuestionnaireWait);
 
-/** Unrefined entry variants, so derived row contracts can omit fields; reapply `refineSubagent` to subagent derivatives. */
+/**
+ * Unrefined entry variants, so derived row contracts can omit fields; reapply `refineSubagent` to subagent derivatives
+ * and `settleWorkbenchQuestionnaireWait` to every thread and subagent derivative.
+ */
 export const WorkbenchThreadSidebarEntryVariants = {
   draft: DraftEntrySchema, thread: TopLevelEntrySchema, subagent: SubagentEntryBaseSchema, refineSubagent,
 };
 
-export const WorkbenchThreadSidebarEntrySchema = z.discriminatedUnion("entryKind", [DraftEntrySchema, TopLevelEntrySchema, SubagentEntrySchema]);
+export const WorkbenchThreadSidebarEntrySchema = z.discriminatedUnion("entryKind", [
+  DraftEntrySchema, TopLevelEntrySchema.transform(settleWorkbenchQuestionnaireWait), SubagentEntrySchema,
+]);
 export type WorkbenchThreadSidebarEntry = z.infer<typeof WorkbenchThreadSidebarEntrySchema>;
-export type WorkbenchTopLevelThreadSidebarEntry = z.infer<typeof TopLevelEntrySchema>;
+export type WorkbenchTopLevelThreadSidebarEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
 
 export const WorkbenchThreadSidebarSnapshotSchema = z.object({
   displayOrder: WorkbenchThreadDisplayOrderSchema.optional(),

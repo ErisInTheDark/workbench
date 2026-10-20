@@ -165,7 +165,8 @@ test("installation changes publish typed deltas only to update observers and rel
   assert.equal(f.updates.length, 1);
 });
 
-const thread = (index: number, overrides: Partial<Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>> = {}): WorkbenchThreadSidebarEntry => ({
+type ThreadOverrides = Partial<Omit<Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>, "lifecycle" | "pendingQuestionnaire">>;
+const thread = (index: number, overrides: ThreadOverrides = {}): WorkbenchThreadSidebarEntry => ({
   entryKind: "thread", title: `Thread ${index} with a realistic title`, activityAt: 1_000 + index,
   identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse(`${String(index).padStart(8, "0")}-0000-4000-8000-000000000000`) },
   metadata: { archived: false, pinned: false, snoozed: false },

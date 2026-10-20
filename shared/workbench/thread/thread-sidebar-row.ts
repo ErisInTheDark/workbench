@@ -14,7 +14,8 @@
  */
 import { z } from "zod";
 import {
-  WorkbenchSidebarGitArcSchema, WorkbenchThreadSidebarEntryVariants, type WorkbenchSidebarGitArc, type WorkbenchThreadSidebarEntry,
+  settleWorkbenchQuestionnaireWait, WorkbenchSidebarGitArcSchema, WorkbenchThreadSidebarEntryVariants, type WorkbenchSidebarGitArc,
+  type WorkbenchThreadSidebarEntry,
   WorkbenchThreadSidebarSnapshotSchema, type WorkbenchThreadSidebarSnapshot,
 } from "./thread-state";
 import { getThreadDisplayDraftKey, getThreadDisplayThreadKey } from "./thread-display-layout";
@@ -34,9 +35,11 @@ const lean = {
 };
 /** Older browsers still ask for row version 2; rows no longer differ by version. */
 export const WorkbenchThreadSidebarRowVersionSchema = z.literal(2);
-const ThreadRowSchema = WorkbenchThreadSidebarEntryVariants.thread.omit(heavy).extend(lean).strict();
+const ThreadRowSchema = WorkbenchThreadSidebarEntryVariants.thread.omit(heavy).extend(lean).strict()
+  .transform(settleWorkbenchQuestionnaireWait);
 const SubagentRowSchema = WorkbenchThreadSidebarEntryVariants.subagent.omit(heavy).extend(lean).strict()
-  .superRefine(WorkbenchThreadSidebarEntryVariants.refineSubagent);
+  .superRefine(WorkbenchThreadSidebarEntryVariants.refineSubagent)
+  .transform(settleWorkbenchQuestionnaireWait);
 export const WorkbenchThreadSidebarRowSchema = z.discriminatedUnion("entryKind", [
   WorkbenchThreadSidebarEntryVariants.draft, ThreadRowSchema, SubagentRowSchema,
 ]);

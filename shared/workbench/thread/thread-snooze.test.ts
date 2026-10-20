@@ -3,13 +3,14 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ProjectIdSchema, WorkbenchThreadIdSchema } from "../identity.ts";
-import { WorkbenchThreadLifecycleSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "../identity.ts";
+import { WorkbenchThreadLifecycleSchema, type WorkbenchDurableQuestionnaire, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import { ThreadSnooze } from "./thread-snooze.ts";
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
+type Question = WorkbenchDurableQuestionnaire;
 
-function row(lifecycle: unknown, extra: Partial<ThreadEntry> = {}): ThreadEntry {
+function row(lifecycle: unknown, extra: Partial<Omit<ThreadEntry, "lifecycle" | "pendingQuestionnaire">> = {}): ThreadEntry {
   return {
     activityAt: 0, title: "Source", entryKind: "thread",
     identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse("source") },
@@ -54,11 +55,14 @@ test("questionnaire snooze survives turn movement and wakes only when its questi
   const question = { itemId: "743c92b1-b79c-49d4-98a4-5b402bf6de6f", requestKey: "q", turnId: null, request: {
     id: "q", title: "Choose", summary: "", submitLabel: "Send",
     questions: [{ id: "c", header: "c", question: "Go?", options: [], allowOther: true, isSecret: false }],
-  } } as ThreadEntry["pendingQuestionnaire"];
+  } } satisfies Question;
+  const waiting = (turnId?: string): ThreadEntry => ({
+    ...row(working("t1")), pendingQuestionnaire: question,
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "q", settled: false, ...(turnId ? { turnId: WorkbenchTurnIdSchema.parse(turnId) } : {}) },
+  });
   const snooze = { ...snoozeOf(row(working("t1"))), basis: ThreadSnooze.capture(row(working("t1")), "q") };
-  const held = row({ kind: "needsAttention", reason: "pendingInput", requestKey: "q", settled: false }, { pendingQuestionnaire: question });
-  assert.equal(ThreadSnooze.isWakeDue(snooze, held), false);
-  assert.equal(ThreadSnooze.isWakeDue(snooze, row(working("t1"), { pendingQuestionnaire: question })), false);
+  assert.equal(ThreadSnooze.isWakeDue(snooze, waiting()), false);
+  assert.equal(ThreadSnooze.isWakeDue(snooze, waiting("t9")), false);
   assert.equal(ThreadSnooze.isWakeDue(snooze, row(working("t2"))), true);
 });
 

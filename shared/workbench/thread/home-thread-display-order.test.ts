@@ -29,7 +29,7 @@ function thread(
   threadId: string,
   activityAt: number,
   options: { pinned?: boolean; snoozed?: boolean } = {},
-): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> {
+): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread"; pendingQuestionnaire?: null }> {
   return {
     activityAt,
     entryKind: "thread",

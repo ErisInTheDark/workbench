@@ -246,8 +246,8 @@ async function questionnaireFixture(childHarness: WorkbenchHarness, options: {
   database.admitRecord({
     ...record,
     lifecycle: {
-      kind: "working", reason: "acceptedIntent", settled: false,
-      agent: { agentStatus: "working", turnId: identitySchemas.WorkbenchTurnIdSchema.parse("delivered-child") },
+      kind: "needsAttention", reason: "pendingInput", requestKey: question.requestKey, settled: false,
+      turnId: identitySchemas.WorkbenchTurnIdSchema.parse("delivered-child"),
     },
   });
   const state = new WorkbenchThreadStateController({

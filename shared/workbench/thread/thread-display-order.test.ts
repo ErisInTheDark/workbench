@@ -49,7 +49,7 @@ function thread(
     settled?: boolean;
     snoozed?: boolean;
   } = {},
-): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> {
+): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread"; pendingQuestionnaire?: null }> {
   const lifecycle = options.lifecycle ?? { kind: "completed", reason: "providerInactive", settled: options.settled ?? false };
   return {
     activityAt: orderAt,
