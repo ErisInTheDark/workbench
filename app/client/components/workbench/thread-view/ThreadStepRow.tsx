@@ -14,8 +14,12 @@ import ThreadDurationText from "./ThreadDurationText";
 import { isFailedStep, type StepState } from "./thread-step";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 
-/** Matches DisclosureStaticRow's own padding, so rows with and without detail line up. */
-const ROW_CLASS = "py-2";
+/**
+ * Roomy on its own; a packed list (`step-rows-packed`) tightens every row inside it. The static row needs `!` over its
+ * own default padding, so rows with and without detail line up.
+ */
+const ROW_CLASS = "py-[var(--thread-step-row-py,0.5rem)]";
+const STATIC_ROW_CLASS = "!py-[var(--thread-step-row-py,0.5rem)]";
 const SUMMARY_CLASS = "text-[0.92em] leading-[1.6] text-fg/muted";
 
 export interface ThreadStepProgress {
@@ -98,6 +102,7 @@ export default function ThreadStepRow({
   if ((children === undefined || children === null) && !renderContent) {
     return (
       <DisclosureStaticRow
+        className={STATIC_ROW_CLASS}
         marker={icon}
         markerClassName={iconClassName}
         markerLabel={iconLabel}

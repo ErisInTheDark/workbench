@@ -132,7 +132,7 @@ export function ThreadActivitySteps({ renderers, segments }: {
     const gap = !previous ? "" : !kind.prose && !RUN_SEGMENT_KINDS[previous.kind].prose ? "mt-0.5" : "mt-2";
     const content = renderSegment(renderers, segment, index === segments.length - 1);
     return (
-      <div className={kind.tinted ? `rounded-lg bg-fg/4 px-3 ${gap}` : gap} key={getActivitySegmentItems(segment)[0]?.id ?? index}>
+      <div className={kind.tinted ? `step-rows-packed rounded-lg bg-fg/4 px-3 py-1.5 ${gap}` : gap} key={getActivitySegmentItems(segment)[0]?.id ?? index}>
         {kind.tinted ? <ThreadRowChromeContext.Provider value="step">{content}</ThreadRowChromeContext.Provider> : content}
       </div>
     );
@@ -212,7 +212,7 @@ export default function ThreadActivityRun({
           </ThreadEntryAnimation>
         ) : null}
       </button>
-      {run.open ? <div className="px-3 pt-1.5">{steps}</div> : null}
+      {run.open ? <div className="px-5 pt-1.5">{steps}</div> : null}
     </div>
   );
 }

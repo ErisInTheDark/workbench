@@ -627,7 +627,7 @@ export default function ThreadFileChangeItem ({
   if (items.length && items.every(item => item.type !== "fileChange"
     && item.status === "inProgress" && !getNativeFileChanges(item).length)) return null;
   return (
-    <div className="space-y-1.5 py-2">
+    <div className="step-rows-packed py-1.5">
       {stitchFileOperationRows(items).map((group) => {
         if (group.kind === "native") {
           const { item, rows } = group;

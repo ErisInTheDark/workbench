@@ -112,6 +112,11 @@
   contain-intrinsic-size: auto 2.75rem;
 }
 
+/* Step rows inside sit tight; the packed list owns the breathing room around them. Cards reset it for their own line. */
+@utility step-rows-packed {
+  --thread-step-row-py: 0.125rem;
+}
+
 @utility bg-checkerboard {
   background-image: conic-gradient(color-mix(in srgb, currentColor 12%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 12%, transparent) 0 75%, transparent 0);
   background-size: 20px 20px;
