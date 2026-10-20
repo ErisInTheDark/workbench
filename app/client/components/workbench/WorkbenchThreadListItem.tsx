@@ -179,7 +179,7 @@ export default function WorkbenchThreadListItem({
   } = describeThreadEntry(entry, { attentionLabel, facts, hasTooltipDetails: Boolean(tooltipDetails) });
   // Row text is pointer-transparent under the link overlay; the row tooltip's own time carries the full form.
   const rowTime = <WorkbenchRelativeTime timestampMs={activityAt} tooltip={false} />;
-  const subagentClaims = useWorkbenchSubagentClaims(projectId, entry.entryKind === "thread" ? entry.identity.threadId : null);
+  const subagentClaims = useWorkbenchSubagentClaims(entry.entryKind === "thread" ? entry.identity.threadId : null);
   const activeClaimCount = claimedPaths.length + subagentClaims.reduce((total, child) => total + child.claimedPaths.length, 0);
   const proposalCount = entry.entryKind === "draft"
     ? 0

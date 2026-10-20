@@ -71,7 +71,7 @@ import { WorkbenchAccountLimitsSchema } from "../provider/provider-account";
 import { ProviderKeySchema } from "../provider/provider-key";
 import { VisSnapshotKindSchema, VisSnapshotSchema, VisThreadSchema, type VisLiveSession } from "../vis/vis-contract";
 import {
-  WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema,
+  WorkbenchSidebarSubagentClaimsSchema, WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema,
   WorkbenchThreadSidebarRowVersionSchema, sidebarRowKey,
 } from "../thread/thread-sidebar-row";
 
@@ -409,10 +409,7 @@ export const WorkspaceThreadMemberSchema = z.object({
     z.object({ kind: z.literal("draft"), draftId: z.string().min(1), launching: z.literal(true).optional() }).strict(),
   ]),
   /** Direct subagents holding active claims; their own rows are not listed, so the parent row carries their claims. */
-  subagentClaims: z.array(z.object({
-    threadId: WorkbenchThreadIdSchema, parentThreadId: WorkbenchThreadIdSchema, name: z.string(), title: z.string(),
-    directSubagentIndex: z.number().int().nonnegative(), claimedPaths: z.array(z.string().min(1)),
-  }).strict()).optional(),
+  subagentClaims: WorkbenchSidebarSubagentClaimsSchema.optional(),
 }).strict();
 export type WorkspaceThreadMember = z.infer<typeof WorkspaceThreadMemberSchema>;
 const placementItem = z.discriminatedUnion("kind", [

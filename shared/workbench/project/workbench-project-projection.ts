@@ -331,22 +331,12 @@ function listedMembership(
     ...placement.main, ...placement.archived, ...(placement.working ?? []),
     ...placementKeys(placement.pinned), ...placementKeys(placement.snoozed), ...placementKeys(settled),
   ]);
-  const children = new Map<string, NonNullable<WorkspaceThreadMember["subagentClaims"]>>();
-  for (const { entry } of rows) {
-    if (entry.entryKind !== "subagent" || entry.gitArc?.phase !== "active") continue;
-    const claims = children.get(entry.parentThreadId) ?? [];
-    claims.push({
-      threadId: entry.identity.threadId, parentThreadId: entry.parentThreadId, name: entry.name, title: entry.title,
-      directSubagentIndex: entry.directSubagentIndex, claimedPaths: entry.gitArc.claimedPaths,
-    });
-    children.set(entry.parentThreadId, claims);
-  }
   const members = rows.flatMap(row => {
     if (row.entry.entryKind === "subagent") return [];
     const member = projectWorkspaceThreadMember(row);
     if (member.homeKey !== null && !listed.has(member.homeKey)) return [];
-    const claims = member.ref.kind === "thread" ? children.get(member.ref.identity.threadId) : undefined;
-    return [claims ? { ...member, subagentClaims: claims } : member];
+    const claims = row.entry.entryKind === "thread" ? row.entry.subagentClaims : undefined;
+    return [claims?.length ? { ...member, subagentClaims: claims } : member];
   });
   return {
     members,

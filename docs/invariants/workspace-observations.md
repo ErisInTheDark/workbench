@@ -1,3 +1,4 @@
 - Churny workspace observations send a full value only on first observe or resync; later changes are typed keyed deltas against the previous revision, at every hop.
 - Sidebar rows carry only list-rendering fields; per-thread detail rides the thread observation. Archived threads load on demand, paged.
+- Subagents live only in their parent's thread tabs, never as sidebar rows at any hop; a parent row carries its direct subagents' active claims.
 - Observation traffic logs name the observation, project, threads and changed fields; never generic counts alone.
