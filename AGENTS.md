@@ -43,6 +43,9 @@ CRITICAL INSTRUCTION EDITING RULES:
 
 ## Commands and Permission Boundaries
 
+### Client building
+workbench automatically compiles client typescript+tailwind (no reload necessary!), but does not publish them to existing tabs via HMR. when using /browse you must refresh the page in order to see your changes
+
 ### Allowed Validation
 do not apply timeouts for validation command runs! they own their own timeouts
 <!-- Agents read "or propose the fix" as permission to file feedback instead of fixing, and treated scenario output that overflowed tool limits as outside "test output", so they redirected it to a file. Naming every validation command, "oversized", and in-task ownership closes both routes. -->
