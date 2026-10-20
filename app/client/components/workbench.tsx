@@ -6,18 +6,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
 import type {
     ExplorerSnapshot,
     ThreadPayload,
     WorkbenchAppRuntimeStore,
     WorkbenchComposerInputDraft,
-    WorkbenchComposerSettings,
     WorkbenchHarness,
     WorkbenchLogicalThreadRow,
     WorkbenchProjectOption,
-    WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { DaemonIdSchema, DraftIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
@@ -50,7 +47,6 @@ import { preferredSelectedLaunchTarget } from "workbench-shared/workbench/projec
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { useThread } from "./workbench/use-thread";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
-import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
 import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetworkClient";
 import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
@@ -85,7 +81,6 @@ import {
 } from "../workbench/state/workbench-settings";
 import { useSettings } from "./workbench/use-settings";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
-import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFileView from "./workbench/layout/WorkbenchFileView";
@@ -102,6 +97,7 @@ import { draftSessionOwner } from "./workbench/thread-view/DraftSessionControlle
 import { seedNewThreadReferences } from "../workbench/thread/new-thread-reference-seeds";
 import { WorkbenchFeedbackAddressingContext } from "./workbench/address-feedback-context";
 import { WorkbenchShellErrorContext } from "./workbench/workbench-shell-error-context";
+import ThreadViewKeys, { ThreadViewKeysContext } from "../workbench/thread/ThreadViewKeys";
 import { useWorkbenchComposerProfiles } from "./workbench/WorkbenchComposerProfileContext";
 import { readWorkbenchLaunchSelection } from "workbench-shared/state/workbench-client-state";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
@@ -110,10 +106,7 @@ import ThreadView from "./workbench/thread-view/ThreadView";
 import { useWorkbenchClientMount } from "./workbench/use-workbench-client";
 import { useProjects } from "./workbench/use-projects";
 import { useThreads } from "./workbench/use-threads";
-import {
-    useWorkbenchClientState,
-    useWorkbenchClientStateController,
-} from "./workbench/workbench-client-state-context";
+import { useWorkbenchClientStateController } from "./workbench/workbench-client-state-context";
 import { WorkbenchExplorerContext } from "./workbench/explorer/workbench-explorer-context";
 import {
     BackArrowIcon,
@@ -136,7 +129,6 @@ import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPre
 import { useWorkbenchSidebarPreferences } from "./workbench/workbench-sidebar-preferences-context";
 import WorkbenchTabIcon from "./workbench/WorkbenchTabIcon";
 import WorkbenchSidebarPane from "./workbench/WorkbenchSidebarPane";
-import { isThreadStatusActive } from "./workbench/thread-attention";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
 import { WorkbenchDaemonAssetOriginContext, WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "./workbench/WorkbenchWorkspaceContext";
 import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
@@ -220,8 +212,6 @@ function getProjectTabLabel (projectName: string | null | undefined) {
 export default function Workbench ({ appRuntime = null }: { appRuntime?: WorkbenchAppRuntimeStore | null }) {
   const appRpc = useWorkbenchAppRpc();
   const clientStateController = useWorkbenchClientStateController();
-  const storedHarness = useWorkbenchClientState(state => state.records.flatMap(record => record.kind === "globalPreference"
-    && record.preference.key === "harness" && typeof record.preference.value === "string" ? [record.preference.value] : [])[0] ?? null);
   const initialRoute = new WorkbenchProjectNavigation([], clientStateController.getProjectAliases())
     .readRoute(typeof window === "undefined" ? "/" : window.location.href,
       readWorkbenchLaunchSelection(clientStateController.getSnapshot().records));
@@ -282,9 +272,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     threadContext: routeThreadContext, draftContext: routeDraftContext, launchLocation: routeLaunchLocation,
     ownerMetadata: routeOwnerMetadata, browseDaemon, selectedDaemon, selectedAssetSource, profileScopeKey,
   } = useWorkbenchRouteContext(workbenchClient, route, currentThread, browseLocation);
-  const profileControllerFor = useWorkbenchComposerProfiles.registry();
-  if (!profileControllerFor) throw new Error("Workbench requires WorkbenchComposerProfileRegistryProvider.");
-  const composerProfileController = profileControllerFor(profileScopeKey);
+  const composerProfileController = useWorkbenchComposerProfiles.registry()?.(profileScopeKey);
+  if (!composerProfileController) throw new Error("Workbench requires WorkbenchComposerProfileRegistryProvider.");
   useEffect(() => {
     const presentation = workbenchClient.mounted?.presentationClient;
     const source = DaemonIdSchema.safeParse(profileScopeKey);
@@ -295,11 +284,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     void composerProfileController.initializePersistence(createComposerProfilePersistence(selectedDaemon));
     return () => { composerProfileController.disconnectPersistence(); };
   }, [composerProfileController, controls, selectedDaemon, workbenchClient.mounted?.presentationClient, profileScopeKey]);
-  const [harness, setHarness] = useState<WorkbenchHarness>(() => (
-    clientStateController.records("globalPreference").find((record) => (
-      record.preference.key === "harness"
-    ))?.preference.value as WorkbenchHarness | undefined
-  ) ?? defaultProviderKey);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   const [mobileShellHeaderVisibility] = useState(() => new MobileShellHeaderVisibilityController());
   const mobileSidebarRequested = isMobileSidebarRequested(useSearchParams().toString());
@@ -311,7 +295,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const mainPaneRef = useRef<HTMLElement>(null);
   const directThreadScrollViewportRef = useRef<HTMLDivElement>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
-  const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
+  const [threadViewKeys] = useState(() => new ThreadViewKeys());
   const search = useWorkbenchSearch();
   const sidebarPreferences = useWorkbenchSidebarPreferences.global();
   const isEffectiveDesktopSidebarCollapsed = !isMobile && sidebarPreferences.preferences.sidebarCollapsed;
@@ -456,10 +440,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   useEffect(() => {
     document.title = pageTitle;
   }, [pageTitle]);
-
-  useEffect(() => {
-    if (storedHarness) setHarness(storedHarness as WorkbenchHarness);
-  }, [storedHarness]);
 
   const theme = shellSettings.get("theme");
   useEffect(() => {
@@ -617,103 +597,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [searchActionContext]);
-  const sendThreadMessage = useCallback(async (
-    thread: ThreadPayload,
-    input: UserInput[],
-    options?: WorkbenchSendThreadMessageOptions,
-  ) => {
-    if (!controls) {
-      throw new ThreadMessageNotSentError();
-    }
-    const submittedRoute = currentRouteRef.current;
-    const sourceContext = workbenchClient.mounted?.threadContextFor(thread.id)
-      ?? workbenchClient.mounted?.draftContextFor(thread.id);
-    const submissionProfiles = sourceContext
-      ? profileControllerFor(sourceContext.daemonId) : composerProfileController;
-    const isActiveSteer = !thread.isDraft && isThreadStatusActive(thread.status);
-    if (options?.composerProfileSlot && !isActiveSteer) {
-      await submissionProfiles.waitForSelection(options.composerProfileSlot);
-      if (options.selectThread !== false && currentRouteRef.current !== submittedRoute) {
-        throw new ThreadMessageNotSentError();
-      }
-      thread = submissionProfiles.resolveThread(options.composerProfileSlot, thread);
-    }
-    const submittedOptions = isActiveSteer
-      ? { ...options, composerProfileSlot: undefined } : options;
-    const replaceCurrentDraftThreadRoute = (materializedThread: Pick<ThreadPayload, "id" | "harness">) => {
-      if (materializedThread.id === thread.id) {
-        return false;
-      }
-
-      const currentRoute = currentRouteRef.current;
-      if (!isWorkbenchRouteOwnerOfThread(currentRoute, thread.id, thread.isDraft)) {
-        return false;
-      }
-
-      if (currentRoute.logical) {
-        navigateToRoute(createLogicalExistingThreadRoute(
-          currentRoute.logical.projectId,
-          { kind: "provider", harness: materializedThread.harness,
-            threadId: ThreadReferenceSchema.parse(materializedThread.id) },
-          currentRoute.logical.browseLocation ?? null,
-        ), { replace: true });
-        return true;
-      }
-      const ownerProjectId = currentRoute.threadOwnerProjectId || currentRoute.projectId;
-      navigateToRoute(!currentRoute.projectId
-        ? createHomeThreadRoute(ownerProjectId, materializedThread.id)
-        : ownerProjectId === currentRoute.projectId
-          ? createThreadRoute(currentRoute.projectId, materializedThread.id)
-          : createPinnedThreadRoute(currentRoute.projectId, ownerProjectId, materializedThread.id), { replace: true });
-      return true;
-    };
-
-    const materializedOptions: WorkbenchSendThreadMessageOptions | undefined = thread.isDraft
-      ? {
-        ...submittedOptions,
-        onThreadLaunched: (materializedThread) => {
-          if (options?.stayInCreate) {
-            const current = currentRouteRef.current;
-            const ownsDraft = isWorkbenchRouteOwnerOfThread(current, thread.id, true)
-              && workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id === thread.id;
-            if (ownsDraft) {
-              const nextId = DraftIdSchema.parse(crypto.randomUUID());
-              threadViewInstanceKeysByThreadIdRef.current.set(nextId,
-                threadViewInstanceKeysByThreadIdRef.current.get(thread.id) ?? thread.id);
-              const nextRoute = controls.continueThreadCreation(DraftIdSchema.parse(thread.id), nextId);
-              if (nextRoute) {
-                navigateToRoute(nextRoute, { replace: true });
-              } else {
-                threadViewInstanceKeysByThreadIdRef.current.delete(nextId);
-              }
-            }
-            options.onThreadLaunched?.(materializedThread);
-            return;
-          }
-          threadViewInstanceKeysByThreadIdRef.current.set(
-            materializedThread.id,
-            threadViewInstanceKeysByThreadIdRef.current.get(thread.id) ?? thread.id,
-          );
-          replaceCurrentDraftThreadRoute(materializedThread);
-          options?.onThreadLaunched?.(materializedThread);
-        },
-      }
-      : submittedOptions;
-    // Drafts launch with their saved attachments; existing threads send through their own store.
-    return await controls.sendThreadMessage(thread, input, materializedOptions);
-  }, [composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted]);
-
-  const setThreadComposerSettings = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
-    if (currentThread?.id === threadId && currentThread.isDraft && currentThread.harness !== settings.harness) {
-      void clientStateController.put({
-        kind: "globalPreference",
-        preference: { key: "harness", value: settings.harness },
-      }).catch((error: Error) => setSelectionError(error.message));
-      setHarness(settings.harness);
-    }
-    controls?.setCurrentThreadComposerSettings(threadId, settings);
-  }, [clientStateController, controls, currentThread]);
-
   const showThreadView = route.view === "thread";
   const showFileView = route.view === "file";
   // New full-page views belong in workbenchRouteViews, not new show* booleans; settings/stats/git should migrate there.
@@ -819,7 +702,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, route.threadTarget)
         : createThreadRoute(activeProjectId, route.threadTarget)
     : route;
-  const getThreadViewInstanceKey = (threadId: string) => threadViewInstanceKeysByThreadIdRef.current.get(threadId) ?? threadId;
+  const getThreadViewInstanceKey = (threadId: string) => threadViewKeys.keyFor(threadId);
   const isThreadOwnedByEffectiveRoute = (thread: ThreadPayload | null) => Boolean(
     showThreadView
     && thread
@@ -1159,20 +1042,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [activeFilePath, applyMobileShellHeaderEvent, showThreadView, isMobile, mobileShellHeaderVisibility,
     selectedThreadIdForView, shouldShowShellHeader, threadSurfaceKey]);
 
-  const handleHarnessChange = (nextHarness: WorkbenchHarness) => {
-    if (nextHarness === harness && currentThread?.harness === nextHarness) {
-      return;
-    }
-
-    void clientStateController.put({
-      kind: "globalPreference",
-      preference: { key: "harness", value: nextHarness },
-    }).catch((error: Error) => setSelectionError(error.message));
-    setHarness(nextHarness);
-    controls?.setDraftThreadHarness(nextHarness);
-  };
-
   return (
+    <ThreadViewKeysContext.Provider value={threadViewKeys}>
     <WorkbenchShellErrorContext.Provider value={setSelectionError}>
     <WorkbenchFeedbackAddressingContext.Provider value={feedbackAddressing}>
     <WorkbenchExplorerContext.Provider value={explorer}>
@@ -1394,10 +1265,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           ? projectHref(createPinnedThreadRoute(activeProjectId, threadProjectId, target))
                           : projectHref(createThreadRoute(activeProjectId, target))}
                       mobileFullBleed={isDirectMobileThreadSurface}
-                      onDraftHarnessChange={handleHarnessChange}
                       onThreadSettled={handleComposerThreadSettled}
-                      onSendMessage={sendThreadMessage}
-                      onThreadSettingsChange={setThreadComposerSettings}
                       selectedThreadId={selectedThreadIdForView}
                       onSelectedThreadChange={handleSelectedThreadChange}
                       projectId={threadProjectId}
@@ -1533,5 +1401,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     </WorkbenchExplorerContext.Provider>
     </WorkbenchFeedbackAddressingContext.Provider>
     </WorkbenchShellErrorContext.Provider>
+    </ThreadViewKeysContext.Provider>
   );
 }

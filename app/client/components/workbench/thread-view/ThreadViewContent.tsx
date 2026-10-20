@@ -10,7 +10,7 @@ import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, use
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
-import type { ThreadPayload, WorkbenchComposerInputDraft, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchProjectRoot, WorkbenchSendThreadMessageOptions, WorkbenchSkillSummary } from "workbench-shared/types";
+import type { WorkbenchComposerInputDraft, WorkbenchProjectRoot, WorkbenchSendThreadMessageOptions, WorkbenchSkillSummary } from "workbench-shared/types";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import { readWorkbenchSkillActivationMismatch } from "workbench-shared/workbench/thread/thread-skill-mentions";
@@ -247,11 +247,8 @@ export default memo(function ThreadViewContent ({
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = true,
-  onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
   onThreadSettled,
-  onSendMessage,
-  onThreadSettingsChange,
   onSelectedThreadChange,
   projectId,
   projectFileCandidates: browseFileCandidates,
@@ -282,15 +279,8 @@ export default memo(function ThreadViewContent ({
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
-  onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onThreadSettled?: (target: WorkbenchThreadTarget, ownerProjectId: string) => void;
-  onSendMessage: (
-    thread: ThreadPayload,
-    input: UserInput[],
-    options?: WorkbenchSendThreadMessageOptions,
-  ) => Promise<ThreadPayload | null>;
-  onThreadSettingsChange: (threadId: string, settings: WorkbenchComposerSettings) => void;
   onSelectedThreadChange?: (threadId: string) => void;
   projectId: string;
   projectFileCandidates: readonly ProjectTreeFileCandidate[];
@@ -823,6 +813,7 @@ export default memo(function ThreadViewContent ({
     });
   }, [projectId, subagents, threads.updateState]);
 
+  const onSendMessage = useComposer.send(composerProfileController);
   const handleSendMessage = useCallback(async (
     _threadId: string,
     input: UserInput[],
@@ -877,9 +868,7 @@ export default memo(function ThreadViewContent ({
     actionsFor(threadId).changeServiceTier(serviceTier);
   }, [actionsFor]);
 
-  const handleThreadSettingsChange = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
-    onThreadSettingsChange(threadId, settings);
-  }, [onThreadSettingsChange]);
+  const handleThreadSettingsChange = useComposer.settings();
   // A draft's provider comes from its selection: move the draft document harness to match so
   // dispatch and the account rate-limit row agree. The target identity does not move.
   useEffect(() => {

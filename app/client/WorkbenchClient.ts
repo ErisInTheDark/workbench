@@ -943,7 +943,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     setCurrentThreadComposerSettings: (id, settings) => rendererForThread(id).setCurrentThreadComposerSettings(id, settings),
     setCurrentThreadReasoningEffort: (id, effort) => rendererForThread(id).setCurrentThreadReasoningEffort(id, effort),
     setCurrentThreadServiceTier: (id, tier) => rendererForThread(id).setCurrentThreadServiceTier(id, tier),
-    setDraftThreadHarness: harness => threadClient.setDraftThreadHarness(harness),
     toggleDirectory: path => { projectClient.toggleDirectory(path); },
     updateThreadState: async request => { await mutateThread(request); },
     updateThreadStateWithAcceptance: mutateThread,

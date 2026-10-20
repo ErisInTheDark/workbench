@@ -1444,7 +1444,6 @@ export interface WorkbenchControls {
         folderId?: string }
       | { kind: "rename"; folderId: string; title: string },
   ) => Promise<void>;
-  setDraftThreadHarness: (harness: WorkbenchHarness) => void;
 }
 
 export interface WorkbenchBindings {

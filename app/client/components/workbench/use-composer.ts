@@ -1,22 +1,33 @@
 /*
  * Exports:
  * - default useComposer: one composer's input draft, saved and cleared at its owner's address; `.questionnaire` binds a
- *   thread's pending questionnaire and its answer draft; `.references` attaches references to any thread's composer.
+ *   thread's pending questionnaire and its answer draft; `.references` attaches references to any thread's composer;
+ *   `.send` sends a composer's message, carrying a launched draft's view and url on to its thread; `.settings` applies
+ *   composer settings.
  *   Drafts and requests are read through getters with a content key for dependencies; draft identities change only
  *   with their content. Failed writes report to the shell banner, then rethrow.
  */
 "use client";
 
-import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { useCallback, useContext, useMemo, useRef, useSyncExternalStore } from "react";
 
 import type {
-  WorkbenchComposerInputDraft, WorkbenchQuestionnaireDraft, WorkbenchSubmitUserInputRequestOptions,
-  WorkbenchUserInputResponse,
+  ThreadPayload, WorkbenchComposerInputDraft, WorkbenchComposerSettings, WorkbenchQuestionnaireDraft,
+  WorkbenchSendThreadMessageOptions, WorkbenchSubmitUserInputRequestOptions, WorkbenchUserInputResponse,
 } from "workbench-shared/types";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import {
+  createHomeThreadRoute, createLogicalExistingThreadRoute, createPinnedThreadRoute, createThreadRoute,
+  isSameWorkbenchRoute, isWorkbenchRouteOwnerOfThread,
+} from "workbench-shared/workbench/navigation/workbench-route";
+import { isThreadStatusActive } from "./thread-attention";
+import { ThreadMessageNotSentError } from "../../workbench/thread/thread-message-submission";
+import { ThreadViewKeysContext } from "../../workbench/thread/ThreadViewKeys";
+import type WorkbenchComposerProfileController from "../../workbench/state/WorkbenchComposerProfileController";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { readWorkbenchRoute } from "../../workbench/navigation/use-workbench-route";
 import { useWorkbenchNavigate } from "../../workbench/navigation/use-workbench-project-navigation";
@@ -194,6 +205,92 @@ useComposer.questionnaire = function useComposerQuestionnaire(
   const getDraft = useCallback(() => draft.value, [draft]);
   return useMemo(() => ({ requestKey, getRequest, draftKey: draft.key, getDraft, save, clear, submit }),
     [clear, draft.key, getDraft, getRequest, requestKey, save, submit]);
+};
+
+/**
+ * Send a composer's message. Drafts wait for their profile selection, launch, and move the url from the draft to its
+ * new thread (or, staying in create, to a fresh draft in the same view); existing threads send through their store.
+ * `fallbackProfiles` serves threads whose daemon is not known yet.
+ */
+useComposer.send = function useComposerSend(fallbackProfiles: WorkbenchComposerProfileController) {
+  const client = useWorkbenchClientController();
+  const state = useWorkbenchClientStateController();
+  const navigate = useWorkbenchNavigate();
+  const profilesFor = useWorkbenchComposerProfiles.registry();
+  const viewKeys = useContext(ThreadViewKeysContext);
+  return useCallback(async (thread: ThreadPayload, input: UserInput[], options?: WorkbenchSendThreadMessageOptions) => {
+    const controls = client.controls;
+    if (!controls) throw new ThreadMessageNotSentError();
+    const currentRoute = () => readWorkbenchRoute(client, state);
+    const submittedRoute = currentRoute();
+    const sourceContext = client.mounted?.threadContextFor(thread.id) ?? client.mounted?.draftContextFor(thread.id);
+    const profiles = (sourceContext && profilesFor?.(sourceContext.daemonId)) || fallbackProfiles;
+    const isActiveSteer = !thread.isDraft && isThreadStatusActive(thread.status);
+    if (options?.composerProfileSlot && !isActiveSteer) {
+      await profiles.waitForSelection(options.composerProfileSlot);
+      if (options.selectThread !== false && !isSameWorkbenchRoute(currentRoute(), submittedRoute)) {
+        throw new ThreadMessageNotSentError();
+      }
+      thread = profiles.resolveThread(options.composerProfileSlot, thread);
+    }
+    const submittedOptions = isActiveSteer ? { ...options, composerProfileSlot: undefined } : options;
+    if (!thread.isDraft) return await controls.sendThreadMessage(thread, input, submittedOptions);
+    const draftThread = thread;
+    const showLaunchedThread = (launched: Pick<ThreadPayload, "id" | "harness">) => {
+      const route = currentRoute();
+      if (launched.id === draftThread.id || !isWorkbenchRouteOwnerOfThread(route, draftThread.id, true)) return;
+      if (route.logical) {
+        navigate(createLogicalExistingThreadRoute(route.logical.projectId,
+          { kind: "provider", harness: launched.harness, threadId: ThreadReferenceSchema.parse(launched.id) },
+          route.logical.browseLocation ?? null), { replace: true });
+        return;
+      }
+      const ownerProjectId = route.threadOwnerProjectId || route.projectId;
+      navigate(!route.projectId
+        ? createHomeThreadRoute(ownerProjectId, launched.id)
+        : ownerProjectId === route.projectId
+          ? createThreadRoute(route.projectId, launched.id)
+          : createPinnedThreadRoute(route.projectId, ownerProjectId, launched.id), { replace: true });
+    };
+    const continueCreating = () => {
+      const ownsDraft = isWorkbenchRouteOwnerOfThread(currentRoute(), draftThread.id, true)
+        && client.mounted?.threadRuntime.getSnapshot().currentThread?.id === draftThread.id;
+      if (!ownsDraft) return;
+      const nextId = DraftIdSchema.parse(crypto.randomUUID());
+      viewKeys?.carry(draftThread.id, nextId);
+      const nextRoute = controls.continueThreadCreation(DraftIdSchema.parse(draftThread.id), nextId);
+      if (nextRoute) navigate(nextRoute, { replace: true });
+      else viewKeys?.forget(nextId);
+    };
+    // Drafts launch with their saved attachments.
+    return await controls.sendThreadMessage(thread, input, {
+      ...submittedOptions,
+      onThreadLaunched: launched => {
+        if (options?.stayInCreate) {
+          continueCreating();
+        } else {
+          viewKeys?.carry(draftThread.id, launched.id);
+          showLaunchedThread(launched);
+        }
+        options?.onThreadLaunched?.(launched);
+      },
+    });
+  }, [client, fallbackProfiles, navigate, profilesFor, state, viewKeys]);
+};
+
+/** Apply a composer's settings; a draft changing provider also remembers that provider for the next new thread. */
+useComposer.settings = function useComposerSettings() {
+  const client = useWorkbenchClientController();
+  const state = useWorkbenchClientStateController();
+  const reported = useReportedWrite();
+  return useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
+    const current = client.mounted?.threadRuntime.getSnapshot().currentThread;
+    if (current?.id === threadId && current.isDraft && current.harness !== settings.harness) {
+      void reported(() => state.put({ kind: "globalPreference", preference: { key: "harness", value: settings.harness } }),
+        "Unable to remember the provider.").catch(() => undefined);
+    }
+    client.controls?.setCurrentThreadComposerSettings(threadId, settings);
+  }, [client, reported, state]);
 };
 
 /** Attach references, such as dropped feedback, to any thread's composer draft without opening it. */
