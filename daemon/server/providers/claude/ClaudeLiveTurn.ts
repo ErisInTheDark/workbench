@@ -4,7 +4,7 @@
  * - ClaudeLiveTurnSnapshot: plain turn state a reloading bridge hands to its replacement.
  * - ClaudeLiveTurnCollaborators: bridge-generation collaborators one live turn needs.
  * - ClaudeLiveTurnOptions: identity, launch usage, and collaborators for a new turn.
- * - default ClaudeLiveTurn: drive one Claude session from start to its single settlement, including steer, context and working-notice delivery and context usage; it pauses and restores across bridge reloads, signals when billing usage changed, and reports settlement before observing it.
+ * - default ClaudeLiveTurn: drive one Claude session from start to its single settlement, including steer (refused once the turn is ending), context and working-notice delivery and context usage; it pauses and restores across bridge reloads, signals when billing usage changed, and reports settlement before observing it.
  */
 import type { SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
@@ -114,6 +114,8 @@ export default class ClaudeLiveTurn {
   /** Input that arrives while start() publishes acceptance; null once the first prompt is admitted. */
   private beforePrompt: { context: string[]; steers: SDKUserMessage[] } | null = { context: [], steers: [] };
   private stopped = false;
+  /** Set the moment reading decides the turn is over, before close() can mark it closing. */
+  private ending = false;
   private settled = false;
   private failure: string | null = null;
   private closing: Promise<void> | null = null;
@@ -198,9 +200,9 @@ export default class ClaudeLiveTurn {
     return { task: this.continue(), warning };
   }
 
-  /** False once the query is closing; later messages belong to a new turn. */
+  /** False once the turn is ending; later messages belong to a new turn. */
   get acceptingInput() {
-    return this.closing === null && !this.stopped;
+    return this.closing === null && !this.stopped && !this.ending;
   }
 
   /** Resolve after this turn released its process and published its settlement. */
@@ -208,13 +210,18 @@ export default class ClaudeLiveTurn {
     return this.task.then(() => undefined, () => undefined);
   }
 
-  /** Queue a steer; it is recorded only when Claude acknowledges folding it into the conversation. */
+  /**
+   * Queue a steer; it is recorded only when Claude acknowledges folding it into the conversation.
+   * False when the turn is ending: nothing is queued or held, and the caller delivers it to a later turn.
+   */
   steer(entry: WorkbenchSteerHistoryEntry, content: ClaudePromptContent) {
     if (!entry.itemId) throw new Error("Claude steer has no item identity.");
+    if (!this.acceptingInput) return false;
     const message = claudePrompt(content, { uuid: entry.itemId });
     if (this.beforePrompt) this.beforePrompt.steers.push(message);
     else this.options.session.push(message);
     this.undelivered.set(entry.itemId, entry);
+    return true;
   }
 
   inject(text: string) {
@@ -254,6 +261,7 @@ export default class ClaudeLiveTurn {
     try {
       status = await this.consume();
     } catch (error) {
+      this.ending = true;
       if (!this.stopped) {
         this.failure = error instanceof Error ? error.message.slice(0, 500) : "unknown failure";
         console.error("[claude] query failed", this.failure, this.options.session.stderr().slice(-1000));
@@ -271,7 +279,10 @@ export default class ClaudeLiveTurn {
     for (;;) {
       const read = await this.options.session.read(this.pausing.signal);
       if (read.kind === "paused") return "paused";
-      if (read.kind === "end") return "failed";
+      if (read.kind === "end") {
+        this.ending = true;
+        return "failed";
+      }
       const { message } = read;
       if (message.type === "stream_event") {
         await transcript.recordStreamEvent(this.threadId, this.turnId, message);
@@ -296,6 +307,7 @@ export default class ClaudeLiveTurn {
         // Steers Claude has not consumed yet run as follow-up results inside this Workbench turn. Other queued
         // context, such as a late working-status notice, does not earn another model turn.
         if (!this.stopped && this.undelivered.size > 0) continue;
+        this.ending = true;
         if (message.subtype === "success" && !message.is_error) return "completed";
         this.failure = (message.subtype === "success" ? message.result : message.errors.join("\n")).trim() || message.subtype;
         return "failed";

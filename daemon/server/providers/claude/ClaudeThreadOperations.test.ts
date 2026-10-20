@@ -394,6 +394,43 @@ test("a Claude turn is live only while this daemon runs it or still owns its tra
   assert.equal(await owner.isTurnLive(threadId, WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000009")), false);
 });
 
+test("a steer held while its Claude turn ends starts a new turn instead of stranding", async () => {
+  const release = Promise.withResolvers<void>();
+  const owner = fixture({ usage: [], hold: release.promise });
+  const transcript = Reflect.get(Reflect.get(owner, "options") as object, "transcript") as Record<string, unknown>;
+  const held = Promise.withResolvers<void>();
+  const recorded = Promise.withResolvers<void>();
+  const steers: string[] = [];
+  transcript.recordSteer = async ({ status }: { status: string }) => {
+    steers.push(status);
+    if (status !== "pending") return;
+    recorded.resolve();
+    await held.promise;
+  };
+  let launches = 0;
+  let fresh = true;
+  transcript.startTurn = async () => { launches++; fresh = false; return turnId; };
+  Object.assign(owner, { read: async () => ({ turns: fresh ? [] : [{ id: turnId, status: "inProgress" }] }) });
+  const text = (value: string) => [{ type: "text" as const, text: value, text_elements: [] }];
+  try {
+    await owner.submit({ threadId, clientMessageId: "first", intent: "newTurn", input: text("hello") });
+    const first = (Reflect.get(owner, "live") as Map<string, { whenSettled(): Promise<void> }>).get(threadId)!;
+    const steering = owner.submit({ threadId, clientMessageId: "late", intent: "continue", input: text("one more thing") });
+    await recorded.promise;
+    release.resolve();
+    await first.whenSettled();
+    fresh = true;
+    held.resolve();
+    assert.equal((await steering).kind, "started");
+    assert.equal(launches, 2);
+    assert.deepEqual(steers, ["pending", "dismissed"]);
+  } finally {
+    release.resolve();
+    held.resolve();
+    await owner.dispose();
+  }
+});
+
 test("a Claude turn adopted across a database reload is known to the replacement generation's identities", async () => {
   const stored = {
     threadId, turnId, turnIndex: 0,

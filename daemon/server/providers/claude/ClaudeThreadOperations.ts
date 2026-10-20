@@ -388,18 +388,20 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     this.options.signal.throwIfAborted();
     const identity = await this.identity(input.threadId);
     mark("identity");
-    let runtime = this.live.get(identity.threadId);
-    if (runtime && !runtime.acceptingInput) {
-      await runtime.whenSettled();
-      mark("previous-turn-settle");
-      runtime = this.live.get(identity.threadId);
-    }
     const content = await claudePromptContent(input.input);
     mark("content");
     const binding = identity.bindings.find(value => value.harness === "claude");
     if (!binding) throw new Error("Claude thread has no native session identity.");
     const activatedSkillPaths = collectActivatedSkillPaths(input.input, input.context);
-    if (runtime && input.intent !== "newTurn") {
+    for (;;) {
+      let runtime = this.live.get(identity.threadId);
+      if (runtime && !runtime.acceptingInput) {
+        await runtime.whenSettled();
+        mark("previous-turn-settle");
+        runtime = this.live.get(identity.threadId);
+      }
+      if (!runtime) break;
+      if (input.intent === "newTurn") throw new Error("Claude turn is already active.");
       if ("expectedTurnId" in input && input.expectedTurnId && input.expectedTurnId !== runtime.turnId) {
         throw new Error("Claude steer targeted a different turn.");
       }
@@ -417,12 +419,15 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       mark("steer-skills");
       await this.options.transcript.recordSteer(entry);
       mark("steer-record");
-      runtime.steer(entry, steerContent);
-      await this.collectInputContext(identity.threadId, "steer");
-      mark("steer-context");
-      return { kind: "steered" as const, turnId: runtime.turnId };
+      if (runtime.steer(entry, steerContent)) {
+        await this.collectInputContext(identity.threadId, "steer");
+        mark("steer-context");
+        return { kind: "steered" as const, turnId: runtime.turnId };
+      }
+      // The turn ended while this steer was held, so it arrives after that turn like any later message.
+      await this.options.transcript.recordSteer({ ...entry, status: "dismissed", resolvedAt: Date.now() });
+      mark("steer-refused");
     }
-    if (runtime) throw new Error("Claude turn is already active.");
     const thread = await this.read(identity.threadId);
     const nativeHistoryExists = Boolean(thread.turns.at(-1));
     if (nativeHistoryExists && !await getSessionInfo(binding.nativeThreadId, { dir: binding.nativeLocation })) {
