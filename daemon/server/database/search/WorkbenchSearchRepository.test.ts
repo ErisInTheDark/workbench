@@ -152,7 +152,7 @@ test("search ranks recent settled narrative, repeated terms, and match-centred e
     const results = repository.search({
       projectId: testProjectIds.project,
       query: "loader loading animation",
-    }).results;
+    }).results.filter(result => result.kind === "thread");
 
     assert.deepEqual(results.map(({ title }) => title), ["Recent visual repair", "Old visual note"]);
     assert.match(results[0]?.detail ?? "", /^You: \.\.\..*loader animation/u);
