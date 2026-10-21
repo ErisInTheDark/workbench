@@ -1,6 +1,5 @@
 /*
- * Keywords: CLI, MCP, logging, exclusions, cancellation, cleanup.
- * No production exports. Tests protect timing cadence, omission and unchanged command outcomes.
+ * No production exports. Tests protect timing cadence, omission, failure reasons and unchanged command outcomes.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -77,11 +76,12 @@ test("quiet commands preserve results and failures without timing logs or timers
   assert.deepEqual(lines, []);
 });
 
-test("reports failed responses and cancelled exceptions without leaking timers", async () => {
+test("reports failure reasons after error completions, never for cancellations, without leaking timers", async () => {
   const lines: string[] = [];
   let activeTimers = 0;
   const logger = new WorkbenchAgentCommandLogger({
     cancel: () => { activeTimers -= 1; },
+    now: () => 0,
     schedule: () => {
       activeTimers += 1;
       return activeTimers as never;
@@ -89,15 +89,25 @@ test("reports failed responses and cancelled exceptions without leaking timers",
     writeLine: (line) => { lines.push(line.replace(/\u001b\[[0-9;]*m/gu, "")); },
   });
 
-  await logger.run("wb git arc diff", new AbortController().signal, async () => Response.json({}, { status: 400 }), (response) => response.ok);
+  const failed = Response.json({}, { status: 400 });
+  assert.equal(await logger.run("wb git repo", new AbortController().signal, async () => failed, async (response) => response.ok ? null : "repo not found\n"), failed);
+  await assert.rejects(logger.run("wb git repo", new AbortController().signal, async () => { throw new Error("remote unreachable"); }), /remote unreachable/u);
+  assert.equal(await logger.run("wb git repo", new AbortController().signal, async () => failed, async () => { throw new Error("body unreadable"); }), failed);
   const cancellation = new AbortController();
   await assert.rejects(logger.run("wb git arc diff", cancellation.signal, async () => {
     cancellation.abort(new Error("cancelled"));
     throw cancellation.signal.reason;
   }), /cancelled/u);
 
-  assert.match(lines[0] ?? "", /CLI wb git arc diff error in/u);
-  assert.match(lines[1] ?? "", /CLI wb git arc diff cancelled in/u);
+  assert.deepEqual(lines, [
+    " CLI wb git repo error in 0ms",
+    " CLI wb git repo repo not found",
+    " CLI wb git repo error in 0ms",
+    " CLI wb git repo remote unreachable",
+    " CLI wb git repo error in 0ms",
+    " CLI wb git repo body unreadable",
+    " CLI wb git arc diff cancelled in 0ms",
+  ]);
   assert.equal(activeTimers, 0);
 });
 

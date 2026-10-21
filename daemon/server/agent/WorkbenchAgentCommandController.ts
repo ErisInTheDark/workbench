@@ -15,7 +15,7 @@ import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-a
 import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "../bridge-types";
-import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
+import WorkbenchAgentCommandLogger, { type WorkbenchAgentCommandFailureReader } from "./WorkbenchAgentCommandLogger";
 import WorkbenchMarkdownTocController from "./WorkbenchMarkdownTocController";
 import WorkbenchRipgrepController from "../project/WorkbenchRipgrepController";
 import WorkbenchAgentCommandLiveScenarioController from "./WorkbenchAgentCommandControllerLiveScenario";
@@ -303,7 +303,9 @@ export default class WorkbenchAgentCommandController {
       `wb ${request.commandName?.trim() || "command"}`,
       signal,
       async () => await this.dispatchRequest(request, signal),
-      (response) => response.ok,
+      async (response) => response.ok
+        ? null
+        : adaptWorkbenchAgentCliResponse({ httpOk: false, request, text: await response.clone().text() }).stderr,
     );
   }
 
@@ -311,9 +313,9 @@ export default class WorkbenchAgentCommandController {
     label: string,
     signal: AbortSignal,
     operation: () => Promise<TValue>,
-    succeeded?: (value: TValue) => boolean,
+    readFailure?: WorkbenchAgentCommandFailureReader<TValue>,
   ) {
-    return await this.commandLogger.run(label, signal, operation, succeeded);
+    return await this.commandLogger.run(label, signal, operation, readFailure);
   }
 
   private async handleApplyPatchClaimHook(
