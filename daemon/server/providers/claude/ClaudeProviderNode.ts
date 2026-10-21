@@ -1,12 +1,15 @@
 /*
  * Exports:
- * - default ClaudeProviderNode: expose native Claude sessions, managed tools, Browse screenshot delivery, unfinished-turn continuation, model choices with context bounds, plan limits, and session-log usage hydration.
+ * - default ClaudeProviderNode: expose native Claude sessions, managed tools, Browse screenshot delivery, unfinished-turn continuation, model choices with context bounds, plan limits, account sign-in, and session-log usage hydration.
  */
 import ReloadableNode from "../../runtime/ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import createWorkbenchSandboxShell, { WORKBENCH_SANDBOX_SHELL_REQUIRES } from "../../exec/WorkbenchSandboxShell";
 import ClaudeToolsController from "./ClaudeToolsController";
+import ClaudeSignInController from "./ClaudeSignInController";
+import ProviderSignInSession from "../ProviderSignInSession";
+import { resolveProviderRuntime } from "../provider-runtimes";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -18,12 +21,18 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       prepareExecution: createWorkbenchSandboxShell(context, { get }),
     });
     const configuration = get("claudeConfiguration");
+    const signIn = new ProviderSignInSession({
+      provider: "claude",
+      adapter: new ClaudeSignInController({
+        resolveExecutable: () => resolveProviderRuntime(context.dataRootPath, "claude", context.providerRuntimePins.claude()).executable,
+      }),
+    });
     return {
       registrations: {
         claudeProvider: {
           threads, tools, interactions: threads.interactions, context: threads.context, browse: threads.browse,
           usage: threads.usage,
-          account: { limits: { read: () => configuration.accountLimits() } },
+          account: { limits: { read: () => configuration.accountLimits() }, signIn },
           configuration: {
             modelContext: { read: () => configuration.modelContext() },
             models: { read: () => configuration.models() },
@@ -32,7 +41,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         },
       },
       start: () => undefined,
-      dispose: () => undefined,
+      dispose: () => signIn.dispose(),
     };
   },
   description: "Reload Claude provider definition.",

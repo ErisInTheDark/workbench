@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { McpServerSnapshot } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import McpServerSettingsController from "../../workbench/McpServerSettingsController";
@@ -18,6 +18,7 @@ import MarkdownRender from "../ui/MarkdownRender";
 import PressDragMenu from "../ui/PressDragMenu";
 import PrimaryButton from "../ui/PrimaryButton";
 import WorkbenchCheckbox from "./WorkbenchCheckbox";
+import { IconLabel, SettingsMenuItem } from "./settings-row-labels";
 import WorkbenchSettingsStatusRow, { type WorkbenchSettingsStatusTone } from "./WorkbenchSettingsStatusRow";
 import WorkbenchTextField from "./WorkbenchTextField";
 import {
@@ -29,14 +30,6 @@ type ServerProps = { server: McpServerSnapshot; controller: McpServerSettingsCon
 type Tool = Extract<McpServerSnapshot["catalog"], { status: "ready" }>["tools"][number];
 
 const cardBorder = "border-[color-mix(in_srgb,var(--text)_10%,transparent)]";
-
-function MenuItem({ icon, danger = false, children }: { icon: ReactNode; danger?: boolean; children: ReactNode }) {
-  return <span className={`inline-flex items-center gap-2 ${danger ? "text-danger" : ""}`}>{icon}{children}</span>;
-}
-
-function IconLabel({ icon, children }: { icon: ReactNode; children: ReactNode }) {
-  return <span className="inline-flex items-center gap-1.5">{icon}{children}</span>;
-}
 
 function presentStatus(server: McpServerSnapshot): { tone: WorkbenchSettingsStatusTone; status: string } {
   if (server.catalog.status === "signInRequired") return { tone: "action", status: "Needs sign-in" };
@@ -107,10 +100,10 @@ function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & 
       : server.catalog.search ? `${enabledCount} enabled` : `${enabledCount} of ${server.catalog.tools.length} tools`;
   const menu = [
     server.auth?.kind === "header"
-      ? { id: "remove-key", content: <MenuItem icon={<KeyRoundOffIcon />}>Remove API key</MenuItem> }
-      : { id: "key", content: <MenuItem icon={<KeyRoundIcon />}>Use an API key…</MenuItem> },
-    ...server.auth?.kind === "oauth" ? [{ id: "sign-out", content: <MenuItem icon={<KeyRoundOffIcon />}>Sign out</MenuItem> }] : [],
-    { id: "remove", content: <MenuItem icon={<Trash2Icon />} danger>Remove server</MenuItem> },
+      ? { id: "remove-key", content: <SettingsMenuItem icon={<KeyRoundOffIcon />}>Remove API key</SettingsMenuItem> }
+      : { id: "key", content: <SettingsMenuItem icon={<KeyRoundIcon />}>Use an API key…</SettingsMenuItem> },
+    ...server.auth?.kind === "oauth" ? [{ id: "sign-out", content: <SettingsMenuItem icon={<KeyRoundOffIcon />}>Sign out</SettingsMenuItem> }] : [],
+    { id: "remove", content: <SettingsMenuItem icon={<Trash2Icon />} danger>Remove server</SettingsMenuItem> },
   ];
   return <WorkbenchSettingsStatusRow tone={tone}
     label={<FlushInput ariaLabel="Server name" value={server.name} disabled={busy}

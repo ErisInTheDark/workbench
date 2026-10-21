@@ -9,6 +9,7 @@ import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provid
 import type { WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type { WorkbenchProviderTools } from "./provider-execution";
+import type ProviderSignInSession from "./ProviderSignInSession";
 import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
 import type { WorkbenchProviderSandboxNetwork } from "workbench-shared/workbench/provider/provider-settings";
 import type { WorkbenchProviderSingleFile } from "workbench-shared/workbench/provider/provider-single-file";
@@ -29,7 +30,11 @@ export default interface WorkbenchProvider {
   readonly interactions?: WorkbenchProviderInteractions;
   readonly tools?: WorkbenchProviderTools;
   readonly browse?: WorkbenchProviderBrowse;
-  readonly account?: { limits: { read(): Promise<WorkbenchAccountLimits> } };
+  readonly account?: {
+    limits: { read(): Promise<WorkbenchAccountLimits> };
+    /** Sign the provider's own accounts in and out, writing the stores its native clients use. */
+    signIn?: ProviderSignInSession;
+  };
   /** Re-derive a native thread's billing usage from provider-owned history, for stats backfill. */
   readonly usage?: { hydrate(nativeThreadId: string): Promise<WorkbenchStatsHydrationResult> };
   readonly configuration: {

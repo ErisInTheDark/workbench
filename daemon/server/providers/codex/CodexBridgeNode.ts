@@ -196,6 +196,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
       onNotification: (notification, facts) => {
         context.broadcastProviderNotification("codex", notification);
+        nativeConfiguration.signIn.observe(notification);
         // Workbench core decides unfinished-turn continuation from the observed lifecycle.
         void persist(async () => {
           await build.get("providerObservations").observe("codex", facts);

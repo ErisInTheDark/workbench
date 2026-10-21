@@ -55,6 +55,15 @@ class WorkbenchDaemonClient {
     install: (provider: ProviderRuntimeKey) => this.request("provider/runtime/install", { provider }),
   };
 
+  readonly providerAccounts = {
+    read: (provider: string) => this.request("provider/account/read", { provider }),
+    start: (params: WorkbenchDaemonParams<"provider/account/sign-in/start">) => this.request("provider/account/sign-in/start", params),
+    submitCode: (params: WorkbenchDaemonParams<"provider/account/sign-in/code">) => this.request("provider/account/sign-in/code", params),
+    wait: (params: WorkbenchDaemonParams<"provider/account/sign-in/wait">) => this.request("provider/account/sign-in/wait", params),
+    cancel: (params: WorkbenchDaemonParams<"provider/account/sign-in/cancel">) => this.request("provider/account/sign-in/cancel", params),
+    signOut: (params: WorkbenchDaemonParams<"provider/account/sign-out">) => this.request("provider/account/sign-out", params),
+  };
+
   readonly voice = {
     configuration: {
       read: () => this.request("voice/configuration/read", {}),

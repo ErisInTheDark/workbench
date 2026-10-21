@@ -6,6 +6,7 @@ import ReloadableNode from "../../runtime/ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import CodexSingleFileController from "./CodexSingleFileController";
+import ProviderSignInSession from "../ProviderSignInSession";
 import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
 import CodexApprovalReviewer, { codexReviewAvailability } from "./CodexApprovalReviewer";
 import createCodexIsolatedTransport from "./CodexIsolatedAppServerTransport";
@@ -31,6 +32,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threads = get("codexThreadOperations");
     const configuration = get("codexNativeConfiguration");
     const network = get("codexSandboxNetwork");
+    const signIn = new ProviderSignInSession({ provider: "codex", adapter: configuration.signIn });
     const readNetwork = async (projectId: string | null) => ({
       ...await network.read(projectId), label: "Codex sandbox network access",
     });
@@ -62,12 +64,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           models: { read: () => configuration.models(() => local.read()) },
           guidance: { contains: sections => local.containsGlobalGuidance(sections) },
         },
-        account: { limits: { read: () => configuration.accountLimits() } },
+        account: { limits: { read: () => configuration.accountLimits() }, signIn },
       } },
       start: () => undefined,
       hasPendingWork: () => singleFile.hasPendingWork(),
       dispose: async () => {
-        await Promise.all([singleFile.dispose(), approvalReviewer.dispose()]);
+        await Promise.all([singleFile.dispose(), approvalReviewer.dispose(), signIn.dispose()]);
       },
     };
   },

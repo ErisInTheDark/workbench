@@ -2,7 +2,7 @@
  * Exports:
  * - openCodeModelOption: expose native model metadata and selectable Workbench rollover context.
  * - openCodeAccountLimits: map credential-free Go quota into the shared account contract.
- * - default OpenCodeProvider: bind graph-owned OpenCode capabilities to the daemon provider contract.
+ * - default OpenCodeProvider: bind graph-owned OpenCode capabilities, including integration sign-in, to the daemon provider contract.
  */
 import ReloadableNode from "../../runtime/ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
@@ -12,6 +12,8 @@ import createWorkbenchSandboxShell, { WORKBENCH_SANDBOX_SHELL_REQUIRES } from ".
 import type { OpenCodeGoQuota } from "./opencode-workbench-rpc";
 import { openCodeWorkbenchRpc } from "./opencode-workbench-rpc";
 import type OpenCodeServiceController from "./OpenCodeServiceController";
+import OpenCodeSignInController from "./OpenCodeSignInController";
+import ProviderSignInSession from "../ProviderSignInSession";
 import { contextWindowFloor } from "workbench-shared/workbench/thread/thread-profile";
 
 const OPEN_CODE_CONTEXT_MINIMUM = 51_000;
@@ -86,6 +88,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       resolveCaller: (nativeThreadId, signal) => threads.resolveToolCaller(nativeThreadId, signal),
       prepareExecution: createWorkbenchSandboxShell(context, { get }),
     });
+    const signIn = new ProviderSignInSession({
+      provider: "opencode",
+      adapter: new OpenCodeSignInController(() => service.acquire()),
+    });
     return {
       registrations: {
         openCodeProvider: {
@@ -102,6 +108,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
                 return openCodeAccountLimits(result.quota);
               },
             },
+            signIn,
           },
           configuration: {
             modelContext: {
@@ -124,7 +131,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         },
       },
       start: () => undefined,
-      dispose: () => undefined,
+      dispose: () => signIn.dispose(),
     };
   },
   description: "Reload the OpenCode provider definition.",

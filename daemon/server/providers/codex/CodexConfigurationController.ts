@@ -2,13 +2,14 @@
  * Exports:
  * - CodexAccount: signed-in Codex account kind, ChatGPT plan and email.
  * - CodexConfigurationOperations: native request and local model-context ports.
- * - default CodexConfigurationController: translate native models, account and limits without owning another cache.
+ * - default CodexConfigurationController: translate native models, account, limits and sign-in without owning another cache.
  */
 import { z } from "zod";
 import type { ModelListResponse } from "workbench-shared/codex/generated/app-server/v2/ModelListResponse";
 import type { WorkbenchModelContextCapability, WorkbenchModelOption } from "workbench-shared/types";
 import { WorkbenchAccountLimitsSchema, type WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
 import providerAccountFingerprint from "../provider-account-fingerprint";
+import CodexSignInController from "./CodexSignInController";
 
 const AccountResponseSchema = z.object({
   account: z.object({ type: z.string(), planType: z.string().nullish(), email: z.string().nullish() }).passthrough().nullable(),
@@ -21,7 +22,15 @@ export interface CodexConfigurationOperations {
 }
 
 export default class CodexConfigurationController {
-  constructor(private readonly operations: CodexConfigurationOperations) {}
+  /** Login runs on the main app-server, so its cached auth and `account/updated` follow every change. */
+  readonly signIn: CodexSignInController;
+
+  constructor(private readonly operations: CodexConfigurationOperations) {
+    this.signIn = new CodexSignInController({
+      request: (method, params, options) => operations.request(method, params, options),
+      readAccount: () => this.account(),
+    });
+  }
 
   async models(readModelContext: () => Promise<WorkbenchModelContextCapability[]>): Promise<WorkbenchModelOption[]> {
     const models: WorkbenchModelOption[] = [];

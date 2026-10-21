@@ -1,8 +1,13 @@
 /*
  * Exports:
- * - providerRequestHandlers: daemon handlers for provider models, context capabilities, account limits, sandbox networking, provider runtime
- *   installs and installation updates.
+ * - providerRequestHandlers: daemon handlers for provider models, context capabilities, account limits, account sign-in, sandbox
+ *   networking, provider runtime installs and installation updates.
  */
+import type { z } from "zod";
+import {
+  ProviderAccountRequestSchema, ProviderSignInAttemptRequestSchema, ProviderSignInCodeRequestSchema,
+  ProviderSignInStartRequestSchema, ProviderSignOutRequestSchema,
+} from "workbench-shared/workbench/provider/provider-account-sign-in";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { ProviderRuntimeInstallRequestSchema } from "workbench-shared/workbench/provider/provider-runtime";
 import { WorkbenchSandboxNetworkUpdateSchema } from "workbench-shared/workbench/provider/provider-settings";
@@ -12,6 +17,18 @@ function provider(params: Record<string, unknown>, { owners }: DaemonRequestCont
   const key = installedProviderKeys.find(candidate => candidate === params.provider);
   if (!key || !owners.providers) throw new InvalidParamsError("The requested provider is unavailable.");
   return { key, provider: owners.providers.get(key) };
+}
+
+function signIn(params: Record<string, unknown>, context: DaemonRequestContext) {
+  const session = provider(params, context).provider.account?.signIn;
+  if (!session) throw new InvalidParamsError("The provider has no account sign-in.");
+  return session;
+}
+
+function parse<T>(schema: z.ZodType<T>, params: Record<string, unknown>) {
+  const parsed = schema.safeParse(params);
+  if (!parsed.success) throw new InvalidParamsError("Invalid provider sign-in request.");
+  return parsed.data;
 }
 
 function installationUpdate(context: DaemonRequestContext) {
@@ -74,6 +91,27 @@ export const providerRequestHandlers = defineDaemonRequestHandlers({
       : await capability.update({ scope: "project", enabled: input.enabled, projectId: projectId! });
     return { data: [{ ...updated, provider: key }] };
   },
+  "provider/account/read": async (params, context) => {
+    parse(ProviderAccountRequestSchema, params);
+    return await signIn(params, context).read();
+  },
+  "provider/account/sign-in/start": async (params, context) => {
+    const { integrationId, methodId, key } = parse(ProviderSignInStartRequestSchema, params);
+    return await signIn(params, context).start({ integrationId, methodId, key });
+  },
+  "provider/account/sign-in/code": async (params, context) => {
+    const { attemptId, code } = parse(ProviderSignInCodeRequestSchema, params);
+    return await signIn(params, context).submitCode(attemptId, code);
+  },
+  "provider/account/sign-in/wait": async (params, context) => (
+    await signIn(params, context).wait(parse(ProviderSignInAttemptRequestSchema, params).attemptId)
+  ),
+  "provider/account/sign-in/cancel": async (params, context) => (
+    await signIn(params, context).cancel(parse(ProviderSignInAttemptRequestSchema, params).attemptId)
+  ),
+  "provider/account/sign-out": async (params, context) => (
+    await signIn(params, context).signOut(parse(ProviderSignOutRequestSchema, params).integrationId)
+  ),
   "installation/update/pull": async (_params, context) => await installationUpdate(context).pull(),
   "installation/update/failure/dismiss": async (_params, context) => await installationUpdate(context).dismissFailure(),
   "provider/runtime/read": async (_params, context) => {

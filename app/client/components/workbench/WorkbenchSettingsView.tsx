@@ -22,7 +22,7 @@ import WorkbenchBrowseCapabilitySetting from "./WorkbenchBrowseCapabilitySetting
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
 import WorkbenchProjectLocationMenu from "./WorkbenchProjectLocationMenu";
-import WorkbenchProviderRuntimeSettings from "./WorkbenchProviderRuntimeSettings";
+import WorkbenchProviderSettings from "./WorkbenchProviderSettings";
 import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
 import WorkbenchRepoPrerequisiteSettings from "./WorkbenchRepoPrerequisiteSettings";
 import WorkbenchSettingsPreferences from "./WorkbenchSettingsPreferences";
@@ -247,7 +247,7 @@ export default function WorkbenchSettingsView({
       {place.kind === "app" && place.page === "network" ? <WorkbenchNetworkSettings /> : null}
       {place.kind === "machine" && place.page === "agents" ? <>
         <FormSection id="settings-providers" title="Providers">
-          {withDaemon((client, id) => <WorkbenchProviderRuntimeSettings key={id} daemon={client} />)}
+          {withDaemon((client, id) => <WorkbenchProviderSettings key={id} daemon={client} />)}
         </FormSection>
         <FormSection id="settings-auto-compact" title="Auto-compact">
           {withDaemon((client, id) => <ThreadAutoCompactSettings key={id} daemon={client} />)}
