@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchProjectRepository: own project parents, historical location admission, aliases, catalogue reconciliation, and icon settlement.
+ * - default WorkbenchProjectRepository: own project parents, historical location admission, aliases, catalogue reconciliation
+ *   (marking projects a complete discovery misses, so retained startup catalogues skip them), and icon settlement.
  * - FIXED_PROJECT_IDS: kinds catalogued under a fixed id equal to the kind, exempt from uuid conversion.
  */
 import { randomUUID } from "node:crypto";
@@ -119,7 +120,8 @@ export default class WorkbenchProjectRepository {
 
   readRetained(discoveryRoots: readonly string[]): WorkbenchProjectStartup {
     const projects = this.database.prepare(
-      "SELECT * FROM workbench_projects WHERE kind <> 'historical' ORDER BY relative_path, id",
+      // A project the last complete discovery did not find would only be served until the next scan drops it again.
+      "SELECT * FROM workbench_projects WHERE kind <> 'historical' AND missing_since IS NULL ORDER BY relative_path, id",
     ).all() as ProjectSchemaRows["projects"][];
     const rootsByProject = new Map<string, ProjectSchemaRows["roots"][]>();
     for (const root of this.database.prepare(
@@ -219,8 +221,8 @@ export default class WorkbenchProjectRepository {
             rootPath: roots[0]?.root_path ?? "",
             roots: roots.map(root => ({ rootPath: root.root_path })),
           }))) continue;
-          this.database.prepare("UPDATE workbench_projects SET icon_source_key = ? WHERE id = ?")
-            .run(randomUUID(), previous.id);
+          this.database.prepare("UPDATE workbench_projects SET icon_source_key = ?, missing_since = COALESCE(missing_since, ?) WHERE id = ?")
+            .run(randomUUID(), Date.now(), previous.id);
         }
       }
       const catalog: WorkbenchProjectStartup["catalog"] = [];
@@ -301,7 +303,7 @@ export default class WorkbenchProjectRepository {
       const checkedAt = sourceChanged ? null : previous.icon_checked_at;
       this.database.prepare(`
         UPDATE workbench_projects SET kind = ?, name = ?, relative_path = ?, workspace_path = ?,
-          last_commit_time_ms = ?, icon_source_key = ?, icon_root_id = ?, icon_path = ?, icon_checked_at = ?
+          last_commit_time_ms = ?, icon_source_key = ?, icon_root_id = ?, icon_path = ?, icon_checked_at = ?, missing_since = NULL
         WHERE id = ?
       `).run(project.kind, project.name, project.relativePath, project.workspacePath ?? null,
         project.lastCommitTimeMs === null ? null : Math.trunc(project.lastCommitTimeMs), sourceKey, iconRootId, iconPath, checkedAt, id);

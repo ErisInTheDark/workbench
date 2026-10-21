@@ -11,7 +11,7 @@ import {
   type ColumnReferences, type SelectRow, type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
 import {
-  copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion,
+  addColumns, copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion,
   type TableHistory,
 } from "../../../database/schema/schema-history.ts";
 
@@ -115,6 +115,9 @@ const daemonProjects = defineTable("workbench_projects", {
   ],
 }));
 
+/** When a complete discovery last failed to find the project; retained startup catalogues skip it until rediscovered. */
+const presenceProjects = evolveTable(daemonProjects, { add: { missing_since: integer().nonNegative() } });
+
 const roots = defineTable("workbench_project_roots", {
   project_id: text().notNull().references("workbench_projects", "id"),
   root_id: text().notNull(),
@@ -144,7 +147,7 @@ function initial<Table extends TableDefinition>(table: Table) {
 }
 
 const projectsHistory = defineTableHistory({
-  current: daemonProjects,
+  current: presenceProjects,
   versions: [
     ...initial(projects).versions,
     tableVersion({
@@ -174,6 +177,11 @@ const projectsHistory = defineTableHistory({
       schemaVersion: databaseReleases.daemonProjects.version,
       table: daemonProjects,
       migration: rebuildTable({ from: locationProjects, to: daemonProjects }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.projectPresence.version,
+      table: presenceProjects,
+      migration: addColumns({ from: daemonProjects, to: presenceProjects, columns: ["missing_since"] }),
     }),
   ],
 });

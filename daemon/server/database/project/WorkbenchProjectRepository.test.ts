@@ -249,6 +249,24 @@ test("missing projects retain their cache without remaining in the current catal
   } finally { database.close(); }
 });
 
+test("the retained startup catalogue skips projects the last complete discovery missed until they are rediscovered", () => {
+  const { database, repository } = setup();
+  try {
+    const kept = project("/kept", "remote://example.test/owner/kept");
+    const gone = project("/gone", "remote://example.test/owner/gone");
+    const retained = () => new WorkbenchProjectRepository(database).readRetained(["/"]).catalog.map(item => item.project.rootPath).sort();
+    const goneId = repository.reconcile(discovery([kept, gone])).catalog.find(item => item.project.rootPath === "/gone")!.project.id;
+    assert.deepEqual(retained(), ["/gone", "/kept"]);
+    repository.reconcile(discovery([kept], { complete: false }));
+    assert.deepEqual(retained(), ["/gone", "/kept"], "an incomplete scan is no evidence of absence");
+    repository.reconcile(discovery([kept]));
+    assert.deepEqual(retained(), ["/kept"]);
+    const back = repository.reconcile(discovery([kept, gone])).catalog.find(item => item.project.rootPath === "/gone")!;
+    assert.equal(back.project.id, goneId);
+    assert.deepEqual(retained(), ["/gone", "/kept"]);
+  } finally { database.close(); }
+});
+
 test("returning to earlier roots does not admit an earlier generation's late icon result", () => {
   const { database, repository } = setup();
   try {
