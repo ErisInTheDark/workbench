@@ -21,6 +21,7 @@ minimumReleaseAgeExclude:
   - "@github/copilot-*"
   - "@anthropic-ai/*"
   - "@openai/codex"
+  - "tailwindcss-squircles"
 # Workbench installs Claude Code on demand under its data root; the SDK's bundled binary is never used.
 ignoredOptionalDependencies:
   - "@anthropic-ai/claude-agent-sdk-darwin-arm64"

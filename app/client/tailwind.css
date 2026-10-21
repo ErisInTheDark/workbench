@@ -1,5 +1,6 @@
 @import url("https://fonts.googleapis.com/css2?family=Sour+Gummy:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
+@plugin "tailwindcss-squircles";
 @import "./theme.css";
 @import "./tailwind/colour-utilities.css";
 @import "./tailwind/scrollbar-utilities.css";

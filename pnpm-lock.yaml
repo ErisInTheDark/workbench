@@ -299,6 +299,9 @@ importers:
       jsdom:
         specifier: ^30.1.2
         version: 30.1.2
+      tailwindcss-squircles:
+        specifier: ^0.1.0
+        version: 0.1.0(tailwindcss@4.3.3)
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
@@ -4034,8 +4037,8 @@ packages:
   oxc-resolver@11.24.2:
     resolution: {integrity: sha512-FY91FiDBj7ls5MsFS9jN3tjz2o0/zsdSsymlakySaBwVJZorHhkWyICLZMKxlu1R9vYo+sd3z1jwb4J8x7bNDw==}
 
-  oxlint-plugin-react-doctor@0.9.17:
-    resolution: {integrity: sha512-j6tdFoJbLztISYNlw7LMT+6naqhVsXTNn7drhoGRIqf0x2mCSD2Ur71hK0E/VrLens355finI6j+sMqHxHpEfA==}
+  oxlint-plugin-react-doctor@0.9.18:
+    resolution: {integrity: sha512-1mfeb/jzXnduWOZJxrvdJjvKT0pFNKrNFYcPO4ncpFAnfW41M0mLz/23lAFzHb0knNLYayEgIQ5DjI4ZfFe+DQ==}
     engines: {node: ^20.19.0 || >=22.13.0}
 
   oxlint@1.81.0:
@@ -4239,8 +4242,8 @@ packages:
     resolution: {integrity: sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==}
     engines: {node: '>= 0.10'}
 
-  react-doctor@0.9.17:
-    resolution: {integrity: sha512-YCsjYk6MocO/oBhVxCcKvPotFxEOf/WJep/oF7jrpyVUBVKDKdpt7jVwTxrJrFE8uALMmVTljzXNTIjoL3talg==}
+  react-doctor@0.9.18:
+    resolution: {integrity: sha512-4Ach00KtfnfjTBGgr2PyPgHua85vT/UfPY5sR0bHgRAc/QSu0JInA0GHCL6a7WFGMeGUrxtGnI8oqZinG44BOA==}
     engines: {node: ^20.19.0 || >=22.13.0}
     hasBin: true
 
@@ -4510,6 +4513,12 @@ packages:
   tagged-tag@1.0.0:
     resolution: {integrity: sha512-yEFYrVhod+hdNyx7g5Bnkkb0G6si8HJurOoOEgC8B/O0uXLHlaey/65KRv6cuWBNhBgHKAROVpc7QyYqE5gFng==}
     engines: {node: '>=20'}
+
+  tailwindcss-squircles@0.1.0:
+    resolution: {integrity: sha512-U0P87oIkis7jnU3TJ618g4UR+qUhH0jDsHw1Oid7SO1x3+GDefm950Fmitx/UDeRdK3wYz3Nfyc+6ErVct5fZA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      tailwindcss: ^4.0.0
 
   tailwindcss@4.3.3:
     resolution: {integrity: sha512-gOhV3P7ufE62QDGg1zVaTgCR+EtPv92k2nIhVcVKcLmxT1sUBsQGhnZj175j+MqRt4zLF7ic+sCYjfhxMxj7YQ==}
@@ -8507,7 +8516,7 @@ snapshots:
       '@oxc-resolver/binding-win32-arm64-msvc': 11.24.2
       '@oxc-resolver/binding-win32-x64-msvc': 11.24.2
 
-  oxlint-plugin-react-doctor@0.9.17:
+  oxlint-plugin-react-doctor@0.9.18:
     dependencies:
       '@shaderfrog/glsl-parser': 7.0.1
       '@typescript-eslint/types': 8.62.1
@@ -8748,7 +8757,7 @@ snapshots:
       iconv-lite: 0.7.2
       unpipe: 1.0.0
 
-  react-doctor@0.9.17(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.219.0(@opentelemetry/api@1.9.1))(eslint@10.6.0(jiti@2.7.0)(supports-color@8.1.1))(react@19.1.0)(supports-color@8.1.1):
+  react-doctor@0.9.18(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.219.0(@opentelemetry/api@1.9.1))(eslint@10.6.0(jiti@2.7.0)(supports-color@8.1.1))(react@19.1.0)(supports-color@8.1.1):
     dependencies:
       '@astrojs/compiler': 4.0.0
       '@sentry/node': 10.62.0(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.219.0(@opentelemetry/api@1.9.1))(supports-color@8.1.1)
@@ -8763,7 +8772,7 @@ snapshots:
       oxc-parser: 0.148.0
       oxc-resolver: 11.24.2
       oxlint: 1.81.0
-      oxlint-plugin-react-doctor: 0.9.17
+      oxlint-plugin-react-doctor: 0.9.18
       playwright-core: 1.63.0
       prompts: 2.4.2
       typescript: 5.9.3
@@ -8802,7 +8811,7 @@ snapshots:
       preact: 10.29.3
       prompts: 2.4.2
       react: 19.1.0
-      react-doctor: 0.9.17(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.219.0(@opentelemetry/api@1.9.1))(eslint@10.6.0(jiti@2.7.0)(supports-color@8.1.1))(react@19.1.0)(supports-color@8.1.1)
+      react-doctor: 0.9.18(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.219.0(@opentelemetry/api@1.9.1))(eslint@10.6.0(jiti@2.7.0)(supports-color@8.1.1))(react@19.1.0)(supports-color@8.1.1)
       react-dom: 19.1.0(react@19.1.0)
       react-grab: 0.2.0(react@19.1.0)
     optionalDependencies:
@@ -9099,6 +9108,10 @@ snapshots:
       has-flag: 4.0.0
 
   tagged-tag@1.0.0: {}
+
+  tailwindcss-squircles@0.1.0(tailwindcss@4.3.3):
+    dependencies:
+      tailwindcss: 4.3.3
 
   tailwindcss@4.3.3: {}
 
