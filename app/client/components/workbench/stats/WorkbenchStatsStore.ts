@@ -14,6 +14,7 @@ import type { WorkbenchHarness, WorkbenchProjectOption } from "workbench-shared/
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkspaceProjectReference } from "workbench-shared/workbench/workspace/workspace-observation";
+import { REMOVED_PROJECTS_ID } from "workbench-shared/workbench/project/project-state";
 import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type { z } from "zod";
@@ -428,7 +429,8 @@ export default class WorkbenchStatsStore {
     const { attachedDaemonId, names } = inputs.scope;
     const isLocal = (daemonId: string | null | undefined) => !daemonId || daemonId === attachedDaemonId;
     const projectName = (projectId: string, daemonId?: string | null) => names.get(statsLocationKey(daemonId ?? attachedDaemonId, projectId))
-      ?? names.get(projectId) ?? inputs.projects.find(({ id }) => id === projectId)?.name ?? projectId;
+      ?? names.get(projectId) ?? inputs.projects.find(({ id }) => id === projectId)?.name
+      ?? (projectId === REMOVED_PROJECTS_ID ? "Removed projects" : projectId);
     const remoteLogicalProject = (projectId: string, daemonId: string | null | undefined) =>
       isLocal(daemonId) ? null : this.#logicalProject(projectId, daemonId);
     const threadRoute = (thread: StatsThreadLocation) => inputs.threadRoute(thread, remoteLogicalProject(thread.projectId, thread.daemonId));

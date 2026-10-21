@@ -1,15 +1,17 @@
 /*
  * Exports:
  * - default WorkbenchProjectRepository: own project parents, historical location admission, aliases, catalogue reconciliation
- *   (marking projects a complete discovery misses, so retained startup catalogues skip them), and icon settlement.
+ *   (marking projects a complete discovery misses, so retained startup catalogues skip them, and retiring ones gone from disk
+ *   across two scans with no unarchived threads), and icon settlement.
  * - FIXED_PROJECT_IDS: kinds catalogued under a fixed id equal to the kind, exempt from uuid conversion.
  */
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import type Database from "better-sqlite3";
 import { z } from "zod";
 import { ProjectIdSchema, ProjectIdentityKeySchema, type ProjectId } from "workbench-shared/workbench/identity";
-import { WorkbenchProjectIconSchema, WorkbenchProjectOptionSchema } from "workbench-shared/workbench/project/project-state";
+import { REMOVED_PROJECTS_ID, WorkbenchProjectIconSchema, WorkbenchProjectOptionSchema } from "workbench-shared/workbench/project/project-state";
 import type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
 import { nativeLocationKey } from "../thread-identity/native-location-key.ts";
 import { projectLocationKey } from "../../lib/workbench/project/project-location-discovery.ts";
@@ -20,7 +22,11 @@ const uuid = z.string().uuid();
 export const FIXED_PROJECT_IDS: ReadonlySet<string> = new Set(["workbench-library", "daemon"]);
 
 export default class WorkbenchProjectRepository {
-  constructor(private readonly database: Database.Database) {}
+  constructor(
+    private readonly database: Database.Database,
+    /** Whether a retained root folder is still on disk; only a project with none left can retire. */
+    private readonly folderExists: (rootPath: string) => boolean = fs.existsSync,
+  ) {}
 
   resolve(id: string): ProjectId {
     const alias = this.database.prepare("SELECT project_id FROM workbench_project_aliases WHERE alias = ?").get(id) as { project_id: string } | undefined;
@@ -116,6 +122,50 @@ export default class WorkbenchProjectRepository {
   private retainAvailableAlias(alias: string, projectId: ProjectId) {
     const previous = this.database.prepare("SELECT project_id FROM workbench_project_aliases WHERE alias = ?").pluck().get(alias);
     if (!previous || previous === projectId) this.retainAlias(alias, projectId);
+  }
+
+  /**
+   * Deletes a vanished project unless an unarchived thread still belongs to it. Its archived threads, their usage and tool
+   * facts, and its feedback move to REMOVED_PROJECTS_ID so stats totals stay exact; everything else it owned is deleted.
+   * Returns whether it was retired; a failure rolls the whole project back and leaves it marked missing.
+   */
+  private retireVanished(projectId: string) {
+    if (this.database.prepare(`
+      SELECT 1 FROM workbench_threads thread
+      JOIN workbench_top_level_thread_states placement ON placement.thread_id = thread.id
+      WHERE thread.project_id = ? AND placement.archived = 0 LIMIT 1
+    `).get(projectId)) return false;
+    try {
+      this.database.transaction(() => {
+        const ids = { project: projectId, removed: REMOVED_PROJECTS_ID };
+        const run = (statement: string) => this.database.prepare(statement).run(ids);
+        run("INSERT OR IGNORE INTO workbench_projects(id, kind) VALUES (@removed, 'historical')");
+        for (const table of [
+          "workbench_threads", "thread_tool_daily_aggregates", "workbench_subagent_relationships",
+          "workbench_thread_vis_sessions", "workbench_agent_feedback",
+        ]) run(`UPDATE ${table} SET project_id = @removed WHERE project_id = @project`);
+        // Import receipts keep their provider thread already counted; a duplicate under the owner is the same receipt.
+        run("UPDATE OR IGNORE thread_usage_imports SET project_id = @removed WHERE project_id = @project");
+        run("DELETE FROM workbench_sidebar_layouts WHERE id IN (SELECT layout_id FROM workbench_sidebar_project_layouts WHERE project_id = @project)");
+        for (const [table, column] of [
+          ["thread_usage_imports", "project_id"], ["git_claim_sessions", "project_id"],
+          ["git_claim_thread_file_days", "project_id"], ["git_claim_imports", "project_id"],
+          ["workbench_thread_drafts", "project_id"], ["workbench_project_thread_profiles", "project_id"],
+          ["workbench_composer_profiles", "scope_project_id"], ["codex_sandbox_network_project_overrides", "project_id"],
+          ["workbench_browse_sessions", "project_id"], ["workbench_thread_launches", "project_id"],
+          ["workbench_search_documents", "project_id"], ["workbench_project_aliases", "project_id"],
+        ] as const) run(`DELETE FROM ${table} WHERE ${column} = @project`);
+        run("UPDATE workbench_projects SET icon_root_id = NULL, icon_path = NULL, icon_checked_at = NULL WHERE id = @project");
+        run("DELETE FROM workbench_project_roots WHERE project_id = @project");
+        // Approval rules and the project store cascade with the project row.
+        run("DELETE FROM workbench_projects WHERE id = @project");
+      })();
+      return true;
+    } catch (error) {
+      console.warn(`[projects] vanished project ${projectId} stays hidden; retiring it failed: ${
+        (error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
+      return false;
+    }
   }
 
   readRetained(discoveryRoots: readonly string[]): WorkbenchProjectStartup {
@@ -221,6 +271,9 @@ export default class WorkbenchProjectRepository {
             rootPath: roots[0]?.root_path ?? "",
             roots: roots.map(root => ({ rootPath: root.root_path })),
           }))) continue;
+          // Missed by an earlier complete scan too, with every folder gone from disk: one hiccup cannot get here.
+          if (previous.missing_since !== null && !roots.some(root => this.folderExists(root.root_path))
+            && this.retireVanished(previous.id)) continue;
           this.database.prepare("UPDATE workbench_projects SET icon_source_key = ?, missing_since = COALESCE(missing_since, ?) WHERE id = ?")
             .run(randomUUID(), Date.now(), previous.id);
         }

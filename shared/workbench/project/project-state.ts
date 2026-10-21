@@ -8,10 +8,14 @@
  * - WorkbenchProjectStateUpdateSchema/WorkbenchProjectStateUpdate: pushed project snapshot update.
  * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh and delete requests.
  * - WorkbenchDeleteFileResultSchema: deletion metadata without a duplicate snapshot.
+ * - REMOVED_PROJECTS_ID: the ownerless historical project that keeps retired projects' archived threads and their stats.
  */
 import { z } from "zod";
 
 import type { TreeNode, WorkbenchProjectOption, WorkbenchProjectsPayload } from "../../types.ts";
+
+/** Never catalogued; retired projects move their archived threads, usage and feedback here so stats totals stay exact. */
+export const REMOVED_PROJECTS_ID = "00000000-0000-4000-8000-0000ffffffff";
 
 const ChangeSummarySchema = z.object({ additions: z.number(), deletions: z.number() }).strict();
 const WorkbenchProjectRootSchema = z.object({

@@ -1,8 +1,9 @@
-/* No production exports. Tests protect stable project ownership, discovery evidence and source-fenced icon settlement. */
+/* No production exports. Tests protect stable project ownership, discovery evidence, vanished-project retirement and source-fenced icon settlement. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { ProjectIdentityKeySchema } from "workbench-shared/workbench/identity";
+import { REMOVED_PROJECTS_ID } from "workbench-shared/workbench/project/project-state";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchProjectRepository from "./WorkbenchProjectRepository";
 import type { WorkbenchProjectCandidate, WorkbenchProjectDiscovery } from "./workbench-project-persistence";
@@ -20,11 +21,12 @@ function discovery(data: WorkbenchProjectCandidate[], overrides: Partial<Workben
     observedKeys: data.flatMap(item => [item.identityKey, ...item.roots.map(root => root.identityKey)]), ...overrides };
 }
 
-function setup() {
+/** Fixture folders are not real, so each test says whether they are still on disk. */
+function setup(folderExists: (rootPath: string) => boolean = () => true) {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
-  return { database, repository: new WorkbenchProjectRepository(database) };
+  return { database, repository: new WorkbenchProjectRepository(database, folderExists) };
 }
 
 test("a changed remote at the same checkout retains its durable owner across reopening and reversal", () => {
@@ -265,6 +267,56 @@ test("the retained startup catalogue skips projects the last complete discovery 
     assert.equal(back.project.id, goneId);
     assert.deepEqual(retained(), ["/gone", "/kept"]);
   } finally { database.close(); }
+});
+
+/** One thread with a tool aggregate in `projectId`, archived or not. */
+function seedThread(database: Database.Database, projectId: string, threadId: string, archived: boolean) {
+  database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES ('codex')").run();
+  database.prepare(`INSERT INTO workbench_threads
+    (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+    VALUES (?, ?, '/gone', 'thread', 1, 1, 1, 1)`).run(threadId, projectId);
+  database.prepare(`INSERT INTO workbench_thread_states (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
+    VALUES (?, 'topLevel', 'codex', 'thread', 1, 1)`).run(threadId);
+  database.prepare("INSERT INTO workbench_top_level_thread_states (thread_id, thread_kind, archived) VALUES (?, 'topLevel', ?)")
+    .run(threadId, archived ? 1 : 0);
+  database.prepare(`INSERT INTO thread_tool_daily_aggregates (project_id, thread_id, day, tool_name, call_count, failure_count)
+    VALUES (?, ?, 1, 'rg', 3, 1)`).run(projectId, threadId);
+}
+
+test("a project gone from disk across two complete scans moves its archived threads ownerless and is deleted", () => {
+  const { database, repository } = setup(rootPath => rootPath !== "/gone");
+  try {
+    const kept = project("/kept", "remote://example.test/owner/kept");
+    const gone = project("/gone", "remote://example.test/owner/gone");
+    const goneId = repository.reconcile(discovery([kept, gone])).catalog.find(item => item.project.rootPath === "/gone")!.project.id;
+    seedThread(database, goneId, "archived-thread", true);
+    const exists = () => Boolean(database.prepare("SELECT 1 FROM workbench_projects WHERE id = ?").get(goneId));
+    repository.reconcile(discovery([kept]));
+    assert.ok(exists(), "a first miss only marks the project");
+    repository.reconcile(discovery([kept]));
+    assert.ok(!exists());
+    assert.equal(database.prepare("SELECT COUNT(*) FROM workbench_project_roots WHERE project_id = ?").pluck().get(goneId), 0);
+    assert.equal(database.prepare("SELECT project_id FROM workbench_threads WHERE id = 'archived-thread'").pluck().get(), REMOVED_PROJECTS_ID);
+    assert.deepEqual(database.prepare("SELECT project_id, call_count FROM thread_tool_daily_aggregates").all(), [
+      { project_id: REMOVED_PROJECTS_ID, call_count: 3 },
+    ]);
+    assert.deepEqual(new WorkbenchProjectRepository(database).readRetained(["/"]).catalog.map(item => item.project.rootPath), ["/kept"]);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("a vanished project stays while it has an unarchived thread or a folder still on disk", () => {
+  for (const guard of ["unarchived", "on disk"] as const) {
+    const { database, repository } = setup(() => guard === "on disk");
+    try {
+      const goneId = repository.reconcile(discovery([project("/gone", "remote://example.test/owner/gone")])).catalog[0]!.project.id;
+      if (guard === "unarchived") seedThread(database, goneId, "live-thread", false);
+      repository.reconcile(discovery([]));
+      repository.reconcile(discovery([]));
+      assert.ok(database.prepare("SELECT 1 FROM workbench_projects WHERE id = ?").get(goneId), guard);
+      assert.deepEqual(repository.readRetained(["/"]).catalog, [], `${guard} stays hidden`);
+    } finally { database.close(); }
+  }
 });
 
 test("returning to earlier roots does not admit an earlier generation's late icon result", () => {
