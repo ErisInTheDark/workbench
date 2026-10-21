@@ -10,10 +10,10 @@ import { useEffect, useRef, useState } from "react";
 import type { WorkbenchSearchKind } from "workbench-shared/workbench/search/workbench-search";
 
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
-import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
-import { WORKBENCH_SEARCH_FILTERS, type WorkbenchSearchHit } from "../../../workbench/search/WorkbenchSearchController";
+import { WORKBENCH_SEARCH_FILTERS, WorkbenchSearchHit } from "../../../workbench/search/WorkbenchSearchController";
 import { useWorkbenchExplorer } from "../explorer/workbench-explorer-context";
 import { useProjects } from "../use-projects";
 import Keybind from "../../ui/Keybind";
@@ -79,8 +79,9 @@ export default function WorkbenchSearchDialog() {
   }, [snapshot.selectedIndex]);
 
   if (!snapshot.isOpen) return null;
+  const scopeProject = snapshot.projectId ? logicalProjects?.find(item => item.id === snapshot.projectId) : undefined;
   const scopeName = snapshot.projectId
-    ? logicalProjects?.find(item => item.id === snapshot.projectId)?.label
+    ? (scopeProject ? scopeProject.displayName ?? scopeProject.label : null)
       ?? projects.find(item => item.id === snapshot.projectId)?.name ?? null
     : null;
   const filters = WORKBENCH_SEARCH_FILTERS.filter(kind => !kind || !PROJECT_KINDS.has(kind) || snapshot.projectId);
@@ -122,11 +123,8 @@ export default function WorkbenchSearchDialog() {
             compact={false}
             dimmedOverride={false}
             entry={thread}
-            href={projectHref(result.logicalProjectId
-              ? createLogicalExistingThreadRoute(result.logicalProjectId,
-                { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId })
-              : createThreadRoute(result.projectId,
-                { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId }))}
+            href={projectHref(WorkbenchSearchHit.threadRoute(result) ?? createThreadRoute(result.projectId,
+              { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId }))}
             id={id}
             onActivate={() => controller.activate(result)}
             project={logicalProject ?? project}

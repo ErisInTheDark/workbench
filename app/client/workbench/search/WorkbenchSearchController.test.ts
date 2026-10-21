@@ -1,7 +1,12 @@
-/* No exports. Protect query replacement, the steady shown result set, filters, summary readiness and disposal without timer races. */
+/*
+ * No exports. Protect query replacement, the steady shown result set, filters, summary readiness, disposal without timer
+ * races, and thread hits opening without client-side owner knowledge.
+ */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import WorkbenchSearchController, { SEARCH_DISPLAY_DEADLINE_MS } from "./WorkbenchSearchController";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchProjectNavigation from "../navigation/workbench-project-navigation";
+import WorkbenchSearchController, { SEARCH_DISPLAY_DEADLINE_MS, WorkbenchSearchHit } from "./WorkbenchSearchController";
 import type { WorkspaceQuerySnapshot } from "../app/WorkbenchWorkspaceClient";
 import type { WorkbenchSearchRequest, WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 
@@ -153,6 +158,19 @@ test("kind and scope filters request at once, cycle with wrap-around, and only s
   controller.setProjectId("project");
   assert.deepEqual(reads.at(-1)!.request, { projectId: "project", query: "", projectOnly: true });
   controller.dispose();
+});
+
+test("a thread hit the client never listed still opens through the owner and folder search found it in", () => {
+  const owner = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const source = { daemonId: DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c"), projectId: ProjectIdSchema.parse("owner-folder") };
+  const navigation = new WorkbenchProjectNavigation([], [], [{
+    id: owner, matchKey: "remote://github.com/team/other", label: "other",
+    locations: [{ target: source, daemonId: source.daemonId, hostname: "desktop", name: "other", rootPath: "C:/other", project: null }],
+  }]);
+  const hit = { kind: "thread", id: "hit", threadId: "thread-uuid", projectId: "owner-folder", harnessId: "codex",
+    title: "", detail: "", logicalProjectId: owner, source } as const;
+  assert.equal(navigation.href(WorkbenchSearchHit.threadRoute(hit)!), "/@/*/thread/other/thread-uuid");
+  assert.equal(WorkbenchSearchHit.threadRoute({ ...hit, logicalProjectId: undefined }), null);
 });
 
 test("project changes and close/reopen replace intent immediately, disposal fences further updates and releases leases", () => {

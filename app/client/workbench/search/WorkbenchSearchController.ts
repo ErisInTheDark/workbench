@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSearchHit: source-qualified selectable search result.
+ * - WorkbenchSearchHit: source-qualified selectable search result; `.threadRoute` opens a thread hit by its found owner.
  * - WorkbenchSearchSummaries: the thread summary leases search waits on before showing thread rows.
  * - WORKBENCH_SEARCH_FILTERS: the kind filters in display and cycling order; null is every kind.
  * - WorkbenchSearchSnapshot: dialog intent, filters, the shown result set and selection.
@@ -10,13 +10,29 @@
 import type {
   WorkbenchSearchCorrection, WorkbenchSearchKind, WorkbenchSearchRequest, WorkbenchSearchResult,
 } from "workbench-shared/workbench/search/workbench-search";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { createLogicalThreadRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkspaceQuerySnapshot } from "../app/WorkbenchWorkspaceClient";
 
 export type WorkbenchSearchHit = WorkbenchSearchResult & {
   logicalProjectId?: string;
   source?: ProjectLocationReference;
+};
+
+export const WorkbenchSearchHit = {
+  /**
+   * A thread hit's route, qualified by the owner and folder the search found it in, as sidebar rows are: most hits are
+   * threads the client has never listed, so the navigator cannot look their owner up. Null for hits outside any project.
+   */
+  threadRoute(hit: Extract<WorkbenchSearchHit, { kind: "thread" }>): WorkbenchRoute | null {
+    if (!hit.logicalProjectId || !hit.source) return null;
+    return createLogicalThreadRoute(null, hit.logicalProjectId, hit.source, {
+      kind: "provider", harness: WorkbenchHarnessSchema.parse(hit.harnessId), threadId: ThreadReferenceSchema.parse(hit.threadId),
+    });
+  },
 };
 
 export interface WorkbenchSearchSummaries {

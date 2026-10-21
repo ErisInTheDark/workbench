@@ -120,6 +120,7 @@ import WorkbenchThreadOwnerLabel from "./workbench/WorkbenchThreadOwnerLabel";
 import WorkbenchProjectLocationMenu from "./workbench/WorkbenchProjectLocationMenu";
 import WorkbenchSearchDialog from "./workbench/search/WorkbenchSearchDialog";
 import { useWorkbenchSearch } from "./workbench/search/workbench-search-context";
+import { WorkbenchSearchHit } from "../workbench/search/WorkbenchSearchController";
 import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
 import { workbenchRouteViews } from "./workbench/route-views/workbench-route-views";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
@@ -498,11 +499,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           logicalProjectId ? [logicalProjectId] : null), { selection: "exact" });
         break;
       }
-      case "thread":
-        if (result.logicalProjectId) {
-          navigateToRoute(createLogicalExistingThreadRoute(result.logicalProjectId,
-            { kind: "provider", harness: result.harnessId as WorkbenchHarness,
-              threadId: ThreadReferenceSchema.parse(result.threadId) }));
+      case "thread": {
+        const threadRoute = WorkbenchSearchHit.threadRoute(result);
+        if (threadRoute) {
+          navigateToRoute(threadRoute);
           break;
         }
         void openThreadFromExplorer({
@@ -511,6 +511,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           threadId: ThreadReferenceSchema.parse(result.threadId),
         }, result.projectId);
         break;
+      }
       case "file":
         if (result.source && result.logicalProjectId) {
           navigateToRoute(createLogicalFileRoute(result.logicalProjectId, result.source, result.path));
