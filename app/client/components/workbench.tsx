@@ -94,6 +94,7 @@ import { seedNewThreadReferences } from "../workbench/thread/new-thread-referenc
 import { WorkbenchFeedbackAddressingContext } from "./workbench/address-feedback-context";
 import { WorkbenchShellErrorContext } from "./workbench/workbench-shell-error-context";
 import ThreadViewKeys, { ThreadViewKeysContext } from "../workbench/thread/ThreadViewKeys";
+import ThreadSubagentTabMemory, { ThreadSubagentTabMemoryContext } from "../workbench/thread/ThreadSubagentTabMemory";
 import { useWorkbenchComposerProfiles } from "./workbench/WorkbenchComposerProfileContext";
 import { readWorkbenchLaunchSelection } from "workbench-shared/state/workbench-client-state";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
@@ -225,6 +226,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const directThreadScrollViewportRef = useRef<HTMLDivElement>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const [threadViewKeys] = useState(() => new ThreadViewKeys());
+  const [subagentTabMemory] = useState(() => new ThreadSubagentTabMemory());
   const search = useWorkbenchSearch();
   const sidebarPreferences = useWorkbenchSidebarPreferences.global();
   const isEffectiveDesktopSidebarCollapsed = !isMobile && sidebarPreferences.preferences.sidebarCollapsed;
@@ -812,6 +814,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
   return (
     <ThreadViewKeysContext.Provider value={threadViewKeys}>
+    <ThreadSubagentTabMemoryContext.Provider value={subagentTabMemory}>
     <WorkbenchShellErrorContext.Provider value={setSelectionError}>
     <WorkbenchFeedbackAddressingContext.Provider value={feedbackAddressing}>
     <WorkbenchExplorerContext.Provider value={explorer}>
@@ -1168,6 +1171,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     </WorkbenchExplorerContext.Provider>
     </WorkbenchFeedbackAddressingContext.Provider>
     </WorkbenchShellErrorContext.Provider>
+    </ThreadSubagentTabMemoryContext.Provider>
     </ThreadViewKeysContext.Provider>
   );
 }

@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { WorkbenchHarness, WorkbenchSubagentSummary } from "workbench-shared/types";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -19,13 +19,13 @@ import {
   getSubagentThreadIds,
   getThreadAgentTabLabel,
   reconcileSubagentTabOrder,
-  type SubagentTabOrder,
 } from "../../../workbench/thread/thread-subagents";
+import ThreadSubagentTabMemory, { ThreadSubagentTabMemoryContext } from "../../../workbench/thread/ThreadSubagentTabMemory";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 
 /**
- * Display state lives with the calling view, not the strip: the strip renders inside the composer, which remounts on
- * every tab switch. Tabs keep their slot across activity; only new or unsettled children move to the front.
+ * Order and reveal persist in the shell's memory: the whole thread surface remounts on every tab switch. Tabs keep their
+ * slot across activity; only new or unsettled children move to the front.
  */
 export default function useThreadSubagentTabs ({
   activeThreadId,
@@ -52,16 +52,22 @@ export default function useThreadSubagentTabs ({
   updateThreadState: (request: WorkbenchThreadStateRequest) => Promise<unknown>;
 }): ReactNode {
   const projectHref = useWorkbenchProjectNavigation();
-  const [areSettledVisible, setAreSettledVisible] = useState(false);
+  const shellMemory = useContext(ThreadSubagentTabMemoryContext);
+  const [localMemory] = useState(() => new ThreadSubagentTabMemory());
+  const memory = shellMemory ?? localMemory;
+  const [settledReveal, setSettledReveal] = useState(() => ({
+    threadId: thread.id, visible: memory.read(thread.id).settledVisible,
+  }));
+  const areSettledVisible = settledReveal.threadId === thread.id
+    ? settledReveal.visible : memory.read(thread.id).settledVisible;
   const hasSettledSubagents = useMemo(() => subagents.some((subagent) => subagent.lifecycle?.settled), [subagents]);
-  const orderRef = useRef<{ threadId: string; value: SubagentTabOrder } | null>(null);
-  const order = useMemo(() => reconcileSubagentTabOrder(
-    orderRef.current?.threadId === thread.id ? orderRef.current.value : null,
-    subagents,
-  ), [subagents, thread.id]);
+  const order = useMemo(
+    () => reconcileSubagentTabOrder(memory.read(thread.id).order, subagents),
+    [memory, subagents, thread.id],
+  );
   useEffect(() => {
-    orderRef.current = { threadId: thread.id, value: order };
-  }, [order, thread.id]);
+    memory.write(thread.id, { order });
+  }, [memory, order, thread.id]);
   const visibleThreadIds = useMemo(() => {
     const revealedThreadIds = new Set<string>(
       areSettledVisible
@@ -97,8 +103,10 @@ export default function useThreadSubagentTabs ({
   }, [relatedThreadsById, subagents, visibleThreadIds]);
 
   const toggleSettledVisible = useCallback(() => {
-    setAreSettledVisible((current) => !current);
-  }, []);
+    const visible = !areSettledVisible;
+    memory.write(thread.id, { settledVisible: visible });
+    setSettledReveal({ threadId: thread.id, visible });
+  }, [areSettledVisible, memory, thread.id]);
 
   const getTabHref = useCallback((threadId: string) => {
     const target: WorkbenchThreadRouteTarget = threadId === thread.id
