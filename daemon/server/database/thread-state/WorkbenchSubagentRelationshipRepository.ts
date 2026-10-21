@@ -7,7 +7,7 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { WorkbenchStoredSubagent, WorkbenchSubagentReservation } from "../../workbench-subagent-record";
+import type { WorkbenchStoredSubagent, WorkbenchSubagentReservation } from "../../subagents/workbench-subagent-record";
 import type { WorkbenchSubagentRelationshipRead } from "./workbench-thread-state-persistence";
 
 type RelationshipRow = {

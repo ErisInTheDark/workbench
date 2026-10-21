@@ -7,7 +7,7 @@ import {
   WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
-import WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
+import WorkbenchThreadIdentityController from "../../thread/WorkbenchThreadIdentityController";
 import { ProviderRuntimeMissingError } from "../provider-runtimes";
 import ClaudeSessionHost, { ENDED_CLAUDE_SESSION } from "./ClaudeSessionHost";
 import ClaudeThreadOperations, { type ClaudeThreadOperationsOptions } from "./ClaudeThreadOperations";

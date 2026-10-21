@@ -9,16 +9,16 @@ import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
 import { resolveGitDirectory } from "../lib/git";
 import { readWorkbenchInstructionSources } from "../lib/workbench/instructions/instruction-source";
-import type { ReloadableNodeBuild } from "../ReloadableNode";
+import type { ReloadableNodeBuild } from "../runtime/ReloadableNode";
 import { reconcileCatalogClaims } from "../stats/reconcile-catalog-claims";
 import WorkbenchClaimRenameController from "../stats/WorkbenchClaimRenameController";
 import WorkbenchStatsController from "../stats/WorkbenchStatsController";
 import WorkbenchToolCatalogueTokens from "../stats/WorkbenchToolCatalogueTokens";
-import WorkbenchAccountLimitsController from "../WorkbenchAccountLimitsController";
-import type WorkbenchGitArcFeature from "../WorkbenchGitArcFeature";
-import type WorkbenchHarnessController from "../WorkbenchHarnessController";
-import type WorkbenchProjectCatalogController from "../WorkbenchProjectCatalogController";
-import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
+import WorkbenchAccountLimitsController from "../providers/WorkbenchAccountLimitsController";
+import type WorkbenchGitArcFeature from "../git/WorkbenchGitArcFeature";
+import type WorkbenchHarnessController from "../providers/WorkbenchHarnessController";
+import type WorkbenchProjectCatalogController from "../project/WorkbenchProjectCatalogController";
+import type WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 
 export default class WorkbenchCoreStatsFeature {
   readonly stats: WorkbenchStatsController;

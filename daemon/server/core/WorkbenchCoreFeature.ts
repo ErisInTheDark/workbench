@@ -1,0 +1,84 @@
+/*
+ * Exports:
+ * - WORKBENCH_CORE_FEATURE_KEYS: feature keys owned by the core lifecycle node.
+ * - default WorkbenchCoreFeature: core node value and lifecycle owner for state, Git (incl. peer transfers and branch positions), thread skills, todos and vis sessions, user-added MCP servers, questionnaire waits, live approvals, harness routing, and supervisors.
+ */
+import type { ReloadableNodeInstance } from "../runtime/ReloadableNode";
+import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../daemon-runtime-objects";
+
+export const WORKBENCH_CORE_FEATURE_KEYS = [
+  "agentContext",
+  "approvals",
+  "voiceSettings",
+  "browseSessionCleanup",
+  "daemonRequests",
+  "gitArc",
+  "gitPeer",
+  "branchPositions",
+  "harnesses",
+  "mcpServers",
+  "messages",
+  "modules",
+  "projectCatalog",
+  "projectSnapshot",
+  "projectFiles",
+  "projectStore",
+  "providerObservations",
+  "questionnaires",
+  "subagents",
+  "subagentQueues",
+  "stats",
+  "threadGit",
+  "threadState",
+  "threadActions",
+  "threadContextRollover",
+  "threadSkills",
+  "threadTodos",
+  "vis",
+  "transcriptReader",
+  "transcriptReconciliation",
+  "workingTree",
+  "accountLimits",
+  "threadRuntime",
+  "threadSummaries",
+] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
+
+interface WorkbenchCoreFeatureOptions {
+  hasPendingWork?(): boolean;
+  afterCommit?(): void;
+  beginRuntimeDrain(): void;
+  captureReloadState?(): unknown;
+  dispose(reportPhase: (phase: string) => void): Promise<void> | void;
+  registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]>;
+  start(reportPhase: (phase: string) => void): Promise<void> | void;
+}
+
+export default class WorkbenchCoreFeature implements ReloadableNodeInstance<DaemonRuntimeObjects, DaemonProviderNotification> {
+  readonly registrations: Partial<DaemonRuntimeObjects>;
+
+  constructor(private readonly options: WorkbenchCoreFeatureOptions) {
+    this.registrations = options.registrations;
+  }
+
+  hasPendingWork() { return this.options.hasPendingWork?.() ?? false; }
+
+  beginRuntimeDrain() {
+    this.options.beginRuntimeDrain();
+  }
+
+  captureReloadState() {
+    return this.options.captureReloadState?.();
+  }
+
+  afterCommit() {
+    this.options.afterCommit?.();
+  }
+
+  async dispose(reportPhase: (phase: string) => void = () => undefined) {
+    await this.options.dispose(reportPhase);
+  }
+
+  async start(reportPhase: (phase: string) => void = () => undefined) {
+    await this.options.start(reportPhase);
+  }
+}

@@ -21,7 +21,7 @@ import ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import ClaudeConfigView from "./ClaudeConfigView";
 import { CLAUDE_COMMENTARY_SERVER_NAME, createClaudeCommentaryServer } from "./claude-commentary-tool";
 import { claudeToolResults, claudeToolUseIds, createClaudeSessionHooks } from "./claude-session-hooks";
-import type { WorkbenchAgentMcpRequestRegistry } from "../../workbench-agent-mcp-request-registry";
+import type { WorkbenchAgentMcpRequestRegistry } from "../../agent/workbench-agent-mcp-request-registry";
 
 export class ClaudePromptQueue implements AsyncIterable<SDKUserMessage> {
   private readonly values: SDKUserMessage[] = [];

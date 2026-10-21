@@ -5,11 +5,11 @@ import http from "node:http";
 import type { Info, ToolContext, ToolEditor } from "@opencode/plugin/promise/tool";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import OpenCodeCompanionToolsController, { connectLifecycleOwnedCompanionTools, type CompanionToolClient } from "./OpenCodeCompanionToolsController";
-import WorkbenchAgentMcpController from "../../../WorkbenchAgentMcpController";
-import { WorkbenchAgentMcpRequestRegistry } from "../../../workbench-agent-mcp-request-registry";
+import WorkbenchAgentMcpController from "../../../agent/WorkbenchAgentMcpController";
+import { WorkbenchAgentMcpRequestRegistry } from "../../../agent/workbench-agent-mcp-request-registry";
 import OpenCodeToolsController from "../OpenCodeToolsController";
 import { WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
-import type { ProviderToolResult, WorkbenchToolTranscriptReference } from "../../../provider-execution";
+import type { ProviderToolResult, WorkbenchToolTranscriptReference } from "../../provider-execution";
 import { listWorkbenchAgentCodeModeToolNames } from "../../../lib/workbench/commands/workbench-agent-command-registry";
 import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
 

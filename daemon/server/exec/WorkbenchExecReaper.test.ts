@@ -1,7 +1,7 @@
 /* No production exports. Protect that the current generation's roots are recorded and forgotten, and only earlier generations' roots are reaped, by start time, through the sandbox. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { CodexExecRootEvent } from "../CodexExecServer";
+import type { CodexExecRootEvent } from "../providers/codex/CodexExecServer";
 import type { ExecRootRecord } from "../database/exec/WorkbenchExecRootStore";
 import WorkbenchExecReaper, { buildExecReapScript } from "./WorkbenchExecReaper";
 

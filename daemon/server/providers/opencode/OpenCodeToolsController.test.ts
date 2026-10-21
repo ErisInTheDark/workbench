@@ -8,7 +8,7 @@ import OpenCodeToolsController from "./OpenCodeToolsController";
 import {
   WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
-import type { WorkbenchProviderTools } from "../../provider-execution";
+import type { WorkbenchProviderTools } from "../provider-execution";
 
 test("native mutation admission checks every resource against the resolved caller", async () => {
   const checked: object[] = [];

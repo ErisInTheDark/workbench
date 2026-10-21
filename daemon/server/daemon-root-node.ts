@@ -4,14 +4,14 @@
  */
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
-import { defineReloadableNodeGraph } from "./ReloadableNode";
+import { defineReloadableNodeGraph } from "./runtime/ReloadableNode";
 import path from "node:path";
 import {
   beginReloadSourceGeneration,
   cancelReloadSourceGeneration,
   completeReloadSourceGeneration,
 } from "./lib/workbench/reload-source-observer";
-import WorkbenchAgentCliNode from "./WorkbenchAgentCliNode";
+import WorkbenchAgentCliNode from "./agent/WorkbenchAgentCliNode";
 import OpenCodeServiceNode from "./providers/opencode/OpenCodeServiceNode";
 import ClaudeSessionNode from "./providers/claude/ClaudeSessionNode";
 
@@ -20,11 +20,11 @@ const graph = (() => {
   try {
     const graph = defineReloadableNodeGraph<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>([
       WorkbenchAgentCliNode,
-      require("./WorkbenchTurnLifecycleNode").default,
-      require("./WorkbenchTransitionLeaseNode").default,
-      require("./WorkbenchDatabaseNode").default,
-      require("./CodexLifecycleNode").default,
-      require("./CodexExecServerNode").default,
+      require("./turn/WorkbenchTurnLifecycleNode").default,
+      require("./runtime/WorkbenchTransitionLeaseNode").default,
+      require("./database/WorkbenchDatabaseNode").default,
+      require("./providers/codex/CodexLifecycleNode").default,
+      require("./providers/codex/CodexExecServerNode").default,
       OpenCodeServiceNode,
       ClaudeSessionNode,
     ]);

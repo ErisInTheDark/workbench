@@ -6,7 +6,7 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { createWorkbenchProjectThreadSummary, type WorkbenchThreadDraft, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
-import { projectWorkbenchThreadStateEntry, type WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
+import { projectWorkbenchThreadStateEntry, type WorkbenchThreadStateRecord } from "../../thread/workbench-thread-state-record";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";

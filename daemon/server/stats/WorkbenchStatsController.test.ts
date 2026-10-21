@@ -19,7 +19,7 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import WorkbenchStatsController from "./WorkbenchStatsController.ts";
 import type { WorkbenchClaimRenameScope } from "./WorkbenchClaimRenameController.ts";
 import { ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import type WorkbenchProvider from "../WorkbenchProvider";
+import type WorkbenchProvider from "../providers/WorkbenchProvider";
 import { WorkbenchAccountLimitsSchema } from "workbench-shared/workbench/provider/provider-account";
 
 const unused = async (): Promise<never> => { throw new Error("Unexpected provider operation"); };

@@ -1,0 +1,56 @@
+/*
+ * Exports:
+ * - WorkbenchShellRunnerOptions: the exec node's executor, expensive-command slots and direct-spawn ports.
+ * - WorkbenchShellObserver: one shell's expensive-queue ticket plus its live output listener.
+ * - default WorkbenchShellRunner: run one prepared agent command where its process lives, outside every provider generation.
+ */
+import type CodexExecServer from "../providers/codex/CodexExecServer";
+import type { CodexExecOutputListener } from "../providers/codex/CodexExecServer";
+import executeApprovedCommand from "../interactions/WorkbenchApprovedCommandExecutor";
+import type WorkbenchCommandCapacity from "./WorkbenchCommandCapacity";
+import type { WorkbenchCommandQueueTicket } from "./WorkbenchCommandCapacity";
+import type { WorkbenchShellRun, WorkbenchShellRunResult } from "../providers/provider-execution";
+
+export interface WorkbenchShellRunnerOptions {
+  executor: Pick<CodexExecServer, "execute">;
+  /** Machine-wide slots for expensive commands; absent means every command runs immediately. */
+  capacity?: Pick<WorkbenchCommandCapacity, "run">;
+  executeApproved?: typeof executeApprovedCommand;
+  environment?: NodeJS.ProcessEnv;
+}
+
+export interface WorkbenchShellObserver extends WorkbenchCommandQueueTicket {
+  /** Each captured output chunk while the command runs; the result still carries all of it. */
+  output?: CodexExecOutputListener;
+}
+
+export default class WorkbenchShellRunner {
+  constructor(private readonly options: WorkbenchShellRunnerOptions) {}
+
+  /**
+   * Expensive commands wait for a shared slot before starting, so their own timeout measures only running time.
+   * A command that waited reports its queue time as `queuedMs`.
+   */
+  async run(run: WorkbenchShellRun, signal: AbortSignal, observer?: WorkbenchShellObserver): Promise<WorkbenchShellRunResult> {
+    const start = () => this.start(run, signal, observer?.output);
+    if (!run.expensive || !this.options.capacity) return await start();
+    const queue: { queuedAt: number | null; admittedAt: number | null } = { queuedAt: null, admittedAt: null };
+    const result = await this.options.capacity.run(run.label, signal, start, {
+      queued: at => { queue.queuedAt = at; observer?.queued(at); },
+      admitted: at => { queue.admittedAt = at; observer?.admitted(at); },
+      ...(observer?.skip ? { skip: observer.skip } : {}),
+    });
+    return queue.queuedAt === null || queue.admittedAt === null
+      ? result
+      : { ...result, queuedMs: Math.max(0, queue.admittedAt - queue.queuedAt) };
+  }
+
+  private async start(run: WorkbenchShellRun, signal: AbortSignal, output?: CodexExecOutputListener): Promise<WorkbenchShellRunResult> {
+    signal.throwIfAborted();
+    if (run.kind === "approved") {
+      return await (this.options.executeApproved ?? executeApprovedCommand)(
+        run.request, signal, this.options.environment ?? process.env, output);
+    }
+    return await this.options.executor.execute(run.request, signal, output);
+  }
+}

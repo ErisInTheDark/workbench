@@ -15,7 +15,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 
-import type { WorkbenchStoredSubagent } from "../../workbench-subagent-record.ts";
+import type { WorkbenchStoredSubagent } from "../../subagents/workbench-subagent-record.ts";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   WorkbenchComposerProfileSelectionSchema,
@@ -32,7 +32,7 @@ import {
 import {
   conformStoredWorkbenchThreadStateRecord,
   type WorkbenchThreadStateRecord,
-} from "../../workbench-thread-state-record.ts";
+} from "../../thread/workbench-thread-state-record.ts";
 
 interface StoredDraft extends WorkbenchThreadDraft {
   pinned: boolean;

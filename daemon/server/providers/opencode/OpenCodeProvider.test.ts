@@ -7,10 +7,10 @@ import path from "node:path";
 import test from "node:test";
 import providerRegistrations from "workbench-shared/workbench/provider/provider-registrations";
 import OpenCodeProvider, { openCodeAccountLimits, openCodeModelOption } from "./OpenCodeProvider";
-import type { CodexExecRequest } from "../../codex-exec-protocol";
+import type { CodexExecRequest } from "../codex/codex-exec-protocol";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
-import { workbenchPowerShellExecutable } from "../../windows-powershell-runtime";
+import { workbenchPowerShellExecutable } from "../../runtime/windows-powershell-runtime";
 
 test("provider execution preserves configured sandbox policy and admitted boundaries", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("wb-opencode-powershell-");

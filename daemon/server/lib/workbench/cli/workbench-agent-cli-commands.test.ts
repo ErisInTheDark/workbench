@@ -6,16 +6,16 @@ import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import WorkbenchAgentCommandLogger from "../../../WorkbenchAgentCommandLogger";
+import WorkbenchAgentCommandLogger from "../../../agent/WorkbenchAgentCommandLogger";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
-import WorkbenchAgentCommandController from "../../../WorkbenchAgentCommandController.ts";
-import CodexToolsController from "../../../CodexToolsController";
+import WorkbenchAgentCommandController from "../../../agent/WorkbenchAgentCommandController.ts";
+import CodexToolsController from "../../../providers/codex/CodexToolsController";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import WorkbenchAgentCliEnvironment, { WORKBENCH_LAUNCHER_ARTIFACT } from "../../../WorkbenchAgentCliEnvironment.ts";
+import WorkbenchAgentCliEnvironment, { WORKBENCH_LAUNCHER_ARTIFACT } from "../../../agent/WorkbenchAgentCliEnvironment.ts";
 import { verifyNativeSidecarArtifact } from "workbench-shared/native/native-sidecar-artifact";
 import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
 import {

@@ -3,7 +3,7 @@
  * - default ClaudeSessionNode: own live Claude Code processes so only an explicit harness reload interrupts Claude turns.
  */
 import path from "node:path";
-import ReloadableNode from "../../ReloadableNode";
+import ReloadableNode from "../../runtime/ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import ClaudeBridgeNode from "./ClaudeBridgeNode";

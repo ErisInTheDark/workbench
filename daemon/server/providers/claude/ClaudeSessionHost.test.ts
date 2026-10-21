@@ -4,7 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
-import { WorkbenchAgentMcpRequestRegistry } from "../../workbench-agent-mcp-request-registry";
+import { WorkbenchAgentMcpRequestRegistry } from "../../agent/workbench-agent-mcp-request-registry";
 import ClaudeSessionHost, { type ClaudeSessionHandlers } from "./ClaudeSessionHost";
 import { CLAUDE_COMMENTARY_SERVER_NAME } from "./claude-commentary-tool";
 

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { createGitignoreMatcher } from "workbench-shared/source-pattern-matcher";
 
 import { createReloadableNodeModuleLoader } from "./reloadable-node-loader";
-import ReloadableNode from "./ReloadableNode";
+import ReloadableNode from "./runtime/ReloadableNode";
 import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
 import {
   DAEMON_PROCESS_REQUIRED_REGISTRATIONS,
@@ -194,12 +194,12 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
     .map(({ scope }) => scope)
     .sort();
 
-  assert.deepEqual(owners("daemon/server/WorkbenchCoreNode.ts"), ["server:core", "server:topology"]);
-  assert.equal(descriptors.get("server:core")!.paths.includes("daemon/server/WorkbenchGitArcFeature.ts"), true);
+  assert.deepEqual(owners("daemon/server/core/WorkbenchCoreNode.ts"), ["server:core", "server:topology"]);
+  assert.equal(descriptors.get("server:core")!.paths.includes("daemon/server/git/WorkbenchGitArcFeature.ts"), true);
   assert.equal(descriptors.get("server:core")!.paths.includes("daemon/server/stats/WorkbenchStatsController.ts"), true);
-  assert.equal(descriptors.get("server:commands")!.paths.includes("daemon/server/WorkbenchAgentCommandController.ts"), true);
+  assert.equal(descriptors.get("server:commands")!.paths.includes("daemon/server/agent/WorkbenchAgentCommandController.ts"), true);
   assert.deepEqual(owners("wb"), ["server:cli"]);
-  assert.deepEqual(owners("daemon/server/WorkbenchAgentCliEnvironment.ts"), ["server:cli"]);
+  assert.deepEqual(owners("daemon/server/agent/WorkbenchAgentCliEnvironment.ts"), ["server:cli"]);
   assert.deepEqual(owners("daemon/launcher/bin/windows-x64/wb.exe"), ["server:cli"]);
   assert.deepEqual(owners("daemon/launcher/bin/manifest.json"), ["server:cli"]);
   assert.deepEqual(owners("instructions/wb/mechanics/git.md"), ["server:instructions"]);
@@ -208,7 +208,7 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   assert.deepEqual(owners("daemon/server/lib/workbench/browse/run-browse-daemon.mjs"), ["server:browse"]);
   assert.deepEqual(owners("daemon/server/providers/opencode/workbench-plugin/OpenCodeSseTap.ts"), ["harness:opencode"]);
   assert.deepEqual(owners("daemon/server/database/WorkbenchDatabaseController.ts"), ["server:database"]);
-  assert.deepEqual(owners("daemon/server/WorkbenchCodexInstructionAdapter.ts"), ["server:codex/instructions"]);
+  assert.deepEqual(owners("daemon/server/providers/codex/WorkbenchCodexInstructionAdapter.ts"), ["server:codex/instructions"]);
   assert.deepEqual(
     owners("daemon/server/database/transcript/WorkbenchTranscriptRepository.ts"),
     ["server:database"],
@@ -216,7 +216,7 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   assert.deepEqual(owners("daemon/server/database/stats/WorkbenchStatsRepository.ts"), ["server:database"]);
   assert.deepEqual(owners("daemon/server/database/stats/WorkbenchUsageStatsRepository.ts"), ["server:database"]);
   assert.deepEqual(owners("daemon/server/database/stats/WorkbenchClaimStatsRepository.ts"), ["server:database"]);
-  assert.deepEqual(owners("daemon/server/WorkbenchClaimStatsController.ts"), ["server:commands"]);
+  assert.deepEqual(owners("daemon/server/agent/WorkbenchClaimStatsController.ts"), ["server:commands"]);
   assert.deepEqual(owners("shared/workbench/stats/workbench-stats-contract.ts"), [
     "server:codex/instructions", "server:commands", "server:core", "server:database", "server:mcp", "server:websocket",
   ]);
@@ -225,7 +225,7 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
     ["server:codex/configuration", "server:database"],
   );
   assert.equal(descriptors.get("server:commands")!.paths.some((sourcePath) => sourcePath.endsWith(".test.ts")), false);
-  assert.equal(descriptors.get("server:process")!.paths.includes("daemon/server/WorkbenchCoreNode.ts"), false);
+  assert.equal(descriptors.get("server:process")!.paths.includes("daemon/server/core/WorkbenchCoreNode.ts"), false);
 });
 
 test("server branch and topology closures never acquire harness roots", () => {

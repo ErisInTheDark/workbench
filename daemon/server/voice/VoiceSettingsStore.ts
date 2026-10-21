@@ -5,7 +5,7 @@
 import { deleteRows, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { VoiceConfigurationSchema, createVoiceConfiguration, readVoiceModelSelection, type VoiceConfiguration, type VoiceModelSelection } from "workbench-shared/workbench/voice/voice-session-contract";
 import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
-import type { WorkbenchComposerProfileDatabase } from "../WorkbenchComposerProfileStore";
+import type { WorkbenchComposerProfileDatabase } from "../store/WorkbenchComposerProfileStore";
 import { voiceProfileLink, voiceSettings } from "../lib/workbench/database/schema/voice-settings-schema";
 
 export default class VoiceSettingsStore {

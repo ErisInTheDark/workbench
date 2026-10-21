@@ -4,13 +4,13 @@
  * - default OpenCodeToolsController: adapt OpenCode MCP metadata to Workbench tools and prepared Codex sandbox execution; Workbench hosts the shell tool.
  */
 import path from "node:path";
-import type { WorkbenchProviderCaller, WorkbenchProviderTools, WorkbenchToolTranscript } from "../../provider-execution";
+import type { WorkbenchProviderCaller, WorkbenchProviderTools, WorkbenchToolTranscript } from "../provider-execution";
 import { describePendingProposalDenial } from "../../lib/workbench/file-claim-check";
 import { OpenCodeFileClaimRequestSchema, OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
 import {
   NativeThreadIdSchema, type WorkbenchThreadId, type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
-import type WorkbenchThreadContextRolloverController from "../../WorkbenchThreadContextRolloverController";
+import type WorkbenchThreadContextRolloverController from "../../turn/WorkbenchThreadContextRolloverController";
 import { WORKBENCH_THREAD_COMPACT_TOOL_NAME } from "workbench-shared/workbench/thread/thread-context-rollover";
 
 export interface OpenCodeToolsControllerOptions {

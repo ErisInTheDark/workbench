@@ -1,0 +1,79 @@
+/*
+ * Exports:
+ * - default CodexExecServerNode: own the sandbox executor process, its Windows ACL repair, its Linux loopback relay broker and the machine-wide expensive-command slots, stopping running commands when it is replaced; reloadable shell orchestration lives in a child.
+ */
+import ReloadableNode from "../../runtime/ReloadableNode";
+import type { DaemonProcessContext } from "../../daemon-process-context";
+import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
+import path from "node:path";
+import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
+import CodexExecServer from "./CodexExecServer";
+import SandboxRelayBroker from "../../exec/SandboxRelayBroker";
+import CodexSandboxAclController from "./CodexSandboxAclController";
+import CodexToolsNode from "./CodexToolsNode";
+import OpenCodeProvider from "../opencode/OpenCodeProvider";
+import ClaudeProviderNode from "../claude/ClaudeProviderNode";
+import WorkbenchShellRunnerNode from "../../exec/WorkbenchShellRunnerNode";
+import { logError } from "../../process-helpers";
+import os from "node:os";
+import WorkbenchCommandCapacity, { expensiveCommandSlots } from "../../exec/WorkbenchCommandCapacity";
+
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
+  access: "agent",
+  children: [WorkbenchShellRunnerNode, CodexToolsNode, OpenCodeProvider, ClaudeProviderNode],
+  create: (context) => {
+    const relayBroker = process.platform === "linux"
+      ? new SandboxRelayBroker({
+        root: path.resolve(context.daemonPackageRoot, ".."),
+        // The staged copy is executable and survives the committed binary being rebuilt.
+        stage: new NativeArtifactStage({
+          runtimeRoot: context.dataRootPath,
+          warn: message => logError("sandbox-relay", message),
+        }),
+      })
+      : undefined;
+    const executor = new CodexExecServer({ cwd: context.daemonPackageRoot, resolveExecutable: context.resolveCodexExecutable, relayBroker });
+    const sandboxAcl = new CodexSandboxAclController();
+    // Shared by every provider's shell so one machine-wide limit covers all agents' builds and test suites.
+    const commandCapacity = new WorkbenchCommandCapacity({
+      slots: expensiveCommandSlots({ cores: os.availableParallelism(), totalMemory: os.totalmem() }),
+      readMemory: () => ({ free: os.freemem(), total: os.totalmem() }),
+      log: message => { process.stdout.write(`${message}\n`); },
+    });
+    const retire = async () => {
+      commandCapacity.dispose();
+      await Promise.all([executor.dispose(), sandboxAcl.dispose()]);
+      await relayBroker?.dispose();
+    };
+    return {
+      registrations: { codexExecutor: executor, codexSandboxAcl: sandboxAcl, commandCapacity },
+      start: () => undefined,
+      // Replacing the executor interrupts its commands: stop them now through their runners instead of waiting out the drain.
+      beginRuntimeDrain: () => {
+        void executor.cancelAll(new Error("The sandbox executor is restarting; this command was stopped.")).catch(error => {
+          logError("codex-exec", `Stopping commands for an executor restart failed: ${String(error).slice(0, 400)}`);
+        });
+      },
+      beginHandoff: () => ({
+        // A half-propagated tree is safe but leaves agents read-only until the successor rescans it.
+        waitForIdle: () => sandboxAcl.idle(),
+        expire: () => {
+          void retire().catch(error => logError("codex-exec", `Executor retirement failed: ${String(error).slice(0, 400)}`));
+        },
+        detach: () => undefined,
+        // A rolled-back replacement keeps this executor, so it admits commands again.
+        resume: () => { executor.resume(); },
+        commit: retire,
+      }),
+      dispose: retire,
+      shutdown: retire,
+    };
+  },
+  description: "Restart the sandbox executor, interrupting running agent shell commands.",
+  destructive: true,
+  lifecycle: "handoff",
+  provides: ["codexExecutor", "codexSandboxAcl", "commandCapacity"],
+  requires: [],
+  safeAll: false,
+  scope: "server:commands/exec",
+});

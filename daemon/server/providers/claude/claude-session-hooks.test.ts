@@ -5,7 +5,7 @@ import { test } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import ClaudeCommentaryNudge, { CLAUDE_COMMENTARY_HINT } from "./ClaudeCommentaryNudge";
 import { CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
-import type { WorkbenchAgentBatchTurn } from "../../workbench-agent-mcp-request-registry";
+import type { WorkbenchAgentBatchTurn } from "../../agent/workbench-agent-mcp-request-registry";
 import {
   claudeToolResults, claudeToolUseIds, createClaudeSessionHooks, type ClaudeFileClaimCheck, type ClaudeToolBatchPort,
 } from "./claude-session-hooks";

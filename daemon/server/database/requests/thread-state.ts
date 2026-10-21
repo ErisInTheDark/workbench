@@ -5,8 +5,8 @@
  */
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { WorkbenchSubagentReservation } from "../../workbench-subagent-record.ts";
-import type { WorkbenchStoredThreadTitleHistory } from "../../WorkbenchThreadStateStore.ts";
+import type { WorkbenchSubagentReservation } from "../../subagents/workbench-subagent-record.ts";
+import type { WorkbenchStoredThreadTitleHistory } from "../../thread/WorkbenchThreadStateStore.ts";
 import WorkbenchSubagentRelationshipRepository from "../thread-state/WorkbenchSubagentRelationshipRepository.ts";
 import type { WorkbenchThreadGitCommitTime } from "../thread-state/WorkbenchThreadStateGitRepository.ts";
 import type { WorkbenchThreadLayoutOwner } from "../thread-state/WorkbenchThreadStateLayoutRepository.ts";

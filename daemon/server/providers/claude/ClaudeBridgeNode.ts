@@ -3,7 +3,7 @@
  * - default ClaudeBridgeNode: own reloadable Claude turn logic, managed prompt and activated-skill builds, input-time agent context, lifecycle publication, native edit claim gating, tool batch ordering, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
  */
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import ReloadableNode from "../../ReloadableNode";
+import ReloadableNode from "../../runtime/ReloadableNode";
 import { resolveProviderRuntime } from "../provider-runtimes";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
@@ -16,7 +16,7 @@ import ClaudeConfigurationController from "./ClaudeConfigurationController";
 import ClaudeProviderNode from "./ClaudeProviderNode";
 import ClaudeThreadOperations, { type ClaudeInstructionInput, type ClaudeTurnHandoff } from "./ClaudeThreadOperations";
 import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
-import { getProcessWorkbenchAgentMcpRequestRegistry } from "../../workbench-agent-mcp-request-registry";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "../../agent/workbench-agent-mcp-request-registry";
 
 interface ClaudeBridgeHandoff {
   turns: ClaudeTurnHandoff[];

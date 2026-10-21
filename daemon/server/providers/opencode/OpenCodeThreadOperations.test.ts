@@ -6,7 +6,7 @@ import {
   WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import OpenCodeThreadOperations, { type OpenCodeThreadOperationsOptions } from "./OpenCodeThreadOperations";
-import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
+import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../provider-execution";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import {
@@ -15,11 +15,11 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
-import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
+import { createThreadStateTestDatabase } from "../../thread/workbench-thread-state-test-database";
 import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTranscriptRepository";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
-import { normalizeProviderSidebarEntry } from "../../WorkbenchThreadStateFeature";
+import { normalizeProviderSidebarEntry } from "../../thread/WorkbenchThreadStateFeature";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 test("passive Workbench context enters native instructions without starting a user turn", async () => {

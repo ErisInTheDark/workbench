@@ -4,7 +4,7 @@
  *   also places each call's transcript item), and prepare admitted commands; Workbench hosts the shell tool and may run
  *   marked shells in parallel.
  */
-import type { WorkbenchProviderTools } from "../../provider-execution";
+import type { WorkbenchProviderTools } from "../provider-execution";
 import type ClaudeThreadOperations from "./ClaudeThreadOperations";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 

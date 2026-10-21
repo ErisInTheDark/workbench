@@ -15,7 +15,7 @@ import { appendFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import WorkbenchTestProcessResources from "../../daemon/server/WorkbenchTestProcessResources";
+import WorkbenchTestProcessResources from "../../daemon/server/runtime/WorkbenchTestProcessResources";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";

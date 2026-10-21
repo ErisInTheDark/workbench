@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import ReloadableNode, { defineReloadableNodeGraph, type ReloadableNodeGraph, type ReloadableNodeHandoff } from "./ReloadableNode";
+import ReloadableNode, { defineReloadableNodeGraph, type ReloadableNodeGraph, type ReloadableNodeHandoff } from "./runtime/ReloadableNode";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 
 interface Objects {

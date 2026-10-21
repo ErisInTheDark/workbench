@@ -7,7 +7,7 @@
  *
  * Commands run as the sandbox account, so only a sandboxed process can stop them; a hard-killed daemon never got to.
  */
-import type CodexExecServer from "../CodexExecServer";
+import type CodexExecServer from "../providers/codex/CodexExecServer";
 import type WorkbenchExecRootStore from "../database/exec/WorkbenchExecRootStore";
 import type { ExecRootRecord } from "../database/exec/WorkbenchExecRootStore";
 

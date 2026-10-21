@@ -7,10 +7,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import NativeArtifactStage from "../../shared/process/NativeArtifactStage";
-import CodexExecServer from "../../daemon/server/CodexExecServer";
+import CodexExecServer from "../../daemon/server/providers/codex/CodexExecServer";
 import stageCodexRuntime from "../../daemon/server/codex-executable";
 import SandboxRelayBroker from "../../daemon/server/exec/SandboxRelayBroker";
-import type { CodexExecRequest } from "../../daemon/server/codex-exec-protocol";
+import type { CodexExecRequest } from "../../daemon/server/providers/codex/codex-exec-protocol";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 
 test("native executor enforces workspace writes and reuses Windows private desktops", async t => {

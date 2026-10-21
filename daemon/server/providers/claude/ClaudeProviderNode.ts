@@ -2,27 +2,20 @@
  * Exports:
  * - default ClaudeProviderNode: expose native Claude sessions, managed tools, Browse screenshot delivery, unfinished-turn continuation, model choices with context bounds, plan limits, and session-log usage hydration.
  */
-import ReloadableNode from "../../ReloadableNode";
+import ReloadableNode from "../../runtime/ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
-import CodexShellController from "../../CodexShellController";
+import createWorkbenchSandboxShell, { WORKBENCH_SANDBOX_SHELL_REQUIRES } from "../../exec/WorkbenchSandboxShell";
 import ClaudeToolsController from "./ClaudeToolsController";
-import { requireWorkbenchPowerShellExecutable } from "../../windows-powershell-runtime";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [],
   create: (context, { get }) => {
     const threads = get("claudeThreadOperations");
-    const shell = new CodexShellController({
-      executor: get("codexExecutor"),
-      sandboxAcl: get("codexSandboxAcl"),
-      powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
-      readConfiguration: cwd => get("codexThreadOperations").requestNative("config/read", { cwd, includeLayers: false }),
-    });
     const tools = new ClaudeToolsController({
       threads, transcript: get("claudeTranscriptAdapter"),
-      prepareExecution: shell.prepareAdmitted.bind(shell),
+      prepareExecution: createWorkbenchSandboxShell(context, { get }),
     });
     const configuration = get("claudeConfiguration");
     return {
@@ -45,7 +38,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Claude provider definition.",
   lifecycle: "atomic",
   provides: ["claudeProvider"],
-  requires: ["claudeConfiguration", "claudeThreadOperations", "claudeTranscriptAdapter", "codexExecutor", "codexSandboxAcl", "codexThreadOperations"],
+  requires: ["claudeConfiguration", "claudeThreadOperations", "claudeTranscriptAdapter", ...WORKBENCH_SANDBOX_SHELL_REQUIRES],
   safeAll: true,
   scope: "server:claude/def",
 });

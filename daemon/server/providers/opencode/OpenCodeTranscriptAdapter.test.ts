@@ -13,7 +13,7 @@ import OpenCodeTranscriptAdapter, {
   openCodeTokenBreakdown,
   openCodeToolContentItems,
 } from "./OpenCodeTranscriptAdapter";
-import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
+import { createThreadStateTestDatabase } from "../../thread/workbench-thread-state-test-database";
 import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTranscriptRepository";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";

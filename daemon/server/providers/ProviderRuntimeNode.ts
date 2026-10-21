@@ -4,7 +4,7 @@
  */
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../daemon-runtime-objects";
-import ReloadableNode from "../ReloadableNode";
+import ReloadableNode from "../runtime/ReloadableNode";
 import ProviderRuntimeController from "./ProviderRuntimeController";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({

@@ -35,11 +35,11 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchProviderCompactionScope } from "workbench-shared/workbench/provider/provider-thread";
-import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
-import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
-import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
-import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
-import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
+import type WorkbenchProjectCatalogController from "../../project/WorkbenchProjectCatalogController";
+import type WorkbenchQuestionnaireController from "../../interactions/WorkbenchQuestionnaireController";
+import type WorkbenchThreadIdentityController from "../../thread/WorkbenchThreadIdentityController";
+import type WorkbenchThreadStateFeature from "../../thread/WorkbenchThreadStateFeature";
+import type WorkbenchTranscriptReader from "../../transcript/WorkbenchTranscriptReader";
 import { claudeEnvironment } from "./claude-process-options";
 import {
     appendClaudePrompt, claudeImageBlock, claudePromptContent, prefixClaudePrompt, type ClaudePromptContent,
@@ -54,7 +54,7 @@ import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import type { ClaudeTranscriptTurnState } from "./ClaudeTranscriptAdapter";
 import ClaudeUsageHydrator from "./ClaudeUsageHydrator";
 import ClaudeSessionLog from "./claude-session-log";
-import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
+import type WorkbenchTranscriptReconciliationController from "../../transcript/WorkbenchTranscriptReconciliationController";
 
 export interface ClaudeTurnHandoff {
   turn: ClaudeLiveTurnSnapshot;

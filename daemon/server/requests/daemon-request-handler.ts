@@ -13,24 +13,24 @@ import type { REPO_RUNTIME_READ_METHOD } from "workbench-shared/workbench/repo/v
 import type { workbenchThreadActions } from "workbench-shared/workbench/thread/thread-actions";
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import type WorkbenchStatsController from "../stats/WorkbenchStatsController";
-import type WorkbenchAgentSkillCatalogController from "../WorkbenchAgentSkillCatalogController";
-import type WorkbenchComposerProfileStore from "../WorkbenchComposerProfileStore";
-import type WorkbenchGitArcFeature from "../WorkbenchGitArcFeature";
-import type WorkbenchHarnessController from "../WorkbenchHarnessController";
-import type WorkbenchModelUsageStore from "../WorkbenchModelUsageStore";
-import type WorkbenchNativeFileController from "../WorkbenchNativeFileController";
-import type WorkbenchProjectCatalogController from "../WorkbenchProjectCatalogController";
-import type WorkbenchProjectCreationController from "../WorkbenchProjectCreationController";
-import type WorkbenchProjectFileController from "../WorkbenchProjectFileController";
-import type WorkbenchProjectSnapshotController from "../WorkbenchProjectSnapshotController";
-import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
-import type WorkbenchQuestionnaireResponseController from "../WorkbenchQuestionnaireResponseController";
-import type WorkbenchSearchController from "../WorkbenchSearchController";
-import type WorkbenchThreadActionController from "../WorkbenchThreadActionController";
-import type WorkbenchThreadAutoCompactController from "../WorkbenchThreadAutoCompactController";
-import type WorkbenchThreadLaunchController from "../WorkbenchThreadLaunchController";
-import type WorkbenchThreadStateController from "../WorkbenchThreadStateController";
-import type WorkbenchWorkingTreeController from "../WorkbenchWorkingTreeController";
+import type WorkbenchAgentSkillCatalogController from "../agent/WorkbenchAgentSkillCatalogController";
+import type WorkbenchComposerProfileStore from "../store/WorkbenchComposerProfileStore";
+import type WorkbenchGitArcFeature from "../git/WorkbenchGitArcFeature";
+import type WorkbenchHarnessController from "../providers/WorkbenchHarnessController";
+import type WorkbenchModelUsageStore from "../store/WorkbenchModelUsageStore";
+import type WorkbenchNativeFileController from "../project/WorkbenchNativeFileController";
+import type WorkbenchProjectCatalogController from "../project/WorkbenchProjectCatalogController";
+import type WorkbenchProjectCreationController from "../project/WorkbenchProjectCreationController";
+import type WorkbenchProjectFileController from "../project/WorkbenchProjectFileController";
+import type WorkbenchProjectSnapshotController from "../project/WorkbenchProjectSnapshotController";
+import type WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
+import type WorkbenchQuestionnaireResponseController from "../interactions/WorkbenchQuestionnaireResponseController";
+import type WorkbenchSearchController from "../project/WorkbenchSearchController";
+import type WorkbenchThreadActionController from "../thread/WorkbenchThreadActionController";
+import type WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCompactController";
+import type WorkbenchThreadLaunchController from "../thread/WorkbenchThreadLaunchController";
+import type WorkbenchThreadStateController from "../thread/WorkbenchThreadStateController";
+import type WorkbenchWorkingTreeController from "../git/WorkbenchWorkingTreeController";
 
 export interface WorkbenchBrowseSessionPort {
   controlSession(params: object): Promise<object>;
@@ -38,11 +38,11 @@ export interface WorkbenchBrowseSessionPort {
 }
 
 export type ProviderRuntimePort = Pick<import("../providers/ProviderRuntimeController").default, "read" | "install">;
-export type InstallationUpdatePort = Pick<import("../WorkbenchInstallationUpdateController").default, "pull" | "dismissFailure">;
+export type InstallationUpdatePort = Pick<import("../runtime/WorkbenchInstallationUpdateController").default, "pull" | "dismissFailure">;
 
 export interface WorkbenchDaemonRequestOwners {
   autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
-  commandApprovals?: Pick<import("../WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
+  commandApprovals?: Pick<import("../interactions/WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
   approvalReview?: Pick<import("../approval-review/WorkbenchApprovalReviewController").default, "read" | "update">;
   mcpServers?: Pick<import("../mcp-servers/WorkbenchMcpServerController").default, "read" | "update" | "startSignIn" | "finishSignIn">;
   projectStore?: Pick<import("../store/WorkbenchProjectStore").default, "read" | "update">;

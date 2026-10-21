@@ -14,7 +14,7 @@ import {
   validateDaemonReloadScopeCombination,
   type DaemonReloadScopeDescriptor,
 } from "workbench-shared/workbench/daemon-reload";
-import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
+import type WorkbenchReloadDirtController from "./runtime/WorkbenchReloadDirtController";
 
 interface ReloadBatch { scopes: DaemonReloadScope[] }
 

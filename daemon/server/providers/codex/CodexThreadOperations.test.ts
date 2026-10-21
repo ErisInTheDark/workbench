@@ -1,0 +1,379 @@
+/* Exports: none. Protect provider dispatch, thread interruption, identity mapping and questionnaire waiter liveness. */
+import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import { test } from "node:test";
+import fs from "node:fs/promises";
+import path from "node:path";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import CodexThreadOperations from "./CodexThreadOperations";
+import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
+import CodexStdioBridge from "./CodexStdioBridge";
+import type CodexAppServer from "./CodexAppServer";
+import type { JsonRpcRequest } from "../../bridge-types";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { NativeTranscriptIdentityOwners } from "../../transcript/thread-identity-transcript-mapping";
+import { createThreadStateTestDatabase } from "../../thread/workbench-thread-state-test-database";
+import {
+  NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema,
+} from "workbench-shared/workbench/identity";
+import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import type { WorkbenchThreadReconcile } from "workbench-shared/workbench/thread/thread-actions";
+
+async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object>, options: {
+  injectContext?: (threadId: string, text: string, signal?: AbortSignal) => Promise<void>;
+  ensureInitialized?: () => Promise<void>;
+  nativeQuestionnaireRequestKey?: string;
+  workbenchQuestionnaireRequestKey?: string;
+} = {}) {
+  const database = createThreadStateTestDatabase();
+  database.admitThread(testProjectIds.project, "wb-thread", "codex", "native-thread", "C:/project");
+  const thread = await database.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("wb-thread") });
+  assert.ok(thread);
+  const native = {
+    harness: "codex", nativeLocation: "C:/project", nativeThreadId: NativeThreadIdSchema.parse("native-thread"),
+    nativeTurnId: NativeTurnIdSchema.parse("native-turn"),
+  };
+  await database.identities.threads.observeTurns([{
+    kind: "turn", threadId: thread.threadId, turnId: native.nativeTurnId, nativeTurnId: native.nativeTurnId,
+    nativeThreadId: native.nativeThreadId, nativeLocation: native.nativeLocation, harnessId: native.harness,
+    state: "inProgress", createdAt: 1, startedAt: 1, endedAt: null, durationMs: null,
+  }]);
+  const turnId = database.identities.threads.workbenchTurnIdForNative(native);
+  const bridge = {
+    injectAgentContext: options.injectContext ?? (async () => { assert.fail("Unexpected passive context"); }),
+    reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
+    ensureInitialized: options.ensureInitialized ?? (async () => {}),
+    handleServerRequest: async (request: JsonRpcRequest) => ({ id: request.id ?? null, result: await handle(request) }),
+    canDeliverQuestionnaire: (requestedThreadId: string, requestKey: string) => (
+      requestedThreadId === native.nativeThreadId
+      && requestKey === options.nativeQuestionnaireRequestKey
+    ),
+    deliverApproval: () => false,
+  };
+  const demands: WorkbenchThreadReconcile[] = [];
+  const operations = new CodexThreadOperations({
+    reconciliation: { reconcile: async input => {
+      demands.push(input);
+      return { turnIds: [turnId], exhausted: false };
+    } },
+    identities: database.identities,
+    resolveProject: async () => ({ id: thread.projectId, rootPath: "C:/project" }),
+    bridge,
+    questionnaires: {
+      canDeliver: (_threadId, requestKey) => requestKey === options.workbenchQuestionnaireRequestKey,
+      deliver: async () => null,
+      interruptRetainingQuestionnaire: async () => false,
+    },
+  });
+  return { operations, demands, threadId: thread.threadId, turnId };
+}
+
+function threadMetadata(status: Thread["status"]): Thread {
+  return {
+    id: "native-thread", sessionId: "native-thread", extra: null, forkedFromId: null, parentThreadId: null,
+    preview: "", ephemeral: false, section: null, sectionEnteredAt: null, projectId: null, historyMode: "legacy",
+    modelProvider: "openai", model: null, reasoningEffort: null, createdAt: 1, updatedAt: 1, recencyAt: null,
+    status, path: null, cwd: "C:/project", cliVersion: "test", source: "cli", canAcceptDirectInput: true,
+    environments: null, originator: null, daybreakEnabled: null,
+    threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null, turns: [],
+  };
+}
+
+test("passive context resolves canonical identity without ordinary provider admission and propagates rejection", async () => {
+  const seen: string[] = [];
+  const fixture = await threadFixture(async () => assert.fail("ordinary provider request"), {
+    injectContext: async (threadId, text) => {
+      assert.equal(threadId, "native-thread");
+      seen.push(text);
+      if (text === "rejected") throw new Error("provider rejected");
+    },
+  });
+  assert.equal(await fixture.operations.context.inject({ threadId: fixture.threadId, text: "accepted" }), "admitted");
+  await assert.rejects(fixture.operations.context.inject({ threadId: fixture.threadId, text: "rejected" }), /provider rejected/u);
+  assert.deepEqual(seen, ["accepted", "rejected"]);
+});
+
+test("creation that fails while Codex initializes is typed as not dispatched", async () => {
+  const fixture = await threadFixture(async () => assert.fail("thread/start must not be requested"), {
+    ensureInitialized: async () => { throw new Error("The previous Codex process has not retired."); },
+  });
+  await assert.rejects(fixture.operations.create({
+    cwd: "C:/project",
+    profile: { kind: "custom", settings: {
+      agentPath: null, agentSource: null, harness: "codex", model: "test", reasoningEffort: null, serviceTier: null,
+    } },
+  }), error => error instanceof WorkbenchThreadCreationNotDispatchedError
+    && error.message === "The previous Codex process has not retired.");
+});
+
+for (const fails of [false, true]) {
+  test(`provider deletion translates only its owned thread and ${fails ? "propagates failure" : "settles"}`, async () => {
+    const requests: JsonRpcRequest[] = [];
+    const fixture = await threadFixture(async request => {
+      requests.push(request);
+      if (fails) throw new Error("deletion failed");
+      return {};
+    });
+    const deletion = fixture.operations.delete(fixture.threadId);
+    if (fails) await assert.rejects(deletion, /deletion failed/);
+    else await deletion;
+    assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
+      { method: "thread/delete", params: { threadId: "native-thread" } },
+    ]);
+  });
+}
+
+test("Codex interruption translates WB identities and interrupts without selecting a turn", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    return request.method === "thread/read"
+      ? { thread: threadMetadata({ type: "active", activeFlags: [] }) } : {};
+  });
+  await fixture.operations.interrupt(fixture.threadId);
+  assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
+    { method: "thread/read", params: { threadId: "native-thread", includeTurns: false } },
+    { method: "turn/interrupt", params: { threadId: "native-thread", turnId: "" } },
+  ]);
+});
+
+test("stopping an inactive Codex thread does not interrupt a cold runtime", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    assert.equal(request.method, "thread/read");
+    return { thread: threadMetadata({ type: "idle" }) };
+  });
+  await fixture.operations.interrupt(fixture.threadId);
+  assert.deepEqual(requests.map(request => request.method), ["thread/read"]);
+});
+
+test("Codex thread interruption propagates native cancellation failure", async () => {
+  const fixture = await threadFixture(async request => {
+    if (request.method === "thread/read") return { thread: threadMetadata({ type: "active", activeFlags: [] }) };
+    if (request.method === "turn/interrupt") throw new Error("native interrupt failed");
+    return {};
+  });
+  await assert.rejects(fixture.operations.interrupt(fixture.threadId), /native interrupt failed/);
+});
+
+test("Browse screenshots stay passive and records retain native storage references", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    return request.method === "workbench/thread/inject-tool-context"
+      ? { acceptedAt: 123, itemId: "image-item", turnId: "native-turn" }
+      : { ok: true };
+  });
+  const imageUrl = "data:image/png;base64,AA==";
+  assert.deepEqual(await fixture.operations.browse.screenshot({
+    threadId: fixture.threadId, turnId: fixture.turnId, imageUrl,
+  }), { kind: "injected", acceptedAt: 123, turnId: fixture.turnId });
+  const injection = requests[0];
+  assert.equal(injection.method, "workbench/thread/inject-tool-context");
+  const params = injection.params as {
+    threadId: string; expectedTurnId: string; toolOutput: { output: { type: string; image_url?: string }[] };
+  };
+  assert.equal(params.threadId, "native-thread");
+  assert.equal(params.expectedTurnId, "native-turn");
+  assert.ok(params.toolOutput.output.some(part => part.type === "input_image" && part.image_url === imageUrl));
+});
+
+test("agent messages retain tool authority and WB attribution at the native admission edge", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => { requests.push(request); return { turnId: "native-turn" }; });
+  const message = { message: "continue the review", senderName: "iris", senderThreadId: "wb-parent" };
+  const admitted = await fixture.operations.messageAgent({
+    threadId: fixture.threadId, cwd: "C:/project", message,
+    context: { subagentName: "lily", workflowIds: ["subagent"] },
+  });
+  // The admitting turn comes back in Workbench identity, ready for lifecycle acceptance.
+  assert.equal(admitted.turnId, fixture.turnId);
+  assert.equal(admitted.kind, "steered");
+  const request = requests[0];
+  assert.equal(request.method, "turn/start");
+  const params = request.params as { threadId: string; input: object[]; toolOutput: { namespace: string; name: string; output: string } };
+  assert.equal(params.threadId, "native-thread");
+  assert.deepEqual(params.input, []);
+  assert.equal(params.toolOutput.namespace, "workbench");
+  assert.equal(params.toolOutput.name, "agent_message");
+  assert.deepEqual(readWorkbenchAgentMessageText(params.toolOutput.output), message);
+  assert.equal((request.workbenchPromptContext as { threadId: string }).threadId, fixture.threadId);
+});
+
+test("latest content reads stay bounded and metadata polls remain item-free", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    return { thread: {
+      id: request.method === "thread/context/read" ? fixture.threadId : "native-thread", cwd: "C:/project", name: "thread", preview: "", source: "appServer",
+      status: { type: "idle" }, createdAt: 1, updatedAt: 2, turns: [], parentThreadId: null,
+    } };
+  });
+  await fixture.operations.read(fixture.threadId, { background: true });
+  assert.equal((await fixture.operations.readLatest(fixture.threadId)).id, fixture.threadId);
+  assert.equal(requests[0].workbenchRequestSource, "autoRefresh");
+  assert.deepEqual(requests[0].params, { threadId: "native-thread", includeTurns: false });
+  assert.equal(requests[1].method, "thread/context/read");
+  assert.deepEqual(requests[1].params, { threadId: "native-thread", includeTurns: false });
+  assert.deepEqual(requests[1].workbenchThreadHydration, { mode: "latest" });
+});
+
+test("materialisation retains canonical identity for reconciliation while compaction never starts a turn", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => { requests.push(request); return {}; });
+  await fixture.operations.materialize(fixture.threadId, [fixture.turnId]);
+  await fixture.operations.compact(fixture.threadId, {
+    scope: { itemId: WorkbenchItemIdSchema.parse("compaction-item"), turnId: fixture.turnId },
+  });
+  assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
+    { method: "thread/compact/start", params: { threadId: "native-thread" } },
+  ]);
+  assert.deepEqual(fixture.demands, [{ threadId: fixture.threadId, target: { mode: "exact", turnId: fixture.turnId }, refresh: false }]);
+});
+
+test("cancelled materialisation does not dispatch provider history work", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => { requests.push(request); return {}; });
+  const cancellation = new AbortController();
+  cancellation.abort(new Error("subscription replaced"));
+  await assert.rejects(
+    fixture.operations.materialize(fixture.threadId, [fixture.turnId], cancellation.signal),
+    /subscription replaced/,
+  );
+  assert.deepEqual(requests, []);
+  assert.deepEqual(fixture.demands, []);
+});
+
+test("recall demands latest or exact canonical turn without dispatch after cancellation", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => { requests.push(request); return {}; });
+  const cancellation = new AbortController();
+  await fixture.operations.history.materialize(fixture.threadId, null, cancellation.signal);
+  await fixture.operations.history.materialize(fixture.threadId, fixture.turnId, cancellation.signal);
+  assert.deepEqual(fixture.demands, [
+    { threadId: fixture.threadId, target: { mode: "latest" }, refresh: false, explicit: true },
+    { threadId: fixture.threadId, target: { mode: "exact", turnId: fixture.turnId }, refresh: false, explicit: true },
+  ]);
+  cancellation.abort(new Error("recall cancelled"));
+  await assert.rejects(fixture.operations.history.materialize(fixture.threadId, fixture.turnId, cancellation.signal), /recall cancelled/);
+  assert.equal(fixture.demands.length, 2);
+  assert.deepEqual(requests, []);
+});
+
+test("questionnaire delivery derives liveness from native and Workbench wait owners", async () => {
+  for (const owner of ["native", "workbench", "none"] as const) {
+    const fixture = await threadFixture(async () => ({}), {
+      ...(owner === "native" ? { nativeQuestionnaireRequestKey: "question" } : {}),
+      ...(owner === "workbench" ? { workbenchQuestionnaireRequestKey: "question" } : {}),
+    });
+    const deliverable = await fixture.operations.interactions.canDeliver(fixture.threadId, "question");
+    assert.equal(deliverable, owner !== "none", `${owner} questionnaire ownership`);
+  }
+});
+
+test("message intents preserve native identity, content and bounded resume through the admission owner", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    return request.method === "turn/steer"
+      ? { turnId: "native-turn" }
+      : { kind: "steered", turnId: "native-turn" };
+  });
+  const input = [
+    { type: "text" as const, text: "message", text_elements: [] },
+    { type: "image" as const, url: "data:image/png;base64,AA==", detail: "original" as const },
+    { type: "localImage" as const, path: "C:/project/image.png" },
+  ];
+  const context = { workflowIds: ["default"], activatedSkillPaths: ["C:/skills/review/SKILL.md"] };
+  for (const intent of ["continue", "newTurn", "steer"] as const) {
+    const result = await fixture.operations.submit({
+      threadId: fixture.threadId, clientMessageId: "message", input, context, intent,
+      ...(intent === "steer" ? { expectedTurnId: fixture.turnId } : {}),
+    } as Parameters<CodexThreadOperations["submit"]>[0]);
+    assert.deepEqual(result, { kind: "steered", turnId: fixture.turnId });
+    const request = requests.at(-1)!;
+    if (intent === "steer") {
+      assert.equal(request.method, "turn/steer");
+      assert.deepEqual(request.params, {
+        threadId: "native-thread", expectedTurnId: "native-turn", clientUserMessageId: "message", input,
+      });
+    } else {
+      assert.equal(request.method, "workbench/codex/message/admit");
+      const params = request.params as {
+        threadId: string; resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest; steerRequest?: JsonRpcRequest;
+      };
+      assert.equal(params.threadId, "native-thread");
+      assert.deepEqual(params.resumeRequest.params, {
+        threadId: "native-thread", excludeTurns: true,
+        initialTurnsPage: { itemsView: "notLoaded", limit: 1, sortDirection: "desc" },
+      });
+      assert.deepEqual(params.startRequest.params, {
+        threadId: "native-thread", clientUserMessageId: "message", input, summary: "detailed",
+      });
+      assert.deepEqual(params.startRequest.workbenchPromptContext, { ...context, harness: "codex", threadId: fixture.threadId });
+      assert.deepEqual(params.resumeRequest.workbenchPromptContext, params.startRequest.workbenchPromptContext);
+      assert.equal(Boolean(params.steerRequest), intent === "continue");
+    }
+  }
+});
+
+for (const rejected of [false, true]) {
+  test(`cold provider operations ${rejected ? "retain initialisation failure without dispatching work" : "share the bridge initialisation gate"}`, async () => {
+    const temporary = await WorkbenchTemporaryDirectory.create("wb-provider-cold-");
+    const root = temporary.path;
+    const methods: string[] = [];
+    let finishInitialize!: () => void;
+    let entered!: () => void;
+    const initializing = new Promise<void>(resolve => { entered = resolve; });
+    const bridge = new CodexStdioBridge({
+      appServer: {
+        send(request: JsonRpcRequest) {
+          methods.push(request.method);
+          if (request.method === "initialize") {
+            finishInitialize = () => {
+              void bridge.handleUpstreamMessage({
+                id: request.id,
+                ...(rejected ? { error: { code: -32000, message: "provider unavailable" } } : { result: {} }),
+              });
+            };
+            entered();
+          } else if (request.method === "model/list") {
+            queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result: { data: [], nextCursor: null } }));
+          }
+        },
+      } as unknown as CodexAppServer,
+      resolveProjectFromCwd: async () => { throw new Error("Model reads must not resolve project ownership."); },
+      handleWorkbenchRequest: async () => { throw new Error("Model reads must not enter Workbench thread admission."); },
+      onNotification() {},
+    });
+    const operations = new CodexThreadOperations({
+      reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
+      bridge,
+      identities: new Proxy({} as NativeTranscriptIdentityOwners, {
+        get() { throw new Error("Model reads must not access thread identity."); },
+      }),
+      resolveProject: async () => { throw new Error("Model reads must not require a project."); },
+    });
+    try {
+      const results = Promise.allSettled([
+        operations.requestNative("model/list", {}),
+        operations.requestNative("model/list", {}),
+      ]);
+      await initializing;
+      assert.deepEqual(methods, ["initialize"]);
+      finishInitialize();
+      const settled = await results;
+      if (rejected) {
+        assert.ok(settled.every(result => result.status === "rejected" && /provider unavailable/.test(String(result.reason))));
+        assert.deepEqual(methods, ["initialize"]);
+      } else {
+        assert.ok(settled.every(result => result.status === "fulfilled"));
+        assert.deepEqual(methods, ["initialize", "initialized", "model/list", "model/list"]);
+      }
+    } finally {
+      await bridge.dispose();
+      await temporary.dispose();
+    }
+  });
+}

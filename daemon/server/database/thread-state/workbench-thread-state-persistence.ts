@@ -11,10 +11,10 @@ import type {
   WorkbenchComposerProfileSelectionState, WorkbenchThreadDraft,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
-import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
+import type { WorkbenchThreadStateRecord } from "../../thread/workbench-thread-state-record";
 import type { WorkbenchThreadLayoutOwner } from "./WorkbenchThreadStateLayoutRepository";
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
-import type { WorkbenchSubagentReservation } from "../../workbench-subagent-record";
+import type { WorkbenchSubagentReservation } from "../../subagents/workbench-subagent-record";
 import type { ProjectDocument } from "./workbench-thread-state-document-source";
 import type { DraftId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 

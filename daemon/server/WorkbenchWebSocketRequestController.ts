@@ -39,27 +39,27 @@ import { REPO_RUNTIME_READ_METHOD } from "workbench-shared/workbench/repo/virtua
 import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import {
   mapWorkbenchThreadStateRequest,
-} from "./thread-identity-workbench-mapping";
-import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
+} from "./thread/thread-identity-workbench-mapping";
+import type { NativeTranscriptIdentityOwners } from "./transcript/thread-identity-transcript-mapping";
 import { WorkbenchThreadStateRequestSchema } from "workbench-shared/workbench/thread/thread-state";
-import type WorkbenchHarnessController from "./WorkbenchHarnessController";
-import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
+import type WorkbenchHarnessController from "./providers/WorkbenchHarnessController";
+import type WorkbenchDaemonRequestController from "./transport/WorkbenchDaemonRequestController";
 import type WorkbenchDaemonReloadController from "./WorkbenchDaemonReloadController";
-import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import type WorkbenchThreadStateController from "./thread/WorkbenchThreadStateController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
-} from "./WorkbenchWebSocketStreamController";
-import WorkbenchWebSocketEventLog, { type WebSocketEventSubject } from "./WorkbenchWebSocketEventLog";
+} from "./transport/WorkbenchWebSocketStreamController";
+import WorkbenchWebSocketEventLog, { type WebSocketEventSubject } from "./transport/WorkbenchWebSocketEventLog";
 import {
   describeWebSocketEvent, formatWebSocketSendFailure, webSocketMethodLabel as methodLabel,
-} from "./websocket-log-format";
+} from "./transport/websocket-log-format";
 import {
   dimWebSocketDetail, formatWebSocketBytes as formatBytes, threadEventSubject as providerEventSubject,
 } from "workbench-shared/process/websocket-traffic-format";
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
-import WorkbenchWorkspaceObservationController, { type DaemonObservationChange } from "./WorkbenchWorkspaceObservationController";
+import WorkbenchWorkspaceObservationController, { type DaemonObservationChange } from "./transport/WorkbenchWorkspaceObservationController";
 import {
   DaemonWorkspaceObserveSchema, DaemonWorkspaceRetargetSchema, WorkspaceReleaseSchema,
   WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_RETARGET_METHOD, WORKSPACE_UPDATED_METHOD,
@@ -165,7 +165,7 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   reportDelivery: (delivery: WorkbenchWebSocketDelivery) => void;
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
-  threadActions?: Pick<import("./WorkbenchThreadActionController").default, "materialize">;
+  threadActions?: Pick<import("./thread/WorkbenchThreadActionController").default, "materialize">;
   harnesses: Pick<WorkbenchHarnessController, "resolveHarness">
     & Partial<Pick<WorkbenchHarnessController, "resolveThreadIdentity" | "resolveTurnIdentity">>;
   identities?: NativeTranscriptIdentityOwners;
@@ -180,7 +180,7 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   threadState: Pick<WorkbenchThreadStateController, "handleRequest">;
   transcript: Pick<DaemonTranscriptRegistration, "read" | "subscribe" | "unsubscribe">
     & Partial<Pick<DaemonTranscriptRegistration, "prefetch">>;
-  transcriptReconciliation?: Pick<import("./WorkbenchTranscriptReconciliationController").default, "healCaptureGaps" | "recoverObservedThread">;
+  transcriptReconciliation?: Pick<import("./transcript/WorkbenchTranscriptReconciliationController").default, "healCaptureGaps" | "recoverObservedThread">;
   writeLine?: (line: string) => void;
 }
 

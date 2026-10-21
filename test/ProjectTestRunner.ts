@@ -20,7 +20,7 @@ import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/server/lib/workbench/Wor
 import ProjectTestRunCoordinator, { type ProjectTestRunLease } from "./ProjectTestRunCoordinator";
 import ProjectTestCatalog from "./ProjectTestCatalog";
 import ProjectTestProcess, { type ProjectTestProcessResult } from "./ProjectTestProcess";
-import WorkbenchTestProcessResources from "../daemon/server/WorkbenchTestProcessResources";
+import WorkbenchTestProcessResources from "../daemon/server/runtime/WorkbenchTestProcessResources";
 
 const GIT_TEST_CONCURRENCY = 1;
 const NESTED_GIT_TEST_CONCURRENCY = 1;

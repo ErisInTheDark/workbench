@@ -27,9 +27,9 @@ import type {
   WorkbenchStoredThreadDraft, WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit,
   WorkbenchThreadStateProjectDocument,
 } from "./workbench-thread-state-persistence.ts";
-import { projectWorkbenchThreadStateEntry, type WorkbenchThreadStateRecord } from "../../workbench-thread-state-record.ts";
+import { projectWorkbenchThreadStateEntry, type WorkbenchThreadStateRecord } from "../../thread/workbench-thread-state-record.ts";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import type { WorkbenchStoredThreadTitleHistory } from "../../WorkbenchThreadStateStore.ts";
+import type { WorkbenchStoredThreadTitleHistory } from "../../thread/WorkbenchThreadStateStore.ts";
 import WorkbenchThreadStateLayoutRepository, { type WorkbenchThreadLayoutOwner } from "./WorkbenchThreadStateLayoutRepository.ts";
 
 type SqlValue = string | number | null;

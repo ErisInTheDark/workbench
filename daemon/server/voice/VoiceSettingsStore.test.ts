@@ -5,7 +5,7 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchDatabaseController from "../database/WorkbenchDatabaseController";
-import WorkbenchComposerProfileStore from "../WorkbenchComposerProfileStore";
+import WorkbenchComposerProfileStore from "../store/WorkbenchComposerProfileStore";
 import VoiceSettingsStore from "./VoiceSettingsStore";
 import type { WorkbenchComposerProfile, WorkbenchComposerSettings } from "workbench-shared/types";
 import { upsertRow } from "workbench-shared/database/workbench-database-statements";

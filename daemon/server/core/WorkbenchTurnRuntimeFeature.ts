@@ -12,19 +12,19 @@ import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/threa
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects, DaemonTranscriptRegistration } from "../daemon-runtime-objects";
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
-import type { ReloadableNodeBuild } from "../ReloadableNode";
-import type WorkbenchProjectCatalogController from "../WorkbenchProjectCatalogController";
-import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
-import type { WorkbenchAgentMcpRequestRegistry } from "../workbench-agent-mcp-request-registry";
-import WorkbenchThreadAdmissionController from "../WorkbenchThreadAdmissionController";
-import WorkbenchThreadAutoCompactController from "../WorkbenchThreadAutoCompactController";
-import WorkbenchThreadCompactionController from "../WorkbenchThreadCompactionController";
-import WorkbenchThreadContextRolloverController from "../WorkbenchThreadContextRolloverController";
-import WorkbenchThreadTurnLiveness from "../WorkbenchThreadTurnLiveness";
-import WorkbenchTranscriptReader, { threadPayloadStatus } from "../WorkbenchTranscriptReader";
-import WorkbenchTranscriptReconciliationController from "../WorkbenchTranscriptReconciliationController";
-import WorkbenchTurnContinuationController from "../WorkbenchTurnContinuationController";
-import WorkbenchTurnSettlementController from "../WorkbenchTurnSettlementController";
+import type { ReloadableNodeBuild } from "../runtime/ReloadableNode";
+import type WorkbenchProjectCatalogController from "../project/WorkbenchProjectCatalogController";
+import type WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
+import type { WorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
+import WorkbenchThreadAdmissionController from "../thread/WorkbenchThreadAdmissionController";
+import WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCompactController";
+import WorkbenchThreadCompactionController from "../turn/WorkbenchThreadCompactionController";
+import WorkbenchThreadContextRolloverController from "../turn/WorkbenchThreadContextRolloverController";
+import WorkbenchThreadTurnLiveness from "../turn/WorkbenchThreadTurnLiveness";
+import WorkbenchTranscriptReader, { threadPayloadStatus } from "../transcript/WorkbenchTranscriptReader";
+import WorkbenchTranscriptReconciliationController from "../transcript/WorkbenchTranscriptReconciliationController";
+import WorkbenchTurnContinuationController from "../turn/WorkbenchTurnContinuationController";
+import WorkbenchTurnSettlementController from "../turn/WorkbenchTurnSettlementController";
 import type WorkbenchCoreThreadLookup from "./WorkbenchCoreThreadLookup";
 
 export type WorkbenchCoreTranscript = Pick<DaemonTranscriptRegistration,

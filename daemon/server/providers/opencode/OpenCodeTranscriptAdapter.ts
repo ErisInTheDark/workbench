@@ -10,7 +10,7 @@
 import type {
   SessionInfo, SessionMessageAssistant, SessionMessageInfo, SessionMessageUser,
 } from "@opencode/client";
-import externalizeCodexTranscriptInlineImages from "../../codex-transcript-image-assets";
+import externalizeCodexTranscriptInlineImages from "../../transcript/codex-transcript-image-assets";
 import type WorkbenchDatabaseController from "../../database/WorkbenchDatabaseController";
 import { z } from "zod";
 import {
@@ -27,9 +27,9 @@ import type {
 } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchQuestionnaireHistoryEntryState } from "workbench-shared/workbench/thread/thread-state";
-import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
+import type WorkbenchThreadIdentityController from "../../thread/WorkbenchThreadIdentityController";
 import type { WorkbenchTurnIdentityMetadata } from "../../database/thread-identity/workbench-thread-identity-types";
-import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
+import type WorkbenchTranscriptIdentityController from "../../transcript/WorkbenchTranscriptIdentityController";
 import type { WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
 import type {
   WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptContextCompactionObservation,
@@ -39,7 +39,7 @@ import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/s
 import {
   openCodeContentSource, openCodeItemSource, type OpenCodeTranscriptSource,
 } from "./open-code-source-id";
-import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
+import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../provider-execution";
 import { isOpenCodeWorkbenchToolName, OPENCODE_COMMENTARY_TOOL_NAME } from "./opencode-workbench-rpc";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 

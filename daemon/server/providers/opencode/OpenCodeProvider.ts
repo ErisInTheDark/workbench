@@ -4,12 +4,11 @@
  * - openCodeAccountLimits: map credential-free Go quota into the shared account contract.
  * - default OpenCodeProvider: bind graph-owned OpenCode capabilities to the daemon provider contract.
  */
-import ReloadableNode from "../../ReloadableNode";
+import ReloadableNode from "../../runtime/ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import OpenCodeToolsController from "./OpenCodeToolsController";
-import CodexShellController from "../../CodexShellController";
-import { requireWorkbenchPowerShellExecutable } from "../../windows-powershell-runtime";
+import createWorkbenchSandboxShell, { WORKBENCH_SANDBOX_SHELL_REQUIRES } from "../../exec/WorkbenchSandboxShell";
 import type { OpenCodeGoQuota } from "./opencode-workbench-rpc";
 import { openCodeWorkbenchRpc } from "./opencode-workbench-rpc";
 import type OpenCodeServiceController from "./OpenCodeServiceController";
@@ -77,12 +76,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const service = get("openCodeService");
     const modelCatalog = get("openCodeModelCatalog");
     const threads = get("openCodeThreadOperations");
-    const shell = new CodexShellController({
-      executor: get("codexExecutor"),
-      sandboxAcl: get("codexSandboxAcl"),
-      powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
-      readConfiguration: cwd => get("codexThreadOperations").requestNative("config/read", { cwd, includeLayers: false }),
-    });
     const tools = new OpenCodeToolsController({
       contextRollover: threads.contextRolloverTool,
       currentTurn: nativeThreadId => threads.currentTurn(nativeThreadId),
@@ -91,7 +84,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         finish: (reference, result) => threads.finishToolTranscript(reference, result),
       },
       resolveCaller: (nativeThreadId, signal) => threads.resolveToolCaller(nativeThreadId, signal),
-      prepareExecution: shell.prepareAdmitted.bind(shell),
+      prepareExecution: createWorkbenchSandboxShell(context, { get }),
     });
     return {
       registrations: {
@@ -137,10 +130,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload the OpenCode provider definition.",
   lifecycle: "atomic",
   provides: ["openCodeProvider"],
-  requires: [
-    "openCodeService", "openCodeModelCatalog", "openCodeThreadOperations", "codexExecutor", "codexSandboxAcl",
-    "codexThreadOperations",
-  ],
+  requires: ["openCodeService", "openCodeModelCatalog", "openCodeThreadOperations", ...WORKBENCH_SANDBOX_SHELL_REQUIRES],
   safeAll: true,
   scope: "server:opencode/def",
 });

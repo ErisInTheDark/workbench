@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { DaemonReloadScope } from "workbench-shared/types";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import WorkbenchDaemonReloadController from "./WorkbenchDaemonReloadController";
-import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
+import type WorkbenchReloadDirtController from "./runtime/WorkbenchReloadDirtController";
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

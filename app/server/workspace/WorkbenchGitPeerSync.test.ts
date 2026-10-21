@@ -16,8 +16,8 @@ import { PEER_SYNC_DIVERGED_FIXTURE } from "./WorkbenchGitPeerSync.test.fixtures
 
 const daemonRequire = createRequire(import.meta.url);
 const { default: WorkbenchGitPeerController } = daemonRequire(
-  "../../../daemon/server/WorkbenchGitPeerController",
-) as typeof import("../../../daemon/server/WorkbenchGitPeerController");
+  "../../../daemon/server/git/WorkbenchGitPeerController",
+) as typeof import("../../../daemon/server/git/WorkbenchGitPeerController");
 const { default: GitTestFixtureCache } = daemonRequire(
   "../../../daemon/server/lib/workbench/git/GitTestFixtureCache.ts",
 ) as typeof import("../../../daemon/server/lib/workbench/git/GitTestFixtureCache");

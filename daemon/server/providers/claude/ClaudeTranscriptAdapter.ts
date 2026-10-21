@@ -22,13 +22,13 @@ import type { WorkbenchProviderCompactionScope } from "workbench-shared/workbenc
 import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { randomUUID } from "node:crypto";
-import externalizeCodexTranscriptInlineImages from "../../codex-transcript-image-assets";
+import externalizeCodexTranscriptInlineImages from "../../transcript/codex-transcript-image-assets";
 import type WorkbenchDatabaseController from "../../database/WorkbenchDatabaseController";
-import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
-import { ProviderToolMetadataSchema, type ProviderToolMetadata } from "../../provider-execution";
+import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../provider-execution";
+import { ProviderToolMetadataSchema, type ProviderToolMetadata } from "../provider-execution";
 import type { ClaudeFileChangeMetadata } from "workbench-shared/workbench/provider/claude-file-change-metadata";
-import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
-import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
+import type WorkbenchThreadIdentityController from "../../thread/WorkbenchThreadIdentityController";
+import type WorkbenchTranscriptIdentityController from "../../transcript/WorkbenchTranscriptIdentityController";
 import type { DaemonTranscriptRegistration } from "../../daemon-runtime-objects";
 import type { WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
 import { CLAUDE_COMMENTARY_TOOL_NAME, readStreamedCommentaryText } from "./claude-commentary-tool";

@@ -9,9 +9,9 @@
  * - DaemonRuntimeObjects: centralized live object registry contract populated by reloadable nodes.
  */
 import * as project from "./lib/project";
-import type CodexThreadOperations from "./CodexThreadOperations";
+import type CodexThreadOperations from "./providers/codex/CodexThreadOperations";
 import type WorkbenchDaemonSleepController from "./WorkbenchDaemonSleepController";
-import type CodexConfigurationController from "./CodexConfigurationController";
+import type CodexConfigurationController from "./providers/codex/CodexConfigurationController";
 import * as threadBootstrap from "./lib/thread-bootstrap";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
@@ -25,38 +25,38 @@ import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseContro
 import type { WorkbenchDatabaseRequestMethods } from "./database/workbench-database-requests";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
-import type BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
-import type CodexAppServer from "./CodexAppServer";
-import type CodexStdioBridge from "./CodexStdioBridge";
-import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
-import type CodexLifecycleController from "./CodexLifecycleController";
-import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
-import type WorkbenchCommandApprovalController from "./WorkbenchCommandApprovalController";
-import type WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
-import type WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
-import type WorkbenchToolRevisionController from "./WorkbenchToolRevisionController";
-import type WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
-import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
-import type WorkbenchInstallationUpdateController from "./WorkbenchInstallationUpdateController";
-import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
-import type WorkbenchBrowseController from "./WorkbenchBrowseController";
-import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
-import type WorkbenchHarnessController from "./WorkbenchHarnessController";
-import type WorkbenchDaemonHttpRouter from "./WorkbenchDaemonHttpRouter";
+import type BrowseSessionCleanupSupervisor from "./browse/BrowseSessionCleanupSupervisor";
+import type CodexAppServer from "./providers/codex/CodexAppServer";
+import type CodexStdioBridge from "./providers/codex/CodexStdioBridge";
+import type { CodexStdioBridgeReloadState } from "./providers/codex/CodexStdioBridge";
+import type CodexLifecycleController from "./providers/codex/CodexLifecycleController";
+import type WorkbenchCodexSandboxNetworkController from "./providers/codex/WorkbenchCodexSandboxNetworkController";
+import type WorkbenchCommandApprovalController from "./interactions/WorkbenchCommandApprovalController";
+import type WorkbenchAgentCommandController from "./agent/WorkbenchAgentCommandController";
+import type WorkbenchAgentMcpController from "./agent/WorkbenchAgentMcpController";
+import type WorkbenchToolRevisionController from "./agent/WorkbenchToolRevisionController";
+import type WorkbenchCodexInstructionAdapter from "./providers/codex/WorkbenchCodexInstructionAdapter";
+import type WorkbenchDaemonRequestController from "./transport/WorkbenchDaemonRequestController";
+import type WorkbenchInstallationUpdateController from "./runtime/WorkbenchInstallationUpdateController";
+import type WorkbenchThreadActionController from "./thread/WorkbenchThreadActionController";
+import type WorkbenchBrowseController from "./browse/WorkbenchBrowseController";
+import type WorkbenchGitArcFeature from "./git/WorkbenchGitArcFeature";
+import type WorkbenchHarnessController from "./providers/WorkbenchHarnessController";
+import type WorkbenchDaemonHttpRouter from "./transport/WorkbenchDaemonHttpRouter";
 import type WorkbenchDaemonReloadController from "./WorkbenchDaemonReloadController";
-import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
-import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
-import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
-import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
-import type WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
-import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
-import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
-import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
-import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
+import type WorkbenchReloadDirtController from "./runtime/WorkbenchReloadDirtController";
+import type WorkbenchProjectCatalogController from "./project/WorkbenchProjectCatalogController";
+import type WorkbenchProjectSnapshotController from "./project/WorkbenchProjectSnapshotController";
+import type WorkbenchQuestionnaireController from "./interactions/WorkbenchQuestionnaireController";
+import type WorkbenchSubagentFeature from "./subagents/WorkbenchSubagentFeature";
+import type WorkbenchThreadGitFeature from "./thread/WorkbenchThreadGitFeature";
+import type WorkbenchThreadStateFeature from "./thread/WorkbenchThreadStateFeature";
+import type WorkbenchThreadIdentityController from "./thread/WorkbenchThreadIdentityController";
+import type WorkbenchTranscriptIdentityController from "./transcript/WorkbenchTranscriptIdentityController";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
-import type WorkbenchProvider from "./WorkbenchProvider";
+import type WorkbenchProvider from "./providers/WorkbenchProvider";
 
 export type DaemonReloadableModules = {
   project: Pick<typeof project, "isPathWithinRoot">;
@@ -146,14 +146,14 @@ export interface DaemonTranscriptRegistration {
 
 
 export interface DaemonRuntimeObjects {
-  agentContext: import("./WorkbenchAgentContextController").default;
-  threadSkills: import("./WorkbenchThreadSkillsController").default;
-  threadTodos: import("./WorkbenchThreadTodoController").default;
+  agentContext: import("./agent/WorkbenchAgentContextController").default;
+  threadSkills: import("./thread/WorkbenchThreadSkillsController").default;
+  threadTodos: import("./thread/WorkbenchThreadTodoController").default;
   mcpServers: import("./mcp-servers/WorkbenchMcpServerController").default;
   vis: import("./vis/WorkbenchVisController").default;
   daemonSleep: WorkbenchDaemonSleepController;
-  transcriptReader: import("./WorkbenchTranscriptReader").default;
-  transcriptReconciliation: import("./WorkbenchTranscriptReconciliationController").default;
+  transcriptReader: import("./transcript/WorkbenchTranscriptReader").default;
+  transcriptReconciliation: import("./transcript/WorkbenchTranscriptReconciliationController").default;
   voiceSettings: import("./voice/VoiceSettingsStore").default;
   voice: {
     controller: import("./voice/WorkbenchVoiceController").default;
@@ -172,11 +172,11 @@ export interface DaemonRuntimeObjects {
   };
   codexThreadOperations: CodexThreadOperations;
   codexNativeConfiguration: CodexConfigurationController;
-  codexTools: import("./CodexToolsController").default;
-  codexExecutor: import("./CodexExecServer").default;
-  codexSandboxAcl: import("./CodexSandboxAclController").default;
-  commandCapacity: import("./WorkbenchCommandCapacity").default;
-  shellRunner: import("./WorkbenchShellRunner").default;
+  codexTools: import("./providers/codex/CodexToolsController").default;
+  codexExecutor: import("./providers/codex/CodexExecServer").default;
+  codexSandboxAcl: import("./providers/codex/CodexSandboxAclController").default;
+  commandCapacity: import("./exec/WorkbenchCommandCapacity").default;
+  shellRunner: import("./exec/WorkbenchShellRunner").default;
   codexProvider: WorkbenchProvider;
   openCodeService: import("./providers/opencode/OpenCodeServiceController").default;
   openCodeModelCatalog: {
@@ -195,7 +195,7 @@ export interface DaemonRuntimeObjects {
   codexAppServer: DaemonCodexAppServerRuntime;
   codexBridge: CodexStdioBridge;
   toolRevision: WorkbenchToolRevisionController;
-  repo: import("./WorkbenchRepoController").default;
+  repo: import("./git/WorkbenchRepoController").default;
   codexSandboxNetwork: WorkbenchCodexSandboxNetworkController;
   codexInstructions: WorkbenchCodexInstructionAdapter;
   database: DaemonDatabaseRegistration;
@@ -203,19 +203,19 @@ export interface DaemonRuntimeObjects {
   daemonRequests: WorkbenchDaemonRequestController;
   installationUpdate: WorkbenchInstallationUpdateController;
   threadActions: WorkbenchThreadActionController;
-  threadContextRollover: import("./WorkbenchThreadContextRolloverController").default;
+  threadContextRollover: import("./turn/WorkbenchThreadContextRolloverController").default;
   gitArc: WorkbenchGitArcFeature;
-  gitPeer: import("./WorkbenchGitPeerController").default;
-  branchPositions: import("./WorkbenchBranchPositionController").default;
+  gitPeer: import("./git/WorkbenchGitPeerController").default;
+  branchPositions: import("./git/WorkbenchBranchPositionController").default;
   harnesses: WorkbenchHarnessController;
   mcp: WorkbenchAgentMcpController;
   modules: DaemonReloadableModules;
   daemonHttp: WorkbenchDaemonHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
-  projectFiles: import("./WorkbenchProjectFileController").default;
-  workingTree: import("./WorkbenchWorkingTreeController").default;
-  accountLimits: import("./WorkbenchAccountLimitsController").default;
+  projectFiles: import("./project/WorkbenchProjectFileController").default;
+  workingTree: import("./git/WorkbenchWorkingTreeController").default;
+  accountLimits: import("./providers/WorkbenchAccountLimitsController").default;
   /** Per-thread live provider facts for thread observations. */
   threadRuntime: {
     /** Runtime for many observed thread entries from one batched read; entries it could not read are absent. */
@@ -225,20 +225,20 @@ export interface DaemonRuntimeObjects {
     subscribe(listener: (threadId: string, change: Partial<import("workbench-shared/workbench/thread/thread-state").ThreadRuntime> | null) => void): () => void;
   };
   /** Every observed thread's canonical summary: lean row plus live facts. */
-  threadSummaries: import("./WorkbenchThreadSummaryIndex").default;
+  threadSummaries: import("./thread/WorkbenchThreadSummaryIndex").default;
   projectStore: import("./store/WorkbenchProjectStore").default;
   questionnaires: WorkbenchQuestionnaireController;
-  approvals: import("./WorkbenchApprovalController").default;
+  approvals: import("./interactions/WorkbenchApprovalController").default;
   reloadController: WorkbenchDaemonReloadController;
   reloadDirt: WorkbenchReloadDirtController;
-  messages: import("./WorkbenchThreadMessageController").default;
+  messages: import("./thread/WorkbenchThreadMessageController").default;
   subagents: WorkbenchSubagentFeature;
-  subagentQueues: import("./WorkbenchSubagentQueueController").default;
+  subagentQueues: import("./subagents/WorkbenchSubagentQueueController").default;
   stats: WorkbenchStatsController;
   threadGit: WorkbenchThreadGitFeature;
   threadIdentity: WorkbenchThreadIdentityController;
   /** Git transition and thread-state lock manager; its live table survives reloads through handoff. */
-  threadTransitions: import("./WorkbenchThreadTransitionCoordinator").default;
+  threadTransitions: import("./turn/WorkbenchThreadTransitionCoordinator").default;
   transcriptIdentity: WorkbenchTranscriptIdentityController;
   threadState: WorkbenchThreadStateFeature;
   transcript: DaemonTranscriptRegistration;

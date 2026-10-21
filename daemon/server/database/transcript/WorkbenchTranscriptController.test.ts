@@ -18,7 +18,7 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { TranscriptPatchUpdate, TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
-import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
+import { createThreadStateTestDatabase } from "../../thread/workbench-thread-state-test-database";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository";
 import { workbenchDatabaseTables } from "../workbench-database-schema";
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";

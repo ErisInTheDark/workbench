@@ -12,7 +12,7 @@ import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { createHash } from "node:crypto";
 import WorkbenchTranscriptAssetStore from "./transcript/WorkbenchTranscriptAssetStore.ts";
-import { encodeTranscriptPathSegment } from "../codex-transcript-normalizers.ts";
+import { encodeTranscriptPathSegment } from "../providers/codex/codex-transcript-normalizers.ts";
 import WorkbenchLegacyDiffArtifactStore from "./git/WorkbenchLegacyDiffArtifactStore.ts";
 
 test("image conversion validates bytes atomically and preserves deduplicated native URLs", async () => {

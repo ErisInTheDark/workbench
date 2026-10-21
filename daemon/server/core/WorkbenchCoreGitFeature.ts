@@ -8,16 +8,16 @@ import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon
 import GitArcRegistry, { getGitArcLiveClaimPaths } from "../lib/workbench/git/GitArcRegistry";
 import type { GitArcThreadIdentityResolver } from "../lib/workbench/git/git-arc-thread-identity";
 import type WorkbenchStatsController from "../stats/WorkbenchStatsController";
-import type WorkbenchAgentContextController from "../WorkbenchAgentContextController";
-import WorkbenchBranchPositionController from "../WorkbenchBranchPositionController";
-import WorkbenchGitArcFeature from "../WorkbenchGitArcFeature";
-import WorkbenchGitPeerController from "../WorkbenchGitPeerController";
-import type WorkbenchProjectCatalogController from "../WorkbenchProjectCatalogController";
-import type WorkbenchSubagentFeature from "../WorkbenchSubagentFeature";
-import WorkbenchThreadGitFeature from "../WorkbenchThreadGitFeature";
-import type WorkbenchThreadStateFeature from "../WorkbenchThreadStateFeature";
-import WorkbenchWorkingTreeController from "../WorkbenchWorkingTreeController";
-import type { createWorktreeGitTransitions } from "../worktree-git-transitions";
+import type WorkbenchAgentContextController from "../agent/WorkbenchAgentContextController";
+import WorkbenchBranchPositionController from "../git/WorkbenchBranchPositionController";
+import WorkbenchGitArcFeature from "../git/WorkbenchGitArcFeature";
+import WorkbenchGitPeerController from "../git/WorkbenchGitPeerController";
+import type WorkbenchProjectCatalogController from "../project/WorkbenchProjectCatalogController";
+import type WorkbenchSubagentFeature from "../subagents/WorkbenchSubagentFeature";
+import WorkbenchThreadGitFeature from "../thread/WorkbenchThreadGitFeature";
+import type WorkbenchThreadStateFeature from "../thread/WorkbenchThreadStateFeature";
+import WorkbenchWorkingTreeController from "../git/WorkbenchWorkingTreeController";
+import type { createWorktreeGitTransitions } from "../git/worktree-git-transitions";
 import type { WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
 
 export default class WorkbenchCoreGitFeature {

@@ -9,10 +9,10 @@ import type { WorkbenchProjectStartup } from "../database/project/workbench-proj
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import { readDeviceIdentity } from "../store/device-identity";
 import WorkbenchProjectStore from "../store/WorkbenchProjectStore";
-import WorkbenchProjectCatalogController from "../WorkbenchProjectCatalogController";
-import WorkbenchProjectFileController from "../WorkbenchProjectFileController";
-import WorkbenchProjectSnapshotController from "../WorkbenchProjectSnapshotController";
-import WorkbenchSearchController from "../WorkbenchSearchController";
+import WorkbenchProjectCatalogController from "../project/WorkbenchProjectCatalogController";
+import WorkbenchProjectFileController from "../project/WorkbenchProjectFileController";
+import WorkbenchProjectSnapshotController from "../project/WorkbenchProjectSnapshotController";
+import WorkbenchSearchController from "../project/WorkbenchSearchController";
 
 export default class WorkbenchCoreProjectsFeature {
   readonly settings: WorkbenchServerSettings;

@@ -6,7 +6,7 @@
  * - renderSubagentQueueNotice: agent-message notices sent by a queue to a member.
  * - renderSubagentQueueReleaseNote: line appended to the parent's subagent_wait result.
  */
-import type { SubagentQueueMember, SubagentQueueState } from "../../../WorkbenchSubagentQueueController";
+import type { SubagentQueueMember, SubagentQueueState } from "../../../subagents/WorkbenchSubagentQueueController";
 
 function formatDuration(ms: number) {
   const seconds = Math.max(0, Math.floor(ms / 1000));

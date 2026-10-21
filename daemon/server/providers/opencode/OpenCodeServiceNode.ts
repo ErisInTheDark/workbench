@@ -4,7 +4,7 @@
  *   restarting a running service only after the reload commits or rolls back.
  */
 import path from "node:path";
-import ReloadableNode from "../../ReloadableNode";
+import ReloadableNode from "../../runtime/ReloadableNode";
 import OpenCodeBridgeNode from "./OpenCodeBridgeNode";
 import OpenCodeServiceController from "./OpenCodeServiceController";
 import OpenCodeProvider from "./OpenCodeProvider";

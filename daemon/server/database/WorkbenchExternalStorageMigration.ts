@@ -16,7 +16,7 @@ import { evidenceTables } from "workbench-shared/workbench/database/schema/evide
 import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadIdentityRepository from "./thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchTranscriptAssetStore, { type TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore.ts";
-import { encodeTranscriptPathSegment } from "../codex-transcript-normalizers.ts";
+import { encodeTranscriptPathSegment } from "../providers/codex/codex-transcript-normalizers.ts";
 import WorkbenchLegacyDiffArtifactStore from "./git/WorkbenchLegacyDiffArtifactStore.ts";
 import { normalizeThreadId } from "workbench-shared/workbench/git/git-arc-storage";
 

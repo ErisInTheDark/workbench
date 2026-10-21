@@ -57,7 +57,7 @@ test("loads project reload definitions without starting their services and selec
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
   const catalog = await ProjectTestCatalog.read(root);
   const selector = await ClaimedTestSelector.load(catalog);
-  const owner = path.join(root, "daemon/server/CodexStdioBridge.ts");
+  const owner = path.join(root, "daemon/server/providers/codex/CodexStdioBridge.ts");
   const selection = selector.select([path.relative(root, owner)]);
   assert.ok(selection.scopes.length > 0);
   for (const companion of catalog.companions([owner])) assert.ok(selection.files.includes(companion));
@@ -81,7 +81,7 @@ test("loads project reload definitions without starting their services and selec
   }
   const threadStateSelection = selector.select(["shared/workbench/thread/thread-state.ts"]);
   assert.ok(threadStateSelection.files.includes(path.join(root, "shared/workbench/thread/thread-state.test.ts")));
-  assert.ok(threadStateSelection.files.includes(path.join(root, "daemon/server/WorkbenchThreadStateController.test.ts")));
+  assert.ok(threadStateSelection.files.includes(path.join(root, "daemon/server/thread/WorkbenchThreadStateController.test.ts")));
   for (const gitFixture of ["WorkbenchThreadGit.test.ts", "WorkbenchGitHistoryRewriter.test.ts"]) {
     assert.ok(!threadStateSelection.files.includes(path.join(root, "daemon/server/lib/workbench/git", gitFixture)),
       `Unrelated Git fixture selected through thread launch: ${gitFixture}`);

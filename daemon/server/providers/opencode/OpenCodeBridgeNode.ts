@@ -2,7 +2,7 @@
  * Exports:
  * - default OpenCodeBridgeNode: own OpenCode event subscription, canonical reconciliation, and WB thread operations.
  */
-import ReloadableNode from "../../ReloadableNode";
+import ReloadableNode from "../../runtime/ReloadableNode";
 import OpenCodeProvider from "./OpenCodeProvider";
 import OpenCodeEventController from "./OpenCodeEventController";
 import OpenCodeEventStreamController from "./OpenCodeEventStreamController";

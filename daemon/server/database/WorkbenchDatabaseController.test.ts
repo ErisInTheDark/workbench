@@ -167,6 +167,8 @@ test("retention protects current observers while reclaiming a historical databas
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-retention-reclaim-");
   const databasePath = join(temporary.path, "workbench.sqlite3");
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
+  // Reclaiming pages can cross the slow-writer threshold on a loaded machine; that warning is expected here.
+  captureTestOutput(context, process.stderr, text => text.startsWith(DATABASE_LOG_PREFIX));
   const seeded = new Database(databasePath);
   seeded.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(seeded);
@@ -249,6 +251,8 @@ test("writes queued during retention run between retention steps instead of afte
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-retention-yield-");
   const databasePath = join(temporary.path, "workbench.sqlite3");
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
+  // Reclaiming pages can cross the slow-writer threshold on a loaded machine; that warning is expected here.
+  captureTestOutput(context, process.stderr, text => text.startsWith(DATABASE_LOG_PREFIX));
   const seeded = new Database(databasePath);
   seeded.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(seeded);

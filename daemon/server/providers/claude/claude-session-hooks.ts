@@ -9,7 +9,7 @@
  */
 import path from "node:path";
 import type { HookCallbackMatcher, HookJSONOutput, SDKAssistantMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { WorkbenchAgentBatchTurn } from "../../workbench-agent-mcp-request-registry";
+import type { WorkbenchAgentBatchTurn } from "../../agent/workbench-agent-mcp-request-registry";
 import { describePendingProposalDenial, type WorkbenchFileClaimCheckResult } from "../../lib/workbench/file-claim-check";
 import type ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import { CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";

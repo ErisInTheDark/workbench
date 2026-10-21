@@ -24,25 +24,25 @@ import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
-import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
-import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
-import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
-import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
+import type WorkbenchThreadIdentityController from "../../thread/WorkbenchThreadIdentityController";
+import type WorkbenchProjectCatalogController from "../../project/WorkbenchProjectCatalogController";
+import type WorkbenchQuestionnaireController from "../../interactions/WorkbenchQuestionnaireController";
+import type WorkbenchThreadStateFeature from "../../thread/WorkbenchThreadStateFeature";
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
-import ProviderCompactionCompletionController from "../../ProviderCompactionCompletionController";
+import ProviderCompactionCompletionController from "../../turn/ProviderCompactionCompletionController";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import OpenCodeTranscriptAdapter, {
   openCodeTokenBreakdown,
   subtractOpenCodeTokenBreakdowns,
 } from "./OpenCodeTranscriptAdapter";
-import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
-import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
+import type WorkbenchTranscriptReader from "../../transcript/WorkbenchTranscriptReader";
+import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "../provider-execution";
 import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
-import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
-import type WorkbenchThreadContextRolloverController from "../../WorkbenchThreadContextRolloverController";
+import type WorkbenchTranscriptReconciliationController from "../../transcript/WorkbenchTranscriptReconciliationController";
+import type WorkbenchThreadContextRolloverController from "../../turn/WorkbenchThreadContextRolloverController";
 import { getWorkbenchLifecycleTurnId } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
+import type { WorkbenchThreadStateRecord } from "../../thread/workbench-thread-state-record";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import {

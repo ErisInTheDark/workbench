@@ -7,7 +7,7 @@ import type {
   WorkbenchAccountIdentity, WorkbenchAccountLimits, WorkbenchRateLimitSnapshot, WorkbenchRateLimitWindow,
 } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
-import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
+import type WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {

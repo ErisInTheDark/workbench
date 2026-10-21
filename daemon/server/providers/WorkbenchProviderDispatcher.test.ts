@@ -1,0 +1,788 @@
+/*
+ * No production exports. Tests protect provider handles across real graph replacement, shared message admission, instruction selection and hidden turns.
+ */
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import ReloadableNode, { defineReloadableNodeGraph } from "../../../shared/reload/ReloadableNode";
+import ReloadableNodeHost from "../../../shared/reload/ReloadableNodeHost";
+import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
+import type WorkbenchProvider from "./WorkbenchProvider";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchToolTranscriptReference } from "./provider-execution";
+import WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCompactController";
+import WorkbenchThreadAdmissionController from "../thread/WorkbenchThreadAdmissionController";
+import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import WorkbenchMessageWaitController from "../agent/WorkbenchMessageWaitController";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
+import { listWorkbenchAgentCommands } from "../lib/workbench/commands/workbench-agent-command-registry";
+import { getWorkbenchAgentCommandToolName } from "../lib/workbench/commands/workbench-agent-command-definition";
+import WorkbenchThreadInstructionSelectionController from "../thread/WorkbenchThreadInstructionSelectionController";
+import type { WorkbenchInstructionSelection, WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
+
+const compaction = {
+  compactInsideAdmission: async <T>(
+    threadId: string,
+    provider: { threads: { compact: WorkbenchProvider["threads"]["compact"] } },
+    _ticket: unknown,
+    options: { signal?: AbortSignal; then?: () => Promise<T> } = {},
+  ) => {
+    await provider.threads.compact(threadId, { scope: { itemId: "item", turnId: "turn" } as never, signal: options.signal });
+    return await options.then?.();
+  },
+  enqueue: async () => false,
+  adopt: async () => {},
+  retireStranded: async () => {},
+};
+
+test("accepted agent messages wake matching message waits and end others without registry cancellation, while user steers still cancel", async () => {
+  const definition = listWorkbenchAgentCommands().find(command => getWorkbenchAgentCommandToolName(command) === "message_wait");
+  assert.ok(definition);
+  for (const harness of ["codex", "claude", "opencode"] as const) {
+    const threadId = WorkbenchThreadIdSchema.parse(`message-caller-${harness}`);
+    const registry = getProcessWorkbenchAgentMcpRequestRegistry();
+    const registration = registry.register(`message-test-${harness}`, "wait", {
+      owner: {}, toolName: getWorkbenchAgentCommandToolName(definition), steerInterruptible: definition.mcpSteerInterruptible,
+    });
+    registration.setWorkbenchThreadId(threadId);
+    const owner = new WorkbenchMessageWaitController();
+    let rejectMessage = false;
+    const provider = { threads: {
+      messageAgent: async () => {
+        if (rejectMessage) throw new Error("rejected admission");
+        return { kind: "steered", turnId: "turn" };
+      },
+      submit: async () => ({ kind: "steered", turnId: "turn" }),
+    } } as unknown as WorkbenchProvider;
+    const dispatcher = new WorkbenchProviderDispatcher(
+      async (_definition, operation) => operation(provider),
+      { onAgentMessageAdmitted: (target, message) => { owner.receive(target, message); } },
+    );
+    const handle = dispatcher.get(harness);
+    const waiter = owner.wait({
+      waitId: "filtered", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],
+    }, registration.signal);
+    const send = (senderThreadId: string, text: string) => handle.threads.messageAgent({
+      threadId, cwd: "C:/repo", message: { senderThreadId, senderName: "luna", message: text },
+    });
+    try {
+      rejectMessage = true;
+      await assert.rejects(send("selected", "rejected reply"), /rejected admission/u);
+      rejectMessage = false;
+      await send("unselected", "unrelated reply");
+      assert.deepEqual(await waiter, { kind: "interrupted" });
+      assert.equal(registration.signal.aborted, false);
+      const selected = owner.wait({
+        waitId: "selected", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],
+      }, registration.signal);
+      await send("selected", "accepted reply");
+      assert.deepEqual(await selected, {
+        kind: "message", message: { senderThreadId: "selected", senderName: "luna", message: "accepted reply" },
+      });
+      assert.equal(registration.signal.aborted, false);
+      const second = owner.wait({
+        waitId: "user-steer", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],
+      }, registration.signal);
+      const interrupted = assert.rejects(second);
+      await handle.threads.submit({ threadId, clientMessageId: "user", input: [], intent: "continue" });
+      assert.equal(registration.signal.aborted, true);
+      await interrupted;
+      assert.equal(owner.hasWait("user-steer"), false);
+    } finally {
+      registration.unregister();
+      owner.dispose();
+    }
+  }
+});
+
+test("user and agent messages on every provider share compact-before-start admission and steer safely after overlap", async () => {
+  for (const harness of ["codex", "claude", "opencode"] as const) {
+    for (const firstRoute of ["user", "agent"] as const) {
+      const compacting = Promise.withResolvers<void>();
+      const completed = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      const waits: string[] = [];
+      let active = false;
+      const provider = { threads: {
+        read: async () => ({ status: active ? "active" : "idle" }),
+        latestTurn: async () => ({ id: "previous", status: "completed" }),
+        isTurnLive: async () => active,
+        compact: async () => { calls.push("compact"); compacting.resolve(); await completed.promise; },
+        submit: async () => {
+          calls.push("user");
+          const wasActive = active;
+          active = true;
+          return wasActive ? { kind: "steered", turnId: "new" } : { kind: "started", turn: { id: "new" } };
+        },
+        messageAgent: async () => {
+          calls.push("agent");
+          const wasActive = active;
+          active = true;
+          return { kind: wasActive ? "steered" : "started", turnId: "new" };
+        },
+      } } as unknown as WorkbenchProvider;
+      const admission = new WorkbenchThreadAdmissionController();
+      const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
+        readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
+        readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+        readRuntime: async () => ({ latestTurn: { id: "previous" }, status: active ? "active" : "idle", turnLive: active }),
+        publish: () => {},
+        now: () => 30 * 60_000,
+        warn: () => {},
+      });
+      const dispatcher = new WorkbenchProviderDispatcher(
+        async (_registration, operation) => operation(provider),
+        {
+          interruptSteerWaits: threadId => { waits.push(threadId); },
+          messageAdmission: owner.run.bind(owner),
+        },
+      );
+      const send = (route: "user" | "agent") => route === "user"
+        ? dispatcher.get(harness).threads.submit({ threadId: "thread", clientMessageId: "message", input: [], intent: "continue" })
+        : dispatcher.get(harness).threads.messageAgent({ threadId: "thread", cwd: "C:/repo",
+          message: { message: "next", senderName: "luna", senderThreadId: "sender" } });
+      const first = send(firstRoute);
+      await Promise.race([compacting.promise, first.then(() => assert.fail("inactive message started before compaction"))]);
+      const next = send(firstRoute === "user" ? "agent" : "user");
+      assert.deepEqual(calls, ["compact"]);
+      completed.resolve();
+      await Promise.all([first, next]);
+      assert.deepEqual(calls, ["compact", firstRoute, firstRoute === "user" ? "agent" : "user"]);
+      assert.deepEqual(waits, ["thread"]);
+      await owner.dispose();
+      await admission.dispose();
+    }
+  }
+});
+
+test("user bypass skips Workbench compaction and is stripped before provider submission", async () => {
+  const received: object[] = [];
+  const provider = { threads: {
+    read: async () => ({ status: "idle" }),
+    latestTurn: async () => ({ id: "previous", status: "completed" }),
+    isTurnLive: async () => false,
+    compact: async () => assert.fail("Bypassed admission must not compact."),
+    submit: async (input: object) => {
+      received.push(input);
+      return { kind: "steered", turnId: "turn" };
+    },
+  } } as unknown as WorkbenchProvider;
+  const admission = new WorkbenchThreadAdmissionController();
+  const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
+    readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
+    readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+    readRuntime: async () => ({ latestTurn: { id: "previous" }, status: "idle", turnLive: false }),
+    publish: () => {},
+    now: () => 30 * 60_000,
+    warn: () => {},
+  });
+  const dispatcher = new WorkbenchProviderDispatcher(
+    async (_registration, operation) => operation(provider),
+    { messageAdmission: owner.run.bind(owner) },
+  );
+  await dispatcher.get("codex").threads.submit({
+    threadId: "thread",
+    clientMessageId: "message",
+    input: [],
+    intent: "continue",
+    skipAutoCompact: true,
+  });
+  assert.deepEqual(received, [{
+    threadId: "thread",
+    clientMessageId: "message",
+    input: [],
+    intent: "continue",
+  }]);
+  await owner.dispose();
+  await admission.dispose();
+});
+
+test("a compaction queue's delivery admits inside the admission its compaction holds, never with a stale ticket", async () => {
+  const received: object[] = [];
+  const provider = { threads: {
+    read: async () => ({ status: "idle" }),
+    latestTurn: async () => ({ id: "previous", status: "completed" }),
+    isTurnLive: async () => false,
+    compact: async () => assert.fail("Queued delivery must not compact again."),
+    submit: async (input: object) => { received.push(input); return { kind: "started", turn: { id: "turn" } }; },
+  } } as unknown as WorkbenchProvider;
+  const admission = new WorkbenchThreadAdmissionController();
+  const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
+    readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
+    readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+    readRuntime: async () => ({ latestTurn: { id: "previous" }, status: "idle", turnLive: false }),
+    publish: () => {},
+    now: () => 30 * 60_000,
+    warn: () => {},
+  });
+  const dispatcher = new WorkbenchProviderDispatcher(
+    async (_registration, operation) => operation(provider),
+    { interruptSteerWaits: () => undefined, messageAdmission: owner.run.bind(owner) },
+  );
+  const merged = { threadId: "thread", clientMessageId: "queue", input: [], intent: "continue" as const };
+  let stale: Parameters<typeof dispatcher.submitWithinAdmission>[2] | null = null;
+  const result = await admission.run("thread", async ticket => {
+    stale = ticket;
+    return await dispatcher.submitWithinAdmission("claude", merged, ticket);
+  });
+  assert.equal(result.kind, "started");
+  assert.deepEqual(received, [merged]);
+  await assert.rejects(dispatcher.submitWithinAdmission("claude", merged, stale!), /no longer holds/u);
+  assert.equal(received.length, 1);
+  await owner.dispose();
+  await admission.dispose();
+});
+
+test("the shared provider admission gate wakes waits only for accepted steers", async () => {
+  const interrupted: string[] = [];
+  let agentAdmission: "started" | "steered" | "failed" = "steered";
+  let userAdmission: "started" | "steered" | "failed" = "steered";
+  const provider = {
+    threads: {
+      submit: async () => {
+        if (userAdmission === "failed") throw new Error("user admission failed");
+        return userAdmission === "steered"
+          ? { kind: "steered" as const, turnId: "turn" }
+          : { kind: "started" as const, turn: { id: "new-turn" } as never };
+      },
+      messageAgent: async () => {
+        if (agentAdmission === "failed") throw new Error("admission failed");
+        return { kind: agentAdmission, turnId: "turn" };
+      },
+    },
+  } as unknown as WorkbenchProvider;
+  const handle = new WorkbenchProviderHandle(
+    "codex",
+    async (_registration, operation) => operation(provider),
+    { interruptSteerWaits: threadId => { interrupted.push(threadId); } },
+  );
+  const userMessage = {
+    threadId: "parent", clientMessageId: "user-1", input: [], intent: "continue" as const,
+  };
+  await handle.threads.submit(userMessage);
+  assert.deepEqual(interrupted, ["parent"]);
+
+  userAdmission = "started";
+  await handle.threads.submit(userMessage);
+  userAdmission = "failed";
+  await assert.rejects(handle.threads.submit(userMessage), /user admission failed/u);
+  assert.deepEqual(interrupted, ["parent"]);
+
+  const message = { threadId: "parent", cwd: "C:/repo", message: {
+    message: "review ready", senderName: "luna", senderThreadId: "child",
+  } };
+  await handle.threads.messageAgent(message);
+  assert.deepEqual(interrupted, ["parent", "parent"]);
+
+  agentAdmission = "started";
+  await handle.threads.messageAgent(message);
+  assert.deepEqual(interrupted, ["parent", "parent"]);
+
+  agentAdmission = "failed";
+  await assert.rejects(handle.threads.messageAgent(message), /admission failed/u);
+  assert.deepEqual(interrupted, ["parent", "parent"]);
+});
+
+test("the shared provider handle publishes each provider-chosen message admission once", async () => {
+  const admissions: Array<{ firstMessagePreview?: string; harness: string; kind: string; threadId: string; turnId: string }> = [];
+  let userAdmission: "failed" | "started" | "steered" = "started";
+  let agentAdmission: "started" | "steered" = "steered";
+  const provider = {
+    threads: {
+      submit: async () => {
+        if (userAdmission === "failed") throw new Error("provider rejected message");
+        return userAdmission === "started"
+          ? { kind: "started" as const, turn: { id: "user-started" } as never }
+          : { kind: "steered" as const, turnId: "user-steered" };
+      },
+      messageAgent: async () => ({
+        kind: agentAdmission,
+        turnId: agentAdmission === "started" ? "agent-started" : "agent-steered",
+      }),
+    },
+  } as unknown as WorkbenchProvider;
+  const handle = new WorkbenchProviderHandle(
+    "codex",
+    async (_registration, operation) => operation(provider),
+    {
+      interruptSteerWaits: () => undefined,
+      onMessageAdmitted: admission => { admissions.push(admission); },
+    },
+  );
+
+  await handle.threads.submit({
+    threadId: "thread", clientMessageId: "user-start",
+    input: [{ type: "text", text: "First user message", text_elements: [] }],
+    intent: "newTurn",
+  });
+  userAdmission = "steered";
+  await handle.threads.submit({
+    threadId: "thread", clientMessageId: "user-steer", input: [], intent: "continue",
+  });
+  await handle.threads.messageAgent({
+    threadId: "thread", cwd: "C:/repo",
+    message: { message: "continue", senderName: "luna", senderThreadId: "sender" },
+  });
+  agentAdmission = "started";
+  await handle.threads.messageAgent({
+    threadId: "thread", cwd: "C:/repo",
+    message: { message: "restart", senderName: "luna", senderThreadId: "sender" },
+  });
+
+  assert.deepEqual(admissions, [
+    {
+      firstMessagePreview: "First user message",
+      harness: "codex", kind: "started", threadId: "thread", turnId: "user-started",
+    },
+    { harness: "codex", kind: "steered", threadId: "thread", turnId: "user-steered" },
+    { harness: "codex", kind: "steered", threadId: "thread", turnId: "agent-steered" },
+    { harness: "codex", kind: "started", threadId: "thread", turnId: "agent-started" },
+  ]);
+  userAdmission = "failed";
+  await assert.rejects(handle.threads.submit({
+    threadId: "thread", clientMessageId: "rejected", input: [], intent: "continue",
+  }), /provider rejected message/u);
+  assert.equal(admissions.length, 4);
+});
+
+test("an accepted user message returns a warning when lifecycle publication fails", async context => {
+  const warned = context.mock.method(console, "warn", () => undefined);
+  const provider = { threads: {
+    submit: async () => ({ kind: "steered" as const, turnId: "turn", warning: "Provider warning." }),
+  } } as unknown as WorkbenchProvider;
+  const handle = new WorkbenchProviderHandle(
+    "codex",
+    async (_registration, operation) => operation(provider),
+    {
+      interruptSteerWaits: () => undefined,
+      onMessageAdmitted: () => { throw new Error("state unavailable"); },
+    },
+  );
+
+  const result = await handle.threads.submit({
+    threadId: "thread", clientMessageId: "accepted", input: [], intent: "continue",
+  });
+
+  assert.equal(result.kind, "steered");
+  assert.match(result.warning ?? "", /Provider warning/u);
+  assert.match(result.warning ?? "", /could not update its thread state/u);
+  assert.equal(warned.mock.callCount(), 1);
+});
+
+function selectionStore() {
+  const stored = new Map<string, WorkbenchInstructionSelection>();
+  return {
+    stored,
+    selection: new WorkbenchThreadInstructionSelectionController({
+      store: async command => {
+        if (command.kind === "record") stored.set(command.threadId, command.selection);
+        return stored.get(command.threadId) ?? null;
+      },
+      readThreadKind: async () => "thread",
+      readSkills: async () => [],
+      recordSkillActivations: async () => {},
+      now: () => 1,
+      warn: message => assert.fail(message),
+    }),
+  };
+}
+
+test("messages without a selection launch with the thread's accepted selection, keeping their own skills", async () => {
+  const received: Array<WorkbenchMessageContext | undefined> = [];
+  let reject = false;
+  const provider = { threads: {
+    submit: async (input: { context?: WorkbenchMessageContext }) => {
+      received.push(input.context);
+      if (reject) throw new Error("rejected");
+      return { kind: "steered", turnId: "turn" };
+    },
+    messageAgent: async (input: { context?: WorkbenchMessageContext }) => {
+      received.push(input.context);
+      return { kind: "steered", turnId: "turn" };
+    },
+  } } as unknown as WorkbenchProvider;
+  const { stored, selection } = selectionStore();
+  const handle = new WorkbenchProviderDispatcher(
+    async (_registration, operation) => operation(provider),
+    { interruptSteerWaits: () => undefined, instructionSelection: selection },
+  ).get("opencode");
+  const submit = (context?: WorkbenchMessageContext) => handle.threads.submit({
+    threadId: "thread", clientMessageId: "message", input: [], intent: "continue", ...(context ? { context } : {}),
+  });
+
+  await submit({ workflowIds: ["review"], workbenchOrigin: "http://wb", activatedSkillPaths: ["skills/a"] });
+  await handle.threads.messageAgent({ threadId: "thread", cwd: "C:/repo",
+    message: { message: "next", senderName: "luna", senderThreadId: "sender" } });
+  await submit({ activatedSkillPaths: ["skills/b"] });
+  reject = true;
+  await assert.rejects(submit({ workflowIds: [] }), /rejected/u);
+
+  assert.deepEqual(received, [
+    { workflowIds: ["review"], workbenchOrigin: "http://wb", activatedSkillPaths: ["skills/a"] },
+    { workflowIds: ["review"], workbenchOrigin: "http://wb" },
+    { workflowIds: ["review"], workbenchOrigin: "http://wb", activatedSkillPaths: ["skills/b"] },
+    { workflowIds: [] },
+  ]);
+  assert.deepEqual(stored.get("thread"), { workflowIds: ["review"], workbenchOrigin: "http://wb" });
+});
+
+test("a hidden turn checks currency after earlier admissions in its lane and starts only when still current", async () => {
+  const userEntered = Promise.withResolvers<void>();
+  const releaseUser = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const submitted: Array<{ intent: string; context?: WorkbenchMessageContext }> = [];
+  const admissions: Array<{ kind: string; firstMessagePreview?: string }> = [];
+  const provider = { threads: {
+    submit: async (input: { intent: string; clientMessageId: string; context?: WorkbenchMessageContext }) => {
+      if (input.clientMessageId === "user") { userEntered.resolve(); await releaseUser.promise; }
+      order.push(`submit:${input.clientMessageId}`);
+      submitted.push({ intent: input.intent, ...(input.context ? { context: input.context } : {}) });
+      return { kind: "started", turn: { id: input.clientMessageId } };
+    },
+  } } as unknown as WorkbenchProvider;
+  const admission = new WorkbenchThreadAdmissionController();
+  const { stored, selection } = selectionStore();
+  stored.set("thread", { workflowIds: ["review"] });
+  const dispatcher = new WorkbenchProviderDispatcher(async (_registration, operation) => operation(provider), {
+    interruptSteerWaits: () => undefined,
+    instructionSelection: selection,
+    messageAdmission: (threadId, _provider, admit) => admission.run(threadId, admit),
+    onMessageAdmitted: received => { admissions.push(received); },
+  });
+  const user = dispatcher.get("claude").threads.submit({ threadId: "thread", clientMessageId: "user", input: [], intent: "newTurn" });
+  await userEntered.promise;
+  let current = false;
+  const hidden = dispatcher.admitHiddenTurn("claude", {
+    threadId: "thread", clientMessageId: "hidden", input: [],
+    isCurrent: async () => { order.push("check"); return current; },
+  });
+  releaseUser.resolve();
+  await user;
+  assert.equal(await hidden, "superseded");
+  assert.deepEqual(order, ["submit:user", "check"]);
+
+  current = true;
+  assert.equal(await dispatcher.admitHiddenTurn("claude", {
+    threadId: "thread", clientMessageId: "hidden", input: [], isCurrent: async () => current,
+  }), "started");
+  assert.deepEqual(submitted.at(-1), { intent: "newTurn", context: { workflowIds: ["review"] } });
+  assert.deepEqual(admissions.map(received => received.kind), ["started", "started"]);
+  assert.equal(admissions[1]!.firstMessagePreview, undefined);
+  await admission.dispose();
+});
+
+test("tool capture finishes through the replacement owner with the original pinned identity", async () => {
+  const f = fixture();
+  const unused = async (): Promise<never> => { throw new Error("unexpected tool execution"); };
+  const reference = { threadId: "thread", turnId: "old-turn", itemId: "item", sourceId: "child",
+    parentId: "parent", tool: "task_get", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
+  const tools: NonNullable<WorkbenchProvider["tools"]> = {
+    patchClaims: unused, describe: unused, caller: unused, prepareShell: unused,
+    transcript: { start: async () => reference, finish: async () => assert.fail("old owner retained") },
+  };
+  f.setTools(tools);
+  await f.host.start();
+  await f.host.reload(["server:codex/def"]);
+  try {
+    const capture = f.providers.get("codex").tools.transcript!;
+    const pinned = await capture.start({ tool: "task_get", arguments: {}, metadata: {} }, new AbortController().signal);
+    assert.equal(pinned, reference);
+    let finished = false;
+    f.setTools({ ...tools, transcript: {
+      start: unused,
+      finish: async (received, result) => {
+        assert.equal(received, reference);
+        assert.deepEqual(result.content, [{ type: "text", text: "late output" }]);
+        finished = true;
+      },
+    } });
+    await f.host.reload(["server:codex/def"]);
+    await capture.finish(pinned!, { content: [{ type: "text", text: "late output" }] });
+    assert.equal(finished, true);
+  } finally { await f.host.dispose(); }
+});
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function fixture() {
+  const unused = async (): Promise<never> => { throw new Error("This fixture exercises only model context."); };
+  type Objects = {
+    codexProvider: WorkbenchProvider;
+    openCodeProvider: WorkbenchProvider;
+    claudeProvider: WorkbenchProvider;
+    providers: WorkbenchProviderDispatcher;
+  };
+  let generation = 0;
+  let failStart = false;
+  let read: WorkbenchProvider["configuration"]["modelContext"]["read"] | undefined;
+  let singleFile: WorkbenchProvider["singleFile"];
+  let tools: WorkbenchProvider["tools"];
+  let context: WorkbenchProvider["context"];
+  const disposed: number[] = [];
+  const started = deferred();
+  const releaseStart = deferred();
+  let holdStart = false;
+  const graph = () => defineReloadableNodeGraph([
+    ReloadableNode.define<object, Objects, never>()({
+      access: "agent", children: [], description: "Provider fixture", lifecycle: "atomic",
+      provides: ["codexProvider", "openCodeProvider"], requires: [], safeAll: true,
+      scope: "server:codex/def",
+      create: () => {
+        const current = ++generation;
+        const currentRead = read;
+        return {
+          registrations: {
+            codexProvider: {
+              context,
+              singleFile,
+              tools,
+              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused },
+              configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
+                read: currentRead ?? (async () => [{ model: String(current), defaultTokens: 1000, maximumTokens: 2000 }]),
+              } },
+            },
+            openCodeProvider: {
+              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused },
+              configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
+                read: async () => [{ model: "opencode", defaultTokens: 1000, maximumTokens: 2000 }],
+              } },
+            },
+          },
+          start: async () => {
+            if (failStart) throw new Error("candidate failed");
+          },
+          activate: async () => {
+            if (holdStart) { started.resolve(); await releaseStart.promise; }
+          },
+          dispose: () => { disposed.push(current); },
+        };
+      },
+    }),
+    ReloadableNode.define<object, Objects, never>()({
+      access: "agent", children: [], description: "Provider consumer", lifecycle: "atomic",
+      provides: ["providers"], requires: [], safeAll: true,
+      scope: "server:consumer",
+      create: (_context, { run }) => ({
+        registrations: {
+          providers: new WorkbenchProviderDispatcher(run, { interruptSteerWaits: () => undefined }),
+        },
+        start() {}, dispose() {},
+      }),
+    }),
+  ]);
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, { topologyScope: "server:codex/def" });
+  const providers = host.get("providers");
+  return {
+    host, providers, disposed, started, releaseStart,
+    fail: () => { failStart = true; },
+    hold: () => { holdStart = true; },
+    setRead: (value: typeof read) => { read = value; },
+    setSingleFile: (value: typeof singleFile) => { singleFile = value; },
+    setTools: (value: typeof tools) => { tools = value; },
+    setContext: (value: typeof context) => { context = value; },
+  };
+}
+
+test("passive context follows replacement capabilities without falling back to turn submission", async () => {
+  const f = fixture();
+  await f.host.start();
+  try {
+    const capability = f.providers.get("codex").context;
+    const input = { threadId: WorkbenchThreadIdSchema.parse("thread"), text: "event" };
+    assert.equal(await capability.inject(input), "unsupported");
+    let calls = 0;
+    f.setContext({ inject: async received => {
+      assert.deepEqual(received, input);
+      calls++;
+      return "admitted";
+    } });
+    await f.host.reload(["server:codex/def"]);
+    assert.equal(await capability.inject(input), "admitted");
+    f.setContext(undefined);
+    await f.host.reload(["server:codex/def"]);
+    assert.equal(await capability.inject(input), "unsupported");
+    assert.equal(calls, 1);
+  } finally { await f.host.dispose(); }
+});
+
+test("optional single-file calls reject unsupported owners and follow replacement capabilities", async () => {
+  const f = fixture();
+  await f.host.start();
+  try {
+    const capability = f.providers.get("codex").singleFile;
+    await assert.rejects(capability.prepare(), /does not support single-file/);
+    let prepared = 0;
+    f.setSingleFile({
+      async prepare() { prepared++; }, async start() { return { directory: "/scratch" }; }, async input() {}, async finish() {}, async cancel() {},
+    });
+    await f.host.reload(["server:codex/def"]);
+    await capability.prepare();
+    assert.equal(prepared, 1);
+    f.setSingleFile(undefined);
+    await f.host.reload(["server:codex/def"]);
+    await assert.rejects(capability.prepare(), /does not support single-file/);
+  } finally { await f.host.dispose(); }
+});
+
+test("admitted preparation retains its provider lease and later calls use replacement capability", async () => {
+  const f = fixture();
+  const entered = deferred();
+  const finish = deferred();
+  const unused = async (): Promise<never> => { throw new Error("unexpected tool"); };
+  const tools: NonNullable<WorkbenchProvider["tools"]> = {
+    patchClaims: unused, describe: unused, caller: unused, prepareShell: unused,
+    prepareExecution: async request => {
+      entered.resolve();
+      await finish.promise;
+      return {
+        kind: "sandboxed", label: "original", expensive: false,
+        request: {
+          command: request.command, cwd: request.cwd, permissions: { type: "disabled" },
+          windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false, workspaceRoots: [request.cwd],
+        },
+      };
+    },
+  };
+  f.setTools(tools);
+  await f.host.start();
+  await f.host.reload(["server:codex/def"]);
+  const request = {
+    caller: { threadId: WorkbenchThreadIdSchema.parse("thread"), harness: "codex", cwd: "/project" },
+    command: ["echo"], cwd: "/project", permissions: { mode: "restricted" as const, writableRoots: ["/project"], network: false },
+  };
+  try {
+    const execute = f.providers.get("codex").tools.prepareExecution!;
+    const active = execute(request, new AbortController().signal);
+    await entered.promise;
+    f.setTools({ ...tools, prepareExecution: undefined });
+    f.hold();
+    const reload = f.host.reload(["server:codex/def"]);
+    await f.started.promise;
+    assert.equal(f.disposed.includes(2), false);
+    f.releaseStart.resolve();
+    finish.resolve();
+    assert.equal((await active).label, "original");
+    await reload;
+    assert.equal(f.disposed.includes(2), true);
+    await assert.rejects(execute(request, new AbortController().signal), /does not support admitted execution/);
+  } finally {
+    finish.resolve();
+    f.releaseStart.resolve();
+    await f.host.dispose();
+  }
+});
+
+test("saved provider handles resolve replacements and survive failed candidates", async () => {
+  const f = fixture();
+  await f.host.start();
+  try {
+    const provider = f.providers.get("codex");
+    assert.equal((await provider.configuration.modelContext.read())[0].model, "1");
+    await f.host.reload(["server:codex/def"]);
+    assert.equal((await provider.configuration.modelContext.read())[0].model, "2");
+    f.fail();
+    await assert.rejects(f.host.reload(["server:codex/def"]), /candidate failed/);
+    assert.equal((await provider.configuration.modelContext.read())[0].model, "2");
+  } finally { await f.host.dispose(); }
+});
+
+test("calls made during replacement wait for the new definition", async () => {
+  const f = fixture();
+  await f.host.start();
+  try {
+    const provider = f.providers.get("codex");
+    f.hold();
+    const reload = f.host.reload(["server:codex/def"]);
+    await f.started.promise;
+    const reading = provider.configuration.modelContext.read();
+    f.releaseStart.resolve();
+    await reload;
+    assert.equal((await reading)[0].model, "2");
+  } finally { f.releaseStart.resolve(); await f.host.dispose(); }
+});
+
+test("an operation failure remains visible and releases its graph lease", async () => {
+  const f = fixture();
+  f.setRead(async () => { throw new Error("catalog failed"); });
+  await f.host.start();
+  try {
+    await f.host.reload(["server:codex/def"]);
+    await assert.rejects(f.providers.get("codex").configuration.modelContext.read(), /catalog failed/);
+    f.setRead(undefined);
+    await f.host.reload(["server:codex/def"]);
+    assert.equal((await f.providers.get("codex").configuration.modelContext.read())[0].model, "3");
+  } finally { await f.host.dispose(); }
+});
+
+test("replacement does not dispose the owner of an admitted operation", async () => {
+  const f = fixture();
+  const entered = deferred();
+  const finish = deferred();
+  f.setRead(async () => {
+    entered.resolve();
+    await finish.promise;
+    return [{ model: "admitted", defaultTokens: 1000, maximumTokens: 2000 }];
+  });
+  await f.host.start();
+  try {
+    await f.host.reload(["server:codex/def"]);
+    const provider = f.providers.get("codex");
+    const reading = provider.configuration.modelContext.read();
+    await entered.promise;
+    f.setRead(undefined);
+    f.hold();
+    const reload = f.host.reload(["server:codex/def"]);
+    await f.started.promise;
+    assert.equal(f.disposed.includes(2), false);
+    f.releaseStart.resolve();
+    finish.resolve();
+    assert.equal((await reading)[0].model, "admitted");
+    await reload;
+    assert.equal(f.disposed.includes(2), true);
+    assert.equal((await provider.configuration.modelContext.read())[0].model, "3");
+  } finally { finish.resolve(); f.releaseStart.resolve(); await f.host.dispose(); }
+});
+
+test("a stateful operation retains its updates and cancellation owner through replacement", async () => {
+  const f = fixture();
+  const entered = deferred();
+  const cancelled = deferred();
+  const caller = new AbortController();
+  const updates: string[] = [];
+  let cleaned = false;
+  f.setRead(async () => {
+    const onAbort = () => cancelled.resolve();
+    caller.signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      updates.push("started");
+      entered.resolve();
+      await cancelled.promise;
+      updates.push("cancelled");
+      return [];
+    } finally {
+      caller.signal.removeEventListener("abort", onAbort);
+      cleaned = true;
+    }
+  });
+  await f.host.start();
+  try {
+    await f.host.reload(["server:codex/def"]);
+    const reading = f.providers.get("codex").configuration.modelContext.read();
+    await entered.promise;
+    f.setRead(undefined);
+    f.hold();
+    const reload = f.host.reload(["server:codex/def"]);
+    await f.started.promise;
+    assert.equal(cleaned, false);
+    caller.abort();
+    assert.deepEqual(await reading, []);
+    assert.equal(cleaned, true);
+    assert.deepEqual(updates, ["started", "cancelled"]);
+    f.releaseStart.resolve();
+    await reload;
+  } finally { caller.abort(); f.releaseStart.resolve(); await f.host.dispose(); }
+});

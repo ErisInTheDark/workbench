@@ -18,7 +18,7 @@ import {
 } from "./opencode-workbench-rpc";
 import type OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
-import type WorkbenchThreadContextRolloverController from "../../WorkbenchThreadContextRolloverController";
+import type WorkbenchThreadContextRolloverController from "../../turn/WorkbenchThreadContextRolloverController";
 
 type ActiveTurn = { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
 

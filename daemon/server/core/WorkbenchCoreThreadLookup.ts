@@ -5,8 +5,8 @@
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { DaemonRuntimeObjects } from "../daemon-runtime-objects";
-import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
-import type WorkbenchThreadStateFeature from "../WorkbenchThreadStateFeature";
+import type WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
+import type WorkbenchThreadStateFeature from "../thread/WorkbenchThreadStateFeature";
 
 export default class WorkbenchCoreThreadLookup {
   constructor(private readonly ports: {
