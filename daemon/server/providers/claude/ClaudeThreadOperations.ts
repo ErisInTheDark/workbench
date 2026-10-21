@@ -28,6 +28,7 @@ import type {
 import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { awaitsClaudeCompactionRecall, CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
+import { CLAUDE_INTERRUPTION_NOTICE, followsClaudeInterruption } from "./claude-interruption-notice";
 import {
     isWorkbenchQuestionnaireResponsePart,
     WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
@@ -450,6 +451,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     // Workbench compacts in its own `/compact` query, whose SessionStart hook output never reaches this turn.
     const promptPrefix = [
       ...(workingStatusInPrompt ? [WORKBENCH_THREAD_WORKING_STATUS_MESSAGE] : []),
+      ...(followsClaudeInterruption(thread) ? [CLAUDE_INTERRUPTION_NOTICE] : []),
       ...(awaitsClaudeCompactionRecall(thread) ? [CLAUDE_COMPACTION_RECALL_CONTEXT] : []),
     ].join("\n\n");
     const sdkContent = promptPrefix ? prefixClaudePrompt(promptPrefix, promptContent) : promptContent;
