@@ -1,6 +1,6 @@
 /* No production exports. Protect cold identity, private control, app detachment and durable service reopening. */
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -61,7 +61,10 @@ test("cold service reads and app detach preserve durable identity without waking
       foreground,
       createDaemon: options => {
         demanded = options.hasDemand!;
-        const daemon = new WorkbenchDaemonHost(options);
+        // This root holds no daemon, so every wake fails; a plain child keeps that failure off the platform container.
+        const daemon = new WorkbenchDaemonHost({ ...options, spawnDaemon: () => spawn(
+          process.execPath, ["-e", "process.exit(1)"], { stdio: ["ignore", "pipe", "pipe", "ipc"] },
+        ) });
         activeDaemon = daemon;
         const publish = daemon.demandChanged.bind(daemon);
         context.mock.method(daemon, "demandChanged", () => { publish(); demandChanged(); });

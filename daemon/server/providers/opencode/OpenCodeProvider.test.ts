@@ -12,7 +12,7 @@ import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { workbenchPowerShellExecutable } from "../../runtime/windows-powershell-runtime";
 
-test("provider execution preserves configured sandbox policy and admitted boundaries", async context => {
+async function prepareRestrictedPwsh(context: test.TestContext) {
   const temporary = await WorkbenchTemporaryDirectory.create("wb-opencode-powershell-");
   context.after(() => temporary.dispose());
   const powerShell = workbenchPowerShellExecutable(temporary.path);
@@ -40,11 +40,22 @@ test("provider execution preserves configured sandbox policy and admitted bounda
   }, new AbortController().signal);
   assert.ok(run.kind === "sandboxed");
   const request: CodexExecRequest = run.request;
+  return { request, powerShell, configurationReads };
+}
+
+test("provider execution preserves configured sandbox policy and admitted boundaries", async context => {
+  const { request, configurationReads } = await prepareRestrictedPwsh(context);
   assert.equal(configurationReads.length, 1);
   assert.equal(request.windowsSandboxLevel, "elevated");
   assert.equal(request.windowsSandboxPrivateDesktop, false);
   assert.equal(request.envPolicy?.inherit, "core");
   assert.ok(request.permissions.type === "managed" && request.permissions.network === "restricted");
+});
+
+test("provider execution runs pwsh through the managed PowerShell", {
+  skip: process.platform !== "win32" && "managed PowerShell replaces pwsh only on Windows",
+}, async context => {
+  const { request, powerShell } = await prepareRestrictedPwsh(context);
   assert.equal(request.command[0], powerShell);
 });
 

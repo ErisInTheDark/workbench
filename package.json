@@ -21,7 +21,7 @@
     "sandbox:install": "node --disable-warning=ExperimentalWarning --import tsx test/install/open-install-sandbox.ts",
     "typecheck": "node scripts/typecheck.mjs",
     "dev": "node --env-file-if-exists=./daemon/.env.local ./daemon/host/launch-foreground.mjs",
-    "codex:types": "codex app-server generate-ts --experimental --out ./shared/codex/generated/app-server",
+    "codex:types": "pnpm --dir daemon exec codex app-server generate-ts --experimental --out ../shared/codex/generated/app-server",
     "pack": "node scripts/publish-package.mjs --pack",
     "publish:package": "node scripts/publish-package.mjs --publish"
   },
