@@ -17,10 +17,9 @@ async function dispatcherFixture() {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-root-wb-");
   const root = temporary.path;
   const dispatcherPath = path.join(root, "wb");
-  // A shell fixture stands in for the published native launcher at its platform path.
-  const daemonCliPath = process.platform === "win32"
-    ? path.join(root, "daemon", "launcher", "bin", "windows-x64", "wb.exe")
-    : path.join(root, "daemon", "launcher", "bin", "linux-x64", "wb");
+  // A shell fixture stands in for the daemon-staged launcher; the checkout holds no launcher to fall back on.
+  const dataRoot = path.join(root, "data");
+  const daemonCliPath = path.join(dataRoot, "native", "launcher", process.platform === "win32" ? "wb.exe" : "wb");
   const dispatchPath = path.join(root, "cli", "dispatch.mjs");
   await fs.mkdir(path.dirname(daemonCliPath), { recursive: true });
   await fs.mkdir(path.dirname(dispatchPath), { recursive: true });
@@ -47,15 +46,15 @@ async function dispatcherFixture() {
     fs.chmod(dispatcherPath, 0o755),
     fs.chmod(daemonCliPath, 0o755),
   ]);
-  return { dispatcherPath, root };
+  return { dispatcherPath, root, env: { ...process.env, WORKBENCH_DATA_ROOT: dataRoot } };
 }
 
-test("delegates argumentful commands to the checkout's launcher", async (context) => {
+test("delegates argumentful commands to the staged launcher", async (context) => {
   const fixture = await dispatcherFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
   const result = await execFileAsync("bash", [fixture.dispatcherPath, "thread", "recall"], {
     cwd: fixture.root,
-    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
+    env: { ...fixture.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
   });
   assert.equal(result.stdout, "daemon|root=checkout|thread=|args=thread,recall,\n");
   assert.equal(result.stderr, "");
@@ -66,11 +65,11 @@ test("views use the local human dispatcher without granting managed threads proc
   context.after(() => fs.rm(fixture.root, { force: true, recursive: true }));
   for (const target of [[], ["daemon"], ["app"]]) {
     const result = await execFileAsync("bash", [fixture.dispatcherPath, "view", ...target], {
-      cwd: fixture.root, env: { ...process.env, WORKBENCH_THREAD_ID: "", CODEX_THREAD_ID: "" },
+      cwd: fixture.root, env: { ...fixture.env, WORKBENCH_THREAD_ID: "", CODEX_THREAD_ID: "" },
     });
     assert.match(result.stdout, /^human\|/u);
     const managed = await execFileAsync("bash", [fixture.dispatcherPath, "view", ...target], {
-      cwd: fixture.root, env: { ...process.env, WORKBENCH_THREAD_ID: "fixture-thread", CODEX_THREAD_ID: "" },
+      cwd: fixture.root, env: { ...fixture.env, WORKBENCH_THREAD_ID: "fixture-thread", CODEX_THREAD_ID: "" },
     });
     assert.match(managed.stdout, /^daemon\|/u);
   }
@@ -82,14 +81,14 @@ test("keeps no-argument managed and hook calls on the launcher", async (context)
 
   const managed = await execFileAsync("bash", [fixture.dispatcherPath], {
     cwd: fixture.root,
-    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
+    env: { ...fixture.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
   });
   assert.match(managed.stdout, /^daemon\|root=checkout\|thread=thread-one/u);
 
   const hook = await execFileAsync("bash", [fixture.dispatcherPath], {
     cwd: fixture.root,
     env: {
-      ...process.env,
+      ...fixture.env,
       CODEX_THREAD_ID: "",
       WORKBENCH_APPLY_PATCH_CLAIM_HOOK: "1",
       WORKBENCH_THREAD_ID: "",
@@ -104,7 +103,7 @@ test("routes unthreaded launch through the checkout-owned dispatcher", async (co
   const result = await execFileAsync("bash", [fixture.dispatcherPath], {
     cwd: fixture.root,
     env: {
-      ...process.env,
+      ...fixture.env,
       CODEX_THREAD_ID: "",
       WORKBENCH_DESKTOP_PLATFORM: "other",
       WORKBENCH_THREAD_ID: "",
@@ -120,7 +119,7 @@ test("keeps Windows human launch on the same dispatcher", async (context) => {
   const result = await execFileAsync("bash", [fixture.dispatcherPath], {
     cwd: fixture.root,
     env: {
-      ...process.env,
+      ...fixture.env,
       CODEX_THREAD_ID: "",
       WORKBENCH_DESKTOP_PLATFORM: "win32",
       WORKBENCH_THREAD_ID: "",
@@ -136,13 +135,13 @@ test("keeps shortcut and repair local for humans and delegated for managed agent
   for (const command of ["shortcut", "repair"]) {
     const human = await execFileAsync("bash", [fixture.dispatcherPath, command], {
       cwd: fixture.root,
-      env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
+      env: { ...fixture.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
     });
     assert.equal(human.stdout, `human|cwd=preserved|args=["${command}"]\n`);
 
     const managed = await execFileAsync("bash", [fixture.dispatcherPath, command], {
       cwd: fixture.root,
-      env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
+      env: { ...fixture.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
     });
     assert.equal(managed.stdout, `daemon|root=checkout|thread=thread-one|args=${command},\n`);
   }
@@ -154,7 +153,7 @@ test("routes ports through the checkout dispatcher for human and managed callers
   for (const threadId of ["", "thread-one"]) {
     const result = await execFileAsync("bash", [fixture.dispatcherPath, "ports"], {
       cwd: fixture.root,
-      env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: threadId },
+      env: { ...fixture.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: threadId },
     });
     assert.equal(result.stdout, "human|cwd=preserved|args=[\"ports\"]\n");
   }
@@ -165,7 +164,7 @@ test("does not discard extra shortcut arguments", async (context) => {
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
   const result = await execFileAsync("bash", [fixture.dispatcherPath, "shortcut", "extra"], {
     cwd: fixture.root,
-    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
+    env: { ...fixture.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
   });
   assert.match(result.stdout, /^daemon\|root=checkout\|thread=\|args=shortcut,extra,/u);
 });
@@ -176,7 +175,7 @@ test("preserves delegated exit status", async (context) => {
   await assert.rejects(
     execFileAsync("bash", [fixture.dispatcherPath, "unsupported"], {
       cwd: fixture.root,
-      env: { ...process.env, FIXTURE_EXIT_CODE: "7" },
+      env: { ...fixture.env, FIXTURE_EXIT_CODE: "7" },
     }),
     (error: NodeJS.ErrnoException & { code?: number }) => {
       assert.equal(error.code, 7);

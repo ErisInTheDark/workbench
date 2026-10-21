@@ -9,9 +9,17 @@ if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
   fi
 fi
 workbench_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Mirrors package/workbench-data-root.mjs: the daemon stages the launcher there, never run checkout binaries.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) launcher="$workbench_root/daemon/launcher/bin/windows-x64/wb.exe" ;;
-  *) launcher="$workbench_root/daemon/launcher/bin/linux-x64/wb" ;;
+  MINGW*|MSYS*|CYGWIN*)
+    data_root="${WORKBENCH_DATA_ROOT:-${LOCALAPPDATA:-$USERPROFILE/AppData/Local}/inthedark/wb}"
+    launcher="$(cygpath -u "$data_root")/native/launcher/wb.exe" ;;
+  *)
+    if [[ -n "${WORKBENCH_DATA_ROOT:-}" ]]; then data_root="$WORKBENCH_DATA_ROOT"
+    elif [[ "${XDG_DATA_HOME:-}" == /* ]]; then data_root="$XDG_DATA_HOME/inthedark/wb"
+    else data_root="$HOME/.local/share/inthedark/wb"
+    fi
+    launcher="$data_root/native/launcher/wb" ;;
 esac
 thread_id="${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
 hook_mode=0
@@ -36,7 +44,7 @@ fi
 
 if (( hook_mode == 1 || checkout_mode == 0 )) || { [[ -n "$thread_id" ]] && (( human_only == 1 )); }; then
   if [[ ! -f "$launcher" ]]; then
-    printf '%s\n' "Workbench wb launcher is unavailable: $launcher. Run pnpm build:launcher." >&2
+    printf '%s\n' "Workbench wb launcher is not staged yet: $launcher. Start Workbench with wb so its daemon stages it." >&2
     exit 1
   fi
   # Git Bash and MSYS2 would otherwise rewrite /path-like arguments on their way into a native image.
