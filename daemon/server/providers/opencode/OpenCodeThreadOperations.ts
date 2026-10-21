@@ -452,7 +452,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   async latestTurn(threadId: string) {
-    await this.sync(threadId);
     return await this.options.reader.latestTurn((await this.identity(threadId)).threadId);
   }
 

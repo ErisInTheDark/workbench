@@ -239,6 +239,7 @@ function operations(
     observe?: (facts: WorkbenchProviderObservation) => Promise<void>;
     questionnaires?: object;
     readPage?: () => Promise<object>;
+    latestTurn?: (threadId: string) => Promise<object | null>;
     resolveTurn?: (input: { threadId: string; turnId: string }) => Promise<{
       threadId: typeof threadId;
       turnId: typeof turnId;
@@ -326,6 +327,7 @@ function operations(
       readPage: lifecycle.readPage ?? (async () => ({
         thread: { turns: [{ id: turnId, status: "inProgress", items: [] }] },
       })),
+      latestTurn: lifecycle.latestTurn ?? (async () => null),
     } as never,
     signal: lifecycle.signal ?? new AbortController().signal,
     rollover: {
@@ -382,6 +384,23 @@ test("cold opencode reads hydrate active canonical turns before sidebar projecti
     resolveTurn: async () => null,
   });
   await assert.rejects(missing.read(threadId), /canonical active turn does not belong/u);
+});
+
+test("latest turn reads stored state without re-recording the live session", async () => {
+  // Liveness rereads latestTurn after every live commit; a re-record here commits again and loops.
+  let providerReads = 0;
+  let records = 0;
+  const stored = { id: turnId, status: "inProgress" };
+  const owner = operations({
+    message: { list: async () => { providerReads += 1; return { data: [], cursor: {} }; } },
+  }, {
+    record: async () => { records += 1; return { threadId, latestTurnId: turnId }; },
+  }, {}, {
+    latestTurn: async requested => requested === threadId ? stored : null,
+  });
+  assert.equal(await owner.latestTurn(threadId), stored);
+  assert.equal(records, 0);
+  assert.equal(providerReads, 0);
 });
 
 test("admits a created session into thread state with its captured profile", async () => {
