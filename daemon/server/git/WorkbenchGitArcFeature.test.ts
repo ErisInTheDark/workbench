@@ -1,9 +1,14 @@
 /*
  * Exports:
- * - No production exports; feature tests prove repository-wide Git arc transition serialization, thread timestamp injection, card-read coalescing, and typed failures.
+ * - No production exports; feature tests prove repository-wide Git arc transition serialization, thread timestamp injection, card-read coalescing, typed failures, and nested worktree owner resolution.
  */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdir, realpath } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 
 import {
   type GitArcFailureEnvelope,
@@ -23,6 +28,8 @@ import { GitArcStartDiagnosticError } from "../lib/workbench/git/git-arc-start-d
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import WorkbenchThreadIdentityController from "../thread/WorkbenchThreadIdentityController";
 import type { WorkbenchThreadIdentityRecord } from "../database/thread-identity/workbench-thread-identity-types";
+
+const execFileAsync = promisify(execFile);
 
 function wbThreadId(harness: string, threadId: string, projectId = "project") {
   return `wb:${projectId}:${harness}:${threadId}`;
@@ -1256,4 +1263,51 @@ test("status and proposal diff may inspect a cross-harness target without changi
   assert.deepEqual(marks, []);
   assert.equal((await feature.executeRequest({ action: "arcStatus", full: [], ...caller })).status, 200);
   assert.deepEqual(marks.map(mark => (mark as { proposalIds: string[] }).proposalIds), [["accepted-one"]]);
+});
+
+test("nested worktree registries resolve owners bound at the containing checkout and no other foreign owners", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-nested-owners-");
+  context.after(async () => await temporary.dispose());
+  const parent = await realpath(temporary.path);
+  const main = path.join(parent, "main");
+  const lab = path.join(main, ".worktrees", "lab");
+  const outside = path.join(parent, "outside");
+  await mkdir(main);
+  const git = async (...args: string[]) => await execFileAsync("git", args, { cwd: main });
+  await git("init", "-q");
+  await git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "init");
+  await git("worktree", "add", "-q", "-b", "lab", lab);
+  await git("worktree", "add", "-q", "-b", "outside", outside);
+  const record = (projectId: string, projectRoot: string, nativeThreadId: string): WorkbenchThreadIdentityRecord => ({
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(wbThreadId("codex", nativeThreadId, projectId)),
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
+    projectRoot,
+    bindings: [{
+      harness: "codex", nativeLocation: projectRoot,
+      nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId), pending: false, turnIndex: 1,
+    }],
+  });
+  const records = [record("main", main, "main-thread"), record("outside", outside, "outside-thread"), record("lab", lab, "lab-thread")];
+  const identities = new WorkbenchThreadIdentityController({
+    listThreadIdentities: async () => records,
+    // Like the identity database, a canonical thread scoped to another project rejects instead of resolving to null.
+    resolveThreadIdentity: async input => {
+      const found = records.find(candidate => candidate.threadId === input.threadId || candidate.bindings[0]!.nativeThreadId === input.threadId);
+      if (found && input.projectId && found.projectId !== input.projectId) throw new Error("Workbench thread does not belong to the requested project.");
+      return found ?? null;
+    },
+    resolveNativeThreadIdentity: async () => null,
+    resolveTurnIdentity: async () => { throw new Error("Owner fixtures do not resolve turns."); },
+    observeThreadIdentities: async () => { throw new Error("Owner fixtures do not admit threads."); },
+    observeTurnIdentities: async () => { throw new Error("Owner fixtures do not admit turns."); },
+  });
+  const projects = new Map([[main, "main"], [lab, "lab"], [outside, "outside"]]);
+  const feature = waitFeature({
+    identities,
+    resolveProjectFromCwd: async (cwd: string) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse(projects.get(cwd)!) } }),
+  });
+  const owner = async (threadId: string) => await feature.resolveThreadIdentity({ harness: "codex", repositoryRoot: lab, threadId });
+  assert.deepEqual(await owner("main-thread"), { nativeThreadId: "main-thread", threadId: wbThreadId("codex", "main-thread", "main") });
+  assert.deepEqual(await owner("lab-thread"), { nativeThreadId: "lab-thread", threadId: wbThreadId("codex", "lab-thread", "lab") });
+  assert.equal(await owner("outside-thread"), null);
 });

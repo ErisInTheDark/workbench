@@ -513,6 +513,17 @@ class FakeLocalGitArcController {
   }
 }
 
+function createNestedWorktreeProject(main: string): AgentEndpointProjectResolution {
+  const lab = `${main}/.worktrees/lab`;
+  const mainRoot = { id: "main", name: "main", root: main, rootPath: main };
+  const labRoot = { id: "lab", name: "lab", root: lab, rootPath: lab, nestedWorktree: { projectId: "lab-project", rootId: "lab-checkout" } };
+  return {
+    cwd: main,
+    project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("main-project"), kind: "git", root: main, rootPath: main, roots: [mainRoot, labRoot] },
+    root: mainRoot,
+  };
+}
+
 function createWorkspace(primary: string, secondary: string): AgentEndpointProjectResolution {
   const roots = [
     { id: "api", name: "API", root: primary, rootPath: primary },
@@ -1410,4 +1421,117 @@ test("workspace retention defers a whole thread before pruning any repository me
     { cwd: "C:/repo/web", proposalIds: ["web-proposal"] },
   ]);
   assert.equal(result.prunedRefCount, 4);
+});
+
+function createNestedWorktreeController(options: { snapshots?: WorkbenchGitClaimSnapshot[] } = {}) {
+  const local = new FakeLocalGitArcController();
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+    options.snapshots ? (snapshot) => options.snapshots!.push(snapshot) : null,
+    { expandScopes: async ({ scopePaths }) => scopePaths },
+  );
+  return { controller, local };
+}
+
+const nestedClaims = (addPaths: string[]) => ({
+  action: "planClaims" as const, inherit: false, start: true, intentName: "lab work", addPaths, removePaths: [], adoptPaths: [], roots: [],
+});
+
+test("nested worktree paths join the worktree's arc while main paths read like a single repository", async () => {
+  const { controller, local } = createNestedWorktreeController();
+  const project = createNestedWorktreeProject("C:/repo/main");
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  await controller.execute(project, { ...identity, ...nestedClaims(["src/main.ts", ".worktrees/lab/src/lab.ts", "lab:src/other.ts"]) });
+  assert.deepEqual(local.claimEditCalls.map(({ addPaths, cwd }) => ({ addPaths, cwd })), [
+    { addPaths: [path.resolve("C:/repo/main/src/main.ts")], cwd: "C:/repo/main" },
+    {
+      addPaths: [path.resolve("C:/repo/main/.worktrees/lab/src/lab.ts"), path.resolve("C:/repo/main/.worktrees/lab/src/other.ts")],
+      cwd: "C:/repo/main/.worktrees/lab",
+    },
+  ]);
+  const lifecycle = await controller.findLifecycleState(project, "codex", "thread-one");
+  assert.deepEqual([...lifecycle?.claimedPaths ?? []].sort(), ["lab:src/lab.ts", "lab:src/other.ts", "src/main.ts"]);
+
+  const fresh = createNestedWorktreeController().controller;
+  const mainOnly = await fresh.execute(project, { ...identity, ...nestedClaims(["src/solo.ts"]) }) as Record<string, unknown>;
+  assert.equal("members" in mainOnly, false);
+  assert.equal("rootId" in mainOnly, false);
+  assert.deepEqual(mainOnly.scopePaths, ["src/solo.ts"]);
+});
+
+test("status reads a nested worktree only once the thread holds arc state there", async () => {
+  const { controller, local } = createNestedWorktreeController();
+  const project = createNestedWorktreeProject("C:/repo/main");
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  const reads: string[] = [];
+  Object.assign(local, {
+    readStatus: async (input: { cwd: string }) => {
+      reads.push(input.cwd);
+      return { pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: ["loose.ts"], recovery: [], unavailableRecovery: [] };
+    },
+  });
+  const status = async () => GitArcStatusSchema.parse(await controller.execute(project, { ...identity, action: "arcStatus", full: [] }));
+  await controller.execute(project, { ...identity, ...nestedClaims(["src/main.ts"]) });
+  assert.deepEqual((await status()).unclaimedDirt, ["loose.ts"]);
+  assert.deepEqual(reads, ["C:/repo/main"]);
+  reads.length = 0;
+  await controller.execute(project, { ...identity, ...nestedClaims(["src/main.ts", "lab:src/lab.ts"]) });
+  assert.deepEqual((await status()).unclaimedDirt, ["lab:loose.ts", "loose.ts"]);
+  assert.deepEqual(reads.sort(), ["C:/repo/main", "C:/repo/main/.worktrees/lab"]);
+});
+
+test("unnamed proposals belong to the root their paths name, defaulting to the caller's root", async () => {
+  const { controller } = createNestedWorktreeController();
+  const project = createNestedWorktreeProject("C:/repo/main");
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  await controller.execute(project, { ...identity, ...nestedClaims(["src/main.ts", "lab:src/lab.ts"]) });
+  const proposal = { ...identity, action: "proposalCreate" as const, amend: false, description: "", title: "change" };
+  const lab = await controller.execute(project, { ...proposal, paths: [".worktrees/lab/src/lab.ts"] }) as { paths: string[]; rootId: string };
+  assert.deepEqual({ paths: lab.paths, rootId: lab.rootId }, { paths: ["src/lab.ts"], rootId: "lab" });
+  // Main-root proposals read like a single repository's, with no root id.
+  const main = await controller.execute(project, proposal) as { paths: string[]; rootId?: string };
+  assert.deepEqual({ paths: main.paths, rootId: main.rootId }, { paths: ["src/main.ts"], rootId: undefined });
+});
+
+test("a claim-view mirror reads only the repository containing its directory", async () => {
+  const { controller, local } = createNestedWorktreeController();
+  const project = createNestedWorktreeProject("C:/repo/main");
+  const views: string[] = [];
+  Object.assign(local, { readClaimView: async (input: { cwd: string }) => { views.push(input.cwd); return { repoRoot: input.cwd }; } });
+  const tree = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one", action: "arcTree" as const, holdOwn: false, paths: [] };
+  await controller.execute(project, { ...tree, into: "C:/repo/main/.worktrees/lab/.mirror" });
+  await controller.execute(project, { ...tree, into: "C:/repo/main/.mirror" });
+  assert.deepEqual(views, ["C:/repo/main/.worktrees/lab", "C:/repo/main"]);
+});
+
+test("nested worktree claim stats belong to the worktree's own project", async () => {
+  const snapshots: WorkbenchGitClaimSnapshot[] = [];
+  const { controller } = createNestedWorktreeController({ snapshots });
+  const project = createNestedWorktreeProject("C:/repo/main");
+  await controller.execute(project, { cwd: project.cwd, harness: "codex", threadId: "thread-one", ...nestedClaims(["src/main.ts", "lab:src/lab.ts"]) });
+  assert.deepEqual(snapshots.map(({ projectId, roots }) => ({ projectId, roots })), [
+    { projectId: "main-project", roots: [{ paths: ["src/main.ts"], rootId: "main" }] },
+    { projectId: "lab-project", roots: [{ paths: ["src/lab.ts"], rootId: "lab-checkout" }] },
+  ]);
+});
+
+test("files in a nested worktree need its claims even though the containing checkout ignores them", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-nested-claims-");
+  context.after(async () => await temporary.dispose());
+  const main = path.join(temporary.path, "main");
+  const lab = path.join(main, ".worktrees", "lab");
+  await mkdir(lab, { recursive: true });
+  await execFileAsync("git", ["init"], { cwd: main });
+  await execFileAsync("git", ["init"], { cwd: lab });
+  await writeFile(path.join(main, ".gitignore"), ".worktrees/\n", "utf8");
+  const project = createNestedWorktreeProject(main);
+  const { controller } = createNestedWorktreeController();
+  await controller.execute(project, { cwd: main, harness: "codex", threadId: "thread-one", ...nestedClaims(["lab:src/lab.ts"]) });
+  const claimed = path.join(lab, "src", "lab.ts");
+  const unclaimed = path.join(lab, "src", "other.ts");
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "thread-one", [claimed, unclaimed]), {
+    allowed: false, pendingProposals: [], uncoveredPaths: [unclaimed],
+  });
 });

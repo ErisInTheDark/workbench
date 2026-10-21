@@ -83,15 +83,11 @@ export default class WorkbenchCoreGitFeature {
       publishAgentContext: (target, text) => ports.agentContext.publish(target, text),
       resolveSubagentPeer: input => ports.subagents().resolveGitArcPeer(input),
       observeClaimSnapshot: (snapshot) => ports.stats()?.observeClaimSnapshot(snapshot),
+      listCatalogProjects: async () => (await projectCatalog.readCatalog()).data,
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
       transitions,
     });
-    const resolveGitArcIdentity: GitArcThreadIdentityResolver = async input => {
-      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(input.repositoryRoot, { endpointName: "Working tree" });
-      return await identities.resolveGitArcThreadIdentity({
-        ...input, harness: WorkbenchHarnessSchema.parse(input.harness), projectId: resolved.project.id,
-      });
-    };
+    const resolveGitArcIdentity: GitArcThreadIdentityResolver = async input => await gitArc.resolveThreadIdentity(input);
     this.threadGit = new WorkbenchThreadGitFeature({
       selectionStore: database,
       identities,

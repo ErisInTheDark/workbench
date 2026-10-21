@@ -26,7 +26,8 @@ scope and phases:
 
 claims and safety:
 <!-- Failure: agents ask permission to edit ignored files after arc tools correctly skip them. -->
-- Arc-managed edits require claims. Gitignored files need none.
+<!-- Registered worktrees kept in an ignored project folder are their own repositories: arc tools route their paths to the worktree's registry, so "ignored needs no claim" must not leak into them. Clients only link catalogue roots, so `name:path` links stay dead text. -->
+- Arc-managed edits require claims. Gitignored files need none, except inside registered Git worktrees nested in a project: those are extra arc roots named by folder, shown `name:path`; pass `rootId: name` when a tool needs one, and link their files by project-relative path.
 <docs tools="git_arc_edit">
 <!-- Agents otherwise burn hundreds of read/edit calls on mechanical renames and risk substring replacements; edit sessions preview, claim and revert as one unit. -->
 - File moves and multi-file replacements in Git-visible files require `wb git arc edit` or its deferred `git_arc_edit_*` tools; run `wb git arc edit --help` first. Gitignored files may use shell commands or `wb git arc edit` with `includeIgnored`.

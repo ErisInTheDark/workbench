@@ -44,6 +44,7 @@ import {
   assertGitArcAdoptionStashChoice, gitArcAdoptionHandlesStash, type GitArcAdoptionInput,
 } from "../lib/workbench/git/GitArcOwnershipTransferController";
 import type { WorkbenchFileClaimCheckResult } from "../lib/workbench/file-claim-check";
+import { claimSnapshotsFor, isConfiguredMultiRoot, isNestedGitWorktreeRoot, qualifiesGitArcRoot } from "./nested-git-worktree-roots";
 
 export class WorkspaceGitArcMemberError extends Error {
   constructor(readonly workspace: NonNullable<GitArcFailure["workspace"]>, cause: unknown) {
@@ -457,7 +458,7 @@ export default class WorkbenchWorkspaceGitArcController {
     project: AgentEndpointProjectResolution,
     input: { harness: WorkbenchHarness; proposalIds: string[]; threadId: string },
   ) {
-    const members = await this.resolveRepoMembers(project);
+    const members = await this.joinedMembers(await this.resolveRepoMembers(project), input.harness, input.threadId);
     const unviewed = await this.runMembers(members, async member => await this.local.readUnviewedAccepted({
       cwd: member.repoRoot, ...input,
     }), undefined, "read");
@@ -477,7 +478,8 @@ export default class WorkbenchWorkspaceGitArcController {
     const members = await this.resolveRepoMembers(project);
     switch (request.action) {
       case "arcStatus": {
-        const values = await this.runMembers(members, member => this.local.readStatus({
+        const joined = await this.joinedMembers(members, request.harness, request.threadId);
+        const values = await this.runMembers(joined, member => this.local.readStatus({
           cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
         }), undefined, "read");
         const result: GitArcStatus = {
@@ -513,11 +515,11 @@ export default class WorkbenchWorkspaceGitArcController {
         return result;
       }
       case "arcTree": {
-        if (request.into && members.length > 1) {
-          throw new Error("A mirror directory holds one repository's view; this workspace spans several repositories.");
-        }
+        const selected = request.into
+          ? [this.mirrorMember(members, request.into)]
+          : await this.joinedMembers(members, request.harness, request.threadId);
         // Mirroring happens at ingress after these member read gates are released.
-        const values = await this.runMembers(members, async member => await this.local.readClaimView({
+        const values = await this.runMembers(selected, async member => await this.local.readClaimView({
           cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, holdOwn: request.holdOwn,
         }), undefined, "read");
         return { repositories: values.map(({ result }) => result) } satisfies GitArcClaimViewResult;
@@ -594,6 +596,16 @@ export default class WorkbenchWorkspaceGitArcController {
     })).sort((left, right) => comparable(left.repoRoot).localeCompare(comparable(right.repoRoot)));
   }
 
+  /** Nested worktrees join a thread's agent-facing reads only once it holds arc state there; configured roots always do. */
+  private async joinedMembers(members: readonly RepoMember[], harness: WorkbenchHarness, threadId: string) {
+    const joined = await Promise.all(members.map(async (member) => {
+      if (!member.roots.every(isNestedGitWorktreeRoot)) return true;
+      const input = { cwd: member.repoRoot, harness, threadId };
+      return Boolean(await this.local.findLifecycleState(input) ?? await this.local.findPlanState(input));
+    }));
+    return members.filter((_member, index) => joined[index]);
+  }
+
   private findRoot(project: AgentEndpointProjectResolution, rootId: string) {
     const normalized = rootId.trim().toLowerCase();
     const root = project.project.roots.find((candidate) => (
@@ -618,16 +630,28 @@ export default class WorkbenchWorkspaceGitArcController {
   private qualify(project: AgentEndpointProjectResolution, member: RepoMember, repoPath: string) {
     const root = this.rootForRepoPath(member, repoPath);
     const relative = path.relative(root.root, path.resolve(member.repoRoot, repoPath)).replace(/\\/gu, "/");
-    return project.project.roots.length > 1 ? `${root.id}:${relative}` : relative;
+    return qualifiesGitArcRoot(project, root) ? `${root.id}:${relative}` : relative;
   }
 
+  /** The deepest root containing a path owns it, matching qualified output and the file claim check. */
   private parseRootPath(project: AgentEndpointProjectResolution, rawPath: string, fallbackRootId: string) {
     const explicit = project.project.roots.find((root) => rawPath.toLowerCase().startsWith(`${root.id.toLowerCase()}:`));
-    const root = explicit ?? this.findRoot(project, fallbackRootId);
-    const value = explicit ? rawPath.slice(root.id.length + 1) : rawPath;
-    const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(root.root, value);
-    if (!isInside(absolute, root.root)) throw new GitArcRejectionError({ reason: "pathOutsideWorkspaceRoot", rootId: root.id, path: rawPath }, `Git arc path escapes workspace root ${root.id}: ${rawPath}`);
+    const named = explicit ?? this.findRoot(project, fallbackRootId);
+    const value = explicit ? rawPath.slice(named.id.length + 1) : rawPath;
+    const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(named.root, value);
+    if (!isInside(absolute, named.root)) throw new GitArcRejectionError({ reason: "pathOutsideWorkspaceRoot", rootId: named.id, path: rawPath }, `Git arc path escapes workspace root ${named.id}: ${rawPath}`);
+    const root = project.project.roots.filter((candidate) => isInside(absolute, candidate.root))
+      .sort((left, right) => comparable(right.root).length - comparable(left.root).length)[0]!;
     return { absolute, root };
+  }
+
+  private mirrorMember(members: readonly RepoMember[], into: string) {
+    const containing = members.filter((member) => isInside(into, member.repoRoot))
+      .sort((left, right) => comparable(right.repoRoot).length - comparable(left.repoRoot).length)[0];
+    if (containing) return containing;
+    // A lone repository's mirror reports its own containment failure.
+    if (members.length === 1) return members[0]!;
+    throw new Error("A mirror directory must be inside one of this workspace's repositories.");
   }
 
   private groupRootPaths(
@@ -639,23 +663,24 @@ export default class WorkbenchWorkspaceGitArcController {
     includeCaller = false,
   ) {
     const grouped = new Map<string, { adoptPaths: string[]; member: RepoMember; paths: string[] }>();
-    const install = (rootId: string, values: readonly string[], kind: "adoptPaths" | "paths") => {
-      const root = this.findRoot(project, rootId);
-      const member = this.memberForRoot(members, root);
+    const groupFor = (member: RepoMember) => {
       const current = grouped.get(member.repoRoot) ?? { adoptPaths: [], member, paths: [] };
-      current[kind].push(...values.map((value) => this.parseRootPath(project, value, root.id).absolute));
       grouped.set(member.repoRoot, current);
+      return current;
+    };
+    const install = (rootId: string, values: readonly string[], kind: "adoptPaths" | "paths") => {
+      const named = this.findRoot(project, rootId);
+      for (const value of values) {
+        const parsed = this.parseRootPath(project, value, named.id);
+        groupFor(this.memberForRoot(members, parsed.root))[kind].push(parsed.absolute);
+      }
     };
     const callerRootId = project.root.id;
-    for (const value of paths) {
-      const parsed = this.parseRootPath(project, value, callerRootId);
-      install(parsed.root.id, [parsed.absolute], "paths");
-    }
-    for (const value of adoptPaths) {
-      const parsed = this.parseRootPath(project, value, callerRootId);
-      install(parsed.root.id, [parsed.absolute], "adoptPaths");
-    }
+    install(callerRootId, paths, "paths");
+    install(callerRootId, adoptPaths, "adoptPaths");
     for (const root of roots) {
+      // A named root without paths still selects its repository.
+      if (!root.paths.length && !root.adoptPaths?.length) groupFor(this.memberForRoot(members, this.findRoot(project, root.rootId)));
       install(root.rootId, root.paths, "paths");
       install(root.rootId, root.adoptPaths ?? [], "adoptPaths");
     }
@@ -744,13 +769,14 @@ export default class WorkbenchWorkspaceGitArcController {
           target.paths.push(path.relative(root.root, path.resolve(member.repoRoot, claimedPath)).replace(/\\/gu, "/") || ".");
         }
         const updatedAt = state ? Date.parse(state.updatedAt) : Number.NaN;
-        this.observeClaimSnapshot({
+        const snapshots = claimSnapshotsFor({
           harness: observation.harness,
           observedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
-          projectId: observation.project.project.id,
-          roots,
           threadId: observation.threadId,
-        });
+        }, observation.project, member.roots.map((root) => ({
+          paths: roots.find(({ rootId }) => rootId === root.id)!.paths, root,
+        })));
+        for (const snapshot of snapshots) this.observeClaimSnapshot(snapshot);
       } catch (error) {
         console.error(`Git claim observation failed after a workspace mutation: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -802,9 +828,13 @@ export default class WorkbenchWorkspaceGitArcController {
 
   private aggregateResults(project: AgentEndpointProjectResolution, values: Array<{ member: RepoMember; result: object }>) {
     const members: Array<Record<string, unknown>> = values.map(({ member, result }) => this.decorateResult(project, member, result));
-    const first = members.find((member) => typeof member.checkpointCommit === "string" && member.checkpointCommit.length > 0)
+    // Unqualified roots read like a single repository: no member list and no root headings.
+    const qualified = values.map(({ member }) => member.roots.some((root) => qualifiesGitArcRoot(project, root)));
+    const lead = members.find((member) => typeof member.checkpointCommit === "string" && member.checkpointCommit.length > 0)
       ?? members[0]
       ?? {};
+    const { rootId: _rootId, rootIds: _rootIds, ...unrooted } = lead;
+    const first = qualified.some(Boolean) ? lead : unrooted;
     const arrays = (name: string) => members.flatMap((member) => Array.isArray(member[name]) ? member[name] as unknown[] : []);
     return {
       ...first,
@@ -823,7 +853,7 @@ export default class WorkbenchWorkspaceGitArcController {
       ...(members.every((member) => typeof member.hasUncommittedChanges === "boolean") ? {
         hasUncommittedChanges: members.some((member) => member.hasUncommittedChanges === true),
       } : {}),
-      members,
+      ...(qualified.some(Boolean) ? { members } : {}),
       noOp: members.length > 0 && members.every((member) => member.noOp === true),
       releasedClaims: arrays("releasedClaims"),
       restoredPaths: arrays("restoredPaths"),
@@ -837,7 +867,7 @@ export default class WorkbenchWorkspaceGitArcController {
       removedClaims: arrays("removedClaims"),
       skippedIgnoredPaths: arrays("skippedIgnoredPaths"),
       ...(members.some((member) => typeof member.diff === "string") ? {
-        diff: members.map((member) => `### ${member.rootId}\n${String(member.diff ?? "")}`).join("\n\n"),
+        diff: members.map((member, index) => `${qualified[index] ? `### ${member.rootId}\n` : ""}${String(member.diff ?? "")}`).join("\n\n"),
       } : {}),
     };
   }
@@ -1297,7 +1327,7 @@ export default class WorkbenchWorkspaceGitArcController {
   ) {
     const groups = this.groupRootPaths(project, members, request.paths ?? [], request.roots);
     const refs = this.refsByRepo(project, members, request.refs);
-    if (request.ref) refs.set(this.memberForRoot(members, project.root).repoRoot, request.ref);
+    if (request.ref) refs.set((await this.inspectionRefMember(project, members, request, request.ref)).repoRoot, request.ref);
     let selected = unique([...groups.map(({ member }) => member.repoRoot), ...refs.keys()])
       .map((repoRoot) => members.find((member) => member.repoRoot === repoRoot)!);
     if (!selected.length) {
@@ -1308,7 +1338,9 @@ export default class WorkbenchWorkspaceGitArcController {
     }
     if (!selected.length) throw new GitArcRejectionError({ reason: "missingWorkspaceMembers" }, "This workspace Git arc has no matching repository members.");
     const selectedRepos = new Set(selected.map(({ repoRoot }) => repoRoot));
-    const values = await this.runMembers(members, async (member) => {
+    const joined = await this.joinedMembers(members, request.harness, request.threadId);
+    const inspected = members.filter((member) => selectedRepos.has(member.repoRoot) || joined.includes(member));
+    const values = await this.runMembers(inspected, async (member) => {
       const inspectionSnapshot = await this.local.createInspectionSnapshot(member.repoRoot);
       const unclaimedDirt = this.local.listUnclaimedWorkspaceDirt({
         cwd: member.repoRoot,
@@ -1347,10 +1379,11 @@ export default class WorkbenchWorkspaceGitArcController {
       const decorated = this.decorateResult(project, member, result);
       const changes = decorated.changes as GitCheckpointFileChange[];
       const rootId = decorated.rootId as string;
+      const headed = member.roots.some((root) => root.id === rootId && qualifiesGitArcRoot(project, root));
       return changes.map((change) => ({
         change,
         content: change.diff,
-        ...(project.project.roots.length > 1 ? { groupHeading: `### ${rootId}` } : {}),
+        ...(headed ? { groupHeading: `### ${rootId}` } : {}),
       }));
     });
     const page = createGitArcDiffPage(units, {
@@ -1378,21 +1411,28 @@ export default class WorkbenchWorkspaceGitArcController {
     const inferredMember = targetedAmend && !request.rootId
       ? await this.findProposalMember(members, { harness: request.harness, proposalId: request.amendProposalId, threadId: request.threadId })
       : null;
-    if (project.project.roots.length > 1 && !request.rootId && !inferredMember) {
+    const configuredMultiRoot = isConfiguredMultiRoot(project);
+    if (configuredMultiRoot && !request.rootId && !inferredMember) {
       throw new GitArcRejectionError({ reason: "missingProposalRoot" }, "A multi-root Git arc proposal requires rootId so one proposal cannot cross projects.");
     }
-    const root = inferredMember?.roots[0] ?? this.findRoot(project, request.rootId ?? project.root.id);
+    // An unnamed proposal reads its paths from the caller's root and belongs to the one root they name.
+    const callerPaths = inferredMember || request.rootId
+      ? undefined
+      : request.paths?.map((value) => this.parseRootPath(project, value, project.root.id));
+    const pathRoots = unique(callerPaths?.map(({ root: pathRoot }) => pathRoot.id) ?? []);
+    const root = inferredMember?.roots[0]
+      ?? this.findRoot(project, request.rootId ?? (pathRoots.length === 1 ? pathRoots[0]! : project.root.id));
     const member = inferredMember ?? this.memberForRoot(members, root);
-    const requestedPaths = request.paths?.map((value) => this.parseRootPath(project, value, root.id));
+    const requestedPaths = callerPaths ?? request.paths?.map((value) => this.parseRootPath(project, value, root.id));
     if (requestedPaths?.some((candidate) => candidate.root.id !== root.id)) {
       throw new GitArcRejectionError({ reason: "crossRootProposal", rootId: root.id }, `A Git arc proposal for ${root.id} cannot include paths from another workspace root.`);
     }
     let selectedPaths = requestedPaths?.map(({ absolute }) => absolute);
-    if (!messageOnlyAmend && !selectedPaths?.length && project.project.roots.length > 1) {
+    if (!messageOnlyAmend && !selectedPaths?.length && configuredMultiRoot) {
       const state = await this.local.findLifecycleState({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId });
       selectedPaths = state?.claimedPaths.filter((candidate) => this.rootForRepoPath(member, candidate).id === root.id) ?? [];
     }
-    if (!messageOnlyAmend && project.project.roots.length > 1 && !request.amend && !selectedPaths?.length) {
+    if (!messageOnlyAmend && configuredMultiRoot && !request.amend && !selectedPaths?.length) {
       throw new GitArcRejectionError({ reason: "noClaimedRootPaths", rootId: root.id }, `Workspace root ${root.id} has no claimed paths to propose.`);
     }
     const values = await this.runMembers([member], async () => await this.local.createProposal({
@@ -1405,7 +1445,7 @@ export default class WorkbenchWorkspaceGitArcController {
       threadId: request.threadId, title: request.title,
     }), undefined, "write", { harness: request.harness, project, threadId: request.threadId });
     const proposal = values[0]!.result;
-    return { ...proposal, rootId: root.id };
+    return { ...proposal, ...(qualifiesGitArcRoot(project, root) ? { rootId: root.id } : {}) };
   }
 
   /**
@@ -1464,6 +1504,24 @@ export default class WorkbenchWorkspaceGitArcController {
   /** The workspace root holding a proposal's first path, else the member's first root. */
   private proposalRootId(member: RepoMember, paths: readonly string[]) {
     return unique(paths.map((candidate) => this.rootForRepoPath(member, candidate).id))[0] ?? member.roots[0]!.id;
+  }
+
+  /** Proposal ids name their own repository; arc SHAs, which linked worktrees share, stay with the caller's root. */
+  private async inspectionRefMember(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    request: { harness: WorkbenchHarness; threadId: string },
+    ref: string,
+  ) {
+    const callerMember = this.memberForRoot(members, project.root);
+    if (members.length === 1 || /^[a-f0-9]{7,64}$/iu.test(ref)) return callerMember;
+    try {
+      return await this.findProposalMember(members, { ...request, proposalId: ref });
+    } catch (error) {
+      // An unknown id is reported by the caller root's own inspection.
+      if (error instanceof GitArcRejectionError && error.rejection.reason === "proposalNotFound") return callerMember;
+      throw error;
+    }
   }
 
   private async findProposalMember(members: readonly RepoMember[], request: { harness: WorkbenchHarness; proposalId: string; threadId: string }) {

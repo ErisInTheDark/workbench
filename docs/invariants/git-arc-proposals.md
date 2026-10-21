@@ -2,6 +2,7 @@
 - A thread's pending proposals never share live paths. Propose rejects overlap unless it replaces that proposal.
 - Content amends always target an owned proposal by id, never bare HEAD. Against pushed targets they become fresh-commit proposals using `freshTitle`; unknown remote state rejects at proposal and detached HEAD at acceptance.
 - Only daemon scratch projects skip Git arc observation; every other catalogued project, including the Workbench Library, projects arcs into thread state.
+- Catalogued linked worktrees registered inside a project root join that project's Git arc as extra roots, qualified only when nested or when the project has several configured roots. Their registries resolve owners bound at the containing checkout; other foreign owners stay orphaned. Claim stats attribute their paths to the worktree's own project. Agent-facing reads include a nested worktree only once the thread holds arc state there or the request names it.
 - Git arc read endpoints do not fetch remotes or update refs. They derive presentation state from local repository state. Mutations revalidate before changing refs or history.
 - Git history rewrites preserve checkpoint state only within declared scope.
 - One Git arc inspection request owns one worktree snapshot per repository. Compare, diff, and unclaimed-dirt projection reuse it.

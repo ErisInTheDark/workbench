@@ -4,8 +4,8 @@
  * - WorkbenchGitArcLifecycleState: public lifecycle with canonical owner and member identities.
  * - WorkbenchGitArcPlanState: public plan with canonical owner and member identities.
  * - WorkbenchGitArcActiveClaim: public claim with a canonical thread owner.
- * - default WorkbenchGitArcFeature: own Git arc dispatch, canonical identity ingress, proposal diff lifecycle, and waits on
- *   claim mutations.
+ * - default WorkbenchGitArcFeature: own Git arc dispatch, canonical identity ingress and registry owner resolution, nested
+ *   worktree roots, proposal diff lifecycle, and waits on claim mutations.
  */
 import type http from "node:http";
 
@@ -45,10 +45,18 @@ import type WorkbenchThreadIdentityController from "../thread/WorkbenchThreadIde
 import { WorkbenchHarnessSchema, type WorkbenchGitArcLifecycleState as ObservedGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
-import { WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import GitArcProposalDiffController, { type GitArcProposalDiffStore } from "../lib/workbench/git/GitArcProposalDiffController";
 import GitArcClaimMutations from "./GitArcClaimMutations";
 import type { GitArcEditOwner, GitArcEditPendingCheck } from "../lib/workbench/git/GitArcEditSessionController";
+import type { GitArcResolvedThreadIdentity } from "../lib/workbench/git/git-arc-thread-identity";
+import {
+  claimSnapshotsFor,
+  isNestedGitWorktreeOf,
+  qualifiesGitArcRoot,
+  withNestedGitWorktreeRoots,
+  type NestedGitWorktreeCatalogProject,
+} from "./nested-git-worktree-roots";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const UNSTASH_CONFLICT_CONTEXT = "Git arc unstash left editable conflict markers. Inspect `wb git arc status` and resolve the markers before continuing.";
@@ -74,6 +82,8 @@ export interface WorkbenchGitArcFeatureOptions {
   onReloadEligibilityChanged?: () => void;
   observeClaimSnapshot?(snapshot: WorkbenchGitClaimSnapshot): void;
   reloadScopeProjectRoot?: string;
+  /** Catalogue projects whose linked worktrees nested in a project root join its arc; absent means none join. */
+  listCatalogProjects?(): Promise<readonly NestedGitWorktreeCatalogProject[]>;
   resolveProjectFromCwd(cwd: string): Promise<AgentEndpointProjectResolution | { cwd: string; project: { id: ProjectId } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
     & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read" | "readMany" | "runMany">>;
@@ -190,15 +200,9 @@ export default class WorkbenchGitArcFeature {
 
   constructor(private readonly options: WorkbenchGitArcFeatureOptions) {
     this.proposalDiffs = new GitArcProposalDiffController({ store: options.proposalDiffStore });
-    this.controller = new WorkbenchGitCheckpointController(this.proposalDiffs, async input => {
-      const project = await this.resolveProject(input.repositoryRoot);
-      return await this.options.identities.resolveGitArcThreadIdentity({
-        harness: WorkbenchHarnessSchema.parse(input.harness),
-        projectId: project.project.id,
-        repositoryRoot: project.cwd,
-        threadId: input.threadId,
-      });
-    }, options.legacyDiffStore, options.readDurableProposalIds);
+    this.controller = new WorkbenchGitCheckpointController(
+      this.proposalDiffs, async input => await this.resolveThreadIdentity(input), options.legacyDiffStore, options.readDurableProposalIds,
+    );
     const readMany = options.transitions.readMany ?? options.transitions.runMany;
     this.workspaceController = new WorkbenchWorkspaceGitArcController(this.controller, {
       readMany: async (paths, operation) => readMany
@@ -210,7 +214,35 @@ export default class WorkbenchGitArcFeature {
     }, undefined, (snapshot) => this.options.observeClaimSnapshot?.(snapshot), this.claimHistory);
   }
 
+  /**
+   * Resolves a registry owner at a repository boundary: a thread of the repository's own project, or one bound at the
+   * checkout a nested worktree belongs to. Other foreign owners stay unresolved.
+   */
+  async resolveThreadIdentity(input: { harness: string; repositoryRoot: string; threadId: string }): Promise<GitArcResolvedThreadIdentity | null> {
+    const harness = WorkbenchHarnessSchema.parse(input.harness);
+    const project = await this.resolveCatalogProject(input.repositoryRoot);
+    // Scoped lookups reject threads of other projects, so the owner's own project picks the binding location.
+    const identity = await this.options.identities.resolve({ harness, threadId: ThreadReferenceSchema.parse(input.threadId) });
+    if (!identity) return null;
+    if (identity.projectId === project.project.id) {
+      return await this.options.identities.resolveGitArcThreadIdentity({
+        harness, projectId: project.project.id, repositoryRoot: project.cwd, threadId: input.threadId,
+      });
+    }
+    if (!await isNestedGitWorktreeOf(identity.projectRoot, input.repositoryRoot)) return null;
+    return await this.options.identities.resolveGitArcThreadIdentity({
+      harness, projectId: identity.projectId, repositoryRoot: identity.projectRoot, threadId: input.threadId,
+    });
+  }
+
+  /** The Git arc's view of a project: catalogue roots plus catalogued linked worktrees nested inside them. */
   private async resolveProject(cwd: string): Promise<AgentEndpointProjectResolution> {
+    const project = await this.resolveCatalogProject(cwd);
+    const catalog = await this.options.listCatalogProjects?.();
+    return catalog ? await withNestedGitWorktreeRoots(project, catalog) : project;
+  }
+
+  private async resolveCatalogProject(cwd: string): Promise<AgentEndpointProjectResolution> {
     const resolved = await this.options.resolveProjectFromCwd(cwd);
     if ("root" in resolved && "roots" in resolved.project) return resolved;
     const root = { id: resolved.project.id, name: resolved.project.id, root: resolved.cwd, rootPath: resolved.cwd };
@@ -953,22 +985,17 @@ export default class WorkbenchGitArcFeature {
     state: WorkspaceGitArcLifecycleState | null,
     observedAt: number,
   ) {
+    const observe = this.options.observeClaimSnapshot;
+    if (!observe) return;
     const paths = state?.claimedPaths ?? [];
-    this.options.observeClaimSnapshot?.({
-      harness,
-      observedAt,
-      projectId: project.project.id,
-      roots: project.project.roots.map((root) => ({
-        paths: project.project.roots.length === 1
-          ? paths
-          : paths.flatMap((candidate) => {
-            const prefix = `${root.id}:`;
-            return candidate.startsWith(prefix) ? [candidate.slice(prefix.length) || "."] : [];
-          }),
-        rootId: root.id,
-      })),
-      threadId,
-    });
+    const prefixes = project.project.roots.filter(root => qualifiesGitArcRoot(project, root)).map(({ id }) => `${id}:`);
+    const snapshots = claimSnapshotsFor({ harness, observedAt, threadId }, project, project.project.roots.map((root) => ({
+      paths: qualifiesGitArcRoot(project, root)
+        ? paths.flatMap((candidate) => candidate.startsWith(`${root.id}:`) ? [candidate.slice(root.id.length + 1) || "."] : [])
+        : paths.filter((candidate) => !prefixes.some(prefix => candidate.startsWith(prefix))),
+      root,
+    })));
+    for (const snapshot of snapshots) observe(snapshot);
   }
 
   private async gitThreadIdentity(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
