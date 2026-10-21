@@ -46,7 +46,7 @@ function fixture(transcriptReservoir?: WorkbenchTranscriptReservoir) {
   const lingering: Array<{ expire(): void; cancelled: boolean }> = [];
   const descriptor = {
     daemonId: DaemonIdSchema.parse(randomUUID()), hostname: "source", state: "ready" as const,
-    endpoint: "ws://127.0.0.1:12345", access: true, failure: null,
+    endpoint: "ws://127.0.0.1:12345", published: true, access: true, failure: null,
   };
   const source = new WorkbenchDaemonSource(descriptor, {
     warn: message => warnings.push(message),
@@ -446,6 +446,35 @@ test("connection loss changes observation and transcript freshness without scope
   assert.ok(failedPendingState?.kind === "transcriptState");
   assert.equal(failedState.data.failure, "Daemon startup failed.");
   assert.equal(failedPendingState.data.failure, "Daemon startup failed.");
+});
+
+test("a daemon dropped from discovery withdraws its facts once its socket closes and restores them when republished", async context => {
+  const f = fixture();
+  context.after(() => f.source.dispose());
+  const observation = f.source.observe({ kind: "threadIdentity", threadId: ThreadReferenceSchema.parse(randomUUID()) }, () => {});
+  const events: WorkbenchDaemonTranscriptEvent[] = [];
+  f.source.observeTranscript({ threadId: randomUUID(), turnLimit: 1 }, event => events.push(event));
+  const socket = await f.created;
+  const opening = f.source.socket.connect(); socket.open(); await opening;
+  const request = await socket.request("workspace/observe");
+  socket.notify({ method: "workspace/updated", params: {
+    kind: "threadIdentity", subscriptionId: request.params.subscriptionId,
+    generation: request.params.generation, revision: 1, phase: "current", failure: null, identity: null,
+  } });
+  const value = observation.getSnapshot().value;
+  assert.ok(value);
+
+  f.source.update({ ...f.descriptor, endpoint: null, published: false });
+  assert.equal(observation.getSnapshot().phase, "current", "An open socket keeps serving facts");
+
+  socket.close();
+  assert.deepEqual(observation.getSnapshot(), { phase: "unavailable", failure: null, value: null });
+  const state = events.at(-1);
+  assert.ok(state?.kind === "transcriptState");
+  assert.deepEqual([state.data.phase, state.data.failure], ["unavailable", null]);
+
+  f.source.update(f.descriptor);
+  assert.deepEqual(observation.getSnapshot(), { phase: "stale", failure: null, value });
 });
 
 test("daemon deltas apply onto the exact first value, may arrive before it, and a gap re-observes", async context => {

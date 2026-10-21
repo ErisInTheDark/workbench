@@ -97,7 +97,7 @@ export default class WorkbenchDaemonSources {
         incoming.set(this.attachedId, {
           descriptor: {
             daemonId: this.attachedId, hostname: facts.attached.hostname,
-            state: facts.attached.state, endpoint, access: true, failure: null,
+            state: facts.attached.state, endpoint, published: true, access: true, failure: null,
           },
           peers: new Set(), endpoints: new Set(endpoint ? [endpoint] : []),
         });
@@ -119,7 +119,7 @@ export default class WorkbenchDaemonSources {
         incoming.set(id, {
           descriptor: {
             daemonId: id, hostname: peer.identity.hostname, state: peer.identity.state,
-            endpoint, access: true, failure: null,
+            endpoint, published: true, access: true, failure: null,
           },
           peers: new Set([peer.peerId]), endpoints: new Set(endpoint ? [endpoint] : []),
         });
@@ -154,10 +154,11 @@ export default class WorkbenchDaemonSources {
         if (incoming.has(id)) continue;
         const revoked = entry.peers.size > 0
           && [...entry.peers].every(peer => this.options.network.canAccessPeer(peer) === false);
-        // Discovery loss withdraws reconnect permission, not already received facts.
-        // An existing healthy socket can continue until actual access is revoked.
+        // Discovery loss withdraws reconnect permission; a healthy socket continues until it closes or access is
+        // revoked, then its facts withdraw. Discovery is authoritative only while the host service is ready.
         entry.descriptor = {
           ...entry.descriptor, endpoint: null,
+          published: facts.current ? false : entry.descriptor.published,
           access: revoked ? false : entry.descriptor.access,
           failure: revoked ? "This app no longer has access to the daemon." : entry.descriptor.failure,
         };

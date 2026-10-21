@@ -11,7 +11,7 @@ const peer = { peerId: "peer-node", hostname: "peer", phase: "verified" as const
   origin: "http://100.80.0.2:52739",
   endpoints: { httpOrigin: "http://100.80.0.2:52739", secureOrigin: null } };
 
-test("the app host's grant admits a sleeping peer without waking it and revocation withdraws it", context => {
+test("the app host's grant admits a sleeping peer without waking it, authoritative discovery loss withdraws its facts and revocation withdraws access", context => {
   let allowed: boolean | null = true;
   let facts: ReturnType<WorkbenchNetworkController["daemonSources"]> = {
     current: true, attached: null, localOrigin: null, discovery: { refreshing: false, peers: [peer] },
@@ -32,6 +32,16 @@ test("the app host's grant admits a sleeping peer without waking it and revocati
   allowed = null;
   changed();
   assert.equal(sources.get(daemonId), source, "Missing discovery is not revocation");
+  const observation = source.observe({ kind: "runtime" }, () => {});
+  assert.equal(observation.getSnapshot().phase, "pending", "Discovery while the host is not ready is not authoritative");
+  facts = { ...facts, current: true, discovery: { refreshing: false, peers: [] } };
+  changed();
+  assert.deepEqual(observation.getSnapshot(), { phase: "unavailable", failure: null, value: null });
+  facts = { ...facts, discovery: { refreshing: false, peers: [peer] } };
+  allowed = true;
+  changed();
+  assert.equal(observation.getSnapshot().phase, "pending");
+  facts = { ...facts, discovery: { refreshing: false, peers: [] } };
   allowed = false;
   changed();
   assert.equal(source.getSnapshot().connection, "revoked");

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchDaemonSourceDescriptor: verified endpoint and access facts for one durable daemon.
+ * - WorkbenchDaemonSourceDescriptor: verified endpoint, publication and access facts for one durable daemon.
  * - WorkbenchDaemonObservationFact: received data with connection-aware freshness.
  * - WorkbenchDaemonTranscriptEvent: source-owned transcript baseline, stream and freshness delivery.
  * - default WorkbenchDaemonSource: own one daemon connection, shared read interests kept warm briefly after release
@@ -64,6 +64,8 @@ export interface WorkbenchDaemonSourceDescriptor {
   hostname: string;
   state: "sleeping" | "starting" | "ready" | "failed";
   endpoint: string | null;
+  /** False once authoritative discovery drops the daemon; its facts withdraw when the socket closes. */
+  published: boolean;
   access: boolean;
   failure: string | null;
 }
@@ -221,6 +223,7 @@ export default class WorkbenchDaemonSource {
 
   get id() { return this.descriptor.daemonId; }
   get available() { return this.descriptor.access && this.socket.isOpen && !this.disposed; }
+  private get withdrawn() { return !this.descriptor.published && !this.socket.isOpen; }
   get hasDemand() { return this.interests.size > 0 || this.transcripts.size > 0 || this.leases.size > 0; }
   private get hasActiveDemand() {
     return this.leases.size > 0 || this.transcripts.size > 0 || [...this.interests.values()].some(interest =>
@@ -512,6 +515,7 @@ export default class WorkbenchDaemonSource {
   }
 
   private readInterest(interest: Interest): WorkbenchDaemonObservationFact {
+    if (this.descriptor.access && this.withdrawn) return { phase: "unavailable", failure: null, value: null };
     const current = this.available && interest.value?.generation === this.socket.getSnapshot().generation;
     return {
       phase: !this.descriptor.access ? "unavailable"
@@ -638,9 +642,10 @@ export default class WorkbenchDaemonSource {
       const current = this.available && listener.generation === this.socket.getSnapshot().generation;
       const state: WorkspaceTranscriptState = {
         subscriptionId: interest.id,
-        phase: !this.descriptor.access ? "unavailable"
+        phase: !this.descriptor.access || this.withdrawn ? "unavailable"
           : interest.failure ? "failed" : current ? "current" : listener.generation === null ? "pending" : "stale",
         failure: !this.descriptor.access ? "This app no longer has access to the daemon."
+          : this.withdrawn ? null
           : interest.failure ?? (this.descriptor.state === "failed" ? this.descriptor.failure : null),
       };
       if (areDeeplyEqual(listener.state, state)) continue;
