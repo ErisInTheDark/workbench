@@ -1,9 +1,9 @@
-/* No production exports. Tests protect compact recall directive injection, commentary hint delivery, the Claude Edit/Write claim gate, and tool batch failure skipping. */
+/* No production exports. Tests protect compact recall directive injection, commentary hint delivery, refusing questionnaires with unseen context, the Claude Edit/Write claim gate, and tool batch failure skipping. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import ClaudeCommentaryNudge, { CLAUDE_COMMENTARY_HINT } from "./ClaudeCommentaryNudge";
+import ClaudeCommentaryNudge, { CLAUDE_COMMENTARY_HINT, CLAUDE_QUESTIONNAIRE_CONTEXT_HINT } from "./ClaudeCommentaryNudge";
 import { CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
 import type { WorkbenchAgentBatchTurn } from "../../agent/workbench-agent-mcp-request-registry";
 import {
@@ -25,7 +25,7 @@ function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit", batc
     cwd, onDenied: id => denied.push(id), nudge: new ClaudeCommentaryNudge(), batch: batch.batch,
     check: async paths => { checked.push(paths); return check(paths); },
   });
-  const hook = hooks.PreToolUse[0]!.hooks[0]!;
+  const hook = hooks.PreToolUse.find(({ matcher }) => matcher === "Edit|Write")!.hooks[0]!;
   const output = hook({
     hook_event_name: "PreToolUse", tool_name: tool, tool_input: toolInput, tool_use_id: "tool-1",
     session_id: "session", transcript_path: "", cwd,
@@ -59,6 +59,32 @@ test("plain assistant text reaches Claude as hint context after its tool batch a
   assert.deepEqual(context(await batch()), { hookEventName: "PostToolBatch", additionalContext: CLAUDE_COMMENTARY_HINT });
   assert.deepEqual(await stop("<wb:end />"), {});
   assert.deepEqual(context(await stop("Done.")), { hookEventName: "Stop", additionalContext: CLAUDE_COMMENTARY_HINT });
+});
+
+test("a questionnaire is refused only while the text introducing it went unseen", async () => {
+  const nudge = new ClaudeCommentaryNudge();
+  const hooks = createClaudeSessionHooks({
+    cwd, onDenied: () => undefined, nudge, batch: recordingBatch().batch,
+    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
+  });
+  const hook = hooks.PreToolUse.find(({ matcher }) => matcher === "mcp__wb__request_user_input")!.hooks[0]!;
+  const ask = () => hook({
+    hook_event_name: "PreToolUse", tool_name: "mcp__wb__request_user_input", tool_input: {}, tool_use_id: "ask",
+    session_id: "session", transcript_path: "", cwd,
+  } as never, "ask", { signal: new AbortController().signal });
+  const reason = (result: unknown) =>
+    (result as { hookSpecificOutput?: { permissionDecisionReason?: string } }).hookSpecificOutput?.permissionDecisionReason;
+
+  assert.equal(decision(await ask()), undefined, "a questionnaire after messaged context goes through");
+  nudge.observe({
+    type: "assistant", parent_tool_use_id: null,
+    message: { content: [{ type: "text", text: "Here is the plan." }, { type: "tool_use", id: "ask", name: "mcp__wb__request_user_input", input: {} }] },
+  } as unknown as SDKMessage);
+  const refused = await ask();
+  assert.equal(decision(refused), "deny");
+  assert.equal(reason(refused), CLAUDE_QUESTIONNAIRE_CONTEXT_HINT);
+  assert.equal(decision(await ask()), undefined, "asking again after resending goes through");
+  assert.equal(nudge.afterToolBatch(), null, "the refusal already said why, so the batch adds no second hint");
 });
 
 test("only native compaction injects the recall directive", async () => {

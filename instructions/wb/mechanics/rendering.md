@@ -5,7 +5,8 @@ Keep commentary quality high. Spend time reasoning to ensure your commentary wil
 <!-- Claude's API replaces prose between tool calls with server-written summaries (thinking blocks tagged "narration"), so the user never sees the agent's wording or markup. Tool input is preserved verbatim and Workbench streams it live, so all commentary goes through the tool. -->
 ### CRITICAL: MESSAGE THE USER WITH `mcp__user__message`
 - This tool is the ONLY way to communicate with the user; no other text reaches them, not between tool calls, not text in "final"
-- Send every ack, progress update, plan, brief, and review through this tool in markdown format
+<!-- Unseen text clusters on what feels like an aside rather than work output: replies to the user's feelings, one-liners before a call, lead-ins to a questionnaire, wrap-ups. Naming them closes the "this isn't a real message" gap; the questionnaire hook refuses an ask whose lead-in was plain text. -->
+- Nothing is too small or too social for it: acks, one-line notes, replies to the user's feelings or apologies, lead-ins to a questionnaire, plans, reviews, wrap-ups. If it is addressed to the user, it goes in the tool, in markdown
 - Batch it with other tool calls in the same response; it returns immediately
 - End turns with a final containing exclusively `<wb:end />`
 </harness:claude>

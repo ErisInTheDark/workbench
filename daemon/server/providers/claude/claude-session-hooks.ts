@@ -4,6 +4,7 @@
  * - ClaudeToolBatchPort: the thread's provider tool batch, reached through the attached bridge.
  * - claudeToolUseIds/claudeToolResults: the ordered call ids one Claude message issues, and the call outcomes one reports.
  * - createClaudeSessionHooks: inject compact recovery context after Claude Code's own compaction, hint after plain assistant text,
+ *   refuse a questionnaire whose introducing text went unseen,
  *   skip native edits after an earlier failed call in their batch, deny native edits whose path no active claim covers or a pending
  *   proposal holds, and end finished batches.
  */
@@ -22,6 +23,7 @@ export interface ClaudeToolBatchPort {
   end(): void;
 }
 
+const CLAUDE_QUESTIONNAIRE_TOOL_NAME = "mcp__wb__request_user_input";
 const SKIPPED_AFTER_FAILURE = "Skipped: an earlier call in this batch failed. Read its result, then call this again if it still applies.";
 const INTERRUPTED_BEFORE_START = "Interrupted before it started: a new message arrived for this thread. Read it, then call this again if it still applies.";
 
@@ -79,6 +81,13 @@ export function createClaudeSessionHooks(options: {
       }],
     }],
     PreToolUse: [{
+      matcher: CLAUDE_QUESTIONNAIRE_TOOL_NAME,
+      hooks: [async input => {
+        if (input.hook_event_name !== "PreToolUse" || input.tool_name !== CLAUDE_QUESTIONNAIRE_TOOL_NAME) return {};
+        const hint = nudge.beforeQuestionnaire();
+        return hint ? deny(hint) : {};
+      }],
+    }, {
       matcher: "Edit|Write",
       hooks: [async (input, toolUseId, { signal }) => {
         // Matchers are patterns; only judge the exact native file tools.
