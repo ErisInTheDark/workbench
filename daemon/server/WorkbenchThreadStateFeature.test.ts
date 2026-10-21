@@ -1617,14 +1617,16 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
   });
   assert.equal(thread.gitArcPlan, null);
   // The accepted proposal became permanent history, which only the thread observation carries.
-  assert.equal(thread.gitCommits, undefined);
+  assert.equal(thread.gitCommitHistory, undefined);
   const observed = await feature.controller.readWorkspaceThread({
     projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: "observer",
     target: { kind: "provider", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one") },
   });
   const observedThread = observed.entries[0];
   const ref = { commitSha: "f".repeat(40), historyIndex: 0, rootId: "root" };
-  assert.deepEqual(observedThread?.entryKind === "thread" ? observedThread.gitCommits : null, [ref]);
+  // The live arc still shows the accepted proposal, so accepted history does not count it twice.
+  assert.equal(observedThread?.entryKind === "thread" ? observedThread.gitCommitHistory?.count : null, 0);
+  assert.deepEqual(await feature.controller.readGitCommitRefs(fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one")), [ref]);
   assert.deepEqual(await feature.controller.readGitCommitDetails(
     fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"), [ref],
   ), [{ ...ref, description: "accepted description", sourceProposalId: "proposal-two", title: "accepted title" }]);

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadStateGitRepository: own permanent accepted commits (promoted from live arcs, replaced by their
- *   accepted amends, read per thread on demand, timed, looked up by sha) and the replaceable Git observation cache.
+ *   accepted amends, read per thread on demand in full or as refs, timed, looked up by sha) and the replaceable Git observation cache.
  * - WorkbenchThreadGitObservations: independently absent, null or populated arc and plan cache.
  * - WorkbenchThreadGitCommitTime: one Git-learned time for a permanent commit stored without one.
  */
@@ -11,7 +11,7 @@ import {
   WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema,
   WorkbenchThreadGitCommitSchema,
   type WorkbenchGitArcLifecycleState, type WorkbenchGitArcPlanState, type WorkbenchGitArcProposalSummary,
-  type WorkbenchThreadGitCommit,
+  type WorkbenchThreadGitCommit, type WorkbenchThreadGitCommitRef,
 } from "workbench-shared/workbench/thread/thread-state";
 
 /** A commit time learned from Git for a permanent commit stored without one. */
@@ -157,6 +157,28 @@ export default class WorkbenchThreadStateGitRepository {
           rootId: commit.root_id,
           sourceProposalId: commit.source_proposal_id,
           title: commit.title,
+        })));
+      }
+    }
+    return result;
+  }
+
+  /** What counts and groups each thread's permanent commits, without their messages; threads without any are absent. */
+  readCommitRefs(threadIds: readonly string[]): Map<string, WorkbenchThreadGitCommitRef[]> {
+    const result = new Map<string, WorkbenchThreadGitCommitRef[]>();
+    for (let offset = 0; offset < threadIds.length; offset += 400) {
+      const ids = threadIds.slice(offset, offset + 400);
+      const rows = this.database.prepare(`
+        SELECT thread_id, root_id, history_index, commit_sha, committed_at FROM workbench_thread_git_commits
+        WHERE thread_id IN (${ids.map(() => "?").join(",")})
+        ORDER BY history_index, root_id, source_proposal_id
+      `).all(...ids) as Array<Pick<GitCommitRow, "thread_id" | "root_id" | "history_index" | "commit_sha" | "committed_at">>;
+      for (const [threadId, commits] of Map.groupBy(rows, row => row.thread_id)) {
+        result.set(threadId, commits.map(commit => ({
+          ...(commit.committed_at === null ? {} : { committedAt: commit.committed_at }),
+          commitSha: commit.commit_sha,
+          historyIndex: commit.history_index,
+          rootId: commit.root_id,
         })));
       }
     }

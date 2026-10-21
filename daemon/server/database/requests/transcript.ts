@@ -23,6 +23,18 @@ export const transcriptRequests = {
       transcripts.settle(observations, mode)
     ),
     local: observations => observations.length ? undefined : { value: { changedThreadIds: [], compactionCompletions: [] } },
+    describe: (observations, mode = "live") => {
+      const kinds = new Map<string, number>();
+      const threads = new Set<string>();
+      let nested = 0;
+      for (const observation of observations) {
+        kinds.set(observation.kind, (kinds.get(observation.kind) ?? 0) + 1);
+        if ("threadId" in observation && typeof observation.threadId === "string") threads.add(observation.threadId);
+        if ("observations" in observation) nested += observation.observations.length;
+        if ("catalog" in observation) nested += observation.catalog.length;
+      }
+      return `${mode} ${[...kinds].map(([kind, count]) => `${kind}x${count}`).join(", ")}; ${threads.size} threads, ${nested} nested`;
+    },
   }),
   readTranscript: defineDatabaseRequest({
     read: "transcript",

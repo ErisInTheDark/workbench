@@ -46,7 +46,7 @@ import {
   WorkbenchProjectThreadSummarySchema, WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadObservationSnapshotSchema,
   WorkbenchProjectThreadSummaryCountsSchema, WorkbenchPinnedThreadSummaryEntrySchema,
-  WorkbenchProjectThreadSummaryEntrySchema, ThreadRuntimeRecordSchema, ThreadRuntimeSchema, workbenchThreadGitCommitKey,
+  WorkbenchProjectThreadSummaryEntrySchema, ThreadRuntimeRecordSchema, ThreadRuntimeSchema,
 } from "../thread/thread-state";
 import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity";
 import { LocatedThreadSummariesSchema, LocatedThreadSummarySchema, ThreadSummarySchema } from "../thread/thread-summary";
@@ -559,11 +559,7 @@ const gitArcPlanShape = observationShape.object({ fields: {
   scopePaths: pathList,
   members: observationShape.keyed(gitArcMemberKey, z.json(), { fields: { scopePaths: pathList } }),
 } });
-// A long-lived thread reaches hundreds of accepted commits; one new commit ships one ref.
-const entryFields = {
-  gitArc: gitArcShape, gitArcPlan: gitArcPlanShape,
-  gitCommits: observationShape.keyed(workbenchThreadGitCommitKey, z.json()),
-};
+const entryFields = { gitArc: gitArcShape, gitArcPlan: gitArcPlanShape };
 const entryShape: ObservationShape = { fields: entryFields };
 // Thread-state revision counters bump on background passes with no visible change; they ride along only with real changes.
 const sidebarRowsShape = observationShape.object({

@@ -149,6 +149,19 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
     });
   }
 
+  readonly gitCommitRefReads: string[][] = [];
+
+  async readGitCommitRefs(threadIds: readonly WorkbenchThreadId[]) {
+    this.gitCommitRefReads.push([...threadIds]);
+    return threadIds.flatMap(threadId => {
+      const commits = this.gitCommits.get(threadId);
+      return commits?.length ? [{
+        commits: commits.map(({ committedAt, commitSha, historyIndex, rootId }) => ({ ...(committedAt ? { committedAt } : {}), commitSha, historyIndex, rootId })),
+        threadId,
+      }] : [];
+    });
+  }
+
   async recordGitCommitTimes(threadId: WorkbenchThreadId, times: ReadonlyArray<{ commitSha: string; committedAt: string; rootId: string }>) {
     this.gitCommits.set(threadId, (this.gitCommits.get(threadId) ?? []).map(commit => {
       const time = commit.committedAt ? undefined : times.find(({ commitSha, rootId }) => commitSha === commit.commitSha && rootId === commit.rootId);
@@ -4030,8 +4043,9 @@ test("only an observed thread's untimed commits learn their times from Git, afte
       target: { kind: "provider", threadId: WorkbenchThreadIdSchema.parse(threadId) },
     });
     const entry = served.entries[0];
-    return entry?.entryKind === "thread" ? (entry.gitCommits ?? []).map(({ committedAt }) => committedAt) : null;
+    return entry?.entryKind === "thread" ? entry.gitCommitHistory?.revision ?? null : null;
   };
+  const refTimes = async () => (await controller.readGitCommitRefs(WorkbenchThreadIdSchema.parse("a"))).map(({ committedAt }) => committedAt);
   const settle = async () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -4039,34 +4053,36 @@ test("only an observed thread's untimed commits learn their times from Git, afte
   try {
     // Loading the project holds no commit history and reads none.
     const snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
-    assert.ok(snapshot.entries.every((entry) => entry.entryKind === "draft" || entry.gitCommits === undefined));
+    assert.ok(snapshot.entries.every((entry) => entry.entryKind === "draft" || entry.gitCommitHistory === undefined));
     await settle();
-    assert.deepEqual(persistence.gitCommitReads, []);
+    assert.deepEqual(persistence.gitCommitRefReads, []);
     assert.equal(requests.length, 0);
 
-    // The observation reads only its own thread's history from SQL and is served before Git answers.
-    assert.deepEqual(await observe("a"), [recorded, undefined, undefined]);
-    assert.deepEqual(persistence.gitCommitReads, [["a"]]);
+    // The observation reads only its own thread's refs from SQL, never commit messages, and is served before Git answers.
+    const untimedRevision = await observe("a");
+    assert.deepEqual(persistence.gitCommitRefReads, [["a"]]);
+    assert.deepEqual(await refTimes(), [recorded, undefined, undefined]);
     await waitFor(() => requests.length === 1, "backfill never asked Git for commit times");
     assert.deepEqual(requests, [[{ commitShas: ["b".repeat(40), "c".repeat(40)], rootId: "root" }]]);
 
     const before = publishes;
     answer(new Map([[`root\0${"b".repeat(40)}`, backfilled]]));
     await waitFor(() => publishes > before, "backfill never nudged observations to re-read");
-    assert.deepEqual(persistence.gitCommits.get("a")?.map(({ committedAt }) => committedAt), [recorded, backfilled, undefined]);
-    assert.deepEqual(await observe("a"), [recorded, backfilled, undefined]);
+    assert.deepEqual(await refTimes(), [recorded, backfilled, undefined]);
+    assert.notEqual(await observe("a"), untimedRevision, "views holding refs learn that a time arrived");
 
     // Re-observing never asks Git again, even for the commit it could not find; the unobserved thread is never read.
     await settle();
     assert.equal(requests.length, 1);
-    assert.ok(persistence.gitCommitReads.every((threadIds) => !threadIds.includes(WorkbenchThreadIdSchema.parse("unobserved"))));
+    assert.ok(persistence.gitCommitRefReads.every((threadIds) => !threadIds.includes(WorkbenchThreadIdSchema.parse("unobserved"))));
+    assert.deepEqual(persistence.gitCommitReads, []);
   } finally {
     await controller.dispose();
     await temporary.dispose();
   }
 });
 
-test("an observed thread carries commit refs, and only the commits a group asks for come back in full", async () => {
+test("an observed thread carries only its accepted-commit count; refs and then asked-for details load on demand", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-commit-refs-");
   const root = temporary.path;
   const commit = (sha: string, historyIndex: number) => ({
@@ -4086,7 +4102,9 @@ test("an observed thread carries commit refs, and only the commits a group asks 
     });
     const entry = served.entries[0];
     assert.ok(entry?.entryKind === "thread");
-    assert.deepEqual(entry.gitCommits, ["a", "b", "c"].map((sha, historyIndex) => ({
+    assert.equal(entry.gitCommitHistory?.count, 3);
+    assert.equal("gitCommits" in entry, false, "the thread value never lists the history itself");
+    assert.deepEqual(await controller.readGitCommitRefs(WorkbenchThreadIdSchema.parse("a")), ["a", "b", "c"].map((sha, historyIndex) => ({
       committedAt: "2026-10-01T00:00:00.000Z", commitSha: sha.repeat(40), historyIndex, rootId: "root",
     })), "titles, descriptions and source proposals stay home until a group opens");
     const details = await controller.readGitCommitDetails(WorkbenchThreadIdSchema.parse("a"), [

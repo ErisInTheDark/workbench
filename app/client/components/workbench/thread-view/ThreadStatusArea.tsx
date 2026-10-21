@@ -13,7 +13,7 @@ import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thr
 import {
   isWorkbenchThreadStatusProviderOwned,
   type WorkbenchHarnessId,
-  type WorkbenchThreadGitCommitRef,
+  type WorkbenchThreadGitCommitHistory,
   type WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -31,7 +31,7 @@ import ThreadSkillPills, { skillPillToneClassName } from "./ThreadSkillPills";
 import ThreadStatusRow, { threadStatusSegmentClassName, type ThreadStatusAttention, type ThreadStatusPanel } from "./ThreadStatusRow";
 import ThreadVisSessionCard, { getVisSessionsUpdatedAt } from "./ThreadVisSessionCard";
 import ThreadGitArcWork, { type ThreadGitArcWorkProps } from "./ThreadGitArcWork";
-import { getThreadAcceptedGitHistory } from "./ThreadGitArcProposalList";
+import { countThreadAcceptedGitCommits } from "./ThreadGitArcProposalList";
 import { useThreadGitArcClaimChanges } from "./ThreadGitArcObservationContext";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
@@ -59,7 +59,7 @@ export function getThreadStatusAttention({ dirtyClaimedPaths, feedbackCount, pen
 
 export default function ThreadStatusArea({
   gitArc,
-  gitCommits = [],
+  gitCommitHistory,
   harness,
   live,
   skills,
@@ -69,7 +69,7 @@ export default function ThreadStatusArea({
   vis,
 }: {
   gitArc: Omit<ThreadGitArcWorkProps, "threadId"> | null;
-  gitCommits?: readonly WorkbenchThreadGitCommitRef[];
+  gitCommitHistory?: WorkbenchThreadGitCommitHistory;
   harness: WorkbenchHarnessId;
   live: ThreadLiveActivityView | null;
   /** Absent where a thread has no skills to manage, such as draft views. */
@@ -86,7 +86,7 @@ export default function ThreadStatusArea({
   const showPlanIntersectionStatus = !live && intersections.hasScope;
   const claim = gitArc?.claim ?? null;
   const proposals = claim?.proposals.filter(({ status }) => status === "proposed") ?? [];
-  const accepted = getThreadAcceptedGitHistory(claim?.proposals ?? [], gitCommits).acceptedCount;
+  const accepted = countThreadAcceptedGitCommits(claim?.proposals ?? [], gitCommitHistory);
   const claimed = claim?.claimedPaths.length ?? 0;
   const stashed = claim?.stashedPaths?.length ?? 0;
   const feedbackCount = todos?.feedbackCount ?? 0;
@@ -169,7 +169,7 @@ export default function ThreadStatusArea({
               ownerProjectId={ownerProjectId}
             />
           ) : null}
-          {gitArc ? <ThreadGitArcWork {...gitArc} history={gitCommits} threadId={threadId} /> : null}
+          {gitArc ? <ThreadGitArcWork {...gitArc} history={gitCommitHistory} threadId={threadId} /> : null}
         </div>
       ),
       segments: arcSegments,

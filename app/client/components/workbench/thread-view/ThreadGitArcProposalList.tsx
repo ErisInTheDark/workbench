@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - getThreadAcceptedGitHistory: dedupe permanent commits against actionable live committed proposals.
- * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows (whose details load when their age group first mounts, and which load their source proposal for amend once opened); pending work sits in a recessed card under a persisted commit-all header (a lone proposal is its own persisted disclosure) with tall stacks folded past the committable layer, accepted history under one group per commit age unless a single age is the whole panel.
+ * - countThreadAcceptedGitCommits: live committed proposals plus recorded history the live arc does not already show.
+ * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows (whose refs load when the list shows them and details when their age group first mounts, and which load their source proposal for amend once opened); pending work sits in a recessed card under a persisted commit-all header (a lone proposal is its own persisted disclosure) with tall stacks folded past the committable layer, accepted history under one group per commit age unless a single age is the whole panel.
  */
 "use client";
 
@@ -10,10 +10,12 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import {
+  getWorkbenchLiveCommittedGitCommitKeys,
   workbenchThreadGitCommitKey,
   type WorkbenchGitArcLifecycleState,
   type WorkbenchGitArcProposalState,
   type WorkbenchHarnessId,
+  type WorkbenchThreadGitCommitHistory,
   type WorkbenchThreadGitCommitRef,
 } from "workbench-shared/workbench/thread/thread-state";
 import { threadGitCommitHistoryFor, type ThreadGitCommitDetail } from "../../../workbench/thread/ThreadGitCommitHistory";
@@ -39,22 +41,32 @@ function formatProposalCounts(committed: number, proposed: number) {
   return `${plural(committed, "commit")}, ${plural(proposed, "proposal")}`;
 }
 
-export function getThreadAcceptedGitHistory(
+/** Live committed proposals plus recorded history the live arc does not already show. */
+export function countThreadAcceptedGitCommits(
   proposals: readonly WorkbenchGitArcProposalState[],
-  history: readonly WorkbenchThreadGitCommitRef[],
+  history: WorkbenchThreadGitCommitHistory | undefined,
 ) {
-  const liveCommitKeys = new Set(proposals.flatMap(({ rootId, status, summary }) => (
-    status === "committed" && rootId && summary?.committedSha ? [workbenchThreadGitCommitKey({ rootId, commitSha: summary.committedSha })] : []
-  )));
-  const historicalCommits = history
-    .filter(commit => !liveCommitKeys.has(workbenchThreadGitCommitKey(commit)))
+  return proposals.filter(({ status }) => status === "committed").length + (history?.count ?? 0);
+}
+
+/** Recorded commits the live arc does not already show, in acceptance order. */
+function getHistoricalCommits(proposals: readonly WorkbenchGitArcProposalState[], refs: readonly WorkbenchThreadGitCommitRef[]) {
+  const live = getWorkbenchLiveCommittedGitCommitKeys(proposals);
+  return refs.filter(commit => !live.has(workbenchThreadGitCommitKey(commit)))
     .slice().sort((left, right) => left.historyIndex - right.historyIndex
       || left.rootId.localeCompare(right.rootId)
       || left.commitSha.localeCompare(right.commitSha));
-  return {
-    acceptedCount: proposals.filter(({ status }) => status === "committed").length + historicalCommits.length,
-    historicalCommits,
-  };
+}
+
+/** The whole recorded history loads once a view shows it, and again only when the entry's revision moves. */
+function useAcceptedCommitRefs(threadId: string, history: WorkbenchThreadGitCommitHistory | undefined) {
+  const store = threadGitCommitHistoryFor(useWorkbenchDaemonClient());
+  useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion);
+  const revision = history?.count ? history.revision : null;
+  useEffect(() => {
+    if (revision) void store.loadRefs(threadId, revision);
+  }, [revision, store, threadId]);
+  return revision ? { refs: store.getRefs(threadId), retry: () => void store.loadRefs(threadId, revision) } : null;
 }
 
 function readProposalsOpen(records: readonly WorkbenchClientStateRecord[]) {
@@ -147,7 +159,7 @@ export default function ThreadGitArcProposalList({
   commitActions,
   cwd,
   harness,
-  history = [],
+  history,
   proposals,
   stackLayers,
   standalone = false,
@@ -158,7 +170,7 @@ export default function ThreadGitArcProposalList({
   commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
-  history?: readonly WorkbenchThreadGitCommitRef[];
+  history?: WorkbenchThreadGitCommitHistory;
   threadId: string;
   proposals: readonly WorkbenchGitArcProposalState[];
   /** Sealed layers, bottom first; their proposals render inside one disclosure per layer. */
@@ -185,7 +197,10 @@ export default function ThreadGitArcProposalList({
   // Commit all walks the stack bottom-up, then unsealed work built on top of it.
   const proposedIds = [...layerGroups.flatMap(({ pendingIds }) => pendingIds), ...pendingIdsOf(unsealedProposals)];
   const acceptedProposals = unsealedProposals.filter(({ status }) => status === "committed");
-  const { acceptedCount, historicalCommits } = getThreadAcceptedGitHistory(proposals, history);
+  const acceptedCount = countThreadAcceptedGitCommits(proposals, history);
+  const recorded = useAcceptedCommitRefs(threadId, history);
+  const refs = recorded?.refs.status === "ready" ? recorded.refs.refs : [];
+  const historicalCommits = getHistoricalCommits(proposals, refs);
   const trailingProposals = acceptedProposals.length
     ? unsealedProposals.filter(({ status }) => status !== "committed")
     : unsealedProposals;
@@ -230,7 +245,7 @@ export default function ThreadGitArcProposalList({
   };
 
   // A lone pending proposal is the whole list, so its own card is the persisted disclosure instead of a header.
-  const loneId = proposals.length === 1 && proposedIds.length === 1 && !historicalCommits.length && !layerGroups.length
+  const loneId = proposals.length === 1 && proposedIds.length === 1 && !history?.count && !layerGroups.length
     ? proposedIds[0]!
     : null;
   const commitAllAction = showCommitAll || committing ? (
@@ -312,7 +327,7 @@ export default function ThreadGitArcProposalList({
     );
   };
   // A live summary from the startup cache has no time yet; its permanent row may already know it.
-  const recordedTimes = new Map(history.map(commit => [workbenchThreadGitCommitKey(commit), commit.committedAt]));
+  const recordedTimes = new Map(refs.map(commit => [workbenchThreadGitCommitKey(commit), commit.committedAt]));
   // Chronological: durable history in acceptance order, then this arc's own accepted proposals.
   const acceptedEntries: AcceptedEntry[] = [
     ...historicalCommits.map(commit => ({ committedAt: commit.committedAt, commit })),
@@ -365,7 +380,29 @@ export default function ThreadGitArcProposalList({
   // Tall stacks show the committable layer and a few above it; folding a lone layer would save nothing.
   const visibleLayerEnd = (lowestPendingGroup ? layerGroups.indexOf(lowestPendingGroup) : 0) + VISIBLE_LAYER_COUNT;
   const foldedLayers = layerRows.length - visibleLayerEnd > 1 ? layerRows.slice(visibleLayerEnd) : [];
+  // Until the recorded history arrives its groups cannot be formed; the header already counts it.
+  const pendingHistory = !recorded || recorded.refs.status === "ready" ? null : recorded.refs.status === "failed" ? (
+    <div className={`${threadGitArcCommitRowClassName} flex items-center gap-3 py-2 text-[0.8em] leading-[1.5]`} key="history-failed" role="alert">
+      <span className="min-w-0 flex-1 text-danger">Accepted commits couldn&apos;t load.</span>
+      <button
+        className="shrink-0 cursor-pointer text-fg/muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none"
+        data-thread-git-commit-retry="true"
+        onClick={recorded.retry}
+        type="button"
+      >
+        Retry
+      </button>
+    </div>
+  ) : (
+    <div className={threadGitArcCommitRowClassName} data-thread-git-commit-history-loading="true" key="history-loading">
+      <div aria-hidden="true" className="flex items-center gap-2 py-2">
+        <span className="size-3 shrink-0 rounded workbench-skeleton" />
+        <span className="h-[1em] w-1/2 rounded workbench-skeleton" />
+      </div>
+    </div>
+  );
   const anchors = [
+    ...(pendingHistory ? [pendingHistory] : []),
     ...(flattenAccepted ? [acceptedRows(ageGroups[0]!.entries, "accepted")] : ageGroups.map(({ bucket, entries, title }) => (
       <ThreadGitArcCommitGroup
         count={plural(entries.length, "commit")}

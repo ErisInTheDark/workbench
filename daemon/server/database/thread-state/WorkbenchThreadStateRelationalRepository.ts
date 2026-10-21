@@ -178,6 +178,15 @@ export default class WorkbenchThreadStateRelationalRepository {
     });
   }
 
+  /** `readGitCommits` without commit messages, for counting and grouping. */
+  readGitCommitRefs(threadIds: readonly WorkbenchThreadId[]) {
+    const history = this.git.readCommitRefs(threadIds);
+    return threadIds.flatMap(threadId => {
+      const commits = history.get(threadId);
+      return commits ? [{ commits, threadId }] : [];
+    });
+  }
+
   recordGitCommitTimes(threadId: WorkbenchThreadId, times: readonly WorkbenchThreadGitCommitTime[]) {
     this.git.recordCommitTimes(threadId, times);
   }

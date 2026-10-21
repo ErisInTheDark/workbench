@@ -101,7 +101,7 @@ export default function ThreadViewStatus ({
   });
 
   const entry = active.entry;
-  const gitCommits = entry?.gitCommits ?? [];
+  const gitCommitHistory = entry?.gitCommitHistory;
   const gitArcWork = getThreadGitArcWork({ gitArc: entry?.gitArc ?? null, proposalObservations: active.gitArcProposals });
   const sourceFailed = transcriptSource?.status === "failed" || transcriptSource?.status === "absent"
     || transcriptSource?.status === "unavailable";
@@ -114,14 +114,14 @@ export default function ThreadViewStatus ({
     {!isMessageBoardOpen && (live || !isDraftThreadView) ? (
       <ThreadStatusArea
         // Observed heads learn the working directory with the transcript; the arc panel's Git requests need it.
-        gitArc={!isDraftThreadView && activeThread.cwd && (gitArcWork || gitCommits.length) ? {
+        gitArc={!isDraftThreadView && activeThread.cwd && (gitArcWork || gitCommitHistory?.count) ? {
           claim: gitArcWork,
           commitActions: checkpointCommitActions,
           cwd: activeThread.cwd,
           harness: activeThread.harness,
           running: liveTurn !== null,
         } : null}
-        gitCommits={gitCommits}
+        gitCommitHistory={gitCommitHistory}
         harness={activeThread.harness}
         key={activeThread.id}
         live={live}

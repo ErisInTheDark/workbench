@@ -18,7 +18,7 @@
  * - WorkbenchThreadGitCommitsReadSchema: accepted-commit details for named commit refs.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
  * - WorkbenchThreadPageResult/WorkbenchThreadPageResultSchema: WB page and domain-history facts.
- * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry; actions route by thread unless they name another route.
+ * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry (including whole accepted-commit ref reads); actions route by thread unless they name another route.
  */
 import { z } from "zod";
 import type {
@@ -221,6 +221,8 @@ export const workbenchThreadActions = {
   "thread/browse/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(browseHistory) },
   "thread/approvals/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(approvalOutcome) },
   "thread/git-commits/read": { params: WorkbenchThreadGitCommitsReadSchema, result: z.object({ data: z.array(WorkbenchThreadGitCommitSchema) }) },
+  /** Every recorded accepted-commit ref, in history order, for views that group the whole history. */
+  "thread/git-commit-refs/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(WorkbenchThreadGitCommitRefSchema) }) },
   // Browser creation uses saved-draft launch, not daemon thread creation.
   "thread/create": { params: WorkbenchThreadCreateSchema, result: WorkbenchThreadPayloadSchema, route: "app" },
   "thread/metadata/read": { params: WorkbenchThreadTargetSchema, result: WorkbenchThreadPayloadSchema },

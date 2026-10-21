@@ -14,7 +14,7 @@ function thread(threadId = parentId): Extract<WorkbenchThreadSidebarEntry, { ent
     entryKind: "thread",
     gitArc: null,
     gitArcPlan: null,
-    gitCommits: [{ commitSha: "d".repeat(40), historyIndex: 0, rootId: "root" }],
+    gitCommitHistory: { count: 1, revision: "1.0.0" },
     identity: { harness: "codex", threadId },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false },
@@ -54,6 +54,6 @@ test("subagents never list as sidebar rows; their parent carries only its direct
 
 test("a full thread entry projects to a row without per-thread detail that the strict row schema accepts", () => {
   const row = projectSidebarRow(thread());
-  assert.deepEqual(["gitCommits", "previousTitles", "profile"].filter(field => field in row), []);
+  assert.deepEqual(["gitCommitHistory", "previousTitles", "profile"].filter(field => field in row), []);
   assert.equal(WorkbenchThreadSidebarRowSchema.safeParse(row).success, true);
 });

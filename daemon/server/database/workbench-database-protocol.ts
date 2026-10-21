@@ -8,6 +8,7 @@
  * isBackgroundDatabaseReadClass: classes that must leave a reader free for interactive work.
  * getWorkbenchDatabaseReadClass/isWorkbenchDatabaseReadRequest: classify pure reads for the reader pool.
  * getWorkbenchDatabaseRequestOrdering: whether a request waits for, or becomes, the latest thread-state write.
+ * getWorkbenchDatabaseCallDescription: a call's lazily built input description for slow-call warnings.
  * WorkbenchDatabaseInventory: installed schema inventory returned after readiness.
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch.
  * WorkbenchTranscriptItemRange: one stable bounded relational item read.
@@ -66,8 +67,16 @@ export function getWorkbenchDatabaseRequestOrdering(request: WorkbenchDatabaseRe
   return request.type === "call" ? getWorkbenchDatabaseRequest(request.name)?.ordering ?? null : null;
 }
 
+/** A call's own description of its input for slow-call warnings, built only when asked; null when it names none. */
+export function getWorkbenchDatabaseCallDescription(request: WorkbenchDatabaseRequestPayload): (() => string) | null {
+  if (request.type !== "call") return null;
+  const describe = getWorkbenchDatabaseRequest(request.name)?.describe;
+  return describe ? () => describe(...request.args).slice(0, 300) : null;
+}
+
 export type WorkbenchDatabaseResponse =
-  | { id: number; type: "result"; result: unknown }
+  /** `runMs` is the worker's own time in the request body, excluding the message hops and the daemon's event loop. */
+  | { id: number; type: "result"; result: unknown; runMs?: number }
   | { id: number; type: "ready"; inventory: WorkbenchDatabaseInventory; projects?: WorkbenchProjectStartup }
   | { id: number; type: "migrationCheckpoint"; backupPath: string }
   | { id: number; type: "suspended" }

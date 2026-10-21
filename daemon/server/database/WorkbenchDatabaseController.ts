@@ -26,7 +26,9 @@ import type {
     WorkbenchDatabaseResponse,
     WorkbenchDatabaseWorkerMessage,
 } from "./workbench-database-protocol";
-import { getWorkbenchDatabaseReadClass, getWorkbenchDatabaseRequestOrdering } from "./workbench-database-protocol";
+import {
+  getWorkbenchDatabaseCallDescription, getWorkbenchDatabaseReadClass, getWorkbenchDatabaseRequestOrdering,
+} from "./workbench-database-protocol";
 import {
   workbenchDatabaseRequests,
   type WorkbenchDatabaseRequestArgs,
@@ -89,7 +91,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
   readonly #readers: WorkbenchDatabaseReadPool;
   readonly #pending = new Map<number, PendingRequest>();
   /** Writer calls in flight, in posting order; a slow one names the work queued ahead of it. */
-  readonly #writerQueue = new Map<number, { ahead: string; name: string; postedAt: number }>();
+  readonly #writerQueue = new Map<number, { ahead: string; describe: (() => string) | null; name: string; postedAt: number }>();
   #writerSettledAt = Number.NEGATIVE_INFINITY;
   // Thread-state reads retain write-before-read ordering across the writer and reader pool.
   #threadStateWrite: Promise<void> = Promise.resolve();
@@ -427,7 +429,9 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
           },
         });
       } else {
-        if (request.type === "call") this.#writerQueue.set(id, { ahead: this.#describeWriterQueue(), name: request.name, postedAt: performance.now() });
+        if (request.type === "call") this.#writerQueue.set(id, {
+          ahead: this.#describeWriterQueue(), describe: getWorkbenchDatabaseCallDescription(request), name: request.name, postedAt: performance.now(),
+        });
         this.#worker.postMessage(message);
       }
     });
@@ -449,7 +453,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       return;
     }
     this.#pending.delete(response.id);
-    this.#reportSlowWriterCall(response.id);
+    this.#reportSlowWriterCall(response.id, response.type === "result" ? response.runMs : undefined);
     if (response.type === "requestFailure") {
       pending.reject(new WorkbenchDatabaseRequestFailure(response.message));
       return;
@@ -474,9 +478,10 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
 
   /**
    * Writes share one worker, so a caller that waited (a steer's admission write) is named with what held it. The writer runs
-   * calls one at a time in order, so a call's own run began when it was posted or when the call before it settled.
+   * calls one at a time in order, so a call's own run began when it was posted or when the call before it settled. That
+   * span also counts message hops and this event loop being busy; the worker's own `sqlMs` separates slow SQL from those.
    */
-  #reportSlowWriterCall(id: number) {
+  #reportSlowWriterCall(id: number, sqlMs: number | undefined) {
     const call = this.#writerQueue.get(id);
     if (!call) return;
     this.#writerQueue.delete(id);
@@ -485,7 +490,9 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
     this.#writerSettledAt = settledAt;
     const elapsedMs = settledAt - call.postedAt;
     if (elapsedMs < SLOW_WRITER_CALL_MS) return;
-    const ran = `ran ${(ranMs / 1_000).toFixed(1)}s`;
+    const seconds = (ms: number) => `${(ms / 1_000).toFixed(1)}s`;
+    const inside = [sqlMs === undefined ? null : `sql ${seconds(sqlMs)}`, call.describe?.() ?? null].filter(Boolean).join("; ");
+    const ran = `ran ${seconds(ranMs)}${inside ? ` (${inside})` : ""}`;
     this.#report({
       source: "database", operation: `writer ${call.name}`, phase: "completed", level: "warn",
       detail: call.ahead ? `${ran}, queued behind ${call.ahead}` : `${ran}, nothing queued ahead`, elapsedMs, progress: null,

@@ -16,7 +16,7 @@ import {
 import type {
   WorkbenchGitArcLifecycleState,
   WorkbenchHarnessId,
-  WorkbenchThreadGitCommitRef,
+  WorkbenchThreadGitCommitHistory,
 } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../../ui/PrimaryButton";
 import Disclosure from "../../ui/Disclosure";
@@ -44,7 +44,7 @@ export interface ThreadGitArcWorkProps {
   commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
-  history?: readonly WorkbenchThreadGitCommitRef[];
+  history?: WorkbenchThreadGitCommitHistory;
   /** A running turn still owns its claims: they list, but their actions wait for the turn to stop. */
   running: boolean;
   threadId: string;
@@ -55,7 +55,7 @@ export default function ThreadGitArcWork ({
   commitActions,
   cwd,
   harness,
-  history = [],
+  history,
   running,
   threadId,
 }: ThreadGitArcWorkProps) {
@@ -139,12 +139,13 @@ export default function ThreadGitArcWork ({
     ...(claim?.claimedPaths.length ? [{ phase: "active" as const, paths: claim.claimedPaths }] : []),
     ...(claim?.stashedPaths?.length ? [{ phase: "stashed" as const, paths: claim.stashedPaths }] : []),
   ];
-  if (!visibleProposals.length && !history.length && !sections.length) return null;
+  const hasHistory = Boolean(history?.count);
+  if (!visibleProposals.length && !hasHistory && !sections.length) return null;
   const showCombinedAction = activeAction === "restoreAndUnclaim" || (activeAction === null && isShiftPressed);
 
   return (
     <section className="w-full" data-thread-git-arc-work="true">
-      {visibleProposals.length || history.length ? (
+      {visibleProposals.length || hasHistory ? (
         <ThreadGitArcProposalList
           acceptance={claim?.acceptance ?? null}
           commitActions={commitActions}
@@ -161,11 +162,11 @@ export default function ThreadGitArcWork ({
         <div
           key={sectionPhase}
           className={`
-            ${visibleProposals.length || history.length || index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : ""}
+            ${visibleProposals.length || hasHistory || index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : ""}
             px-3 py-2
           `}
           data-thread-git-arc-resolution="true"
-          data-thread-git-arc-resolution-separator={visibleProposals.length || history.length ? "true" : undefined}
+          data-thread-git-arc-resolution-separator={visibleProposals.length || hasHistory ? "true" : undefined}
         >
           <Disclosure
             contentClassName="mt-1 pl-1"

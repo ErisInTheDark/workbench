@@ -71,10 +71,20 @@ export const threadStateRequests = {
   commitThreadState: defineDatabaseRequest({
     ordering: "threadStateWrite",
     run: (context, changes: WorkbenchThreadStateCommit) => { inTransaction(context, state => state.commit(changes)); },
+    describe: changes => [
+      `${changes.records?.length ?? 0} records`, `${changes.drafts?.length ?? 0} drafts`,
+      `${(changes.deletedThreadIds?.length ?? 0) + (changes.deletedDraftIds?.length ?? 0)} deletions`,
+      `${changes.layouts?.length ?? 0} layouts`,
+    ].join(", "),
   }),
   readThreadGitCommits: defineDatabaseRequest({
     read: "core",
     run: (context, threadIds: readonly WorkbenchThreadId[]) => inTransaction(context, state => state.readGitCommits(threadIds)),
+    local: threadIds => threadIds.length ? undefined : { value: [] },
+  }),
+  readThreadGitCommitRefs: defineDatabaseRequest({
+    read: "core",
+    run: (context, threadIds: readonly WorkbenchThreadId[]) => inTransaction(context, state => state.readGitCommitRefs(threadIds)),
     local: threadIds => threadIds.length ? undefined : { value: [] },
   }),
   recordThreadGitCommitTimes: defineDatabaseRequest({

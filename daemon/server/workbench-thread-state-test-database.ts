@@ -113,6 +113,7 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
     readThreadStateNavigationSummary: async projectId => repository.readNavigationSummary(projectId),
     readThreadStateTitleHistories: async projectId => repository.readTitleHistories(projectId),
     readThreadGitCommits: async threadIds => repository.readGitCommits(threadIds),
+    readThreadGitCommitRefs: async threadIds => repository.readGitCommitRefs(threadIds),
     recordThreadGitCommitTimes: async (threadId, times) => { repository.recordGitCommitTimes(threadId, times); },
     writeThreadStateProject: async (projectId, document, titleHistories) => {
       operations.push("commit");

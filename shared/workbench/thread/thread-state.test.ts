@@ -3,10 +3,10 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isWorkbenchSidebarThreadCompletionAvailable, withWorkbenchThreadLifecycle, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema, WorkbenchThreadSidebarEntrySchema } from "./thread-state.ts";
+import { getWorkbenchThreadGitCommitHistory, isWorkbenchSidebarThreadCompletionAvailable, withWorkbenchThreadLifecycle, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema, WorkbenchThreadSidebarEntrySchema } from "./thread-state.ts";
 import { countDraftPromptTokens, createDraftTitle, createWorkbenchPinnedThreadSummaryEntry, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
-import { projectSidebarRow, WorkbenchThreadSidebarRowSchema } from "./thread-sidebar-row";
+import { projectSidebarRow } from "./thread-sidebar-row";
 
 const fixtureIdentityValues = {
   DraftId: {
@@ -528,25 +528,6 @@ test("stashed claim intersections use retained paths rather than a pending plan"
   ).activeEntries.map(({ entry }) => entry.title), ["blocking"]);
 });
 
-test("a full thread entry projects to a sidebar row the strict row schema accepts", () => {
-  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 12_345,
-    entryKind: "thread" as const,
-    gitArc: null,
-    gitArcPlan: null,
-    gitCommits: [{ commitSha: "d".repeat(40), historyIndex: 0, rootId: "root" }],
-    identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("heavy") },
-    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    previousTitles: [{ title: "older title", usedAt: 1 }],
-    title: "heavy",
-  };
-  const row = projectSidebarRow(entry);
-  assert.equal("gitCommits" in row, false);
-  assert.equal("previousTitles" in row, false);
-  assert.equal(WorkbenchThreadSidebarRowSchema.safeParse(row).success, true);
-});
-
 test("lifecycle parsing preserves canonical attention variants and normalizes legacy reasons", () => {
   assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "noActiveTurn", settled: false }), {
     kind: "needsAttention", reason: "noActiveTurn", settled: false,
@@ -924,4 +905,28 @@ test("pinned summary rows carry wait targets and leave out snoozed and settled p
   assert.equal(createWorkbenchPinnedThreadSummaryEntry({
     ...pinnedThread, lifecycle: { kind: "completed", reason: "userCompleted", settled: true },
   }), null);
+});
+
+test("accepted history counts only commits the live arc does not show, and its revision moves with every ref change", () => {
+  const sha = (digit: number) => String(digit).repeat(40);
+  const refs = [
+    { commitSha: sha(1), historyIndex: 0, rootId: "root" },
+    { commitSha: sha(2), historyIndex: 1, rootId: "root", committedAt: "2026-10-01T00:00:00.000Z" },
+  ];
+  const live = [
+    { proposalId: "p2", rootId: "root", status: "committed" as const,
+      summary: { changes: null, committedSha: sha(2), description: "", mode: "commit" as const, title: "two" } },
+    { proposalId: "p3", rootId: "root", status: "proposed" as const },
+  ];
+  const history = getWorkbenchThreadGitCommitHistory(refs, live);
+  assert.equal(history.count, 1);
+  const revisions = new Set([
+    history.revision,
+    getWorkbenchThreadGitCommitHistory([...refs, { commitSha: sha(3), historyIndex: 2, rootId: "root" }], live).revision,
+    // An accepted amend drops the commit it replaced and records its successor later in the history.
+    getWorkbenchThreadGitCommitHistory([refs[1]!, { commitSha: sha(4), historyIndex: 2, rootId: "root" }], live).revision,
+    getWorkbenchThreadGitCommitHistory([{ ...refs[0]!, committedAt: "2026-10-02T00:00:00.000Z" }, refs[1]!], live).revision,
+  ]);
+  assert.equal(revisions.size, 4);
+  assert.equal(getWorkbenchThreadGitCommitHistory(refs, live).revision, history.revision);
 });

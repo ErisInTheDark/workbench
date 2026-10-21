@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchDatabaseWorkerContext: what a registered request's worker body reads: the connection, long-lived repositories, inventory and diagnostics.
- * - WorkbenchDatabaseRequestDefinition/defineDatabaseRequest: one database request: its worker body, read class, thread-state ordering and
- *   local short-circuit.
+ * - WorkbenchDatabaseRequestDefinition/defineDatabaseRequest: one database request: its worker body, read class, thread-state ordering,
+ *   local short-circuit and slow-call description.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchDatabaseDiagnosticEvent } from "workbench-shared/database/workbench-database-diagnostic";
@@ -46,6 +46,8 @@ export interface WorkbenchDatabaseRequestDefinition<Args extends unknown[], Resu
   readonly ordering?: "threadStateRead" | "threadStateWrite";
   /** Answers on the caller's side without a worker round trip, such as for an empty batch; undefined asks the worker. */
   readonly local?: (...args: NoInfer<Args>) => { value: NoInfer<Result> } | undefined;
+  /** What a slow call's warning names about its input, so the log says which work was heavy; bounded, never content. */
+  readonly describe?: (...args: NoInfer<Args>) => string;
   readonly run: (context: WorkbenchDatabaseWorkerContext, ...args: Args) => Result;
 }
 

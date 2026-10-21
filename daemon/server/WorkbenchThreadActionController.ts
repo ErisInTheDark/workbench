@@ -63,7 +63,7 @@ export interface WorkbenchThreadActionOwners {
   profiles: Pick<WorkbenchThreadStateFeature, "captureCreationProfile" | "captureCreationProfileForProject">;
   state: Pick<
     WorkbenchThreadStateController,
-    "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires" | "readGitCommitDetails"
+    "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires" | "readGitCommitDetails" | "readGitCommitRefs"
   >;
   skills: Pick<WorkbenchThreadSkillsController, "read" | "deactivate">;
   goals: Pick<WorkbenchThreadGoalController, "set" | "clear">;
@@ -166,6 +166,9 @@ export default class WorkbenchThreadActionController {
     },
     "thread/git-commits/read": async input => ({
       data: await this.owners.state.readGitCommitDetails(WorkbenchThreadIdSchema.parse(input.threadId), input.commits),
+    }),
+    "thread/git-commit-refs/read": async input => ({
+      data: await this.owners.state.readGitCommitRefs(WorkbenchThreadIdSchema.parse(input.threadId)),
     }),
     "thread/create": input => this.create(input),
     "thread/message/submit": input => this.message(input),

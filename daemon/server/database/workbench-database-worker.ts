@@ -206,7 +206,9 @@ function handleInitializedRequest(request: Extract<WorkbenchDatabaseRequest, { t
   if (request.type === "call") {
     const definition = getWorkbenchDatabaseRequest(request.name);
     if (!definition) throw new Error(`Unknown database request ${String(request.name).slice(0, 120)}.`);
-    post({ id: request.id, type: "result", result: definition.run(context, ...request.args) });
+    const startedAt = performance.now();
+    const result = definition.run(context, ...request.args);
+    post({ id: request.id, type: "result", result, runMs: performance.now() - startedAt });
     return;
   }
   const closeFailure = closeDatabase();

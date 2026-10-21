@@ -6,7 +6,7 @@
  * - WorkbenchThreadGitArcSnapshot: project Git arc projection.
  * - WorkbenchThreadClaimContext: thread-owned claim context.
  * - WorkbenchObservedLifecycleEvent: identity-owned provider lifecycle input.
- * - default WorkbenchThreadStateController: coordinate admission, provider observation, cross-project operations, publication, owned project stores, and on-demand accepted-commit details.
+ * - default WorkbenchThreadStateController: coordinate admission, provider observation, cross-project operations, publication, owned project stores, and on-demand accepted-commit refs and details.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { createHash } from "node:crypto";
@@ -60,6 +60,7 @@ import {
   withWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
   workbenchThreadGitCommitKey,
+  getWorkbenchThreadGitCommitHistory,
   type WorkbenchLifecycleEvent,
   type WorkbenchComposerProfileSelectionState,
   type WorkbenchDurableQuestionnaire,
@@ -70,6 +71,7 @@ import {
   type WorkbenchGitArcLifecycleState,
   type WorkbenchGitArcPlanState,
   type WorkbenchThreadGitCommit,
+  type WorkbenchThreadGitCommitRef,
   type WorkbenchHarnessId,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarSnapshot,
@@ -392,6 +394,7 @@ export default class WorkbenchThreadStateController {
       readNavigationSummary: projectId => this.readPersistence(() => persistence.readNavigationSummary(projectId)),
       readTitleHistories: projectId => this.readPersistence(() => persistence.readTitleHistories(projectId)),
       readGitCommits: threadIds => this.readPersistence(() => persistence.readGitCommits(threadIds)),
+      readGitCommitRefs: threadIds => this.readPersistence(() => persistence.readGitCommitRefs(threadIds)),
       recordGitCommitTimes: (threadId, times) => this.writePersistence(() => persistence.recordGitCommitTimes(threadId, times)),
       writeProject: (projectId, document, histories) => this.writePersistence(() => persistence.writeProject(projectId, document, histories)),
     };
@@ -1464,20 +1467,26 @@ export default class WorkbenchThreadStateController {
   }
 
   /**
-   * Durable commit history lives only in SQL: an observed thread family reads its own here, and nothing else holds it.
-   * Commits stored before times were recorded are handed to the backfill, which never delays this read.
+   * Durable commit history lives only in SQL: an observed thread family counts its own here, and nothing else holds it.
+   * Entries carry the count and a revision; `readGitCommitRefs` and `readGitCommitDetails` serve views that open the
+   * history. Commits stored before times were recorded are handed to the backfill, which never delays this read.
    */
   private async withGitCommits(projectId: ProjectId, state: ProjectState, entries: readonly WorkbenchThreadSidebarEntry[]) {
     const threadIds = entries.flatMap(entry => entry.entryKind === "draft" ? [] : [entry.identity.threadId]);
-    const history = new Map((await this.options.threadStateStore.readGitCommits(threadIds)).map(({ commits, threadId }) => [threadId, commits]));
+    const history = new Map((await this.options.threadStateStore.readGitCommitRefs(threadIds)).map(({ commits, threadId }) => [threadId, commits]));
     if (!history.size) return [...entries];
     for (const [threadId, commits] of history) this.backfillGitCommitTimes(projectId, state, threadId, commits);
-    // Entries carry refs to count and group commits; `readGitCommitDetails` serves the rest when a group opens.
     return entries.map(entry => {
-      const commits = entry.entryKind === "draft" ? undefined : history.get(entry.identity.threadId);
-      return commits ? { ...entry, gitCommits: commits.map(({ committedAt, commitSha, historyIndex, rootId }) =>
-        ({ ...(committedAt ? { committedAt } : {}), commitSha, historyIndex, rootId })) } : entry;
+      if (entry.entryKind === "draft") return entry;
+      const refs = history.get(entry.identity.threadId);
+      return refs ? { ...entry, gitCommitHistory: getWorkbenchThreadGitCommitHistory(refs, entry.gitArc?.proposals ?? []) } : entry;
     });
+  }
+
+  /** One thread's recorded accepted-commit refs in history order, for a view grouping its whole history. */
+  async readGitCommitRefs(threadId: WorkbenchThreadId) {
+    const [history] = await this.options.threadStateStore.readGitCommitRefs([threadId]);
+    return history?.commits ?? [];
   }
 
   /** Full commits for the requested keys of one thread's accepted history; unknown keys are left out. */
@@ -1491,7 +1500,7 @@ export default class WorkbenchThreadStateController {
    * Learns times for one observed thread's untimed commits from Git, attempted once per process, through one serial
    * chain in bounded chunks; commits Git cannot find stay untimed.
    */
-  private backfillGitCommitTimes(projectId: ProjectId, state: ProjectState, threadId: WorkbenchThreadId, commits: readonly WorkbenchThreadGitCommit[]) {
+  private backfillGitCommitTimes(projectId: ProjectId, state: ProjectState, threadId: WorkbenchThreadId, commits: readonly WorkbenchThreadGitCommitRef[]) {
     const read = this.options.readGitCommitTimes;
     const untimed = commits.filter(commit => !commit.committedAt);
     if (!read || !untimed.length || this.gitCommitTimeAttempts.has(threadId)) return;

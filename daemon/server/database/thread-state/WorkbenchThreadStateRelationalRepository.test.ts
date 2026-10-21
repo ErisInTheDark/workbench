@@ -419,7 +419,10 @@ test("permanent commit history is promoted on write but only read per thread, ne
       rootId: "root", sourceProposalId: "proposal", title: "landed",
     }];
     assert.deepEqual(repository.readGitCommits([threadId!]), [{ commits: history, threadId }]);
-    assert.ok(repository.readProject(testProjectIds.project).records.every((stored) => stored.gitCommits === undefined));
+    assert.deepEqual(repository.readGitCommitRefs([threadId!]), [{
+      commits: [{ committedAt: "2026-10-16T00:00:00.000Z", commitSha: "b".repeat(40), historyIndex: 0, rootId: "root" }], threadId,
+    }]);
+    assert.ok(repository.readProject(testProjectIds.project).records.every((stored) => !("gitCommitHistory" in stored)));
 
     // An unchanged arc never touches permanent history on later writes.
     database.exec(`

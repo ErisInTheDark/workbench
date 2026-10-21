@@ -115,28 +115,6 @@ test("a draft edit ships that draft's changed fields, not the whole presentation
   assert.deepEqual(applyObservationDelta(before, delta, shape), after);
 });
 
-test("a newly accepted commit ships its one ref at both hops, not the thread's whole history", () => {
-  const commits = (count: number) => Array.from({ length: count }, (_, index) => ({
-    commitSha: String(index).repeat(40).slice(0, 40), historyIndex: index, rootId: "root",
-  }));
-  const data = (count: number) => ({
-    entries: [entry(1, { gitCommits: commits(count) })], error: null, freshness: "fresh", projectId: "project",
-    revision: 1, subscriptionId, target: { kind: "provider", threadId }, updateKind: "threadObservation", version: 2,
-  });
-  const envelope = { kind: "thread", subscriptionId, generation: 1, revision: 1, phase: "current", failure: null, runtime: {} };
-  for (const [observation, shape] of [
-    [(count: number) => DaemonWorkspaceObservationSchema.parse({ ...envelope, data: data(count) }), daemonObservationShape("thread")],
-    [(count: number) => WorkspaceObservationSchema.parse({ ...envelope, data: data(count),
-      owner: { phase: "pending", failure: null } }), workspaceObservationShape("thread")],
-  ] as const) {
-    const delta = diffObservationValue(observation(2), observation(3), shape)!;
-    assert.deepEqual(delta.objects?.data?.collections?.entries?.update?.[0]?.delta, {
-      collections: { gitCommits: { add: [{ key: `root\0${commits(3)[2]!.commitSha}`, item: commits(3)[2]! }] } },
-    });
-    assert.deepEqual(applyObservationDelta(observation(2), delta, shape), observation(3));
-  }
-});
-
 test("each resolved startup project drops one pending id instead of resending the pending list", () => {
   const placement = (resolved: number) => {
     const ids = ["p1", "p2", "p3"];

@@ -31,7 +31,9 @@
  * - WorkbenchComposerProfileSlotSchema: strict target slot contract.
  * - WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema and state types: re-export composer profile contracts.
  * - WorkbenchComposerProfileSlotInputSchema: unresolved thread references accepted at profile RPC ingress.
- * - WorkbenchThreadGitCommitRefSchema/workbenchThreadGitCommitKey: the per-commit facts a thread entry carries, and their stable key.
+ * - WorkbenchThreadGitCommitRefSchema/workbenchThreadGitCommitKey: the per-commit facts that count and group accepted history, and their stable key.
+ * - WorkbenchThreadGitCommitHistorySchema/getWorkbenchThreadGitCommitHistory: an entry's accepted-commit count and refs revision.
+ * - getWorkbenchLiveCommittedGitCommitKeys: commits a live arc still shows as its own committed proposals.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchThreadGitCommitSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema: current project and grouped sidebar facts.
  * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order.
@@ -323,6 +325,37 @@ export const WorkbenchThreadGitCommitRefSchema = WorkbenchThreadGitCommitSchema.
 export type WorkbenchThreadGitCommitRef = z.infer<typeof WorkbenchThreadGitCommitRefSchema>;
 export const workbenchThreadGitCommitKey = (commit: Pick<WorkbenchThreadGitCommitRef, "commitSha" | "rootId">) =>
   `${commit.rootId}\0${commit.commitSha}`;
+/** Keys of accepted commits a live arc still shows as its own committed proposals; accepted history leaves them out. */
+export function getWorkbenchLiveCommittedGitCommitKeys(proposals: readonly WorkbenchGitArcProposalState[]): ReadonlySet<string> {
+  return new Set(proposals.flatMap(({ rootId, status, summary }) => (
+    status === "committed" && rootId && summary?.committedSha ? [workbenchThreadGitCommitKey({ rootId, commitSha: summary.committedSha })] : []
+  )));
+}
+/** What a thread's entry says about its accepted commits; the refs themselves load on demand. */
+export const WorkbenchThreadGitCommitHistorySchema = z.object({
+  /** Recorded commits the entry's live arc does not already show as committed proposals. */
+  count: z.number().int().nonnegative(),
+  /** Changes whenever the recorded refs do (a new or replacing commit, a learned time), so views know to re-read them. */
+  revision: z.string().min(1),
+}).strict();
+export type WorkbenchThreadGitCommitHistory = z.infer<typeof WorkbenchThreadGitCommitHistorySchema>;
+/** Recorded refs change only by growing, by an amend replacing one with a later index, or by learning a time. */
+export function getWorkbenchThreadGitCommitHistory(
+  refs: readonly WorkbenchThreadGitCommitRef[],
+  liveProposals: readonly WorkbenchGitArcProposalState[],
+): WorkbenchThreadGitCommitHistory {
+  const live = getWorkbenchLiveCommittedGitCommitKeys(liveProposals);
+  let latestIndex = -1;
+  let timed = 0;
+  for (const ref of refs) {
+    latestIndex = Math.max(latestIndex, ref.historyIndex);
+    if (ref.committedAt) timed += 1;
+  }
+  return {
+    count: refs.filter(ref => !live.has(workbenchThreadGitCommitKey(ref))).length,
+    revision: `${refs.length}.${latestIndex}.${timed}`,
+  };
+}
 
 /** Own sealed stack layers, bottom first; proposals listed here render inside their layer. Absent means none. */
 const WorkbenchGitArcStackLayersSchema = z.array(z.object({
@@ -594,7 +627,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   entryKind: z.literal("thread"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
-  gitCommits: z.array(WorkbenchThreadGitCommitRefSchema).optional(),
+  gitCommitHistory: WorkbenchThreadGitCommitHistorySchema.optional(),
   identity: ThreadIdentitySchema,
   /** The app draft launch that created this thread, while the daemon remembers it; that draft lists in its place until accepted. */
   launchId: CanonicalUuidSchema.optional(),
@@ -615,7 +648,7 @@ const SubagentEntryBaseSchema = SidebarCommonSchema.extend({
   entryKind: z.literal("subagent"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
-  gitCommits: z.array(WorkbenchThreadGitCommitRefSchema).optional(),
+  gitCommitHistory: WorkbenchThreadGitCommitHistorySchema.optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   name: z.string().trim().min(1),
