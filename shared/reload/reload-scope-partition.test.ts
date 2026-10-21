@@ -33,8 +33,13 @@ test("host and app process replacement subsume only their own graph", () => {
   });
 });
 
-test("a dependency install replaces every process, so it subsumes all other scopes", () => {
-  assert.deepEqual(partitionReloadScopes(["server:core", "host:process", "client:http", "client:install"]), {
+test("an app-only dependency install subsumes app scopes but leaves host and daemon reloads routed", () => {
+  const scopes = ["server:core", "host:process", "client:http", "client:process", "client:install"];
+  assert.deepEqual(partitionReloadScopes(scopes), {
+    client: ["host:process", "client:install"],
+    server: ["server:core"],
+  });
+  assert.deepEqual(partitionReloadScopes(scopes, { installRestartsHost: true }), {
     client: ["client:install"],
     server: [],
   });

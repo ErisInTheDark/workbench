@@ -22,6 +22,8 @@ export interface WorkbenchAppReloadOrchestratorPorts {
   readControlDaemon(): { dirt: WorkbenchReloadDirtSnapshot | null; update: InstallationUpdate | null };
   pullDaemon(daemonId?: DaemonId, signal?: AbortSignal): Promise<InstallationPullResult>;
   prepareInstallationRuntime(signal?: AbortSignal): Promise<void>;
+  /** Whether installing must stop the host and daemon because their dependencies changed. */
+  installRestartsHost(): Promise<boolean>;
   refreshAppDirt(signal?: AbortSignal): Promise<void>;
   reloadDaemon(scopes: string[], daemonId?: DaemonId, signal?: AbortSignal): Promise<void>;
   reloadHost(scopes: string[], signal?: AbortSignal): Promise<void>;
@@ -131,7 +133,10 @@ export default class WorkbenchAppReloadOrchestrator {
     const app = this.ports.readAppDirt();
     const scopes = [...app.dirtyScopes, ...daemon?.dirtyScopes ?? []].map(item => item.scope);
     if (pulled?.lockfileChanged) scopes.push("client:install");
-    const partition = partitionReloadScopes(scopes);
+    const partition = partitionReloadScopes(scopes, {
+      installRestartsHost: scopes.includes("client:install") && await this.ports.installRestartsHost(),
+    });
+    signal?.throwIfAborted();
     if (partition.server.length) await this.ports.reloadDaemon(partition.server, daemonId, signal);
     const host = partition.client.filter(scope => scope.startsWith("host:"));
     if (host.length) await this.ports.reloadHost(host, signal);

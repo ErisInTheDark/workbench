@@ -5,6 +5,7 @@
  * - default WorkbenchAppReloadDirtController: preserve app dirt state and snapshot identity.
  */
 import ReloadDirtController, {
+  type ReloadDependencySource,
   type ReloadDirtControllerState,
   type ReloadDirtSourceState,
 } from "workbench-shared/reload/ReloadDirtController";
@@ -14,6 +15,7 @@ const APP_RELOAD_SNAPSHOT_REF = "refs/worktree/workbench/app-reload-snapshot";
 export type WorkbenchAppReloadDirtControllerState = ReloadDirtControllerState;
 
 export interface WorkbenchAppReloadDirtControllerOptions {
+  dependencySources?: readonly ReloadDependencySource[];
   getSourceState(): ReloadDirtSourceState;
   onChange?(): void;
   repositoryRootPath: string;
@@ -36,6 +38,7 @@ export default class WorkbenchAppReloadDirtController extends ReloadDirtControll
     state?: WorkbenchAppReloadDirtControllerState | object,
   ) {
     super({
+      dependencySources: options.dependencySources,
       getSourceState: options.getSourceState,
       onChange: options.onChange,
       repoRoot: options.repositoryRootPath,

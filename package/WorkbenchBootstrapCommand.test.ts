@@ -78,6 +78,24 @@ test("setup preserves process failures and does not run cancelled commands", asy
     error.code === "ENOENT" && /workbench-nonexistent-command-for-test.*PATH/i.test(error.message));
 });
 
+// Windows tree cancellation uses taskkill, which the Workbench agent sandbox denies.
+test("cancelling a running command stops its grandchildren too", {
+  timeout: 30_000,
+  skip: process.platform === "win32" && Boolean(process.env.WORKBENCH_THREAD_ID) && "taskkill is unavailable inside the agent sandbox",
+}, async () => {
+  const controller = new AbortController();
+  const command = new WorkbenchBootstrapCommand({ output: new PassThrough(), errorOutput: new PassThrough() });
+  // The grandchild shares the child's stdout, so the run only settles once the grandchild has exited.
+  const grandchild = "setInterval(() => {}, 1000)";
+  const child = `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "inherit" });`
+    + "process.stdout.write('ready\\n'); setInterval(() => {}, 1000);";
+  const run = command.run(process.execPath, ["-e", child], {
+    signal: controller.signal,
+    onOutput: text => { if (text.includes("ready")) controller.abort(); },
+  });
+  await assert.rejects(run, { name: "AbortError" });
+});
+
 test("child overrides remove inherited variables without changing the runner environment", async () => {
   const environment = { ...process.env, WORKBENCH_TEST_REMOVE: "parent", WORKBENCH_TEST_OVERRIDE: "parent" };
   const output = new PassThrough();

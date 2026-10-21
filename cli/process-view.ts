@@ -1,12 +1,14 @@
 /*
  * No exports. Attach a local terminal to the local Workbench stack: always tail combined logs and offer lifecycle keybinds.
+ * Runs natively without tsx, so it works while a dependency repair has node_modules in flux; full controls load once
+ * dependencies are whole.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import resolveWorkbenchDataRoot from "../shared/workbench-data-root.ts";
 import WorkbenchProcessView from "./WorkbenchProcessView.ts";
-import createWorkbenchProcessViewControls from "./WorkbenchProcessViewControls.ts";
+import createWorkbenchRepairViewControls from "./WorkbenchRepairViewControls.ts";
 
 const warn = (text: string) => process.stderr.write(`${text}\n`);
 const write = async (text: string) => {
@@ -14,9 +16,9 @@ const write = async (text: string) => {
 };
 
 function logPrefixes(target: string) {
-  if (target === "app") return ["workbench-app"] as const;
+  if (target === "app") return ["workbench-app", "workbench-update"] as const;
   if (target === "daemon") return ["workbench-host"] as const;
-  return ["workbench-app", "workbench-host"] as const;
+  return ["workbench-app", "workbench-host", "workbench-update"] as const;
 }
 
 async function main() {
@@ -26,23 +28,32 @@ async function main() {
   const [target = "all", ...rest] = process.argv.slice(2);
   if ((target !== "daemon" && target !== "app" && target !== "all") || rest.length) throw new Error("Usage: wb view [daemon|app]");
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const dataRoot = resolveWorkbenchDataRoot();
+  const repair = await createWorkbenchRepairViewControls({ dataRoot, repositoryRoot });
   const view = new WorkbenchProcessView({
     input: process.stdin,
     write,
     warn,
     logDirectory: path.join(repositoryRoot, ".workbench", "logs"),
     prefixes: logPrefixes(target),
-    openControls: warnMessage => createWorkbenchProcessViewControls({
-      dataRoot: resolveWorkbenchDataRoot(),
-      repositoryRoot,
-      warn: warnMessage,
-    }),
+    repair,
+    openControls: async (warnMessage, signal) => {
+      await repair.whenIdle(signal);
+      // Process controls reach into app and host code that needs tsx and installed dependencies.
+      const { register } = await import("tsx/esm/api");
+      register();
+      const { default: createWorkbenchProcessViewControls } = await import("./WorkbenchProcessViewControls.ts");
+      return await createWorkbenchProcessViewControls({ dataRoot, repositoryRoot, warn: warnMessage });
+    },
   });
   const detach = () => view.detach();
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const signal of signals) process.on(signal, detach);
   try { await view.run(); }
-  finally { for (const signal of signals) process.off(signal, detach); }
+  finally {
+    for (const signal of signals) process.off(signal, detach);
+    repair.close();
+  }
 }
 
 void main().catch(error => { warn(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });

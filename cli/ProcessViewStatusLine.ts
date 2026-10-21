@@ -21,8 +21,12 @@ function visibleLength(text: string) {
 export default class ProcessViewStatusLine {
   private installed = false;
   private text = "";
+  // Plain fields, not parameter properties: Node loads this file natively while dependencies are being repaired.
+  private readonly output: ProcessViewStatusLineOutput;
 
-  constructor(private readonly output: ProcessViewStatusLineOutput) {}
+  constructor(output: ProcessViewStatusLineOutput) {
+    this.output = output;
+  }
 
   get enabled() {
     const { isTTY, rows } = this.output;

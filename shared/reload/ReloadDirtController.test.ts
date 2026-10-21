@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect transferred pending state, stale-refresh cancellation, completed-scope cleanup, watcher coalescing, Git-backed partial baselines, deletion, and external dirt.
+ * No production exports. Tests protect transferred pending state, stale-refresh cancellation, completed-scope cleanup, watcher coalescing, Git-backed partial baselines, deletion, and dependency dirt.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 import ReloadDirtController, {
+  type ReloadDirtControllerOptions,
   type ReloadDirtControllerState,
   type ReloadDirtSourceDescriptor,
   type ReloadDirtSourceState,
@@ -89,6 +90,19 @@ function transferredState(pendingScopes: string[] = []): ReloadDirtControllerSta
     snapshotCommit: "base-snapshot",
     tail: Promise.resolve(),
   };
+}
+
+/** Wanted and installed pnpm lockfiles where `app` and `daemon` each depend on one package. */
+async function writeLockfiles(root: string, versions: Record<"wanted" | "installed", { app: string }>) {
+  const lockfile = ({ app }: { app: string }) => [
+    "lockfileVersion: '9.0'", "", "importers:", "",
+    "  app:", "    dependencies:", "      left:", `        specifier: ${app}`, `        version: ${app}`, "",
+    "  daemon:", "    dependencies:", "      right:", "        specifier: 1.0.0", "        version: 1.0.0", "",
+    "snapshots:", "", `  left@${app}: {}`, "", "  right@1.0.0: {}", "",
+  ].join("\n");
+  await fs.mkdir(path.join(root, "node_modules", ".pnpm"), { recursive: true });
+  await fs.writeFile(path.join(root, "pnpm-lock.yaml"), lockfile(versions.wanted));
+  await fs.writeFile(path.join(root, "node_modules", ".pnpm", "lock.yaml"), lockfile(versions.installed));
 }
 
 test("internal repository churn cannot wake source watchers through recursive overflow", async (context) => {
@@ -254,11 +268,9 @@ test("completed reloads drop applied Git dirt before a failed reconciliation", a
     scope: "client:external",
   };
   const descriptors = [descriptor, other, external];
-  const marker = ".workbench/reset";
-  await fs.mkdir(path.dirname(path.join(temporary.path, marker)), { recursive: true });
-  await fs.writeFile(path.join(temporary.path, marker), "reset\n");
+  await writeLockfiles(temporary.path, { wanted: { app: "2.0.0" }, installed: { app: "1.0.0" } });
   const controller = new ReloadDirtController({
-    externalDirtSources: [{ path: marker, scope: external.scope }],
+    dependencySources: [{ kind: "install", scope: external.scope }],
     getSourceState: () => ({ dependantClosure: scopes => [...scopes], descriptors }),
     repoRoot: temporary.path,
     repository,
@@ -399,30 +411,52 @@ test("Git reload content shares one repository across source graphs", async (con
   await context.test("Git content truth preserves unapplied owners and detects deletion plus recreation", child => checkContentTruth(child, target));
 });
 
-test("external dirt remains until its owner reloads after the marker is removed", async (context) => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-external-reload-dirt-");
-  const repoRoot = temporary.path;
-  const repository = new ControlledRepository();
-  const marker = ".workbench/reset";
+async function dependencyController(context: test.TestContext, sources: ReloadDirtControllerOptions["dependencySources"]) {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-dependency-reload-dirt-");
+  const app = { ...descriptor, scope: "client:app", paths: [] };
+  const daemon = { ...descriptor, scope: "client:daemon", paths: [] };
+  const install = { ...descriptor, scope: "client:install", paths: [] };
   const controller = new ReloadDirtController({
-    externalDirtSources: [{ path: marker, scope: "client:core" }],
-    getSourceState: sourceState,
-    repoRoot,
-    repository,
-    snapshotRef: "refs/worktree/workbench/external-test-reload-snapshot",
+    dependencySources: sources,
+    getSourceState: () => sourceState([app, daemon, install]),
+    repoRoot: temporary.path,
+    repository: new ControlledRepository(),
+    snapshotRef: "refs/worktree/workbench/dependency-test-reload-snapshot",
     watchSource: (() => ({ close: () => {}, on: () => {} })) as never,
-  }, transferredState());
+  });
   context.after(async () => {
     await controller.dispose();
     await temporary.dispose();
   });
+  return { controller, root: temporary.path };
+}
+
+const dirtyScopes = async (controller: ReloadDirtController) =>
+  (await controller.refresh()).dirtyScopes.map(({ scope }) => scope);
+
+test("install dirt clears as soon as installed dependencies catch up, without a reload", async (context) => {
+  const { controller, root } = await dependencyController(context, [{ kind: "install", scope: "client:install" }]);
+  await writeLockfiles(root, { wanted: { app: "1.0.0" }, installed: { app: "1.0.0" } });
   await controller.start();
-  await fs.mkdir(path.dirname(path.join(repoRoot, marker)), { recursive: true });
-  await fs.writeFile(path.join(repoRoot, marker), "reset\n", "utf8");
-  assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["client:core"]);
-  await controller.completeReload(["client:core"]);
-  assert.deepEqual(controller.getSnapshot().dirtyScopes.map(({ scope }) => scope), ["client:core"]);
-  await fs.rm(path.join(repoRoot, marker));
-  await controller.completeReload(["client:core"]);
-  assert.deepEqual(controller.getSnapshot().dirtyScopes, []);
+  assert.deepEqual(await dirtyScopes(controller), []);
+  await writeLockfiles(root, { wanted: { app: "2.0.0" }, installed: { app: "1.0.0" } });
+  assert.deepEqual(await dirtyScopes(controller), ["client:install"]);
+  // A manual install rewrites node_modules/.pnpm/lock.yaml; no reload of any scope happens.
+  await writeLockfiles(root, { wanted: { app: "2.0.0" }, installed: { app: "2.0.0" } });
+  assert.deepEqual(await dirtyScopes(controller), []);
+});
+
+test("an installed dependency change dirties only processes whose importers load it", async (context) => {
+  const { controller, root } = await dependencyController(context, [
+    { kind: "loaded", scope: "client:app", importers: ["app"] },
+    { kind: "loaded", scope: "client:daemon", importers: ["daemon"] },
+  ]);
+  await writeLockfiles(root, { wanted: { app: "1.0.0" }, installed: { app: "1.0.0" } });
+  await controller.start();
+  assert.deepEqual(await dirtyScopes(controller), []);
+  await writeLockfiles(root, { wanted: { app: "2.0.0" }, installed: { app: "2.0.0" } });
+  assert.deepEqual(await dirtyScopes(controller), ["client:app"]);
+  // Only a process restart, which starts from fresh state, adopts the new installed closure.
+  await controller.completeReload(["client:app"]);
+  assert.deepEqual(controller.getSnapshot().dirtyScopes.map(({ scope }) => scope), ["client:app"]);
 });

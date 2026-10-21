@@ -70,16 +70,20 @@ const MIN_RELEASE_GAP_MS = 80;
  * repeat gap ends it. Releasing at full progress fires, earlier cancels, and Escape cancels even at full progress.
  */
 export class TerminalKeyHold {
+  // Plain fields, not parameter properties: `wb view` loads this file natively while dependencies are being repaired.
+  readonly key: string;
+  readonly durationMs: number;
+  readonly startedAt: number;
+  private readonly releases: boolean;
   private lastInputAt: number;
   private interval: number | null = null;
   private releasedAt: number | null = null;
 
-  constructor(
-    readonly key: string,
-    readonly durationMs: number,
-    readonly startedAt: number,
-    private readonly releases: boolean,
-  ) {
+  constructor(key: string, durationMs: number, startedAt: number, releases: boolean) {
+    this.key = key;
+    this.durationMs = durationMs;
+    this.startedAt = startedAt;
+    this.releases = releases;
     this.lastInputAt = startedAt;
   }
 

@@ -1,5 +1,5 @@
 /*
- * No exports. Repair tests protect durable phase recovery and the dependency recovery ladder.
+ * No exports. Repair tests protect durable phase recovery, the dependency recovery ladder, host scoping and cancellation.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import {
   prepareInstallationRuntime,
   preparePulledInstallationRuntime,
+  readRepairActivity,
+  requestRepairCancel,
   runRepair as repair,
   type RepairOptions,
 } from "./update-repair.mjs";
@@ -49,8 +51,9 @@ function fixture(phase: InstallationRepairJournal["phase"] = "pending", failures
       events.push(`phase:${next.phase}`);
     },
     log: async (line: string) => { events.push(`log:${line}`); },
-    stop: async () => { events.push("stop"); },
+    stop: async ({ host }: { host: boolean }) => { events.push(host ? "stop" : "stop app"); },
     clean: async () => { events.push("clean"); },
+    daemonDependencyDrift: async () => true,
     commands: { run: async (command: string, args: string[]) => {
       events.push(`${command} ${args.join(" ")}`);
       const failure = failures.shift();
@@ -101,6 +104,98 @@ test("locked install retries once only after a second stop confirmation", async 
     "stop", "vp install", "stop", "vp install",
   ]);
   assert.equal(f.journal().failure, null);
+});
+
+test("app-only dependency changes install without stopping the host, but escalations stop everything", async () => {
+  const f = fixture("pending", ["install failed", ""]);
+  f.options.daemonDependencyDrift = async () => false;
+  assert.equal((await runRepair(f.options))?.phase, "done");
+  assert.deepEqual(f.events.filter(e => /^(stop|clean|vp |git )/u.test(e)), [
+    "stop app", "vp install", "stop", `git reset --keep ${fromSha}`, "vp install",
+  ]);
+});
+
+/** Commands whose first install fails with the given output; later installs succeed. */
+function failingOnce(f: ReturnType<typeof fixture>, output: string) {
+  let installs = 0;
+  return { run: async (command: string, args: string[], config?: { onOutput?: (text: string) => void }) => {
+    f.events.push(`${command} ${args.join(" ")}`);
+    if (command === "vp" && installs++ === 0) {
+      config?.onOutput?.(output);
+      throw new Error("vp failed with status 1.");
+    }
+  } };
+}
+
+test("an unreachable registry keeps the repair on its rung without rollback or cleanup", async () => {
+  const f = fixture("pending", [], false);
+  f.options.commands = failingOnce(f, "[WARN] GET https://registry.npmjs.org/zod error (ENETUNREACH).\nERR_PNPM_META_FETCH_FAIL\n");
+  const result = await runRepair(f.options);
+  assert.equal(result?.phase, "installing");
+  assert.match(result?.lastError ?? "", /network/u);
+  assert.deepEqual(f.events.filter(e => /^(clean|git )/u.test(e)), []);
+  assert.equal((await runRepair(f.options))?.phase, "done");
+  assert.deepEqual(f.events.filter(e => /^(clean|vp |git )/u.test(e)), ["vp install", "vp install"]);
+});
+
+test("network warnings that recovered before a real failure still escalate", async () => {
+  const f = fixture("pending", [], false);
+  f.options.commands = failingOnce(f, `[WARN] GET https://registry.npmjs.org/zod error (ENETUNREACH).\n${"progress\n".repeat(600)}ERR_PNPM_PATCH_FAILED\n`);
+  assert.equal((await runRepair(f.options))?.phase, "done");
+  assert.deepEqual(f.events.filter(e => /^(clean|vp )/u.test(e)), ["vp install", "clean", "vp install"]);
+});
+
+test("a cancelled install keeps its rung and records the cancellation", async () => {
+  const f = fixture("pending", [], false);
+  const controller = new AbortController();
+  f.options.commands = { run: async (command: string, args: string[]) => {
+    f.events.push(`${command} ${args.join(" ")}`);
+    controller.abort();
+    throw Object.assign(new Error("vp was cancelled."), { name: "AbortError" });
+  } };
+  const result = await runRepair({ ...f.options, signal: controller.signal });
+  assert.equal(result?.phase, "installing");
+  assert.equal(result?.lastError, "Cancelled.");
+  assert.deepEqual(f.events.filter(e => /^(clean|vp |git )/u.test(e)), ["vp install"]);
+});
+
+test("only a cancel request for the live owner's token cancels its repair", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-repair-cancel-");
+  context.after(() => temporary.dispose());
+  const dataRoot = path.join(temporary.path, "data");
+  const f = fixture();
+  await writeJournal({ ...f.journal(), logPath: path.join(temporary.path, ".workbench", "logs", "update.log") }, dataRoot);
+  const installing = Promise.withResolvers<void>();
+  let polls = 0;
+  let settled = false;
+  const repairing = runRepair({
+    root: temporary.path, dataRoot,
+    alive: (pid: number) => pid === process.pid,
+    log: () => {}, stop: async () => {}, clean: async () => {}, daemonDependencyDrift: async () => true,
+    sleep: async () => { polls++; await new Promise(setImmediate); },
+    commands: { run: async (_command, _args, config) => {
+      installing.resolve();
+      await new Promise((_resolve, reject) => {
+        config.signal!.addEventListener("abort", () => reject(config.signal!.reason), { once: true });
+      });
+    } },
+  }).finally(() => { settled = true; });
+  await installing.promise;
+  const activity = await readRepairActivity(dataRoot, { alive: pid => pid === process.pid });
+  assert.equal(activity.owner?.pid, process.pid);
+  assert.equal(activity.journal?.phase, "installing");
+
+  await requestRepairCancel(dataRoot, `owner-${process.pid}-3a343847-c6cf-4c35-97f0-71873090a8da`);
+  const before = polls;
+  while (polls < before + 3) await new Promise(setImmediate);
+  assert.equal(settled, false);
+
+  await requestRepairCancel(dataRoot, activity.owner!.token);
+  const result = await repairing;
+  assert.equal(result?.phase, "installing");
+  assert.equal(result?.lastError, "Cancelled.");
+  const remaining = await fs.readdir(path.join(dataRoot, "update"));
+  assert.equal(remaining.includes(`cancel-${activity.owner!.token}`), false);
 });
 
 test("failed process stop strands without installing", async () => {
@@ -385,6 +480,7 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
     "scripts/installation/WorkbenchPowerShell.mjs",
     "scripts/installation/powershell-installer.mjs",
     "shared/windows-powershell-runtime.mjs",
+    "shared/pnpm-dependency-state.mjs",
     "package/vite-plus-installer.mjs",
     "package/workbench-data-root.mjs",
   ]) {

@@ -8,7 +8,17 @@ import { StringDecoder } from "node:string_decoder";
 
 type OpenLog = { file: FileHandle; offset: number; decoder: StringDecoder };
 
+interface WorkbenchLogFollowerOptions {
+  directory: string;
+  prefix: string | readonly string[];
+  write(text: string): Promise<void>;
+  failed(error: Error): void;
+  schedule?: (callback: () => Promise<void>) => () => void;
+}
+
 export default class WorkbenchLogFollower {
+  // Plain fields, not parameter properties: `wb view` loads this file natively while dependencies are being repaired.
+  private readonly options: WorkbenchLogFollowerOptions;
   private readonly prefixes: readonly string[];
   private started = false;
   private cancelScheduled: (() => void) | null = null;
@@ -18,13 +28,8 @@ export default class WorkbenchLogFollower {
   private closed = false;
   private initial = true;
 
-  constructor(private readonly options: {
-    directory: string;
-    prefix: string | readonly string[];
-    write(text: string): Promise<void>;
-    failed(error: Error): void;
-    schedule?: (callback: () => Promise<void>) => () => void;
-  }) {
+  constructor(options: WorkbenchLogFollowerOptions) {
+    this.options = options;
     this.prefixes = [...new Set(typeof options.prefix === "string" ? [options.prefix] : options.prefix)];
     if (!this.prefixes.length || this.prefixes.some(prefix => !/^[a-z-]+$/u.test(prefix))) throw new Error("Invalid process log prefix.");
   }

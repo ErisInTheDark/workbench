@@ -1,10 +1,23 @@
 /*
  * Exports:
- * - WorkbenchBootstrapCommand (default): owns bootstrap child commands, Windows executable lookup (including Git Bash), and failures.
+ * - WorkbenchBootstrapCommand (default): owns bootstrap child commands, Windows executable lookup (including Git Bash), process-tree cancellation, and failures.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+
+function stopTree(child) {
+  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
+  if (process.platform === "win32") {
+    // A denied or failed tree kill still stops the direct child.
+    const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    killer.once("error", () => { child.kill(); });
+    killer.once("exit", code => { if (code !== 0) child.kill(); });
+    return;
+  }
+  try { process.kill(-child.pid, "SIGTERM"); }
+  catch (error) { if (error.code !== "ESRCH") child.kill("SIGTERM"); }
+}
 
 export default class WorkbenchBootstrapCommand {
   constructor({ output = process.stdout, errorOutput = process.stderr, environment = process.env } = {}) {
@@ -115,19 +128,28 @@ export default class WorkbenchBootstrapCommand {
     throw new Error(`Workbench needs Git Bash on Windows.${sawLauncher ? " The bash on PATH is WSL's, which cannot run Workbench." : ""} Install Git for Windows, then retry.`);
   }
 
+  /** Cancelling a non-interactive run stops the child's whole process tree; wrappers like vp otherwise orphan their workers. */
   async run(command, args, { cwd, signal, onOutput, environment = {}, output = this.output, errorOutput = this.errorOutput, interactive = false } = {}) {
     signal?.throwIfAborted();
     const [executable, ...prefix] = await this.resolve(command);
     signal?.throwIfAborted();
+    const tree = Boolean(signal) && !interactive;
     return await new Promise((resolve, reject) => {
       const child = spawn(executable, [...prefix, ...args], {
         cwd,
         env: this.environmentFor(environment),
         windowsHide: true,
         stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
-        signal,
+        // A POSIX process group lets one signal reach every descendant.
+        ...(tree ? { detached: process.platform !== "win32" } : { signal }),
       });
       let failure;
+      let cancelled = false;
+      const cancel = () => {
+        cancelled = true;
+        stopTree(child);
+      };
+      if (tree) signal.addEventListener("abort", cancel, { once: true });
       const relay = signal => { child.kill(signal); };
       const interrupt = () => relay("SIGINT");
       const terminate = () => relay("SIGTERM");
@@ -157,7 +179,10 @@ export default class WorkbenchBootstrapCommand {
           process.off("SIGTERM", terminate);
           process.off("SIGHUP", hangup);
         }
-        if (failure?.code === "ENOENT") {
+        if (tree) signal.removeEventListener("abort", cancel);
+        if (cancelled) {
+          reject(Object.assign(new Error(`${command} was cancelled.`, { cause: signal.reason }), { name: "AbortError", code: "ABORT_ERR" }));
+        } else if (failure?.code === "ENOENT") {
           reject(Object.assign(new Error(`Cannot start ${command}: executable not found. Install it and make it available on PATH, then retry.`, { cause: failure }), {
             code: "ENOENT",
           }));

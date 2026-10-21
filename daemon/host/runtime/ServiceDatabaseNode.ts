@@ -5,6 +5,7 @@
 import path from "node:path";
 import ReloadableNode from "../../../shared/reload/ReloadableNode.ts";
 import ReloadDirtController, { type ReloadDirtControllerState } from "../../../shared/reload/ReloadDirtController.ts";
+import { DAEMON_DEPENDENCY_IMPORTERS } from "../../../shared/pnpm-dependency-state.mjs";
 import WorkbenchServiceRepository from "../WorkbenchServiceRepository.ts";
 import WorkbenchNetworkImport from "../WorkbenchNetworkImport.ts";
 import WorkbenchServiceReloadController from "./WorkbenchServiceReloadController.ts";
@@ -29,6 +30,7 @@ export default ReloadableNode.define<ServiceProcessContext, ServiceRuntimeObject
     const dirt = new ReloadDirtController({
       repoRoot: context.root, snapshotRef: "refs/worktree/workbench/host-reload-snapshot",
       getSourceState: build.getSourceState, onChange: context.publish,
+      dependencySources: [{ kind: "loaded", scope: "host:process", importers: DAEMON_DEPENDENCY_IMPORTERS }],
     }, state?.dirt ?? null);
     const reload = new WorkbenchServiceReloadController({ dirt, execute: context.reload, restart: context.restart, warn: context.warn }, state?.reload);
     if (state) state.releaseCandidate = () => database.close();

@@ -189,7 +189,7 @@ export default class WorkbenchAppRuntime {
       processScopes: [{
         descriptor: {
           access: "operator",
-          description: "Restart the Workbench app to replace its stable process shell.",
+          description: "Restart the Workbench app and tray. Host and daemon keep running.",
           destructive: true,
           safeAll: false,
           scope: "client:process",
@@ -209,12 +209,13 @@ export default class WorkbenchAppRuntime {
       }, {
         descriptor: {
           access: "operator",
-          description: "Install changed dependencies and fully restart Workbench.",
+          description: "Install changed dependencies and restart the app. Host and daemon restart only when their dependencies changed.",
           destructive: true,
           safeAll: false,
           scope: "client:install",
         },
-        assets: "pnpm-lock.yaml",
+        // Dirt comes from installed-versus-wanted lockfile drift, declared by AppRuntimeNode.
+        assets: "",
         sources: "assets",
         subsumesAll: true,
       }],

@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default WorkbenchProcessView: own the detachable terminal log view, pinned log-coloured keybind legend, lifecycle controls,
- *   open-in-browser, and hold-to-confirm reload-all and pull keys.
+ *   open-in-browser, hold-to-confirm reload-all and pull keys, and dependency repair cancel/retry.
+ *   Built-ins only and erasable TypeScript: `wb view` loads it natively while dependencies are being repaired.
  */
 import type { ReadStream } from "node:tty";
 import WorkbenchLogFollower from "../shared/process/WorkbenchLogFollower.ts";
@@ -9,6 +10,7 @@ import { logDomainColors, logTimestampColor } from "../shared/process/WorkbenchP
 import type { WorkbenchAppControlRuntime } from "../shared/http/workbench-app-control.ts";
 import ProcessViewStatusLine from "./ProcessViewStatusLine.ts";
 import type { ProcessViewControls, ProcessViewControlsSnapshot } from "./WorkbenchProcessViewControls.ts";
+import type { RepairViewControls, RepairViewSnapshot } from "./WorkbenchRepairViewControls.ts";
 import {
   decodeTerminalInput, KITTY_KEYBOARD_POP, KITTY_KEYBOARD_PUSH, KITTY_KEYBOARD_QUERY, TerminalKeyHold,
   type HoldOutcome, type TerminalKeyEvent,
@@ -16,7 +18,27 @@ import {
 
 type ViewInput = Pick<ReadStream, "isTTY" | "isRaw" | "setRawMode" | "on" | "off" | "resume" | "pause">;
 type ViewStatusLine = Pick<ProcessViewStatusLine, "enabled" | "install" | "update" | "notice" | "close">;
-type HoldKey = "r" | "u";
+type HoldKey = "r" | "u" | "x";
+/** `r` retries a pending dependency repair instead of reloading: nothing can reload until dependencies are whole. */
+type HoldAction = "reload" | "pull" | "retry-repair" | "cancel-repair";
+
+interface WorkbenchProcessViewOptions {
+  input: ViewInput;
+  write(text: string): Promise<void>;
+  warn(message: string): void;
+  logDirectory: string;
+  prefixes: readonly string[];
+  /** May wait (for example, for a dependency repair); the view detaching aborts `signal`. */
+  openControls(warn: (message: string) => void, signal: AbortSignal): Promise<ProcessViewControls>;
+  repair?: RepairViewControls;
+  createFollower?: (options: ConstructorParameters<typeof WorkbenchLogFollower>[0]) => Pick<WorkbenchLogFollower, "start" | "close">;
+  createStatusLine?: () => ViewStatusLine;
+  /** Raw terminal control output (keyboard protocol negotiation). */
+  writeTerminal?: (text: string) => void;
+  now?: () => number;
+  /** Repeats `frame` until the returned stop is called. */
+  every?: (ms: number, frame: () => void) => () => void;
+}
 
 const ANSI_BOLD = "\u001b[1m";
 const ANSI_BOLD_OFF = "\u001b[22m";
@@ -34,22 +56,59 @@ const DANGER_HOLD_MS = 2_000;
 const HOLD_FRAME_MS = 33;
 
 const UNAVAILABLE: ProcessViewControlsSnapshot = { host: false, daemon: false, app: false, runtime: null };
+const NO_REPAIR: RepairViewSnapshot = { state: "idle", pid: null, lastError: null, logPath: null };
 
 const OPERATION_LABELS: Partial<Record<WorkbenchAppControlRuntime["operation"]["phase"], string>> = {
   pulling: "pulling", waiting: "reloading", reloading: "reloading", restarting: "restarting",
+};
+
+const HOLD_LABELS: Record<HoldAction, string> = {
+  reload: "reload all", pull: "pull changes", "retry-repair": "retry repair", "cancel-repair": "cancel repair",
 };
 
 function operationRunning(runtime: WorkbenchAppControlRuntime | null) {
   return Boolean(runtime && runtime.operation.phase !== "idle" && runtime.operation.phase !== "failed");
 }
 
-function holdAvailable(key: HoldKey, runtime: WorkbenchAppControlRuntime | null) {
-  if (!runtime || operationRunning(runtime)) return false;
-  return key === "r" ? runtime.dirty : runtime.update?.state === "available";
+function holdAction(key: HoldKey, repair: RepairViewSnapshot): HoldAction {
+  if (key === "x") return "cancel-repair";
+  if (key === "u") return "pull";
+  return repair.state === "idle" ? "reload" : "retry-repair";
 }
 
-function holdDanger(key: HoldKey, runtime: WorkbenchAppControlRuntime | null) {
-  return key === "r" && Boolean(runtime?.destructive);
+function holdAvailable(action: HoldAction, runtime: WorkbenchAppControlRuntime | null, repair: RepairViewSnapshot) {
+  if (action === "cancel-repair") return repair.state === "running";
+  if (action === "retry-repair") return repair.state === "pending";
+  if (repair.state !== "idle" || !runtime || operationRunning(runtime)) return false;
+  return action === "reload" ? runtime.dirty : runtime.update?.state === "available";
+}
+
+function holdDanger(action: HoldAction, runtime: WorkbenchAppControlRuntime | null) {
+  return action === "cancel-repair" || action === "reload" && Boolean(runtime?.destructive);
+}
+
+function unavailableNotice(action: HoldAction, runtime: WorkbenchAppControlRuntime | null, repair: RepairViewSnapshot) {
+  if (action === "cancel-repair") return "Cancel repair is unavailable: no dependency repair is running.";
+  if (action === "retry-repair") return "Retry repair is unavailable: the dependency repair is already running.";
+  if (action === "reload") {
+    return operationRunning(runtime) ? "Reload all is unavailable: an update or reload is already running."
+      : runtime ? "Reload all is unavailable: nothing needs reloading." : "Reload all is unavailable: the app is not running.";
+  }
+  if (repair.state !== "idle") return "Pull changes is unavailable: dependencies are being repaired.";
+  return runtime?.update?.state === "conflict" ? "Pull changes is unavailable: the update conflicts with local changes."
+    : operationRunning(runtime) ? "Pull changes is unavailable: an update or reload is already running."
+    : runtime ? "Pull changes is unavailable: no update is available." : "Pull changes is unavailable: the app is not running.";
+}
+
+function repairNotice(repair: RepairViewSnapshot, previous: RepairViewSnapshot | null) {
+  if (repair.state === "running" && (previous?.state !== "running" || previous.pid !== repair.pid)) {
+    return `Dependency repair is running in process ${repair.pid}. Hold x to cancel it.`;
+  }
+  if (repair.state === "pending" && previous?.state !== "pending") {
+    return `Dependency repair ${previous?.state === "running" ? "stopped" : "is incomplete"}: ${repair.lastError ?? "not finished"}. Hold r to retry it.`;
+  }
+  if (repair.state === "idle" && previous && previous.state !== "idle") return "Dependency repair finished.";
+  return null;
 }
 
 const entry = (key: string, label: string, enabled: boolean, color = "") => enabled
@@ -66,25 +125,32 @@ function holdingEntry(key: string, label: string, progress: number, danger: bool
   return `${ANSI_BOLD}${start}${text.slice(0, filled)}${stop}${danger ? ANSI_RED : ""}${rest}${ANSI_FOREGROUND_OFF}${ANSI_BOLD_OFF}`;
 }
 
-function holdEntry(key: HoldKey, snapshot: ProcessViewControlsSnapshot, hold: TerminalKeyHold | null, now: number) {
+type HoldState = { hold: TerminalKeyHold; action: HoldAction } | null;
+
+function holdEntry(key: HoldKey, snapshot: ProcessViewControlsSnapshot, repair: RepairViewSnapshot, held: HoldState, now: number) {
   const runtime = snapshot.runtime;
-  const label = key === "r" ? "reload all" : "pull changes";
-  if (hold?.key === key) return holdingEntry(key, label, hold.progress(now), holdDanger(key, runtime));
+  if (held?.hold.key === key) {
+    return holdingEntry(key, HOLD_LABELS[held.action], held.hold.progress(now), holdDanger(held.action, runtime));
+  }
+  const action = holdAction(key, repair);
   const running = runtime ? OPERATION_LABELS[runtime.operation.phase] : undefined;
-  const action = runtime?.operation.action;
-  if (running && (key === "r" ? action === "reloadAll" : action === "pull" || action === "pullAndReload")) {
+  const operation = runtime?.operation.action;
+  if (running && (action === "reload" ? operation === "reloadAll" : action === "pull" && (operation === "pull" || operation === "pullAndReload"))) {
     return entry(key, `${running}…`, false);
   }
-  if (key === "u" && runtime?.update?.state === "conflict") return `${ANSI_AMBER}${key} pull conflicts${ANSI_FOREGROUND_OFF}`;
-  return entry(key, label, holdAvailable(key, runtime), holdDanger(key, runtime) ? ANSI_RED : "");
+  if (action === "pull" && runtime?.update?.state === "conflict") return `${ANSI_AMBER}${key} pull conflicts${ANSI_FOREGROUND_OFF}`;
+  return entry(key, HOLD_LABELS[action], holdAvailable(action, runtime, repair), holdDanger(action, runtime) ? ANSI_RED : "");
 }
 
 /** Lit keys are bold with their label in the log domain colour they act on; unavailable keys use the timestamp grey. */
-function renderLegend(snapshot: ProcessViewControlsSnapshot, forceArmed: boolean, hold: TerminalKeyHold | null, now: number) {
+function renderLegend(
+  snapshot: ProcessViewControlsSnapshot, repair: RepairViewSnapshot, forceArmed: boolean, held: HoldState, now: number,
+) {
   return [
     entry("q", "exit", true),
-    holdEntry("r", snapshot, hold, now),
-    holdEntry("u", snapshot, hold, now),
+    holdEntry("r", snapshot, repair, held, now),
+    holdEntry("u", snapshot, repair, held, now),
+    ...repair.state === "idle" ? [] : [holdEntry("x", snapshot, repair, held, now)],
     entry("d", "kill daemon", snapshot.host && snapshot.daemon, logDomainColors.daemon),
     entry("h", forceArmed ? "FORCE HALT" : "kill host", forceArmed || (snapshot.host && snapshot.app), logDomainColors.host),
     entry("a", "kill app", snapshot.app, logDomainColors.app),
@@ -99,30 +165,20 @@ export default class WorkbenchProcessView {
   private commands = Promise.resolve();
   private forceArmed = false;
   private controls: ProcessViewControls | null = null;
+  private unsubscribeControls: (() => void) | null = null;
   private statusLine: ViewStatusLine | null = null;
   private notice: (message: string) => void;
   private readonly lifetime = new AbortController();
   private kitty = false;
-  private hold: TerminalKeyHold | null = null;
+  private held: HoldState = null;
   /** A refused hold still absorbs its own autorepeat, so one press warns once. */
   private refused: TerminalKeyHold | null = null;
   private stopFrames: (() => void) | null = null;
+  private repairShown: RepairViewSnapshot | null = null;
+  private readonly options: WorkbenchProcessViewOptions;
 
-  constructor(private readonly options: {
-    input: ViewInput;
-    write(text: string): Promise<void>;
-    warn(message: string): void;
-    logDirectory: string;
-    prefixes: readonly string[];
-    openControls(warn: (message: string) => void): Promise<ProcessViewControls>;
-    createFollower?: (options: ConstructorParameters<typeof WorkbenchLogFollower>[0]) => Pick<WorkbenchLogFollower, "start" | "close">;
-    createStatusLine?: () => ViewStatusLine;
-    /** Raw terminal control output (keyboard protocol negotiation). */
-    writeTerminal?: (text: string) => void;
-    now?: () => number;
-    /** Repeats `frame` until the returned stop is called. */
-    every?: (ms: number, frame: () => void) => () => void;
-  }) {
+  constructor(options: WorkbenchProcessViewOptions) {
+    this.options = options;
     this.notice = options.warn;
   }
 
@@ -135,7 +191,8 @@ export default class WorkbenchProcessView {
     statusLine.install();
     const wasRaw = this.options.input.isRaw;
     let follower: Pick<WorkbenchLogFollower, "start" | "close"> | null = null;
-    let unsubscribe: (() => void) | null = null;
+    let unsubscribeRepair: (() => void) | null = null;
+    let opening: Promise<void> | null = null;
     const failed = (error: Error) => { this.notice(error.message); this.detach(); };
     const end = () => this.detach();
     const data = (bytes: Buffer | string) => {
@@ -156,12 +213,20 @@ export default class WorkbenchProcessView {
       });
       // Logs never wait for a process: a failing startup is exactly what the view must show.
       await follower.start();
-      try {
-        this.controls = await this.options.openControls(this.notice);
-        unsubscribe = this.controls.subscribe(() => this.renderLegend());
-      } catch (error) {
-        if (!this.closed) this.notice(`Process controls are unavailable: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      unsubscribeRepair = this.options.repair?.subscribe(() => this.repairChanged()) ?? null;
+      this.repairChanged();
+      // Keys must work while controls wait, so a dependency repair stays cancellable.
+      opening = (async () => {
+        try {
+          const controls = await this.options.openControls(this.notice, this.lifetime.signal);
+          if (this.closed) { await controls.close(); return; }
+          this.controls = controls;
+          this.unsubscribeControls = controls.subscribe(() => this.renderLegend());
+          this.renderLegend();
+        } catch (error) {
+          if (!this.closed) this.notice(`Process controls are unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      })();
       this.renderLegend();
       if (this.options.input.isTTY) {
         this.options.input.setRawMode(true);
@@ -186,7 +251,10 @@ export default class WorkbenchProcessView {
         this.options.input.setRawMode(Boolean(wasRaw));
         this.options.input.pause();
       }
-      unsubscribe?.();
+      this.lifetime.abort(new Error("Process view detached."));
+      unsubscribeRepair?.();
+      await opening;
+      this.unsubscribeControls?.();
       const results = await Promise.allSettled([
         (async () => { await this.controls?.close(); })(),
         follower?.close(),
@@ -201,6 +269,18 @@ export default class WorkbenchProcessView {
     this.closed = true;
     this.lifetime.abort(new Error("Process view detached."));
     this.release?.();
+  }
+
+  private repairSnapshot() {
+    return this.options.repair?.snapshot() ?? NO_REPAIR;
+  }
+
+  private repairChanged() {
+    const repair = this.repairSnapshot();
+    const notice = repairNotice(repair, this.repairShown);
+    this.repairShown = repair;
+    if (notice) this.notice(notice);
+    this.renderLegend();
   }
 
   private now() {
@@ -221,15 +301,15 @@ export default class WorkbenchProcessView {
       if (outcome === "holding") return;
       this.refused = null;
     }
-    if (this.hold) {
-      this.settleHold(this.hold.accept(event, now));
+    if (this.held) {
+      this.settleHold(this.held.hold.accept(event, now));
       // Escape and the hold keys belong to the hold; anything else still acts below.
-      if (event.key === "Escape" || event.key === "r" || event.key === "u") return;
+      if (event.key === "Escape" || event.key === "r" || event.key === "u" || event.key === "x") return;
     }
     if (event.type !== "press") return;
     if (event.key === "q" || event.key === "\u0003") { this.detach(); return; }
     switch (event.key) {
-      case "r": case "u": this.beginHold(event.key, now); break;
+      case "r": case "u": case "x": this.beginHold(event.key, now); break;
       case "d": this.enqueue(() => this.act("daemon")); break;
       case "h": this.enqueue(() => this.act("host")); break;
       case "a": this.enqueue(() => this.act("app")); break;
@@ -241,37 +321,35 @@ export default class WorkbenchProcessView {
 
   private beginHold(key: HoldKey, now: number) {
     const runtime = this.controls?.snapshot().runtime ?? null;
-    if (!holdAvailable(key, runtime)) {
+    const repair = this.repairSnapshot();
+    const action = holdAction(key, repair);
+    if (!holdAvailable(action, runtime, repair)) {
       this.refused = new TerminalKeyHold(key, NORMAL_HOLD_MS, now, this.kitty);
-      this.notice(key === "r"
-        ? operationRunning(runtime) ? "Reload all is unavailable: an update or reload is already running."
-          : runtime ? "Reload all is unavailable: nothing needs reloading." : "Reload all is unavailable: the app is not running."
-        : runtime?.update?.state === "conflict" ? "Pull changes is unavailable: the update conflicts with local changes."
-          : operationRunning(runtime) ? "Pull changes is unavailable: an update or reload is already running."
-          : runtime ? "Pull changes is unavailable: no update is available." : "Pull changes is unavailable: the app is not running.");
+      this.notice(unavailableNotice(action, runtime, repair));
       return;
     }
-    this.hold = new TerminalKeyHold(key, holdDanger(key, runtime) ? DANGER_HOLD_MS : NORMAL_HOLD_MS, now, this.kitty);
+    const hold = new TerminalKeyHold(key, holdDanger(action, runtime) ? DANGER_HOLD_MS : NORMAL_HOLD_MS, now, this.kitty);
+    this.held = { hold, action };
     this.stopFrames = (this.options.every ?? ((ms, frame) => {
       const timer = setInterval(frame, ms);
       return () => clearInterval(timer);
     }))(HOLD_FRAME_MS, () => {
-      if (this.hold) this.settleHold(this.hold.tick(this.now()));
+      if (this.held) this.settleHold(this.held.hold.tick(this.now()));
       this.renderLegend();
     });
     this.renderLegend();
   }
 
   private settleHold(outcome: HoldOutcome) {
-    const hold = this.hold;
-    if (!hold || outcome === "holding") return;
+    const held = this.held;
+    if (!held || outcome === "holding") return;
     this.endHold();
-    if (outcome === "fire") this.enqueue(() => this.act(hold.key === "r" ? "reload" : "pull"));
+    if (outcome === "fire") this.enqueue(() => this.act(held.action));
     this.renderLegend();
   }
 
   private endHold() {
-    this.hold = null;
+    this.held = null;
     this.stopFrames?.();
     this.stopFrames = null;
   }
@@ -286,7 +364,20 @@ export default class WorkbenchProcessView {
     });
   }
 
-  private async act(kind: "daemon" | "host" | "app" | "start" | "open" | "reload" | "pull") {
+  private async act(kind: "daemon" | "host" | "app" | "start" | "open" | HoldAction) {
+    if (kind === "cancel-repair" || kind === "retry-repair") {
+      const repair = this.options.repair;
+      if (!repair) { this.notice("Dependency repair controls are unavailable."); return; }
+      if (kind === "cancel-repair") {
+        await repair.cancel();
+        this.notice("Asked the dependency repair to cancel.");
+      } else {
+        await repair.retry();
+        this.notice("Started dependency repair in the background.");
+      }
+      this.renderLegend();
+      return;
+    }
     const controls = this.controls;
     if (!controls) { this.notice("Process controls are unavailable."); return; }
     const snapshot = controls.snapshot();
@@ -332,6 +423,6 @@ export default class WorkbenchProcessView {
   private renderLegend() {
     if (!this.statusLine?.enabled) return;
     const snapshot = this.controls?.snapshot() ?? UNAVAILABLE;
-    this.statusLine.update(renderLegend(snapshot, this.forceArmed, this.hold, this.now()));
+    this.statusLine.update(renderLegend(snapshot, this.repairSnapshot(), this.forceArmed, this.held, this.now()));
   }
 }

@@ -21,6 +21,7 @@ function harness(overrides: Partial<WorkbenchAppReloadOrchestratorPorts> = {}) {
     readControlDaemon: () => ({ dirt: null, update: null }),
     pullDaemon: async () => ({ fromSha: "a".repeat(40), toSha: "b".repeat(40), lockfileChanged: false }),
     prepareInstallationRuntime: async () => { events.push("runtime"); },
+    installRestartsHost: async () => true,
     refreshAppDirt: async () => { events.push("refresh"); },
     reloadDaemon: async scopes => { events.push(`daemon:${scopes.join(",")}`); },
     reloadHost: async scopes => { events.push(`host:${scopes.join(",")}`); },
@@ -124,6 +125,15 @@ test("lockfile pull refreshes then installs exclusively with the pre-pull commit
   await owner.admitPull(undefined, true).start();
   assert.deepEqual(events, ["runtime", "refresh"]);
   assert.equal(owner.read().phase, "restarting");
+});
+
+test("an app-only install still reloads daemon and host scopes before restarting the app", async () => {
+  const { owner, events } = harness({
+    readAppDirt: () => dirt("host:network", "client:http", "client:install"),
+    installRestartsHost: async () => false,
+  });
+  await owner.admitReloadAll().start();
+  assert.deepEqual(events, ["daemon:server:workspace", "host:host:network", "client:client:install"]);
 });
 
 test("pull prepares the current checkout runtime even without a reload", async () => {

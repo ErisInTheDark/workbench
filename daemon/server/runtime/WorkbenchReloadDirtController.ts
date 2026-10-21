@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchReloadDirtControllerState/WorkbenchReloadExternalDirtSource/WorkbenchReloadDirtControllerOptions: daemon-compatible shared dirt contracts.
+ * - WorkbenchReloadDirtControllerState/WorkbenchReloadDirtControllerOptions: daemon-compatible shared dirt contracts.
  * - default WorkbenchReloadDirtController: add instruction-source observation and the daemon snapshot ref to shared Git reconciliation.
  */
 import path from "node:path";
@@ -8,7 +8,6 @@ import path from "node:path";
 import ReloadDirtController, {
   type ReloadDirtControllerOptions,
   type ReloadDirtControllerState,
-  type ReloadDirtExternalSource,
 } from "workbench-shared/reload/ReloadDirtController";
 
 import { setActiveReloadInstructionObserver } from "../lib/workbench/reload-source-observer";
@@ -16,7 +15,6 @@ import { setActiveReloadInstructionObserver } from "../lib/workbench/reload-sour
 const DAEMON_RELOAD_SNAPSHOT_REF = "refs/worktree/workbench/reload-snapshot";
 
 export type WorkbenchReloadDirtControllerState = ReloadDirtControllerState;
-export type WorkbenchReloadExternalDirtSource = ReloadDirtExternalSource;
 export interface WorkbenchReloadDirtControllerOptions extends Omit<
   ReloadDirtControllerOptions,
   "connectSourceObserver" | "snapshotRef"

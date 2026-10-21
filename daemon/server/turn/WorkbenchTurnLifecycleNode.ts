@@ -19,6 +19,7 @@ import WorkbenchTurnRecoveryController from "../WorkbenchTurnRecoveryController"
 import OpenCodeBridgeNode from "../providers/opencode/OpenCodeBridgeNode";
 import ClaudeBridgeNode from "../providers/claude/ClaudeBridgeNode";
 import WorkbenchDaemonSleepController from "../WorkbenchDaemonSleepController";
+import { DAEMON_DEPENDENCY_IMPORTERS } from "../../../shared/pnpm-dependency-state.mjs";
 
 interface WorkbenchTurnLifecycleState {
   reloadController?: WorkbenchDaemonReloadControllerState;
@@ -35,6 +36,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const daemonSleep = new WorkbenchDaemonSleepController(context.sleep);
     const toolRevision = new WorkbenchToolRevisionController(state?.toolRevision ?? state?.mcpGeneration);
     const reloadDirt = new WorkbenchReloadDirtController({
+      dependencySources: [{ kind: "loaded", scope: "server:process", importers: DAEMON_DEPENDENCY_IMPORTERS }],
       getSourceState: build.getSourceState,
       repoRoot: context.legacyMigrationProjectRoot,
     }, state?.reloadDirt);

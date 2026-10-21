@@ -4,6 +4,9 @@
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import { preparePulledInstallationRuntime } from "../../../scripts/installation/update-repair.mjs";
+import {
+  APP_DEPENDENCY_IMPORTERS, DAEMON_DEPENDENCY_IMPORTERS, hasDependencyDrift,
+} from "../../../shared/pnpm-dependency-state.mjs";
 
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
@@ -28,6 +31,10 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   create: (context, build) => {
     const state = build.handoffState as AppRuntimeNodeState | undefined;
     const dirt = new WorkbenchAppReloadDirtController({
+      dependencySources: [
+        { kind: "loaded", scope: "client:process", importers: APP_DEPENDENCY_IMPORTERS },
+        { kind: "install", scope: "client:install" },
+      ],
       getSourceState: build.getSourceState,
       repositoryRootPath: context.repositoryRootPath,
     }, state?.dirt);
@@ -36,7 +43,11 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       execute: context.executeReloadScopes,
       processScope: "client:process",
       repositoryRootPath: context.repositoryRootPath,
-      repairInstall: () => context.runRuntimeObject("network", async network => { await network.stopHostForInstall(); }),
+      // Only daemon-side dependency changes risk replacing files the running host and daemon hold open.
+      repairInstall: async () => {
+        if (!await hasDependencyDrift(context.repositoryRootPath, DAEMON_DEPENDENCY_IMPORTERS)) return;
+        await context.runRuntimeObject("network", async network => { await network.stopHostForInstall(); });
+      },
     }, state?.reload);
     const orchestrator = new WorkbenchAppReloadOrchestrator({
       readControlDaemon: context.readControlDaemonFacts,
@@ -49,6 +60,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         pullDaemonInstallation(resolveOperationDaemon(sources, daemonId), signal)),
       prepareInstallationRuntime: signal =>
         preparePulledInstallationRuntime(context.repositoryRootPath, { signal }),
+      installRestartsHost: () => hasDependencyDrift(context.repositoryRootPath, DAEMON_DEPENDENCY_IMPORTERS),
       refreshAppDirt: signal => context.runRuntimeObject("reloadDirt", async owner => { await owner.refresh(signal); }),
       reloadDaemon: (scopes, daemonId, signal) => context.runRuntimeObject("sources", sources =>
         reloadDaemonScopes(resolveOperationDaemon(sources, daemonId), scopes, signal)),

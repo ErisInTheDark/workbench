@@ -25,7 +25,8 @@ try {
       path.join(root, "cli/workbench-ports.ts"),
     ], { cwd: root, interactive: true });
   } else {
-    if (command === "repair" || isRepairPending(await readJournal())) {
+    // `wb view` watches, cancels and retries repairs, so it never waits behind one.
+    if (command === "repair" || !view && isRepairPending(await readJournal())) {
       if (managed) throw new Error("Dependency update repair is pending. Ask the user to run `wb repair`.");
       const journal = await runRepair({ root, force: command === "repair" });
       if (journal && journal.phase !== "done") throw new Error(
@@ -34,13 +35,16 @@ try {
     }
     if (command === "repair") {
       process.stdout.write("Workbench dependency repair complete. Run `wb` to launch.\n");
+    } else if (view) {
+      // Native type stripping: node_modules (and tsx) may be mid-repair.
+      await new WorkbenchToolchain().runNode(root, path.join(root, "cli/process-view.ts"), args.slice(1), {
+        cwd: root, interactive: true, nodeOptions: ["--disable-warning=ExperimentalWarning"],
+      });
     } else if (native) {
-      const entry = view
-        ? "cli/process-view.ts"
-        : ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
-      await new WorkbenchToolchain().runNode(root, path.join(root, entry), [
-        ...(view ? args.slice(1) : [command]),
-      ], { cwd: root, interactive: view, nodeOptions: ["--disable-warning=ExperimentalWarning", "--import", "tsx"] });
+      const entry = ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
+      await new WorkbenchToolchain().runNode(root, path.join(root, entry), [command], {
+        cwd: root, interactive: false, nodeOptions: ["--disable-warning=ExperimentalWarning", "--import", "tsx"],
+      });
     } else {
       await new WorkbenchBootstrapCommand().run("bash", [path.join(root, "wb"), ...args], { interactive: true });
     }

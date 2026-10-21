@@ -1,11 +1,12 @@
 /*
- * No production exports. Protect detachable key handling, always-on logging and lifecycle/open intent routing.
+ * No production exports. Protect detachable key handling, always-on logging, lifecycle/open intent routing and repair cancel/retry.
  */
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import WorkbenchProcessView from "./WorkbenchProcessView.ts";
 import type { ProcessViewControls, ProcessViewControlsSnapshot } from "./WorkbenchProcessViewControls.ts";
+import type { RepairViewControls, RepairViewSnapshot } from "./WorkbenchRepairViewControls.ts";
 import type { WorkbenchAppControlRuntime } from "../shared/http/workbench-app-control.ts";
 import { IDLE_RELOAD_OPERATION } from "../shared/reload/workbench-reload.ts";
 import { KITTY_KEYBOARD_POP, KITTY_KEYBOARD_PUSH, KITTY_KEYBOARD_QUERY } from "./terminal-key-hold.ts";
@@ -32,10 +33,29 @@ const runtime = (overrides: Partial<WorkbenchAppControlRuntime> = {}): Workbench
   dirty: true, destructive: false, update: null, operation: IDLE_RELOAD_OPERATION, ...overrides,
 });
 
+function repairFake(initial: RepairViewSnapshot) {
+  let current = initial;
+  const calls: string[] = [];
+  const listeners = new Set<() => void>();
+  const controls: RepairViewControls = {
+    snapshot: () => current,
+    subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    cancel: async () => { calls.push("cancel"); },
+    retry: async () => { calls.push("retry"); },
+    whenIdle: async () => {},
+    close: () => {},
+  };
+  const set = (next: RepairViewSnapshot) => { current = next; for (const listener of [...listeners]) listener(); };
+  return { controls, calls, set };
+}
+
+const RUNNING_REPAIR: RepairViewSnapshot = { state: "running", pid: 42, lastError: null, logPath: null };
+
 function fixture(options: {
   snapshot?: ProcessViewControlsSnapshot;
   failHost?: boolean;
-  openControls?: (warn: (message: string) => void) => Promise<ProcessViewControls>;
+  openControls?: (warn: (message: string) => void, signal: AbortSignal) => Promise<ProcessViewControls>;
+  repair?: RepairViewControls;
   isTTY?: boolean;
 } = {}) {
   const input = new Terminal();
@@ -69,6 +89,7 @@ function fixture(options: {
     logDirectory: "/unused",
     prefixes: ["workbench-app"],
     openControls: options.openControls ?? (async () => controls),
+    repair: options.repair,
     createFollower: () => ({
       start: async () => { calls.push("follow"); },
       close: async () => { calls.push("unfollow"); },
@@ -259,6 +280,44 @@ test("kitty terminals hold until the real release and restore the keyboard on de
   f.view.detach();
   await running;
   assert.equal(f.terminal.at(-1), KITTY_KEYBOARD_POP);
+});
+
+test("while controls wait on a running repair, holding x cancels it and r cannot reload", async () => {
+  const repair = repairFake(RUNNING_REPAIR);
+  const f = fixture({
+    repair: repair.controls,
+    snapshot: { host: true, daemon: true, app: true, runtime: runtime() },
+    openControls: (_warn, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+  });
+  const running = f.view.run();
+  await f.attached.promise;
+  assert.match(f.notices.join("\n"), /running in process 42/u);
+  f.advance(autorepeat(f, "r", 1_200) + 200);
+  await flush();
+  assert.match(f.notices.join("\n"), /Retry repair is unavailable/u);
+  f.advance(autorepeat(f, "x", 2_300, 10_000) + 200);
+  await flush();
+  assert.deepEqual(repair.calls, ["cancel"]);
+  assert.deepEqual(holdCalls(f.calls), []);
+  f.view.detach();
+  await running;
+});
+
+test("while a repair is pending, holding r retries it instead of reloading", async () => {
+  const repair = repairFake({ state: "pending", pid: null, lastError: "Cancelled.", logPath: null });
+  const f = fixture({ repair: repair.controls, snapshot: { host: true, daemon: true, app: true, runtime: runtime() } });
+  const running = f.view.run();
+  await f.attached.promise;
+  f.advance(autorepeat(f, "r", 1_200) + 200);
+  await flush();
+  assert.deepEqual(repair.calls, ["retry"]);
+  assert.deepEqual(holdCalls(f.calls), []);
+  repair.set({ state: "idle", pid: null, lastError: null, logPath: null });
+  assert.match(f.notices.join("\n"), /repair finished/u);
+  f.view.detach();
+  await running;
 });
 
 test("an unavailable hold key warns once for its whole autorepeat", async () => {

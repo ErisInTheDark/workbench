@@ -2,13 +2,13 @@
  * Exports:
  * - ReloadDirtSourceDescriptor/ReloadDirtSourceState: current source ownership and dependant metadata.
  * - ReloadDirtControllerState: transferable snapshots, baselines, pending scopes and refresh lifecycle.
- * - ReloadDirtExternalSource/ReloadDirtControllerOptions: snapshot, watcher and dynamic-source ports.
+ * - ReloadDependencySource: dependency-backed dirt; `loaded` closures changed since process start, `install` lockfile drift.
+ * - ReloadDirtControllerOptions: snapshot, watcher, dependency and dynamic-source ports.
  * - default ReloadDirtController: reconcile source content against per-scope Git baselines.
  */
 import { type watch } from "node:fs";
-import { access } from "node:fs/promises";
-import path from "node:path";
 
+import { hasDependencyDrift, readDependencyFingerprint } from "../pnpm-dependency-state.mjs";
 import type {
   WorkbenchReloadDirtSnapshot,
   WorkbenchReloadScope,
@@ -34,6 +34,8 @@ export interface ReloadDirtSourceState {
 
 export interface ReloadDirtControllerState {
   baselines: Map<WorkbenchReloadScope, string>;
+  /** Installed closure fingerprints first seen by this process; absent in states transferred from older code. */
+  dependencyBaselines?: Map<WorkbenchReloadScope, string | null>;
   descriptors: Map<WorkbenchReloadScope, ReloadDirtSourceDescriptor>;
   error: string | null;
   pendingScopes: WorkbenchReloadScope[];
@@ -42,14 +44,15 @@ export interface ReloadDirtControllerState {
   tail: Promise<void>;
 }
 
-export interface ReloadDirtExternalSource {
-  path: string;
-  scope: WorkbenchReloadScope;
-}
+export type ReloadDependencySource =
+  | { kind: "loaded"; scope: WorkbenchReloadScope; importers: readonly string[] }
+  | { kind: "install"; scope: WorkbenchReloadScope };
+
+const DEPENDENCY_LOCKFILES = ["pnpm-lock.yaml", "node_modules/.pnpm/lock.yaml"];
 
 export interface ReloadDirtControllerOptions {
   connectSourceObserver?(observe: (scope: WorkbenchReloadScope, sourcePath: string) => void): () => void;
-  externalDirtSources?: readonly ReloadDirtExternalSource[];
+  dependencySources?: readonly ReloadDependencySource[];
   getSourceState(): ReloadDirtSourceState;
   isPotentialSourcePath?(sourcePath: string): boolean;
   onChange?(): void;
@@ -61,16 +64,6 @@ export interface ReloadDirtControllerOptions {
 
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(0, MAX_ERROR_LENGTH);
-}
-
-async function pathExists(filename: string) {
-  try {
-    await access(filename);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
 }
 
 function sameSnapshot(left: WorkbenchReloadDirtSnapshot, right: WorkbenchReloadDirtSnapshot) {
@@ -201,9 +194,10 @@ export default class ReloadDirtController {
       state.snapshotCommit = snapshotCommit;
       state.pendingScopes = [];
       state.error = null;
-      const externalDirtScopes = new Set((this.options.externalDirtSources ?? []).map(({ scope }) => scope));
+      // Dependency dirt is not source content; only its own check, below, may clear it.
+      const dependencyScopes = new Set((this.options.dependencySources ?? []).map(({ scope }) => scope));
       this.publish({
-        dirtyScopes: this.snapshot.dirtyScopes.filter(({ scope }) => !applied.has(scope) || externalDirtScopes.has(scope)),
+        dirtyScopes: this.snapshot.dirtyScopes.filter(({ scope }) => !applied.has(scope) || dependencyScopes.has(scope)),
         error: null,
         pendingScopes: [],
       });
@@ -279,7 +273,7 @@ export default class ReloadDirtController {
           paths: descriptor.paths,
           patterns: descriptor.boundaryPatterns,
         })),
-        { paths: (this.options.externalDirtSources ?? []).map(source => source.path) },
+        { paths: this.options.dependencySources?.length ? DEPENDENCY_LOCKFILES : [] },
       ],
       onChange: () => this.queueRefresh(),
       onError: error => this.publishError(error),
@@ -363,13 +357,8 @@ export default class ReloadDirtController {
           dirtyScopeNames.add(descriptor.scope);
         }
       }
-      for (const source of this.options.externalDirtSources ?? []) {
-        if (!state.descriptors.has(source.scope)) {
-          throw new Error(`External reload dirt source ${source.path} names unknown scope ${source.scope}.`);
-        }
-        if (await pathExists(path.join(this.options.repoRoot, source.path))) dirtyScopeNames.add(source.scope);
-        if (signal?.aborted) throw signal.reason;
-      }
+      for (const scope of await this.dependencyDirt()) dirtyScopeNames.add(scope);
+      if (signal?.aborted) throw signal.reason;
       for (const descriptor of descriptors) {
         if (dirtyScopeNames.has(descriptor.scope)) {
           dirtyScopes.push({
@@ -387,6 +376,23 @@ export default class ReloadDirtController {
       if (signal?.aborted) throw signal.reason;
       this.publishError(error);
     }
+  }
+
+  private async dependencyDirt() {
+    const state = this.requireState();
+    const baselines = state.dependencyBaselines ??= new Map();
+    const dirty: WorkbenchReloadScope[] = [];
+    for (const source of this.options.dependencySources ?? []) {
+      if (!state.descriptors.has(source.scope)) throw new Error(`Dependency reload source names unknown scope ${source.scope}.`);
+      if (source.kind === "install") {
+        if (await hasDependencyDrift(this.options.repoRoot)) dirty.push(source.scope);
+        continue;
+      }
+      const current = await readDependencyFingerprint(this.options.repoRoot, "installed", source.importers);
+      if (!baselines.has(source.scope)) baselines.set(source.scope, current);
+      else if (baselines.get(source.scope) !== current) dirty.push(source.scope);
+    }
+    return dirty;
   }
 
   private async writeSnapshot(message: string) {
