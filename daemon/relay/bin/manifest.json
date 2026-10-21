@@ -3,8 +3,8 @@
   "artifacts": {
     "linux-x64": {
       "file": "linux-x64/workbench-relay",
-      "sha256": "ae47989c2c57fd5e01c5359e4eef207e3e0c860706484fa0c207b0eb8d7bf641",
-      "sourceHash": "7910cd172f920c243f29ec42b5546942e1eb3fa61bcab9501d62f6c7d7e36b83"
+      "sha256": "604c7a8a626ddc9bb9ac2af6e4f68ec6c3a0f4f4ea2408dd1473e7812ee7b7a5",
+      "sourceHash": "6a3d8210fabf22d7e03574a84058fbf02570a322db41394c57523f87c562d1b7"
     }
   }
 }

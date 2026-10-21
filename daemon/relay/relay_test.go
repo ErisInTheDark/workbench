@@ -315,6 +315,17 @@ func TestUnavailableBrokerStillRunsTheCommandWithoutRelayConfig(t *testing.T) {
 	}
 }
 
+func TestLoopbackProxyBypassKeepsExistingEntriesWithoutDuplicates(t *testing.T) {
+	got := withLoopbackProxyBypass([]string{"PATH=/bin", "NO_PROXY=example.com, 127.0.0.1", "HTTP_PROXY=http://127.0.0.1:9"})
+	want := []string{
+		"PATH=/bin", "NO_PROXY=example.com,127.0.0.1,localhost,::1", "HTTP_PROXY=http://127.0.0.1:9",
+		"no_proxy=localhost,127.0.0.1,::1",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("environment = %q, want %q", got, want)
+	}
+}
+
 func TestHelperChild(t *testing.T) {
 	code := os.Getenv("RELAY_TEST_CHILD_EXIT")
 	if code == "" {

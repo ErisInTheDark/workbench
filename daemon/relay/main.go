@@ -1,5 +1,6 @@
 // No exports. `workbench-relay -- <command> [args...]` runs one sandboxed command with host loopback relayed into its
-// network namespace and its own loopback listeners exposed to the host through the daemon's broker.
+// network namespace, its own loopback listeners exposed to the host through the daemon's broker, and loopback kept off
+// Codex's proxy.
 package main
 
 import (
@@ -23,12 +24,54 @@ func run(args []string, environ []string, stdin io.Reader, stdout io.Writer, std
 		return 2
 	}
 	relay, err := startRelay(environment(environ), deps, stderr)
+	childEnv := withoutRelayConfig(environ)
 	if err != nil {
 		fmt.Fprintf(stderr, "workbench relay unavailable: %v\n", err)
 	} else {
 		defer relay.close()
+		childEnv = withLoopbackProxyBypass(childEnv)
 	}
-	return runChild(args[1:], withoutRelayConfig(environ), stdin, stdout, stderr)
+	return runChild(args[1:], childEnv, stdin, stdout, stderr)
+}
+
+var loopbackHosts = []string{"localhost", "127.0.0.1", "::1"}
+
+// withLoopbackProxyBypass keeps loopback off Codex's forward proxy, which drops protocol upgrades; the relay
+// already makes host ports and the command's own listeners directly reachable.
+func withLoopbackProxyBypass(environ []string) []string {
+	bypassed := make([]string, 0, len(environ)+2)
+	seen := map[string]bool{}
+	for _, entry := range environ {
+		key, value, _ := strings.Cut(entry, "=")
+		if key == "NO_PROXY" || key == "no_proxy" {
+			seen[key] = true
+			entry = key + "=" + withLoopbackHosts(value)
+		}
+		bypassed = append(bypassed, entry)
+	}
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		if !seen[key] {
+			bypassed = append(bypassed, key+"="+withLoopbackHosts(""))
+		}
+	}
+	return bypassed
+}
+
+func withLoopbackHosts(value string) string {
+	hosts := []string{}
+	present := map[string]bool{}
+	for _, host := range strings.Split(value, ",") {
+		if host = strings.TrimSpace(host); host != "" && !present[host] {
+			present[host] = true
+			hosts = append(hosts, host)
+		}
+	}
+	for _, host := range loopbackHosts {
+		if !present[host] {
+			hosts = append(hosts, host)
+		}
+	}
+	return strings.Join(hosts, ",")
 }
 
 func environment(environ []string) map[string]string {
