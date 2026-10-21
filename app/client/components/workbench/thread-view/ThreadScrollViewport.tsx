@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change (activated controls stay put), gesture-safe correction, and clipping content above unrevealed history.
+ * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change (activated controls stay put, end snapping paused, until the reader moves), gesture-safe correction, and clipping content above unrevealed history.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -27,7 +27,9 @@ import {
   type ThreadScrollProximity,
 } from "./thread-scroll-snap";
 import ThreadInitialEndPlacementController from "./ThreadInitialEndPlacementController";
-import ThreadReadingAnchorController, { pickThreadActivationAnchor, pickThreadReadingAnchor } from "./ThreadReadingAnchorController";
+import ThreadReadingAnchorController, {
+  getThreadContentOffset, pickThreadActivationAnchor, pickThreadReadingAnchor,
+} from "./ThreadReadingAnchorController";
 import ThreadScrollSettleController from "./ThreadScrollSettleController";
 import {
   ThreadScrollViewportContext,
@@ -178,14 +180,13 @@ function ActiveThreadScrollViewport ({
         ? THREAD_SCROLL_TOUCH_RESERVE_PX : 0;
     },
   });
-  const anchorRef = useRef<ThreadReadingAnchorController<Element> | null>(null);
-  const anchor = anchorRef.current ??= new ThreadReadingAnchorController<Element>({
+  const anchorRef = useRef<ThreadReadingAnchorController<HTMLElement> | null>(null);
+  const anchor = anchorRef.current ??= new ThreadReadingAnchorController<HTMLElement>({
     pick: () => viewportRef.current && contentRef.current
       ? pickThreadReadingAnchor(viewportRef.current, contentRef.current) : null,
     offset: (element) => {
       const content = contentRef.current;
-      return content && element.isConnected && content.contains(element)
-        ? element.getBoundingClientRect().top - content.getBoundingClientRect().top : null;
+      return content && element.isConnected && content.contains(element) ? getThreadContentOffset(element, content) : null;
     },
     shift: delta => settle.shift(delta),
   });
@@ -294,6 +295,17 @@ function ActiveThreadScrollViewport ({
       directionRef.current = direction;
       viewport.dataset.threadScrollDirection = direction;
     };
+    // An activated control holds the reader in place until they move on their own: end snapping and the initial end pin
+    // would otherwise follow what it revealed to the new end, and its own correction scrolls must not drop the hold.
+    const holdActivation = (control: HTMLElement) => {
+      anchor.hold(pickThreadActivationAnchor(control, content));
+      initialEndPlacement.release();
+      viewport.dataset.threadScrollHeld = "true";
+    };
+    const readerMoved = () => {
+      initialEndPlacement.release();
+      delete viewport.dataset.threadScrollHeld;
+    };
     const handleScroll = () => {
       const previousScrollTop = previousScrollTopRef.current;
       const scrollTop = viewport.scrollTop;
@@ -312,21 +324,23 @@ function ActiveThreadScrollViewport ({
       previousScrollTopRef.current = scrollTop;
       syncScrollProximity(viewport);
       settle.scrolled();
-      anchor.record();
+      if (viewport.dataset.threadScrollHeld) anchor.reconcile();
+      else anchor.record();
       readerMovedListeners.current.forEach(listener => listener());
     };
     const handleScrollEnd = () => settle.scrollEnded();
     // Capture runs before the control's own handlers and default action (a disclosure toggling), whatever they stop.
     // Only expanding controls: one that removes itself would drop the hold and skip correcting its own removal.
     const handleControlActivated = (event: MouseEvent) => {
-      const control = event.target instanceof Element ? event.target.closest("summary, [aria-expanded]") : null;
-      if (control && content.contains(control)) anchor.hold(pickThreadActivationAnchor(control, content));
+      const control = event.target instanceof Element
+        ? event.target.closest<HTMLElement>("summary, [aria-expanded], [data-thread-expander]") : null;
+      if (control && content.contains(control)) holdActivation(control);
     };
     const handleWheel = (event: WheelEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       const direction = event.deltaY > 0 ? "down" : event.deltaY < 0 ? "up" : null;
       if (!direction) return;
-      initialEndPlacement.release();
+      readerMoved();
       setScrollDirection(direction);
       const distance = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? Math.abs(event.deltaY) * 16
         : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? Math.abs(event.deltaY) * viewport.clientHeight
@@ -337,19 +351,20 @@ function ActiveThreadScrollViewport ({
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       if (isInteractiveScrollKeyTarget(event.target)) return;
       if (THREAD_SCROLL_DOWN_KEYS.has(event.key) || (event.key === " " && !event.shiftKey)) {
-        initialEndPlacement.release();
+        readerMoved();
         setScrollDirection("down");
         onScrollIntent?.("down", viewport.clientHeight);
       }
       if (THREAD_SCROLL_UP_KEYS.has(event.key) || (event.key === " " && event.shiftKey)) {
-        initialEndPlacement.release();
+        readerMoved();
         setScrollDirection("up");
         onScrollIntent?.("up", viewport.clientHeight);
       }
     };
     const handlePointerDown = (event: PointerEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
-      if (event.target === viewport) initialEndPlacement.release();
+      // The viewport itself is only hit on its scrollbar.
+      if (event.target === viewport) readerMoved();
       pointerScrollActiveRef.current = true;
       pointerScrollMovedRef.current = false;
       previousScrollTopRef.current = viewport.scrollTop;
@@ -361,14 +376,32 @@ function ActiveThreadScrollViewport ({
       pointerScrollActiveRef.current = false;
       pointerScrollMovedRef.current = false;
     };
+    // A touch's later events go to the element it started on even once that element is unmounted (history landing,
+    // windows remounting), and then never bubble to the viewport; listening on the start target never loses the lift.
+    const touchTargets = new Set<GlobalEventHandlers>();
+    const releaseTouchTargets = () => {
+      for (const target of touchTargets) {
+        target.removeEventListener("touchmove", handleTouchMove);
+        target.removeEventListener("touchend", handleTouchEnd);
+        target.removeEventListener("touchcancel", handleTouchEnd);
+      }
+      touchTargets.clear();
+    };
     const handleTouchStart = (event: TouchEvent) => {
-      if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
+      if (!(event.target instanceof HTMLElement || event.target instanceof SVGElement)) return;
+      if (event.target.closest("[data-thread-scroll-target]") !== viewport) return;
+      const target: GlobalEventHandlers = event.target;
+      if (!touchTargets.has(target)) {
+        touchTargets.add(target);
+        target.addEventListener("touchmove", handleTouchMove, { passive: true });
+        target.addEventListener("touchend", handleTouchEnd, { passive: true });
+        target.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+      }
       touchClientYRef.current = event.touches.length === 1 ? event.touches[0].clientY : null;
       settle.touchStarted();
       onTouchActivityChange?.(touchClientYRef.current !== null);
     };
-    const handleTouchMove = (event: TouchEvent) => {
-      if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
+    function handleTouchMove (event: TouchEvent) {
       const previousClientY = touchClientYRef.current;
       if (event.touches.length !== 1 || previousClientY === null) {
         touchClientYRef.current = null;
@@ -383,16 +416,19 @@ function ActiveThreadScrollViewport ({
       );
       setScrollDirection(direction);
       if (currentClientY !== previousClientY) {
-        initialEndPlacement.release();
+        readerMoved();
         onScrollIntent?.(direction, Math.abs(currentClientY - previousClientY));
       }
       touchClientYRef.current = currentClientY;
-    };
-    const handleTouchEnd = (event: TouchEvent) => {
+    }
+    function handleTouchEnd (event: TouchEvent) {
       touchClientYRef.current = null;
-      if (event.touches.length === 0) settle.touchEnded();
+      if (event.touches.length === 0) {
+        releaseTouchTargets();
+        settle.touchEnded();
+      }
       onTouchActivityChange?.(false);
-    };
+    }
 
     content.addEventListener("click", handleControlActivated, { capture: true, passive: true });
     viewport.addEventListener("keydown", handleKeyDown);
@@ -400,9 +436,6 @@ function ActiveThreadScrollViewport ({
     viewport.addEventListener("pointermove", handlePointerMove, { passive: true });
     viewport.addEventListener("scroll", handleScroll, { passive: true });
     viewport.addEventListener("scrollend", handleScrollEnd, { passive: true });
-    viewport.addEventListener("touchcancel", handleTouchEnd, { passive: true });
-    viewport.addEventListener("touchend", handleTouchEnd, { passive: true });
-    viewport.addEventListener("touchmove", handleTouchMove, { passive: true });
     viewport.addEventListener("touchstart", handleTouchStart, { passive: true });
     viewport.addEventListener("wheel", handleWheel, { passive: true });
     viewport.ownerDocument.addEventListener("pointercancel", handlePointerEnd, { passive: true });
@@ -417,9 +450,7 @@ function ActiveThreadScrollViewport ({
       viewport.removeEventListener("pointermove", handlePointerMove);
       viewport.removeEventListener("scroll", handleScroll);
       viewport.removeEventListener("scrollend", handleScrollEnd);
-      viewport.removeEventListener("touchcancel", handleTouchEnd);
-      viewport.removeEventListener("touchend", handleTouchEnd);
-      viewport.removeEventListener("touchmove", handleTouchMove);
+      releaseTouchTargets();
       viewport.removeEventListener("touchstart", handleTouchStart);
       viewport.removeEventListener("wheel", handleWheel);
       viewport.ownerDocument.removeEventListener("pointercancel", handlePointerEnd);
@@ -434,8 +465,8 @@ function ActiveThreadScrollViewport ({
         "scrollbar-hover-reveal flex min-h-0 flex-col overflow-x-hidden overflow-y-auto",
         "[--thread-scroll-inline-padding:1.25rem] md:[--thread-scroll-inline-padding:1.5rem]",
         "[--thread-scroll-snap-distance:0px] [overflow-anchor:none] snap-none",
-        "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]]:[scroll-snap-type:y_proximity]",
-        "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]]:[--thread-scroll-snap-distance:calc(100dvh-1px)]",
+        "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]:not([data-thread-scroll-held])]:[scroll-snap-type:y_proximity]",
+        "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]:not([data-thread-scroll-held])]:[--thread-scroll-snap-distance:calc(100dvh-1px)]",
         className,
       )}
       data-thread-scroll-direction="down"

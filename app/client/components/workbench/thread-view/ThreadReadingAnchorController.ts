@@ -2,8 +2,9 @@
  * Exports:
  * - ReadingAnchorOptions: anchor picking, content-relative measurement, and correction boundary.
  * - default ThreadReadingAnchorController: keep what the reader sees still across any layout change above them.
- * - pickThreadReadingAnchor: the leaf at a scroller's reading line, the element whose content position the reader holds.
+ * - pickThreadReadingAnchor: the visible leaf at a scroller's reading line, the element whose content position the reader holds.
  * - pickThreadActivationAnchor: the element a reader holds after activating a control, never content a nested scroller moves.
+ * - getThreadContentOffset: an anchor's layout position in the content, untouched by transforms and animations.
  */
 
 export interface ReadingAnchorOptions<Anchor> {
@@ -11,8 +12,8 @@ export interface ReadingAnchorOptions<Anchor> {
   readonly pick: () => Anchor | null;
   /** Anchor top relative to the scrolled content (independent of scroll position), or null once it left the content. */
   readonly offset: (anchor: Anchor) => number | null;
-  /** Move the reader by `delta` so the anchor keeps its on-screen position. */
-  readonly shift: (delta: number) => void;
+  /** Move the reader by `delta` so the anchor keeps its on-screen position; returns how much actually moved. */
+  readonly shift: (delta: number) => number;
 }
 
 /**
@@ -57,8 +58,9 @@ export default class ThreadReadingAnchorController<Anchor> {
     const offset = this.#anchor === null ? null : this.#options.offset(this.#anchor);
     if (offset === null || this.#offset === null) return false;
     const drift = offset - this.#offset;
-    this.#offset = offset;
-    if (Math.abs(drift) >= 0.5) this.#options.shift(drift);
+    // A scroller at its edge cannot take all of a correction (nothing above scrollTop 0); what it could not take
+    // stays owed, so the next change (the replacement for an unmounted chunk landing) puts the reader back exactly.
+    if (Math.abs(drift) >= 0.5) this.#offset += this.#options.shift(drift);
     return true;
   }
 
@@ -68,12 +70,19 @@ export default class ThreadReadingAnchorController<Anchor> {
   }
 }
 
-function flowChildren(parent: Element): Element[] {
-  const children: Element[] = [];
+/**
+ * Only boxes the reader reads may hold their place: hidden ones (visibility, closed disclosures, skipped content)
+ * keep geometry the reader never sees move, and `aria-hidden` boxes are chrome (spacers, reserves, markers) that move
+ * on their own schedule, not with the text around them. SVG and other non-HTML boxes have no layout offsets to hold.
+ */
+function flowChildren(parent: Element): HTMLElement[] {
+  const children: HTMLElement[] = [];
   for (const child of parent.children) {
+    if (!(child instanceof HTMLElement) || child.ariaHidden === "true") continue;
     const style = getComputedStyle(child);
     if (style.display === "contents") children.push(...flowChildren(child));
-    else if (style.display !== "none" && !/^(?:sticky|fixed|absolute)$/.test(style.position)) children.push(child);
+    else if (style.display !== "none" && !/^(?:sticky|fixed|absolute)$/.test(style.position)
+      && child.checkVisibility?.({ visibilityProperty: true, contentVisibilityAuto: true }) !== false) children.push(child);
   }
   return children;
 }
@@ -116,23 +125,38 @@ function isNestedScroller(element: Element) {
  */
 export function pickThreadReadingAnchor(viewport: HTMLElement, content: Element) {
   const line = viewport.getBoundingClientRect().top + viewport.clientHeight / 2;
-  let anchor: Element | null = null;
+  let anchor: HTMLElement | null = null;
   let next = firstChildReaching(content, line);
   while (next) {
     anchor = next;
     // A placeholder's skipped children have no reliable geometry; the placeholder itself holds the measured space.
-    if ((anchor instanceof HTMLElement && anchor.dataset.threadMeasuredContent === "placeholder")
-      || isNestedScroller(anchor)) break;
+    if (anchor.dataset.threadMeasuredContent === "placeholder" || isNestedScroller(anchor)) break;
     next = firstChildReaching(anchor, line);
   }
   return anchor;
 }
 
 /** What the reader holds after activating `control`: the control itself, or the outermost nested scroller carrying it. */
-export function pickThreadActivationAnchor(control: Element, content: Element) {
+export function pickThreadActivationAnchor(control: HTMLElement, content: Element) {
   let anchor = control;
   for (let element = control.parentElement; element && element !== content; element = element.parentElement) {
     if (isNestedScroller(element)) anchor = element;
   }
   return anchor;
+}
+
+function layoutTop(element: HTMLElement) {
+  let top = 0;
+  for (let node: Element | null = element; node instanceof HTMLElement; node = node.offsetParent) {
+    top += node.offsetTop + (node === element ? 0 : node.clientTop);
+  }
+  return top;
+}
+
+/**
+ * Where an anchor sits in the content's layout. Transforms are left out: entry motion and slides move pixels for a
+ * moment, never the reader's place, so measuring them would read an animation ending as drift and shove the reader.
+ */
+export function getThreadContentOffset(anchor: HTMLElement, content: HTMLElement) {
+  return layoutTop(anchor) - layoutTop(content);
 }

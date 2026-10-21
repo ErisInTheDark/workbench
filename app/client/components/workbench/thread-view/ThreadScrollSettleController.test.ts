@@ -154,6 +154,18 @@ test("a drag caught at the loaded top stays caught until the finger lifts", () =
   assert.equal(f.locked, false);
 });
 
+test("momentum the catch did not stop is put back at the loaded top on the scroll that crossed, not at rest", () => {
+  const f = fixture(1_000);
+  f.moveTo(1_200);
+  f.fling();
+  f.scrollTo(1_100);
+  f.scrollTo(970);
+  assert.equal(f.scrollTop, 1_000);
+  assert.deepEqual(f.scrolls, [1_000, 30]);
+  f.controller.scrollEnded();
+  assert.deepEqual(f.scrolls, [1_000, 30], "nothing is left to repay at rest");
+});
+
 test("an overshoot into the reserve is brought back to the loaded top at rest", () => {
   const f = fixture(1_000);
   f.moveTo(1_200);

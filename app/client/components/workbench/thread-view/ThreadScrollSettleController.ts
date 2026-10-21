@@ -10,7 +10,7 @@ export interface ThreadScrollSettleOptions {
   readonly schedule: (callback: () => void, delayMs: number) => () => void;
   /** Current scroll position; a main-thread stall can delay scroll events while momentum keeps moving it. */
   readonly readScrollTop: () => number;
-  /** Move the scroll position by a delta; only called while the reader is settled. */
+  /** Move the scroll position by a delta; in flight only to put a reader who crossed into the reserve back at the top. */
   readonly scrollBy: (delta: number) => void;
   /** Height in px of the empty spacer above the content. */
   readonly setReserve: (heightPx: number) => void;
@@ -54,15 +54,17 @@ export default class ThreadScrollSettleController {
   }
 
   /**
-   * Keep the reader's visual position after layout above them changed by `delta`.
-   * iOS ignores or halts a fling on scrollTop writes mid-gesture, so in flight the same delta comes out of the
-   * reserve above the content instead: the new content takes the reserve's place and nothing the reader sees moves.
+   * Keep the reader's visual position after layout above them changed by `delta`; returns how much was applied, less
+   * than asked only when a settled scroll hits its edge. iOS ignores or halts a fling on scrollTop writes mid-gesture,
+   * so in flight the same delta comes out of the reserve above the content instead: the new content takes the reserve's
+   * place and nothing the reader sees moves.
    */
   shift(delta: number) {
-    if (!delta) return;
+    if (!delta) return 0;
     if (this.settled) {
+      const before = this.#options.readScrollTop();
       this.#options.scrollBy(delta);
-      return;
+      return this.#options.readScrollTop() - before;
     }
     // Shrinking content first repays overflow; growth spends the reserve, and only what it cannot cover overflows.
     const repaid = delta < 0 ? Math.min(-delta, this.#overflow) : 0;
@@ -77,6 +79,7 @@ export default class ThreadScrollSettleController {
       this.#overflow = overflow;
       this.#options.setContentOffset(overflow ? -overflow : 0);
     }
+    return delta;
   }
 
   touchStarted() {
@@ -103,6 +106,12 @@ export default class ThreadScrollSettleController {
     // top on the frame before they would cross into it, rather than writing scrollTop after they have.
     if (!this.settled && !this.#locked && this.#reserve > 0 && upward > 0 && scrollTop - upward <= this.#reserve) {
       this.#catch();
+    }
+    // Momentum the lock did not stop in time already crossed: put the reader back before that frame paints, a stop at
+    // the top instead of blank reserve and a bounce back at settle. A scroller that ignores the write is repaid at rest.
+    if (!this.settled && scrollTop < this.#reserve) {
+      this.#options.scrollBy(this.#reserve - scrollTop);
+      this.#lastScrollTop = this.#options.readScrollTop();
     }
     if (this.#momentum) this.#armIdle();
   }

@@ -1,10 +1,12 @@
 /*
- * No exports. Tests protect flow-box selection, nested-scroller boundaries, exact-once layout corrections, held
- * activated controls, and re-anchoring after removal.
+ * No exports. Tests protect flow-box selection, hidden boxes never anchoring, transform-free offsets, nested-scroller
+ * boundaries, exact-once layout corrections, held activated controls, and re-anchoring after removal.
  */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import ThreadReadingAnchorController, { pickThreadActivationAnchor, pickThreadReadingAnchor } from "./ThreadReadingAnchorController";
+import ThreadReadingAnchorController, {
+  getThreadContentOffset, pickThreadActivationAnchor, pickThreadReadingAnchor,
+} from "./ThreadReadingAnchorController";
 
 interface FakeAnchor { offset: number; connected: boolean }
 
@@ -14,7 +16,7 @@ function fixture() {
   const controller = new ThreadReadingAnchorController<FakeAnchor>({
     pick: () => atTop,
     offset: anchor => anchor.connected ? anchor.offset : null,
-    shift: delta => shifts.push(delta),
+    shift: delta => { shifts.push(delta); return delta; },
   });
   controller.record();
   return {
@@ -55,6 +57,31 @@ test("a shrink above the reader moves them back up", () => {
   assert.deepEqual(f.shifts, [-300]);
 });
 
+test("a correction the scroller can only partly apply at its edge is finished by the next layout change", () => {
+  const shifts: number[] = [];
+  let scrollTop = 0;
+  const anchor = { offset: 500, connected: true };
+  const controller = new ThreadReadingAnchorController<FakeAnchor>({
+    pick: () => anchor,
+    offset: current => current.offset,
+    shift: delta => {
+      const next = Math.max(0, scrollTop + delta);
+      shifts.push(next - scrollTop);
+      const applied = next - scrollTop;
+      scrollTop = next;
+      return applied;
+    },
+  });
+  controller.record();
+  // An old chunk above unmounts while the reader is at the very top: nothing to scroll back.
+  anchor.offset -= 276;
+  controller.reconcile();
+  // Its replacement lands: the reader ends exactly where they were reading.
+  anchor.offset += 6_612;
+  controller.reconcile();
+  assert.deepEqual(shifts, [0, 6_336]);
+});
+
 test("an unmounted anchor is replaced on the next layout change without inventing a correction", () => {
   const shifts: number[] = [];
   const first = { offset: 100, connected: true };
@@ -63,7 +90,7 @@ test("an unmounted anchor is replaced on the next layout change without inventin
   const controller = new ThreadReadingAnchorController<FakeAnchor>({
     pick: () => atTop,
     offset: anchor => anchor.connected ? anchor.offset : null,
-    shift: delta => shifts.push(delta),
+    shift: delta => { shifts.push(delta); return delta; },
   });
   controller.record();
   first.connected = false;
@@ -203,6 +230,34 @@ test("positioned and hidden siblings cannot redirect the flow search", t => {
     const content = box(-1000, 2200, [reading, box(0, 20, [], display, position)]);
     assert.equal(pickThreadReadingAnchor(viewport, content), reading);
   }
+});
+
+test("boxes the reader cannot see never become the anchor", t => {
+  const { box, viewport } = layoutFixture(t);
+  const reading = box(250, 100);
+  const hidden = box(240, 120, [box(250, 20)]);
+  Object.assign(hidden, { checkVisibility: () => false });
+  const icon = box(200, 200);
+  Object.setPrototypeOf(icon, Object.prototype);
+  const spacer = box(0, 600);
+  Object.assign(spacer, { ariaHidden: "true" });
+  assert.equal(pickThreadReadingAnchor(viewport, box(0, 600, [spacer, hidden, icon, reading])), reading);
+});
+
+test("an anchor's content offset follows layout, not transforms", t => {
+  layoutFixture(t);
+  const positioned = (offsetTop: number, offsetParent: HTMLElement | null, clientTop = 0) => {
+    const element = Object.create(HTMLElement.prototype) as HTMLElement;
+    Object.defineProperties(element, { offsetTop: { value: offsetTop }, offsetParent: { value: offsetParent }, clientTop: { value: clientTop } });
+    return element;
+  };
+  const page = positioned(0, null);
+  const viewport = positioned(40, page, 2);
+  const content = positioned(10, viewport);
+  const card = positioned(300, viewport, 1);
+  const row = positioned(25, card, 4);
+  // The rows' getBoundingClientRect would include any running animation; the offset never reads it.
+  assert.equal(getThreadContentOffset(row, content), 316);
 });
 
 test("a measured placeholder remains the anchor instead of its skipped descendants", t => {

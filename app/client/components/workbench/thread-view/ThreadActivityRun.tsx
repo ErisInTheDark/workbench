@@ -144,7 +144,7 @@ export default function ThreadActivityRun({
         {statusStep ? (
           // The step itself, drawn as the opened card draws it, in a fixed one-row slot so steps of different heights
           // never shift the card. It is a preview: inert, and tapping it toggles the card like the line above.
-          <div className="-mt-1 mb-1 flex h-8 cursor-pointer items-center overflow-hidden" onClick={run.toggle}>
+          <div className="-mt-1 mb-1 flex h-8 cursor-pointer items-center overflow-hidden" data-thread-expander="true" onClick={run.toggle}>
             <ThreadStepEntryAnimation className="step-rows-packed pointer-events-none min-w-0 flex-1" key={statusItemId} play={animateEntries}>
               <ThreadRowChromeContext.Provider value="step">{renderSegment(renderers, statusStep, true, "status")}</ThreadRowChromeContext.Provider>
             </ThreadStepEntryAnimation>
