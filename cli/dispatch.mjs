@@ -1,9 +1,9 @@
 /*
- * No exports. Checkout-owned human commands preserve daemon shell dispatch.
+ * No exports. Checkout-owned human commands, including managed provider passthrough, preserve daemon shell dispatch.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
+import WorkbenchBootstrapCommand, { WorkbenchChildExitError } from "../package/WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "../package/WorkbenchToolchain.mjs";
 import { readJournal, isRepairPending } from "../scripts/installation/update-journal.mjs";
 import { runRepair } from "../scripts/installation/update-repair.mjs";
@@ -11,10 +11,11 @@ import { runRepair } from "../scripts/installation/update-repair.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const view = args[0] === "view" && (args.length === 1 || args.length === 2 && ["daemon", "app"].includes(args[1]));
+const provider = ["codex", "claude", "opencode"].includes(args[0]);
 const command = view ? "view" : args.length === 0 ? "start" : args.length === 1 ? args[0] : null;
 try {
   const native = ["start", "shortcut", "connect", "disconnect", "view", "repair"].includes(command);
-  const humanOnly = ["start", "shortcut", "connect", "disconnect", "view", "repair"].includes(command);
+  const humanOnly = native || provider;
   const managed = process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim();
   if (humanOnly && managed) throw new Error("Managed threads cannot launch or configure Workbench services.");
   if (command === "ports") {
@@ -40,6 +41,11 @@ try {
       await new WorkbenchToolchain().runNode(root, path.join(root, "cli/process-view.ts"), args.slice(1), {
         cwd: root, interactive: true, nodeOptions: ["--disable-warning=ExperimentalWarning"],
       });
+    } else if (provider) {
+      // The caller's cwd is the provider's working directory, so tsx resolves from the checkout instead.
+      await new WorkbenchToolchain().runNode(root, path.join(root, "cli/provider-passthrough.ts"), args, {
+        interactive: true, nodeOptions: ["--disable-warning=ExperimentalWarning", "--import", import.meta.resolve("tsx")],
+      });
     } else if (native) {
       const entry = ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
       await new WorkbenchToolchain().runNode(root, path.join(root, entry), [command], {
@@ -50,6 +56,7 @@ try {
     }
   }
 } catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  // A child that exited with a status already reported its own failure.
+  if (!(error instanceof WorkbenchChildExitError)) process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1;
 }

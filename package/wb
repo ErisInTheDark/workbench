@@ -4,7 +4,10 @@
  */
 import WorkbenchBootstrap from "./WorkbenchBootstrap.mjs";
 
-try { await new WorkbenchBootstrap().run(process.argv.slice(2)); }
+try {
+  const exitCode = await new WorkbenchBootstrap().run(process.argv.slice(2));
+  if (Number.isInteger(exitCode)) process.exitCode = exitCode;
+}
 catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1;

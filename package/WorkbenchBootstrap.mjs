@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchBootstrap (default): locates or installs an editable checkout and delegates to it.
+ * - WorkbenchBootstrap (default): locates or installs an editable checkout and delegates to it; `run` resolves a delegated exit code.
  */
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
-import WorkbenchBootstrapCommand from "./WorkbenchBootstrapCommand.mjs";
+import WorkbenchBootstrapCommand, { WorkbenchChildExitError } from "./WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "./WorkbenchToolchain.mjs";
 import WorkbenchPackageRegistration from "./WorkbenchPackageRegistration.mjs";
 import resolveWorkbenchDataRoot from "./workbench-data-root.mjs";
@@ -189,8 +189,15 @@ export default class WorkbenchBootstrap {
       args[0] === "connect" ? "--connect" : "--welcome"], { cwd: root, interactive: true });
   }
 
+  /** Resolves the checkout CLI's exit code; it already reported its own failure. */
   async delegate(root, args) {
-    return await this.commands.run(process.execPath, [path.join(root, "cli", "dispatch.mjs"), ...args], { interactive: true });
+    try {
+      await this.commands.run(process.execPath, [path.join(root, "cli", "dispatch.mjs"), ...args], { interactive: true });
+      return 0;
+    } catch (error) {
+      if (error instanceof WorkbenchChildExitError) return error.exitCode;
+      throw error;
+    }
   }
 
   async requireEmptyDestination(root) {

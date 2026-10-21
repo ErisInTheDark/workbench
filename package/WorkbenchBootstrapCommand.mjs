@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchBootstrapCommand (default): owns bootstrap child commands, Windows executable lookup (including Git Bash), process-tree cancellation, and failures.
+ * - WorkbenchChildExitError: a child exited with a non-zero status after reporting its own failure; delegators propagate `exitCode` silently.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -17,6 +18,14 @@ function stopTree(child) {
   }
   try { process.kill(-child.pid, "SIGTERM"); }
   catch (error) { if (error.code !== "ESRCH") child.kill("SIGTERM"); }
+}
+
+export class WorkbenchChildExitError extends Error {
+  constructor(command, exitCode) {
+    super(`${command} failed with status ${exitCode}.`);
+    this.name = "WorkbenchChildExitError";
+    this.exitCode = exitCode;
+  }
 }
 
 export default class WorkbenchBootstrapCommand {
@@ -188,7 +197,8 @@ export default class WorkbenchBootstrapCommand {
           }));
         } else if (failure) reject(failure);
         else if (code === 0) resolve();
-        else reject(Object.assign(new Error(`${command} failed with ${exitSignal ? `signal ${exitSignal}` : `status ${code ?? "unknown"}`}.`), { exitCode: code ?? 1 }));
+        else if (code !== null) reject(new WorkbenchChildExitError(command, code));
+        else reject(Object.assign(new Error(`${command} failed with signal ${exitSignal ?? "unknown"}.`), { exitCode: 1 }));
       });
     });
   }

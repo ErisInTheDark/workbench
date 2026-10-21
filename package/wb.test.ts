@@ -63,8 +63,9 @@ test("preserves delegated failure and reports a missing checkout", async (contex
       cwd: fixture.workingDirectory,
       env: { ...process.env, FIXTURE_EXIT_CODE: "7" },
     }),
-    (error: NodeJS.ErrnoException & { code?: number }) => {
+    (error: NodeJS.ErrnoException & { code?: number; stderr?: string }) => {
       assert.equal(error.code, 7);
+      assert.equal(error.stderr, "", "the delegated CLI reports its own failure");
       return true;
     },
   );

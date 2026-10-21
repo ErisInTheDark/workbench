@@ -26,6 +26,9 @@ elif [[ "$#" -eq 1 && "${1:-}" == "ports" ]]; then
 elif [[ "$#" -eq 0 ]] || { [[ "$#" -eq 1 ]] && [[ "${1:-}" == "shortcut" || "${1:-}" == "connect" || "${1:-}" == "disconnect" || "${1:-}" == "repair" ]]; }; then
   checkout_mode=1
   human_only=1
+elif [[ "${1:-}" == "codex" || "${1:-}" == "claude" || "${1:-}" == "opencode" ]]; then
+  checkout_mode=1
+  human_only=1
 elif [[ "${1:-}" == "view" ]] && { [[ "$#" -eq 1 ]] || [[ "$#" -eq 2 && ( "${2:-}" == "daemon" || "${2:-}" == "app" ) ]]; }; then
   checkout_mode=1
   human_only=1

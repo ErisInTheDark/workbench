@@ -1,6 +1,8 @@
 /*
  * Exports:
- * - CodexRuntimeStageOptions: data root plus injectable platform, package source and executable probe.
+ * - CodexRuntimeLocateOptions: data root plus injectable platform and package source.
+ * - CodexRuntimeStageOptions: locate options plus warnings and an injectable executable probe.
+ * - locateCodexRuntime: the pinned Codex binary the daemon runs, without staging it.
  * - default stageCodexRuntime: copy the daemon's pinned Codex platform package into the data root once per version and resolve its binary there.
  */
 import { createRequire } from "node:module";
@@ -27,13 +29,16 @@ const TARGETS: Partial<Record<string, { triple: string; packageName: string }>> 
   "win32-arm64": { triple: "aarch64-pc-windows-msvc", packageName: "@openai/codex-win32-arm64" },
 };
 
-export interface CodexRuntimeStageOptions {
+export interface CodexRuntimeLocateOptions {
   dataRoot: string;
-  warn: (message: string) => void;
   platform?: NodeJS.Platform;
   arch?: string;
   /** Path of the pinned `@openai/codex` manifest; throws MODULE_NOT_FOUND when the package is missing. */
   resolveManifest?: () => string;
+}
+
+export interface CodexRuntimeStageOptions extends CodexRuntimeLocateOptions {
+  warn: (message: string) => void;
   probe?: (executable: string) => Promise<string>;
 }
 
@@ -62,6 +67,34 @@ function locateCodexPackage(target: { triple: string; packageName: string }, res
   return { version, tree: path.join(vendorRoot, target.triple) };
 }
 
+interface CodexRuntimeLayout {
+  target: { triple: string; packageName: string };
+  source: CodexPackage;
+  /** Executable path relative to both the package tree and the staged version directory. */
+  executable: string;
+  versionRoot: string;
+}
+
+function codexRuntimeLayout(options: CodexRuntimeLocateOptions): CodexRuntimeLayout {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const target = TARGETS[`${platform}-${arch}`];
+  if (!target) throw new Error(`Codex has no native build for ${platform}-${arch}.`);
+  const source = locateCodexPackage(target, options.resolveManifest ?? (() => require.resolve("@openai/codex/package.json")));
+  return {
+    target,
+    source,
+    executable: path.join("bin", platform === "win32" ? "codex.exe" : "codex"),
+    versionRoot: providerRuntimeVersionRoot(options.dataRoot, "codex", source.version),
+  };
+}
+
+/** The binary the daemon runs for the pinned Codex: its staged copy once committed, else the checkout's. Never stages. */
+export function locateCodexRuntime(options: CodexRuntimeLocateOptions) {
+  const { source, executable, versionRoot } = codexRuntimeLayout(options);
+  return readInstalledProviderRuntime(versionRoot) ? path.join(versionRoot, executable) : path.join(source.tree, executable);
+}
+
 /**
  * Runs once per daemon process, before any Codex spawn. Codex runs from its data-root copy so a checkout
  * dependency install never deletes or replaces a running binary, and only a restart adopts a new pin.
@@ -69,19 +102,11 @@ function locateCodexPackage(target: { triple: string; packageName: string }, res
  * that recovery treats as a missing installation. A failed copy keeps Codex running from the checkout.
  */
 export default async function stageCodexRuntime(options: CodexRuntimeStageOptions): Promise<() => string> {
-  const platform = options.platform ?? process.platform;
-  const arch = options.arch ?? process.arch;
-  const target = TARGETS[`${platform}-${arch}`];
-  if (!target) {
-    const unsupported = new Error(`Codex has no native build for ${platform}-${arch}.`);
-    return () => { throw unsupported; };
-  }
-  let source: CodexPackage;
-  try { source = locateCodexPackage(target, options.resolveManifest ?? (() => require.resolve("@openai/codex/package.json"))); }
+  let layout: CodexRuntimeLayout;
+  try { layout = codexRuntimeLayout(options); }
   catch (error) { return () => { throw error; }; }
-  const executable = path.join("bin", platform === "win32" ? "codex.exe" : "codex");
+  const { target, source, executable, versionRoot } = layout;
   const root = providerRuntimeRoot(options.dataRoot, "codex");
-  const versionRoot = providerRuntimeVersionRoot(options.dataRoot, "codex", source.version);
   const staged = () => path.join(versionRoot, executable);
   try {
     if (readInstalledProviderRuntime(versionRoot)) return staged;

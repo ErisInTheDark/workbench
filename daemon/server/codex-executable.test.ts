@@ -7,7 +7,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
-import stageCodexRuntime from "./codex-executable";
+import stageCodexRuntime, { locateCodexRuntime } from "./codex-executable";
 
 const TRIPLE = "x86_64-unknown-linux-musl";
 
@@ -26,18 +26,30 @@ async function checkout(context: TestContext, version: string) {
   await writeFile(path.join(tree, "codex-path", "rg"), "rg");
   const probes: string[] = [];
   const warnings: string[] = [];
-  const stage = () => stageCodexRuntime({
+  const location = {
     dataRoot: path.join(temporary.path, "data"),
-    platform: "linux", arch: "x64",
+    platform: "linux" as const, arch: "x64",
     resolveManifest: () => {
       if (!existsSync(manifest)) throw Object.assign(new Error("missing"), { code: "MODULE_NOT_FOUND" });
       return manifest;
     },
+  };
+  const stage = () => stageCodexRuntime({
+    ...location,
     probe: async executable => { probes.push(executable); return `codex-cli ${version}`; },
     warn: message => { warnings.push(message); },
   });
-  return { tree, modules, probes, warnings, stage };
+  const locate = () => locateCodexRuntime(location);
+  return { tree, modules, probes, warnings, stage, locate, dataRoot: location.dataRoot };
 }
+
+test("locating Codex finds the binary the daemon runs without staging it", async context => {
+  const { tree, dataRoot, stage, locate } = await checkout(context, "1.2.3");
+  assert.equal(locate(), path.join(tree, "bin", "codex"));
+  assert.equal(existsSync(dataRoot), false);
+  const staged = (await stage())();
+  assert.equal(locate(), staged);
+});
 
 test("staged Codex and its helpers keep resolving after the checkout package is removed", async context => {
   const { tree, modules, warnings, stage } = await checkout(context, "1.2.3");
