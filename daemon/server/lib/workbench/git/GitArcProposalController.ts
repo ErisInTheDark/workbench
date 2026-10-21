@@ -1163,13 +1163,13 @@ export default class GitArcProposalController {
     if (amend && !freshTitle?.trim()) throw new GitArcRejectionError({ reason: "missingFreshTitle" });
     const revivalAmendSha = revivalTarget?.metadata.mode === "amend" ? revivalTarget.metadata.amendTargetSha : null;
     if (stackTip && (amend || revivalAmendSha)) throw new GitArcRejectionError({ reason: "amendOnPendingStack" });
-    const requestedPaths = rawPaths?.length
-      ? repository.normalizePaths(rawPaths)
-      : repository.normalizePaths(claimedPaths);
+    let requestedPaths = repository.normalizePaths(rawPaths?.length ? rawPaths : claimedPaths);
     if (rawPaths?.length) {
       const claimed = new GitArcPathSet(claimedPaths);
-      const outsideClaim = requestedPaths.filter((candidate) => !claimed.covers(candidate));
+      const outsideClaim = requestedPaths.filter((candidate) => !claimed.overlaps(candidate));
       if (outsideClaim.length) throw new GitArcRejectionError({ reason: "pathsOutsideClaims", paths: outsideClaim }, `Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
+      // A folder holding claims selects only those claims, never unclaimed content beneath it.
+      requestedPaths = [...new Set(requestedPaths.flatMap((candidate) => claimed.covers(candidate) ? [candidate] : claimed.overlapping(candidate)))];
     }
     let liveBaseCommit: string | null;
     if (stackTip) {

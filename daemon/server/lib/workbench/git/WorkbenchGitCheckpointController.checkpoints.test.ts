@@ -1044,6 +1044,25 @@ test("pending proposals in one thread never share live paths", async (context) =
   assert.deepEqual(replacement.paths, ["literal1.txt"]);
 });
 
+test("proposing a folder selects only the claimed files beneath it", async (context) => {
+  const fixture = await fixtureCache.copyFresh(CHECKPOINT_OPERATIONS_FIXTURE);
+  context.after(fixture.dispose);
+  const { root: repoRoot } = branchFixture(fixture, "additions");
+  const identity = { cwd: repoRoot, threadId: "thread-folder" };
+  const plan = await createGitPlan({ ...identity, intentName: "Folder proposal", paths: ["nested/a.txt", "nested/b.txt"] });
+  await startGitArc({ ...identity, checkpointCommit: plan.checkpointCommit });
+  await write(repoRoot, "nested/a.txt", "a\n");
+  await write(repoRoot, "nested/b.txt", "b\n");
+  await write(repoRoot, "nested/unclaimed.txt", "not ours\n");
+
+  await assert.rejects(
+    createGitCheckpointProposal({ ...identity, description: "", paths: ["elsewhere"], title: "Outside" }),
+    (error: unknown) => error instanceof GitArcRejectionError && error.rejection.reason === "pathsOutsideClaims",
+  );
+  const proposal = await createGitCheckpointProposal({ ...identity, description: "", paths: ["nested", "nested/a.txt"], title: "Folder" });
+  assert.deepEqual(proposal.paths, ["nested/a.txt", "nested/b.txt"]);
+});
+
 test("discard drops frozen work without changing the worktree and keeps an inactive successor plan", async (context) => {
   const fixture = await fixtureCache.copyFresh(CHECKPOINT_OPERATIONS_FIXTURE);
   context.after(fixture.dispose);
