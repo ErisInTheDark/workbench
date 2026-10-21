@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default MarkdownRender: render cached thread markdown with the contextual project's file, workspace and mention links plus external absolute file links; live text fades in and streaming text renders its frontier, or only complete blocks under per-paragraph reveal. Keywords: thread markdown, file links, external git roots, streaming.
- * - Local helpers: bound rendered Markdown and external-root caches, and own one reveal timeline per live render context. Keywords: cache, markdown, reveal.
+ * - Local helpers: bound rendered Markdown and external-root caches, and own one reveal timeline per live render context that never replays or re-hides text already shown. Keywords: cache, markdown, reveal.
  */
 "use client";
 
@@ -251,17 +251,26 @@ function prefersReducedMotion() {
   return typeof window !== "undefined" && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
 }
 
-/** One reveal timeline per live render context; a changed context starts settled again. */
-function useRevealTimeline(live: boolean, streaming: boolean, contextKey: string) {
+/**
+ * What this render has already put on screen never animates or hides again, even when a paused turn goes live again
+ * (an answered questionnaire). Only text streaming in as the render first shows it fades whole; a later reveal timeline
+ * (a changed context, or live again) starts settled, and text once shown whole keeps its last word while it streams.
+ */
+function useShownText(markdown: string, live: boolean, streaming: boolean, contextKey: string) {
   const timelineRef = useRef<{ contextKey: string; timeline: MarkdownRevealTimeline } | null>(null);
+  const shownRef = useRef<{ whole: string | null } | null>(null);
+  const partial = streaming && markdown !== shownRef.current?.whole;
+  useLayoutEffect(() => {
+    shownRef.current = { whole: partial ? shownRef.current?.whole ?? null : markdown };
+  }, [markdown, partial]);
   if (!live || prefersReducedMotion()) {
     timelineRef.current = null;
-    return null;
+    return { partial, timeline: null };
   }
   if (timelineRef.current?.contextKey !== contextKey) {
-    timelineRef.current = { contextKey, timeline: new MarkdownRevealTimeline(streaming ? 0 : null) };
+    timelineRef.current = { contextKey, timeline: new MarkdownRevealTimeline(streaming && !shownRef.current ? 0 : null) };
   }
-  return timelineRef.current.timeline;
+  return { partial, timeline: timelineRef.current.timeline };
 }
 
 /** Links and mentions resolve against the surrounding contextual project; outside one, markdown renders without project links. */
@@ -306,7 +315,7 @@ export default memo(function MarkdownRender ({
     threadCwdPath,
     workspaceRoots: resolvedWorkspaceRoots,
   }), [project, resolvedWorkspaceRoots, threadCwdPath]);
-  const timeline = useRevealTimeline(live, streaming, contextKey);
+  const { partial, timeline } = useShownText(markdown, live, streaming, contextKey);
   const animationStyle = useContext(ThreadAnimationStyleContext);
   const caret = streaming && animationStyle.caret;
   const holdIncompleteBlocks = animationStyle.perParagraph;
@@ -314,9 +323,9 @@ export default memo(function MarkdownRender ({
     if (!live) return { cursor: null, rendered: renderCachedThreadMarkdown(markdown, renderOptions, cacheKey) };
     const cursor = timeline?.cursor(performance.now()) ?? null;
     return { cursor, rendered: renderThreadMarkdown(markdown, {
-      ...renderOptions, caret, holdIncompleteBlocks, partial: streaming, reveal: cursor ?? undefined,
+      ...renderOptions, caret, holdIncompleteBlocks, partial, reveal: cursor ?? undefined,
     }) };
-  }, [cacheKey, caret, holdIncompleteBlocks, live, markdown, renderOptions, streaming, timeline]);
+  }, [cacheKey, caret, holdIncompleteBlocks, live, markdown, partial, renderOptions, timeline]);
 
   useLayoutEffect(() => {
     if (presentation.cursor) timeline?.commit(presentation.cursor);
