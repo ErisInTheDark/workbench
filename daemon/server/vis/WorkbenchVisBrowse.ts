@@ -2,8 +2,8 @@
  * Exports:
  * - VisBrowsePort: run a Browse script or stop a session as a vis session's thread.
  * - VisBrowseTarget: the vis session, its thread and the render to show.
- * - default WorkbenchVisBrowse: own each vis session's headless Browse session: write its current render as a framed
- *   page seeded with the user's control state, open it, return a snapshot or screenshot of it, and stop it with the vis.
+ * - default WorkbenchVisBrowse: own each vis session's headless Browse session: keep its page on the current render,
+ *   framed and seeded with the user's control state, open it, return a snapshot or screenshot of it, and stop it with the vis.
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -38,6 +38,8 @@ export default class WorkbenchVisBrowse {
   readonly #directory: string;
   readonly #port: VisBrowsePort;
   readonly #log: (message: string) => void;
+  /** Each session's page writes and removal, in order, so an older render never lands over a newer one or after the end. */
+  readonly #pageWrites = new Map<string, Promise<void>>();
 
   constructor(options: { directory: string; port: VisBrowsePort; log(message: string): void }) {
     this.#directory = options.directory;
@@ -55,6 +57,15 @@ export default class WorkbenchVisBrowse {
       await this.#load(target, `Opening vis of ${target.path}`);
     } catch (error) {
       this.#log(`Vis browser for ${target.path} could not open: ${message(error)}`);
+    }
+  }
+
+  /** Puts a rebuilt render in the page without navigating, so a `reload` in the session shows what the card shows. */
+  async refresh(target: VisBrowseTarget) {
+    try {
+      await this.#writePage(target);
+    } catch (error) {
+      this.#log(`Vis browser page for ${target.path} could not refresh: ${message(error)}`);
     }
   }
 
@@ -81,21 +92,33 @@ export default class WorkbenchVisBrowse {
     } catch (error) {
       this.#log(`Vis browser ${WorkbenchVisBrowse.sessionName(target.sessionId)} could not stop: ${message(error)}`);
     }
-    await rm(this.#page(target.sessionId), { force: true }).catch((error: unknown) => {
+    await this.#queuePage(target.sessionId, () => rm(this.#page(target.sessionId), { force: true })).catch((error: unknown) => {
       this.#log(`Vis browser page for ${target.sessionId} could not be removed: ${message(error)}`);
     });
+    this.#pageWrites.delete(target.sessionId);
   }
 
   #page(sessionId: string) {
     return path.join(this.#directory, `${sessionId}.html`);
   }
 
+  #queuePage(sessionId: string, write: () => Promise<void>) {
+    const queued = (this.#pageWrites.get(sessionId) ?? Promise.resolve()).catch(() => undefined).then(write);
+    this.#pageWrites.set(sessionId, queued);
+    return queued;
+  }
+
+  #writePage(target: VisBrowseTarget) {
+    return this.#queuePage(target.sessionId, async () => {
+      await mkdir(this.#directory, { recursive: true });
+      await writeFile(this.#page(target.sessionId), frameVisDocument(target.document, target.controls));
+    });
+  }
+
   /** Writes the framed current render and opens it at the card's width. */
   async #load(target: VisBrowseTarget, summary: string) {
-    const page = this.#page(target.sessionId);
-    await mkdir(this.#directory, { recursive: true });
-    await writeFile(page, frameVisDocument(target.document, target.controls));
-    await this.#script(target, `open ${pathToFileURL(page).href} --headless\n${VIEWPORT}`, summary);
+    await this.#writePage(target);
+    await this.#script(target, `open ${pathToFileURL(this.#page(target.sessionId)).href} --headless\n${VIEWPORT}`, summary);
   }
 
   /** Script requests answer with one command response; failures carry `error`. */

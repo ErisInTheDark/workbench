@@ -58,6 +58,10 @@ async function fixture(context: TestContext) {
       browse.controls.push(target.controls);
       return `${kind} of ${target.document}`;
     },
+    refresh: async (target: { document: string; controls: VisControls }) => {
+      browse.calls.push(`refresh ${target.document}`);
+      browse.controls.push(target.controls);
+    },
     end: async (target: { sessionId: string }) => { browse.calls.push(`end ${target.sessionId}`); },
   };
   const create = (): WorkbenchVisController => {
@@ -204,7 +208,7 @@ test("ending snapshots the current file and stops watching; a new generation res
   second.dispose();
 });
 
-test("a session's browser opens with it, checks its latest render, and stops when it ends", async context => {
+test("a session's browser opens with it, follows each rebuild, checks its latest render, and stops when it ends", async context => {
   const f = await fixture(context);
   await writeFile(f.file, "<p>one</p>");
   const controller = f.create();
@@ -216,7 +220,7 @@ test("a session's browser opens with it, checks its latest render, and stops whe
   await rendered;
   assert.equal(await controller.inspect(target, "screenshot"), "screenshot of <p>two</p>");
   await controller.endSession(target);
-  assert.deepEqual(f.browse.calls, ["open <p>one</p>", "screenshot <p>two</p>", `end ${sessionId}`]);
+  assert.deepEqual(f.browse.calls, ["open <p>one</p>", "refresh <p>two</p>", "screenshot <p>two</p>", `end ${sessionId}`]);
   await assert.rejects(controller.inspect(target, "snapshot"), /No vis session is live/u);
   controller.dispose();
 });
@@ -262,6 +266,7 @@ test("control changes are JSON from a live session, reach every frame of it, and
   const published = until(controller, session => session.controls.tab === "\"card\"");
   await controller.setControl("thread", sessionId, "tab", "\"card\"");
   await published;
+  assert.deepEqual([f.browse.calls.at(-1), f.browse.controls.at(-1)], ["refresh <p>x</p>", { tab: "\"card\"" }], "a reload in the agent's browser sees the user's state");
   assert.deepEqual(await controller.readControls(target), { path: "mock.html", live: true, controls: { tab: "\"card\"" } });
   await controller.inspect(target, "screenshot");
   assert.deepEqual(f.browse.controls.at(-1), { tab: "\"card\"" }, "the agent's browser sees the user's state");

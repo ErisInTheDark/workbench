@@ -6,7 +6,7 @@
  *   last render and marks one in flight, and only a finished render replaces it. Live sessions survive reloads
  *   through storage and resume on start. Each session builds in its caller's project, another folder's `.wb.json`,
  *   or Workbench's kit, keeps its file's synced control state (which outlives the session), and has a headless browser
- *   agents check it in with that state.
+ *   agents check it in with that state, whose page follows every render.
  */
 import { randomUUID } from "node:crypto";
 import { watch as watchDirectory } from "node:fs";
@@ -38,7 +38,7 @@ export interface WorkbenchVisControllerOptions {
   /** Resolves the verified absolute pwsh.exe path used for Windows project commands. */
   powerShellExecutable?(): Promise<string>;
   /** Each session's headless browser, opened with it and stopped when it ends. */
-  browse?: Pick<WorkbenchVisBrowse, "end" | "inspect" | "open">;
+  browse?: Pick<WorkbenchVisBrowse, "end" | "inspect" | "open" | "refresh">;
   /** Calls `onChange` whenever the file may have changed; returns a stop function. */
   watch?(file: string, onChange: () => void): () => void;
   now?(): number;
@@ -197,6 +197,7 @@ export default class WorkbenchVisController {
     if (!sessions.length || !live) throw new Error("That vis session is no longer live.");
     live.state = { ...live.state, controls: { ...live.state.controls, [controlId]: value } };
     this.#publish(threadId);
+    this.#refreshBrowser(live);
   }
 
   /** The control state of the caller's file, live or from an ended session. */
@@ -343,7 +344,14 @@ export default class WorkbenchVisController {
         rendering: live.again,
       };
       this.#publish(live.stored.threadId);
+      if (replace) this.#refreshBrowser(live);
     } while (live.again);
+  }
+
+  /** The session's browser page follows the card, so a reload there shows the latest render; it never rejects. */
+  #refreshBrowser(live: Live) {
+    const render = live.state.render;
+    if (render) void this.#options.browse?.refresh({ ...live.stored, document: render.document, controls: live.state.controls });
   }
 
   async #end(live: Live, endedBy: "agent" | "user" = "agent") {

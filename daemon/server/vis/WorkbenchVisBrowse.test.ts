@@ -47,6 +47,22 @@ test("a snapshot opens the framed current render in the session's browser and re
   await assert.rejects(access(page), /ENOENT/u);
 });
 
+test("a refresh puts the latest render in the page a reload opens, without driving the browser, until the vis ends", async context => {
+  const f = await fixture(context, () => reply(json({ url: "file:///page" })));
+  await f.browse.open(f.target);
+  const page = fileURLToPath(/^open (\S+)/u.exec(f.requests[0]!.script)![1]!);
+  const refreshed = f.browse.refresh({ ...f.target, document: "<p>two</p>" });
+  const ended = f.browse.end(f.target);
+  await refreshed;
+  await ended;
+  assert.equal(f.requests.length, 1, "a refresh never navigates the session");
+  await assert.rejects(access(page), /ENOENT/u, "a refresh queued before the end cannot bring the page back");
+
+  const live = { ...f.target, sessionId: "fedcba9876543210" };
+  await f.browse.refresh({ ...live, document: "<p>three</p>" });
+  assert.ok((await readFile(page.replace(f.target.sessionId, live.sessionId), "utf8")).endsWith("<p>three</p>"));
+});
+
 test("a screenshot names the stored image so its transcript entry can show it", async context => {
   const assetUrl = "/api/transcript-assets/thread/shot.png";
   const f = await fixture(context, request => request.script.startsWith("open ")
