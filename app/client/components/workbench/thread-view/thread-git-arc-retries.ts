@@ -1,42 +1,44 @@
 /*
  * Exports:
- * - readGitArcStartAttempt: a block that is one Git arc start (plain or plan start, MCP or CLI) and how it ended.
- * - foldGitArcRetries: fold failed arc starts, the work between them and the start that finally succeeded into one block.
+ * - readGitArcStartAttempt: a block that is one Git arc start (plain start, plan start or wait, MCP or CLI) and how it ended.
+ * - foldGitArcRetries: fold failed arc starts or waits, the work between them and the start that finally succeeded into one block.
  */
 import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
 import {
   getGitArcMatcherAction, getThreadCommandDisplay, getThreadCommandExecutionOutcome, getThreadMcpToolCallOutcome,
-  getWorkbenchMcpCommandRoute, type GitArcCommandAction,
+  getWorkbenchMcpCommandRoute, isGitArcWaitMatcherClaim, type GitArcCommandAction,
 } from "../../../workbench/thread/thread-command-matchers";
 import { pushActivitySegment } from "./thread-activity-runs";
 import {
   getRenderableBlockItems, type ActivitySegment, type CommandSequenceItem, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
 
-type ArcCall = { action: GitArcCommandAction; item: CommandSequenceItem; outcome: "completed" | "failed" | "other" };
+/** A wait starts its plan once sibling claims clear, so it is a start attempt too. */
+type ArcCallAction = GitArcCommandAction | "wait";
+type ArcCall = { action: ArcCallAction; item: CommandSequenceItem; outcome: "completed" | "failed" | "other" };
 
-const STARTS: ReadonlySet<GitArcCommandAction> = new Set(["start", "planStart"]);
+const STARTS: ReadonlySet<ArcCallAction> = new Set(["start", "planStart", "wait"]);
 /** Reads an agent makes while working out why its start failed; they change nothing, so they fold into the retry. */
-const READS: ReadonlySet<GitArcCommandAction> = new Set(["status", "scope"]);
+const READS: ReadonlySet<ArcCallAction> = new Set(["status", "scope"]);
 
 /** One Git arc call standing alone as a block; an interrupted or running call has no settled outcome. */
 function readArcCall(block: ThreadRenderableBlock): ArcCall | null {
   if (block.kind === "item" && block.item.type === "mcpToolCall") {
     const item = block.item;
     const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
-    if (route?.kind !== "specialized" || route.operation.kind !== "gitArc") return null;
+    if (route?.kind !== "specialized" || (route.operation.kind !== "gitArc" && route.operation.kind !== "gitArcWait")) return null;
     const typed = readGitArcMcpResult(item.result?.structuredContent ?? null);
     const result = typed?.kind === "valid" ? typed.result : null;
     const base = getThreadMcpToolCallOutcome(item);
     const outcome = result?.kind === "interruptedBySteer" || base === "inProgress" ? "other"
       : result?.kind === "failure" || typed?.kind === "invalid" || base === "failed" ? "failed" : "completed";
-    return { action: route.operation.operation.action, item, outcome };
+    return { action: route.operation.kind === "gitArcWait" ? "wait" : route.operation.operation.action, item, outcome };
   }
   if (block.kind !== "commandSequence" || block.items.length !== 1) return null;
   const item = block.items[0]!;
   if (item.type !== "commandExecution") return null;
   const display = getThreadCommandDisplay({ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell });
-  const action = getGitArcMatcherAction(display.claimedBy);
+  const action = isGitArcWaitMatcherClaim(display.claimedBy) ? "wait" : getGitArcMatcherAction(display.claimedBy);
   if (!action) return null;
   const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
   return { action, item, outcome: outcome === "completed" ? "completed" : outcome === "failed" || outcome === "timedOut" ? "failed" : "other" };

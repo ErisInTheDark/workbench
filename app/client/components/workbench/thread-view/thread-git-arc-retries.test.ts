@@ -69,6 +69,13 @@ test("every failed attempt before the success folds and counts", () => {
   assert.equal(retry?.kind === "gitArcRetry" ? retry.failedAttempts : null, 2);
 });
 
+test("a failed wait starts a retry like a failed start", () => {
+  const [retry, ...rest] = fold([mcp("waited", "git_arc_wait", "failed"), mcp("diffed", "git_arc_diff"), mcp("started", "git_arc_start")]);
+  assert.equal(rest.length, 0);
+  assert.equal(retry?.kind === "gitArcRetry" ? retry.failedAttempts : null, 1);
+  assert.deepEqual(fold([cli("waited", "wb git arc wait", 1), cli("started", "wb git arc start")]).map(block => block.kind), ["gitArcRetry"]);
+});
+
 test("CLI starts fold like MCP starts", () => {
   const blocks = fold([cli("failed", "wb git arc start", 1), thought("why"), cli("started", "wb git plan start --inherit")]);
   assert.deepEqual(blocks.map(block => block.kind), ["gitArcRetry"]);
