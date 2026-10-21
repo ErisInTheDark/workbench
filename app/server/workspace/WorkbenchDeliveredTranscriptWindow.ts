@@ -17,9 +17,7 @@ import {
   splitWorkbenchTranscriptSnapshot,
 } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import {
-  deferWorkbenchTranscriptEnvelopeBody, LIVE_TURN_EAGER_TOOL_CALLS,
-} from "workbench-shared/workbench/transcript/workbench-transcript-deferred-bodies";
+import { deferWorkbenchTranscriptEnvelopeBody } from "workbench-shared/workbench/transcript/workbench-transcript-deferred-bodies";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
 import {
   projectWorkbenchTranscript,
@@ -149,22 +147,7 @@ export default class WorkbenchDeliveredTranscriptWindow {
       this.#signatures.clear();
       this.#bodies.clear();
       this.#remember(fresh);
-      // A live turn's latest tools feed the live terminal, so only its older tools start deferred, like settled turns.
-      const liveTurns = new Set(result.catalog.turns
-        .filter(turn => turn.state === "inProgress" || turn.state === "admitted").map(turn => turn.id));
-      const eager = new Set(fresh
-        .filter(envelope => {
-          const root = envelope.snapshot.rows.threadItems[0];
-          return root?.type === "operation" && liveTurns.has(root.turn_id);
-        })
-        .sort((left, right) => compareWorkbenchTranscriptItemCursors(right.cursor, left.cursor))
-        .slice(0, LIVE_TURN_EAGER_TOOL_CALLS)
-        .map(envelope => envelope.itemId));
-      const envelopes = fresh.map(envelope => {
-        const root = envelope.snapshot.rows.threadItems[0];
-        return root && liveTurns.has(root.turn_id) && (root.type !== "operation" || eager.has(envelope.itemId))
-          ? envelope : this.#defer(envelope);
-      });
+      const envelopes = fresh.map(envelope => this.#defer(envelope));
       const loaded = new Set(envelopes.flatMap(envelope => envelope.snapshot.loadedTurnIds));
       return this.#apply(composeWorkbenchTranscriptWindow({ ...result.catalog, turns: browserTurns(result.catalog.turns, loaded) }, envelopes, {
         hasPreviousItems: result.hasMore,

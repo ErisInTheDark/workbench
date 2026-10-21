@@ -332,9 +332,11 @@ function hidden(claimedBy: string) {
   } satisfies WorkbenchCommandRoute;
 }
 
+/** Its own renderer draws the row; the ongoing phrase still names the running action for live status. */
 function specialized(
   claimedBy: string,
   operation: WorkbenchSpecializedOperation,
+  ongoing: string,
   stats?: Partial<ThreadCommandSummaryStats>,
 ) {
   return {
@@ -345,7 +347,7 @@ function specialized(
       result: CommandMatcher.Result({
         omitFromDisplay: true,
         ownRow: true,
-        ongoingSummaryParts: [],
+        ongoingSummaryParts: [CommandMatcher.Text(ongoing)],
         remainingCommand: null,
         stop: true,
         summaryParts: [],
@@ -525,11 +527,34 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
   return actions[name] ?? null;
 }
 
+const GIT_ARC_ONGOING: Record<WorkbenchGitArcOperation["action"], string> = {
+  adopt: "Adopting claims",
+  claims: "Claiming files",
+  compare: "Comparing changes",
+  continue: "Continuing arc",
+  diff: "Diffing changes",
+  edit: "Editing files",
+  plan: "Planning claims",
+  planStart: "Planning claims",
+  propose: "Proposing changes",
+  release: "Releasing claims",
+  rescind: "Rescinding proposal",
+  restore: "Restoring files",
+  scope: "Scoping claims",
+  stack: "Stacking proposals",
+  start: "Starting arc",
+  stash: "Stashing arc",
+  status: "Checking arc status",
+  unknown: "Executing arc command",
+  unstack: "Unstacking proposals",
+  unstash: "Unstashing arc",
+};
+
 export function getUnknownGitArcCommandRoute(): WorkbenchCommandRoute {
   return specialized("git-arc.unknown", {
     kind: "gitArc",
     operation: { action: "unknown", intentName: null, paths: [], ref: null },
-  });
+  }, GIT_ARC_ONGOING.unknown);
 }
 
 function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: string]: JsonValue | undefined }) {
@@ -606,7 +631,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
       : action === "propose" || action === "rescind" || action === "scope" || action === "stack" || action === "unstack"
         ? undefined
         : { gitCheckpointCreates: 1 };
-  return specialized(matcherIds[action], { kind: "gitArc", operation }, stats);
+  return specialized(matcherIds[action], { kind: "gitArc", operation }, GIT_ARC_ONGOING[action], stats);
 }
 
 function renderSubagentQueue(action: "queue" | "dequeue", args: { [key: string]: JsonValue | undefined }): WorkbenchCommandRoute {
@@ -650,6 +675,7 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
     const userVisibleSimpleVersion = action === "create"
       ? readString(args.userVisibleSimpleVersion)
       : null;
+    const ongoing = { create: "Creating subagent", settle: "Settling subagents", stop: "Stopping subagents", wait: "Waiting for subagents" }[action];
     return specialized("workbench-cli.subagent", {
       kind: "subagent",
       operation: {
@@ -661,7 +687,7 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
         title: readString(args.title),
         ...(userVisibleSimpleVersion ? { userVisibleSimpleVersion } : {}),
       },
-    });
+    }, ongoing);
   }
   const target = action === "list" ? "subagents" : "subagent profiles";
   return simple(
@@ -686,7 +712,7 @@ function renderMessage(args: { [key: string]: JsonValue | undefined }): Workbenc
   return specialized("workbench-cli.message", {
     kind: "message",
     operation: { message: readString(args.message), target, userVisibleSimpleVersion: readString(args.userVisibleSimpleVersion) },
-  });
+  }, "Messaging thread");
 }
 
 export function getWorkbenchCommandRoute(
@@ -712,7 +738,7 @@ export function getWorkbenchCommandRoute(
     case "skill":
       return renderSkillLoad(readString(args.name), context);
     case "git_arc_wait":
-      return specialized("git-arc.wait", { kind: "gitArcWait", ref: readString(args.ref) });
+      return specialized("git-arc.wait", { kind: "gitArcWait", ref: readString(args.ref) }, "Waiting for claims");
     case "request_user_input":
       return hidden("workbench-cli.questionnaire");
     case "toc": {
@@ -792,7 +818,8 @@ export function getWorkbenchCommandRoute(
       const action = WORKBENCH_VIS_ACTIONS.find(action => name === `vis_${action}`)!;
       // Browser checks are routine enough to group; the stat names them in the block summary.
       const stats = action === "snapshot" || action === "screenshot" ? { visChecks: 1 } : undefined;
-      return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action, path } }, stats) : null;
+      const ongoing = { end: "Ending vis", read: "Reading vis", screenshot: "Checking vis", snapshot: "Checking vis", start: "Showing vis" }[action];
+      return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action, path } }, ongoing, stats) : null;
     }
     case "mcp_tools": {
       const query = readString(args.query);
@@ -829,12 +856,12 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));
     case "task_set": {
       const title = readString(args.title);
-      return title ? specialized("workbench-cli.task-title-set", { kind: "threadTitle", title }) : null;
+      return title ? specialized("workbench-cli.task-title-set", { kind: "threadTitle", title }, "Naming task") : null;
     }
     case "task_completed":
-      return specialized("workbench-cli.task-status", { kind: "threadStatus", status: "completed" });
+      return specialized("workbench-cli.task-status", { kind: "threadStatus", status: "completed" }, "Marking task completed");
     case "task_blocked":
-      return specialized("workbench-cli.task-status", { kind: "threadStatus", status: "blocked" });
+      return specialized("workbench-cli.task-status", { kind: "threadStatus", status: "blocked" }, "Marking task blocked");
     case "thread_refresh":
       return simple("workbench-cli.thread-refresh", actionTarget("Refreshing ", "thread"), actionTarget("Refreshed ", "thread"));
     case "thread_compact":
@@ -843,17 +870,17 @@ export function getWorkbenchCommandRoute(
       return specialized("thread-context.read", {
         kind: "threadRecall",
         operation: { action: "search", query: readString(args.query) },
-      });
+      }, "Recalling thread history");
     case "thread_recall_expand":
       return specialized("thread-context.read", {
         kind: "threadRecall",
         operation: { action: "expand", query: null },
-      });
+      }, "Recalling thread history");
     case "thread_recall":
       return specialized("thread-context.read", {
         kind: "threadRecall",
         operation: { action: "recall", query: null },
-      });
+      }, "Recalling thread history");
     case "git_add":
       return simple("workbench-git.selection", actionTarget("Selecting ", "files for commit"), actionTarget("Selected ", "files for commit"));
     case "git_unstage":

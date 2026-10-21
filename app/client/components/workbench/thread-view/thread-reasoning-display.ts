@@ -5,12 +5,9 @@
  * - getThreadReasoningSteps: project reasoning items into ordered visible steps. Keywords: reasoning, projection, order.
  * - projectThreadReasoningMarkdown: derive one reasoning title and body from presented Markdown. Keywords: reasoning, presentation, title.
  * - getLatestReasoningSentence: the first sentence of live reasoning's newest prose paragraph, skipping fenced code. Keywords: reasoning, live, sentence.
- * - getCurrentThreadReasoningActivity: select the newest live reasoning step after pending steers. Keywords: reasoning, live, status.
  * - omitThreadReasoningStep: remove one exact live step while preserving earlier disclosure content. Keywords: reasoning, disclosure, filter.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 
@@ -138,35 +135,6 @@ export function getThreadReasoningSteps(items: readonly ReasoningItem[]): Thread
       }];
     });
   });
-}
-
-/** `turn` is the thread's live turn (null when the thread is not working); its own status is not consulted. */
-export function getCurrentThreadReasoningActivity(turn: Turn | null) {
-  if (!turn) return null;
-
-  let latestActivityItemIndex = turn.items.length - 1;
-  while (
-    latestActivityItemIndex >= 0
-    && isWorkbenchPendingSteerUserMessage(turn.items[latestActivityItemIndex]!)
-  ) {
-    latestActivityItemIndex -= 1;
-  }
-
-  const latestItem = turn.items[latestActivityItemIndex];
-  if (!latestItem || latestItem.type !== "reasoning") return null;
-  const latestStep = getThreadReasoningSteps([latestItem]).at(-1);
-  return latestStep
-    ? {
-      body: latestStep.body,
-      hiddenStep: {
-        itemId: latestStep.itemId,
-        sectionIndex: latestStep.sectionIndex,
-        source: latestStep.source,
-      } satisfies ThreadReasoningStepReference,
-      markdown: latestStep.markdown,
-      title: latestStep.title,
-    }
-    : { body: null, hiddenStep: null, markdown: null, title: "Thinking" };
 }
 
 export function omitThreadReasoningStep(

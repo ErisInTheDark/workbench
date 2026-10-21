@@ -10,7 +10,6 @@ import {
   type WorkbenchTranscriptSnapshot,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { composeWorkbenchTranscriptWindow } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
-import { LIVE_TURN_EAGER_TOOL_CALLS } from "workbench-shared/workbench/transcript/workbench-transcript-deferred-bodies";
 import {
   applyTranscriptLayoutPatch,
   applyTranscriptStructure,
@@ -188,17 +187,6 @@ test("settled history tool bodies stay app-side until the browser asks for them"
   assert.ok(replaced?.type === "dynamicToolCall");
   assert.equal(replaced.bodyDeferred, undefined, "live changes arrive complete");
   assert.throws(() => window.bodies(["item-0"]), /no deferred body/);
-});
-
-test("a live turn's first page defers only tool bodies older than the live terminal can show", () => {
-  const count = LIVE_TURN_EAGER_TOOL_CALLS + 2;
-  const source = history(count);
-  for (let index = 0; index < count; index += 1) withReadTool(source, index);
-  const window = new WorkbenchDeliveredTranscriptWindow();
-  const baseline = window.deliver(page(source, 0, count, false));
-  assert.deepEqual(baseline?.snapshot.deferredItemBodies, [{ itemId: 1 }, { itemId: 2 }]);
-  assert.equal(baseline?.snapshot.rows.threadCallableDynamicContent.length, LIVE_TURN_EAGER_TOOL_CALLS);
-  assert.equal(window.bodies(["item-0"]).rows.threadCallableDynamicContent[0]?.text, "file body");
 });
 
 test("a thread without history takes its first live baseline as the browser baseline", () => {

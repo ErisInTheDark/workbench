@@ -164,7 +164,8 @@ function assertRouteOnlyDisplay(
   assert.equal(display.claimedBy, claimedBy);
   assert.equal(display.omitFromDisplay, true);
   assert.deepEqual(display.summaryParts, []);
-  assert.deepEqual(display.ongoingSummaryParts, []);
+  // The live status row still needs the running action's verb.
+  assert.match(display.ongoingSummaryText, /^[A-Z][a-z]+ing\b/u);
 }
 
 function displayPartKinds(parts: readonly ThreadCommandDisplayPart[]) {
@@ -1423,7 +1424,7 @@ wb git arc propose --replace proposal-one --title \"make arc Git transactions co
   );
   assert.equal(display.omitFromDisplay, true);
   assert.deepEqual(display.summaryParts, []);
-  assert.deepEqual(display.ongoingSummaryParts, []);
+  assert.match(display.ongoingSummaryText, /^Proposing\b/u);
   assert.deepEqual(parseGitCheckpointCommitCommand(display.unwrappedCommand), {
     description,
     mode: null,

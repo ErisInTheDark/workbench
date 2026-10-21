@@ -12,7 +12,7 @@ import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/t
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import createDraftThreadSource from "./DraftThreadSource";
 import ThreadStore from "./ThreadStore";
-import { getLiveThreadActivity } from "../../components/workbench/thread-view/thread-live-activity";
+import { getLiveThreadVerb } from "../../components/workbench/thread-view/thread-live-activity";
 import ThreadTranscriptProjection from "../../components/workbench/thread-view/ThreadTranscriptProjection";
 
 function renderProjection(projection: WorkbenchTranscriptProjection) {
@@ -94,7 +94,7 @@ test("submission immediately renders the initial input and connecting activity b
   assert.equal(message.type, "userMessage");
   assert.deepEqual(message.content, input);
   assert.deepEqual(getWorkbenchInputState(message), { kind: "optimistic", placement: "initial", status: "pending" });
-  assert.equal(getLiveThreadActivity({ pendingUserInputRequest: null, turn })?.title, "Connecting");
+  assert.equal(getLiveThreadVerb({ context: { cwd: "." }, pendingUserInputRequest: null, turn }), "Connecting");
   assert.equal(pending.transcript.status, "ready");
   const html = renderProjection(pending.transcript.projection);
   assert.ok(html.includes("launch preview words"), "the shared renderer can show the submitted input");
@@ -105,7 +105,7 @@ test("submission immediately renders the initial input and connecting activity b
   const accepted = store.getSlice("turns").turns[0]!;
   assert.equal(accepted.items[0]!.id, message.id, "acceptance retains the same message");
   assert.equal(getWorkbenchInputState(accepted.items[0]!), null, "accepted input no longer has a pending halo");
-  assert.equal(getLiveThreadActivity({ pendingUserInputRequest: null, turn: accepted })?.title, "Thinking");
+  assert.equal(getLiveThreadVerb({ context: { cwd: "." }, pendingUserInputRequest: null, turn: accepted }), "Thinking");
   assert.equal(await store.actions.submitDraft(input, async () => { submissions++; return true; }), false);
   assert.equal(submissions, 1, "an accepted draft cannot launch again");
 });
@@ -141,7 +141,7 @@ test("provider acceptance clears pending decoration before draft cleanup complet
     accept();
     const turn = store.getSlice("turns").turns[0]!;
     assert.equal(getWorkbenchInputState(turn.items[0]!), null);
-    assert.equal(getLiveThreadActivity({ pendingUserInputRequest: null, turn })?.title, "Thinking");
+    assert.equal(getLiveThreadVerb({ context: { cwd: "." }, pendingUserInputRequest: null, turn }), "Thinking");
   } finally {
     cleanup.resolve(true);
     await sending;

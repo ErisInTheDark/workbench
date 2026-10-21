@@ -135,6 +135,7 @@ export interface ThreadCommandSummaryDisplay {
   omitFromDisplay: boolean;
   /** A dedicated renderer draws this command; an omitted summary must not hide it, and it groups only when a stat names it. */
   ownRow?: boolean;
+  /** Leads with its gerund (`Reading …`, after any `cwd: ` prefix); the thread status row shows that word alone. */
   ongoingSummaryParts: ThreadCommandDisplayPart[];
   ongoingSummaryText: string;
   shell: CommandShell;

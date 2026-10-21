@@ -11,7 +11,6 @@ import type {
 } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientContext from "../workbench-client-context";
 import type { WorkbenchClientController } from "../workbench-client-context";
-import type { ThreadLiveActivityView } from "./use-thread-live-activity";
 import ThreadStatusArea, { getThreadStatusAttention } from "./ThreadStatusArea";
 
 function render(lifecycle: WorkbenchThreadLifecycle) {
@@ -20,7 +19,7 @@ function render(lifecycle: WorkbenchThreadLifecycle) {
   }, createElement(ThreadStatusArea, {
     gitArc: null,
     harness: "codex",
-    live: null,
+    liveVerb: null,
     skills: null,
     threadId: "thread",
     threadLifecycle: lifecycle,
@@ -97,7 +96,7 @@ const activeOwner = planThread("active owner", {
   updatedAt: "2026-10-13T00:00:00.000Z",
 }, null);
 
-function renderPlanStatus(active: boolean, live: ThreadLiveActivityView | null = null) {
+function renderPlanStatus(active: boolean, liveVerb: string | null = null) {
   const snapshot = {
     entries: active ? [planOwner, activeOwner] : [planOwner],
     error: null,
@@ -129,7 +128,7 @@ function renderPlanStatus(active: boolean, live: ThreadLiveActivityView | null =
   }, createElement(ThreadStatusArea, {
     gitArc: null,
     harness: "codex",
-    live,
+    liveVerb,
     skills: null,
     threadId: "thread",
     threadLifecycle: planOwner.lifecycle,
@@ -147,6 +146,6 @@ test("planned scope status distinguishes active intersections from clear scope a
   assert.match(clear, /data-thread-plan-intersection-status="clear"/u);
   assert.match(clear, /aria-haspopup="dialog"/u);
 
-  const live = renderPlanStatus(false, { key: "turn", title: "Working", renderBody: () => null });
+  const live = renderPlanStatus(false, "Reading");
   assert.doesNotMatch(live, /data-thread-plan-intersection-status=/u);
 });

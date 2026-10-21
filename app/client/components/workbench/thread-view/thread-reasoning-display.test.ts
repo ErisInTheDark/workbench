@@ -1,14 +1,11 @@
 /*
- * No production exports. Tests protect reasoning step order, newest live ownership, exact disclosure omission, and the code-aware live sentence. Keywords: reasoning, live, disclosure, test.
+ * No production exports. Tests protect reasoning step order, exact disclosure omission, and the code-aware live sentence. Keywords: reasoning, live, disclosure, test.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import {
-  getCurrentThreadReasoningActivity,
   getLatestReasoningSentence,
   getThreadReasoningSteps,
   omitThreadReasoningStep,
@@ -19,19 +16,6 @@ type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 
 function reasoning(summary: string[]): ReasoningItem {
   return { content: ["hidden raw reasoning"], id: "reasoning", summary, type: "reasoning" };
-}
-
-function turn(items: ThreadItem[]): Turn {
-  return {
-    completedAt: null,
-    durationMs: null,
-    error: null,
-    id: "turn",
-    items,
-    itemsView: "full",
-    startedAt: 1,
-    status: "inProgress",
-  };
 }
 
 test("reasoning sections preserve order and split each title from its description", () => {
@@ -59,16 +43,12 @@ test("reasoning sections preserve order and split each title from its descriptio
   ]);
 });
 
-test("live reasoning selects the newest section and omits only that exact step", () => {
+test("omitting a step removes only that exact section", () => {
   const item = reasoning(["First\nold detail", "Latest\nlive detail"]);
-  const activity = getCurrentThreadReasoningActivity(turn([item]));
-  assert.deepEqual(activity, {
-    body: "live detail",
-    hiddenStep: { itemId: "reasoning", sectionIndex: 1, source: "summary" },
-    markdown: "Latest\nlive detail",
-    title: "Latest",
-  });
-  assert.deepEqual(omitThreadReasoningStep(item, activity?.hiddenStep), reasoning(["First\nold detail"]));
+  assert.deepEqual(
+    omitThreadReasoningStep(item, { itemId: "reasoning", sectionIndex: 1, source: "summary" }),
+    reasoning(["First\nold detail"]),
+  );
 });
 
 test("presented reasoning Markdown keeps title and body projection identical to settled steps", () => {
@@ -108,17 +88,4 @@ test("punctuation inside inline code does not end the sentence", () => {
     getLatestReasoningSentence("Read `src/script/runtime.rs`, `dts.rs` and `a.b!` next. Later."),
     "Read `src/script/runtime.rs`, `dts.rs` and `a.b!` next.",
   );
-});
-
-test("pending steers do not replace the newest reasoning activity", () => {
-  const pendingSteer = withWorkbenchInputState({
-    clientId: null,
-    content: [{ text: "queued", text_elements: [], type: "text" as const }],
-    id: "cced43f7-5a5a-4168-9b34-81ce28e5bc36",
-    type: "userMessage" as const,
-  }, { kind: "optimistic", placement: "steer", status: "pending" });
-  assert.equal(getCurrentThreadReasoningActivity(turn([
-    reasoning(["Still thinking\nwith detail"]),
-    pendingSteer,
-  ]))?.title, "Still thinking");
 });

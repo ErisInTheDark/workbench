@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadViewStatus: the shown thread's status row (live activity, git arc work, vis, skills, todos and feedback) and its error card.
+ * - default ThreadViewStatus: the shown thread's status row (live verb, git arc work, vis, skills, todos and feedback) and its error card.
  */
 "use client";
 
@@ -20,10 +20,9 @@ import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadStatusArea from "./ThreadStatusArea";
 import ThreadTodoPanel from "./ThreadTodoPanel";
 import { getThreadGitArcWork } from "./thread-git-arc-presentation";
-import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
+import { getLiveThreadVerb } from "./thread-live-activity";
 import type { ThreadTodoControls } from "./thread-todo-controls";
 import type { ThreadReferenceSelection } from "./use-thread-reference-selection";
-import useThreadLiveActivity from "./use-thread-live-activity";
 import { readActiveTranscript } from "./ThreadViewTranscript";
 
 export default function ThreadViewStatus ({
@@ -75,30 +74,13 @@ export default function ThreadViewStatus ({
   const activityTurn = loadedTurns?.at(-1) ?? null;
   // The thread's lifecycle decides liveness; a provider's turn status never does.
   const liveTurn = activityTurn && activityTurn.id === turns.liveTurnId ? activityTurn : null;
-  const terminalContext = useMemo(() => ({
+  const commandContext = useMemo(() => ({
     cwd: activeThread?.cwd || projectRootPath || ".",
     knownSkills: skills, projectRootPath, workspaceRoots,
   }), [activeThread?.cwd, projectRootPath, skills, workspaceRoots]);
-  const terminalRetention = useMemo(() => ({
-    itemTimeline: projection?.turns.at(-1)?.itemTimeline,
-    turnStartedAt: activityTurn?.startedAt,
-  }), [projection, activityTurn]);
-  const terminalCommands = useMemo(() => getThreadTerminalEntries(
-    liveTurn ? liveTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
-    { ...terminalContext, includeOutput: false },
-  ), [liveTurn, terminalContext]);
-  const liveActivity = useMemo(() => getLiveThreadActivity({
-    pendingUserInputRequest, turn: liveTurn, commands: terminalCommands,
-  }), [pendingUserInputRequest, liveTurn, terminalCommands]);
-  const live = useThreadLiveActivity({
-    activity: liveActivity,
-    items: liveTurn?.items ?? [],
-    terminalContext,
-    terminalRetention,
-    presentationSource: activeThread ? { kind: "sqlite", sourceKey: `${activeThread.harness}:${activeThread.id}` } : null,
-    threadId: activeThread?.id ?? "",
-    turnId: liveTurn?.id ?? null,
-  });
+  const liveVerb = useMemo(() => getLiveThreadVerb({
+    context: commandContext, pendingUserInputRequest, turn: liveTurn,
+  }), [commandContext, pendingUserInputRequest, liveTurn]);
 
   const entry = active.entry;
   const gitCommitHistory = entry?.gitCommitHistory;
@@ -111,7 +93,7 @@ export default function ThreadViewStatus ({
   const headTodos = active.head?.todos;
   const headFeedback = active.head?.addressedFeedback;
   return <>
-    {!isMessageBoardOpen && (live || !isDraftThreadView) ? (
+    {!isMessageBoardOpen && (liveVerb || !isDraftThreadView) ? (
       <ThreadStatusArea
         // Observed heads learn the working directory with the transcript; the arc panel's Git requests need it.
         gitArc={!isDraftThreadView && activeThread.cwd && (gitArcWork || gitCommitHistory?.count) ? {
@@ -124,7 +106,7 @@ export default function ThreadViewStatus ({
         gitCommitHistory={gitCommitHistory}
         harness={activeThread.harness}
         key={activeThread.id}
-        live={live}
+        liveVerb={liveVerb}
         skills={entry && !isDraftThreadView ? { onDeactivate: active.actions.deactivateSkill, skills: active.head?.skills ?? [] } : null}
         threadId={activeThread.id}
         threadLifecycle={entry?.lifecycle ?? null}

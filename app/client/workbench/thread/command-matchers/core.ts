@@ -183,14 +183,15 @@ export function runThreadCommandMatchers(
     omitFromDisplay ||= matchedResult.omitFromDisplay === true;
     ownRow ||= matchedResult.ownRow === true;
 
-    if (shouldRenderSummaryParts && summaryParts.length) {
-      summaryParts.push(CommandMatcher.Separator());
-      ongoingSummaryParts.push(CommandMatcher.Separator());
-    }
-
     if (shouldRenderSummaryParts) {
+      if (summaryParts.length) summaryParts.push(CommandMatcher.Separator());
       summaryParts.push(...matchedResult.summaryParts);
-      ongoingSummaryParts.push(...matchedResult.ongoingSummaryParts ?? []);
+    }
+    // Dedicated-renderer stages draw no summary but still name their running action.
+    const ongoingParts = matchedResult.hide ? [] : matchedResult.ongoingSummaryParts ?? [];
+    if (ongoingParts.length) {
+      if (ongoingSummaryParts.length) ongoingSummaryParts.push(CommandMatcher.Separator());
+      ongoingSummaryParts.push(...ongoingParts);
     }
     if (matchedResult.detailRows?.length) {
       detailRows.push(...matchedResult.detailRows);

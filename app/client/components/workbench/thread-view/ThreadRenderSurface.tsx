@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadRenderSurface: render standalone transcripts and live activity inside the shared scroll owner.
+ * - default ThreadRenderSurface: render standalone transcripts and their live verb inside the shared scroll owner.
  */
 "use client";
 
@@ -13,8 +13,7 @@ import ContextualProjectProvider from "../ContextualProjectProvider";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
 import ThreadStatusRow from "./ThreadStatusRow";
-import useThreadLiveActivity from "./use-thread-live-activity";
-import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
+import { getLiveThreadVerb } from "./thread-live-activity";
 import type { ThreadRenderContext, ThreadRenderFlags } from "./thread-render-lab-options";
 import { threadPayloadToProjection } from "./thread-render-lab-projection";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
@@ -75,24 +74,11 @@ export default function ThreadRenderSurface({
     items: projectedTurn.items.filter((item): item is ThreadPayload["turns"][number]["items"][number] =>
       item.type !== "generic" && !("requestKey" in item)),
   } : null;
-  const terminalContext = useMemo(() => ({ cwd, knownSkills, workspaceRoots }), [cwd, knownSkills, workspaceRoots]);
-  const terminalRetention = useMemo(() => ({
-    itemTimeline: projectedTurn?.itemTimeline,
-    turnStartedAt: activityTurn?.startedAt,
-  }), [projectedTurn, activityTurn]);
   // A standalone surface has no thread lifecycle to consult; its newest turn's own status stands in.
   const liveTurn = activityTurn?.status === "inProgress" ? activityTurn : null;
-  const commands = getThreadTerminalEntries(
-    liveTurn ? liveTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
-    { ...terminalContext, includeOutput: false },
-  );
-  const activity = getLiveThreadActivity({ pendingUserInputRequest: null, turn: liveTurn, commands });
+  const liveVerb = getLiveThreadVerb({ context: { cwd, knownSkills, workspaceRoots }, pendingUserInputRequest: null, turn: liveTurn });
   const presentationSource = suppliedPresentationSource
     ?? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? defaultProviderKey}:${threadId}` };
-  const liveView = useThreadLiveActivity({
-    activity, items: liveTurn?.items ?? [], terminalContext, terminalRetention,
-    threadId, turnId: liveTurn?.id ?? null, presentationSource,
-  });
   const style = {
     fontSize: `${fontSizeRem}rem`,
   } satisfies CSSProperties;
@@ -130,7 +116,7 @@ export default function ThreadRenderSurface({
           hiddenReasoningStep={context.hiddenReasoningStep}
         />
       ) : <p className="text-fg/muted">{transcriptExpired ? "Transcript expired 3 days after settlement." : emptyMessage}</p>}
-      {flags.showLiveActivity !== false && liveView ? <ThreadStatusRow key={liveView.key} live={liveView} /> : null}
+      {flags.showLiveActivity !== false && liveVerb ? <ThreadStatusRow liveVerb={liveVerb} /> : null}
     </div>
     <ThreadScrollViewportEnd />
     </ThreadScrollViewport>

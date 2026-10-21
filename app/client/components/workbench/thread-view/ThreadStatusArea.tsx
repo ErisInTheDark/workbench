@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - getThreadStatusAttention: the panel an idle thread opens by itself: pending proposals, then required todos or addressed feedback, then dirty claims.
- * - default ThreadStatusArea: compose a thread's status row from its live activity, skills, live vis, Git arc work
+ * - default ThreadStatusArea: compose a thread's status row from its live verb, skills, live vis, Git arc work
  *   (claim intersections, proposals, claims, stash, accepted commits) and goal/todos with addressed feedback.
  */
 "use client";
@@ -34,7 +34,6 @@ import ThreadGitArcWork, { type ThreadGitArcWorkProps } from "./ThreadGitArcWork
 import { countThreadAcceptedGitCommits } from "./ThreadGitArcProposalList";
 import { useThreadGitArcClaimChanges } from "./ThreadGitArcObservationContext";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
-import type { ThreadLiveActivityView } from "./use-thread-live-activity";
 import { FEEDBACK_TEXT_TONE_CLASS_NAME } from "../feedback-presentation";
 
 const amberClassName = "text-amber-600 dark:text-amber-300";
@@ -61,7 +60,7 @@ export default function ThreadStatusArea({
   gitArc,
   gitCommitHistory,
   harness,
-  live,
+  liveVerb,
   skills,
   threadId,
   threadLifecycle,
@@ -71,7 +70,7 @@ export default function ThreadStatusArea({
   gitArc: Omit<ThreadGitArcWorkProps, "threadId"> | null;
   gitCommitHistory?: WorkbenchThreadGitCommitHistory;
   harness: WorkbenchHarnessId;
-  live: ThreadLiveActivityView | null;
+  liveVerb: string | null;
   /** Absent where a thread has no skills to manage, such as draft views. */
   skills: { onDeactivate: (path: string) => Promise<void>; skills: readonly WorkbenchThreadSkill[] } | null;
   threadId: string;
@@ -83,7 +82,7 @@ export default function ThreadStatusArea({
   const { intersections, logicalProjectId, ownerProjectId } = useThread.claimIntersections(threadId, harness, "plan");
   const overlapCount = intersections.hasScope ? intersections.activeEntries.length : 0;
   const plannedOverlapCount = intersections.hasScope ? intersections.plannedEntries.length : 0;
-  const showPlanIntersectionStatus = !live && intersections.hasScope;
+  const showPlanIntersectionStatus = !liveVerb && intersections.hasScope;
   const claim = gitArc?.claim ?? null;
   const proposals = claim?.proposals.filter(({ status }) => status === "proposed") ?? [];
   const accepted = countThreadAcceptedGitCommits(claim?.proposals ?? [], gitCommitHistory);
@@ -238,7 +237,7 @@ export default function ThreadStatusArea({
         ),
         panel: "arc",
       } : null}
-      live={live}
+      liveVerb={liveVerb}
       panels={panels}
     />
   );

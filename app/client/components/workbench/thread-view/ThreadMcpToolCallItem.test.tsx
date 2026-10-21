@@ -13,7 +13,6 @@ import ThreadTestTurn from "./thread-view-test-render";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadStepRow from "./ThreadStepRow";
 import ContextualProjectProvider from "../ContextualProjectProvider";
-import { getThreadTerminalEntries } from "./thread-live-activity";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
@@ -298,13 +297,10 @@ test("wb shell calls render through the ordinary command execution surface", () 
 
   assert.match(html, /Failed/u);
   assert.match(html, /title="src"/u);
-  const terminal = getThreadTerminalEntries([item], { cwd: "C:/workspace" });
-  assert.equal(terminal[0]?.command, "Get-ChildItem src");
-  assert.match(terminal[0]?.output ?? "", /partial\s*denied/u);
   assert.doesNotMatch(html, /mcp__wb__shell/u);
 });
 
-test("adjacent wb rg and shell calls count into one run summary while retaining separate terminal entries", () => {
+test("adjacent wb rg and shell calls count into one run summary", () => {
   const rgItem = makeItem({
     arguments: { args: ["needle", "webapp"] },
     id: "rg-one",
@@ -349,7 +345,6 @@ test("adjacent wb rg and shell calls count into one run summary while retaining 
 
   assert.match(visibleText, /1searched/u);
   assert.match(visibleText, /1listed/u);
-  assert.equal(getThreadTerminalEntries([rgItem, shellItem], { cwd: "C:/workspace" }).length, 2);
 });
 
 test("adjacent provider-native reads count into one run summary", () => {

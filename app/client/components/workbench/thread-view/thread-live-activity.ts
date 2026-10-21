@@ -1,177 +1,104 @@
 /*
  * Exports:
- * - LiveThreadActivity: current reasoning, search, or command status presentation.
- * - ThreadTerminalEntry: one canonical command projected for terminal display.
- * - ThreadTerminalContext/ThreadTerminalRetention: matcher context and invocation-age admission inputs.
- * - getThreadTerminalEntries: derive command history without changing canonical order.
- * - getLiveThreadActivity: select reasoning first, then ongoing command summaries.
+ * - ThreadLiveCommandContext: matcher context for naming running calls.
+ * - getLiveThreadVerb: a live turn's simplest current action (Thinking, Reading, Proposing...), or null when nothing is live.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
-import { WorkbenchShellInputSchema, WorkbenchShellResultSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
-import { LIVE_TERMINAL_TOOL_CALLS } from "workbench-shared/workbench/transcript/workbench-transcript-deferred-bodies";
+import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
+import { WorkbenchShellResultSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/thread-optimistic-items";
 import {
-  getThreadCommandDisplay, getThreadCommandBlockDisplay, getThreadCommandExecutionOutcome,
-  getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, getWorkbenchCommandRouteSummaryDisplay,
-  getNativeToolDisplay,
-  type ThreadCommandSummaryDisplay,
-  type ThreadCommandExecutionOutcome,
+  getNativeToolDisplay, getThreadCommandDisplay, getThreadCommandExecutionOutcome,
+  getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
 } from "../../../workbench/thread/thread-command-matchers";
-import { getCurrentThreadReasoningActivity, type ThreadReasoningStepReference } from "./thread-reasoning-display";
-import { getThreadWebSearchLiveLabel, isThreadWebSearchPlaceholder } from "./thread-web-search-state";
+import { summarizeDisplayParts } from "../../../workbench/thread/command-matchers/helpers";
+import { isThreadWebSearchPlaceholder } from "./thread-web-search-state";
 import { isHiddenCommandExecution } from "./thread-render-blocks";
-import { formatDynamicToolInvocation, formatMcpToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 
-export type LiveThreadActivity =
-  | { kind: "reasoning"; body: string | null; hiddenStep: ThreadReasoningStepReference | null; markdown: string | null; title: string }
-  | { kind: "webSearch"; contextItems: Array<Extract<ThreadItem, { type: "webSearch" }>>; hiddenItemIds: string[]; title: string }
-  | { kind: "commands"; title: string };
-
-export interface ThreadTerminalEntry {
-  id: string;
-  command: string;
-  output: string;
-  status: ThreadCommandExecutionOutcome;
-  streamsOutput: boolean;
-  display: ThreadCommandSummaryDisplay | null;
-  expiresAt?: number | null;
-}
-
-export interface ThreadTerminalRetention {
-  now: number;
-  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
-  turnStartedAt?: number | null;
-}
-
-export interface ThreadTerminalContext {
+export interface ThreadLiveCommandContext {
   cwd: string;
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
-export function getThreadTerminalEntries(items: readonly ThreadItem[], context: ThreadTerminalContext & {
-  includeOutput?: boolean;
-  retention?: ThreadTerminalRetention;
-}): ThreadTerminalEntry[] {
-  const calls = items.filter(item => {
-    if (item.type === "commandExecution") return !isHiddenCommandExecution(item.command);
-    if (item.type === "dynamicToolCall") return true;
-    if (item.type !== "mcpToolCall") return false;
-    if ((item.server === "wb" || item.server === "wbex") && item.tool === "shell") {
-      const input = WorkbenchShellInputSchema.safeParse(item.arguments);
-      if (input.success && isHiddenCommandExecution(input.data.command)) return false;
-    }
-    const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context, server: item.server, tool: item.tool });
-    return !(route?.kind === "simple" && route.rendering.result.omitFromDisplay);
-  });
-  const times = new Map<string, number>();
-  for (const entry of context.retention?.itemTimeline ?? []) {
-    const time = entry.startedAt ?? entry.firstSeenAt;
-    if (time === null) continue;
-    times.set(entry.itemId, time);
-    for (const alias of entry.aliases ?? []) times.set(alias, time);
+/** What a call says while no matcher describes it. */
+const UNMATCHED_VERB = "Executing";
+const GERUND = /^[A-Za-z]+ing$/u;
+
+/** The leading gerund of an ongoing summary (`Reading x`, `Browsing: x`), past a `cwd: ` prefix. */
+function ongoingVerb(text: string) {
+  for (const word of text.trim().split(/\s+/u, 2)) {
+    const bare = word.replace(/:$/u, "");
+    if (GERUND.test(bare)) return `${bare[0]!.toUpperCase()}${bare.slice(1)}`;
+    if (bare === word) break;
   }
-  const expiresAt = (id: string) => {
-    const start = times.get(id) ?? (context.retention?.turnStartedAt == null ? null : context.retention.turnStartedAt * 1_000);
-    return start === null ? null : start + 30 * 60 * 1_000;
-  };
-  const admitted = context.retention ? calls.filter((item, index) => {
-    const shellResult = item.type === "mcpToolCall" && (item.server === "wb" || item.server === "wbex") && item.tool === "shell"
-      ? WorkbenchShellResultSchema.safeParse(item.result?.structuredContent) : null;
-    const running = item.type === "commandExecution"
-      ? getThreadCommandExecutionOutcome(item.status, item.exitCode) === "inProgress"
-      : item.type === "mcpToolCall" ? !item.error && getThreadCommandExecutionOutcome(item.status, shellResult?.success ? shellResult.data.exitCode : null) === "inProgress"
-        : item.type === "dynamicToolCall" && item.status === "inProgress" && item.success !== false;
-    if (running) return true;
-    const expiry = expiresAt(item.id);
-    return index >= calls.length - LIVE_TERMINAL_TOOL_CALLS && (expiry === null || context.retention!.now < expiry);
-  }) : calls;
-  return admitted.flatMap<ThreadTerminalEntry>(item => {
-    const shellCommand = item.type === "mcpToolCall" ? getWorkbenchMcpShellCommandItem(item, context.cwd) : null;
-    const command = item.type === "commandExecution" ? item : shellCommand;
-    if (command) {
-      if (isHiddenCommandExecution(command.command)) return [];
-      const status = getThreadCommandExecutionOutcome(command.status, command.exitCode);
-      return [{
-        id: item.id, command: command.command, output: context.includeOutput === false ? "" : command.aggregatedOutput ?? "",
-        status,
-        streamsOutput: item.type === "commandExecution",
-        display: status === "inProgress" ? getThreadCommandDisplay({
-          ...context, command: command.command, commandActions: command.commandActions, cwd: command.cwd,
-          shell: shellCommand?.shell,
-        }) : null,
-      }];
-    }
-    if (item.type === "mcpToolCall") {
-      const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context, server: item.server, tool: item.tool });
-      if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) return [];
-      return [{
-        id: item.id,
-        command: formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool }),
-        output: context.includeOutput === false ? "" : item.error?.message || formatToolCallOutput({ content: item.result?.content, fallback: item.result?.structuredContent ?? item.result?._meta }),
-        status: item.error ? "failed" : item.status, streamsOutput: false,
-        display: item.status === "inProgress" && !item.error ? getWorkbenchCommandRouteSummaryDisplay(route) : null,
-      }];
-    }
-    if (item.type === "dynamicToolCall") return [{
-      id: item.id,
-      command: formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool }),
-      output: context.includeOutput === false ? "" : formatToolCallOutput({ content: item.contentItems }),
-      status: item.success === false ? "failed" : item.status, streamsOutput: false,
-      display: item.status === "inProgress" && item.success !== false ? getNativeToolDisplay(item, context) : null,
-    }];
-    return [];
-  }).map(entry => ({ ...entry, expiresAt: entry.status === "inProgress" ? null : expiresAt(entry.id) }));
+  return null;
 }
 
-export function getLiveThreadActivity({ pendingUserInputRequest, turn, commands = [] }: {
+/** A running visible call's verb; null for settled, hidden or omitted calls. */
+function runningCallVerb(item: ThreadItem, context: ThreadLiveCommandContext): string | null {
+  if (item.type === "fileChange") {
+    if (item.status !== "inProgress") return null;
+    const kinds = new Set(item.changes.map(change => change.kind.type));
+    return kinds.size === 1 && kinds.has("add") ? "Creating" : kinds.size === 1 && kinds.has("delete") ? "Deleting" : "Editing";
+  }
+  if (item.type === "dynamicToolCall") {
+    if (item.status !== "inProgress" || item.success === false) return null;
+    const display = getNativeToolDisplay(item, context);
+    return (display && ongoingVerb(display.ongoingSummaryText)) ?? UNMATCHED_VERB;
+  }
+  const shell = item.type === "mcpToolCall" ? getWorkbenchMcpShellCommandItem(item, context.cwd) : null;
+  const command = item.type === "commandExecution" ? item : shell;
+  if (command) {
+    if (isHiddenCommandExecution(command.command)) return null;
+    if (item.type === "mcpToolCall") {
+      const result = WorkbenchShellResultSchema.safeParse(item.result?.structuredContent);
+      if (item.error || getThreadCommandExecutionOutcome(item.status, result.success ? result.data.exitCode : null) !== "inProgress") return null;
+    } else if (getThreadCommandExecutionOutcome(command.status, command.exitCode) !== "inProgress") return null;
+    const display = getThreadCommandDisplay({
+      ...context, command: command.command, commandActions: command.commandActions, cwd: command.cwd, shell: shell?.shell,
+    });
+    return (display.summaryKind === "matched" && ongoingVerb(display.ongoingSummaryText)) || UNMATCHED_VERB;
+  }
+  if (item.type !== "mcpToolCall" || item.error || item.status !== "inProgress") return null;
+  const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context, server: item.server, tool: item.tool });
+  if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) return null;
+  return (route && ongoingVerb(summarizeDisplayParts(route.rendering.result.ongoingSummaryParts))) ?? UNMATCHED_VERB;
+}
+
+/** The newest running call's verb, counting an OpenCode execute wrapper only when no wb child it carries speaks for it. */
+function newestRunningCallVerb(items: readonly ThreadItem[], context: ThreadLiveCommandContext) {
+  const running = items.flatMap(item => {
+    const verb = runningCallVerb(item, context);
+    return verb ? [{ item, verb }] : [];
+  });
+  const runningIds = new Set(running.map(({ item }) => item.id));
+  const childGroups = new Set(items.flatMap(item => item.type === "mcpToolCall" && item.server === "wb"
+    && item.toolCallGroupId && runningIds.has(item.id) ? [item.toolCallGroupId] : []));
+  const rolloverGroups = new Set(items.flatMap(item => item.type === "mcpToolCall" && item.server === "wb"
+    && item.tool === "thread_compact" && item.toolCallGroupId ? [item.toolCallGroupId] : []));
+  return running.findLast(({ item }) => !(item.type === "dynamicToolCall" && item.namespace === "opencode"
+    && item.tool === "execute" && item.toolCallGroupId
+    && (childGroups.has(item.toolCallGroupId) || rolloverGroups.has(item.toolCallGroupId))))?.verb ?? null;
+}
+
+export function getLiveThreadVerb({ context, pendingUserInputRequest, turn }: {
+  context: ThreadLiveCommandContext;
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   /** The thread's live turn; null when the thread is not working. */
   turn: ThreadPayload["turns"][number] | null;
-  commands?: readonly ThreadTerminalEntry[];
-}): LiveThreadActivity | null {
+}): string | null {
   if (!turn || pendingUserInputRequest) return null;
-  const idle = (title: string): LiveThreadActivity => ({ kind: "reasoning", title, body: null, markdown: null, hiddenStep: null });
   const compacting = turn.items.some(item => item.type === "contextCompaction" && item.status === "inProgress");
-  if (turn.items.some(isPendingInitialOptimisticInputItem) && !compacting) return idle("Connecting");
-  const reasoning = getCurrentThreadReasoningActivity(turn);
-  if (reasoning) return { kind: "reasoning", ...reasoning };
-  const runningIds = new Set(commands.filter(entry => entry.status === "inProgress").map(entry => entry.id));
-  const childGroups = new Set(turn.items.flatMap(item => item.type === "mcpToolCall" && item.server === "wb"
-    && item.toolCallGroupId && runningIds.has(item.id) ? [item.toolCallGroupId] : []));
-  const rolloverGroups = new Set(turn.items.flatMap(item => item.type === "mcpToolCall" && item.server === "wb"
-    && item.tool === "thread_compact" && item.toolCallGroupId ? [item.toolCallGroupId] : []));
-  const coveredWrappers = new Set(turn.items.flatMap(item => item.type === "dynamicToolCall"
-    && item.namespace === "opencode" && item.tool === "execute" && item.toolCallGroupId
-    && (childGroups.has(item.toolCallGroupId) || rolloverGroups.has(item.toolCallGroupId)) ? [item.id] : []));
-  const running = commands.filter(entry => entry.status === "inProgress" && !coveredWrappers.has(entry.id));
-  if (running.length) {
-    const matched = running.flatMap(entry => entry.display ? [{ display: entry.display }] : []);
-    const unmatched = running.length - matched.length;
-    const summary = matched.length === 1 ? matched[0]!.display.ongoingSummaryText
-      : matched.length ? getThreadCommandBlockDisplay({ items: matched }).ongoingSummaryText : "";
-    return { kind: "commands", title: [
-      summary, unmatched ? `Running ${unmatched} tool${unmatched === 1 ? "" : "s"}` : "",
-    ].filter(Boolean).join(", ") };
-  }
+  if (turn.items.some(isPendingInitialOptimisticInputItem) && !compacting) return "Connecting";
+  if (turn.items.findLast(item => !isWorkbenchPendingSteerUserMessage(item))?.type === "reasoning") return "Thinking";
+  const running = newestRunningCallVerb(turn.items, context);
+  if (running) return running;
   if (compacting) return null;
   const latest = turn.items.at(-1);
   if (latest?.type === "contextCompaction") return null;
-  if (latest?.type === "webSearch" && isThreadWebSearchPlaceholder(latest)) {
-    const contextItems: Array<Extract<ThreadItem, { type: "webSearch" }>> = [];
-    for (let index = turn.items.length - 2; index >= 0; index--) {
-      const item = turn.items[index]!;
-      if (item.type === "reasoning" && ![...item.summary, ...item.content].some(section => section.trim())) continue;
-      if (item.type === "agentMessage" && !isVisibleWorkbenchAgentMessageText(item.text)) continue;
-      if (item.type !== "webSearch") break;
-      if (!isThreadWebSearchPlaceholder(item)) contextItems.unshift(item);
-    }
-    return { kind: "webSearch", title: getThreadWebSearchLiveLabel(latest), contextItems, hiddenItemIds: [latest.id, ...contextItems.map(item => item.id)] };
-  }
-  return idle("Thinking");
+  return latest?.type === "webSearch" && isThreadWebSearchPlaceholder(latest) ? "Searching" : "Thinking";
 }
