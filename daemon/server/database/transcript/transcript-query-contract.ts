@@ -1,7 +1,9 @@
 /*
  * Exports:
  * - TRANSCRIPT_QUERY_KINDS: item kinds shared by --kind filters, stats counts and item headers.
+ * - TRANSCRIPT_QUERY_ACTIONS: the stored-history command actions.
  * - TranscriptQuerySchema/TranscriptQuery: validate the stored-history command vocabulary.
+ * - TranscriptCommandFieldsSchema/TranscriptCommandField: every command option, unrefined, for per-action tool schemas.
  * - TranscriptCommandQuerySchema/TranscriptCommandQuery: add explicit exact-turn provider recovery to CLI queries.
  * - TranscriptField/TranscriptQueryRow/TranscriptQueryPage: bounded display records shared by worker and CLI.
  * - TranscriptQueryError: expected invalid query or stale-reference failure.
@@ -14,8 +16,8 @@ export const TRANSCRIPT_QUERY_KINDS = [
   "user-message", "user-steer", "agent-message", "assistant-message", "plan", "reasoning", "process", "tool", "collaboration",
   "tool-output", "file-change", "web-search", "questionnaire", "approval", "compaction", "unknown",
 ] as const;
-export const TranscriptQuerySchema = z.object({
-  action: z.enum(["projects", "threads", "turns", "search", "read", "show", "stats"]),
+export const TRANSCRIPT_QUERY_ACTIONS = ["projects", "threads", "turns", "search", "read", "show", "stats"] as const;
+const queryFields = {
   threads: z.array(text).max(50).default([]),
   project: text.nullable().default(null),
   harness: ProviderKeySchema.nullable().default(null),
@@ -40,6 +42,10 @@ export const TranscriptQuerySchema = z.object({
   direction: z.enum(["older", "newer"]).default("older"),
   cursor: z.string().min(1).max(16000).nullable().default(null),
   json: z.boolean().default(false),
+};
+export const TranscriptQuerySchema = z.object({
+  action: z.enum(TRANSCRIPT_QUERY_ACTIONS),
+  ...queryFields,
 }).strict().superRefine((query, context) => {
   const fail = (message: string) => context.addIssue({ code: "custom", message });
   if (["read", "show", "turns"].includes(query.action) && query.threads.length !== 1) fail("Pass exactly one --thread <wb-thread-id>.");
@@ -52,9 +58,12 @@ export const TranscriptQuerySchema = z.object({
 });
 export type TranscriptQuery = z.output<typeof TranscriptQuerySchema>;
 
-export const TranscriptCommandQuerySchema = TranscriptQuerySchema.safeExtend({
-  provider: z.boolean().default(false),
-}).superRefine((query, context) => {
+const providerField = { provider: z.boolean().default(false) };
+/** Every command option without `action` or cross-field rules, so each action's tool can pick its own. */
+export const TranscriptCommandFieldsSchema = z.object({ ...queryFields, ...providerField }).strict();
+export type TranscriptCommandField = keyof typeof TranscriptCommandFieldsSchema.shape;
+
+export const TranscriptCommandQuerySchema = TranscriptQuerySchema.safeExtend(providerField).superRefine((query, context) => {
   if (!query.provider) return;
   if (!["read", "search", "show"].includes(query.action)) {
     context.addIssue({ code: "custom", message: "--provider is only valid for read, search and show." });

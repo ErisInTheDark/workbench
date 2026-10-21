@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - McpToolListing: one server's offered tools with their allowed state, or why they are unavailable.
- * - formatMcpToolListing: agent-facing text for `mcp_tools`; allowed tools first, then disabled ones under one hint; a query ranks matches (a wrapped server's own search leads) and adds input schemas.
+ * - formatMcpToolListing: agent-facing text for `mcp_tools`; allowed tools first, then disabled ones under one hint; a query ranks matches (a wrapped server's own search leads) and adds TypeScript-like input types.
  * - formatWorkbenchToolSection: the same ranked text for Workbench's deferred tools under server `wb`.
  * - formatMcpToolResult: agent-facing text for one `mcp_call` result, including structured content its text does not already mirror.
  */
@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { McpServerTool } from "./McpServerConnection";
+import { formatMcpInputSchema } from "./mcp-input-schema-text";
 
 /** `search` marks a wrapped server whose tools are found by query; `ranked` tools came from its own search, best first. */
 export type McpToolListing =
@@ -51,7 +52,7 @@ function detailed(entry: Entry) {
   return [
     `${entry.server}/${entry.tool.name}`,
     entry.tool.description.trim(),
-    `Input schema: ${JSON.stringify(entry.tool.inputSchema)}`,
+    formatMcpInputSchema(entry.tool.inputSchema),
   ].filter(Boolean).join("\n");
 }
 

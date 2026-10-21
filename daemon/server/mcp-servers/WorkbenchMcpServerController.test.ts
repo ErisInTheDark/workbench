@@ -168,7 +168,7 @@ test("a query returns ranked allowed matches with input schemas; without one, ev
     await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH_FILES", "UPLOAD"] });
     assert.equal(await owner.listTools({}, signal()), "docs/UPLOAD: Upload a file, then search it\ndocs/SEARCH_FILES: Find files by name\n");
     const matches = await owner.listTools({ query: "search" }, signal());
-    assert.match(matches, /^docs\/SEARCH_FILES\nFind files by name\nInput schema: \{"type":"object"\}\n\ndocs\/UPLOAD\n/u);
+    assert.match(matches, /^docs\/SEARCH_FILES\nFind files by name\nInput: \{\}\n\ndocs\/UPLOAD\n/u);
     assert.equal(matches.includes("HIDDEN"), false);
   } finally { close(); }
 });

@@ -392,7 +392,7 @@ test("deferred commands are found and run through server wb without joining the 
 
     const searched = responseText(await call("mcp_tools", { server: "wb", query: "edit session preview" }));
     assert.match(searched, /^wb\/git_arc_edit_start$/mu);
-    assert.match(searched, /Input schema: .*"operations"/u);
+    assert.match(searched, /^\s+operations\?: /mu);
     // Search mirrors CLI help: root-help-hidden commands stay undiscoverable and unrunnable.
     assert.doesNotMatch(responseText(await call("mcp_tools", { server: "wb" })), /wb\/(?:reload|store_get)\b/u);
     const listedAlongside = responseText(await call("mcp_tools", {}));
@@ -1069,7 +1069,7 @@ test("root-only tools follow the resolved caller, not the connection's flags", a
   const flagged = await connectClient(flaggedUrl);
   const call = (client: Client, threadId: string, name: string, args: Record<string, unknown>) => (
     client.callTool({ name, arguments: args, _meta: { threadId } }));
-  const transcriptCall = { server: "wb", tool: "transcript_projects", arguments: { action: "projects" } };
+  const transcriptCall = { server: "wb", tool: "transcript_projects", arguments: {} };
   try {
     const found = responseText(await call(flagless, "root-thread", "mcp_tools", { server: "wb", query: "transcript" }));
     assert.match(found, /^wb\/transcript_projects$/mu);
