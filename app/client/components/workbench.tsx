@@ -1,20 +1,17 @@
 /*
  * Exports:
  * - default Workbench: shell composition, providers (including the explorer snapshot), routed views and responsive chrome.
- * Local helpers: route, title, drag, editor, file, and thread UI transformations.
  */
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
-    ExplorerSnapshot,
     ThreadPayload,
     WorkbenchAppRuntimeStore,
     WorkbenchComposerInputDraft,
     WorkbenchHarness,
     WorkbenchLogicalThreadRow,
-    WorkbenchProjectOption,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { DaemonIdSchema, DraftIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
@@ -55,7 +52,7 @@ import {
   FileActionContext, FileScopeContext, useFileActions,
 } from "../workbench/file/use-file";
 import useMediaQuery from "../workbench/dom/layout/use-media-query";
-import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
+import { createProjectFileLinkRoots } from "../workbench/markdown/project-file-link-roots";
 import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
 import { useWorkbenchTabs } from "../workbench/navigation/use-workbench-tabs";
 import { useWorkbenchRoute, useWorkbenchRouteIntent } from "../workbench/navigation/use-workbench-route";
@@ -87,8 +84,7 @@ import WorkbenchFileView from "./workbench/layout/WorkbenchFileView";
 import WorkbenchSvgFileView from "./workbench/svg/WorkbenchSvgFileView";
 import WorkbenchShellTabs from "./workbench/shell-tabs/WorkbenchShellTabs";
 import MobilePaneTrack from "./workbench/MobilePaneTrack";
-import type { MobileShellHeaderEvent } from "./workbench/mobile-shell-header-visibility";
-import MobileShellHeaderVisibilityController from "./workbench/MobileShellHeaderVisibilityController";
+import useMobileShellHeader from "./workbench/use-mobile-shell-header";
 import WorkbenchMobileShellHeader from "./workbench/WorkbenchMobileShellHeader";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope";
@@ -118,7 +114,7 @@ import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import IconButton from "./ui/IconButton";
-import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
+import WorkbenchHomeDraftProjectControl from "./workbench/WorkbenchHomeDraftProjectControl";
 import WorkbenchThreadOwnerLabel from "./workbench/WorkbenchThreadOwnerLabel";
 import WorkbenchProjectLocationMenu from "./workbench/WorkbenchProjectLocationMenu";
 import WorkbenchSearchDialog from "./workbench/search/WorkbenchSearchDialog";
@@ -133,70 +129,6 @@ import { WorkbenchDaemonAssetOriginContext, WorkbenchOperationsContext as Workbe
 import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 
 installBrowserRandomUuidPolyfill();
-
-function createUniqueFileLinkRootId (id: string, usedIds: Set<string>) {
-  const baseId = id.trim() || "root";
-  let candidateId = baseId;
-  let suffix = 2;
-  while (usedIds.has(candidateId.toLowerCase())) {
-    candidateId = `${baseId}-${suffix}`;
-    suffix += 1;
-  }
-
-  usedIds.add(candidateId.toLowerCase());
-  return candidateId;
-}
-
-function createProjectFileLinkRoots (
-  projects: readonly WorkbenchProjectOption[],
-  currentProjectId: string,
-  currentRoots: readonly ExplorerSnapshot["roots"][number][],
-): WorkspaceFileLinkRoot[] {
-  const roots: WorkspaceFileLinkRoot[] = [];
-  const usedIds = new Set<string>();
-  const usedRootPaths = new Set<string>();
-
-  const addRoot = (root: WorkspaceFileLinkRoot) => {
-    const rootPathKey = root.rootPath.toLowerCase();
-    if (!root.rootPath || usedRootPaths.has(rootPathKey)) {
-      return;
-    }
-
-    usedRootPaths.add(rootPathKey);
-    roots.push({
-      ...root,
-      id: createUniqueFileLinkRootId(root.id, usedIds),
-    });
-  };
-
-  if (currentRoots.length > 1) {
-    for (const root of currentRoots) {
-      addRoot({
-        id: root.id,
-        openPathMode: "workspace-qualified",
-        projectId: currentProjectId,
-        rootPath: root.rootPath,
-      });
-    }
-  }
-
-  for (const project of projects) {
-    if (project.id === currentProjectId) {
-      continue;
-    }
-
-    for (const root of project.roots) {
-      addRoot({
-        id: project.kind === "git" ? project.name || project.id : root.id,
-        openPathMode: project.kind === "workspace" ? "workspace-qualified" : "root-relative",
-        projectId: project.id,
-        rootPath: root.rootPath,
-      });
-    }
-  }
-
-  return roots;
-}
 
 function formatWorkbenchPageTitle (projectName: string | null | undefined) {
   const normalizedProjectName = projectName?.trim();
@@ -265,7 +197,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       console.warn("Project identities could not refresh:",
         error instanceof Error ? error.message.slice(0, 512) : "Unknown failure."));
   }, [workbenchClient.mounted]);
-  const [isProjectRotationPending, setIsProjectRotationPending] = useState(false);
   const controls = workbenchClient.controls;
   const {
     threadContext: routeThreadContext, draftContext: routeDraftContext, launchLocation: routeLaunchLocation,
@@ -284,7 +215,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     return () => { composerProfileController.disconnectPersistence(); };
   }, [composerProfileController, controls, selectedDaemon, workbenchClient.mounted?.presentationClient, profileScopeKey]);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
-  const [mobileShellHeaderVisibility] = useState(() => new MobileShellHeaderVisibilityController());
   const mobileSidebarRequested = isMobileSidebarRequested(useSearchParams().toString());
   const mobilePane = getPreferredMobilePane(isMobile, route, mobileSidebarRequested);
   const mobilePaneSlideRef = useRef<((destination: MobilePaneDestination) => void) | null>(null);
@@ -793,59 +723,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     && !route.logical?.projectId
     && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft");
   const homeDraftProjects = route.logical ? selectedLogicalProjects : selectedPhysicalProjects;
-  const homeDraftProjectId = route.logical?.threadOwnerProjectId ?? threadProjectId;
-  const moveHomeDraftProject = useCallback(async (nextProjectId: string) => {
-    if (!controls || !isHomeDraftRoute) return;
-    const nextProject = homeDraftProjects.find(({ id }) => id === nextProjectId);
-    if (!homeDraftProjectId || !nextProject || nextProject.id === homeDraftProjectId) return;
-    setIsProjectRotationPending(true);
-    setSelectionError("");
-    try {
-      const target = route.threadTarget;
-      if (route.logical) {
-        const logicalProject = selectedLogicalProjects.find(project => project.id === nextProject.id);
-        const destination = logicalProject?.locations.find(item => item.project)?.target;
-        if (!logicalProject || !destination) throw new Error("That project's daemon folder is unavailable.");
-        const draftSession = activeDraftSessionRef.current;
-        const draftId = target?.kind === "draft" ? target.draftId
-          : threadForThreadView?.isDraft ? DraftIdSchema.parse(threadForThreadView.id) : null;
-        const owner = workbenchClient.mounted?.presentationClient;
-        if (!draftSession || !draftId || !owner) throw new Error("The draft editor is unavailable.");
-        await draftSession.retarget(draftSessionOwner(destination.projectId, draftId), async () => {
-          if (!isSameDraftRouteIntent(route, currentRouteRef.current, draftId)) return false;
-          const draft = owner.draft(draftId);
-          if (draft) await controls.retargetPresentationDraft(draftId, destination, logicalProject.id);
-          if (!isSameDraftRouteIntent(route, currentRouteRef.current, draftId)) return false;
-          navigateToRoute(createLogicalThreadRoute(null, logicalProject.id, draft ? null : destination,
-            draft ? { kind: "draft", draftId } : { kind: "new" }), { replace: Boolean(draft) });
-          return true;
-        });
-        return;
-      }
-      if (!threadProjectId) return;
-      const legacyNext = selectedPhysicalProjects.find(project => project.id === nextProject.id);
-      if (!legacyNext) return;
-      if (target?.kind === "draft") {
-        await controls.moveThreadDraft(threadProjectId, legacyNext.id, target.draftId);
-        navigateToRoute(createHomeThreadRoute(legacyNext.id, target));
-      } else {
-        navigateToRoute(createHomeThreadRoute(legacyNext.id, { kind: "new" }));
-      }
-    } catch (error) {
-      setSelectionError((error instanceof Error ? error.message : "Unable to move this draft.").slice(0, 500));
-    } finally {
-      setIsProjectRotationPending(false);
-    }
-  }, [controls, homeDraftProjectId, homeDraftProjects, isHomeDraftRoute, navigateToRoute, route, selectedLogicalProjects,
-    selectedPhysicalProjects, threadForThreadView, threadProjectId, workbenchClient.mounted]);
   const homeRotatorProject = route.logical ? logicalThreadProject
     : explorer.projects.find(project => project.id === threadProject?.id);
   const projectRotator = isHomeDraftRoute && homeRotatorProject ? (
-    <WorkbenchProjectControl
-      disabled={isProjectRotationPending || homeDraftProjects.length < 2}
-      onSelect={projectId => { void moveHomeDraftProject(projectId); }}
+    <WorkbenchHomeDraftProjectControl
+      draftSession={activeDraftSessionRef}
       project={homeRotatorProject}
       projects={homeDraftProjects}
+      route={route}
+      routeRef={currentRouteRef}
+      thread={threadForThreadView}
     />
   ) : null;
   const isForeignThreadProject = Boolean(threadProjectId && (threadProjectId !== browseProjectId
@@ -913,133 +800,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     });
   }, [explorer.browseLocation, tabs, workbenchClient]);
 
-  useEffect(() => {
-    if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey || showThreadView) {
-      return;
-    }
-
-    const frameId = window.requestAnimationFrame(() => {
-      if (mainPaneRef.current) {
-        mainPaneRef.current.scrollTop = 0;
-      }
-    });
-
-    return () => {
-      window.cancelAnimationFrame(frameId);
-    };
-  }, [showThreadView, isMobile, mainPaneScrollKey, mobilePane]);
-
-  const applyMobileShellHeaderEvent = useCallback((event: MobileShellHeaderEvent) => {
-    if (!isMobile || !shouldShowShellHeader) return;
-    mobileShellHeaderVisibility.apply(event);
-  }, [isMobile, mobileShellHeaderVisibility, shouldShowShellHeader]);
-
-  const handleThreadScrollIntent = useCallback((direction: "up" | "down", travelPx: number) => {
-    applyMobileShellHeaderEvent({
-      kind: "gesture",
-      direction,
-      travelPx,
-    });
-  }, [applyMobileShellHeaderEvent]);
-  const handleThreadTouchActivity = useCallback((active: boolean) => {
-    applyMobileShellHeaderEvent({ kind: "touch", active });
-  }, [applyMobileShellHeaderEvent]);
-
-  useEffect(() => {
-    const scrollTarget = showThreadView
-      ? directThreadScrollViewportRef.current
-      : mainPaneRef.current;
-    mobileShellHeaderVisibility.reset(scrollTarget ? {
-      scrollTop: scrollTarget.scrollTop,
-      scrollHeight: scrollTarget.scrollHeight,
-      clientHeight: scrollTarget.clientHeight,
-    } : null);
-    if (!isMobile || !shouldShowShellHeader) return;
-    if (!scrollTarget) return;
-
-    const handleScroll = () => {
-      applyMobileShellHeaderEvent({
-        kind: "scroll",
-        scrollTop: scrollTarget.scrollTop,
-        scrollHeight: scrollTarget.scrollHeight,
-        clientHeight: scrollTarget.clientHeight,
-      });
-    };
-    scrollTarget.addEventListener("scroll", handleScroll, { passive: true });
-
-    if (showThreadView) {
-      return () => {
-        scrollTarget.removeEventListener("scroll", handleScroll);
-      };
-    }
-
-    let touchClientY: number | null = null;
-    const handleGesture = (direction: "up" | "down", travelPx: number) => {
-      applyMobileShellHeaderEvent({
-        kind: "gesture",
-        direction,
-        travelPx,
-      });
-    };
-    const belongsToMainPane = (target: EventTarget | null) => (
-      !(target instanceof Element) || !target.closest("[data-thread-scroll-target]")
-    );
-    const handleTouchStart = (event: TouchEvent) => {
-      touchClientY = belongsToMainPane(event.target) && event.touches.length === 1
-        ? event.touches[0].clientY : null;
-      if (touchClientY !== null) applyMobileShellHeaderEvent({ kind: "touch", active: true });
-    };
-    const handleTouchMove = (event: TouchEvent) => {
-      if (!belongsToMainPane(event.target) || event.touches.length !== 1 || touchClientY === null) {
-        touchClientY = null;
-        applyMobileShellHeaderEvent({ kind: "touch", active: false });
-        return;
-      }
-      const nextClientY = event.touches[0].clientY;
-      if (nextClientY !== touchClientY) {
-        handleGesture(nextClientY > touchClientY ? "up" : "down", Math.abs(nextClientY - touchClientY));
-      }
-      touchClientY = nextClientY;
-    };
-    const handleTouchEnd = () => {
-      touchClientY = null;
-      applyMobileShellHeaderEvent({ kind: "touch", active: false });
-    };
-    const handleWheel = (event: WheelEvent) => {
-      if (!belongsToMainPane(event.target) || event.deltaY === 0) return;
-      const travelPx = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? Math.abs(event.deltaY) * 16
-        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? Math.abs(event.deltaY) * scrollTarget.clientHeight
-          : Math.abs(event.deltaY);
-      handleGesture(event.deltaY > 0 ? "down" : "up", travelPx);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!belongsToMainPane(event.target)) return;
-      if (event.target instanceof HTMLElement
-        && event.target.closest("a,button,input,select,textarea,[contenteditable='true']")) return;
-      if (["ArrowDown", "End", "PageDown"].includes(event.key) || (event.key === " " && !event.shiftKey)) {
-        handleGesture("down", scrollTarget.clientHeight);
-      } else if (["ArrowUp", "Home", "PageUp"].includes(event.key) || (event.key === " " && event.shiftKey)) {
-        handleGesture("up", scrollTarget.clientHeight);
-      }
-    };
-
-    scrollTarget.addEventListener("touchstart", handleTouchStart, { passive: true });
-    scrollTarget.addEventListener("touchmove", handleTouchMove, { passive: true });
-    scrollTarget.addEventListener("touchend", handleTouchEnd, { passive: true });
-    scrollTarget.addEventListener("touchcancel", handleTouchEnd, { passive: true });
-    scrollTarget.addEventListener("wheel", handleWheel, { passive: true });
-    scrollTarget.addEventListener("keydown", handleKeyDown);
-    return () => {
-      scrollTarget.removeEventListener("scroll", handleScroll);
-      scrollTarget.removeEventListener("touchstart", handleTouchStart);
-      scrollTarget.removeEventListener("touchmove", handleTouchMove);
-      scrollTarget.removeEventListener("touchend", handleTouchEnd);
-      scrollTarget.removeEventListener("touchcancel", handleTouchEnd);
-      scrollTarget.removeEventListener("wheel", handleWheel);
-      scrollTarget.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [activeFilePath, applyMobileShellHeaderEvent, showThreadView, isMobile, mobileShellHeaderVisibility,
-    selectedThreadIdForView, shouldShowShellHeader, threadSurfaceKey]);
+  const mobileShellHeader = useMobileShellHeader({
+    isMobile,
+    shouldShowShellHeader,
+    showThreadView,
+    mainPaneRef,
+    threadViewportRef: directThreadScrollViewportRef,
+    mainPaneScrollKey,
+    surfaceKey: `${threadSurfaceKey}\0${selectedThreadIdForView}\0${activeFilePath}`,
+  });
 
   return (
     <ThreadViewKeysContext.Provider value={threadViewKeys}>
@@ -1128,8 +897,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 className="h-full"
                 contentClassName="flex flex-col"
                 enabled={showThreadView}
-                onScrollIntent={handleThreadScrollIntent}
-                onTouchActivityChange={handleThreadTouchActivity}
+                onScrollIntent={mobileShellHeader.onScrollIntent}
+                onTouchActivityChange={mobileShellHeader.onTouchActivity}
                 resetKey={`${threadSurfaceKey}:${getThreadViewInstanceKey(selectedThreadIdForView || activeThreadId)}`}
               >
               <WorkbenchMobileShellHeader
@@ -1138,7 +907,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               md:translate-y-0 md:opacity-100
             `}
                 hidden={!shouldShowShellHeader}
-                visibility={mobileShellHeaderVisibility}
+                visibility={mobileShellHeader.visibility}
               >
                 {/* On desktop the fade stops short of the left edge so the page's top-left glow shows through. */}
                 <div
@@ -1378,7 +1147,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     route={route}
                     fontSizePreview={displayedFontSizePreview}
                     path={route.filePath}
-                    shellHeaderVisibility={mobileShellHeaderVisibility}
+                    shellHeaderVisibility={mobileShellHeader.visibility}
                   />
                 ) : null}
               </section>
