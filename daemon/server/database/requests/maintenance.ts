@@ -69,8 +69,13 @@ export const maintenanceRequests = {
       return database.prepare(compiled.sql).all(...compiled.parameters) as WorkbenchDatabaseRow[];
     },
   }),
-  expireRetainedPayloads: defineDatabaseRequest({
-    run: ({ retention }, cutoffs: WorkbenchTranscriptRetentionCutoffs) => retention.expire(cutoffs),
+  expireRetainedResults: defineDatabaseRequest({
+    run: ({ retention }, cutoffs: Pick<WorkbenchTranscriptRetentionCutoffs, "expiredAt" | "resultCutoff">) =>
+      retention.expireResultPayloads(cutoffs),
+  }),
+  expireRetainedTurns: defineDatabaseRequest({
+    run: ({ retention }, cutoffs: Omit<WorkbenchTranscriptRetentionCutoffs, "resultCutoff">, maxTurns: number) =>
+      retention.expireTurnPayloads(cutoffs, maxTurns),
   }),
   listOrphanAssetCandidates: defineDatabaseRequest({
     run: ({ database }, createdBefore: number) => new WorkbenchTranscriptAssetStore(database).listOrphanCandidates(createdBefore),

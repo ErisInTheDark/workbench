@@ -2948,9 +2948,7 @@ test("provider replay cannot restore expired result or turn payloads", () => {
   try {
     repository.settle([threadObservation(), providerReplay()]);
     const retention = new WorkbenchTranscriptRetentionRepository(database);
-    assert.equal(retention.expire({
-      expiredAt: 1_000, resultCutoff: 100, transcriptCutoff: 0,
-    }).expiredResults, 1);
+    assert.equal(retention.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 100 }), 1);
 
     repository.settle([providerReplay()]);
     assert.equal(
@@ -2969,9 +2967,7 @@ test("provider replay cannot restore expired result or turn payloads", () => {
       VALUES ('thread', 10)
       ON CONFLICT(thread_id) DO UPDATE SET settled_at = excluded.settled_at
     `).run();
-    assert.equal(retention.expire({
-      expiredAt: 2_000, resultCutoff: 0, transcriptCutoff: 100,
-    }).expiredTurns, 1);
+    assert.equal(retention.expireTurnPayloads({ expiredAt: 2_000, transcriptCutoff: 100 }, 10), 1);
     assert.equal(database.prepare("SELECT COUNT(*) FROM thread_items").pluck().get(), 0);
 
     repository.settle([providerReplay()]);

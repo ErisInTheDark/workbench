@@ -62,13 +62,13 @@ test("observed settled transcripts survive until release while restored threads 
       });
     }
     const owner = new WorkbenchTranscriptRetentionRepository(database);
-    assert.equal(owner.expire({
-      expiredAt: 1_000, resultCutoff: 0, transcriptCutoff: 100, observedThreadIds: ["observed"],
-    }).expiredTurns, 1);
+    assert.equal(owner.expireTurnPayloads({
+      expiredAt: 1_000, transcriptCutoff: 100, observedThreadIds: ["observed"],
+    }, 10), 1);
     assert.deepEqual(database.prepare("SELECT thread_id FROM thread_items ORDER BY thread_id").pluck().all(), ["observed", "restored"]);
-    assert.equal(owner.expire({
-      expiredAt: 2_000, resultCutoff: 0, transcriptCutoff: 100, observedThreadIds: [],
-    }).expiredTurns, 1);
+    assert.equal(owner.expireTurnPayloads({
+      expiredAt: 2_000, transcriptCutoff: 100, observedThreadIds: [],
+    }, 10), 1);
     assert.deepEqual(database.prepare("SELECT thread_id FROM thread_items").pluck().all(), ["restored"]);
   } finally { database.close(); }
 });
@@ -86,9 +86,7 @@ test("result expiry preserves the call envelope, honours exact cutoffs, and aggr
     processItem(database, { threadId: "running", turnId: "running-turn", itemId: 3, createdAt: 1, state: "inProgress", output: "streaming" });
     const repository = new WorkbenchTranscriptRetentionRepository(database);
 
-    assert.deepEqual(repository.expire({ expiredAt: 1_000, resultCutoff: 100, transcriptCutoff: 0 }), {
-      expiredResults: 1, expiredTurns: 0,
-    });
+    assert.equal(repository.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 100 }), 1);
     assert.deepEqual(database.prepare(`SELECT item_id, output_text FROM thread_operation_process_sources ORDER BY item_id`).all(), [
       { item_id: 1, output_text: null },
       { item_id: 2, output_text: "keep" },
@@ -105,7 +103,7 @@ test("result expiry preserves the call envelope, honours exact cutoffs, and aggr
     const expiredItem = projection.data.turns[0]?.items[0];
     assert.equal(expiredItem?.type, "commandExecution");
     assert.equal(expiredItem?.type === "commandExecution" ? expiredItem.resultExpiredAt : null, 1_000);
-    assert.equal(repository.expire({ expiredAt: 2_000, resultCutoff: 100, transcriptCutoff: 0 }).expiredResults, 0);
+    assert.equal(repository.expireResultPayloads({ expiredAt: 2_000, resultCutoff: 100 }), 0);
   } finally { database.close(); }
 });
 
@@ -121,9 +119,7 @@ test("later result expiry epochs never revisit earlier payload cohorts", () => {
       createdAt: 10, state: "completed", output: "earlier payload",
     });
     const repository = new WorkbenchTranscriptRetentionRepository(database);
-    assert.equal(repository.expire({
-      expiredAt: 1_000, resultCutoff: 20, transcriptCutoff: 0,
-    }).expiredResults, 1);
+    assert.equal(repository.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 20 }), 1);
     processItem(database, {
       threadId: "later", turnId: "later-turn", itemId: 2,
       createdAt: 30, state: "completed", output: "later payload",
@@ -137,9 +133,7 @@ test("later result expiry epochs never revisit earlier payload cohorts", () => {
       END;
     `);
 
-    assert.equal(repository.expire({
-      expiredAt: 2_000, resultCutoff: 40, transcriptCutoff: 0,
-    }).expiredResults, 1);
+    assert.equal(repository.expireResultPayloads({ expiredAt: 2_000, resultCutoff: 40 }), 1);
     assert.deepEqual(database.prepare(`
       SELECT item_id, expired_at FROM thread_item_payload_retention ORDER BY item_id
     `).all(), [
@@ -166,10 +160,9 @@ test("settled transcript expiry keeps turn identity and removes only generations
       ('turn', 'boundary', 'boundary-turn', NULL, 'codex', 'C:/project', 'boundary',
         'snapshot', '{"large":"keep"}', 90)`).run();
 
-    const result = new WorkbenchTranscriptRetentionRepository(database)
-      .expire({ expiredAt: 1_000, resultCutoff: 0, transcriptCutoff: 100 });
-
-    assert.deepEqual(result, { expiredResults: 0, expiredTurns: 1 });
+    const repository = new WorkbenchTranscriptRetentionRepository(database);
+    assert.equal(repository.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 0 }), 0);
+    assert.equal(repository.expireTurnPayloads({ expiredAt: 1_000, transcriptCutoff: 100 }, 10), 1);
     assert.deepEqual(database.prepare("SELECT id FROM thread_turns ORDER BY id").all(), [
       { id: "boundary-turn" }, { id: "expired-turn" },
     ]);
@@ -184,6 +177,29 @@ test("settled transcript expiry keeps turn identity and removes only generations
   } finally { database.close(); }
 });
 
+test("turn expiry runs in bounded batches that together expire every eligible turn exactly once", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    for (let index = 1; index <= 5; index += 1) {
+      seed(database, `thread-${index}`, 1);
+      processItem(database, { threadId: `thread-${index}`, turnId: `turn-${index}`, itemId: index, createdAt: 1, state: "completed", output: "old" });
+    }
+    const repository = new WorkbenchTranscriptRetentionRepository(database);
+    const cutoffs = { expiredAt: 1_000, transcriptCutoff: 100 };
+    const remaining = () => database.prepare("SELECT COUNT(*) FROM thread_items").pluck().get();
+    assert.equal(repository.expireTurnPayloads(cutoffs, 2), 2);
+    assert.equal(remaining(), 3, "a batch leaves later turns untouched");
+    assert.equal(repository.expireTurnPayloads(cutoffs, 2), 2);
+    assert.equal(repository.expireTurnPayloads(cutoffs, 2), 1, "a short batch means nothing is left");
+    assert.equal(repository.expireTurnPayloads(cutoffs, 2), 0);
+    assert.equal(remaining(), 0);
+    assert.equal(database.prepare("SELECT COUNT(*) FROM thread_turn_payload_retention WHERE expired_at = 1000").pluck().get(), 5);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
 test("expiring settled transcripts keep their message text searchable until the thread is archived", () => {
   const database = createSearchTestDatabase();
   try {
@@ -194,7 +210,7 @@ test("expiring settled transcripts keep their message text searchable until the 
     const retention = new WorkbenchTranscriptRetentionRepository(database);
     const retained = () => database.prepare("SELECT thread_id, role, text FROM workbench_search_narratives ORDER BY role").all();
 
-    assert.equal(retention.expire({ expiredAt: 1_000, resultCutoff: 0, transcriptCutoff: 100 }).expiredTurns, 2);
+    assert.equal(retention.expireTurnPayloads({ expiredAt: 1_000, transcriptCutoff: 100 }, 10), 2);
     assert.deepEqual(database.prepare("SELECT COUNT(*) FROM thread_items").pluck().get(), 0);
     assert.deepEqual(retained(), [
       { role: "assistant", text: "keep this answer", thread_id: "settled" },
@@ -202,7 +218,7 @@ test("expiring settled transcripts keep their message text searchable until the 
     ]);
 
     database.prepare("UPDATE workbench_top_level_thread_states SET archived = 1 WHERE thread_id = 'settled'").run();
-    retention.expire({ expiredAt: 2_000, resultCutoff: 0, transcriptCutoff: 100 });
+    retention.expireResultPayloads({ expiredAt: 2_000, resultCutoff: 0 });
     assert.deepEqual(retained(), []);
   } finally { database.close(); }
 });
@@ -251,9 +267,9 @@ test("result expiry removes every supported result family while preserving invoc
       }),
     ]);
 
-    assert.deepEqual(new WorkbenchTranscriptRetentionRepository(database).expire({
-      expiredAt: 1_000, resultCutoff: 100, transcriptCutoff: 0,
-    }), { expiredResults: 4, expiredTurns: 0 });
+    assert.equal(new WorkbenchTranscriptRetentionRepository(database).expireResultPayloads({
+      expiredAt: 1_000, resultCutoff: 100,
+    }), 4);
     assert.equal(database.prepare("SELECT COUNT(*) FROM thread_callable_mcp_results").pluck().get(), 0);
     assert.equal(database.prepare("SELECT COUNT(*) FROM thread_callable_dynamic_content").pluck().get(), 0);
     assert.equal(database.prepare("SELECT COUNT(*) FROM thread_tool_output_parts").pluck().get(), 0);
@@ -265,9 +281,9 @@ test("result expiry removes every supported result family while preserving invoc
       SELECT tool_name, call_count, failure_count FROM thread_tool_daily_aggregates
       ORDER BY tool_name
     `).all(), [{ tool_name: "rg", call_count: 1, failure_count: 0 }]);
-    assert.equal(new WorkbenchTranscriptRetentionRepository(database).expire({
-      expiredAt: 2_000, resultCutoff: 100, transcriptCutoff: 0,
-    }).expiredResults, 0);
+    assert.equal(new WorkbenchTranscriptRetentionRepository(database).expireResultPayloads({
+      expiredAt: 2_000, resultCutoff: 100,
+    }), 0);
     assert.deepEqual(database.prepare(`
       SELECT tool_name, call_count, failure_count FROM thread_tool_daily_aggregates
       ORDER BY tool_name

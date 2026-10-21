@@ -1,16 +1,11 @@
 /*
  * Exports:
- * - WorkbenchTranscriptRetentionResult: payload rows expired by one atomic pass.
  * - WorkbenchTranscriptRetentionCutoffs: expiry clocks and observed threads excluded from whole-turn expiry.
- * - default WorkbenchTranscriptRetentionRepository: aggregate durable tool facts, keep expiring narrative searchable, and expire eligible result/transcript payloads.
+ * - default WorkbenchTranscriptRetentionRepository: aggregate durable tool facts, keep expiring narrative searchable, and expire
+ *   eligible result payloads in one atomic step and whole turns in bounded atomic batches.
  */
 import type Database from "better-sqlite3";
 import { purgeArchivedSearchNarrative, retainSearchNarrative } from "../search/WorkbenchSearchNarrativeIndex.ts";
-
-export interface WorkbenchTranscriptRetentionResult {
-  expiredResults: number;
-  expiredTurns: number;
-}
 
 export interface WorkbenchTranscriptRetentionCutoffs {
   expiredAt: number;
@@ -24,16 +19,26 @@ const DAY_MS = 86_400_000;
 export default class WorkbenchTranscriptRetentionRepository {
   constructor(private readonly database: Database.Database) {}
 
-  expire(cutoffs: WorkbenchTranscriptRetentionCutoffs): WorkbenchTranscriptRetentionResult {
+  /** Expires every eligible result payload and purges narrative of archived threads; returns the results expired. */
+  expireResultPayloads(cutoffs: Pick<WorkbenchTranscriptRetentionCutoffs, "expiredAt" | "resultCutoff">) {
     return this.database.transaction(() => {
-      const expiredResults = this.expireResults(cutoffs.resultCutoff, cutoffs.expiredAt);
-      const expiredTurns = this.expireTranscripts(cutoffs.transcriptCutoff, cutoffs.expiredAt, cutoffs.observedThreadIds ?? []);
+      const expired = this.expireResults(cutoffs.resultCutoff, cutoffs.expiredAt);
       purgeArchivedSearchNarrative(this.database);
-      return { expiredResults, expiredTurns };
+      return expired;
     })();
   }
 
-  private aggregateCandidateResults(where: string, parameters: Record<string, number>) {
+  /**
+   * Expires at most `maxTurns` whole eligible turns as one atomic batch; returns how many it expired, so fewer than
+   * `maxTurns` means none are left. Each turn's items cascade through every item table, so batches bound the writer hold.
+   */
+  expireTurnPayloads(cutoffs: Omit<WorkbenchTranscriptRetentionCutoffs, "resultCutoff">, maxTurns: number) {
+    return this.database.transaction(() => this.expireTranscripts(
+      cutoffs.transcriptCutoff, cutoffs.expiredAt, cutoffs.observedThreadIds ?? [], maxTurns,
+    ))();
+  }
+
+  private aggregateCandidateResults(where: string, parameters: Record<string, number | string>) {
     this.database.prepare(`
       INSERT INTO thread_tool_daily_aggregates
         (project_id, thread_id, day, tool_name, call_count, failure_count)
@@ -98,8 +103,9 @@ export default class WorkbenchTranscriptRetentionRepository {
     return inserted;
   }
 
-  private expireTranscripts(cutoff: number, expiredAt: number, observedThreadIds: readonly string[]) {
-    const inserted = this.database.prepare(`
+  private expireTranscripts(cutoff: number, expiredAt: number, observedThreadIds: readonly string[], maxTurns: number) {
+    // Earlier batches share `expiredAt`, so this batch is addressed by its own turn ids.
+    const expiring = this.database.prepare(`
       INSERT OR IGNORE INTO thread_turn_payload_retention(turn_id, expired_at)
       SELECT turn.id, @expiredAt
       FROM thread_turns turn
@@ -107,23 +113,16 @@ export default class WorkbenchTranscriptRetentionRepository {
       LEFT JOIN thread_turn_payload_retention expired ON expired.turn_id = turn.id
       WHERE retention.settled_at < @cutoff AND expired.turn_id IS NULL
         AND turn.thread_id NOT IN (SELECT value FROM json_each(@observedThreadIds))
-    `).run({ cutoff, expiredAt, observedThreadIds: JSON.stringify(observedThreadIds) }).changes;
-    if (!inserted) return 0;
-    this.aggregateCandidateResults(`
-      retained.item_id IS NULL
-      AND item.turn_id IN (
-        SELECT turn_id FROM thread_turn_payload_retention WHERE expired_at = @expiredAt
-      )
-    `, { expiredAt });
-    retainSearchNarrative(this.database, "SELECT turn_id FROM thread_turn_payload_retention WHERE expired_at = ?", [expiredAt]);
-    this.database.prepare(`
-      DELETE FROM transcript_native_records
-      WHERE turn_id IN (SELECT turn_id FROM thread_turn_payload_retention WHERE expired_at = ?)
-    `).run(expiredAt);
-    this.database.prepare(`
-      DELETE FROM thread_items
-      WHERE turn_id IN (SELECT turn_id FROM thread_turn_payload_retention WHERE expired_at = ?)
-    `).run(expiredAt);
-    return inserted;
+      LIMIT @maxTurns
+      RETURNING turn_id
+    `).pluck().all({ cutoff, expiredAt, maxTurns, observedThreadIds: JSON.stringify(observedThreadIds) });
+    if (!expiring.length) return 0;
+    const turnIds = JSON.stringify(expiring);
+    const batch = "SELECT value FROM json_each(@turnIds)";
+    this.aggregateCandidateResults(`retained.item_id IS NULL AND item.turn_id IN (${batch})`, { turnIds });
+    retainSearchNarrative(this.database, "SELECT value FROM json_each(?)", [turnIds]);
+    this.database.prepare(`DELETE FROM transcript_native_records WHERE turn_id IN (${batch})`).run({ turnIds });
+    this.database.prepare(`DELETE FROM thread_items WHERE turn_id IN (${batch})`).run({ turnIds });
+    return expiring.length;
   }
 }

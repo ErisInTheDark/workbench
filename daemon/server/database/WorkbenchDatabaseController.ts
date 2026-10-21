@@ -47,6 +47,8 @@ import {
 const ASSET_ADMISSION_GRACE_MS = 3_600_000;
 /** 1024 pages is about 4 MiB of file movement: short enough to keep each writer step well under a second. */
 const RECLAIMED_PAGES_PER_STEP = 1_024;
+/** Expired turns average ~240 items cascading through every item table (~20ms each on a real database), so ~0.3s a step. */
+const EXPIRED_TURNS_PER_STEP = 16;
 const SLOW_WRITER_CALL_MS = 1_000;
 
 /** Settles with the abort reason as soon as `signal` fires; the abandoned call keeps running and its outcome is dropped. */
@@ -307,8 +309,18 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       signal?.throwIfAborted();
       return unlessAborted(this.#call(name, args, signal), signal);
     };
-    const expiry = await step("expireRetainedPayloads",
-      { ...cutoffs, ...(readObservedThreadIds ? { observedThreadIds: readObservedThreadIds() } : {}) });
+    const expiredResults = await step("expireRetainedResults", { expiredAt: cutoffs.expiredAt, resultCutoff: cutoffs.resultCutoff });
+    let expiredTurns = 0;
+    for (;;) {
+      // Observed threads are sampled per batch, so a thread opened mid-pass keeps its remaining turns.
+      const expired = await step("expireRetainedTurns", {
+        expiredAt: cutoffs.expiredAt, transcriptCutoff: cutoffs.transcriptCutoff,
+        observedThreadIds: readObservedThreadIds?.() ?? cutoffs.observedThreadIds ?? [],
+      }, EXPIRED_TURNS_PER_STEP);
+      expiredTurns += expired;
+      if (expired < EXPIRED_TURNS_PER_STEP) break;
+    }
+    const expiry = { expiredResults, expiredTurns };
     const createdBefore = cutoffs.expiredAt - ASSET_ADMISSION_GRACE_MS;
     let expiredAssets = 0;
     const candidates = await step("listOrphanAssetCandidates", createdBefore);
