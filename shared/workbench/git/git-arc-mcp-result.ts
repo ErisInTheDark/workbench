@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { JsonValue } from "../thread/workbench-thread-items.ts";
 import { conformToZodSchema } from "../zod-schema-conformer.ts";
 import { GitCheckpointFileChangeSchema } from "./git-checkpoint-file-change.ts";
+import { GitArcEditResultSchema } from "./git-arc-edit-contracts.ts";
 import { GitArcFailureSchema } from "./git-arc-failures.ts";
 import { GitArcReceiptSchema } from "./git-arc-receipts.ts";
 import { GitArcStatusPresentationSchema } from "./git-arc-status.ts";
@@ -18,6 +19,7 @@ const successSchema = z.object({
   status: GitArcStatusPresentationSchema.partial().default({}),
   changes: z.array(GitCheckpointFileChangeSchema).default([]),
   diff: z.string().nullable().default(null),
+  edit: GitArcEditResultSchema.nullable().default(null),
 }).strict();
 
 const failureSchema = z.object({
@@ -43,6 +45,7 @@ const successDefaults = {
   status: {},
   changes: [],
   diff: null,
+  edit: null,
 };
 
 export function readGitArcMcpResult(value: JsonValue | null) {

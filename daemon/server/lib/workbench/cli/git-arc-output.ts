@@ -31,18 +31,19 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
     const full = paths(request.body, "full").map(value => GitArcStatusFullSchema.parse(value));
     return {
       text: formatGitArcStatus(status, full),
-      structuredContent: { kind: "success", version: 1, receipt: null, status: projectGitArcStatus(status, full), changes: [], diff: null },
+      structuredContent: { kind: "success", version: 1, receipt: null, status: projectGitArcStatus(status, full), changes: [], diff: null, edit: null },
     };
   }
   if (request.responseKind === "git-arc-edit") {
+    const edit = GitArcEditResultSchema.parse(payload);
     return {
-      text: formatGitArcEditText(GitArcEditResultSchema.parse(payload)),
-      structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null },
+      text: formatGitArcEditText(edit),
+      structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null, edit },
     };
   }
   if (!payload) return {
     text: "No registered Git arc.",
-    structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null },
+    structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null, edit: null },
   };
   const action = (request.responseKind === "git-arc-wait" ? "start" : request.responseKind.replace("git-arc-", "")) as GitArcAction;
   const members = rows(payload, "members");
@@ -183,6 +184,7 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
         ? GitCheckpointFileChangeSchema.array().parse(payload.changes ?? []).map(change => ({ ...change, diff: "" }))
         : [],
       diff: action === "diff" ? string(payload, "diff") : null,
+      edit: null,
     },
   };
 }

@@ -1913,6 +1913,10 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   assert.deepEqual(parsedEdit?.collisions, [{ owner: "other work", paths: ["src/b.ts"], threadId: "sibling" }]);
   assert.match(editPreview.stdout, /^diff src\/b\.ts\n@@ -1 \+1 @@/mu);
   assert.match(editPreview.stdout, /Apply waits until the other threads release/u);
+  const structuredEdit = editPreview.structuredContent?.kind === "success" ? editPreview.structuredContent.edit : null;
+  assert.deepEqual(structuredEdit?.files.map(({ movedFrom, path }) => ({ movedFrom, path })), [{ movedFrom: "src/a.ts", path: "src/b.ts" }]);
+  assert.deepEqual(structuredEdit?.collisions, [{ owner: "other work", paths: ["src/b.ts"], threadId: "sibling" }]);
+  assert.deepEqual(structuredEdit?.diffs.map(({ path }) => path), ["src/b.ts"]);
   const largeStack = adapt("git-arc-stack", {
     checkpointCommit: successorRef,
     intentName: "Large fixture stack",
