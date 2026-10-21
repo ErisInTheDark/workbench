@@ -496,7 +496,7 @@ test("tooltips name required todos by title and only count optional ones", async
 test("tooltip proposals commit through the thread's own store, without a host-supplied cwd", async () => {
   const html = await renderDetails(false, "C:/elsewhere", true, {
     pendingRequest: null,
-    proposalSummary: { changes: null, committedSha: null, description: "", mode: "commit", title: "ship the store wiring" },
+    proposalSummary: { committedSha: null, description: "", mode: "commit", title: "ship the store wiring", totals: null },
   });
   assert.match(html, /data-thread-tooltip-proposal="commit"/u);
   assert.match(html, /ship the store wiring/u);

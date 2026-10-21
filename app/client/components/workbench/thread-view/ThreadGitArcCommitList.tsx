@@ -16,7 +16,7 @@ export default function ThreadGitArcCommitList({
           key={commit}
           paths={paths}
           sourceItemId={`intersecting-commit:${commit}`}
-          state={{ status: "summary", summary: { changes: null, committedSha: commit, description: "", title: subject || "No commit subject" } }}
+          state={{ status: "summary", summary: { committedSha: commit, description: "", title: subject || "No commit subject", totals: null } }}
         />
       ))}
     </div>

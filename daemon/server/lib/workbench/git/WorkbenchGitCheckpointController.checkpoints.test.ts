@@ -10,6 +10,7 @@ import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { GitArcStashResultSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import { summarizeGitArcChanges } from "workbench-shared/workbench/git/git-arc-change-totals";
 
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -853,9 +854,7 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   // Observed totals describe what landed, newer selected edits included, without hydrating the proposal.
   const newerSummary = (await controller.findLifecycleState({ cwd: repoRoot, threadId: newerThreadId }))
     ?.proposals.find(({ proposalId }) => proposalId === fixture.state.newerProposalId)?.summary;
-  assert.deepEqual(newerSummary?.changes, committedNewer.changes.map(({ additions, deletions, kind, path: filePath }) => (
-    { additions, deletions, kind: kind.type, path: filePath }
-  )));
+  assert.deepEqual(newerSummary?.totals, summarizeGitArcChanges(committedNewer.changes));
   assert.equal(await git(repoRoot, ["show", "HEAD:unrelated.txt"]), "unrelated checkpoint\n");
   assert.equal(await git(repoRoot, ["show", ":unrelated.txt"]), "unrelated staged\n");
   assert.equal(await fs.readFile(path.join(repoRoot, "unrelated.txt"), "utf8"), "unrelated worktree\n");

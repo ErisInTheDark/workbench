@@ -28,7 +28,7 @@ function ThreadGitArcProposalPreview({
         ? { status: "summary", summary }
         // Surfaces without Git arc observation can only show what the agent asked for.
         : !isObserved && intent?.title.trim()
-          ? { status: "summary", summary: { changes: null, description: intent.description, title: intent.title } }
+          ? { status: "summary", summary: { description: intent.description, title: intent.title, totals: null } }
           : { status: "pending" };
   const fallbackTitle = cardState.status === "pending" ? intent?.title.trim() : undefined;
   return (

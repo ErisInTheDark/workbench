@@ -35,7 +35,7 @@ export default function WorkbenchGitPeerTooltip({ location, peer, hostname, bran
   const Icon = mode === "fastForward" ? GitFastForwardIcon : mode === "merge" ? GitMergeIcon : GitRebaseIcon;
   const row = (commit: NonNullable<typeof data>["commits"][number]) => <ThreadCheckpointCommitCard key={commit.commit}
     sourceItemId={`peer-commit:${commit.commit}`}
-    state={{ status: "summary", summary: { changes: null, committedSha: commit.commit, description: "", title: commit.subject } }} />;
+    state={{ status: "summary", summary: { committedSha: commit.commit, description: "", title: commit.subject, totals: null } }} />;
   const loadingRow = <ThreadCheckpointCommitCard sourceItemId="peer-commit:loading" state={{ status: "pending" }} />;
   const failure = unavailable ?? (!branch ? "Branch unavailable"
     : snapshot.phase === "failed" || snapshot.phase === "unavailable" ? "Commits unavailable" : null);

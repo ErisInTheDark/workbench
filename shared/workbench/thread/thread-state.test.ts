@@ -915,7 +915,7 @@ test("accepted history counts only commits the live arc does not show, and its r
   ];
   const live = [
     { proposalId: "p2", rootId: "root", status: "committed" as const,
-      summary: { changes: null, committedSha: sha(2), description: "", mode: "commit" as const, title: "two" } },
+      summary: { committedSha: sha(2), description: "", mode: "commit" as const, title: "two", totals: null } },
     { proposalId: "p3", rootId: "root", status: "proposed" as const },
   ];
   const history = getWorkbenchThreadGitCommitHistory(refs, live);

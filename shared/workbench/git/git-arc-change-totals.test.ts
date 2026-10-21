@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getThreadGitArcChangeTotals } from "./ThreadGitArcChangeTotals";
+import { summarizeGitArcChanges } from "./git-arc-change-totals.ts";
 
 test("mixed changes partition every line exactly once, including inline rust tests as premise", () => {
   const changes = [
@@ -14,8 +14,9 @@ test("mixed changes partition every line exactly once, including inline rust tes
     { path: "tests/test_cache.py", additions: 4, deletions: 0 },
     { path: "image.png", additions: 0, deletions: 0 },
   ];
-  const result = getThreadGitArcChangeTotals(changes);
+  const result = summarizeGitArcChanges(changes);
   assert.deepEqual(result, {
+    files: 6,
     premise: { additions: 27, deletions: 10 },
     tests: { additions: 94, deletions: 19 },
   });
@@ -25,27 +26,29 @@ test("mixed changes partition every line exactly once, including inline rust tes
 });
 
 test("test-only and premise-only changes stay in their own partition", () => {
-  assert.deepEqual(getThreadGitArcChangeTotals([
+  assert.deepEqual(summarizeGitArcChanges([
     { path: "owner.spec.tsx", additions: 8, deletions: 3 },
     { path: "CacheTest.java", additions: 0, deletions: 2 },
   ]), {
+    files: 2,
     premise: { additions: 0, deletions: 0 },
     tests: { additions: 8, deletions: 5 },
   });
-  assert.deepEqual(getThreadGitArcChangeTotals([
+  assert.deepEqual(summarizeGitArcChanges([
     { path: "tests/owner.rs", additions: 5, deletions: 0 },
     { path: "src/owner.test.fixtures.ts", additions: 0, deletions: 4 },
   ]), {
+    files: 2,
     premise: { additions: 5, deletions: 4 },
     tests: { additions: 0, deletions: 0 },
   });
 });
 
 test("empty and zero-line changes do not manufacture counts", () => {
-  for (const changes of [[], [{ path: "owner.test.ts", additions: 0, deletions: 0 }]]) {
-    assert.deepEqual(getThreadGitArcChangeTotals(changes), {
-      premise: { additions: 0, deletions: 0 },
-      tests: { additions: 0, deletions: 0 },
-    });
-  }
+  assert.deepEqual(summarizeGitArcChanges([]), {
+    files: 0, premise: { additions: 0, deletions: 0 }, tests: { additions: 0, deletions: 0 },
+  });
+  assert.deepEqual(summarizeGitArcChanges([{ path: "owner.test.ts", additions: 0, deletions: 0 }]), {
+    files: 1, premise: { additions: 0, deletions: 0 }, tests: { additions: 0, deletions: 0 },
+  });
 });

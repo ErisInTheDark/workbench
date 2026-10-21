@@ -65,7 +65,7 @@ import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadI
 
 import { areDeeplyEqual } from "../deep-equality.ts";
 import GitArcPathSet from "../git/GitArcPathSet.ts";
-import { GitArcChangeTotalSchema } from "../git/git-arc-receipts.ts";
+import { GitArcChangeTotalsSchema } from "../git/git-arc-change-totals.ts";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerSettingsSchema } from "./composer-profile-selection.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
 import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
@@ -283,10 +283,8 @@ export const WorkbenchThreadLifecycleSchema = z.union([
 });
 export type WorkbenchThreadLifecycle = z.infer<typeof WorkbenchThreadLifecycleSchema>;
 
-/** A proposal's message and change totals as Git currently records them; never cached in SQLite. */
+/** A proposal's message and change totals as Git currently records them; per-file changes load with the proposal. */
 const WorkbenchGitArcProposalSummarySchema = z.object({
-  /** Null on proposals written before change totals were recorded. */
-  changes: z.array(GitArcChangeTotalSchema).nullable(),
   /** ISO acceptance time of a committed proposal; absent while proposed or when unrecorded. */
   committedAt: z.string().datetime().optional(),
   committedSha: z.string().regex(/^[a-f0-9]{40,64}$/u).nullable(),
@@ -295,6 +293,8 @@ const WorkbenchGitArcProposalSummarySchema = z.object({
   /** Pre-amend commit an accepted amend replaced; permanent history drops its row. Never cached in SQLite. */
   replacedSha: z.string().regex(/^[a-f0-9]{40,64}$/u).optional(),
   title: z.string(),
+  /** Null on proposals written before change totals were recorded, and in startup-cache rows not yet re-observed. */
+  totals: GitArcChangeTotalsSchema.nullable(),
 }).strict();
 export type WorkbenchGitArcProposalSummary = z.infer<typeof WorkbenchGitArcProposalSummarySchema>;
 

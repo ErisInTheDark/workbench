@@ -360,7 +360,10 @@ test("the git startup cache retains compact summaries while live stack facts nev
         checkpointCommit: "a".repeat(40), claimedPaths: ["one.ts"], intentDescription: "", intentName: "arc", phase: "active",
         proposals: [{
           proposalId: "proposal", status: "proposed",
-          summary: { changes: [{ additions: 2, deletions: 1, kind: "update", path: "one.ts" }], committedSha: null, description: "", mode: "commit", title: summaryTitle },
+          summary: {
+            committedSha: null, description: "", mode: "commit", title: summaryTitle,
+            totals: { files: 1, premise: { additions: 2, deletions: 1 }, tests: { additions: 0, deletions: 0 } },
+          },
         }],
         stackLayers: [{ layerId: "layer", proposalIds: ["proposal"], sealedAt: "sealed", title: "layer" }],
         stashedPaths: [],
@@ -381,11 +384,11 @@ test("the git startup cache retains compact summaries while live stack facts nev
       proposalId: "proposal",
       status: "proposed",
       summary: {
-        changes: [{ additions: 2, deletions: 1, kind: "update", path: "one.ts" }],
         committedSha: null,
         description: "",
         mode: "commit",
         title: "observed title",
+        totals: { files: 1, premise: { additions: 2, deletions: 1 }, tests: { additions: 0, deletions: 0 } },
       },
     }]);
     assert.equal(loaded.gitArc?.stackLayers, undefined);
@@ -406,7 +409,7 @@ test("permanent commit history is promoted on write but only read per thread, ne
         checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "arc", phase: "resolved",
         proposals: [{
           proposalId: "proposal", rootId: "root", status: "committed",
-          summary: { changes: null, committedAt: "2026-10-16T00:00:00.000Z", committedSha: "b".repeat(40), description: "", mode: "commit", title: "landed" },
+          summary: { committedAt: "2026-10-16T00:00:00.000Z", committedSha: "b".repeat(40), description: "", mode: "commit", title: "landed", totals: null },
         }],
         stashedPaths: [],
         updatedAt: "now",

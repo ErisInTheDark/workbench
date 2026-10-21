@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default GitArcProposalController: own proposal validity (including stacked proposals), bounded diff hydration, publication, acceptance, and lifecycle projection.
- * - GitArcLifecycleState: active or resolved arc with ordered proposals, their paths and Git-derived summaries.
+ * - GitArcLifecycleState: active or resolved arc with ordered proposals, their paths and Git-derived summaries (change totals, not per-file lists).
  * - GitArcDurableProposalReader: accepted proposal ids each thread already holds in permanent commit history.
  * - GitArcAcceptedProposalsError: accepted receipts and remaining claims when continuation stops.
  * - GitCheckpointProposalReceipt: published proposal identity.
@@ -16,6 +16,7 @@ import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitObjectReadSession from "./GitObjectReadSession";
 import type { GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
 import type { WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
+import { summarizeGitArcChanges } from "workbench-shared/workbench/git/git-arc-change-totals";
 import GitArcProposalDiffController from "./GitArcProposalDiffController";
 import {
   passthroughGitArcThreadIdentityResolver,
@@ -141,8 +142,8 @@ function projectLifecycleState(
         ? [{
           paths, proposalId, status,
           summary: {
-            changes, ...(committedAt ? { committedAt } : {}), committedSha, description, mode,
-            ...(replacedSha ? { replacedSha } : {}), title,
+            ...(committedAt ? { committedAt } : {}), committedSha, description, mode,
+            ...(replacedSha ? { replacedSha } : {}), title, totals: changes ? summarizeGitArcChanges(changes) : null,
           },
         }]
         : []

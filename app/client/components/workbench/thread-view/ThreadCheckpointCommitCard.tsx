@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadCommitSummary: diff-free commit message and per-file totals shared by every commit display.
+ * - ThreadCommitSummary: diff-free commit message and change totals shared by every commit display.
  * - CheckpointCommitCardState: distinguish static previews, pending enrichment, diff-free summaries, failures, and loaded proposals.
  * - ThreadCommitControls: edit and commit wiring that makes a commit card interactive.
  * - ThreadCommitMessage: an edited or fallback message shown instead of the state's own.
@@ -11,10 +11,11 @@
  */
 "use client";
 
-import { useEffect, useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { createGitArcOperationRejected, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
+import { summarizeGitArcChanges, type GitArcChangeTotals } from "workbench-shared/workbench/git/git-arc-change-totals";
 import type { GitArcChangeTotal } from "workbench-shared/workbench/git/git-arc-receipts";
 import PrimaryButton from "../../ui/PrimaryButton";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
@@ -29,13 +30,15 @@ import ChevronIcon from "../ChevronIcon";
 import { useThreadWindowPin } from "./ThreadMeasuredContent";
 
 export interface ThreadCommitSummary {
-  /** Exact total when a bounded receipt omits per-file summaries. */
+  /** Exact file count when a bounded receipt omits both its per-file list and line totals. */
   changeCount?: number;
-  /** Null when the proposal predates recorded totals. */
-  changes: readonly GitArcChangeTotal[] | null;
+  /** Per-file totals a receipt carries; observed summaries leave them to the loaded proposal. */
+  changes?: readonly GitArcChangeTotal[];
   committedSha?: string | null;
   description: string;
   title: string;
+  /** Null when unknown. */
+  totals: GitArcChangeTotals | null;
 }
 
 export type CheckpointCommitCardState =
@@ -77,8 +80,6 @@ export interface ThreadCommitDisclosure {
   open: boolean;
 }
 
-type CommitLineChanges =ComponentProps<typeof ThreadGitArcChangeTotals>["changes"];
-
 /** Diff-free file rows: totals only, never expandable. */
 function summaryChangeRows(changes: readonly GitArcChangeTotal[], sourceItemId: string): ThreadFileChangeListChange[] {
   return changes.map(({ additions, deletions, kind, path }, sourceChangeIndex) => ({
@@ -91,10 +92,10 @@ function summaryChangeRows(changes: readonly GitArcChangeTotal[], sourceItemId: 
 }
 
 /** The one-line commit at card title weight: title, totals and short sha, or a skeleton while the title is unknown. */
-function CommitLine({ changes, committedSha, title }: {
-  changes: CommitLineChanges | null;
+function CommitLine({ committedSha, title, totals }: {
   committedSha: string | null;
   title: string | null;
+  totals: GitArcChangeTotals | null;
 }) {
   if (title === null) {
     return (
@@ -106,9 +107,9 @@ function CommitLine({ changes, committedSha, title }: {
   return (
     <span className="flex min-w-0 items-baseline gap-2">
       <span className="min-w-0 truncate font-medium text-text">{title}</span>
-      {changes ? (
+      {totals ? (
         <span className="shrink-0 text-[0.87em]">
-          <ThreadGitArcChangeTotals changes={changes} />
+          <ThreadGitArcChangeTotals totals={totals} />
         </span>
       ) : null}
       {committedSha ? <span className="shrink-0 font-mono text-[0.86em] text-fg/muted">{committedSha.slice(0, 8)}</span> : null}
@@ -218,12 +219,11 @@ export default function ThreadCheckpointCommitCard({
     && proposal.unavailableReasonCode === "committed-outside-proposal";
   const editable = interactive && (!proposal || proposal.status === "proposed" || committedAmendable);
   const displayedChanges = getCheckpointProposalDisplayedChanges(proposal, commitMode);
-  const summaryChanges = summary?.changes ?? null;
-  const summaryChangeCount = summary?.changeCount ?? summaryChanges?.length ?? null;
+  const summaryChangeCount = summary?.totals?.files ?? summary?.changeCount ?? null;
   const fileCount = proposal ? displayedChanges.length : summaryChangeCount ?? paths.length;
   const committedSha = proposal?.status === "committed" ? proposal.committedSha : summary?.committedSha ?? null;
   const committed = proposal ? proposal.status === "committed" : Boolean(committedSha);
-  const lineChanges: CommitLineChanges | null = proposal ? displayedChanges : summaryChanges;
+  const lineTotals = proposal ? summarizeGitArcChanges(displayedChanges) : summary?.totals ?? null;
   const amendTargetMessage = proposal?.amendTargetMessage ?? null;
   const titleWillChange = commitMode === "amend"
     && amendTargetMessage !== null
@@ -462,7 +462,7 @@ export default function ThreadCheckpointCommitCard({
     detailsAvailable: !compact,
     sourceChangeIndex: index,
     sourceItemId,
-  }))) : summaryChanges ? fileList(summaryChangeRows(summaryChanges, sourceItemId)) : paths.length ? fileList(paths.map((path, index) => ({
+  }))) : summary?.changes ? fileList(summaryChangeRows(summary.changes, sourceItemId)) : paths.length ? fileList(paths.map((path, index) => ({
     change: {
       diff: "",
       kind: { move_path: null, type: "update" as const },
@@ -508,7 +508,7 @@ export default function ThreadCheckpointCommitCard({
           ${titleClassName}
         `}
       >
-        <CommitLine changes={lineChanges} committedSha={committedSha} title={titlePending ? null : title} />
+        <CommitLine committedSha={committedSha} title={titlePending ? null : title} totals={lineTotals} />
       </span>
     </>
   );
@@ -596,7 +596,7 @@ export default function ThreadCheckpointCommitCard({
             <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="inline-flex min-w-0 items-baseline gap-2">
                 <span>{changeSummary}</span>
-                {lineChanges ? <ThreadGitArcChangeTotals changes={lineChanges} /> : null}
+                {lineTotals ? <ThreadGitArcChangeTotals totals={lineTotals} /> : null}
               </span>
               {actions}
             </span>

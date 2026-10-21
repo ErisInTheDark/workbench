@@ -216,7 +216,7 @@ test("live accepted proposals win over duplicate durable commits", async () => {
     proposalId: "proposal",
     rootId: "root",
     status: "committed",
-    summary: { changes: null, committedSha: duplicate.commitSha, description: "live copy", mode: "commit", title: "live copy" },
+    summary: { committedSha: duplicate.commitSha, description: "live copy", mode: "commit", title: "live copy", totals: null },
   }] });
   assert.equal(html.match(/data-thread-git-arc-proposal="proposal"/gu)?.length, 1, "the live proposal shows once");
   assert.match(html, new RegExp(`data-thread-git-commit="${distinct.commitSha}"`, "u"));

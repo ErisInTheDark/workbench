@@ -52,21 +52,21 @@ function observations(): WorkbenchThreadGitObservations {
         {
           proposalId: "second", status: "proposed", rootId: "root-b",
           summary: {
-            changes: [{ additions: 2, deletions: 1, kind: "update", path: "src/two.ts" }],
             committedSha: null,
             description: "keep details",
             mode: "commit",
             title: "second proposal",
+            totals: { files: 3, premise: { additions: 2, deletions: 1 }, tests: { additions: 5, deletions: 4 } },
           },
         },
         {
           proposalId: "first", status: "committed",
           summary: {
-            changes: null,
             committedSha: "b".repeat(40),
             description: "",
             mode: "amend",
             title: "first proposal",
+            totals: null,
           },
         },
       ],
@@ -137,9 +137,9 @@ function promote(repository: WorkbenchThreadStateGitRepository, threadId: string
       proposals: [{
         proposalId: commit.proposalId, rootId: "root-a", status: "committed",
         summary: {
-          changes: null, ...(commit.committedAt ? { committedAt: commit.committedAt } : {}), committedSha: commit.commitSha,
+          ...(commit.committedAt ? { committedAt: commit.committedAt } : {}), committedSha: commit.commitSha,
           description: commit.description ?? "", mode: commit.replacedSha ? "amend" : "commit",
-          ...(commit.replacedSha ? { replacedSha: commit.replacedSha } : {}), title: commit.title,
+          ...(commit.replacedSha ? { replacedSha: commit.replacedSha } : {}), title: commit.title, totals: null,
         },
       }],
     },

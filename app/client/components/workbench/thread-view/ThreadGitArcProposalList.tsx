@@ -86,7 +86,7 @@ function useObservedProposalCommits(commitActions: ThreadCheckpointCommitActions
   const [failure, setFailure] = useState<string | null>(null);
   const stored = pending.flatMap(({ proposalId, status, summary }): ThreadCheckpointStoredProposal[] => summary ? [{
     description: summary.description,
-    hasChanges: summary.changes === null || summary.changes.length > 0,
+    hasChanges: summary.totals === null || summary.totals.files > 0,
     mode: summary.mode,
     proposalId,
     status,
@@ -314,12 +314,12 @@ export default function ThreadGitArcProposalList({
           proposalId={commit.sourceProposalId}
           sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
           summary={{
-            changes: null,
             ...(commit.committedAt ? { committedAt: commit.committedAt } : {}),
             committedSha: commit.commitSha,
             description: commit.description,
             mode: "commit",
             title: commit.title,
+            totals: null,
           }}
           threadId={threadId}
         />

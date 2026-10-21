@@ -105,6 +105,7 @@ const databaseReleases = Object.freeze({
   threadVisControls: release(95, "ef11ee16ff1c813b9039302c93b48d7acd2e0774d613f0ac02fd6f167c4fb59e"),
   appOwnedPins: release(96, "75782a547ea09b95a97e11a3dfb7d6a68b5ca2f2874c3e57852be011eeddb0a9"),
   retainedSearchNarrative: release(97, "ed6a50bcb3c982e61d448ecf101c29ac0573e48576b2d9a0d87dbb08cfa022fb"),
+  proposalChangeTotals: release(98, "33a664f000ccbc483ef0825944acd542465da812a86f549600104cacd138036e"),
 });
 
 export default databaseReleases;

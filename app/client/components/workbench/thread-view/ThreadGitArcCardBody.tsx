@@ -8,6 +8,7 @@
 import type { ReactNode } from "react";
 
 import type { GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
+import { summarizeGitArcChanges } from "workbench-shared/workbench/git/git-arc-change-totals";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadGitArcCollapsedSummary, { createThreadGitArcEditSummaryRows } from "./ThreadGitArcCollapsedSummary";
@@ -33,8 +34,19 @@ export default function ThreadGitArcCardBody({ card, editResult, operationDetail
       {operationDetails && !claimFailure ? <div>{operationDetails}</div> : null}
       {card.stackedProposals.length ? (
         <div className="divide-y divide-[color-mix(in_srgb,var(--text)_8%,transparent)]" data-thread-git-arc-stacked-proposals="true">
-          {card.stackedProposals.map((summary) => (
-            <ThreadCheckpointCommitCard key={summary.proposalId} sourceItemId={`stacked-proposal:${summary.proposalId}`} state={{ status: "summary", summary }} />
+          {card.stackedProposals.map(({ changeCount, changes, description, proposalId, title }) => (
+            <ThreadCheckpointCommitCard
+              key={proposalId}
+              sourceItemId={`stacked-proposal:${proposalId}`}
+              state={{
+                status: "summary",
+                summary: {
+                  ...(changeCount === undefined ? {} : { changeCount }),
+                  ...(changes ? { changes } : {}),
+                  description, title, totals: changes ? summarizeGitArcChanges(changes) : null,
+                },
+              }}
+            />
           ))}
         </div>
       ) : null}

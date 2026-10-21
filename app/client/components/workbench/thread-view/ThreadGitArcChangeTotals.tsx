@@ -1,31 +1,14 @@
 /*
  * Exports:
  * - default ThreadGitArcChangeTotals: show premise totals with separately revealed dedicated-test totals.
- * - getThreadGitArcChangeTotals: partition per-file counts without changing their combined sum.
  */
 "use client";
 
-import { isDedicatedTestFile } from "workbench-shared/workbench/git/dedicated-test-files";
+import type { GitArcChangeTotals } from "workbench-shared/workbench/git/git-arc-change-totals";
 import { FlaskConicalIcon } from "../workbench-icons";
 import { ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 
-type GitArcCountedChange = { additions: number; deletions: number; path: string };
-
-export function getThreadGitArcChangeTotals (changes: readonly GitArcCountedChange[]) {
-  const totals = {
-    premise: { additions: 0, deletions: 0 },
-    tests: { additions: 0, deletions: 0 },
-  };
-  for (const change of changes) {
-    const partition = isDedicatedTestFile(change.path) ? totals.tests : totals.premise;
-    partition.additions += change.additions;
-    partition.deletions += change.deletions;
-  }
-  return totals;
-}
-
-export default function ThreadGitArcChangeTotals ({ changes }: { changes: readonly GitArcCountedChange[] }) {
-  const totals = getThreadGitArcChangeTotals(changes);
+export default function ThreadGitArcChangeTotals ({ totals }: { totals: Pick<GitArcChangeTotals, "premise" | "tests"> }) {
   const hasTests = Boolean(totals.tests.additions || totals.tests.deletions);
   if (!hasTests && !totals.premise.additions && !totals.premise.deletions) return null;
   return (

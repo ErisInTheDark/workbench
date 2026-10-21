@@ -89,7 +89,7 @@ test("bounded summaries display their exact changed-file count", () => {
     sourceItemId: "proposal",
     state: {
       status: "summary",
-      summary: { changeCount: 1_300, changes: null, description: "", title: "capture fixtures" },
+      summary: { changeCount: 1_300, description: "", title: "capture fixtures", totals: null },
     },
   }));
 
@@ -146,7 +146,10 @@ test("readonly commits are a closed disclosure when they have a body and a stati
     sourceItemId: "commit",
     state: {
       status: "summary",
-      summary: { changes: [{ additions: 2, deletions: 1, kind: "update", path: "app/a.ts" }], committedSha: "c".repeat(40), description: "the body", title: "titled commit" },
+      summary: {
+        changes: [{ additions: 2, deletions: 1, kind: "update", path: "app/a.ts" }], committedSha: "c".repeat(40), description: "the body", title: "titled commit",
+        totals: { files: 1, premise: { additions: 2, deletions: 1 }, tests: { additions: 0, deletions: 0 } },
+      },
     },
   }));
   assert.match(withBody, /aria-expanded="false"/u);
@@ -156,7 +159,7 @@ test("readonly commits are a closed disclosure when they have a body and a stati
 
   const titleOnly = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
     sourceItemId: "commit",
-    state: { status: "summary", summary: { changes: null, committedSha: "d".repeat(40), description: "", title: "bare commit" } },
+    state: { status: "summary", summary: { committedSha: "d".repeat(40), description: "", title: "bare commit", totals: null } },
   }));
   assert.match(titleOnly, /bare commit/u);
   assert.doesNotMatch(titleOnly, /aria-expanded/u);

@@ -1510,11 +1510,11 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
         rootId: "root",
         status: "committed" as const,
         summary: {
-          changes: null,
           committedSha: "f".repeat(40),
           description: "accepted description",
           mode: "commit" as const,
           title: "accepted title",
+          totals: null,
         },
       }]
       : [{ proposalId: "proposal-one", status: "proposed" as const }],
@@ -1605,11 +1605,11 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
       rootId: "root",
       status: "committed",
       summary: {
-        changes: null,
         committedSha: "f".repeat(40),
         description: "accepted description",
         mode: "commit",
         title: "accepted title",
+        totals: null,
       },
     }],
     stashedPaths: [],

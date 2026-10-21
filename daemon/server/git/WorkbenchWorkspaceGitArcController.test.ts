@@ -493,7 +493,7 @@ class FakeLocalGitArcController {
     this.proposals.set(proposalId, { cwd: input.cwd, paths, proposalId });
     state?.proposals.push({
       paths, proposalId, status: "proposed",
-      summary: { changes: [], committedSha: null, description: "", mode: "commit", title: proposalId },
+      summary: { committedSha: null, description: "", mode: "commit", title: proposalId, totals: null },
     });
     return {
       baseCommit: "f".repeat(40), description: "", includeNewer: false, paths, proposalId,

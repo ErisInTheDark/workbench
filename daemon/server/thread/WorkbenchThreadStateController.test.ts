@@ -2459,7 +2459,8 @@ test("resolved Git history expires after 24 hours independently of thread settle
         proposalId: "accepted",
         status: "committed",
         summary: {
-          changes: [], committedSha: "b".repeat(40), description: "", mode: "commit", title: "accepted",
+          committedSha: "b".repeat(40), description: "", mode: "commit", title: "accepted",
+          totals: { files: 0, premise: { additions: 0, deletions: 0 }, tests: { additions: 0, deletions: 0 } },
         },
       }],
       updatedAt: new Date(resolvedAt).toISOString(),

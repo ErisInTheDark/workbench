@@ -69,7 +69,7 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
             <div className={threadGitArcCommitRowClassName} key={proposalId}>
               <ThreadCheckpointCommitCard
                 sourceItemId={`status-proposal:${proposalId}`}
-                state={{ status: "summary", summary: { changes: null, committedSha, description: "", title: commitTitle } }}
+                state={{ status: "summary", summary: { committedSha, description: "", title: commitTitle, totals: null } }}
               />
             </div>
           ))}

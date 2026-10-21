@@ -10,6 +10,7 @@ import { useContext, type ReactNode } from "react";
 
 import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
+import { summarizeGitArcChanges } from "workbench-shared/workbench/git/git-arc-change-totals";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
@@ -113,7 +114,7 @@ export default function ThreadGitArcItem ({
       card.stackedProposalCount !== null ? <span key="proposals">{card.stackedProposalCount} {card.stackedProposalCount === 1 ? "proposal" : "proposals"}</span> : null,
       editResult ? <ThreadFileChangeTotals additions={editResult.additions} deletions={editResult.deletions} key="totals" />
         : operationSummaryRows.length ? (
-          <ThreadGitArcChangeTotals changes={operationSummaryRows.map(row => ({ path: row.change.path, ...(row.summaryTotals ?? row.diff ?? parseUnifiedDiff(row.change.diff)) }))} key="totals" />
+          <ThreadGitArcChangeTotals totals={summarizeGitArcChanges(operationSummaryRows.map(row => ({ path: row.change.path, ...(row.summaryTotals ?? row.diff ?? parseUnifiedDiff(row.change.diff)) })))} key="totals" />
         ) : null,
     ],
     progress: { durationMs, state: card.state, waited: durationPresentation === "waited" },

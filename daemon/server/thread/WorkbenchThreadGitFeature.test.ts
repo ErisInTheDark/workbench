@@ -20,7 +20,7 @@ test("finds one commit owner across permanent history and live proposal evidence
   const commit = "a".repeat(40);
   const proposal = {
     proposalId: "proposal", status: "committed" as const,
-    summary: { changes: [], committedSha: commit, description: "", mode: "commit" as const, title: "land change" },
+    summary: { committedSha: commit, description: "", mode: "commit" as const, title: "land change", totals: null },
   };
   const arc = {
     checkpointCommit: "b".repeat(40), claimedPaths: [], intentDescription: "", intentName: "lookup",

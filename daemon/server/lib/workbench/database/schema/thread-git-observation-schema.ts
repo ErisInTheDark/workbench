@@ -7,7 +7,7 @@ import {
   primaryKey, sql, text, unique, type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
 import {
-  addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion,
+  addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, retireTableHistory, tableVersion,
 } from "workbench-shared/database/schema/schema-history";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 
@@ -98,7 +98,7 @@ export function defineThreadGitObservationSchema(schemaVersion: number) {
       }),
     ],
   }));
-  const proposalsTable = evolveTable(proposalsV1, {
+  const proposalsV2 = evolveTable(proposalsV1, {
     add: {
       summary_title: text(),
       summary_description: text(),
@@ -107,26 +107,42 @@ export function defineThreadGitObservationSchema(schemaVersion: number) {
       summary_changes_known: booleanInteger(),
     },
   });
+  // Cached totals start null and refill when the arc is next observed from Git.
+  const proposalsTable = evolveTable(proposalsV2, {
+    drop: ["summary_changes_known"],
+    add: {
+      summary_files: integer().nonNegative(),
+      summary_premise_additions: integer().nonNegative(),
+      summary_premise_deletions: integer().nonNegative(),
+      summary_test_additions: integer().nonNegative(),
+      summary_test_deletions: integer().nonNegative(),
+    },
+  });
   const proposals = defineTableHistory({
     current: proposalsTable,
     versions: [
       tableVersion({ schemaVersion, table: proposalsV1, migration: createTable(proposalsV1) }),
       tableVersion({
         schemaVersion: databaseReleases.boundedPayloadRetention.version,
-        table: proposalsTable,
+        table: proposalsV2,
         migration: addColumns({
           from: proposalsV1,
-          to: proposalsTable,
+          to: proposalsV2,
           columns: [
             "summary_title", "summary_description", "summary_mode",
             "summary_committed_sha", "summary_changes_known",
           ],
         }),
       }),
+      tableVersion({
+        schemaVersion: databaseReleases.proposalChangeTotals.version,
+        table: proposalsTable,
+        migration: rebuildTable({ from: proposalsV2, to: proposalsTable }),
+      }),
     ],
   });
 
-  const proposalChanges = install(defineTable("workbench_thread_git_proposal_changes", {
+  const proposalChanges = retireTableHistory(install(defineTable("workbench_thread_git_proposal_changes", {
     entry_id: text().notNull(),
     proposal_index: integer().notNull().nonNegative(),
     change_index: integer().notNull().nonNegative(),
@@ -143,7 +159,7 @@ export function defineThreadGitObservationSchema(schemaVersion: number) {
         onDelete: "CASCADE",
       }),
     ],
-  })), databaseReleases.boundedPayloadRetention.version);
+  })), databaseReleases.boundedPayloadRetention.version), databaseReleases.proposalChangeTotals.version);
 
   const memberRoots = install(defineTable("workbench_thread_git_member_roots", {
     entry_id: text().notNull(),
@@ -162,7 +178,7 @@ export function defineThreadGitObservationSchema(schemaVersion: number) {
   return {
     tables: {
       observations: observations.current, entries: entries.current, paths: paths.current,
-      proposals: proposals.current, proposalChanges: proposalChanges.current, memberRoots: memberRoots.current,
+      proposals: proposals.current, memberRoots: memberRoots.current,
     },
     history: defineSubsystemHistory([observations, entries, paths, proposals, proposalChanges, memberRoots]),
   };
