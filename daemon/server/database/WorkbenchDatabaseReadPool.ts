@@ -4,7 +4,7 @@
  * - WORKBENCH_DATABASE_READER_COUNT: reader workers (and read connections) beside the writer.
  * - default WorkbenchDatabaseReadPool: reader workers shared by priority, spawned at construction so they boot beside the
  *   writer. Each runs one read at a time, the most urgent queued read goes next, background reads never take the last
- *   free reader, and queued reads can be abandoned.
+ *   free reader, queued reads can be abandoned, and closing abandons background reads rather than waiting on them.
  */
 import {
   isBackgroundDatabaseReadClass,
@@ -28,14 +28,15 @@ export const WORKBENCH_DATABASE_READER_COUNT = 4;
 
 interface Slot {
   reader: WorkbenchDatabaseReader;
-  /** Request id the reader is running; null while idle. */
-  running: number | null;
+  /** The read the reader is running; null while idle. */
+  running: Queued | null;
 }
 
 interface Queued {
   request: WorkbenchDatabaseRequest;
   rank: number;
   readClass: WorkbenchDatabaseReadClass;
+  abandon(reason: unknown): void;
   /** Detaches the abort listener once the read leaves the queue. */
   detach(): void;
 }
@@ -92,7 +93,7 @@ export default class WorkbenchDatabaseReadPool {
       abandon(signal.reason);
       return;
     }
-    const entry: Queued = { request, readClass, rank: WORKBENCH_DATABASE_READ_CLASSES.indexOf(readClass), detach: () => {} };
+    const entry: Queued = { abandon, request, readClass, rank: WORKBENCH_DATABASE_READ_CLASSES.indexOf(readClass), detach: () => {} };
     if (signal) {
       const onAbort = () => {
         const index = this.#queue.indexOf(entry);
@@ -109,13 +110,26 @@ export default class WorkbenchDatabaseReadPool {
     this.#pump();
   }
 
-  /** Lets queued and running reads finish, then closes every reader. */
+  /**
+   * Lets queued and running interactive reads finish, then closes every reader. Background reads are abandoned instead:
+   * SQLite cannot interrupt a running scan, so its reader is terminated rather than waited on.
+   */
   async close(closeReader: (reader: WorkbenchDatabaseReader) => Promise<void>) {
     if (!this.#opened) {
       await this.terminate();
       return;
     }
     this.#closing = true;
+    const reason = new Error("Database background read was abandoned because the database is closing.");
+    for (const entry of this.#queue.filter(({ readClass }) => isBackgroundDatabaseReadClass(readClass))) {
+      this.#queue.splice(this.#queue.indexOf(entry), 1);
+      entry.detach();
+      entry.abandon(reason);
+    }
+    const abandoned = this.#slots.filter(({ running }) => running && isBackgroundDatabaseReadClass(running.readClass));
+    this.#slots = this.#slots.filter(slot => !abandoned.includes(slot));
+    for (const { running } of abandoned) running!.abandon(reason);
+    const terminated = Promise.all(abandoned.map(({ reader }) => reader.terminate()));
     await new Promise<void>((resolve) => {
       this.#drainWaiters.push(resolve);
       this.#notifyDrained();
@@ -125,10 +139,10 @@ export default class WorkbenchDatabaseReadPool {
     this.#opened = false;
     this.#ready = false;
     this.#closing = false;
-    await Promise.all(slots.map(async ({ reader }) => {
+    await Promise.all([terminated, ...slots.map(async ({ reader }) => {
       try { await closeReader(reader); }
       finally { await reader.terminate(); }
-    }));
+    })]);
   }
 
   /** Drops every reader and queued read at once; the controller rejects their callers. */
@@ -159,7 +173,7 @@ export default class WorkbenchDatabaseReadPool {
     const slot: Slot = { reader: this.#options.create(), running: null };
     slot.reader.on("message", (response) => {
       this.#options.settle(response);
-      if (slot.running !== response.id) return;
+      if (slot.running?.request.id !== response.id) return;
       slot.running = null;
       this.#pump();
       this.#notifyDrained();
@@ -181,7 +195,7 @@ export default class WorkbenchDatabaseReadPool {
       if (index < 0) return;
       const [entry] = this.#queue.splice(index, 1);
       entry!.detach();
-      free[0]!.running = entry!.request.id;
+      free[0]!.running = entry!;
       free[0]!.reader.postMessage(entry!.request);
     }
   }

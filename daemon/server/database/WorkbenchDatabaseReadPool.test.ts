@@ -1,4 +1,4 @@
-/* No production exports. Protect reader boot-before-open, dispatch order, the interactive reserve, queued-read abandonment, draining close and crash failure. */
+/* No production exports. Protect reader boot-before-open, dispatch order, the interactive reserve, queued-read abandonment, draining close that abandons background reads, and crash failure. */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
@@ -112,6 +112,28 @@ test("close lets queued and running reads finish before closing every reader", a
   assert.equal(closed, 2);
   assert.ok(f.readers.every(({ terminated }) => terminated));
   assert.equal(f.pool.ready, false);
+});
+
+test("close abandons running and queued background reads instead of waiting on them, while interactive reads drain", async () => {
+  const f = await fixture(3);
+  const scan = f.read("stats");
+  const interactive = f.read("core");
+  const waiting = f.read("stats");
+  let closed = 0;
+  const closing = f.pool.close(async () => { closed += 1; });
+  assert.match(String(scan.abandoned[0]), /closing/u, "the running scan's caller is released at once");
+  assert.match(String(waiting.abandoned[0]), /closing/u);
+  assert.ok(f.busy(scan.id).terminated, "its reader is terminated, since SQLite cannot interrupt the scan");
+  assert.ok(!f.running().includes(waiting.id));
+  await Promise.resolve();
+  assert.equal(closed, 0, "the interactive read still drains");
+  f.busy(interactive.id).answer(interactive.id);
+  await closing;
+  assert.equal(closed, 2, "only readers that were not terminated receive a close");
+  assert.ok(f.readers.every(({ terminated }) => terminated));
+  assert.deepEqual(f.failures, [], "terminating an abandoned reader is not an unexpected exit");
+  f.busy(scan.id).emit("exit", 1);
+  assert.deepEqual(f.failures, []);
 });
 
 test("readers boot before open, open initializes those same readers, and an unopened close only terminates them", async () => {

@@ -77,17 +77,19 @@ export default ReloadableNode.define<
     });
     let shutdownPromise: Promise<void> | null = null;
     let committed = build.mode !== "replacement";
-    const shutdown = () => {
+    const shutdown = (reportPhase?: (phase: string) => void) => {
       shutdownPromise ??= (async () => {
         const failures: unknown[] = [];
-        for (const close of [
-          () => memory.dispose(),
-          () => retention.dispose(),
-          () => transcript.dispose(),
-          () => threadIdentity.dispose(),
-          () => transcriptIdentity.dispose(),
-          () => committed ? database.close() : database.abortPreparation(),
-        ]) {
+        for (const [phase, close] of [
+          ["memory reporter", () => memory.dispose()],
+          ["retention", () => retention.dispose()],
+          ["transcript", () => transcript.dispose()],
+          ["thread identities", () => threadIdentity.dispose()],
+          ["transcript identities", () => transcriptIdentity.dispose()],
+          ["database close", () => committed ? database.close() : database.abortPreparation()],
+        ] as const) {
+          const busy = database.describeRunningWrite();
+          reportPhase?.(busy ? `${phase}, writer running ${busy}` : phase);
           try { await close(); }
           catch (error) { failures.push(error); }
         }
@@ -116,7 +118,7 @@ export default ReloadableNode.define<
             await state.releaseCandidate?.();
             await database.resume(state.checkpointPath ?? undefined);
           },
-          commit: shutdown,
+          commit: () => shutdown(),
         };
       },
       hasPendingWork: () => retention.hasPendingWork(),
@@ -140,7 +142,7 @@ export default ReloadableNode.define<
         signal?.throwIfAborted();
         if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info(`[startup] daemon thread identities ready in ${Math.round(performance.now() - identitiesStartedAt)}ms`);
       },
-      detachForReload: shutdown,
+      detachForReload: () => shutdown(),
       dispose: shutdown,
     };
   },

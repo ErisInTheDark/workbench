@@ -3,7 +3,8 @@
  * WorkbenchDatabaseRequestFailure: one rolled-back request that leaves the database lifecycle ready.
  * WorkbenchDatabaseFailure: stable controller failure carrying one bounded cause.
  * WorkbenchDatabaseController: owns the writer worker, the priority reader pool, their heap readings, the complete database lifecycle,
- *   step-sliced retention, slow writer-call reports, and one method per registered request (./workbench-database-requests).
+ *   step-sliced retention that stops waiting once aborted, slow writer-call reports, the running writer call, and one method
+ *   per registered request (./workbench-database-requests).
  */
 import { Worker } from "node:worker_threads";
 import type {
@@ -47,6 +48,16 @@ const ASSET_ADMISSION_GRACE_MS = 3_600_000;
 /** 1024 pages is about 4 MiB of file movement: short enough to keep each writer step well under a second. */
 const RECLAIMED_PAGES_PER_STEP = 1_024;
 const SLOW_WRITER_CALL_MS = 1_000;
+
+/** Settles with the abort reason as soon as `signal` fires; the abandoned call keeps running and its outcome is dropped. */
+function unlessAborted<T>(call: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return call;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    call.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
 
 export interface WorkbenchDatabaseControllerOptions {
   beforeMigration?(backupPath: string): void;
@@ -291,9 +302,10 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       detail: `results before ${cutoffs.resultCutoff}, transcripts before ${cutoffs.transcriptCutoff}`,
       elapsedMs: null, progress: null,
     });
+    // An aborted pass stops waiting at once: a running step cannot be interrupted, but its result would be discarded.
     const step = <Name extends WorkbenchDatabaseRequestName>(name: Name, ...args: WorkbenchDatabaseRequestArgs<Name>) => {
       signal?.throwIfAborted();
-      return this.#call(name, args);
+      return unlessAborted(this.#call(name, args, signal), signal);
     };
     const expiry = await step("expireRetainedPayloads",
       { ...cutoffs, ...(readObservedThreadIds ? { observedThreadIds: readObservedThreadIds() } : {}) });
@@ -465,6 +477,14 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       return;
     }
     pending.resolve(response);
+  }
+
+  /** The writer call running now and for how long, or null when the writer is idle. */
+  describeRunningWrite() {
+    const running = this.#writerQueue.values().next();
+    if (running.done) return null;
+    const startedAt = Math.max(running.value.postedAt, this.#writerSettledAt);
+    return `${running.value.name} for ${((performance.now() - startedAt) / 1_000).toFixed(1)}s`;
   }
 
   /** Counts of writer calls still queued, most frequent first: what a newly posted call waits behind. */
