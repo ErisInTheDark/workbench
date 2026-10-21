@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadFileChangeItem: render adjacent native and canonical file operations as step rows, growing back-to-back edits of one kind or identical native failed attempts on one file into one row,
- *   each timed from its first piece starting to its last finishing; while `editing`, the last row stays in progress.
+ *   each timed from its first piece starting to its last finishing; while `editing`, the last row stays in progress; `status` mode shows only that last row.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes, marking binary diffs without previews.
  * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
@@ -632,6 +632,7 @@ export default function ThreadFileChangeItem ({
   editing = false,
   itemTimeline,
   items,
+  mode = "step",
 }: {
   animateEntries?: boolean;
   /**
@@ -641,6 +642,8 @@ export default function ThreadFileChangeItem ({
   editing?: boolean;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   items: FileOperationItem[];
+  /** `status`: only the newest row, for an activity card's one-row status slot. */
+  mode?: "status" | "step";
 }) {
   const hasRows = items.some((item) => item.type !== "fileChange" || item.changes.length || item.status !== "completed");
   if (items.length && items.every(item => item.type !== "fileChange"
@@ -652,9 +655,11 @@ export default function ThreadFileChangeItem ({
     editing: editing && row === trailingRow && !change.danger,
     span: getStitchedRowSpan(row.pieces.map(piece => piece.item), itemTimeline),
   });
+  const shown = mode === "status" ? groups.slice(-1) : groups;
+  const shownRows = <Row,>(rows: Row[]) => mode === "status" ? rows.slice(-1) : rows;
   return (
     <div className="step-rows-packed py-1.5">
-      {groups.map((group) => {
+      {shown.map((group) => {
         if (group.kind === "native") {
           const { item, rows } = group;
           if (rows.length) {
@@ -662,7 +667,7 @@ export default function ThreadFileChangeItem ({
               <div className="space-y-0.5" key={item.id}>
                 <ThreadFileChangeRows
                   animateEntries={animateEntries}
-                  changes={rows.map(row => timed(getStitchedNativeRowChange(row), row))}
+                  changes={shownRows(rows).map(row => timed(getStitchedNativeRowChange(row), row))}
                   steps
                 />
               </div>
@@ -687,7 +692,7 @@ export default function ThreadFileChangeItem ({
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
             animateEntries={animateEntries}
-            changes={group.rows.map(row => timed(getStitchedCanonicalRowChange(row), row))}
+            changes={shownRows(group.rows).map(row => timed(getStitchedCanonicalRowChange(row), row))}
             steps
           />
           {item.workbenchRecovery?.state === "failed" ? (

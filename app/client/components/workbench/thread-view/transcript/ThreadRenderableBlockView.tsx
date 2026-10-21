@@ -70,12 +70,13 @@ function useActivityRunRenderers(animateEntries: boolean, isMostRecent: boolean,
         : <ThreadCommandSequence itemTimeline={itemTimeline} items={[item]} key={item.id} />;
     }),
     // Edits nothing has followed in a live turn are still being worked on: repeat calls on one file read as one edit.
-    files: ({ items }, isLastSegment) => (
+    files: ({ items }, isLastSegment, mode) => (
       <ThreadFileChangeItem
         animateEntries={animateEntries}
         editing={isMostRecent && isLastSegment && turn.status === "inProgress"}
         itemTimeline={itemTimeline}
         items={items}
+        mode={mode}
       />
     ),
     reasoning: ({ item }, isLastSegment, mode) => (
