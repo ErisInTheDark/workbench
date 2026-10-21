@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect exact-field isolation, delta-shape-independent token pacing, canonical reconciliation, source reset, and disposal.
+ * No production exports. Tests protect exact-field isolation, delta-shape-independent token pacing, paragraph pacing for reasoning too fast to read, canonical reconciliation, source reset, and disposal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -58,6 +58,62 @@ function harness(options: { reducedMotion?: boolean } = {}) {
 }
 
 const WORDS = "word ".repeat(100);
+
+/** Streams `text` in 10-character deltas, one per `stepMs`, sampling what is shown after every step. */
+function stream(testHarness: ReturnType<typeof harness>, field: ThreadTextPresentationKey, text: string, stepMs: number, from = "") {
+  let canonicalText = from;
+  const shown: string[] = [];
+  for (let index = 0; index < text.length; index += 10) {
+    const delta = text.slice(index, index + 10);
+    canonicalText += delta;
+    testHarness.controller.acceptDelta({ canonicalText, delta, key: field });
+    testHarness.advance(stepMs);
+    shown.push(testHarness.controller.getSnapshot(field) ?? "");
+  }
+  return { canonicalText, shown };
+}
+
+const PARAGRAPHS = `${"word ".repeat(20)}end.\n\n`.repeat(12);
+
+test("reasoning arriving too fast to read shows only whole paragraphs", () => {
+  const testHarness = harness();
+  const field = { ...key("sqlite"), field: "reasoningContent" as const };
+  testHarness.controller.subscribe(field, "", () => undefined);
+  // 1000 characters a second.
+  const { canonicalText, shown } = stream(testHarness, field, `${PARAGRAPHS}last words`, 10);
+  const later = shown.slice(shown.length / 2);
+  assert.ok(later.every(text => !text || text.endsWith("\n\n")), "only finished paragraphs show");
+  assert.ok(new Set(later).size > 2, "paragraphs keep arriving");
+  testHarness.play(1_000);
+  assert.equal(testHarness.controller.getSnapshot(field), canonicalText, "the stream pausing shows its last paragraph");
+});
+
+test("a blank line inside an unfinished code block does not finish a paragraph", () => {
+  const testHarness = harness();
+  const field = { ...key("sqlite"), field: "reasoningSummary" as const };
+  testHarness.controller.subscribe(field, "", () => undefined);
+  const prose = stream(testHarness, field, PARAGRAPHS, 10);
+  const code = stream(testHarness, field, "```ts\nconst a = 1;\n\nconst b = 2;\n\n", 10, prose.canonicalText);
+  assert.ok(code.shown.every(text => !text.includes("```")), "open code stays hidden");
+  const closed = stream(testHarness, field, "```\n\n", 10, code.canonicalText);
+  testHarness.drain();
+  assert.ok(closed.shown.at(-1)?.endsWith("```\n\n"), "closed code arrives whole");
+});
+
+test("reasoning at a readable pace and fast agent messages still reveal word by word", () => {
+  const slow = harness();
+  const reasoning = { ...key("sqlite"), field: "reasoningContent" as const };
+  slow.controller.subscribe(reasoning, "", () => undefined);
+  // 100 characters a second.
+  const slowStream = stream(slow, reasoning, PARAGRAPHS.slice(0, 400), 100);
+  assert.ok(slowStream.shown.some(text => text && !text.endsWith("\n\n")), "reasoning mid-paragraph shows");
+
+  const fast = harness();
+  const message = key("sqlite");
+  fast.controller.subscribe(message, "", () => undefined);
+  const fastStream = stream(fast, message, PARAGRAPHS, 10);
+  assert.ok(fastStream.shown.slice(fastStream.shown.length / 2).some(text => text && !text.endsWith("\n\n")), "message mid-paragraph shows");
+});
 
 test("ordered appends notify only the exact source-qualified field", () => {
   const testHarness = harness();

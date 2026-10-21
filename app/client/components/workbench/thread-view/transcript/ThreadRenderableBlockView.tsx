@@ -78,8 +78,8 @@ function useActivityRunRenderers(animateEntries: boolean, isMostRecent: boolean,
         items={items}
       />
     ),
-    reasoning: ({ item }, isLastSegment) => (
-      <ThreadReasoningSequence block={{ items: [item], kind: "reasoningSequence" }} isMostRecent={isMostRecent && isLastSegment} />
+    reasoning: ({ item }, isLastSegment, mode) => (
+      <ThreadReasoningSequence block={{ items: [item], kind: "reasoningSequence" }} isMostRecent={isMostRecent && isLastSegment} mode={mode} />
     ),
     sleep: ({ durationMs, item }) => (
       <ThreadSleepItem

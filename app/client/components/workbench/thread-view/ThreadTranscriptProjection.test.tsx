@@ -323,7 +323,7 @@ test("SQLite projection preserves canonical order with initially closed Browse d
   assert.equal((html.match(/data-thread-history-turn-id="turn-two"/gu) ?? []).length, 1);
 });
 
-test("SQLite normal projection keeps command runs closed and opens latest reasoning within its run", () => {
+test("SQLite normal projection keeps command runs and reasoning closed until opened", () => {
   const commandHtml = renderItems([
     command("one", "alpha --one"),
     command("two", "beta --two"),
@@ -341,7 +341,7 @@ test("SQLite normal projection keeps command runs closed and opens latest reason
     type: "reasoning",
   }], null, 1, openRun);
   assert.equal((detailedHtml.match(/Careful title/gu) ?? []).length, 1);
-  assert.match(detailedHtml, /<details[^>]*\bopen=/u);
+  assert.doesNotMatch(detailedHtml, /<details[^>]*\bopen=/u);
   assert.match(detailedHtml, /<details/u);
 
   const staticHtml = renderItems([{
@@ -376,6 +376,5 @@ test("SQLite normal projection removes only the newest live reasoning section", 
   }, 1, { openActivityRunIds: ["reasoning"] });
 
   assert.match(html, /Earlier title/u);
-  assert.match(html, /<details[^>]*\bopen=/u);
   assert.doesNotMatch(html, /Latest title|Latest detail/u);
 });

@@ -13,6 +13,7 @@ import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { LoaderIcon } from "../workbench-icons";
 import MarkdownRender from "../../ui/MarkdownRender";
 import { projectThreadReasoningMarkdown } from "./thread-reasoning-display";
+import useReasoningSentence from "./use-reasoning-sentence";
 import { ThreadWebSearchActionRow } from "./ThreadWebSearchItem";
 import { useTranscript } from "../use-transcript";
 import type { LiveThreadActivity, ThreadTerminalContext, ThreadTerminalRetention } from "./thread-live-activity";
@@ -54,13 +55,18 @@ export default function useThreadLiveActivity({
     threadId,
     turnId: turnId ?? "",
   });
+  // Reasoning titles follow its latest sentence at a readable pace, so the title only re-enters when that changes.
+  const sentence = useReasoningSentence(presentedMarkdown, activity?.kind === "reasoning" && Boolean(reasoningStep));
   if (!activity || !turnId) return null;
   const reasoningDisplay = activity.kind === "reasoning" && reasoningStep
     ? projectThreadReasoningMarkdown(presentedMarkdown)
     : activity.kind === "reasoning"
       ? { body: activity.body, title: activity.title }
       : null;
-  const activityTitle = reasoningDisplay?.title ?? activity.title ?? "";
+  // Plain text: the shimmer cannot paint through inline code pills.
+  const activityTitle = activity.kind === "reasoning"
+    ? sentence?.replaceAll("`", "") ?? "Thinking"
+    : activity.title ?? "";
   const showReasoning = Boolean(reasoningDisplay?.body || (activity.kind === "webSearch" && activity.contextItems.length));
   return {
     key: `${threadId}:${turnId}`,

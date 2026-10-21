@@ -129,15 +129,16 @@ function countVisibleSteps(segments: readonly ActivitySegment[], commandRows: (i
 }
 
 /**
- * A run is a card summarising several steps. Settled with one step it is just that step. A lone sleep or command shows
- * its own progress, so it stays bare even while live: one row from start to finish, until a second step joins it.
+ * A run is a card summarising several steps. Settled with one step it is just that step. A lone reasoning, sleep or
+ * command step shows its own progress, so it stays bare even while live: one row from start to finish, until a second
+ * step joins it.
  */
 export function getActivityRunPresentation(
   segments: readonly ActivitySegment[], live: boolean, commandRows: (item: ThreadItem) => number = () => 1,
 ): "bare" | "card" {
   if (countVisibleSteps(segments, commandRows) !== 1) return "card";
   const kind = segments[0]?.kind;
-  return !live || kind === "sleep" || kind === "commands" ? "bare" : "card";
+  return !live || kind === "reasoning" || kind === "sleep" || kind === "commands" ? "bare" : "card";
 }
 
 type FileStepItem = Extract<ActivitySegment, { kind: "files" }>["items"][number];

@@ -143,9 +143,10 @@ test("a run is a card summarising several steps, and otherwise its one step", ()
   assert.equal(getActivityRunPresentation(runOf([reasoning("first"), command("run")]).segments, false), "card");
   // Retries of one file stitch into one row, so they are one step.
   assert.equal(getActivityRunPresentation(runOf([failedEdit("one"), failedEdit("two"), failedEdit("three")]).segments, false), "bare");
-  // A live run keeps its card so its status row never jumps, except a lone sleep or command, which shows its own
-  // progress and stays the same row from start to finish.
-  assert.equal(getActivityRunPresentation(runOf([reasoning("thinking")]).segments, true), "card");
+  // A live run keeps its card so its status row never jumps, except a lone reasoning, sleep or command step, which
+  // shows its own progress and stays the same row from start to finish.
+  assert.equal(getActivityRunPresentation(runOf([reasoning("thinking")]).segments, true), "bare");
+  assert.equal(getActivityRunPresentation(runOf([reasoning("thinking"), running("build", "cargo build")]).segments, true), "card");
   assert.equal(getActivityRunPresentation(runOf([running("nap", "Start-Sleep -Seconds 120")]).segments, true), "bare");
   assert.equal(getActivityRunPresentation(runOf([running("build", "cargo build")]).segments, true), "bare");
   assert.equal(getActivityRunPresentation(runOf([command("built", "cargo build")]).segments, true), "bare");

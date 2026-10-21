@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect reasoning step order, newest live ownership, and exact disclosure omission. Keywords: reasoning, live, disclosure, test.
+ * No production exports. Tests protect reasoning step order, newest live ownership, exact disclosure omission, and the code-aware live sentence. Keywords: reasoning, live, disclosure, test.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,6 +9,7 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import {
   getCurrentThreadReasoningActivity,
+  getLatestReasoningSentence,
   getThreadReasoningSteps,
   omitThreadReasoningStep,
   projectThreadReasoningMarkdown,
@@ -87,6 +88,26 @@ test("title-only reasoning becomes one bodyless step and exact omission removes 
     sectionIndex: 0,
     source: "summary",
   }), null);
+});
+
+test("live reasoning reads as the first sentence of its newest prose paragraph", () => {
+  assert.equal(getLatestReasoningSentence("Old idea. More.\n\nNew plan here. Then more detail."), "New plan here.");
+  assert.equal(getLatestReasoningSentence("## Checking the cache\n\n**Bold lead** is next! after"), "Bold lead is next!");
+  assert.equal(getLatestReasoningSentence("Still writing the first line\nwith a second"), "Still writing the first line");
+});
+
+test("code blocks in reasoning never become the sentence or split the prose around them", () => {
+  const closed = "Reading the runtime. It owns state.\n\n```rust\nfn a() {}\n\nfn b() {}\n```";
+  assert.equal(getLatestReasoningSentence(closed), "Reading the runtime.");
+  assert.equal(getLatestReasoningSentence("Patch the loader. Then test.\n\n~~~ts\nconst a = 1;\n\nconst b = 2;"), "Patch the loader.");
+  assert.equal(getLatestReasoningSentence("```\nonly code\n```"), null);
+});
+
+test("punctuation inside inline code does not end the sentence", () => {
+  assert.equal(
+    getLatestReasoningSentence("Read `src/script/runtime.rs`, `dts.rs` and `a.b!` next. Later."),
+    "Read `src/script/runtime.rs`, `dts.rs` and `a.b!` next.",
+  );
 });
 
 test("pending steers do not replace the newest reasoning activity", () => {
