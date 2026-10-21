@@ -14,6 +14,7 @@ import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
 import { readWorkbenchAppCommandLine } from "./app-command-line.ts";
 import WorkbenchAppRuntime from "./runtime/WorkbenchAppRuntime.ts";
 import resolveWorkbenchRuntimeRoot from "./workbench-runtime-root.ts";
+import WorkbenchBusyLease from "../../shared/WorkbenchBusyLease.mjs";
 
 const processLogger = new WorkbenchProcessLogger();
 
@@ -29,6 +30,10 @@ async function main() {
   const outputDirectoryPath = path.join(resolveWorkbenchRuntimeRoot(repositoryRootPath), "frontend");
   let protocol: WorkbenchAppProcessProtocol | null = null;
   let runtime: WorkbenchAppRuntime | null = null;
+  const busy = new WorkbenchBusyLease({
+    dataRoot: resolveWorkbenchDataRoot(), holder: "app", warn: message => processLogger.error("app", message),
+  });
+  process.once("exit", () => busy.close());
   // The tray learns the chosen browser address after readiness and whenever networking changes it.
   const announceLaunchUrl = () => {
     const url = runtime?.readLaunchUrl();
@@ -56,6 +61,7 @@ async function main() {
     createRuntime: (appPort) => {
       const created = new WorkbenchAppRuntime({
         appPort,
+        busy,
         createDatabase: (Repository) => new Repository(),
         logger: processLogger,
         outputDirectoryPath,

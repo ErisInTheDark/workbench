@@ -2,7 +2,7 @@
  * Exports:
  * - prepareInstallationRuntime: make the managed PowerShell runtime ready without dependency repair.
  * - preparePulledInstallationRuntime: execute runtime preparation from the freshly pulled checkout.
- * - runRepair: resume the durable dependency repair before any dependency loads; cancellable while it owns the lock.
+ * - runRepair: resume the durable dependency repair before any dependency loads; cancellable while it owns the lock, busy while it runs.
  * - readRepairActivity: the journal plus the live repair lock owner, for watchers.
  * - requestRepairCancel: ask one exact live repair owner to cancel.
  */
@@ -16,6 +16,7 @@ import { promisify } from "node:util";
 import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "../../package/WorkbenchToolchain.mjs";
 import { DAEMON_DEPENDENCY_IMPORTERS, hasDependencyDrift } from "../../shared/pnpm-dependency-state.mjs";
+import WorkbenchBusyLease from "../../shared/WorkbenchBusyLease.mjs";
 import WorkbenchPowerShell from "./WorkbenchPowerShell.mjs";
 import { resolveDataRoot, readJournal, writeJournal, isRepairPending, journalPath } from "./update-journal.mjs";
 
@@ -368,6 +369,15 @@ export async function preparePulledInstallationRuntime(root, {
 }
 
 async function repair(options) {
+  const busy = options.busy ?? new WorkbenchBusyLease({
+    dataRoot: options.dataRoot ?? resolveDataRoot(), holder: "repair", warn: line => process.stderr.write(`${line}\n`),
+  });
+  busy.hold("installing", "installing dependencies");
+  try { return await repairJournal(options); }
+  finally { busy.close(); }
+}
+
+async function repairJournal(options) {
   const root = options.root ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const dataRoot = options.dataRoot ?? resolveDataRoot();
   const files = options.files ?? fs;

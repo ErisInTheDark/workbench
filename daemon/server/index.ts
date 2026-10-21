@@ -29,6 +29,7 @@ import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-da
 import WorkbenchServiceLauncher from "../host/WorkbenchServiceLauncher.ts";
 import stageCodexRuntime from "./codex-executable";
 import { captureProviderRuntimePins, preloadProviderRuntimeClients } from "./providers/provider-runtimes";
+import WorkbenchBusyLease from "../../shared/WorkbenchBusyLease.mjs";
 import {
   DaemonHostMessageSchema,
   DaemonOwnedMessageSchema,
@@ -49,6 +50,9 @@ const daemonListener = new WorkbenchDaemonListener({
   leasePath: path.join(WORKBENCH_DATA_ROOT, "daemon", "launch.sqlite3"),
 });
 
+const busyLease = new WorkbenchBusyLease({
+  dataRoot: WORKBENCH_DATA_ROOT, holder: "daemon", warn: message => logError("busy", message),
+});
 const bridgeConnections = new Set<BridgeClient>();
 const serviceAttachmentAbort = new AbortController();
 const serviceLauncher = process.env.WORKBENCH_SERVICE_MANAGED === "1" ? null : new WorkbenchServiceLauncher({
@@ -248,6 +252,7 @@ function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint, providers
         }
       },
     } } : {}),
+    busy: busyLease,
     dataRootPath: WORKBENCH_DATA_ROOT,
     daemonPackageRoot: DAEMON_PACKAGE_ROOT,
     isShuttingDown: () => shuttingDown,
@@ -310,6 +315,7 @@ function closeBridgeClients(code: number, reason: string) {
 async function executeReloadScopes(scopes: DaemonReloadScope[]) {
   if (scopes.includes("server:process")) throw new Error("Full daemon restart requires the operator hard-reload boundary.");
   const previousController = featureHost.get("reloadController");
+  busyLease.hold("reloading", "daemon reloading");
   try {
     await featureHost.reload(scopes);
     const currentController = featureHost.get("reloadController");
@@ -318,6 +324,8 @@ async function executeReloadScopes(scopes: DaemonReloadScope[]) {
     const currentController = featureHost.get("reloadController");
     if (currentController !== previousController) currentController.failTransferredBatch(error);
     throw error;
+  } finally {
+    busyLease.hold("reloading", null);
   }
 }
 
@@ -582,6 +590,7 @@ process.on("uncaughtException", (error) => shutdownAndExit(1, error));
 process.on("unhandledRejection", (reason) => shutdownAndExit(1, reason));
 process.on("exit", () => {
   shuttingDown = true;
+  busyLease.close();
 });
 
 async function startDaemon() {

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAppRuntimeOptions: process-owned compiler, database, logging, and port configuration.
- * - default WorkbenchAppRuntime: own the stable graph host, runtime facts, the relayed launch URL and reload ingress.
+ * - default WorkbenchAppRuntime: own the stable graph host, runtime facts, the relayed launch URL, reload ingress and its busy reason.
  */
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -35,6 +35,8 @@ const requiredRegistrations = [
 
 export interface WorkbenchAppRuntimeOptions {
   appPort: WorkbenchAppPortControl;
+  /** The app process's busy lease; omitted runtimes publish none. */
+  busy?: AppProcessContext["busy"];
   createCompiler?(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
   createNetwork?: AppProcessContext["createNetwork"];
@@ -98,7 +100,9 @@ export default class WorkbenchAppRuntime {
 
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
+    const busy = options.busy ?? { hold: () => {} };
     const context: AppProcessContext = {
+      busy,
       daemonEndpointPath: options.daemonEndpointPath ?? path.join(resolveWorkbenchDataRoot(), "daemon", "runtime.json"),
       appPort: options.appPort,
       captureReactDevelopmentMode: readRequested => {
@@ -111,6 +115,7 @@ export default class WorkbenchAppRuntime {
       executeReloadScopes: async (scopes) => {
         const previous = host.get("reloadController");
         const applied = host.getDependantClosure(scopes);
+        busy.hold("reloading", "app reloading");
         try {
           await host.reload(scopes);
           const current = host.get("reloadController");
@@ -120,6 +125,8 @@ export default class WorkbenchAppRuntime {
           const current = host.get("reloadController");
           if (current !== previous) current.failTransferredBatch(error);
           throw error;
+        } finally {
+          busy.hold("reloading", null);
         }
       },
       runRuntimeObject: (key, operation) => host.run(key, operation, `app reload orchestration: ${String(key)}`),

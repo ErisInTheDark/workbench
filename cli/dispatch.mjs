@@ -1,13 +1,16 @@
 /*
- * No exports. Checkout-owned human commands, including managed provider passthrough, preserve daemon shell dispatch.
+ * No exports. Checkout-owned human commands, including managed provider passthrough and the `idle` busy-lease check, preserve daemon shell dispatch.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WorkbenchBootstrapCommand, { WorkbenchChildExitError } from "../package/WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "../package/WorkbenchToolchain.mjs";
-import { readJournal, isRepairPending } from "../scripts/installation/update-journal.mjs";
+import { readJournal, isRepairPending, resolveDataRoot } from "../scripts/installation/update-journal.mjs";
 import { runRepair } from "../scripts/installation/update-repair.mjs";
+import { readWorkbenchBusyLeases } from "../shared/WorkbenchBusyLease.mjs";
 
+/** sysexits EX_TEMPFAIL: busy now, retry later; other failures exit 1. */
+const BUSY_EXIT_CODE = 75;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const view = args[0] === "view" && (args.length === 1 || args.length === 2 && ["daemon", "app"].includes(args[1]));
@@ -25,6 +28,11 @@ try {
       "tsx",
       path.join(root, "cli/workbench-ports.ts"),
     ], { cwd: root, interactive: true });
+  } else if (command === "idle") {
+    // Read-only and dependency-free: never waits behind or starts a pending repair.
+    const leases = await readWorkbenchBusyLeases(resolveDataRoot());
+    for (const lease of leases) process.stdout.write(`${lease.holder}: ${lease.reasons.join(", ")}\n`);
+    if (leases.length) process.exitCode = BUSY_EXIT_CODE;
   } else {
     // `wb view` watches, cancels and retries repairs, so it never waits behind one.
     if (command === "repair" || !view && isRepairPending(await readJournal())) {

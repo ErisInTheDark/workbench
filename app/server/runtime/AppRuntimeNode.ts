@@ -66,6 +66,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         reloadDaemonScopes(resolveOperationDaemon(sources, daemonId), scopes, signal)),
       reloadHost: (scopes, signal) => context.runRuntimeObject("network", async network => { await network.reloadHost(scopes, signal); }),
       admitClient: context.admitAppReload,
+      holdBusy: reason => context.busy.hold("update", reason),
       warn: message => context.processLogger.error("app", message),
     }, state?.orchestration);
     let detached = false;

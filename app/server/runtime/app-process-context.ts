@@ -15,8 +15,11 @@ import type { projectWorkbenchAppRuntimeSnapshot } from "./workbench-app-runtime
 import type { AppRuntimeObjects } from "./app-runtime-objects";
 import type WorkbenchAppReloadOrchestrator from "./WorkbenchAppReloadOrchestrator";
 import type { WorkbenchAppReloadAdmission } from "./WorkbenchAppReloadController";
+import type WorkbenchBusyLease from "../../../shared/WorkbenchBusyLease.mjs";
 
 export interface AppProcessContext {
+  /** This process's busy lease; it outlives every reload generation. */
+  busy: Pick<WorkbenchBusyLease, "hold">;
   daemonEndpointPath: string;
   appPort: WorkbenchAppPortControl;
   captureReactDevelopmentMode(readRequested: () => boolean): boolean;

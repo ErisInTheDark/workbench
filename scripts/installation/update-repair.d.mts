@@ -4,12 +4,13 @@
  * - RepairActivity: the journal plus the live repair lock owner.
  * - prepareInstallationRuntime: make the managed PowerShell runtime ready without dependency repair.
  * - preparePulledInstallationRuntime: execute runtime preparation from the freshly pulled checkout.
- * - runRepair: resume repair without loading installed dependencies; cancellable while it owns the lock.
+ * - runRepair: resume repair without loading installed dependencies; cancellable while it owns the lock, busy while it runs.
  * - readRepairActivity: read the journal and live lock owner for watchers.
  * - requestRepairCancel: ask one exact live repair owner to cancel.
  */
 import type { InstallationRepairJournal } from "../../shared/workbench/installation-update.ts";
 import type { JournalReadFiles } from "./update-journal.mjs";
+import type WorkbenchBusyLease from "../../shared/WorkbenchBusyLease.mjs";
 
 export interface RepairFiles extends JournalReadFiles {
   mkdir(filename: string, options?: { recursive: true }): Promise<string | undefined | void>;
@@ -60,6 +61,8 @@ export interface RepairOptions {
   powerShell?: {
     ensure(options?: { onOutput?: (text: string) => void }): Promise<object | void>;
   };
+  /** Defaults to this process's `repair` busy lease in the data root. */
+  busy?: Pick<WorkbenchBusyLease, "hold" | "close">;
 }
 export interface RepairActivity {
   journal: InstallationRepairJournal | null;

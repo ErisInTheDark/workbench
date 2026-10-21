@@ -14,6 +14,7 @@ import type { WorkbenchWebSocketDelivery } from "./WorkbenchWebSocketRequestCont
 import type { DaemonSleepPorts } from "./WorkbenchDaemonSleepController";
 import type { DaemonDiagnosticMessage } from "workbench-shared/http/workbench-daemon-lifecycle";
 import type { ProviderRuntimePins } from "./providers/provider-runtimes";
+import type WorkbenchBusyLease from "../../shared/WorkbenchBusyLease.mjs";
 
 export const DAEMON_PROCESS_REQUIRED_REGISTRATIONS = [
   "daemonSleep",
@@ -30,6 +31,8 @@ export const DAEMON_PROCESS_REQUIRED_REGISTRATIONS = [
 
 export interface DaemonProcessContext {
   sleep?: DaemonSleepPorts;
+  /** This process's busy lease; it outlives every reload generation. */
+  busy: Pick<WorkbenchBusyLease, "hold">;
   dataRootPath: string;
   daemonPackageRoot: string;
   /** Provider pins this process loaded at boot; checkout dependency installs apply only after a restart. */

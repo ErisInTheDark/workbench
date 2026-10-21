@@ -26,6 +26,7 @@ const toSha = "b".repeat(40);
 
 function runRepair(options: RepairOptions) {
   return repair({
+    busy: { hold: () => {}, close: () => {} },
     powerShell: { ensure: async () => {} },
     toolchain: {
       ensure: async () => {},
@@ -72,6 +73,26 @@ test("repair persists each recovery rung and reports recovered failures", async 
   assert.deepEqual(f.events.filter(e => /^(stop|clean|vp |git )/u.test(e)), [
     "stop", "vp install", `git reset --keep ${fromSha}`, "vp install", "clean", "vp install",
   ]);
+});
+
+test("repair is busy for its whole run and releases on success and stranding", async () => {
+  for (const [failures, expected] of [[[], "done"], [["install failed", "rollback failed", "clean failed"], "stranded"]] as const) {
+    const f = fixture("pending", [...failures]);
+    const busy: string[] = [];
+    let busyDuringInstall = false;
+    const run = f.options.commands.run;
+    const result = await runRepair({
+      ...f.options,
+      busy: { hold: (_key, reason) => { busy.push(`hold:${reason}`); }, close: () => { busy.push("close"); } },
+      commands: { run: async (command, args) => {
+        busyDuringInstall ||= busy.length === 1;
+        await run(command, args);
+      } },
+    });
+    assert.equal(result?.phase, expected);
+    assert.ok(busyDuringInstall);
+    assert.deepEqual(busy, ["hold:installing dependencies", "close"]);
+  }
 });
 
 test("no rollback sha skips rollback, and the next launch retries a stranded repair from clean install", async () => {
@@ -481,6 +502,7 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
     "scripts/installation/powershell-installer.mjs",
     "shared/windows-powershell-runtime.mjs",
     "shared/pnpm-dependency-state.mjs",
+    "shared/WorkbenchBusyLease.mjs",
     "package/vite-plus-installer.mjs",
     "package/workbench-data-root.mjs",
   ]) {

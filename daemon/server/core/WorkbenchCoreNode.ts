@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchCoreNode: own the core generation's lifecycle (start, drain, reload handoff, dispose order) and registrations, wiring the
- *   feature clusters under ./core with the provider dispatcher, thread state, thread summaries, thread actions, launches, daemon requests,
+ *   feature clusters under ./core with the provider dispatcher, thread state, thread summaries, the thread busy lease, thread actions, launches, daemon requests,
  *   MCP servers and browse cleanup, plus supervisor registrations and direct child declarations (including provider runtime installs).
  * Local helpers: construct reloadable modules and the core feature lifecycle.
  */
@@ -38,6 +38,7 @@ import WorkbenchHarnessController from "../providers/WorkbenchHarnessController"
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import WorkbenchDaemonRequestController from "../transport/WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "../thread/WorkbenchThreadActionController";
+import WorkbenchThreadBusyTracker from "../thread/WorkbenchThreadBusyTracker";
 import WorkbenchThreadSummaryIndex from "../thread/WorkbenchThreadSummaryIndex";
 import WorkbenchMcpNode from "../agent/WorkbenchMcpNode";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
@@ -112,9 +113,11 @@ function createWorkbenchCoreFeature(
   let threadState: WorkbenchThreadStateFeature | null = null;
   /** Turn runtime and thread facts are wired before thread state exists; their facts reach the index once it does. */
   let threadSummaries: WorkbenchThreadSummaryIndex | null = null;
+  let threadBusy: WorkbenchThreadBusyTracker | null = null;
   let coreStats: WorkbenchCoreStatsFeature | null = null;
   const setSummaryFacts = (threadId: string, facts: Parameters<WorkbenchThreadSummaryIndex["setFacts"]>[1]) => {
     threadSummaries?.setFacts(threadId, facts);
+    if (facts.compacting !== undefined) threadBusy?.setCompacting(threadId, facts.compacting);
   };
   const lookup = new WorkbenchCoreThreadLookup({ identities: threadIdentity, providers: () => providers, threadState: () => threadState });
   const turns = new WorkbenchTurnRuntimeFeature({
@@ -208,6 +211,15 @@ function createWorkbenchCoreFeature(
     warn: logThreadStateWarning,
   });
   const summaries = threadSummaries;
+  const busyThreads = threadBusy = new WorkbenchThreadBusyTracker({
+    readWorkingThreadIds: async () => (await Promise.all(installedProviderKeys.map(harness =>
+      database.readThreadStateRecords({ selection: "working", harness })))).flat().map(record => record.identity.threadId),
+    subscribe: listener => threadStateController.subscribe((_projectId, entry) => {
+      if (entry.entryKind !== "draft") listener(entry.identity.threadId, entry.lifecycle.kind === "working");
+    }),
+    hold: reason => context.busy.hold("threads", reason),
+    warn: logThreadStateWarning,
+  });
   facts.endVisOnSettlement(listener => threadStateController.subscribe(listener));
   const collaboration = new WorkbenchCoreSubagentsFeature({
     database, transcript, identities: threadIdentity, lookup, projectCatalog, profileStore, threadState: threadStateFeature, facts, gitArc,
@@ -385,6 +397,7 @@ function createWorkbenchCoreFeature(
       stopShellObservation ??= turns.observeShells();
       if (coldStart) void turnSettlement.startColdSweep();
       void compaction.retireStrandedBefore(generationStartedAt);
+      void busyThreads.start();
       if (!initialCatalog) return;
       stats.start();
       browseSessionCleanup.start();
@@ -414,6 +427,7 @@ function createWorkbenchCoreFeature(
       unsubscribeTurnStarted();
       unsubscribeHeldSteers();
       unsubscribeAgentMessageDelivery();
+      busyThreads.dispose();
       summaries.dispose();
       facts.disposeVis();
       continuations.dispose();

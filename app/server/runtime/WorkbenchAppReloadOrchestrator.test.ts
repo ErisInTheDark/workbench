@@ -14,7 +14,9 @@ function dirt(...scopes: string[]): WorkbenchReloadDirtSnapshot {
 
 function harness(overrides: Partial<WorkbenchAppReloadOrchestratorPorts> = {}) {
   const events: string[] = [];
+  const busy: Array<string | null> = [];
   const ports: WorkbenchAppReloadOrchestratorPorts = {
+    holdBusy: reason => { busy.push(reason); },
     readAppDirt: () => dirt("host:network", "client:http"),
     readDaemonDirt: async () => dirt("server:workspace"),
     isLocalDaemon: () => true,
@@ -34,8 +36,29 @@ function harness(overrides: Partial<WorkbenchAppReloadOrchestratorPorts> = {}) {
     warn: message => { events.push(`warning:${message}`); },
     ...overrides,
   };
-  return { owner: new WorkbenchAppReloadOrchestrator(ports), events, ports };
+  return { owner: new WorkbenchAppReloadOrchestrator(ports), events, ports, busy };
 }
+
+test("an update stays busy through every running phase and releases on completion or failure", async () => {
+  const pulled = harness();
+  let busyWhilePulling: string | null | undefined;
+  pulled.ports.pullDaemon = async () => {
+    busyWhilePulling = pulled.busy.at(-1);
+    return { fromSha: "a".repeat(40), toSha: "b".repeat(40), lockfileChanged: false };
+  };
+  await pulled.owner.admitPull(undefined, true).start();
+  assert.notEqual(busyWhilePulling, null);
+  assert.ok(pulled.busy.slice(0, -1).every(reason => reason !== null));
+  assert.equal(pulled.busy.at(-1), null);
+
+  const failed = harness({ pullDaemon: async () => { throw new Error("pull rejected"); } });
+  await failed.owner.admitPull(undefined, true).start();
+  assert.equal(failed.busy.at(-1), null);
+
+  const restarting = harness({ readAppDirt: () => dirt("client:process"), readDaemonDirt: async () => null });
+  await restarting.owner.admitReloadAll().start();
+  assert.notEqual(restarting.busy.at(-1), null);
+});
 
 test("reload all completes daemon, host and client in order", async () => {
   const daemonEntered = Promise.withResolvers<void>();

@@ -28,6 +28,8 @@ export interface WorkbenchAppReloadOrchestratorPorts {
   reloadDaemon(scopes: string[], daemonId?: DaemonId, signal?: AbortSignal): Promise<void>;
   reloadHost(scopes: string[], signal?: AbortSignal): Promise<void>;
   admitClient(scopes: string[], options?: { installFromSha?: string }): WorkbenchAppReloadAdmission;
+  /** The process busy reason this orchestrator owns; null when no operation runs. */
+  holdBusy(reason: string | null): void;
   warn(message: string): void;
 }
 
@@ -151,6 +153,8 @@ export default class WorkbenchAppReloadOrchestrator {
   private phase(phase: WorkbenchReloadOperation["phase"]) { this.publish({ ...this.state.operation, phase }); }
   private publish(operation: WorkbenchReloadOperation) {
     this.state.operation = operation;
+    const running = operation.phase !== "idle" && operation.phase !== "failed";
+    this.ports.holdBusy(running ? `${operation.action ?? "reload"} ${operation.phase}` : null);
     for (const listener of [...this.state.listeners]) {
       try { listener(); }
       catch (error) {
