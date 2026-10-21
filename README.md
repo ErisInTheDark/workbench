@@ -21,34 +21,63 @@ npx @inthedark/wb
 npx @inthedark/wb connect
 ```
 
+## philosophies
+
+- what the human says goes
+- harnesses should own agent mistake prevention via mechanical tools. make mistakes impossible or difficult to walk into
+- for projects sandboxes are the right approach
+- allow the user to do anything in minimal clicks
+- reinventing the wheel is worth it way more than in the past
+
 ## features
 
-key features:
-- fully customisable agent instructions with support for comments & imports
-- strong thread transcript UX for when you need to keep an eye on a thread (command matching + html elements for agents)
-- strong thread management UX for when you're managing LOTS of threads (thread status-sorted sidebar)
-- better shared workspace support than any other agentic ide, because a lot of work is not worktree->pr shaped; agents claim the files they need and other agents don't freak out about unclaimed dirt
-- near-identical agent behaviour across providers (codex, opencode 2, claude code) as if they're the same harness
-- agents can orchestrate subagents working in threads across providers and projects
-- customisable voice to text ("what if voice to text was like working in a rich text editor")
-- git UI for doing your own work at the same time as other agents, allowing easy commits while agents have other files claimed
-- quickly switch between saved profiles for harness/model/effort/window/fast mode/agent identity
-- automatic compaction on turn start past configurable time & token thresholds (reduce cache write costs)
-- agents can search repos with shell tools like they're on disk via vfs
+selling points first:
 
-setup/meta:
+#### first class shared workspace support
+a lot of work is not worktree->pr shaped; agents claim the files they need and other agents don't freak out about workspace dirt, they don't *see* it. they queue up behind each other for their claims. even has a git view that helps you easily commit unclaimed dirt
+
+#### fully customisable instructions
+base instructions get improved constantly; but YOUR CONTROL is important. you can override it piecemeal or in entirety, *with* support for comments & imports
+
+#### consolidated tool & sandbox behaviour across harnesses
+codex, opencode 2, and claude code agents all have workbench tools and only the most basic of their native tools left like edit tools
+
+#### customisable voice to text
+what if voice to text was like telling someone what to do in a rich text editor
+
+#### webdev mockups using real project components & css
+configure build+css scripts to handle the agent's created tsx
+
+#### .env secrets
+store secrets in ui, reference from .env, see dedicated docs below
+
+#### agents can search repos with comfy shell fs tools
+vfs-powered, so doesn't require the repo being on disk entirely
+
+### ux
+- thread status inbox, snooze threads while working to make them hide until done
+- human readable displays for common shell commands
+- near-instant loads
+- smooth per-token animations, or animate in whole blocks if you prefer
+
+### obligatory
 - built on top of other harnesses (codex, opencode 2, claude code) so you can use subscriptions
+- cross-harness subagents
+- browser use
+- saved profiles for harness/model/effort/window/fast mode/agent identity
+- mcp servers (agents must ask to enable tools by default)
+
+### misc
+- automatic compaction on turn start past configurable time & token thresholds (reduce cache write costs)
 - tailscale integration
 - daemon sleeps when idle, leaving only a light http wake service up
 
-unpolished/unfinished/broken stuff (coming soon tm!!!!!):
+### unpolished/unfinished/broken stuff (coming soon tm!!!!!)
 - soon, autocomplete/suggestions extension for vscode & similar (highly configurable, able to be FAST)
 - worktree->pr workflow is unsupported (gonna be honest i have been in a cave working solo on wb for so long that i have not needed this yet)
-- browse AX & UX
 - search UX
 - i'd like more git ui
-- many places around the app could use a UI polish pass
-- the codebase itself could use a polish pass, esp. the react & tailwind
+- the codebase's refactors from its (very) humble beginnings are not complete
 
 ## tech
 
