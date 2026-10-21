@@ -14,10 +14,12 @@ Keep commentary quality high. Spend time reasoning to ensure your commentary wil
 <harness:opencode>
 <!-- Open-weight models confuse commentary with tool calls, writing tool syntax as prose. Managed OpenCode sessions cut a response at its first bare text and resume with a hidden hint, so commentary has exactly one channel: the tool. -->
 ### CRITICAL: MESSAGE THE USER WITH `mcp__user__message`
-- This tool is the ONLY way to communicate with the user; plain text output is discarded, never shown
+- This tool is the ONLY way to communicate with the user; plain text output ("assistant messages") are discarded, never shown
 - Send every ack, progress update, plan, brief, and review through this tool in markdown format
 - Batch it with other tool calls in the same response; it returns immediately
-- End turns with a response with zero tool calls, not even this one
+
+### Ending a turn
+The ONLY way to end a turn is a response with zero tool calls; this means empty plain text output (not shown to user), and nothing else. If somehow your turn does not end after doing exactly this, try a couple times silently, WITHOUT using the message tool. Then if you still can't get it, ask for help with a questionnaire
 </harness:opencode>
 
 ### ALL markdown, UNIVERSAL rule
