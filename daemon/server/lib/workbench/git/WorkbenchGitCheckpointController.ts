@@ -926,11 +926,13 @@ export default class WorkbenchGitCheckpointController {
       const dirtPaths = new GitArcPathSet(dirt);
       const allClaims = new GitArcPathSet(entries.flatMap(getGitArcLiveClaimPaths));
       const lifecycle = current?.phase === "plan" ? current.retainedArc : current;
-      const proposals = await this.proposals.readStatusProposals({ ...input, threadId: owner?.threadId ?? input.threadId },
+      const { proposedPaths, status: proposals } = await this.proposals.readStatusProposals({ ...input, threadId: owner?.threadId ?? input.threadId },
         lifecycle?.proposalIds ?? (current?.proposalId ? [current.proposalId] : []), repository, inspection);
+      const proposed = new Set(proposedPaths);
+      const unproposedDirt = new GitArcPathSet(dirt.filter(file => !proposed.has(file)));
       const status: GitArcStatus = {
         ...proposals,
-        dirtyClaims: claims.filter(claim => dirtPaths.overlaps(claim)),
+        dirtyClaims: claims.filter(claim => unproposedDirt.overlaps(claim)),
         cleanClaims: claims.filter(claim => !dirtPaths.overlaps(claim)),
         baselineClaims: ownership.baselineClaims,
         stashedClaims: savedPaths,

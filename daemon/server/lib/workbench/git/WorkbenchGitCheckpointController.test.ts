@@ -84,7 +84,7 @@ controllerTest("status", "status and proposal reads preserve pending state, mate
   const before = await repository.listRefsWithValues("refs/worktree");
   const pending = await controller.readStatus(identity);
   assert.deepEqual(pending.pending, [{ proposalId: proposal.proposalId, title: "change one" }]);
-  assert.deepEqual(pending.dirtyClaims, ["added.txt", "one.txt"]);
+  assert.deepEqual(pending.dirtyClaims, [], "fully proposed changes are not unproposed dirt");
   assert.deepEqual(pending.cleanClaims, ["two.txt"]);
   const resolvedIds: string[] = [];
   const mappedController = new WorkbenchGitCheckpointController(undefined, async ({ threadId }) => {
@@ -100,6 +100,8 @@ controllerTest("status", "status and proposal reads preserve pending state, mate
   assert.ok(resolvedIds.includes("provider-partial-thread"));
   assert.ok(resolvedIds.includes("partial-thread"));
   assert.deepEqual(await repository.listRefsWithValues("refs/worktree"), before);
+  await fs.writeFile(path.join(source, "one.txt"), "edited beyond proposal\n");
+  assert.deepEqual((await controller.readStatus(identity)).dirtyClaims, ["one.txt"]);
   await fs.writeFile(path.join(source, "one.txt"), "one\n");
   await fs.unlink(path.join(source, "added.txt"));
   assert.deepEqual((await controller.readStatus(identity)).pending, pending.pending);

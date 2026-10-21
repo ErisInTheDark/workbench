@@ -711,6 +711,7 @@ export default class GitArcProposalController {
     const stackedPending = new Map<string, Array<{ proposalId: string; title: string }>>();
     const accepted: Array<{ proposalId: string; title: string; commitSha: string }> = [];
     const unavailable: Array<{ proposalId: string; title: string; reason: string }> = [];
+    const proposedPaths: string[] = [];
     const visibility = entry ? acceptedVisibility(entry) : { dismissed: [], viewed: [] };
     const hiddenAccepted = new Set([...visibility.dismissed, ...visibility.viewed]);
     // Viewed and dismissed ids are accepted proposals status never shows again, so they need no read at all.
@@ -733,7 +734,11 @@ export default class GitArcProposalController {
       const layer = layers.find(({ layer: candidate }) => candidate.proposalIds.includes(proposalId));
       if (metadata.status === "proposed") {
         if (layer) stackedPending.set(layer.tipCommit, [...stackedPending.get(layer.tipCommit) ?? [], { proposalId, title: metadata.title }]);
-        else pending.push({ proposalId, title: metadata.title });
+        else {
+          pending.push({ proposalId, title: metadata.title });
+          const edited = new Set(await repository.listChangedPaths(proposal.tree, snapshot.tree, metadata.livePaths));
+          proposedPaths.push(...metadata.livePaths.filter(livePath => !edited.has(livePath)));
+        }
       }
       if (metadata.status === "committed" && metadata.committedSha) {
         accepted.push({ proposalId, title: metadata.title, commitSha: metadata.committedSha });
@@ -746,7 +751,10 @@ export default class GitArcProposalController {
       const layerPending = stackedPending.get(tipCommit);
       return layerPending?.length ? [{ title: layer.title, pending: layerPending }] : [];
     });
-    return { pending, accepted, ...(stacked.length ? { stacked } : {}), ...(unavailable.length ? { unavailable } : {}) };
+    return {
+      proposedPaths,
+      status: { pending, accepted, ...(stacked.length ? { stacked } : {}), ...(unavailable.length ? { unavailable } : {}) },
+    };
   }
 
   /** The given accepted proposal ids this thread's lifecycle owns that status has not yet shown it. */
