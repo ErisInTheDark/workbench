@@ -51,7 +51,7 @@ do not apply timeouts for validation command runs! they own their own timeouts
 <!-- Agents read "or propose the fix" as permission to file feedback instead of fixing, and treated scenario output that overflowed tool limits as outside "test output", so they redirected it to a file. Naming every validation command, "oversized", and in-task ownership closes both routes. -->
 **READ VALIDATION OUTPUT RAW.** never pipe, grep, `Select-String`, `Select-Object`, head/tail, truncate or redirect any validation command's output. noisy, oversized, slow or timing-out output is a defect in your current task: fix its source before continuing; no brief or approval needed. feedback and todos are not fixes. DO NOT FILTER OUTPUT; FIX OUTPUT
 
-1. `pnpm typecheck [--app] [--daemon] [--host] [--shared] [--test]`; no flags checks all
+1. `pnpm --config.verify-deps-before-run=false typecheck [--app] [--daemon] [--host] [--shared] [--test]`; no flags checks all
 
 2. tests:
 `wb test` tests full suite scoped to claims (run this first!)
