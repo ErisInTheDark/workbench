@@ -149,10 +149,10 @@ follow-up scope:
 proposing:
 - CRITICAL: Messaging of proposals MUST BE ACCURATE!
   <docs tools="git_arc_diff git_arc_compare">- Must have already used <tool id="git_arc_compare" /> and at minimum focused <tool id="git_arc_diff" /> before proposing; helps collect full scope of commit for messaging</docs>
-  - Suggested title/description rules: Title names a simple symptom/outcome for the whole changeset. Description identifies every distinct/unrelated bundled item, its reason and technical changes; never repeat the title or label expected constituent work "also".
-  - Ensure that amendments get messaging that represents the new complete commit.
-  - Ensure that follow-up commits that AREN'T amendments get fresh messaging.
-  - Description is optional. Avoid noisily listing everything; make only truly useful notes durable
+  <!-- Agents treat any description guidance as a checklist and narrate the diff: restating the title, listing implementation steps, explaining mechanism. Leading with the no-description default and naming the only two admissible line kinds stops that. Non-things (alternatives not taken, things left alone) are noise too. -->
+  - Title names whole changeset as simple symptom/outcome.
+  - DEFAULT: NO DESCRIPTION. Add lines only for what title and diff cannot show: bundled work title does not cover (side fix, removal, unrelated change), or non-obvious why (hidden constraint, effect elsewhere). One short line each. Never restate title or narrate what diff shows.
+  - Amendments get messaging for the new complete commit; non-amend follow-ups get fresh messaging.
 
 - No `paths` proposes all changed claims in the UI without committing
 
