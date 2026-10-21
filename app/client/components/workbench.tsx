@@ -14,7 +14,7 @@ import type {
     WorkbenchLogicalThreadRow,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { DaemonIdSchema, DraftIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
 import {
     createFileRoute,
     createDiscardedDraftExitRoute,
@@ -385,11 +385,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [activeSettings, globalSettings]);
 
   const statsTab = route.view === "stats" ? route.statsTab ?? "usage" : "usage";
-  // Threads on another machine open by id through their logical project, which knows every location.
-  const statsThreadRoute = useCallback((thread: { projectId: string; threadId: string }, logicalProjectId: string | null) => {
+  // Threads on another machine open through their owner and folder, which stats knows even for threads the client never listed.
+  const statsThreadRoute = useCallback((thread: { daemonId?: string | null; projectId: string; threadId: string },
+    logicalProjectId: string | null) => {
     const reference = ThreadReferenceSchema.safeParse(thread.threadId).data;
-    return logicalProjectId && reference
-      ? createLogicalExistingThreadRoute(logicalProjectId, { kind: "provider", threadId: reference })
+    const daemonId = DaemonIdSchema.safeParse(thread.daemonId).data;
+    const projectId = ProjectIdSchema.safeParse(thread.projectId).data;
+    return logicalProjectId && reference && daemonId && projectId
+      ? createLogicalThreadRoute(null, logicalProjectId, { daemonId, projectId }, { kind: "provider", threadId: reference })
       : createThreadRoute(thread.projectId, thread.threadId);
   }, []);
 
