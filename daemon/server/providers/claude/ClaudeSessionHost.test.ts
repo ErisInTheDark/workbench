@@ -40,12 +40,14 @@ const binding = { cwd: "C:/repo", threadId, turnId: WorkbenchTurnIdSchema.parse(
 type HookFunction = (
   input: object, toolUseId?: string, options?: { signal: AbortSignal },
 ) => Promise<{ hookSpecificOutput?: Record<string, unknown> }>;
+type Hooks = Record<string, Array<{ matcher?: string; hooks: HookFunction[] }>>;
+const editHook = (hooks: Hooks) => hooks.PreToolUse!.find(entry => entry.matcher === "Edit|Write")!.hooks[0]!;
 
 test("host-owned session hooks see output before they run, without consuming it, and reach the attached bridge", async () => {
   const stray = { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "plain words" }] } } as unknown as SDKMessage;
   let drained!: () => void;
   const finished = new Promise<void>(resolve => { drained = resolve; });
-  let hooks!: Record<string, Array<{ hooks: HookFunction[] }>>;
+  let hooks!: Hooks;
   let servers!: Record<string, unknown>;
   const host = new ClaudeSessionHost({
     viewsRoot: null,
@@ -66,7 +68,7 @@ test("host-owned session hooks see output before they run, without consuming it,
   const hint = await hooks.PostToolBatch![0]!.hooks[0]!({ hook_event_name: "PostToolBatch" });
   assert.equal(typeof hint.hookSpecificOutput?.additionalContext, "string", "the stray text was observed before the hook ran");
   assert.deepEqual(await session.read(new AbortController().signal), { kind: "message", message: stray }, "observation must not consume buffered output");
-  await hooks.PreToolUse![0]!.hooks[0]!(
+  await editHook(hooks)(
     { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "a.ts" } }, "tool", { signal: new AbortController().signal });
   assert.deepEqual(checked, [{ cwd: "C:/repo", threadId, paths: [path.resolve("C:/repo", "a.ts")] }]);
   assert.deepEqual(Object.keys(servers).sort(), [CLAUDE_COMMENTARY_SERVER_NAME, "wb"].sort());
@@ -84,7 +86,7 @@ test("a message's calls become its tool batch and their streamed results settle 
   ] } } as unknown as SDKMessage;
   let drained!: () => void;
   const finished = new Promise<void>(resolve => { drained = resolve; });
-  let hooks!: Record<string, Array<{ hooks: HookFunction[] }>>;
+  let hooks!: Hooks;
   const host = new ClaudeSessionHost({
     viewsRoot: null,
     createQuery: (({ options }: { options: { hooks: typeof hooks } }) => {
@@ -102,7 +104,7 @@ test("a message's calls become its tool batch and their streamed results settle 
   await host.launch({ scope: "scope", captureStderr: false, binding, options: () => ({}) });
   await finished;
   const signal = new AbortController().signal;
-  const denied = await hooks.PreToolUse![0]!.hooks[0]!(
+  const denied = await editHook(hooks)(
     { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "a.ts" } }, "edit-2", { signal });
   assert.equal(denied.hookSpecificOutput?.permissionDecision, "deny");
   assert.match(String(denied.hookSpecificOutput?.permissionDecisionReason), /^Skipped: an earlier call in this batch failed/u);

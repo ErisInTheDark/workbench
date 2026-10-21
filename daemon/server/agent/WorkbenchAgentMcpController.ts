@@ -17,6 +17,9 @@ import { ErrorCode, McpError, type CallToolResult, type Tool } from "@modelconte
 
 import { z } from "zod";
 import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
+import {
+  BATCH_TURN_INTERRUPTION_TEXT, QUEUED_SHELL_STEER_INTERRUPTION_TEXT, SKIPPED_AFTER_FAILURE_TEXT,
+} from "workbench-shared/workbench/thread/tool-batch-turn-results";
 import { readWorkbenchMcpEndpointUrl } from "workbench-shared/workbench/mcp/workbench-mcp-endpoint";
 import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-agent-cli-responses";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
@@ -69,9 +72,6 @@ const LEGACY_MCP_CLIENT_SCOPE = "legacy";
 /** McpServer's schema for tools without an object input, so hand-served lists match what it served before. */
 const EMPTY_OBJECT_JSON_SCHEMA = { type: "object" as const, properties: {} };
 const STEER_INTERRUPTION_TEXT = "Wait interrupted: a new message arrived for this thread. Read it, then call this tool again if you still need to wait.";
-const QUEUED_SHELL_STEER_INTERRUPTION_TEXT = "Queued command interrupted before it started: a new message arrived for this thread. Read it, then call shell again if it still needs to run.";
-const SKIPPED_AFTER_FAILURE_TEXT = "Skipped: an earlier call in this batch failed. Read its result, then call this again if it still applies.";
-const BATCH_TURN_INTERRUPTION_TEXT = "Interrupted before it started: a new message arrived for this thread. Read it, then call this again if it still applies.";
 const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 type WorkbenchAgentMcpRequestId = number | string;
 type WorkbenchAgentMcpRegisteredCommand = {

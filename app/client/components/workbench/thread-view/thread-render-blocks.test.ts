@@ -64,6 +64,24 @@ test("transcript-hidden screenshots create no block, so the work around them sta
   assert.deepEqual(kinds([command("one"), screenshotSteer("shown", false), command("two")]), ["commandSequence", "item", "commandSequence"]);
 });
 
+test("calls a failed batch never started create no block, while real failures still show", () => {
+  const notice = "Skipped: an earlier call in this batch failed. Read its result, then call this again if it still applies.";
+  const failedMcp = (id: string, text: string): ThreadItem => ({
+    ...mcpWithOutput(id, "message", { message: "hi", name: "Daisy" }, text), status: "failed",
+  });
+  const claudeEdit: Extract<ThreadItem, { type: "dynamicToolCall" }> = {
+    id: "edit", type: "dynamicToolCall", namespace: "claude", tool: "Edit", arguments: { file_path: "a.ts", old_string: "a", new_string: "b" },
+    status: "failed", contentItems: [{ type: "inputText", text: notice }], success: false, durationMs: null,
+  };
+  const blocks = (middle: ThreadItem) => buildRenderableBlocks([command("one"), middle, command("two")]);
+  const shows = (middle: ThreadItem) => blocks(middle).flatMap(getRenderableBlockItems).some(item => item.id === middle.id);
+  assert.deepEqual(blocks(failedMcp("skipped", notice)).map(block => block.kind), ["commandSequence"]);
+  assert.deepEqual(blocks({ ...mcp("rg", "rg", { args: ["x"] }), status: "failed", error: { message: notice } }).map(block => block.kind), ["commandSequence"]);
+  assert.equal(shows({ ...claudeEdit, contentItems: [{ type: "inputText", text: `Hook denied: ${notice}` }] }), false);
+  assert.equal(shows(failedMcp("real", "Thread not found.")), true);
+  assert.equal(shows(mcpWithOutput("printed", "rg", { args: ["Skipped"] }, notice)), true);
+});
+
 test("hidden Workbench transport creates no render block without hiding ordinary tag mentions", () => {
   const activated = createWorkbenchActivatedSkillsInput('<skill filename="example">Follow the workflow.</skill>');
   const questionnaireResponse = createWorkbenchQuestionnaireResponseInput({

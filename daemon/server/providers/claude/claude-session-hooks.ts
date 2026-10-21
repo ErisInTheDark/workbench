@@ -10,6 +10,7 @@
  */
 import path from "node:path";
 import type { HookCallbackMatcher, HookJSONOutput, SDKAssistantMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { BATCH_TURN_INTERRUPTION_TEXT, SKIPPED_AFTER_FAILURE_TEXT } from "workbench-shared/workbench/thread/tool-batch-turn-results";
 import type { WorkbenchAgentBatchTurn } from "../../agent/workbench-agent-mcp-request-registry";
 import { describePendingProposalDenial, type WorkbenchFileClaimCheckResult } from "../../lib/workbench/file-claim-check";
 import type ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
@@ -24,8 +25,6 @@ export interface ClaudeToolBatchPort {
 }
 
 const CLAUDE_QUESTIONNAIRE_TOOL_NAME = "mcp__wb__request_user_input";
-const SKIPPED_AFTER_FAILURE = "Skipped: an earlier call in this batch failed. Read its result, then call this again if it still applies.";
-const INTERRUPTED_BEFORE_START = "Interrupted before it started: a new message arrived for this thread. Read it, then call this again if it still applies.";
 
 export function claudeToolUseIds(content: SDKAssistantMessage["message"]["content"]) {
   return content.flatMap(block => block.type === "tool_use" ? [block.id] : []);
@@ -98,7 +97,7 @@ export function createClaudeSessionHooks(options: {
         if (!filePath) return deny(`${input.tool_name} requires file_path before Workbench can check claims.`);
         try {
           const turn = await batch.turn(toolUseId ?? input.tool_use_id, input.tool_name, signal);
-          if (turn !== "ready") return deny(turn === "skipped" ? SKIPPED_AFTER_FAILURE : INTERRUPTED_BEFORE_START);
+          if (turn !== "ready") return deny(turn === "skipped" ? SKIPPED_AFTER_FAILURE_TEXT : BATCH_TURN_INTERRUPTION_TEXT);
           const result = await options.check([path.resolve(options.cwd, filePath)]);
           if (result.allowed) return {};
           // Only claim denials carry the transcript's unclaimed-change presentation.

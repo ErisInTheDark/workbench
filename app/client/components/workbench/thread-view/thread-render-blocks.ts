@@ -4,7 +4,7 @@
  *   including the retried Git arc start that thread-git-arc-retries folds.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
  * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
- * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context), preserve wait folds, then give qualifying subagent coordination one outer render block.
+ * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context and calls a batch never started), preserve wait folds, then give qualifying subagent coordination one outer render block.
  * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
  * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
@@ -28,6 +28,7 @@ import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thr
 import { readComposerReferenceMessage } from "workbench-shared/workbench/thread/composer-reference";
 import { isAgentScreenshotSteerUserMessage, isHiddenAgentScreenshotContent } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
+import { isUnstartedToolCall } from "workbench-shared/workbench/thread/tool-batch-turn-results";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   getThreadCommandDisplay, getThreadCommandExecutionOutcome, getThreadSubagentWaitMcpOutcome, getGitArcMatcherAction,
@@ -536,6 +537,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
         continue;
       }
     }
+    if (isUnstartedToolCall(item)) continue;
     if (item.type === "commandExecution") {
       if (!isHiddenCommandExecution(item.command)) commands(item);
       continue;
