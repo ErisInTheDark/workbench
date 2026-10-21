@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
@@ -1517,21 +1517,30 @@ test("nested worktree claim stats belong to the worktree's own project", async (
   ]);
 });
 
-test("files in a nested worktree need its claims even though the containing checkout ignores them", async (context) => {
+test("nested worktree files follow the worktree's own ignore rules, not the containing checkout's", async (context) => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-nested-claims-");
   context.after(async () => await temporary.dispose());
-  const main = path.join(temporary.path, "main");
+  const main = path.join(await realpath(temporary.path), "main");
   const lab = path.join(main, ".worktrees", "lab");
-  await mkdir(lab, { recursive: true });
-  await execFileAsync("git", ["init"], { cwd: main });
-  await execFileAsync("git", ["init"], { cwd: lab });
-  await writeFile(path.join(main, ".gitignore"), ".worktrees/\n", "utf8");
+  await mkdir(main);
+  const git = async (cwd: string, ...args: string[]) => await execFileAsync("git", args, { cwd });
+  const commit = async (cwd: string, message: string) => await git(cwd, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", message);
+  await git(main, "init", "-q");
+  await writeFile(path.join(main, ".gitignore"), ".worktrees/\n*.tmp\n", "utf8");
+  await git(main, "add", ".gitignore");
+  await commit(main, "main ignores");
+  await git(main, "worktree", "add", "-q", "-b", "lab", lab);
+  await writeFile(path.join(lab, "keep.log"), "tracked\n", "utf8");
+  await git(lab, "add", "keep.log");
+  await writeFile(path.join(lab, ".gitignore"), ".worktrees/\n*.log\n", "utf8");
+  await git(lab, "add", ".gitignore");
+  await commit(lab, "lab ignores");
   const project = createNestedWorktreeProject(main);
   const { controller } = createNestedWorktreeController();
   await controller.execute(project, { cwd: main, harness: "codex", threadId: "thread-one", ...nestedClaims(["lab:src/lab.ts"]) });
-  const claimed = path.join(lab, "src", "lab.ts");
-  const unclaimed = path.join(lab, "src", "other.ts");
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "thread-one", [claimed, unclaimed]), {
-    allowed: false, pendingProposals: [], uncoveredPaths: [unclaimed],
+  const allowed = [path.join(lab, "src", "lab.ts"), path.join(lab, "debug.log"), path.join(main, "scratch.tmp")];
+  const uncovered = [path.join(lab, "src", "other.ts"), path.join(lab, "notes.tmp"), path.join(lab, "keep.log")];
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "thread-one", [...allowed, ...uncovered]), {
+    allowed: false, pendingProposals: [], uncoveredPaths: uncovered,
   });
 });
