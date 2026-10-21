@@ -227,7 +227,7 @@ test("patch targets appear while both response and arguments are unfinished and 
   } finally { if (typeof cleanup === "function") await cleanup(); }
 });
 
-test("a successful task status call turns commentary results and bare-text hints into empty-reply turn-end guidance", async () => {
+test("a successful task status call turns commentary results and bare-text hints into turn-end guidance", async () => {
   const bareText = async (owner: Awaited<ReturnType<typeof fixture>>) => {
     const frame = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
     const input = { sessionID: "managed", kind: "primary", model: { providerID: "opencode-go", modelID: "test" },

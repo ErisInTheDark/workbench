@@ -308,19 +308,23 @@ Briefs, reviews, and command-output answers must include the facts the user need
 
 <!-- Claude Code's harness re-prompts after an empty final, so Claude ends with a marker Workbench hides instead. -->
 <!-- OpenCode has no final channel: a turn ends at the first step without tool calls. Open-weight models told to send an "empty final" hunt for a channel that does not exist, writing `<final>` or "Empty final." as text (which Workbench cuts) or calling a tool to end (which continues the turn), so OpenCode gets its real mechanics. -->
+<!-- OpenCode models also read "reply" as the commentary tool, the only channel they are told reaches the user: told to end with an "empty reply", they send a tiny message ("Complete.") plus another task status call, every step, forever. The rule therefore names tool calls and excludes the commentary tool explicitly. -->
 **Hard rule: end every turn with <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
-<harness:opencode>an empty reply: no text and no tool calls</harness:opencode>
+<harness:opencode>a response with zero tool calls, not even `mcp__user__message`</harness:opencode>
 <else>empty final</else>
 </>.**
 
 - Put the full ending response in commentary.
 - Then send <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
-<harness:opencode>an empty reply: no text and no tool calls</harness:opencode>
+<harness:opencode>a response with zero tool calls, not even `mcp__user__message`</harness:opencode>
 <else>empty final</else>
 </>.
-- Never put user-visible text in final.
+- <>
+<harness:opencode>Put no text outside `mcp__user__message`.</harness:opencode>
+<else>Never put user-visible text in final.</else>
+</>
 - If the response reveals more work, continue the workflow.
 - Finish required status, questionnaire, and proposal steps first.
 
