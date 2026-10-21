@@ -11,6 +11,8 @@ import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workben
 import { WorkbenchProjectStateRequestSchema } from "workbench-shared/workbench/project/project-state";
 import { ProjectStoreReadRequestSchema, ProjectStoreUpdateRequestSchema } from "workbench-shared/workbench/project/project-store";
 import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
+import { WorkbenchSearchRequestSchema } from "workbench-shared/workbench/search/workbench-search";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   defineDaemonRequestHandlers, InvalidParamsError, optionalFiniteNumber, requiredFiniteNumber, requiredString, requiredText,
   type DaemonRequestContext,
@@ -149,9 +151,11 @@ export const projectRequestHandlers = defineDaemonRequestHandlers({
     return await tree.mutate(WorkingTreeMutationSchema.parse(params));
   },
   "search/query": async (params, { owners }) => {
-    let projectId = params.projectId === null || params.projectId === ""
-      ? null
-      : requiredString(params, "projectId");
+    // A newer app may send fields this daemon does not know; they drop instead of failing the search.
+    const conformed = conformToZodSchema(WorkbenchSearchRequestSchema, { ...params, projectId: params.projectId === "" ? null : params.projectId });
+    if (!conformed.success) throw new InvalidParamsError("Invalid search request.");
+    const request = conformed.data;
+    let projectId = request.projectId;
     if (projectId) {
       try {
         projectId = (await owners.projects.resolveProjectById(projectId)).id;
@@ -159,7 +163,7 @@ export const projectRequestHandlers = defineDaemonRequestHandlers({
         throw new InvalidParamsError(error instanceof Error ? error.message : "Unknown project.");
       }
     }
-    return await owners.search.search({ projectId, query: requiredText(params, "query") });
+    return await owners.search.search({ ...request, projectId });
   },
   "native/file/open": async (params, { owners }) => await owners.nativeFiles.open(openFileRequest(params)),
   "native/file/reveal": async (params, { owners }) => await owners.nativeFiles.reveal({

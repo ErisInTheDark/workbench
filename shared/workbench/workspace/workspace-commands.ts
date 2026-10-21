@@ -11,7 +11,7 @@
  * - WorkspaceLayoutRequest/WorkspaceLayoutRequestSchema: app-owned layout edits.
  * - WorkspaceHomeLayoutIntent/WorkspaceHomeLayoutIntentSchema: home row or project-folder move intent.
  * - WorkspaceTranscriptDemandSchema/WorkspaceTranscriptDemandResultSchema/WorkspaceTranscriptBodiesSchema/WorkspaceTranscriptRequestSchema: typed transcript reads, subscriptions, bounded item demand, and deferred body reads.
- * - WorkspaceSearchResponseSchema: source-qualified search results and partial failure.
+ * - WorkspaceSearchResponseSchema: source-qualified search results and applied typo corrections.
  */
 import { z } from "zod";
 import type { DaemonRequestRoute } from "../daemon/define-daemon-request";
@@ -24,7 +24,9 @@ import { DaemonIdSchema, ThreadReferenceSchema, LogicalProjectIdSchema, ThreadDi
 import { WorkbenchThreadStateRequestSchema, WorkbenchHomeThreadDisplayOrderSchema, type WorkbenchThreadStateRequest } from "../thread/thread-state";
 import { WorkbenchThreadDisplayOrderSchema } from "../thread/thread-display-order";
 import { WorkbenchMessageContextSchema } from "../provider/provider-input";
-import { WorkbenchSearchResultSchema } from "../search/workbench-search";
+import {
+  WORKBENCH_SEARCH_RESULT_LIMIT, WorkbenchSearchCorrectionSchema, WorkbenchSearchResultSchema,
+} from "../search/workbench-search";
 import {
   workbenchTranscriptOperations,
   type WorkbenchTranscriptReadRequest, type WorkbenchTranscriptSubscribeParams,
@@ -144,8 +146,8 @@ export const WorkspaceSearchResponseSchema = z.object({
     hit: WorkbenchSearchResultSchema,
     source: ProjectLocationReferenceSchema.optional(),
     logicalProjectId: LogicalProjectIdSchema.optional(),
-  }).strict()).max(50),
-  warning: z.string().max(512).optional(),
+  }).strict()).max(WORKBENCH_SEARCH_RESULT_LIMIT),
+  corrections: z.array(WorkbenchSearchCorrectionSchema).max(16).optional(),
 }).strict();
 
 const layoutEdit = {

@@ -1,14 +1,16 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceSearch: share demanded searches and publish independently completed source results.
+ * - default WorkbenchWorkspaceSearch: share demanded searches, run one search at a time per daemon (skipping superseded
+ *   ones), and publish independently completed source results, filtered and merged by score into kind sections.
  */
 import {
-  WorkbenchSearchResponseSchema, type WorkbenchSearchRequest, type WorkbenchSearchResponse,
+  WORKBENCH_SEARCH_RESULT_LIMIT, WorkbenchSearchResponseSchema, arrangeWorkbenchSearchResults,
+  type WorkbenchSearchCorrection, type WorkbenchSearchRequest, type WorkbenchSearchResponse, type WorkbenchSearchResult,
 } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController";
@@ -31,8 +33,15 @@ interface Interest {
   value: Result;
 }
 
+/** Older daemons title file hits with their whole path; every daemon's hits read as file name over folder. */
+function fileNames(hit: Extract<WorkbenchSearchResult, { kind: "file" }>) {
+  const slash = hit.path.lastIndexOf("/");
+  return { ...hit, title: hit.path.slice(slash + 1), detail: hit.path.slice(0, Math.max(0, slash)) };
+}
+
 export default class WorkbenchWorkspaceSearch {
   private readonly interests = new Set<Interest>();
+  private readonly lanes = new Map<Source["id"], { busy: boolean; waiting: Array<() => void> }>();
   private readonly stop: Array<() => void>;
   private refreshing = false;
   private dirty = false;
@@ -145,16 +154,16 @@ export default class WorkbenchWorkspaceSearch {
       const cancellation = new AbortController();
       job.cancellation = cancellation;
       const current = job;
-      void job.source.request<WorkbenchSearchResponse>("search/query", {
-        ...interest.request, projectId: job.projectId,
-      }, {}, { signal: cancellation.signal }).then(value => {
+      void this.inLane(job.source, cancellation.signal, () => current.source.request<WorkbenchSearchResponse>("search/query", {
+        ...interest.request, projectId: current.projectId,
+      })).then(value => {
         if (!this.active(interest, key, current, cancellation)) return;
-        const parsed = WorkbenchSearchResponseSchema.safeParse(value);
-        if (!parsed.success) {
-          reportClientSchemaError("Rejected daemon search response", parsed.error);
-          throw new Error("The daemon returned invalid search results.");
+        const conformed = conformToZodSchema(WorkbenchSearchResponseSchema, value);
+        if (!conformed.success) throw new Error("The daemon returned invalid search results.");
+        if (conformed.discardedPaths.length) {
+          this.options.warn(`Workspace search dropped ${conformed.discardedPaths.length} malformed daemon results.`);
         }
-        current.response = parsed.data;
+        current.response = conformed.data;
       }).catch(error => {
         if (!this.active(interest, key, current, cancellation)) return;
         current.failure = (error instanceof Error ? error.message : "Source search failed.")
@@ -168,7 +177,10 @@ export default class WorkbenchWorkspaceSearch {
     }
     const sources: Result["sources"] = [];
     const results: Result["data"]["results"] = [];
+    const corrections = new Map<string, WorkbenchSearchCorrection>();
     const seen = new Set<string>();
+    const { kinds, projectOnly } = interest.request;
+    const typed = interest.request.query.trim() !== "";
     for (const job of interest.jobs.values()) {
       const source = job.source.getSnapshot();
       const failure = job.failure ?? source.failure;
@@ -176,7 +188,12 @@ export default class WorkbenchWorkspaceSearch {
         ? source.connection === "revoked" ? "unavailable" : job.response ? "stale" : failure ? "failed" : "pending"
         : job.cancellation ? job.response ? "stale" : "pending" : job.failure ? "failed" : "current";
       sources.push({ daemonId: source.daemonId, projectId: job.projectId, phase, failure });
+      for (const correction of job.response?.corrections ?? []) corrections.set(`${correction.from}\n${correction.to}`, correction);
       for (const hit of job.response?.results ?? []) {
+        // Older daemons ignore filters they do not know and list every file for an empty query, so the merge enforces both.
+        if (kinds && !kinds.includes(hit.kind)) continue;
+        if (!typed && (hit.kind === "file" || hit.kind === "projectSetting")) continue;
+        if (projectOnly && job.projectId && hit.kind === "thread" && hit.projectId !== job.projectId) continue;
         if (hit.kind === "action") {
           if (job.source.id === this.options.sources.attached?.id && !seen.has(hit.id)) {
             seen.add(hit.id);
@@ -188,22 +205,25 @@ export default class WorkbenchWorkspaceSearch {
         const location = presentation.locations.find(item =>
           item.target.daemonId === job.source.id && item.target.projectId === hit.projectId);
         if (!location) continue;
-        const key = hit.kind === "project" ? location.logicalProjectId : `${job.source.id}/${hit.id}`;
+        // Checkouts of one logical project hold the same files; show each path once.
+        const key = hit.kind === "project" ? location.logicalProjectId
+          : hit.kind === "file" ? `${location.logicalProjectId}/file/${hit.path}` : `${job.source.id}/${hit.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        results.push({ hit: { ...hit, id: `${job.source.id}:${hit.id}` },
+        results.push({ hit: { ...(hit.kind === "file" ? fileNames(hit) : hit), id: `${job.source.id}:${hit.id}` },
           source: location.target, logicalProjectId: location.logicalProjectId });
       }
     }
-    const failed = sources.filter(source => source.failure || source.phase === "unavailable").length;
+    const failed = (source: Result["sources"][number]) => Boolean(source.failure) || source.phase === "unavailable";
     const pending = sources.some(source => source.phase === "pending" || source.phase === "stale");
+    // One unreachable daemon only narrows the answer; the search failed only when no source could answer.
     const next: Result = {
       kind: "search", sources,
       phase: !sources.length || pending ? results.length ? "stale" : "pending"
-        : failed ? results.length ? "stale" : "failed" : "current",
+        : sources.every(failed) ? "failed" : "current",
       failure: sources.find(source => source.failure)?.failure ?? null,
-      data: { results: results.slice(0, 50),
-        ...(failed ? { warning: `Results are incomplete: ${failed} source queries are unavailable.` } : {}) },
+      data: { results: arrangeWorkbenchSearchResults(results, result => result.hit, kinds).slice(0, WORKBENCH_SEARCH_RESULT_LIMIT),
+        ...(corrections.size ? { corrections: [...corrections.values()].slice(0, 16) } : {}) },
     };
     if (areDeeplyEqual(interest.value, next)) return;
     interest.value = next;
@@ -213,6 +233,32 @@ export default class WorkbenchWorkspaceSearch {
         this.options.warn(`Search subscriber failed: ${error instanceof Error ? error.message.slice(0, 512) : "Unexpected failure."}`);
       }
     }
+  }
+
+  /**
+   * One search at a time per daemon, in demand order. Each turn waits for the daemon's real answer, not its own
+   * cancellation, so superseded queries still waiting their turn are skipped instead of piling up on the daemon.
+   */
+  private inLane<Value>(source: Source, signal: AbortSignal, send: () => Promise<Value>) {
+    const lane = this.lanes.get(source.id) ?? { busy: false, waiting: [] };
+    this.lanes.set(source.id, lane);
+    const next = () => lane.waiting.shift()?.();
+    return new Promise<Value>((resolve, reject) => {
+      const start = () => {
+        if (signal.aborted) {
+          reject(signal.reason);
+          next();
+          return;
+        }
+        lane.busy = true;
+        void send().then(resolve, reject).finally(() => {
+          lane.busy = false;
+          next();
+        });
+      };
+      if (lane.busy) lane.waiting.push(start);
+      else start();
+    });
   }
 
   private active(interest: Interest, key: string, job: Job, cancellation: AbortController) {

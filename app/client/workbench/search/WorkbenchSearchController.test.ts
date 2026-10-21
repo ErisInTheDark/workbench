@@ -1,12 +1,13 @@
-/* No exports. Protect query replacement, partial selection and disposal without timer races. */
+/* No exports. Protect query replacement, the steady shown result set, filters, summary readiness and disposal without timer races. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import WorkbenchSearchController from "./WorkbenchSearchController";
+import WorkbenchSearchController, { SEARCH_DISPLAY_DEADLINE_MS } from "./WorkbenchSearchController";
 import type { WorkspaceQuerySnapshot } from "../app/WorkbenchWorkspaceClient";
-import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
+import type { WorkbenchSearchRequest, WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 
 const home: WorkbenchSearchResult = { actionId: "home", detail: "", id: "home", kind: "action", title: "Home" };
 const settings: WorkbenchSearchResult = { actionId: "settings", detail: "", id: "settings", kind: "action", title: "Settings" };
+const thread = (id: string): WorkbenchSearchResult => ({ kind: "thread", id, threadId: id, projectId: "p", harnessId: "codex", title: id, detail: "" });
 
 function snapshot(results: WorkbenchSearchResult[], phase: "pending" | "current" | "failed" = "current",
   failure: string | null = null): WorkspaceQuerySnapshot<"search"> {
@@ -15,14 +16,16 @@ function snapshot(results: WorkbenchSearchResult[], phase: "pending" | "current"
 }
 
 function setup() {
-  const scheduled = new Map<number, () => void>();
+  const scheduled = new Map<number, { callback: () => void; delay: number }>();
   let timerId = 0;
   const reads: Array<{
-    request: { query: string; projectId: string | null };
+    request: WorkbenchSearchRequest;
     publish(snapshot: WorkspaceQuerySnapshot<"search">): void;
     released: boolean;
   }> = [];
   const activated: string[] = [];
+  const known = new Set<string>();
+  const summaryListeners = new Map<string, () => void>();
   const controller = new WorkbenchSearchController({
     clearTimeout: id => { scheduled.delete(Number(id)); },
     observe: (request, publish) => {
@@ -30,23 +33,35 @@ function setup() {
       reads.push(read);
       return () => { read.released = true; };
     },
-    setTimeout: callback => { scheduled.set(++timerId, callback); return timerId; },
+    setTimeout: (callback, delay) => { scheduled.set(++timerId, { callback, delay }); return timerId; },
+    summaries: {
+      get: () => null,
+      has: threadId => known.has(threadId),
+      subscribe: (threadId, listener) => {
+        summaryListeners.set(threadId, listener);
+        return () => { summaryListeners.delete(threadId); };
+      },
+    },
   });
   controller.onActivate(result => activated.push(`${controller.getSnapshot().isOpen}:${result.id}`));
-  const runScheduled = () => {
-    for (const [id, callback] of [...scheduled]) { scheduled.delete(id); callback(); }
+  const run = (delay: number) => {
+    for (const [id, timer] of [...scheduled]) if (timer.delay === delay) { scheduled.delete(id); timer.callback(); }
   };
-  return { activated, controller, reads, runScheduled, scheduled };
+  const debounce = () => run(80);
+  const deadline = () => run(SEARCH_DISPLAY_DEADLINE_MS);
+  const resolveSummary = (threadId: string) => { known.add(threadId); summaryListeners.get(threadId)?.(); };
+  const titles = () => controller.getSnapshot().results.map(result => result.title);
+  return { activated, controller, deadline, debounce, reads, resolveSummary, scheduled, summaryListeners, titles };
 }
 
 test("coalesced replacement starts without waiting for an obsolete source and fences its late results", () => {
-  const { controller, reads, runScheduled } = setup();
+  const { controller, reads, debounce } = setup();
   controller.open();
   controller.setQuery("first");
-  runScheduled();
+  debounce();
   for (const query of ["second", "third", "latest"]) controller.setQuery(query);
   assert.equal(reads[0].released, true);
-  runScheduled();
+  debounce();
   assert.equal(reads.length, 2);
   assert.equal(reads[1].request.query, "latest");
   reads[0].publish(snapshot([home]));
@@ -56,58 +71,110 @@ test("coalesced replacement starts without waiting for an obsolete source and fe
   controller.dispose();
 });
 
-test("partial updates preserve selected identity when another source inserts results", () => {
-  const { controller, reads, runScheduled, activated } = setup();
+test("earlier results stay up, stale, until the next set is complete with its thread summaries", () => {
+  const { controller, reads, debounce, resolveSummary, titles } = setup();
   controller.open();
-  runScheduled();
-  reads[0].publish(snapshot([settings], "pending"));
-  assert.equal(controller.getSnapshot().isLoading, true);
-  reads[0].publish(snapshot([home, settings]));
-  assert.equal(controller.getSnapshot().selectedIndex, 1);
-  assert.equal(controller.activateSelected(), true);
-  assert.deepEqual(activated, ["false:settings"]);
-  assert.equal(reads[0].released, true);
+  debounce();
+  reads[0].publish(snapshot([home]));
+  controller.setQuery("claude");
+  assert.deepEqual(titles(), ["Home"]);
+  assert.equal(controller.getSnapshot().stale, true);
+  debounce();
+  reads[1].publish(snapshot([thread("partial")], "pending"));
+  assert.deepEqual(titles(), ["Home"], "a partial answer does not replace the shown set");
+  reads[1].publish(snapshot([thread("best"), thread("partial")]));
+  assert.deepEqual(titles(), ["Home"], "thread rows wait for their summaries");
+  resolveSummary("best");
+  assert.deepEqual(titles(), ["Home"]);
+  resolveSummary("partial");
+  assert.deepEqual(titles(), ["best", "partial"]);
+  assert.equal(controller.getSnapshot().stale, false);
+  assert.equal(controller.getSnapshot().isLoading, false);
   controller.dispose();
 });
 
-test("editing clears actionable stale rows and current failures do not retry themselves", () => {
-  const { controller, reads, runScheduled, scheduled, activated } = setup();
+test("the deadline shows a partial set, and later arrivals join it without moving shown rows", () => {
+  const { controller, reads, debounce, deadline, titles } = setup();
   controller.open();
-  runScheduled();
+  debounce();
+  reads[0].publish(snapshot([settings], "pending"));
+  assert.deepEqual(titles(), []);
+  deadline();
+  assert.deepEqual(titles(), ["Settings"]);
+  assert.equal(controller.getSnapshot().isLoading, true);
+  controller.moveSelection(0);
+  reads[0].publish(snapshot([home, settings]));
+  assert.deepEqual(titles(), ["Settings", "Home"]);
+  assert.equal(controller.getSnapshot().selectedIndex, 0);
+  assert.equal(controller.getSnapshot().isLoading, false);
+  controller.dispose();
+});
+
+test("enter on stale rows opens the first fresh result once shown; stale rows never activate", () => {
+  const { controller, reads, debounce, activated } = setup();
+  controller.open();
+  debounce();
   reads[0].publish(snapshot([settings]));
-  controller.setQuery("new");
+  controller.setQuery("home");
   controller.activate(settings);
-  assert.equal(controller.activateSelected(), false);
   assert.deepEqual(activated, []);
-  runScheduled();
-  reads[1].publish(snapshot([], "failed", "Source failed"));
+  assert.equal(controller.activateSelected(), true);
+  debounce();
+  reads[1].publish(snapshot([home]));
+  assert.deepEqual(activated, ["false:home"]);
+  controller.dispose();
+});
+
+test("failures show once complete and do not retry themselves", () => {
+  const { controller, reads, debounce, scheduled } = setup();
+  controller.open();
+  debounce();
+  reads[0].publish(snapshot([], "failed", "Source failed"));
   assert.equal(controller.getSnapshot().error, "Source failed");
   assert.equal(controller.getSnapshot().isLoading, false);
-  assert.equal(scheduled.size, 0);
-  reads[1].publish(snapshot([home]));
+  scheduled.clear();
+  reads[0].publish(snapshot([home]));
   assert.equal(controller.getSnapshot().error, null);
+  assert.equal(scheduled.size, 0);
   controller.dispose();
 });
 
-test("project changes and close/reopen replace intent immediately, disposal fences further updates", () => {
-  const { controller, reads, runScheduled, scheduled } = setup();
+test("kind and scope filters request at once, cycle with wrap-around, and only scope when a project is in view", () => {
+  const { controller, reads, debounce } = setup();
   controller.open();
-  runScheduled();
+  debounce();
+  controller.cycleKind(-1);
+  assert.equal(controller.getSnapshot().kind, "action");
+  assert.deepEqual(reads.at(-1)!.request, { projectId: null, query: "", kinds: ["action"] });
+  controller.cycleKind(1);
+  assert.equal(controller.getSnapshot().kind, null);
+  controller.setProjectOnly(true);
+  assert.deepEqual(reads.at(-1)!.request, { projectId: null, query: "" });
+  controller.setProjectId("project");
+  assert.deepEqual(reads.at(-1)!.request, { projectId: "project", query: "", projectOnly: true });
+  controller.dispose();
+});
+
+test("project changes and close/reopen replace intent immediately, disposal fences further updates and releases leases", () => {
+  const { controller, reads, debounce, scheduled, summaryListeners } = setup();
+  controller.open();
+  debounce();
+  reads[0].publish(snapshot([thread("leased")], "pending"));
+  assert.ok(summaryListeners.has("leased"));
   controller.setProjectId("other");
   controller.close();
+  assert.equal(summaryListeners.size, 0);
   controller.open();
   controller.setQuery("latest");
-  runScheduled();
-  assert.equal(reads.length, 2);
+  debounce();
   assert.equal(reads[0].released, true);
-  assert.deepEqual(reads[1].request, { projectId: "other", query: "latest" });
+  assert.deepEqual(reads.at(-1)!.request, { projectId: "other", query: "latest" });
   reads[0].publish(snapshot([home]));
   assert.deepEqual(controller.getSnapshot().results, []);
   controller.dispose();
   const retired = controller.getSnapshot();
-  reads[1].publish(snapshot([settings]));
-  runScheduled();
-  assert.equal(reads[1].released, true);
+  reads.at(-1)!.publish(snapshot([settings]));
+  assert.equal(reads.at(-1)!.released, true);
   assert.equal(controller.getSnapshot(), retired);
   assert.equal(scheduled.size, 0);
 });

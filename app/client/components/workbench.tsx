@@ -518,7 +518,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         break;
     }
   });
-  useWorkbenchSearch.scope(viewedProjectId || null);
+  useWorkbenchSearch.scope(viewedProjectId || route.logical?.threadOwnerProjectId || null);
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       handleWorkbenchActionShortcut(event, searchActionContext);

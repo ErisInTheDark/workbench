@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - ThreadSummaryStoreWorkspace: the workspace observation boundary the store batches through.
- * - default ThreadSummaryStore: lease per-thread summaries for every mounted thread display, batched into one retargeted `threadSummaries` observation.
+ * - default ThreadSummaryStore: lease per-thread summaries for every mounted thread display, batched into one retargeted
+ *   `threadSummaries` observation; tells an answered-missing summary apart from a pending one.
  */
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkspaceQuery, WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -46,6 +47,11 @@ export default class ThreadSummaryStore {
   /** The thread's located summary; null while it is unknown, pending, or not leased. */
   get(threadId: string): WorkspaceThreadSummary | null {
     return this.values[threadId] ?? null;
+  }
+
+  /** Whether the leased thread's summary has been answered, including answered as missing. */
+  has(threadId: string) {
+    return threadId in this.values;
   }
 
   dispose() {

@@ -17,6 +17,8 @@ interface SearchDatabase {
 export default class WorkbenchSearchController {
   private disposed = false;
   private readonly retiredError = new Error("Workbench search controller is disposed.");
+  /** What this controller last wrote; projections rewrite only when their source changed. */
+  private catalogSignature: string | null = null;
   private readonly fileSignatures = new Map<string, string>();
   private pendingWrite: Promise<void> | null = null;
   private projectionTail = Promise.resolve();
@@ -45,7 +47,13 @@ export default class WorkbenchSearchController {
       this.assertActive();
       const catalog = await this.options.readCatalog();
       this.assertActive();
-      await this.writeProjection(() => this.options.database.replaceSearchProjects(catalog.data.map(({ id, name, rootPath }) => ({ id, name, rootPath }))));
+      const projects = catalog.data.map(({ id, name, rootPath }) => ({ id, name, rootPath }));
+      const catalogSignature = JSON.stringify(projects);
+      if (catalogSignature !== this.catalogSignature) {
+        await this.writeProjection(() => this.options.database.replaceSearchProjects(projects));
+        this.assertActive();
+        this.catalogSignature = catalogSignature;
+      }
       if (!projectId) return;
       this.assertActive();
       const snapshot = await this.options.readProjectSnapshot(projectId);

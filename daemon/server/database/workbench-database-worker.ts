@@ -72,11 +72,25 @@ function initializeRepositories(reader = false) {
   transcriptRepository = new WorkbenchTranscriptRepository(database, threadIdentityRepository);
   threadStateRepository = new WorkbenchThreadStateRelationalRepository(database, threadIdentityRepository);
   searchRepository = reader ? null : new WorkbenchSearchRepository(database);
+  if (searchRepository) indexSearchNarrative(searchRepository);
   statsRepository = new WorkbenchStatsRepository(database);
   statsImportRepository = new WorkbenchStatsImportRepository(database);
   statsAttributionRepository = new WorkbenchStatsAttributionRepository(database);
   gitArcProposalDiffRepository = new GitArcProposalDiffRepository(database);
   transcriptRetentionRepository = reader ? null : new WorkbenchTranscriptRetentionRepository(database);
+}
+
+/** Backfill the search narrative index between requests; a search arriving first finishes it inline. */
+function indexSearchNarrative(repository: WorkbenchSearchRepository) {
+  setImmediate(() => {
+    if (searchRepository !== repository) return;
+    try {
+      if (repository.indexNarrative()) indexSearchNarrative(repository);
+    } catch (error) {
+      postDiagnostic({ source: "database", operation: "search index", phase: "warning", level: "warn",
+        detail: boundedError(error), elapsedMs: null, progress: null });
+    }
+  });
 }
 
 function boundedError(error: unknown) {

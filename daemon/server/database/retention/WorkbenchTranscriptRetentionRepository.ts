@@ -2,9 +2,10 @@
  * Exports:
  * - WorkbenchTranscriptRetentionResult: payload rows expired by one atomic pass.
  * - WorkbenchTranscriptRetentionCutoffs: expiry clocks and observed threads excluded from whole-turn expiry.
- * - default WorkbenchTranscriptRetentionRepository: aggregate durable tool facts and expire eligible result/transcript payloads.
+ * - default WorkbenchTranscriptRetentionRepository: aggregate durable tool facts, keep expiring narrative searchable, and expire eligible result/transcript payloads.
  */
 import type Database from "better-sqlite3";
+import { purgeArchivedSearchNarrative, retainSearchNarrative } from "../search/WorkbenchSearchNarrativeIndex.ts";
 
 export interface WorkbenchTranscriptRetentionResult {
   expiredResults: number;
@@ -27,6 +28,7 @@ export default class WorkbenchTranscriptRetentionRepository {
     return this.database.transaction(() => {
       const expiredResults = this.expireResults(cutoffs.resultCutoff, cutoffs.expiredAt);
       const expiredTurns = this.expireTranscripts(cutoffs.transcriptCutoff, cutoffs.expiredAt, cutoffs.observedThreadIds ?? []);
+      purgeArchivedSearchNarrative(this.database);
       return { expiredResults, expiredTurns };
     })();
   }
@@ -113,6 +115,7 @@ export default class WorkbenchTranscriptRetentionRepository {
         SELECT turn_id FROM thread_turn_payload_retention WHERE expired_at = @expiredAt
       )
     `, { expiredAt });
+    retainSearchNarrative(this.database, "SELECT turn_id FROM thread_turn_payload_retention WHERE expired_at = ?", [expiredAt]);
     this.database.prepare(`
       DELETE FROM transcript_native_records
       WHERE turn_id IN (SELECT turn_id FROM thread_turn_payload_retention WHERE expired_at = ?)

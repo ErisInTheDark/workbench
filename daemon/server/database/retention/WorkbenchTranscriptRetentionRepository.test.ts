@@ -1,4 +1,4 @@
-/* No production exports. Tests protect exact payload cutoffs, settlement ownership, compact aggregation, and retry safety. */
+/* No production exports. Tests protect exact payload cutoffs, settlement ownership, compact aggregation, retry safety, and retained search narrative. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -9,6 +9,7 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts"
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import WorkbenchTranscriptRetentionRepository from "./WorkbenchTranscriptRetentionRepository.ts";
+import { createSearchTestDatabase, placeSearchThread, seedSearchThread } from "../search/search.test.fixtures.ts";
 
 function seed(database: Database.Database, threadId: string, settledAt: number | null) {
   database.prepare("INSERT OR IGNORE INTO workbench_projects(id) VALUES (?)").run(testProjectIds.project);
@@ -180,6 +181,29 @@ test("settled transcript expiry keeps turn identity and removes only generations
       { thread_id: "boundary", payload_json: '{"large":"keep"}' },
     ]);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("expiring settled transcripts keep their message text searchable until the thread is archived", () => {
+  const database = createSearchTestDatabase();
+  try {
+    seedSearchThread(database, { id: "settled", title: "Settled", userText: "keep this ask", assistantText: "keep this answer" });
+    seedSearchThread(database, { id: "archived", title: "Archived", userText: "drop this ask", assistantText: "drop this answer" });
+    placeSearchThread(database, "settled", { archived: false, settledAt: 1 });
+    placeSearchThread(database, "archived", { archived: true, settledAt: 1 });
+    const retention = new WorkbenchTranscriptRetentionRepository(database);
+    const retained = () => database.prepare("SELECT thread_id, role, text FROM workbench_search_narratives ORDER BY role").all();
+
+    assert.equal(retention.expire({ expiredAt: 1_000, resultCutoff: 0, transcriptCutoff: 100 }).expiredTurns, 2);
+    assert.deepEqual(database.prepare("SELECT COUNT(*) FROM thread_items").pluck().get(), 0);
+    assert.deepEqual(retained(), [
+      { role: "assistant", text: "keep this answer", thread_id: "settled" },
+      { role: "user", text: "keep this ask", thread_id: "settled" },
+    ]);
+
+    database.prepare("UPDATE workbench_top_level_thread_states SET archived = 1 WHERE thread_id = 'settled'").run();
+    retention.expire({ expiredAt: 2_000, resultCutoff: 0, transcriptCutoff: 100 });
+    assert.deepEqual(retained(), []);
   } finally { database.close(); }
 });
 

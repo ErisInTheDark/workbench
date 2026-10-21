@@ -1,8 +1,8 @@
 /*
- * Keywords: database, search, projections, history.
  * Exports:
- * - workbenchSearchDocuments: SQLite-backed project, file, setting, and action search projection. Keywords: database, search, projection.
- * - searchTables/SearchSchemaRows/searchSchemaHistory: current search table registry, row types, and migration history. Keywords: database, schema, search.
+ * - workbenchSearchDocuments: SQLite-backed project, file, setting, and action search projection.
+ * - workbenchSearchNarratives: user and agent message text kept searchable after transcript retention expires its items.
+ * - searchTables/SearchSchemaRows/searchSchemaHistory: current search table registry, row types, and migration history.
  */
 import databaseReleases from "./releases.ts";
 import { ownProjectReferences } from "./project-schema.ts";
@@ -45,6 +45,16 @@ export const workbenchSearchDocuments = defineTable("workbench_search_documents"
   ],
 }));
 
+export const workbenchSearchNarratives = defineTable("workbench_search_narratives", {
+  id: integer().primaryKey({ autoincrement: true }),
+  item_public_id: text().notNull().unique(),
+  thread_id: text().notNull().references("workbench_threads", "id", { onDelete: "CASCADE" }),
+  role: enumText("user", "assistant").notNull(),
+  text: text().notNull(),
+}, (table) => ({
+  indexes: [index("workbench_search_narratives_thread_idx", [table.thread_id])],
+}));
+
 const workbenchSearchDocumentsHistory = defineTableHistory({
   current: workbenchSearchDocuments,
   versions: [tableVersion({
@@ -54,8 +64,20 @@ const workbenchSearchDocumentsHistory = defineTableHistory({
   })],
 });
 
-export const searchTables = Object.freeze({ workbenchSearchDocuments });
+const workbenchSearchNarrativesHistory = defineTableHistory({
+  current: workbenchSearchNarratives,
+  versions: [tableVersion({
+    migration: createTable(workbenchSearchNarratives),
+    schemaVersion: databaseReleases.retainedSearchNarrative.version,
+    table: workbenchSearchNarratives,
+  })],
+});
+
+export const searchTables = Object.freeze({ workbenchSearchDocuments, workbenchSearchNarratives });
 export type SearchSchemaRows = {
   [Name in keyof typeof searchTables]: SelectRow<(typeof searchTables)[Name]>;
 };
-export const searchSchemaHistory = defineSubsystemHistory([ownProjectReferences(workbenchSearchDocumentsHistory)]);
+export const searchSchemaHistory = defineSubsystemHistory([
+  ownProjectReferences(workbenchSearchDocumentsHistory),
+  workbenchSearchNarrativesHistory,
+]);
