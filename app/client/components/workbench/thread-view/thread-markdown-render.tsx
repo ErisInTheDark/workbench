@@ -53,13 +53,15 @@ const CODE_BLOCK_HEADER_BUTTON_CLASS = [
   "data-[thread-codeblock-copy-state=copied]:text-success",
   "data-[thread-codeblock-copy-state=failed]:text-danger",
 ].join(" ");
+/** Headings sit closer to the section they introduce than to the one before them. */
+const HEADING_CLASS = "mt-[1.5em] mb-[0.4em] first:mt-0 last:mb-0 [&+:is(h1,h2,h3,h4,h5,h6)]:mt-[0.5em] text-text-strong font-sans font-semibold leading-[1.2]";
 const HEADING_CLASSES = {
-  1: `${BLOCK_SPACING_CLASS} font-sans text-[1.16em] font-semibold leading-[1.2]`,
-  2: `${BLOCK_SPACING_CLASS} font-sans text-[1.08em] font-semibold leading-[1.2]`,
-  3: `${BLOCK_SPACING_CLASS} font-sans text-[1em] font-semibold leading-[1.2]`,
-  4: `${BLOCK_SPACING_CLASS} font-sans text-[1em] font-semibold leading-[1.2]`,
-  5: `${BLOCK_SPACING_CLASS} font-sans text-[1em] font-semibold leading-[1.2]`,
-  6: `${BLOCK_SPACING_CLASS} font-sans text-[1em] font-semibold leading-[1.2]`,
+  1: `${HEADING_CLASS} text-[1.16em]`,
+  2: `${HEADING_CLASS} text-[1.08em]`,
+  3: `${HEADING_CLASS} text-[1em]`,
+  4: `${HEADING_CLASS} text-[1em]`,
+  5: `${HEADING_CLASS} text-[1em]`,
+  6: `${HEADING_CLASS} text-[1em]`,
 } satisfies Record<1 | 2 | 3 | 4 | 5 | 6, string>;
 const SVG_PREVIEW_SRC_DOC_STYLE = [
   "html,body{margin:0;padding:0;background:transparent;min-height:100%;}",

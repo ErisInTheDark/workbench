@@ -49,9 +49,11 @@ const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
 
 /** Typography of rendered markdown, shared by the editor and the suggestion originals shown beside it. */
 const markdownProseClassName = `
-  text-[1.08rem] leading-[1.72] whitespace-normal [text-underline-offset:0.32em]
-  [& :is(p, blockquote, ul, ol, pre, table, h1, h2, h3, h4, h5, h6)]:(m-0 mb-4 text-justify)
-  [& :is(h1, h2, h3, h4, h5, h6)]:(font-sans font-semibold leading-[1.15])
+  text-[1.08rem] text-fg/94 leading-[1.72] whitespace-normal [text-underline-offset:0.32em]
+  [& :is(p, blockquote, ul, ol, pre, table)]:(m-0 mb-4 text-justify)
+  [& :is(h1, h2, h3, h4, h5, h6)]:(mx-0 mt-[1.5em] mb-[0.5em] text-justify text-text-strong font-sans font-semibold leading-[1.15])
+  [& :is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6)]:mt-[0.6em]
+  [& > :first-child]:mt-0
   [& h1]:text-[2.05em] [& h2]:text-[1.55em] [& h3]:text-[1.25em]
   [& :is(ul, ol)]:(list-outside pl-[1.3rem])
   [& ul]:list-disc [& ul ul]:list-[circle] [& ul ul ul]:list-[square]

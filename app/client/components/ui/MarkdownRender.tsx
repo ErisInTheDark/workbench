@@ -25,6 +25,7 @@ const THREAD_MARKDOWN_CLASS = [
   "min-w-0",
   "max-w-full",
   "leading-[1.72]",
+  "[:where(&)]:text-fg/94",
   "[&:not(:first-child)]:mt-[0.2rem]",
 ].join(" ");
 

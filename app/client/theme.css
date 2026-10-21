@@ -102,6 +102,8 @@
   --color-canvas: var(--app-bg-solid);
   --color-bg-soft: var(--bg-soft);
   --color-text: var(--text);
+  /* Relative to the inherited colour, so emphasis inside muted text stays muted. */
+  --color-text-strong: color-mix(in srgb, currentColor, light-dark(black, white) 60%);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
   --color-danger: var(--danger);
