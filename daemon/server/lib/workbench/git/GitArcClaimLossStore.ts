@@ -15,6 +15,13 @@ import {
 
 interface Identity { harness: string; threadId: string }
 
+/** Claim scopes are unique paths whose stored order differs between writers, so snapshots match by membership. */
+function matchesPaths(snapshot: { paths: readonly string[] } | null | undefined, expected: readonly string[]) {
+  if (!snapshot || snapshot.paths.length !== expected.length) return false;
+  const members = new Set(expected);
+  return snapshot.paths.every(value => members.has(value));
+}
+
 export default class GitArcClaimLossStore {
   constructor(
     private readonly repository: WorkbenchGitRepository,
@@ -106,8 +113,7 @@ export default class GitArcClaimLossStore {
 
   async prepareRehomeFrozen(source: Identity, destination: Identity, expectedPaths: readonly string[]) {
     const snapshot = await this.read(source);
-    if (!snapshot?.frozen || snapshot.paths.length !== expectedPaths.length
-      || snapshot.paths.some((value, index) => value !== expectedPaths[index])) {
+    if (!snapshot?.frozen || !matchesPaths(snapshot, expectedPaths)) {
       throw new Error("The source frozen stash snapshot does not match its claim set.");
     }
     const { deletions } = await this.prepareDeleteFrozen(source, expectedPaths);
@@ -116,8 +122,7 @@ export default class GitArcClaimLossStore {
 
   async prepareRehomeAdopted(source: Identity, destination: Identity, expectedPaths: readonly string[]) {
     const snapshot = await this.readAdopted(source);
-    if (!snapshot || snapshot.paths.length !== expectedPaths.length
-      || snapshot.paths.some((value, index) => value !== expectedPaths[index])) {
+    if (!snapshot || !matchesPaths(snapshot, expectedPaths)) {
       throw new Error("The source adopted stash snapshot does not match its claim set.");
     }
     return await this.prepareAdoptedAddress(snapshot, destination, [{ ref: snapshot.ref, oldValue: snapshot.commit }]);
@@ -125,8 +130,7 @@ export default class GitArcClaimLossStore {
 
   async prepareDeleteAdopted(identity: Identity, expectedPaths: readonly string[]) {
     const snapshot = await this.readAdopted(identity);
-    if (!snapshot || snapshot.paths.length !== expectedPaths.length
-      || snapshot.paths.some((value, index) => value !== expectedPaths[index])) {
+    if (!snapshot || !matchesPaths(snapshot, expectedPaths)) {
       throw new Error("The adopted stash snapshot does not match its registered paths.");
     }
     return [{ ref: snapshot.ref, oldValue: snapshot.commit }];
@@ -137,8 +141,7 @@ export default class GitArcClaimLossStore {
     if (entry.savedStash) {
       const snapshot = await this.readAdopted(identity);
       const saved = entry.savedStash;
-      if (!snapshot || snapshot.paths.length !== saved.paths.length
-        || snapshot.paths.some((value, index) => value !== saved.paths[index])) {
+      if (!snapshot || !matchesPaths(snapshot, saved.paths)) {
         throw new Error("The adopted stash snapshot does not match its registered paths.");
       }
       return {
@@ -149,8 +152,7 @@ export default class GitArcClaimLossStore {
     }
     if (entry.phase !== "stashed" || !entry.claimedPaths.length) return null;
     const snapshot = await this.read(identity);
-    if (!snapshot?.frozen || snapshot.paths.length !== entry.claimedPaths.length
-      || snapshot.paths.some((value, index) => value !== entry.claimedPaths[index])) {
+    if (!snapshot?.frozen || !matchesPaths(snapshot, entry.claimedPaths)) {
       throw new Error("The ordinary stash snapshot does not match its registered paths.");
     }
     const arc = entry.retainedArc ?? entry;
@@ -163,8 +165,7 @@ export default class GitArcClaimLossStore {
 
   async prepareDeleteFrozen(identity: Identity, expectedPaths: readonly string[]) {
     const snapshot = await this.read(identity);
-    if (!snapshot?.frozen || snapshot.paths.length !== expectedPaths.length
-      || snapshot.paths.some((path, index) => path !== expectedPaths[index])) {
+    if (!snapshot?.frozen || !matchesPaths(snapshot, expectedPaths)) {
       throw new Error("The frozen Git arc stash snapshot does not match its saved paths.");
     }
     const refs = gitArcThreadStorageIds(await this.identity(identity))

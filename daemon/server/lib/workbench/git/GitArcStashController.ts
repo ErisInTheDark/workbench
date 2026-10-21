@@ -127,7 +127,7 @@ export default class GitArcStashController {
         if (dirty.length) throw new Error(`Stashed paths contain current worktree changes: ${dirty.join(", ")}`);
         const collisions = findGitArcCollisions(await registry.list(), identity, paths);
         if (collisions.length) throw new GitArcCollisionError(collisions);
-        const combined = [...new Set([...live, ...paths])].sort();
+        const combined = [...new Set([...live, ...paths])].sort((left, right) => left.localeCompare(right));
         const pendingPlan = current?.phase === "plan" || current?.phase === "stashed" && current.retainedArc
           ? await checkpoints.readCheckpoint(harness, input.threadId, current.checkpointCommit) : null;
         const planScope = new GitArcPathSet(pendingPlan?.metadata?.scopePaths);

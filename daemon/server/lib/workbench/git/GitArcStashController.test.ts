@@ -8,6 +8,7 @@ import test from "node:test";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
+import GitArcRegistry from "./GitArcRegistry";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 const fixtures = new GitTestFixtureCache();
@@ -32,6 +33,37 @@ test("discarding an adopted stash preserves the caller's live claims and changes
   assert.deepEqual(status.stashedClaims, []);
   assert.deepEqual(status.dirtyClaims, ["two.txt"]);
   assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "live change\n");
+});
+
+test("repeated stash cycles survive claim paths whose code-unit and locale orders disagree", async context => {
+  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const owner = { cwd, threadId: "owner" };
+  const controller = new WorkbenchGitCheckpointController();
+  await controller.createAndStartPlan({ ...owner, intentName: "mixed case", paths: ["a.txt", "B.txt"] });
+  await fs.writeFile(path.join(cwd, "a.txt"), "lower\n");
+  await fs.writeFile(path.join(cwd, "B.txt"), "upper\n");
+  const sorted = (paths: readonly string[]) => [...paths].sort();
+  for (const cycle of [1, 2]) {
+    await controller.stashArc(owner);
+    assert.deepEqual(sorted((await controller.readStatus(owner)).stashedClaims), ["B.txt", "a.txt"], `cycle ${cycle} stash`);
+    await controller.unstashArc(owner);
+    assert.equal(await fs.readFile(path.join(cwd, "a.txt"), "utf8"), "lower\n", `cycle ${cycle} unstash`);
+    assert.equal(await fs.readFile(path.join(cwd, "B.txt"), "utf8"), "upper\n", `cycle ${cycle} unstash`);
+  }
+  // Stashes saved before writers agreed on one order keep registry and snapshot paths in different orders.
+  await controller.stashArc(owner);
+  const repository = await WorkbenchGitRepository.open(cwd);
+  const registry = new GitArcRegistry(repository);
+  const entry = await registry.find({ harness: "codex", threadId: "owner" });
+  assert.ok(entry);
+  const reordered = [...entry.claimedPaths].reverse();
+  await repository.updateRefs((await registry.prepareSet(
+    { ...entry, claimedPaths: reordered, activeClaimedPaths: reordered }, entry.checkpointCommit,
+  )).updates);
+  await controller.createPlan({ ...owner, intentName: "successor", paths: ["two.txt"] });
+  assert.deepEqual(sorted((await controller.readStatus(owner)).stashedClaims), ["B.txt", "a.txt"]);
 });
 
 test("stashed pending proposals can be reworded without changing frozen work", async context => {
