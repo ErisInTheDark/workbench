@@ -18,7 +18,7 @@ export default function HoldConfirmationRail ({ holding, progress }: {
       `}
     >
       <span className="absolute inset-x-0 bottom-0 h-1.5 bg-[color-mix(in_srgb,var(--text)_18%,transparent)]">
-        <span className="block h-full origin-left bg-[color:var(--text)] transition-transform ease-linear" {...progress} />
+        <span className="block h-full origin-left bg-[color:var(--text)] transition-transform" {...progress} />
       </span>
     </span>
   );

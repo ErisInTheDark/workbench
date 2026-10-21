@@ -82,7 +82,7 @@ function ContextMenuActionRow({ action, onClose }: { action: WorkbenchContextMen
           `}
         >
           <span
-            className={`block h-full origin-left transition-transform ease-linear ${danger ? "bg-danger" : "bg-accent"}`}
+            className={`block h-full origin-left transition-transform ${danger ? "bg-danger" : "bg-accent"}`}
             {...hold.progressProps}
           />
         </span>
