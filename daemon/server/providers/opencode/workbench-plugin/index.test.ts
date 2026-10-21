@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import type { Result } from "@opencode/plugin/promise/tool";
-import { createOpenCodeWorkbenchPlugin, MANAGED_DISABLED_NATIVE_TOOLS, readOpenCodeGoQuota, resolveOpenCodeGoCredential } from "./index";
+import { createOpenCodeWorkbenchPlugin, MANAGED_NATIVE_TOOLS, readOpenCodeGoQuota, resolveOpenCodeGoCredential } from "./index";
 import { OPENCODE_COMMENTARY_TOOL_NAME } from "../opencode-workbench-rpc";
 import {
   OPENCODE_COMMENTARY_FINISHING_HINT, OPENCODE_COMMENTARY_HINT, openCodeCommentaryResult,
@@ -162,21 +162,23 @@ for (const failure of ["rpc", "http.response"]) {
   });
 }
 
-test("managed native command, search, read, question, and skill denial preserves ordinary skill use, commentary scope and hosted request identity", async () => {
+test("managed sessions keep only allowlisted native tools while ordinary sessions keep skill use, commentary scope and hosted request identity", async () => {
   const owner = await fixture();
   const cleanup = await owner.setup();
   try {
-    const retained = ["edit", "write", "patch", "execute", OPENCODE_COMMENTARY_TOOL_NAME];
-    const tools = Object.fromEntries([...MANAGED_DISABLED_NATIVE_TOOLS, ...retained].map(name => [name, { description: name }]));
+    const retained = [...MANAGED_NATIVE_TOOLS, "wb_shell", "wbex_task_completed", OPENCODE_COMMENTARY_TOOL_NAME];
+    const unlisted = ["shell", "read", "grep", "glob", "question", "skill", "subagent", "opencode_worktree_create", "future_native"];
+    const tools = Object.fromEntries([...unlisted, ...retained].map(name => [name, { description: name }]));
     await owner.hooks.get("context")!({ sessionID: "managed", tools } as never);
     assert.deepEqual(Object.keys(tools), retained);
     const ordinaryCommentary = { [OPENCODE_COMMENTARY_TOOL_NAME]: { description: "commentary" }, edit: { description: "edit" } };
     await owner.hooks.get("context")!({ sessionID: "ordinary", tools: ordinaryCommentary } as never);
     assert.deepEqual(Object.keys(ordinaryCommentary), ["edit"], "ordinary sessions keep native text output");
-    for (const tool of MANAGED_DISABLED_NATIVE_TOOLS) {
+    for (const tool of unlisted) {
       await assert.rejects(owner.hooks.get("execute.before")!({ sessionID: "managed", tool } as never), /unavailable/);
       await owner.hooks.get("execute.before")!({ sessionID: "ordinary", tool } as never);
     }
+    for (const tool of retained) await owner.hooks.get("execute.before")!({ sessionID: "managed", tool } as never);
     const ordinaryTools = { skill: { description: "native skill with <available_skills>" } };
     await owner.hooks.get("context")!({ sessionID: "ordinary", tools: ordinaryTools } as never);
     assert.equal(ordinaryTools.skill.description, "native skill with <available_skills>");

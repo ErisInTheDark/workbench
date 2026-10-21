@@ -5,7 +5,7 @@
  * - resolveOpenCodeGoCredential: select the credential of the integration OpenCode binds Go models to (Go key or Console login).
  * - OpenCodeWorkbenchPluginOptions: injectable companion boundaries for focused tests.
  * - createOpenCodeWorkbenchPlugin: create the process-local OpenCode companion.
- * - MANAGED_DISABLED_NATIVE_TOOLS: native tools hidden and denied in managed Workbench sessions.
+ * - MANAGED_NATIVE_TOOLS: the only native tools managed Workbench sessions keep; all others are hidden and denied.
  * - default plugin: preserve ordinary OpenCode sessions while adapting managed Workbench sessions.
  */
 import { z } from "zod";
@@ -30,10 +30,18 @@ import {
 
 const WORKBENCH_PLUGIN_ID = "workbench";
 const MANAGED_CODE_MODE_SCOPE =
-  "Call the nested Workbench tools listed here only. Native OpenCode tools such as edit, write, and apply_patch and direct `wbex_*` tools remain direct OpenCode tools outside this catalogue.";
-/** Managed sessions replace these with wb equivalents: shell, rg, skill, request_user_input. Read hangs on missing paths and directories, so it is denied too; agents read through the wb shell. */
-export const MANAGED_DISABLED_NATIVE_TOOLS = new Set(["bash", "glob", "grep", "question", "read", "shell", "skill"]);
+  "Call the nested Workbench tools listed here only. Native OpenCode tools such as edit, write, and patch and direct `wbex_*` tools remain direct OpenCode tools outside this catalogue.";
+/**
+ * Managed sessions expose only these native tools, so new OpenCode tools stay hidden until listed. wb replaces shell,
+ * search, skills, questions and subagents; native read hangs on missing paths and directories, so agents read through
+ * the wb shell. `execute` hosts the nested code-mode wb tools.
+ */
+export const MANAGED_NATIVE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "patch", "execute", "webfetch", "websearch"]);
 const OPENCODE_HOSTED_PROVIDERS = new Set(["opencode", "opencode-go"]);
+
+function isManagedTool(tool: string) {
+  return MANAGED_NATIVE_TOOLS.has(tool) || isOpenCodeWorkbenchToolName(tool) || tool === OPENCODE_COMMENTARY_TOOL_NAME;
+}
 
 export interface OpenCodeWorkbenchPluginOptions {
   connectTools?: (url: string) => Promise<CompanionToolClient>;
@@ -314,7 +322,7 @@ export function createOpenCodeWorkbenchPlugin(
             execute.description = `${execute.description}\n\n${MANAGED_CODE_MODE_SCOPE}`;
           }
           for (const tool of Object.keys(input.tools)) {
-            if (managed ? MANAGED_DISABLED_NATIVE_TOOLS.has(tool)
+            if (managed ? !isManagedTool(tool)
               : isOpenCodeWorkbenchToolName(tool) || tool === OPENCODE_COMMENTARY_TOOL_NAME) {
               delete input.tools[tool];
             }
@@ -330,8 +338,7 @@ export function createOpenCodeWorkbenchPlugin(
         }),
         context.tool.hook("execute.before", async input => {
           cuts.toolCalled(input.sessionID, input.tool);
-          const managed = await isManagedSession(input.sessionID);
-          if (MANAGED_DISABLED_NATIVE_TOOLS.has(input.tool) && managed) {
+          if (!isManagedTool(input.tool) && await isManagedSession(input.sessionID)) {
             throw new Error(`Native OpenCode tool ${input.tool} is unavailable in a managed Workbench session.`);
           }
           await files.before(input);
