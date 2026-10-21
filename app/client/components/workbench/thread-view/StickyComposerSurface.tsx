@@ -115,9 +115,7 @@ function StickyComposerSurface({
     const syncFlowReserver = () => {
       const bottom = bottomRef.current;
       const bottomReserve = bottomReserveRef.current;
-      const docked = Boolean(bottom
-        && viewport.dataset.threadScrollDirection !== "up"
-        && viewport.dataset.threadScrollProximity === "near");
+      const docked = Boolean(bottom && viewport.dataset.threadScrollFollowing === "true");
       if (bottom) bottom.dataset.docked = String(docked);
       const shellStyle = getComputedStyle(shell);
       const marginBlockStart = Number.parseFloat(shellStyle.marginTop);
@@ -162,7 +160,7 @@ function StickyComposerSurface({
     resizeObserver.observe(shell);
     if (bottomRef.current) resizeObserver.observe(bottomRef.current);
     const attributes = new MutationObserver(syncFlowReserver);
-    attributes.observe(viewport, { attributes: true, attributeFilter: ["data-thread-scroll-direction", "data-thread-scroll-proximity"] });
+    attributes.observe(viewport, { attributes: true, attributeFilter: ["data-thread-scroll-following"] });
     viewport.addEventListener("scroll", syncFlowReserver, { passive: true });
     return () => {
       intersectionObserver.disconnect();

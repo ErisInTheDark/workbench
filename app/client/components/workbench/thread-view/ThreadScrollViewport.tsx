@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change (activated controls stay put, end snapping paused, until the reader moves), gesture-safe correction, and clipping content above unrevealed history.
+ * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change (controls activated above the end stay put, end following paused, until the reader moves), the `data-thread-scroll-following` flag end snapping and docked chrome share, gesture-safe correction, and clipping content above unrevealed history.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -123,6 +123,8 @@ function ActiveThreadScrollViewport ({
   onTouchActivityChange,
 }: ActiveThreadScrollViewportProps) {
   const directionRef = useRef<ThreadScrollDirection>("down");
+  const proximityRef = useRef<ThreadScrollProximity>("far");
+  const heldRef = useRef(false);
   const endTargetRef = useRef<HTMLElement | null>(null);
   const initialEndPlacementRef = useRef<ThreadInitialEndPlacementController | null>(null);
   const initialEndPlacement = initialEndPlacementRef.current ??= new ThreadInitialEndPlacementController();
@@ -138,15 +140,25 @@ function ActiveThreadScrollViewport ({
   const readerMovedListeners = useRef(new Set<() => void>());
   const visibility = useRef<ThreadViewportVisibilityController | null>(null);
   const progressiveWindowStartsRef = useRef(new Map<string, string>());
+  // End snapping and the docked bottom UI both assume the reader is carried to the end; one flag keeps them agreeing.
+  const isFollowing = useCallback(
+    () => directionRef.current === "down" && proximityRef.current === "near" && !heldRef.current, []);
+  const syncFollowing = useCallback((viewport: HTMLDivElement) => {
+    const following = isFollowing();
+    if (following === (viewport.dataset.threadScrollFollowing === "true")) return;
+    if (following) viewport.dataset.threadScrollFollowing = "true";
+    else delete viewport.dataset.threadScrollFollowing;
+  }, [isFollowing]);
   const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
     const metrics = readScrollMetrics(viewport, endTargetRef.current);
     const reattached = didThreadScrollReattach(wasAtEndRef.current, metrics);
     wasAtEndRef.current = isThreadScrollAtEnd(metrics);
     const proximity = resolveThreadScrollProximity(metrics);
-    if (viewport.dataset.threadScrollProximity !== proximity) viewport.dataset.threadScrollProximity = proximity;
+    proximityRef.current = proximity;
+    syncFollowing(viewport);
     if (reattached) bottomListeners.current.forEach(listener => listener());
     return proximity;
-  }, []);
+  }, [syncFollowing]);
   const settleRef = useRef<ThreadScrollSettleController | null>(null);
   const settle = settleRef.current ??= new ThreadScrollSettleController({
     schedule: (callback, delayMs) => {
@@ -293,18 +305,21 @@ function ActiveThreadScrollViewport ({
     const setScrollDirection = (direction: ThreadScrollDirection) => {
       if (direction === directionRef.current) return;
       directionRef.current = direction;
-      viewport.dataset.threadScrollDirection = direction;
+      syncFollowing(viewport);
     };
-    // An activated control holds the reader in place until they move on their own: end snapping and the initial end pin
-    // would otherwise follow what it revealed to the new end, and its own correction scrolls must not drop the hold.
+    // A control activated while reading above the end holds the reader in place until they move on their own: end
+    // following and the initial end pin would otherwise carry what it revealed to the new end, and its own correction
+    // scrolls must not drop the hold. A reader following the end keeps following it.
     const holdActivation = (control: HTMLElement) => {
       anchor.hold(pickThreadActivationAnchor(control, content));
       initialEndPlacement.release();
-      viewport.dataset.threadScrollHeld = "true";
+      heldRef.current = true;
+      syncFollowing(viewport);
     };
     const readerMoved = () => {
       initialEndPlacement.release();
-      delete viewport.dataset.threadScrollHeld;
+      heldRef.current = false;
+      syncFollowing(viewport);
     };
     const handleScroll = () => {
       const previousScrollTop = previousScrollTopRef.current;
@@ -324,7 +339,7 @@ function ActiveThreadScrollViewport ({
       previousScrollTopRef.current = scrollTop;
       syncScrollProximity(viewport);
       settle.scrolled();
-      if (viewport.dataset.threadScrollHeld) anchor.reconcile();
+      if (heldRef.current) anchor.reconcile();
       else anchor.record();
       readerMovedListeners.current.forEach(listener => listener());
     };
@@ -334,7 +349,7 @@ function ActiveThreadScrollViewport ({
     const handleControlActivated = (event: MouseEvent) => {
       const control = event.target instanceof Element
         ? event.target.closest<HTMLElement>("summary, [aria-expanded], [data-thread-expander]") : null;
-      if (control && content.contains(control)) holdActivation(control);
+      if (control && content.contains(control) && !isFollowing()) holdActivation(control);
     };
     const handleWheel = (event: WheelEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
@@ -456,7 +471,7 @@ function ActiveThreadScrollViewport ({
       viewport.ownerDocument.removeEventListener("pointercancel", handlePointerEnd);
       viewport.ownerDocument.removeEventListener("pointerup", handlePointerEnd);
     };
-  }, [anchor, onScrollIntent, onTouchActivityChange, settle, syncScrollProximity]);
+  }, [anchor, isFollowing, onScrollIntent, onTouchActivityChange, settle, syncFollowing, syncScrollProximity]);
 
   return (
     <div
@@ -465,12 +480,10 @@ function ActiveThreadScrollViewport ({
         "scrollbar-hover-reveal flex min-h-0 flex-col overflow-x-hidden overflow-y-auto",
         "[--thread-scroll-inline-padding:1.25rem] md:[--thread-scroll-inline-padding:1.5rem]",
         "[--thread-scroll-snap-distance:0px] [overflow-anchor:none] snap-none",
-        "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]:not([data-thread-scroll-held])]:[scroll-snap-type:y_proximity]",
-        "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]:not([data-thread-scroll-held])]:[--thread-scroll-snap-distance:calc(100dvh-1px)]",
+        "[&[data-thread-scroll-following]]:[scroll-snap-type:y_proximity]",
+        "[&[data-thread-scroll-following]]:[--thread-scroll-snap-distance:calc(100dvh-1px)]",
         className,
       )}
-      data-thread-scroll-direction="down"
-      data-thread-scroll-proximity="far"
       data-thread-scroll-target="true"
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
