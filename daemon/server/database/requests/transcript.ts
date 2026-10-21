@@ -33,7 +33,9 @@ export const transcriptRequests = {
         if ("observations" in observation) nested += observation.observations.length;
         if ("catalog" in observation) nested += observation.catalog.length;
       }
-      return `${mode} ${[...kinds].map(([kind, count]) => `${kind}x${count}`).join(", ")}; ${threads.size} threads, ${nested} nested`;
+      // A lone thread is named, since settlement cost follows that thread's size more than the batch's.
+      const scope = threads.size === 1 ? `thread ${[...threads][0]!.slice(0, 8)}` : `${threads.size} threads`;
+      return `${mode} ${[...kinds].map(([kind, count]) => `${kind}x${count}`).join(", ")}; ${scope}, ${nested} nested`;
     },
   }),
   readTranscript: defineDatabaseRequest({
