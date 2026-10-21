@@ -15,9 +15,7 @@ import OpenCodeCompanionToolsController, { type CompanionToolClient } from "./Op
 import OpenCodePatchStreamController from "./OpenCodePatchStreamController";
 import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
 import OpenCodeStreamCutController from "./OpenCodeStreamCutController";
-import {
-  OPENCODE_COMMENTARY_FINISHING_HINT, OPENCODE_COMMENTARY_HINT, registerOpenCodeCommentaryTool,
-} from "./open-code-commentary-tool";
+import { OPENCODE_COMMENTARY_HINT, registerOpenCodeCommentaryTool } from "./open-code-commentary-tool";
 import providerAccountFingerprint from "../../provider-account-fingerprint";
 import {
   isOpenCodeWorkbenchToolName,
@@ -217,9 +215,8 @@ export function createOpenCodeWorkbenchPlugin(
         isManagedMetadata((await context.session.get({ sessionID })).metadata));
       const cuts = new OpenCodeStreamCutController({
         isManagedSession,
-        hint: async (sessionID, taskStatusSet) => {
-          const text = taskStatusSet ? OPENCODE_COMMENTARY_FINISHING_HINT : OPENCODE_COMMENTARY_HINT;
-          await context.session.synthetic({ sessionID, text, delivery: "steer" });
+        hint: async sessionID => {
+          await context.session.synthetic({ sessionID, text: OPENCODE_COMMENTARY_HINT, delivery: "steer" });
         },
         warn: message => console.warn(`[workbench-opencode-cut] ${message}`),
       });

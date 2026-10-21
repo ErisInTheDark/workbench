@@ -7,9 +7,7 @@ import path from "node:path";
 import type { Result } from "@opencode/plugin/promise/tool";
 import { createOpenCodeWorkbenchPlugin, MANAGED_NATIVE_TOOLS, readOpenCodeGoQuota, resolveOpenCodeGoCredential } from "./index";
 import { OPENCODE_COMMENTARY_TOOL_NAME } from "../opencode-workbench-rpc";
-import {
-  OPENCODE_COMMENTARY_FINISHING_HINT, OPENCODE_COMMENTARY_HINT, openCodeCommentaryResult,
-} from "./open-code-commentary-tool";
+import { OPENCODE_COMMENTARY_HINT, openCodeCommentaryResult } from "./open-code-commentary-tool";
 
 async function* lifecycleEvents({ signal }: { signal: AbortSignal }) {
   if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -227,7 +225,7 @@ test("patch targets appear while both response and arguments are unfinished and 
   } finally { if (typeof cleanup === "function") await cleanup(); }
 });
 
-test("a successful task status call turns commentary results and bare-text hints into turn-end guidance", async () => {
+test("a successful task status call turns commentary results into turn-end guidance and lets bare text end the turn", async () => {
   const bareText = async (owner: Awaited<ReturnType<typeof fixture>>) => {
     const frame = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
     const input = { sessionID: "managed", kind: "primary", model: { providerID: "opencode-go", modelID: "test" },
@@ -238,7 +236,7 @@ test("a successful task status call turns commentary results and bare-text hints
       ), { headers: { "content-type": "text/event-stream" } }),
     };
     await owner.hooks.get("http.response")!(input as never);
-    assert.doesNotMatch(await input.response.text(), /Done\./u);
+    return await input.response.text();
   };
   const call = { sessionID: "managed", id: "call", messageID: "message" };
   const failing = await fixture({ catalogue: ["task_completed"], toolFails: true });
@@ -253,15 +251,15 @@ test("a successful task status call turns commentary results and bare-text hints
   const cleanup = await owner.setup();
   try {
     const commentary = owner.tools.get(OPENCODE_COMMENTARY_TOOL_NAME)!;
-    await bareText(owner);
+    assert.doesNotMatch(await bareText(owner), /Done\./u);
     await owner.tools.get("git_arc_status")!.execute({}, call);
     assert.equal((await commentary.execute({ text: "x" }, call)).content, openCodeCommentaryResult(false));
     await owner.tools.get("task_completed")!.execute({}, call);
     assert.equal((await commentary.execute({ text: "x" }, call)).content, openCodeCommentaryResult(true));
     assert.equal((await commentary.execute({ text: "x" }, { ...call, sessionID: "other" })).content,
       openCodeCommentaryResult(false), "status belongs to the session that set it");
-    await bareText(owner);
-    assert.deepEqual(owner.synthetic, [OPENCODE_COMMENTARY_HINT, OPENCODE_COMMENTARY_FINISHING_HINT]);
+    assert.match(await bareText(owner), /Done\./u, "a finished agent's bare text ends its turn");
+    assert.deepEqual(owner.synthetic, [OPENCODE_COMMENTARY_HINT]);
   } finally { if (typeof cleanup === "function") await cleanup(); }
 });
 

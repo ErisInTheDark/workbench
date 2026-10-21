@@ -704,6 +704,30 @@ test("broadcasts an inbox-delivered turn as the app's active turn", async () => 
   ]);
 });
 
+test("a delivered synthetic hint is not user intent, so it keeps the agent's task status", async () => {
+  const lifecycle: string[] = [];
+  const controller = new OpenCodeEventController({
+    broadcast: () => undefined,
+    observe: async facts => { if (facts.lifecycle) lifecycle.push(facts.lifecycle.event.kind); },
+    threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId, turn: turn() }) },
+    transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined },
+  });
+  const enqueued = (inboxID: string, type: "user" | "synthetic") => event({
+    type: "session.inbox.enqueued", created: 1,
+    data: { sessionID: "session", inboxID, item: { type, payload: { text: "x" }, delivery: "steer" } },
+  });
+  const delivered = (inboxID: string) => event({ type: "session.inbox.delivered", created: 2, data: { sessionID: "session", inboxID } });
+
+  await controller.accept(enqueued("hint", "synthetic"));
+  await controller.accept(delivered("hint"));
+  assert.deepEqual(lifecycle, []);
+  await controller.accept(enqueued("steer", "user"));
+  await controller.accept(delivered("steer"));
+  assert.deepEqual(lifecycle, ["acceptedIntent"], "a user steer is still new intent");
+});
+
 test("maps OpenCode cancellation failure to interrupted after a WB stop", async () => {
   const lifecycle: string[] = [];
   const states: string[] = [];

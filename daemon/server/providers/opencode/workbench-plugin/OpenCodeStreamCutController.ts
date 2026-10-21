@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default OpenCodeStreamCutController: end managed model responses early, at open reasoning for a pending steer, or before bare text so the agent retries through the commentary tool; tracks whether each execution set its task status.
+ * - default OpenCodeStreamCutController: end managed model responses early, at open reasoning for a pending steer, or before bare text so an unfinished agent retries through the commentary tool; tracks whether each execution set its task status.
  */
 import type { SessionHttpResponse } from "@opencode/plugin/promise/session";
 import OpenCodeSseTap, { type OpenCodeSseTapDecision } from "./OpenCodeSseTap";
@@ -39,7 +39,7 @@ export default class OpenCodeStreamCutController {
   constructor(private readonly options: {
     isManagedSession(sessionID: string): Promise<boolean>;
     /** Admit the hidden steer that tells the agent its bare text was discarded and how to proceed. */
-    hint(sessionID: string, taskStatusSet: boolean): Promise<void>;
+    hint(sessionID: string): Promise<void>;
     warn(message: string): void;
   }) {}
 
@@ -135,8 +135,12 @@ export default class OpenCodeStreamCutController {
     return guarded ? "hold" : "forward";
   }
 
+  /**
+   * After a task status, a text-only response is the turn end OpenCode needs; cutting it would teach the agent that
+   * ending in text is wrong and send it back to the commentary tool forever.
+   */
   private cutsBareText(sessionID: string) {
-    return !this.disposed && (this.strikes.get(sessionID) ?? 0) < BARE_TEXT_CUT_LIMIT;
+    return !this.disposed && !this.taskStatus.has(sessionID) && (this.strikes.get(sessionID) ?? 0) < BARE_TEXT_CUT_LIMIT;
   }
 
   private async evaluate(response: LiveResponse) {
@@ -156,7 +160,7 @@ export default class OpenCodeStreamCutController {
     const strikes = (this.strikes.get(response.sessionID) ?? 0) + 1;
     this.strikes.set(response.sessionID, strikes);
     try {
-      await this.options.hint(response.sessionID, this.taskStatus.has(response.sessionID));
+      await this.options.hint(response.sessionID);
     } catch {
       this.strikes.set(response.sessionID, BARE_TEXT_CUT_LIMIT);
       this.options.warn("OpenCode commentary hint could not be admitted; bare text is kept until the next work tool call.");

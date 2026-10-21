@@ -46,13 +46,12 @@ function provider(sessionID = "managed") {
 function controller(options: { managed?: boolean; hint?: () => Promise<void> } = {}) {
   const warnings: string[] = [];
   const hints: string[] = [];
-  const statuses: boolean[] = [];
   const owner = new OpenCodeStreamCutController({
     isManagedSession: async () => options.managed ?? true,
-    hint: async (sessionID, taskStatusSet) => { hints.push(sessionID); statuses.push(taskStatusSet); await options.hint?.(); },
+    hint: async sessionID => { hints.push(sessionID); await options.hint?.(); },
     warn: message => warnings.push(message),
   });
-  return { owner, warnings, hints, statuses };
+  return { owner, warnings, hints };
 }
 
 async function bareTextResponse(owner: OpenCodeStreamCutController) {
@@ -192,16 +191,17 @@ test("repeated bare text stops being cut until the agent calls a work tool, even
   assert.equal(hints.length, 4);
 });
 
-test("hints report whether the current execution set its task status", async () => {
-  const { owner, statuses } = controller();
-  await bareTextResponse(owner);
+test("once the execution set its task status, bare text is kept so it ends the turn", async () => {
+  const { owner, hints } = controller();
+  assert.doesNotMatch((await bareTextResponse(owner)).output!, /working/u);
   owner.taskStatusSet("managed");
   assert.equal(owner.hasTaskStatus("managed"), true);
-  await bareTextResponse(owner);
+  assert.match((await bareTextResponse(owner)).output!, /working/u);
+  assert.equal(hints.length, 1, "a finished agent is not hinted");
   owner.settleSession("managed");
   assert.equal(owner.hasTaskStatus("managed"), false, "the next execution must set its status again");
-  await bareTextResponse(owner);
-  assert.deepEqual(statuses, [false, true, false]);
+  assert.doesNotMatch((await bareTextResponse(owner)).output!, /working/u);
+  assert.equal(hints.length, 2);
 });
 
 test("a failed hint keeps the bare text instead of ending the response silently", async () => {

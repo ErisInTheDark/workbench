@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - OpenCodeEventControllerOptions: provider-local event, transcript, and lifecycle ports.
- * - default OpenCodeEventController: translate OpenCode events (commentary-tool input as exact commentary) into direct live facts, compaction reports, and one terminal canonical settlement.
+ * - default OpenCodeEventController: translate OpenCode events (commentary-tool input as exact commentary; synthetic hint deliveries as no user intent) into direct live facts, compaction reports, and one terminal canonical settlement.
  */
 import type { OpenCodeEvent, SessionInfo, SessionToolFailed, SessionToolSuccess } from "@opencode/client";
 import type { WorkbenchProviderObservation, WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
@@ -80,6 +80,8 @@ function parseToolInput(text: string): JsonValue {
 
 export default class OpenCodeEventController {
   private readonly tools = new Map<string, Map<string, ToolState>>();
+  /** Queued synthetic inbox items: Workbench's own hidden hints, whose delivery is no user intent. */
+  private readonly syntheticInbox = new Set<string>();
   private readonly previews = new Map<string, {
     requestID: string;
     calls: Map<string, Extract<OpenCodePatchObservation, { kind: "preview" }>>;
@@ -106,6 +108,7 @@ export default class OpenCodeEventController {
   dispose() {
     for (const sessionID of this.previews.keys()) this.clearPreviews(sessionID);
     this.tools.clear();
+    this.syntheticInbox.clear();
   }
 
   async reconcileConnection(signal: AbortSignal, wasTouched: (sessionID: string) => boolean) {
@@ -177,7 +180,15 @@ export default class OpenCodeEventController {
         }
         return;
       }
+      case "session.inbox.enqueued":
+        if (event.data.item.type === "synthetic") this.syntheticInbox.add(event.data.inboxID);
+        return;
+      case "session.inbox.cancelled":
+        this.syntheticInbox.delete(event.data.inboxID);
+        return;
       case "session.inbox.delivered": {
+        // A delivered hint would replace the agent's task status with fresh working intent.
+        if (this.syntheticInbox.delete(event.data.inboxID)) return;
         const identity = await this.options.threads.syncNative(sessionID);
         if (identity.maintenance) return;
         const turn = identity.turn;
