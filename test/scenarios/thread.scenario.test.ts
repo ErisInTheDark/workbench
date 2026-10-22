@@ -1,5 +1,6 @@
 /*
- * No exports. One explicitly selected provider journey with paid or test-scripted model calls.
+ * No exports. One explicitly selected provider journey with paid or test-scripted model calls; fake Codex also edits a
+ * machine file through a daemon-project arc.
  */
 import assert from "node:assert/strict";
 import { randomInt, randomUUID } from "node:crypto";
@@ -177,6 +178,74 @@ async function verifyOpenCodeSteerCuts(input: {
       await runtime.daemon.threads.stop({ threadId, intent: "stop" });
       await runtime.daemon.threads.deleteProvider({ threadId });
     }
+  }
+}
+
+/**
+ * A daemon-project Codex thread edits a machine file: claiming it asks once, the patch inside the claim asks nothing more,
+ * and the machine repository's baseline holds the file as it was before the claim.
+ */
+async function verifyCodexMachineArcs(input: {
+  runtime: IsolatedWorkbench;
+  profile: WorkbenchComposerProfile;
+  fakeModel: FakeThreadModelServer;
+  signal: AbortSignal;
+}) {
+  const { runtime, profile, fakeModel, signal } = input;
+  // Test temp dirs sit ignored inside this repository, so the claim also crosses a nested-repository boundary.
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-machine-arc-"));
+  const target = path.join(directory, "target.txt");
+  const display = path.resolve(target).replace(/\\/gu, "/");
+  await fs.writeFile(target, "before\n");
+  let threadId: string | null = null;
+  try {
+    const daemonProject = (await runtime.waitForProjects([])).find(project => project.kind === "daemon");
+    assert.ok(daemonProject, "The clone catalogue must offer its daemon project");
+    fakeModel.enqueue([
+      // Git arc tools are direct Codex tools, not code-mode ones.
+      { tool: { nameSuffix: "git_plan_start", arguments: { intentName: "Machine edit", addPaths: [display] } } },
+      { tool: { nameSuffix: "apply_patch", input: `*** Begin Patch\n*** Update File: ${display}\n@@\n-before\n+after\n*** End Patch\n` } },
+      { tool: { nameSuffix: "task_completed", arguments: {} } },
+      { text: "Machine edit done." },
+    ]);
+    const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens } = profile;
+    threadId = await runtime.launchDraft(daemonProject.id, {
+      kind: "profile", profileId: profile.id,
+      settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens },
+    }, `Change ${display} from before to after.`);
+    // The whole edit is a few scripted steps; a stall fails here with its transcript instead of eating the runner budget.
+    const owner = new ProviderThreadJourney(runtime, "codex", daemonProject.id, threadId, AbortSignal.any([signal, AbortSignal.timeout(90_000)]));
+    await owner.subscribe();
+    const claim = await owner.pending("decision").catch(async (error: unknown) => {
+      const items = (await owner.durable()).turns.at(-1)?.items ?? [];
+      throw new Error(`Machine claim approval never appeared: ${JSON.stringify(items).slice(0, 6000)}`, { cause: error });
+    });
+    assert.ok(JSON.stringify(claim.request).includes(display), "The claim approval must name the machine file it grants");
+    assert.equal((await owner.answer(claim, "decision", "Allow once")).route, "live");
+    const turnId = claim.turnId;
+    assert.ok(turnId, "The claim approval must sit on the turn that asked for it");
+    const projection = await owner.waitTurn(turnId);
+    await owner.unsubscribe();
+    assert.equal(await fs.readFile(target, "utf8"), "after\n");
+    assert.equal(fakeModel.queuedActions, 0, "The machine edit must consume its whole script");
+    const patchItem = projection.turns.find(turn => turn.id === turnId)?.items.find(item => item.type === "fileChange");
+    assert.ok(patchItem, "The patch must reach the canonical transcript");
+    const outcomes = (await runtime.daemon.threads.history.approvals({ threadId })).data;
+    assert.deepEqual(outcomes.filter(entry => entry.itemId === patchItem.id).map(entry => entry.outcome), ["autoApproved"],
+      "A patch inside approved claims must not ask again");
+    const drive = path.parse(path.resolve(target)).root;
+    const slug = /^[a-z]:/iu.test(drive) ? drive[0]!.toLowerCase() : "root";
+    const baseline = await IsolatedWorkbench.command("git", [
+      "--git-dir", path.join(runtime.dataRootPath, "daemon", "machine-git", `${slug}.git`),
+      "show", `HEAD:${path.relative(drive, path.resolve(target)).replace(/\\/gu, "/")}`,
+    ], directory, process.env, signal);
+    assert.equal(baseline.replace(/\r\n/gu, "\n"), "before\n", "Claiming must take the file as it was into the machine baseline");
+  } finally {
+    if (threadId) {
+      await runtime.daemon.threads.stop({ threadId, intent: "stop" });
+      await runtime.daemon.threads.deleteProvider({ threadId });
+    }
+    await fs.rm(directory, { recursive: true, force: true });
   }
 }
 
@@ -934,6 +1003,10 @@ test("selected providers complete the shared thread boundary journey in one clon
     const retained = await runtime.transcripts.read({ threadId, turnLimit: 20 });
     assert.ok(retained, "Deleting provider state must retain isolated WB transcript history");
     await providerRegistry[provider].verifyLegacyFiles?.();
+    if (provider === "codex" && fakeModel) {
+      step("editing a machine file through a daemon-project arc");
+      await verifyCodexMachineArcs({ runtime, profile, fakeModel, signal: scenarioSignal });
+    }
     if (provider === "opencode") {
       await verifyOpenCodeSteerCuts({ runtime, projectId: project.id, profile, fakeModel, signal: scenarioSignal });
     }

@@ -203,11 +203,9 @@ Before the first file edit in Implement mode:
 - Run the required arc command directly.
 - For an inactive plan's first Implement pass, call <tool id="git_arc_start" />.
 - If already active, call <tool id="git_arc_continue" /> before another pass, or <tool id="git_arc_claims" /> for scope edits.
-<workspace:project>
 <docs tools="git_arc_propose">
 - Own pending proposals and new work builds on them: call <tool id="git_arc_stack" /> first.
 </docs>
-</workspace:project>
 - Start drift below 2,000 plan-scoped additions + deletions: inspect <tool id="git_arc_diff" /> against the supplied ref.
 - Larger or binary drift: enter Inspect; reread affected current code and owners; rebase planned work, not Git history.
 - Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. When it does, enter Implement with <tool id="git_plan_start" /> and `{ inherit: true }`; otherwise revise in Brief and seek approval.
@@ -242,9 +240,7 @@ Review follows completion gate: summarize/propose. No inspection, implementation
 <>
 <!-- The tool gate sits directly inside the wrapper so subagents, which cannot propose, fall through to the handoff. -->
 <docs tools="git_arc_propose">
-<workspace:project>
 - Use <tool id="git_arc_propose" />, not commit-selection tools, for changed claims. Skip unchanged; failure keeps Review open.
-</workspace:project>
 </docs>
 <else>
 - Report changes and validation to parent; keep claims for adoption.

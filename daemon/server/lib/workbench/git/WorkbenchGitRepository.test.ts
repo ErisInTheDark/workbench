@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests cover atomic index/ref publication, object/ref-format compatibility, object framing, combined file changes, direct worktree dirt and large path/ref selections.
+ * No production exports. Tests cover atomic index/ref publication, object/ref-format compatibility, object framing, combined file changes, direct worktree dirt, large path/ref selections, and machine worktrees never walking untracked machine files while still seeing files inside nested repositories.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -15,6 +15,7 @@ import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGitRepository";
 import parseGitFileChangeOutput from "./git-file-change-output";
+import { ensureMachineGitWorktree } from "./machine-git-worktrees";
 import { THREAD_GIT_BASE_FIXTURE, UNBORN_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 const execFileAsync = promisify(execFile);
@@ -694,4 +695,75 @@ test("huge changed pathsets diff within the command-line budget through a few Gi
   assert.deepEqual(summaries.map(({ diff, path: filePath }) => [filePath, diff]), paths.map(filePath => [filePath, ""]));
   assert.ok(longestArguments < 32 * 1024, `a Git invocation carried ${longestArguments} argument characters`);
   assert.ok(peak <= 4, `${peak} Git processes ran at once`);
+});
+
+test("machine worktrees snapshot tracked files only and list untracked files only inside scopes", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-scan-");
+  context.after(async () => await temporary.dispose());
+  const drive = path.join(temporary.path, "drive");
+  await fs.mkdir(path.join(drive, "scoped"), { recursive: true });
+  await fs.mkdir(path.join(drive, "elsewhere"), { recursive: true });
+  await fs.writeFile(path.join(drive, "tracked.txt"), "base\n", "utf8");
+  await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
+  const repository = new WorkbenchGitRepository(drive);
+  const root = await repository.headOrNull();
+  const baseline = await repository.createCommitFromTree(await repository.writeScopedWorktreeTree(["tracked.txt"], root), root, "baseline\n");
+  await repository.updateRefs([{ ref: await repository.symbolicHead() ?? "HEAD", newValue: baseline, oldValue: root }]);
+
+  await fs.writeFile(path.join(drive, "tracked.txt"), "changed\n", "utf8");
+  await fs.writeFile(path.join(drive, "scoped", "new.txt"), "new\n", "utf8");
+  await fs.writeFile(path.join(drive, "elsewhere", "stray.txt"), "stray\n", "utf8");
+  const run = repository.run.bind(repository);
+  const walks: string[][] = [];
+  context.mock.method(repository, "run", async (...args: Parameters<typeof repository.run>) => {
+    if (args[0].includes("--others")) walks.push(args[0]);
+    return await run(...args);
+  });
+
+  const snapshot = await repository.writeWorktreeTree(baseline);
+  assert.deepEqual(await repository.listTreePaths(snapshot), ["tracked.txt"]);
+  assert.deepEqual(await repository.listWorktreeChangedPaths(baseline), ["tracked.txt"]);
+  assert.deepEqual(await repository.listWorktreeChangedPaths(baseline, ["scoped"]), ["scoped/new.txt"]);
+  const oversized = ["scoped", ...Array.from({ length: 300 }, (_value, index) => `missing/${String(index).padStart(4, "0")}-${"z".repeat(140)}`)];
+  assert.deepEqual(await repository.listWorktreeChangedPaths(baseline, oversized), ["scoped/new.txt"]);
+  assert.deepEqual(await repository.listWorktreePaths(oversized), ["scoped/new.txt"]);
+  // An unscoped `--others` walk on a real machine would cross every drive folder.
+  const scoped = (args: string[]) => args.includes("--") && args.length > args.indexOf("--") + 1;
+  assert.ok(walks.length > 0 && walks.every(scoped), `unscoped untracked walk: ${JSON.stringify(walks.find(args => !scoped(args)))}`);
+});
+
+test("a repository rooted at a filesystem root accepts the paths beneath it", () => {
+  const root = path.parse(process.cwd()).root;
+  const repository = new WorkbenchGitRepository(root);
+  const nested = path.join(root, "users", "someone", "notes.txt");
+  assert.deepEqual(repository.normalizePaths([nested]), ["users/someone/notes.txt"]);
+  assert.equal(repository.resolvePath("users/someone/notes.txt"), nested);
+});
+
+test("machine worktrees discover and stage files inside nested repositories, where Git stops walking", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-boundary-");
+  context.after(async () => await temporary.dispose());
+  const drive = path.join(temporary.path, "drive");
+  const modules = path.join(drive, "repo", "node_modules");
+  await fs.mkdir(modules, { recursive: true });
+  await git(temporary.path, ["init", "-q", path.join(drive, "repo")]);
+  await fs.writeFile(path.join(modules, "keep.txt"), "v1\n", "utf8");
+  await fs.writeFile(path.join(modules, "gone.txt"), "v1\n", "utf8");
+  await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
+  const repository = new WorkbenchGitRepository(drive);
+  const root = await repository.headOrNull();
+  const scope = ["repo/node_modules"];
+
+  assert.deepEqual(await repository.listWorktreeChangedPaths(root, scope), ["repo/node_modules/gone.txt", "repo/node_modules/keep.txt"]);
+  const baseline = await repository.createCommitFromTree(await repository.writeScopedWorktreeTree(scope, root), root, "baseline\n");
+  assert.deepEqual(await repository.listTreePaths(baseline), ["repo/node_modules/gone.txt", "repo/node_modules/keep.txt"]);
+
+  await fs.writeFile(path.join(modules, "keep.txt"), "v2\n", "utf8");
+  await fs.rm(path.join(modules, "gone.txt"));
+  await fs.writeFile(path.join(modules, "new.txt"), "new\n", "utf8");
+  assert.deepEqual(await repository.listWorktreeChangedPaths(baseline, scope),
+    ["repo/node_modules/gone.txt", "repo/node_modules/keep.txt", "repo/node_modules/new.txt"]);
+  const tree = await repository.writeScopedWorktreeTree(scope, baseline);
+  assert.deepEqual(await repository.listTreePaths(tree), ["repo/node_modules/keep.txt", "repo/node_modules/new.txt"]);
+  assert.equal((await repository.readTreeFiles(tree, ["repo/node_modules/keep.txt"])).get("repo/node_modules/keep.txt")?.bytes.toString("utf8"), "v2\n");
 });

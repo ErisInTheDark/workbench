@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - GitArcEditOwner: thread identity plus the workspace root directory an edit session resolves paths against.
+ * - GitArcEditOwner: thread identity plus the workspace root directory an edit session resolves paths against; claimedOnly
+ *   owners (machine roots) apply and revert only already-claimed paths.
  * - GitArcEditArcPort: active-arc facts and claim publication borrowed from the checkpoint controller.
  * - GitArcEditPendingCheck: absolute paths held by the caller's unsealed pending proposals.
  * - GitArcEditApplyAttempt: one apply attempt, blocked by sibling claims or applied.
@@ -29,6 +30,8 @@ export interface GitArcEditOwner {
   cwd: string;
   harness: GitArcHarness;
   threadId: string;
+  /** Machine roots: every touched path, ignored or not, must already be actively claimed; apply never claims. */
+  claimedOnly?: boolean;
 }
 
 type Identity = Pick<GitArcEditOwner, "harness" | "threadId"> & { cwd: string };
@@ -301,6 +304,7 @@ export default class GitArcEditSessionController {
       const comparedPaths = [...new Set([...plan.touchedPaths, ...session.metadata.touchedPaths])];
       const matchedPreview = plan.touchedPaths.length === session.metadata.touchedPaths.length
         && !(await repository.listChangedPaths(session.target, plan.target, comparedPaths)).length;
+      await this.assertClaimedOnly(input.owner, identity, plan.touchedPaths);
       let applied: GitArcEditSession | null = null;
       const write = async (publish: () => Promise<void>, additionalClaims: string[]) => {
         const prepared = await store.prepare(plan, this.metadata(plan, session.metadata.operations, {
@@ -316,7 +320,7 @@ export default class GitArcEditSessionController {
           throw error;
         }
       };
-      if (plan.visiblePaths.length) await this.arc.claimAndWrite({ ...identity, claimPaths: plan.visiblePaths, write });
+      if (plan.visiblePaths.length && !input.owner.claimedOnly) await this.arc.claimAndWrite({ ...identity, claimPaths: plan.visiblePaths, write });
       else await write(async () => undefined, []);
       // Assigned inside `write`, which control-flow analysis cannot see through.
       const recorded = applied as GitArcEditSession | null;
@@ -332,6 +336,7 @@ export default class GitArcEditSessionController {
       if (session.metadata.phase !== "applied") throw new Error(`Edit session ${session.session} is not applied. Run wb git arc edit end to discard it.`);
       const ignored = new Set(session.metadata.ignoredPaths);
       const touched = session.metadata.touchedPaths;
+      await this.assertClaimedOnly(input.owner, identity, touched);
       const visible = touched.filter(filePath => !ignored.has(filePath));
       const held = visible.length ? await input.checkPending(visible.map(filePath => repository.resolvePath(filePath))) : [];
       if (held.length) {
@@ -358,6 +363,13 @@ export default class GitArcEditSessionController {
       await store.delete(input.owner, session.commit);
       return this.result(session, "reverted", 1, { conflictedPaths: merged.conflictedPaths, releasedClaims });
     });
+  }
+
+  private async assertClaimedOnly(owner: GitArcEditOwner, identity: Identity, touchedPaths: readonly string[]) {
+    if (!owner.claimedOnly || !touchedPaths.length) return;
+    const claims = new GitArcPathSet(await this.arc.activeClaimPaths(identity) ?? []);
+    const unclaimed = touchedPaths.filter(filePath => !claims.covers(filePath));
+    if (unclaimed.length) throw new Error(`Machine edit sessions only change claimed files; claim these first: ${unclaimed.join(", ")}`);
   }
 
   async end(input: { owner: GitArcEditOwner }) {

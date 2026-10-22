@@ -5,9 +5,16 @@
  * - WorkbenchGitArcPlanState: public plan with canonical owner and member identities.
  * - WorkbenchGitArcActiveClaim: public claim with a canonical thread owner.
  * - default WorkbenchGitArcFeature: own Git arc dispatch, canonical identity ingress and registry owner resolution, nested
- *   worktree roots, proposal diff lifecycle, and waits on claim mutations.
+ *   worktree and machine roots, machine claim approval, proposal diff lifecycle, and waits on claim mutations.
  */
 import type http from "node:http";
+import path from "node:path";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
+import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
+import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
+import { isPathWithinRoot } from "../lib/project";
+import { isMachineGitWorktree } from "../lib/workbench/git/machine-git-worktrees";
+import { isMachineGitArcRoot, withMachineGitArcRoots } from "./machine-git-arc-roots";
 
 import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcDurableProposalReader } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import GitObjectReadSession from "../lib/workbench/git/GitObjectReadSession";
@@ -45,7 +52,7 @@ import type WorkbenchThreadIdentityController from "../thread/WorkbenchThreadIde
 import { WorkbenchHarnessSchema, type WorkbenchGitArcLifecycleState as ObservedGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
-import { ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import GitArcProposalDiffController, { type GitArcProposalDiffStore } from "../lib/workbench/git/GitArcProposalDiffController";
 import GitArcClaimMutations from "./GitArcClaimMutations";
 import type { GitArcEditOwner, GitArcEditPendingCheck } from "../lib/workbench/git/GitArcEditSessionController";
@@ -85,6 +92,16 @@ export interface WorkbenchGitArcFeatureOptions {
   /** Catalogue projects whose linked worktrees nested in a project root join its arc; absent means none join. */
   listCatalogProjects?(): Promise<readonly NestedGitWorktreeCatalogProject[]>;
   resolveProjectFromCwd(cwd: string): Promise<AgentEndpointProjectResolution | { cwd: string; project: { id: ProjectId } }>;
+  /** Daemon-project machine roots; defaults to this machine's filesystem roots. */
+  withMachineRoots?(resolution: AgentEndpointProjectResolution, requestPaths: readonly string[]): Promise<AgentEndpointProjectResolution>;
+  /** The thread's approval mode deciding new machine claims; absent rejects them. */
+  approveMachineClaims?(request: {
+    harness: WorkbenchHarness;
+    threadId: WorkbenchThreadId;
+    turnId: WorkbenchTurnId | null;
+    itemId: string | null;
+    subject: WorkbenchApprovalSubject;
+  }, signal: AbortSignal): Promise<WorkbenchApprovalDecision>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
     & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read" | "readMany" | "runMany">>;
 }
@@ -155,6 +172,27 @@ function requireInspectionModifiedSince(value: number | undefined) {
   return value;
 }
 
+/** Absolute paths a request names, so machine roots for drives it mentions exist before routing. */
+function requestPathHints(request: GitCheckpointRequest) {
+  const lists: Array<readonly string[] | undefined> = [];
+  if ("paths" in request) lists.push(request.paths);
+  if ("addPaths" in request) lists.push(request.addPaths);
+  if ("adoptPaths" in request) lists.push(request.adoptPaths);
+  if ("roots" in request) {
+    for (const root of request.roots) {
+      if ("paths" in root) lists.push(root.paths);
+      if ("addPaths" in root) lists.push(root.addPaths);
+      if ("adoptPaths" in root) lists.push(root.adoptPaths);
+    }
+  }
+  return lists.flatMap(list => list ?? []).filter(candidate => path.isAbsolute(candidate));
+}
+
+function machinePathKey(candidate: string) {
+  const normalized = path.resolve(candidate).replace(/\\/gu, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
 function usesWorkspaceController(project: AgentEndpointProjectResolution, request: GitCheckpointRequest) {
   if (project.project.roots.length > 1) return true;
   if ("roots" in request && request.roots.length) return true;
@@ -220,6 +258,14 @@ export default class WorkbenchGitArcFeature {
    */
   async resolveThreadIdentity(input: { harness: string; repositoryRoot: string; threadId: string }): Promise<GitArcResolvedThreadIdentity | null> {
     const harness = WorkbenchHarnessSchema.parse(input.harness);
+    // Machine worktrees belong to no catalogue location; only daemon-project threads may own their arcs.
+    if (isMachineGitWorktree(input.repositoryRoot)) {
+      const identity = await this.options.identities.resolve({ harness, threadId: ThreadReferenceSchema.parse(input.threadId) });
+      if (!identity || (await this.resolveCatalogProject(identity.projectRoot)).project.kind !== "daemon") return null;
+      return await this.options.identities.resolveGitArcThreadIdentity({
+        harness, projectId: identity.projectId, repositoryRoot: identity.projectRoot, threadId: input.threadId,
+      });
+    }
     const project = await this.resolveCatalogProject(input.repositoryRoot);
     // Scoped lookups reject threads of other projects, so the owner's own project picks the binding location.
     const identity = await this.options.identities.resolve({ harness, threadId: ThreadReferenceSchema.parse(input.threadId) });
@@ -236,10 +282,74 @@ export default class WorkbenchGitArcFeature {
   }
 
   /** The Git arc's view of a project: catalogue roots plus catalogued linked worktrees nested inside them. */
-  private async resolveProject(cwd: string): Promise<AgentEndpointProjectResolution> {
+  private async resolveProject(cwd: string, requestPaths: readonly string[] = []): Promise<AgentEndpointProjectResolution> {
     const project = await this.resolveCatalogProject(cwd);
+    if (project.project.kind === "daemon") return await (this.options.withMachineRoots ?? withMachineGitArcRoots)(project, requestPaths);
     const catalog = await this.options.listCatalogProjects?.();
     return catalog ? await withNestedGitWorktreeRoots(project, catalog) : project;
+  }
+
+  /**
+   * Machine claims are write permission: before a daemon-project request gives its caller live ownership of machine
+   * paths it does not already hold, the thread's approval mode decides. Runs before any Git gate so a human wait never
+   * holds the worktree transition.
+   */
+  private async approveMachineClaims(
+    project: AgentEndpointProjectResolution,
+    request: GitCheckpointRequest,
+    owner: { harness: WorkbenchHarness; threadId: WorkbenchThreadId },
+    adoptionSource: { harness: WorkbenchHarness; threadId: WorkbenchThreadId } | null,
+    signal: AbortSignal,
+  ) {
+    if (project.project.kind !== "daemon" || !project.project.roots.some(isMachineGitArcRoot)) return;
+    const requested = await this.requestedMachineClaims(project, request, owner, adoptionSource);
+    if (!requested.length) return;
+    const held = await this.workspaceController.findLifecycleState(project, owner.harness, owner.threadId);
+    const owned = new GitArcPathSet(held?.phase === "active" ? held.claimedPaths.map(machinePathKey) : []);
+    const machineRoots = project.project.roots.filter(isMachineGitArcRoot);
+    const paths = [...new Set(requested.filter(candidate => path.isAbsolute(candidate)
+      && !isDaemonWorkspacePath(candidate)
+      && machineRoots.some(root => isPathWithinRoot(candidate, root.root))
+      && !owned.covers(machinePathKey(candidate))))].sort((left, right) => left.localeCompare(right));
+    if (!paths.length) return;
+    if (!this.options.approveMachineClaims) throw new Error("Machine Git arc claims need an approval owner, and none is available.");
+    const decision = await this.options.approveMachineClaims({
+      harness: owner.harness, threadId: owner.threadId, turnId: null, itemId: null,
+      subject: { kind: "patch", reason: "Claim machine files for editing through a Git arc.", grantRoot: null, paths },
+    }, signal);
+    if (decision.kind === "decline") throw new Error(decision.feedback ?? `Machine claims were declined: ${paths.join(", ")}`);
+  }
+
+  /** Every path a request could newly activate for its caller; held-path filtering happens in the caller. */
+  private async requestedMachineClaims(
+    project: AgentEndpointProjectResolution,
+    request: GitCheckpointRequest,
+    owner: { harness: WorkbenchHarness; threadId: WorkbenchThreadId },
+    adoptionSource: { harness: WorkbenchHarness; threadId: WorkbenchThreadId } | null,
+  ) {
+    const rootPaths = (roots: ReadonlyArray<{ paths?: string[]; addPaths?: string[]; adoptPaths?: string[] }>) => (
+      roots.flatMap(root => [...root.paths ?? [], ...root.addPaths ?? [], ...root.adoptPaths ?? []])
+    );
+    const planned = async () => (await this.workspaceController.findPlanState(project, owner.harness, owner.threadId))?.scopePaths ?? [];
+    switch (request.action) {
+      case "planStart": return [...request.paths, ...request.adoptPaths, ...rootPaths(request.roots)];
+      case "planClaims":
+        if (!request.start) return [];
+        return [...request.addPaths, ...request.adoptPaths, ...rootPaths(request.roots), ...request.inherit ? await planned() : []];
+      case "arcClaims": return [...request.addPaths, ...request.adoptPaths, ...rootPaths(request.roots)];
+      case "arcAdd":
+      case "arcAdopt": return [...request.paths, ...rootPaths(request.roots)];
+      case "arcStart":
+      case "arcWait": return await planned();
+      case "arcUnstash": return (await this.workspaceController.findLifecycleState(project, owner.harness, owner.threadId))?.stashedPaths ?? [];
+      case "arcAdoptSource": {
+        if (request.paths?.length) return request.paths;
+        if (!adoptionSource) return [];
+        const source = await this.workspaceController.findLifecycleState(project, adoptionSource.harness, adoptionSource.threadId);
+        return [...source?.claimedPaths ?? [], ...source?.stashedPaths ?? []];
+      }
+      default: return [];
+    }
   }
 
   private async resolveCatalogProject(cwd: string): Promise<AgentEndpointProjectResolution> {
@@ -376,7 +486,7 @@ export default class WorkbenchGitArcFeature {
     const parsed = GitCheckpointRequestSchema.safeParse(input);
     if (!parsed.success) return failureResponse(createGitArcFailureFromError("unknown", parsed.error));
     try {
-      const project = await this.resolveProject(parsed.data.cwd);
+      const project = await this.resolveProject(parsed.data.cwd, requestPathHints(parsed.data));
       const identity = await this.options.identities.resolveGitArcThreadIdentity({
         harness: parsed.data.harness,
         projectId: project.project.id,
@@ -417,6 +527,7 @@ export default class WorkbenchGitArcFeature {
       if ((effectiveRequest.action === "compare" || effectiveRequest.action === "diff") && modifiedSince === null) {
         throw new Error("The managed thread creation timestamp is unavailable for Git arc inspection.");
       }
+      await this.approveMachineClaims(project, effectiveRequest, owner, adoptionSource, this.lifecycleSignal(signal));
       if (effectiveRequest.action === "arcWait") {
         try {
           return Response.json(await this.waitForPlanAndStart(project, effectiveRequest, owner, signal));
@@ -605,9 +716,15 @@ export default class WorkbenchGitArcFeature {
     owner: { harness: WorkbenchHarness; threadId: WorkbenchThreadId },
     callerSignal?: AbortSignal,
   ) {
-    const root = request.rootId ? project.project.roots.find(({ id }) => id === request.rootId) : project.root;
+    // Daemon scratch is no repository: machine edit sessions default to the first machine root.
+    const machine = project.project.kind === "daemon";
+    const root = request.rootId
+      ? project.project.roots.find(({ id }) => id === request.rootId)
+      : machine ? project.project.roots.find(isMachineGitArcRoot) : project.root;
     if (!root) throw new Error(`Unknown workspace root: ${request.rootId}`);
-    const editOwner: GitArcEditOwner = { cwd: root.root, harness: owner.harness, threadId: owner.threadId };
+    const editOwner: GitArcEditOwner = {
+      cwd: root.root, harness: owner.harness, threadId: owner.threadId, ...machine ? { claimedOnly: true } : {},
+    };
     const sessions = this.controller.editSessions;
     const checkPending: GitArcEditPendingCheck = async (absolutePaths) => (
       (await this.workspaceController.checkActiveClaimPaths(project, owner.harness, owner.threadId, absolutePaths))

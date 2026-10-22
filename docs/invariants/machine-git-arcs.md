@@ -1,0 +1,6 @@
+- Machine Git state lives under the data root; never write Git files onto the machine.
+- Machine repos track only arc-scoped paths. Whole-worktree reads cover tracked files only and never walk untracked machine directories.
+- Publishing or acquiring machine paths first absorbs disk content of requested paths no arc scopes into HEAD; adopted paths are never absorbed.
+- New live ownership of machine paths requires approval through the thread's approval mode, outside any Git transition; arc writes touch only owned paths, and ignore rules never waive machine claims.
+- Claims are the daemon thread's write permission: patch approvals wholly inside its claims auto-allow, and daemon Codex turns run `on-request` so out-of-sandbox patches can ask instead of failing.
+- Machine arc paths reject filesystem roots, the Workbench data root and paths another Git repository does not ignore; daemon scratch needs no claims. Git cannot walk past a nested `.git`, so Workbench discovers and stages ignored files there itself.

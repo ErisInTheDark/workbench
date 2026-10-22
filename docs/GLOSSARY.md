@@ -30,7 +30,8 @@
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
 | daemon | The Workbench harness, applied on top of existing harnesses. Server source lives in `daemon/server/`. |
 | daemon host | Lightweight service under `daemon/host/`. Owns networking, durable daemon identity and supervised daemon startup independently of the app. |
-| daemon project | A daemon's own catalogue entry (`kind: "daemon"`), rooted at a hidden Workbench workspace folder; threads have no repo, read anywhere, and escalate outside the sandbox through the thread's approval mode |
+| daemon project | A daemon's own catalogue entry (`kind: "daemon"`), rooted at a hidden Workbench workspace folder; threads read anywhere, edit machine files through machine Git arc roots, and escalate outside the sandbox through the thread's approval mode |
+| machine Git arc root | Daemon-project Git arc root over a filesystem root (`C:/`, `/`), backed by a Workbench-internal Git dir; agents see absolute paths, raw Git sees no repository |
 | approval mode | Per-thread daemon-project policy for outside-sandbox requests: approvals on, skip approvals, or auto-approve via the selected reviewer; stored beside the profile selection |
 | codex app-server | Codex's harness. |
 | provider | A harness integrated by Workbench, such as Codex, OpenCode or Copilot. Provider and harness are interchangeable here; Workbench is the enclosing harness. |

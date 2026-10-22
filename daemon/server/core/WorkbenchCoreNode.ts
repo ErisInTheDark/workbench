@@ -173,6 +173,11 @@ function createWorkbenchCoreFeature(
     threadState: () => threadState,
     subagents: () => collaboration.subagents,
     stats: () => coreStats?.stats ?? null,
+    approvals: () => interactions.approvals,
+    activeTurn: async (threadId, harness) => {
+      const turn = await lookup.provider(harness).threads.latestTurn(threadId);
+      return turn?.status === "inProgress" ? WorkbenchTurnIdSchema.parse(turn.id) : null;
+    },
     warn: logThreadStateWarning,
   });
   const { gitArc, threadGit, workingTree, gitPeer, branchPositions, gitCheckout } = git;
@@ -235,6 +240,7 @@ function createWorkbenchCoreFeature(
     context, database, transcript, identities: threadIdentity, transcriptIdentity, commandApprovals, approvalHandoff, lookup,
     projectCatalog, threadState: threadStateFeature, agentContext, facts, harnesses, providers, turnLiveness, transcriptReader,
     publishRuntime: (threadId, change) => turns.publish(threadId, change),
+    gitArc,
     warn: logThreadStateWarning,
   });
   const { approvalReview, approvals, questionnaires, questionnaireSteers, questionnaireResponses } = interactions;

@@ -216,7 +216,7 @@ export default class WorkbenchThreadStateFeature {
       } : {}),
       ...(context.gitArcs.readCommitTimes ? {
         readGitCommitTimes: async (projectId, requests) => {
-          if (!this.projectWorktreeAvailable(projectId)) return new Map();
+          if (!this.projectCatalogued(projectId)) return new Map();
           const project = await context.resolveProjectById(projectId);
           return await context.gitArcs.readCommitTimes!(project.rootPath, requests);
         },
@@ -230,7 +230,7 @@ export default class WorkbenchThreadStateFeature {
         return title;
       },
       resolveGitArc: async (projectId, harness, threadId) => {
-        if (!this.projectWorktreeAvailable(projectId)) return null;
+        if (!this.projectCatalogued(projectId)) return null;
         const project = await context.resolveProjectById(projectId);
         const state = context.gitArcs.findLifecycleState
           ? await context.gitArcs.findLifecycleState(project.rootPath, harness, threadId)
@@ -238,14 +238,13 @@ export default class WorkbenchThreadStateFeature {
         return projectGitArc(state ?? undefined);
       },
       resolveGitArcPlan: async (projectId, harness, threadId) => {
-        if (!this.projectWorktreeAvailable(projectId)) return null;
-        if (!context.gitArcs.findPlanState) return null;
+        if (!this.projectCatalogued(projectId) || !context.gitArcs.findPlanState) return null;
         const project = await context.resolveProjectById(projectId);
         const state = await context.gitArcs.findPlanState(project.rootPath, harness, threadId);
         return projectGitArcPlan(state ?? undefined);
       },
       hasGitArcBlockingSettlement: async (projectId, harness, threadId) => {
-        if (!this.projectWorktreeAvailable(projectId)) return false;
+        if (!this.projectCatalogued(projectId)) return false;
         const project = await context.resolveProjectById(projectId);
         if (context.gitArcs.blocksThreadSettlement) {
           return await context.gitArcs.blocksThreadSettlement(project.rootPath, harness, threadId);
@@ -257,7 +256,7 @@ export default class WorkbenchThreadStateFeature {
       },
       ...(context.settlementHold ? { settlementHold: (threadId: WorkbenchThreadId) => context.settlementHold!(threadId) } : {}),
       runGitArcReadTransition: async (projectId, operation) => {
-        if (!this.projectWorktreeAvailable(projectId)) return await operation();
+        if (!this.projectCatalogued(projectId)) return await operation();
         const project = await context.resolveProjectById(projectId);
         const read = context.transitions.read ?? context.transitions.run;
         return await read.call(context.transitions, project.rootPath, operation);
@@ -495,9 +494,9 @@ export default class WorkbenchThreadStateFeature {
     return id;
   }
 
-  private projectWorktreeAvailable(projectId: ProjectId) {
-    return this.context.getProjectCatalog().data.some(project =>
-      project.id === projectId && project.kind !== "daemon");
+  /** Projects gone from the catalogue have no worktree left to read arcs from. */
+  private projectCatalogued(projectId: ProjectId) {
+    return this.context.getProjectCatalog().data.some(project => project.id === projectId);
   }
 
   async installCreatedProfile(harness: WorkbenchHarness, thread: ThreadPayload, selection: WorkbenchComposerProfileTargetSelection) {
@@ -559,7 +558,7 @@ export default class WorkbenchThreadStateFeature {
   ) {
     const project = await this.context.resolveProjectById(projectId);
     const readGitArcSnapshot = async (): Promise<WorkbenchThreadGitArcSnapshot> => {
-      if (!this.projectWorktreeAvailable(projectId)) return { arcs: [], plans: [] };
+      if (!this.projectCatalogued(projectId)) return { arcs: [], plans: [] };
       const [gitArcs, gitArcPlans] = await Promise.all([
         this.context.gitArcs.listLifecycleStates
           ? this.context.gitArcs.listLifecycleStates(project.rootPath)

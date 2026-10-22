@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect the single live approval owner: approval modes, presentation, saved rules, decisions, outcomes and cleanup.
+ * No production exports. Tests protect the single live approval owner: approval modes, claim-covered patches, presentation, saved rules, decisions, outcomes and cleanup.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -27,6 +27,7 @@ function harness(options: {
   mode?: WorkbenchApprovalMode; review?: () => Promise<ApprovalReviewVerdict>;
   /** Holds every `inputResolved` thread-state update open until it settles. */
   resolvingLifecycle?: Promise<void>;
+  claimed?: readonly string[];
 } = {}) {
   const events: string[] = [];
   const delivered: WorkbenchApprovalDecision[] = [];
@@ -64,6 +65,7 @@ function harness(options: {
     },
     recordOutcome: async entry => { outcomes.push(entry); },
     resolveProject: async () => projectId,
+    ...options.claimed ? { coveredByClaims: async (_thread, paths) => paths.every(candidate => options.claimed!.includes(candidate)) } : {},
   }, options.handoff);
   const open = (requestKey: string, subject = command()) => controller.open({
     harness: "claude", threadId, turnId, itemId: `item-${requestKey}`, requestKey, subject, allowSession: false,
@@ -110,6 +112,15 @@ test("a failing reviewer never decides: the person is asked and the failure is r
   assert.match(h.summary("first") ?? "", /TypeSafe key rejected/u);
   assert.ok(h.errors.some(message => message.includes("TypeSafe key rejected")));
   assert.deepEqual(h.outcomes, []);
+});
+
+test("patches wholly inside approved claims decide without asking, even with approvals on; anything else still asks", async () => {
+  const h = harness({ mode: "approvals", claimed: ["C:/claimed.txt", "C:/also.txt"] });
+  const patch = (paths: string[]): WorkbenchApprovalSubject => ({ kind: "patch", reason: null, grantRoot: null, paths });
+  assert.deepEqual(await h.open("covered", patch(["C:/claimed.txt", "C:/also.txt"])), { kind: "decided", decision: { kind: "allowOnce" } });
+  assert.deepEqual(h.outcomes.map(({ outcome }) => outcome), ["autoApproved"]);
+  assert.deepEqual(await h.open("partial", patch(["C:/claimed.txt", "C:/other.txt"])), { kind: "shown" });
+  assert.deepEqual(await h.open("command", command({ command: "C:/claimed.txt" })), { kind: "shown" });
 });
 
 test("approvals on keeps asking without consulting a reviewer", async () => {

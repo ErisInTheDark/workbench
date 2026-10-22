@@ -11,6 +11,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Readable, Writable } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { gitProcesses } from "./GitProcessHost";
+import { machineGitEnvironment } from "./machine-git-worktrees";
 
 export type GitObjectReadResult = {
   objectId: string;
@@ -39,7 +40,7 @@ type State = { kind: "open" | "closing" | "closed" } | { kind: "failed"; error: 
 const scopes = new AsyncLocalStorage<Scope>();
 
 function startGit(root: string): GitObjectReadProcess {
-  return gitProcesses.open({ args: ["cat-file", "--batch-command"], cwd: root });
+  return gitProcesses.open({ args: ["cat-file", "--batch-command"], cwd: root, env: { ...process.env, ...machineGitEnvironment(root) } });
 }
 
 /** A scope several separate steps of one long operation re-enter; its owner closes it once. */

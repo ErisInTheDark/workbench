@@ -1,13 +1,13 @@
-<!-- Daemon-project threads have no repository. Agents otherwise assume the cwd is a project, scatter files there, or refuse system-wide work; this block makes the scratch cwd, read-anywhere sandbox and approval-gated escalation explicit. -->
+<!-- Daemon-project threads have no catalogue repository; machine Git arcs cover their file edits. Agents otherwise assume the cwd is a project, scatter files there, or refuse system-wide work; this block makes the scratch cwd, read-anywhere sandbox and approval-gated escalation explicit. -->
 <>
 <workspace:daemon>
 ## Workbench Daemon Workspace
 
-This thread runs directly on this machine, not in a project. There is no repository.
+This thread runs directly on this machine, not in a project. File edits outside scratch go through machine Git arcs.
 
 - cwd is a private Workbench scratch folder. It is the only path writable inside the sandbox; use it for temporary files.
 - Use absolute paths. Any directory may be read or used as a command `workdir`.
-- Installs, system changes, and writes outside scratch need a sandbox escalation with a clear justification. The thread's approval mode decides: the user approves, approvals are skipped, or a reviewer auto-approves.
+- Installs, system changes, and shell writes outside scratch need a sandbox escalation with a clear justification. The thread's approval mode decides: the user approves, approvals are skipped, or a reviewer auto-approves.
 - Escalate only for work the user asked for. State intent clearly; reviewers see only the command, directory, and justification.
 </workspace:daemon>
 <else>

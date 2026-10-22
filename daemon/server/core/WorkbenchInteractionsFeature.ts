@@ -1,9 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchInteractionsFeature: build questionnaires, approval review, live approvals, questionnaire-held steers and questionnaire
- *   responses, and read a thread's shown approval prompt.
+ * - default WorkbenchInteractionsFeature: build questionnaires, approval review, live approvals (daemon-thread patches inside
+ *   approved machine claims auto-allow), questionnaire-held steers and questionnaire responses, and read a thread's shown
+ *   approval prompt.
  */
+import path from "node:path";
 import { ProjectIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import type WorkbenchGitArcFeature from "../git/WorkbenchGitArcFeature";
 import { DEFAULT_APPROVAL_MODE, resolveApprovalMode } from "workbench-shared/workbench/approval-review/approval-mode";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-state";
@@ -53,6 +57,7 @@ export default class WorkbenchInteractionsFeature {
     turnLiveness: Pick<WorkbenchThreadTurnLiveness, "read">;
     transcriptReader: Pick<WorkbenchTranscriptReader, "history">;
     publishRuntime(threadId: string, change: Partial<ThreadRuntime>): void;
+    gitArc: Pick<WorkbenchGitArcFeature, "checkActiveClaimPaths">;
     warn(message: string): void;
   }) {
     const { identities, lookup, projectCatalog, threadState, agentContext, transcript } = ports;
@@ -109,6 +114,14 @@ export default class WorkbenchInteractionsFeature {
         }));
       },
       review: (input, signal) => approvalReview.review(input.subject, signal),
+      // Machine claims are approved write permission only in daemon projects; normal projects keep asking.
+      coveredByClaims: async (threadId, paths) => {
+        const identity = await identities.resolve({ threadId });
+        const harness = identity?.bindings[0]?.harness;
+        if (!identity || !harness || (await projectCatalog.resolveProjectById(identity.projectId)).kind !== "daemon") return false;
+        const absolute = paths.map(candidate => path.resolve(identity.projectRoot, candidate));
+        return (await ports.gitArc.checkActiveClaimPaths(identity.projectRoot, WorkbenchHarnessSchema.parse(harness), identity.threadId, absolute)).allowed;
+      },
     }, ports.approvalHandoff);
     const questionnaireSteers = this.questionnaireSteers = new WorkbenchQuestionnaireSteerController({
       hasPendingQuestionnaire: async threadId => {

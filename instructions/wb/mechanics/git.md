@@ -4,7 +4,6 @@
 - Favour it and normal shell calls over web searches and reads.
 - Assume user does not want to contribute to remote repositories by default.
 </docs>
-<workspace:project>
 <!-- Outer region: only policy that genuinely applies to every arc tool. Each line names the tools it is about, so prompt cost lands where it belongs. -->
 <docs tools="git_plan_claims git_plan_start git_arc_start git_arc_wait git_arc_continue git_arc_claims git_arc_adopt git_arc_stash git_arc_unstash git_arc_release git_arc_status git_arc_compare git_arc_diff git_arc_restore git_arc_propose git_arc_rescind git_arc_reword git_arc_stack git_arc_unstack">
 ## Workbench Git Plans and Arcs
@@ -27,7 +26,13 @@ scope and phases:
 claims and safety:
 <!-- Failure: agents ask permission to edit ignored files after arc tools correctly skip them. -->
 <!-- Registered worktrees kept in an ignored project folder are their own repositories: arc tools route their paths to the worktree's registry, so "ignored needs no claim" must not leak into them. Clients only link catalogue roots, so `name:path` links stay dead text. -->
+<workspace:project>
 - Arc-managed edits require claims. Gitignored files need none, except inside registered Git worktrees nested in a project: those are extra arc roots named by folder, shown `name:path`; pass `rootId: name` when a tool needs one, and link their files by project-relative path.
+</workspace:project>
+<!-- Daemon threads otherwise try raw git on the machine, claim relative scratch paths, or expect gitignored files to be claim-free; machine claims are the approval-gated write permission. -->
+<workspace:daemon>
+- Machine files use Git arcs over absolute paths in a Workbench-internal repository; raw `git` sees none. Edits outside scratch require claims, ignored files included; acquiring claims requests approval through the thread's approval mode. Scratch needs no claims. Paths visible to other repositories belong to those projects. Edit sessions change only already-claimed files.
+</workspace:daemon>
 <docs tools="git_arc_edit">
 <!-- Agents otherwise burn hundreds of read/edit calls on mechanical renames and risk substring replacements; edit sessions preview, claim and revert as one unit. -->
 - File moves and multi-file replacements in Git-visible files require `wb git arc edit` or its deferred `git_arc_edit_*` tools; run `wb git arc edit --help` first. Gitignored files may use shell commands or `wb git arc edit` with `includeIgnored`.
@@ -219,6 +224,8 @@ planning:
 </workspace:multi-root>
 </docs>
 
+<!-- Daemon threads have no catalogue repository, so commit selections have nothing to select. -->
+<workspace:project>
 <docs tools="git_add git_unstage git_commit">
 ## Workbench Git Commits
 When workflow or user explicitly authorizes unsupervised agent commits:

@@ -5,8 +5,8 @@
  * - isNestedGitWorktreeOf: whether a path is a linked worktree located inside, and registered by, a checkout.
  * - isNestedGitWorktreeRoot: narrow a workspace root to a nested worktree root.
  * - withNestedGitWorktreeRoots: add a project's catalogued nested worktrees to its Git arc roots.
- * - isConfiguredMultiRoot: whether a project has several catalogue roots, ignoring nested worktrees.
- * - qualifiesGitArcRoot: whether Git arc paths in a root carry its `id:` prefix.
+ * - isConfiguredMultiRoot: whether a project has several catalogue roots, ignoring nested worktree and machine roots.
+ * - qualifiesGitArcRoot: whether Git arc paths in a root carry its `id:` prefix; machine roots never do.
  * - claimSnapshotsFor: split claim stats by owning catalogue project, so nested worktree paths count for the worktree itself.
  */
 import path from "node:path";
@@ -17,6 +17,7 @@ import { readRegisteredGitWorktrees, resolveGitDirectory } from "../lib/git";
 import { isPathWithinRoot, normalizeRelativePath, type ResolvedProjectRoot } from "../lib/project";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
+import { isMachineGitArcRoot } from "./machine-git-arc-roots";
 
 export type NestedGitWorktreeCatalogProject = Pick<WorkbenchProjectOption, "id" | "kind" | "rootPath" | "roots">;
 
@@ -98,10 +99,12 @@ export async function withNestedGitWorktreeRoots(
 }
 
 export function isConfiguredMultiRoot(project: AgentEndpointProjectResolution) {
-  return project.project.roots.filter(root => !isNestedGitWorktreeRoot(root)).length > 1;
+  return project.project.roots.filter(root => !isNestedGitWorktreeRoot(root) && !isMachineGitArcRoot(root)).length > 1;
 }
 
+/** Machine roots never qualify: their paths read as absolute machine paths instead. */
 export function qualifiesGitArcRoot(project: AgentEndpointProjectResolution, root: ResolvedProjectRoot) {
+  if (isMachineGitArcRoot(root)) return false;
   return isNestedGitWorktreeRoot(root) || isConfiguredMultiRoot(project);
 }
 

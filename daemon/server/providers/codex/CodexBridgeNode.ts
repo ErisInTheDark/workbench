@@ -22,7 +22,7 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../dae
 import ReloadableNode from "../../runtime/ReloadableNode";
 import OpenCodeProvider from "../opencode/OpenCodeProvider";
 import ClaudeProviderNode from "../claude/ClaudeProviderNode";
-import { applyServerCodexPermissions } from "./codex-sandbox-policy";
+import { applyServerCodexApprovalPolicy, applyServerCodexPermissions } from "./codex-sandbox-policy";
 import { NativeThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { describeErrorCauseChain } from "workbench-shared/process/error-cause-chain";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
@@ -150,6 +150,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         project.roots.map((root) => root.rootPath),
         networkAccess,
       );
+      applyServerCodexApprovalPolicy(request, project.kind);
     };
     const configureProfileRequests = async <T extends { resumeRequest: JsonRpcRequest; startRequest?: JsonRpcRequest }>(
       requests: T,

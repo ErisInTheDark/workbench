@@ -11,7 +11,8 @@
  * - GitArcInspectionSnapshot: one shared repository, HEAD, tree and registry view per inspection.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: rejected ownership paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcRetentionResult: controller results.
- * Notable members: readCommitTimes reads committer times for durable-commit backfill.
+ * Notable members: readCommitTimes reads committer times for durable-commit backfill; absorbMachineBaseline moves a
+ * machine worktree's HEAD over unowned requested paths before scope is published or acquired.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -63,6 +64,7 @@ import GitArcStackController from "./GitArcStackController";
 import GitArcClaimViewController, { type GitArcClaimViewInput } from "./GitArcClaimViewController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
+import { absorbMachineBaseline } from "./machine-git-baseline";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitArcStashController from "./GitArcStashController";
 import GitArcOwnershipTransferController, { type GitArcAdoptionInput, type GitArcSelectedTransferInput } from "./GitArcOwnershipTransferController";
@@ -274,6 +276,16 @@ export default class WorkbenchGitCheckpointController {
 
   private registry(repository: WorkbenchGitRepository) {
     return new GitArcRegistry(repository, this.resolveThreadIdentity);
+  }
+
+  /** Machine worktrees only: take unowned requested paths' disk content as baseline; hold the repository write gate. */
+  async absorbMachineBaseline({ cwd, paths, adoptPaths }: { cwd: string; paths: string[]; adoptPaths: string[] }) {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    if (!repository.machine || !paths.length) return [];
+    return await GitObjectReadSession.run(async () => await absorbMachineBaseline(repository, await this.registry(repository).list(), {
+      paths: repository.normalizePaths(paths),
+      adoptPaths: adoptPaths.length ? repository.normalizePaths(adoptPaths) : [],
+    }));
   }
 
   private store(repository: WorkbenchGitRepository) {

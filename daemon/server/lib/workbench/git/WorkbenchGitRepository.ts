@@ -14,6 +14,9 @@
  * that fit the command line, with at most four Git processes in flight. Git children never take optional index locks;
  * real-index writers (resetMixedPaths, writeIndexTree, restorePaths, restoreWorktree, checkoutTreeTransition) first clear
  * provably orphaned locks; checkoutTreeTransition moves index and worktree between two commits' trees like a checkout.
+ * Machine worktrees run Git against their internal Git dir; their whole-worktree reads cover tracked files only,
+ * oversized scope sets batch pathspecs instead of walking the machine, and scopes inside nested repositories are walked
+ * and staged by Workbench (machine-git-boundaries) because Git stops at their `.git`.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -27,6 +30,8 @@ import GitObjectWriter from "./GitObjectWriter";
 import { gitProcesses, GitProcessError } from "./GitProcessHost";
 import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
 import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
+import { listBoundaryFiles, nestedRepositoryScopes } from "./machine-git-boundaries";
+import { isMachineGitWorktree, machineGitEnvironment } from "./machine-git-worktrees";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -61,9 +66,12 @@ function gitProcessLimit(): GitProcessLimit {
   };
 }
 
-/** Reads never opportunistically lock the real index; explicit index writers are unaffected by this setting. */
-function withoutOptionalLocks(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return { ...env, GIT_OPTIONAL_LOCKS: "0" };
+/**
+ * Reads never opportunistically lock the real index; explicit index writers are unaffected by this setting.
+ * Machine worktrees also point Git at their internal Git dir.
+ */
+function processEnvironment(root: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, GIT_OPTIONAL_LOCKS: "0", ...machineGitEnvironment(root) };
 }
 
 function isStdoutCapacityError(error: unknown) {
@@ -164,8 +172,9 @@ export interface GitWorktreeSnapshot {
 }
 
 function isWithinRoot(candidatePath: string, rootPath: string, platform: NodeJS.Platform) {
+  // Filesystem roots (machine worktrees) resolve with a trailing separator, which the `${root}/` test must not double.
   const comparable = (value: string) => {
-    const normalized = path.resolve(value).replace(/\\/g, "/");
+    const normalized = path.resolve(value).replace(/\\/g, "/").replace(/\/+$/u, "");
     return platform === "win32" ? normalized.toLowerCase() : normalized;
   };
   const candidate = comparable(candidatePath);
@@ -179,6 +188,7 @@ function comparablePath(value: string) {
 }
 
 async function gitDirectoryExists(root: string) {
+  if (isMachineGitWorktree(root)) return true;
   try {
     await fs.stat(path.join(root, ".git"));
     return true;
@@ -262,16 +272,19 @@ export default class WorkbenchGitRepository {
     signal?: AbortSignal,
   ) {
     return await gitProcesses.runText({
-      args, cwd, env: withoutOptionalLocks(env), maxBuffer: GIT_MAX_BUFFER, ...(signal ? { signal } : {}),
+      args, cwd, env: processEnvironment(cwd, env), maxBuffer: GIT_MAX_BUFFER, ...(signal ? { signal } : {}),
     });
   }
 
   readonly root: string;
+  /** Machine worktrees track only arc-scoped paths, so whole-worktree reads never walk untracked files. */
+  readonly machine: boolean;
   private readonly objects: GitObjectWriter;
   private readonly trees: GitTreeObjects;
 
   constructor(repoRoot: string, private readonly platform: NodeJS.Platform = process.platform) {
     this.root = path.resolve(repoRoot);
+    this.machine = isMachineGitWorktree(this.root);
     this.objects = new GitObjectWriter(this.root);
     this.trees = new GitTreeObjects(this.root, this.objects);
   }
@@ -289,7 +302,7 @@ export default class WorkbenchGitRepository {
   ) {
     try {
       const { stdout } = await gitProcesses.run({
-        args, cwd: this.root, env: withoutOptionalLocks(env), input, ...(signal ? { signal } : {}),
+        args, cwd: this.root, env: processEnvironment(this.root, env), input, ...(signal ? { signal } : {}),
       });
       return { exitCode: 0, stdout: stdout.toString("utf8") };
     } catch (error) {
@@ -305,7 +318,7 @@ export default class WorkbenchGitRepository {
 
   async runBufferWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
     try {
-      return (await gitProcesses.run({ args, cwd: this.root, env: withoutOptionalLocks(env), input })).stdout;
+      return (await gitProcesses.run({ args, cwd: this.root, env: processEnvironment(this.root, env), input })).stdout;
     } catch (error) {
       if (!(error instanceof GitProcessError) || typeof error.code !== "number") throw error;
       throw new Error(error.stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${error.code}.`);
@@ -692,7 +705,7 @@ export default class WorkbenchGitRepository {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
-      await this.run(["add", "-A", "--", "."], env, signal);
+      await this.run(["add", this.machine ? "-u" : "-A", "--", "."], env, signal);
       return (await this.run(["write-tree"], env, signal)).trim();
     });
   }
@@ -710,10 +723,42 @@ export default class WorkbenchGitRepository {
     env: NodeJS.ProcessEnv = process.env,
     signal?: AbortSignal,
   ) {
-    const candidates = [...new Set(parseNullPaths(await this.run([
-      "ls-files", "-z", "--cached", "--others", "--exclude-standard", ...this.scopePathspecs(scopes),
-    ], env, signal)))].sort((left, right) => left.localeCompare(right));
+    const [outputs, boundary] = await Promise.all([
+      Promise.all(this.scopeBatches(scopes).map(async (pathspecs) => await this.run([
+        "ls-files", "-z", "--cached", ...this.walksUntracked(pathspecs) ? ["--others", "--exclude-standard"] : [], ...pathspecs,
+      ], env, signal))),
+      this.listBoundaryPaths(scopes),
+    ]);
+    const candidates = [...new Set([...outputs.flatMap(parseNullPaths), ...boundary])].sort((left, right) => left.localeCompare(right));
     return filterPathsByScopes(candidates, scopes);
+  }
+
+  /** Machine worktrees: files under scopes inside nested repositories, which Git cannot walk itself. */
+  private async listBoundaryPaths(scopes: readonly string[]) {
+    if (!this.machine || !scopes.length) return [];
+    return (await listBoundaryFiles(this.root, await nestedRepositoryScopes(this.root, scopes))).map(file => file.path);
+  }
+
+  /** Stage machine files inside nested repositories, where `git add` silently stages nothing; missing paths are removed. */
+  private async stageBoundaryFiles(paths: readonly string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) {
+    const present = await listBoundaryFiles(this.root, paths);
+    const found = new Set(present.map(file => file.path));
+    const regular = present.filter(file => file.mode !== "120000");
+    const ids = regular.length
+      ? (await this.runWithInput(["hash-object", "-w", "--stdin-paths"], `${regular.map(file => file.path).join("\n")}\n`, env, signal))
+        .trim().split(/\r?\n/u)
+      : [];
+    const links = await Promise.all(present.filter(file => file.mode === "120000").map(async file => ({
+      ...file,
+      id: await this.objects.writeObject("blob", await fs.readlink(path.join(this.root, ...file.path.split("/")), { encoding: "buffer" })),
+    })));
+    const records = [
+      ...regular.map((file, index) => `${file.mode} ${ids[index]}\t${file.path}`),
+      ...links.map(file => `${file.mode} ${file.id}\t${file.path}`),
+    ];
+    if (records.length) await this.runWithInput(["update-index", "-z", "--index-info"], `${records.join("\0")}\0`, env, signal);
+    const removed = paths.filter(filePath => !found.has(filePath));
+    if (removed.length) await this.runWithInput(["update-index", "-z", "--force-remove", "--stdin"], `${removed.join("\0")}\0`, env, signal);
   }
 
   /** Literal pathspecs that let Git walk only the selected scopes; none (walk everything, then filter) when too many. */
@@ -723,6 +768,34 @@ export default class WorkbenchGitRepository {
     return pathspecs.reduce((total, pathspec) => total + pathspec.length + 1, 0) > PATHSPEC_ARGUMENT_BUDGET ? [] : ["--", ...pathspecs];
   }
 
+  /**
+   * Pathspec argument lists covering the scopes; `[]` means one unscoped walk. Machine worktrees batch oversized scope
+   * sets instead, since an unscoped walk there would cross the whole machine.
+   */
+  private scopeBatches(scopes: readonly string[]): string[][] {
+    const pathspecs = this.scopePathspecs(scopes);
+    if (pathspecs.length || !this.machine || !scopes.length || scopes.includes(".")) return [pathspecs];
+    const batches: string[][] = [];
+    let current: string[] = [];
+    let size = 0;
+    for (const pathspec of scopes.map(scope => this.literalPathspec(scope))) {
+      if (current.length && size + pathspec.length + 1 > PATHSPEC_ARGUMENT_BUDGET) {
+        batches.push(["--", ...current]);
+        current = [];
+        size = 0;
+      }
+      current.push(pathspec);
+      size += pathspec.length + 1;
+    }
+    if (current.length) batches.push(["--", ...current]);
+    return batches;
+  }
+
+  /** Untracked files are only listed where Git walks a bounded tree: anywhere in a project, only within scopes on a machine. */
+  private walksUntracked(pathspecs: readonly string[]) {
+    return !this.machine || pathspecs.length > 0;
+  }
+
   async listWorktreeChangedPaths(
     baseTreeish: string | null,
     scopes: readonly string[] = [],
@@ -730,13 +803,20 @@ export default class WorkbenchGitRepository {
   ) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", await this.contentBase(baseTreeish)], env, signal);
-      const pathspecs = this.scopePathspecs(scopes);
-      const [tracked, untracked] = await Promise.all([
-        this.run(["diff", "--name-only", "-z", "--no-renames", ...pathspecs.length ? pathspecs : ["--"]], env, signal),
-        this.run(["ls-files", "-z", "--others", "--exclude-standard", ...pathspecs.length ? pathspecs : ["--"]], env, signal),
+      const base = await this.contentBase(baseTreeish);
+      await this.run(["read-tree", base], env, signal);
+      const [outputs, boundary] = await Promise.all([
+        Promise.all(this.scopeBatches(scopes).flatMap((pathspecs) => [
+          this.run(["diff", "--name-only", "-z", "--no-renames", ...pathspecs.length ? pathspecs : ["--"]], env, signal),
+          ...this.walksUntracked(pathspecs)
+            ? [this.run(["ls-files", "-z", "--others", "--exclude-standard", ...pathspecs.length ? pathspecs : ["--"]], env, signal)]
+            : [],
+        ])),
+        this.listBoundaryPaths(scopes),
       ]);
-      const changedPaths = [...new Set([...parseNullPaths(tracked), ...parseNullPaths(untracked)])]
+      // Git diffs tracked boundary files itself; only files the base never held are new.
+      const known = boundary.length ? new Set(await this.listTreePaths(base, boundary)) : new Set<string>();
+      const changedPaths = [...new Set([...outputs.flatMap(parseNullPaths), ...boundary.filter(filePath => !known.has(filePath))])]
         .sort((left, right) => left.localeCompare(right));
       return filterPathsByScopes(changedPaths, scopes);
     });
@@ -747,11 +827,14 @@ export default class WorkbenchGitRepository {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
       const matchedPaths = await this.listWorktreePaths(paths, env, signal);
-      if (matchedPaths.length) {
+      const boundary = new Set(this.machine ? await nestedRepositoryScopes(this.root, matchedPaths) : []);
+      const added = matchedPaths.filter(filePath => !boundary.has(filePath));
+      if (added.length) {
         await this.runWithInput([
           "add", "-A", "-f", "--pathspec-from-file=-", "--pathspec-file-nul",
-        ], pathspecInput(matchedPaths), env, signal);
+        ], pathspecInput(added), env, signal);
       }
+      if (boundary.size) await this.stageBoundaryFiles([...boundary], env, signal);
       return (await this.run(["write-tree"], env, signal)).trim();
     });
   }
@@ -809,9 +892,11 @@ export default class WorkbenchGitRepository {
 
   /** Untracked files Git ignores beneath the scopes, file by file. */
   async listIgnoredWorktreePaths(scopes: readonly string[]) {
-    const candidates = [...new Set(parseNullPaths(await this.run([
-      "ls-files", "-z", "--others", "--ignored", "--exclude-standard", ...this.scopePathspecs(scopes),
-    ])))].sort((left, right) => left.localeCompare(right));
+    const batches = this.scopeBatches(scopes).filter(pathspecs => this.walksUntracked(pathspecs));
+    const outputs = await Promise.all(batches.map(async (pathspecs) => await this.run([
+      "ls-files", "-z", "--others", "--ignored", "--exclude-standard", ...pathspecs,
+    ])));
+    const candidates = [...new Set(outputs.flatMap(parseNullPaths))].sort((left, right) => left.localeCompare(right));
     return filterPathsByScopes(candidates, scopes);
   }
 

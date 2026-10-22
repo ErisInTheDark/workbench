@@ -3,7 +3,7 @@
  * - WorkbenchApprovalControllerOptions: lifecycle, presentation, saved-rule, delivery, and outcome ports.
  * - WorkbenchApprovalOpenResult: whether an opened approval was decided automatically, shown, or closed meanwhile.
  * - WorkbenchApprovalHandoff: opaque pending-approval state a successor controller adopts across core reloads.
- * - default WorkbenchApprovalController: own every live approval across providers, apply the thread's approval mode, and wait in-process for Workbench-hosted ones; transports only adapt native requests and decisions.
+ * - default WorkbenchApprovalController: own every live approval across providers, auto-allow patches inside approved claims, apply the thread's approval mode, and wait in-process for Workbench-hosted ones; transports only adapt native requests and decisions.
  */
 import { randomUUID } from "node:crypto";
 import type {
@@ -47,6 +47,8 @@ export interface WorkbenchApprovalControllerOptions {
   resolveApprovalMode(threadId: WorkbenchThreadId): Promise<WorkbenchApprovalMode>;
   /** Ask the selected auto-approve reviewer; throws when no reviewer can judge. */
   review(input: { threadId: WorkbenchThreadId; subject: WorkbenchApprovalSubject }, signal: AbortSignal): Promise<ApprovalReviewVerdict>;
+  /** Whether the thread's approved claims already cover every path a file write touches; absent means never. */
+  coveredByClaims?(threadId: WorkbenchThreadId, paths: readonly string[]): Promise<boolean>;
 }
 
 export type WorkbenchApprovalOpenResult =
@@ -299,6 +301,14 @@ export default class WorkbenchApprovalController {
   private async applyApprovalMode(entry: PendingApproval, subject: WorkbenchApprovalSubject): Promise<
     { kind: "allow" } | { kind: "ask"; summary?: string }
   > {
+    // Claims were approved as write permission, so a patch inside them needs no second decision.
+    if (subject.kind === "patch" && subject.paths.length && this.options.coveredByClaims) {
+      try {
+        if (await this.options.coveredByClaims(entry.threadId, subject.paths)) return { kind: "allow" };
+      } catch (error) {
+        this.options.logError(`Claim coverage was unavailable; applying the approval mode: ${sanitize(error)}`);
+      }
+    }
     let mode: WorkbenchApprovalMode;
     try {
       mode = await this.options.resolveApprovalMode(entry.threadId);

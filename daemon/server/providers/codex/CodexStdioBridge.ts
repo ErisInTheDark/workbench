@@ -509,8 +509,13 @@ function describeRequestedPermissions(permissions: RequestPermissionProfile) {
   return sections.length ? sections.join("\n\n") : null;
 }
 
-/** Adapt one native approval request into the Workbench subject; presentation belongs to the approval owner. */
-function toApprovalSubject(pending: PendingCodexApproval): WorkbenchApprovalSubject {
+/**
+ * Adapt one native approval request into the Workbench subject; presentation belongs to the approval owner. File-change
+ * requests carry no paths, so the observed patch item supplies them when it has been seen.
+ */
+function toApprovalSubject(
+  pending: PendingCodexApproval, fileChanges: Pick<CodexFileChangeController, "changedPaths">,
+): WorkbenchApprovalSubject {
   switch (pending.kind) {
     case "commandExecutionApproval": {
       const { params } = pending;
@@ -532,8 +537,13 @@ function toApprovalSubject(pending: PendingCodexApproval): WorkbenchApprovalSubj
         kind: "command", command: pending.params.command.join(" "), cwd: pending.params.cwd, commandActions: [],
         justification: pending.params.reason ?? null, networkTarget: null, rememberable: false,
       };
-    case "fileChangeApproval":
-      return { kind: "fileChange", reason: pending.params.reason ?? null, grantRoot: pending.params.grantRoot ?? null };
+    case "fileChangeApproval": {
+      const { params } = pending;
+      const paths = fileChanges.changedPaths(params.threadId, params.turnId, params.itemId);
+      return paths.length
+        ? { kind: "patch", reason: params.reason ?? null, grantRoot: params.grantRoot ?? null, paths }
+        : { kind: "fileChange", reason: params.reason ?? null, grantRoot: params.grantRoot ?? null };
+    }
     case "permissionsApproval":
       return {
         kind: "permissions", cwd: pending.params.cwd, reason: pending.params.reason ?? null,
@@ -2476,7 +2486,7 @@ export default class CodexStdioBridge {
   private openApproval(pending: PendingCodexApproval) {
     void this.approvals.open({
       threadId: NativeThreadIdSchema.parse(pending.threadId), turnId: pending.turnId, itemId: pending.itemId,
-      requestKey: pending.requestKey, subject: toApprovalSubject(pending),
+      requestKey: pending.requestKey, subject: toApprovalSubject(pending, this.fileChanges),
     }).then(result => {
       if (result.kind === "decided" && this.pendingApprovals.get(pending.requestKey) === pending) {
         this.applyApprovalDecision(pending, result.decision);

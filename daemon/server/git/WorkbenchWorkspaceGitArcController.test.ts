@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect workspace Git arc routing, projection, and rollback.
+ * - No production exports; tests protect workspace Git arc routing, projection, rollback, and machine root claims.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -24,6 +24,10 @@ import { GitArcStatusSchema } from "workbench-shared/workbench/git/git-arc-statu
 import { GitArcScopeClaimsResponseSchema } from "workbench-shared/workbench/git/git-arc-scope-response";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import OpenCodeToolsController from "../providers/opencode/OpenCodeToolsController";
+import WorkbenchGitCheckpointControllerImpl from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
+import { ensureMachineGitWorktree } from "../lib/workbench/git/machine-git-worktrees";
+import { daemonWorkspaceRoot } from "../lib/daemon-workspace-paths";
 
 const execFileAsync = promisify(execFile);
 
@@ -1613,4 +1617,60 @@ test("nested worktree files follow the worktree's own ignore rules, not the cont
   assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "thread-one", [...allowed, ...uncovered]), {
     allowed: false, pendingProposals: [], uncoveredPaths: uncovered,
   });
+});
+
+test("machine roots claim existing files by absolute path, admit scratch edits, and leave repositories their visible files", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-arc-");
+  context.after(async () => await temporary.dispose());
+  const drive = path.join(temporary.path, "drive");
+  await mkdir(path.join(drive, "notes"), { recursive: true });
+  await mkdir(path.join(drive, "repo", "cache"), { recursive: true });
+  await execFileAsync("git", ["init", "-q", path.join(drive, "repo")], { windowsHide: true });
+  await writeFile(path.join(drive, "repo", ".gitignore"), "cache/\n", "utf8");
+  const cached = path.join(drive, "repo", "cache", "data.txt");
+  await writeFile(cached, "cached\n", "utf8");
+  const config = path.join(drive, "notes", "config.txt");
+  await writeFile(config, "original\n", "utf8");
+  await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
+  const scratchRoot = { id: "daemon", name: "daemon", root: daemonWorkspaceRoot, rootPath: daemonWorkspaceRoot };
+  const machineRoot = { id: "m", machine: true as const, name: "m", root: drive, rootPath: drive };
+  const project: AgentEndpointProjectResolution = {
+    cwd: daemonWorkspaceRoot,
+    project: {
+      id: fixtureIdentitySchemas.ProjectIdSchema.parse("daemon"), kind: "daemon",
+      root: daemonWorkspaceRoot, rootPath: daemonWorkspaceRoot, roots: [scratchRoot, machineRoot],
+    },
+    root: scratchRoot,
+  };
+  // Scratch sits inside a repository here, as a data root may; it must still never become an arc member.
+  const enclosingRepository = path.join(temporary.path, "enclosing-repository-that-must-stay-untouched");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    new WorkbenchGitCheckpointControllerImpl(), new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath === drive ? drive : enclosingRepository,
+  );
+  const identity = { cwd: daemonWorkspaceRoot, harness: "codex" as const, threadId: "machine-thread" };
+  const display = (absolute: string) => path.resolve(absolute).replace(/\\/gu, "/");
+
+  await controller.execute(project, {
+    action: "planStart", adoptPaths: [], intentDescription: "", intentName: "Machine", paths: [config, cached], roots: [], ...identity,
+  });
+  await writeFile(config, "changed\n", "utf8");
+  await writeFile(cached, "recached\n", "utf8");
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "machine-thread"))?.claimedPaths, [display(config), display(cached)].sort());
+  const machine = new WorkbenchGitRepository(drive);
+  const baseline = await machine.readTreeFiles("HEAD", ["notes/config.txt", "repo/cache/data.txt"]);
+  assert.equal(baseline.get("notes/config.txt")?.bytes.toString("utf8"), "original\n");
+  assert.equal(baseline.get("repo/cache/data.txt")?.bytes.toString("utf8"), "cached\n");
+  assert.deepEqual(await machine.listWorktreeChangedPaths("HEAD", ["notes/config.txt", "repo/cache/data.txt"]), ["notes/config.txt", "repo/cache/data.txt"]);
+
+  const other = path.join(drive, "notes", "other.txt");
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [config, path.join(daemonWorkspaceRoot, "tmp.txt"), other]), {
+    allowed: false, pendingProposals: [], uncoveredPaths: [other],
+  });
+  await assert.rejects(controller.execute(project, {
+    action: "arcClaims", addPaths: [path.join(drive, "repo", "file.txt")], adoptPaths: [], removePaths: [], roots: [], inherit: true, ...identity,
+  }), /visible to the Git repository/u);
+  await assert.rejects(controller.execute(project, {
+    action: "arcClaims", addPaths: [path.join(daemonWorkspaceRoot, "tmp.txt")], adoptPaths: [], removePaths: [], roots: [], inherit: true, ...identity,
+  }), /daemon scratch/u);
 });

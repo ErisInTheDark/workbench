@@ -4,7 +4,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
+import { applyServerCodexApprovalPolicy, applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
+
+test("only daemon-project turns may ask before out-of-sandbox patches; other turns keep the user's settings", () => {
+  const daemon = { id: 1, method: "turn/start", params: { threadId: "thread" } };
+  applyServerCodexApprovalPolicy(daemon, "daemon");
+  assert.deepEqual(daemon.params, { threadId: "thread", approvalPolicy: "on-request" });
+  const project = { id: 2, method: "turn/start", params: { threadId: "thread" } };
+  applyServerCodexApprovalPolicy(project, "git");
+  assert.deepEqual(project.params, { threadId: "thread" });
+});
 
 test("server Codex sandbox policy replaces hostile browser authority and preserves canonical roots", () => {
   const request = {

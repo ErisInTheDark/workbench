@@ -13,6 +13,7 @@ import zlib from "node:zlib";
 
 import GitObjectReadSession from "./GitObjectReadSession";
 import { gitProcesses } from "./GitProcessHost";
+import { machineGitEnvironment } from "./machine-git-worktrees";
 
 const deflate = promisify(zlib.deflate);
 
@@ -69,11 +70,17 @@ function parseIdent(value: string | undefined): Actor | null {
 export default class GitObjectWriter {
   constructor(private readonly root: string) {}
 
+  private env() {
+    return { ...process.env, ...machineGitEnvironment(this.root) };
+  }
+
   private async facts() {
     let facts = repositoryFacts.get(this.root);
     if (!facts) {
       facts = (async () => {
-        const stdout = await gitProcesses.runText({ args: ["rev-parse", "--git-path", "objects", "--show-object-format"], cwd: this.root });
+        const stdout = await gitProcesses.runText({
+          args: ["rev-parse", "--git-path", "objects", "--show-object-format"], cwd: this.root, env: this.env(),
+        });
         const [objects = "", format = ""] = stdout.split(/\r?\n/u).map(line => line.trim());
         if (!objects || (format !== "sha1" && format !== "sha256")) throw new Error(`Unsupported Git object store (${format || "unknown format"}).`);
         return { format, objectsDirectory: path.resolve(this.root, objects) } satisfies RepositoryFacts;
@@ -152,7 +159,7 @@ export default class GitObjectWriter {
     return await GitObjectReadSession.memo(`git-var:${this.root}`, async (): Promise<DefaultIdentity | null> => {
       let stdout: string;
       try {
-        stdout = await gitProcesses.runText({ args: ["var", "-l"], cwd: this.root });
+        stdout = await gitProcesses.runText({ args: ["var", "-l"], cwd: this.root, env: this.env() });
       } catch (error) {
         // Expected when Git cannot determine an identity (a nonzero exit); commit-tree then reports that failure itself.
         if (error && typeof error === "object" && "code" in error && typeof error.code === "number") return null;

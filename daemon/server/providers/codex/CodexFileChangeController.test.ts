@@ -1,6 +1,6 @@
 /*
  * Keywords: partial patch, bounded observation, unsafe target, recovery excerpts.
- * Exports: none. Tests protect filesystem evidence and recovery admission content.
+ * Exports: none. Tests protect filesystem evidence, recovery admission content, and the paths a pending patch approval writes.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -23,6 +23,20 @@ async function withFiles(run: (root: string, controller: CodexFileChangeControll
 function patch(changes: WorkbenchFileChangeItem["changes"]): WorkbenchFileChangeItem {
   return { id: "patch", type: "fileChange", status: "failed", changes, workbenchPolicy: "automaticEscalation" };
 }
+
+test("an observed patch item names every path its approval writes, across a reload handoff", () => {
+  const controller = new CodexFileChangeController();
+  assert.deepEqual(controller.changedPaths("thread", "turn", "patch"), []);
+  controller.recordTurnCursor({
+    threadId: "thread", turnId: "turn",
+    item: patch([
+      { path: "C:/moved.txt", kind: { type: "update", move_path: "C:/target.txt" }, diff: "" },
+      { path: "C:/edited.txt", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-a\n+b\n" },
+    ]),
+  });
+  const reloaded = new CodexFileChangeController(structuredClone(controller.state));
+  assert.deepEqual(reloaded.changedPaths("thread", "turn", "patch"), ["C:/moved.txt", "C:/target.txt", "C:/edited.txt"]);
+});
 
 test("partial write evidence and current-line uncertainty excerpts belong to the originating patch", async () => withFiles(async (root, controller) => {
   const mixed = "top\nnew\nmiddle\nbottom\nold\nend\n";

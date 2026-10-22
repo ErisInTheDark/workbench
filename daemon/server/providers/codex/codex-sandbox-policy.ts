@@ -2,6 +2,7 @@
  * Exports:
  * - applyServerCodexPermissions: apply platform-appropriate Workbench filesystem and network authority to one Codex turn.
  * - applyServerCodexSandboxPolicy: overwrite one Codex turn with the legacy server-owned workspace sandbox policy.
+ * - applyServerCodexApprovalPolicy: let daemon-project turns ask before out-of-sandbox patches.
  * - withWorkbenchCodexSandboxConfig: install Linux managed-network profiles into thread configuration.
  */
 import type { SandboxPolicy } from "workbench-shared/codex/generated/app-server/v2/SandboxPolicy";
@@ -88,6 +89,16 @@ export function applyServerCodexSandboxPolicy(
     sandboxPolicy,
   };
   return sandboxPolicy;
+}
+
+/**
+ * Daemon-project turns edit machine files outside their sandbox through approved claims, so Codex must be able to ask
+ * before an out-of-sandbox patch (claim-covered ones are then auto-allowed); with Codex's shell off, nothing else asks.
+ * Other projects keep the user's own Codex approval settings.
+ */
+export function applyServerCodexApprovalPolicy(request: JsonRpcRequest, projectKind: string) {
+  if (projectKind !== "daemon") return;
+  request.params = { ...record(request.params), approvalPolicy: "on-request" };
 }
 
 export function applyServerCodexPermissions(

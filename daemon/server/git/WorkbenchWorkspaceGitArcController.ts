@@ -7,7 +7,8 @@
  * - WorkspaceGitArcPlanMemberState: planned repository plus root identity.
  * - WorkspaceGitArcPlanState: workspace plan projection.
  * - WorkspaceGitArcPlanClaimCollisionResult: project-qualified inactive member collision results.
- * Local mechanics: observe mutation claims while the Git transition remains held.
+ * Local mechanics: observe mutation claims while the Git transition remains held; machine members reject unusable paths
+ * before gates and absorb unowned requested paths into their baseline inside them; daemon scratch needs no claims.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -46,6 +47,8 @@ import {
 } from "../lib/workbench/git/GitArcOwnershipTransferController";
 import type { WorkbenchFileClaimCheckResult } from "../lib/workbench/file-claim-check";
 import { claimSnapshotsFor, isConfiguredMultiRoot, isNestedGitWorktreeRoot, qualifiesGitArcRoot } from "./nested-git-worktree-roots";
+import { isMachineGitArcRoot, machineArcDisplayPath, machineArcPathRejection } from "./machine-git-arc-roots";
+import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
 
 export class WorkspaceGitArcMemberError extends Error {
   constructor(readonly workspace: NonNullable<GitArcFailure["workspace"]>, cause: unknown) {
@@ -66,6 +69,10 @@ type ResolveGitRepoRoot = (rootPath: string) => Promise<string | null>;
 interface RepoMember {
   repoRoot: string;
   roots: ResolvedProjectRoot[];
+}
+
+function isMachineMember(member: RepoMember) {
+  return member.roots.some(isMachineGitArcRoot);
 }
 
 interface RootPathInput {
@@ -268,7 +275,9 @@ export default class WorkbenchWorkspaceGitArcController {
     const claimedPaths = lifecycle?.phase === "active" ? lifecycle.claimedPaths : [];
     // Same rule as arc ownership: an entry covers itself and anything beneath it, whether or not it exists yet.
     const claims = new GitArcPathSet(claimedPaths.map((claimedPath) => comparable(this.parseRootPath(project, claimedPath, project.root.id).absolute)));
+    const daemonScratch = project.project.kind === "daemon" ? isDaemonWorkspacePath : () => false;
     const uncoveredPaths = absolutePaths.filter((candidate) => {
+      if (daemonScratch(candidate)) return false;
       const absolute = comparable(candidate);
       const insideWorkspace = roots.some((root) => isInside(absolute, root.root));
       if (!insideWorkspace) return true;
@@ -362,7 +371,8 @@ export default class WorkbenchWorkspaceGitArcController {
     for (const candidate of absolutePaths) {
       const root = roots.find((projectRoot) => isInside(candidate, projectRoot.root));
       const member = root ? memberByRootId.get(root.id) : null;
-      if (!root || !member || comparable(candidate) === comparable(root.root)) continue;
+      // Machine writes are approval-gated through claims, so ignore rules never waive them.
+      if (!root || !member || isMachineMember(member) || comparable(candidate) === comparable(root.root)) continue;
       candidatesByRepo.set(member.repoRoot, [...candidatesByRepo.get(member.repoRoot) ?? [], candidate]);
     }
     const ignoredPaths = await Promise.all([...candidatesByRepo].map(async ([repoRoot, candidates]) => {
@@ -596,6 +606,8 @@ export default class WorkbenchWorkspaceGitArcController {
   private async resolveRepoMembers(project: AgentEndpointProjectResolution) {
     const byRepo = new Map<string, RepoMember>();
     for (const root of project.project.roots) {
+      // Daemon scratch is never a repository, even when the data root happens to sit inside one.
+      if (project.project.kind === "daemon" && !isMachineGitArcRoot(root)) continue;
       const repoRoot = await this.resolveGitRepoRoot(root.root);
       if (!repoRoot) continue;
       const key = comparable(repoRoot);
@@ -643,19 +655,46 @@ export default class WorkbenchWorkspaceGitArcController {
   private qualify(project: AgentEndpointProjectResolution, member: RepoMember, repoPath: string) {
     const root = this.rootForRepoPath(member, repoPath);
     const relative = path.relative(root.root, path.resolve(member.repoRoot, repoPath)).replace(/\\/gu, "/");
+    if (isMachineGitArcRoot(root)) return machineArcDisplayPath(root, relative);
     return qualifiesGitArcRoot(project, root) ? `${root.id}:${relative}` : relative;
   }
 
-  /** The deepest root containing a path owns it, matching qualified output and the file claim check. */
+  /**
+   * The deepest root containing a path owns it, matching qualified output and the file claim check. Machine roots take
+   * absolute paths only, so a drive letter never reads as an `id:` prefix.
+   */
   private parseRootPath(project: AgentEndpointProjectResolution, rawPath: string, fallbackRootId: string) {
-    const explicit = project.project.roots.find((root) => rawPath.toLowerCase().startsWith(`${root.id.toLowerCase()}:`));
-    const named = explicit ?? this.findRoot(project, fallbackRootId);
-    const value = explicit ? rawPath.slice(named.id.length + 1) : rawPath;
-    const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(named.root, value);
+    const explicit = project.project.roots.find((root) => !isMachineGitArcRoot(root) && rawPath.toLowerCase().startsWith(`${root.id.toLowerCase()}:`));
+    const fallback = explicit ?? this.findRoot(project, fallbackRootId);
+    const value = explicit ? rawPath.slice(fallback.id.length + 1) : rawPath;
+    const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(fallback.root, value);
+    const named = explicit || isInside(absolute, fallback.root)
+      ? fallback
+      : project.project.roots.find((root) => isMachineGitArcRoot(root) && isInside(absolute, root.root)) ?? fallback;
     if (!isInside(absolute, named.root)) throw new GitArcRejectionError({ reason: "pathOutsideWorkspaceRoot", rootId: named.id, path: rawPath }, `Git arc path escapes workspace root ${named.id}: ${rawPath}`);
     const root = project.project.roots.filter((candidate) => isInside(absolute, candidate.root))
       .sort((left, right) => comparable(right.root).length - comparable(left.root).length)[0]!;
+    if (project.project.kind === "daemon" && isDaemonWorkspacePath(absolute)) {
+      throw new GitArcRejectionError({ reason: "pathOutsideWorkspaceRoot", rootId: root.id, path: rawPath }, `${rawPath} is daemon scratch; scratch files need no claims.`);
+    }
     return { absolute, root };
+  }
+
+  /** Machine scope rejects filesystem roots, Workbench data and other repositories before any Git gate is taken. */
+  private async rejectMachinePaths(groups: ReadonlyArray<{ adoptPaths: string[]; member: RepoMember; paths: string[] }>) {
+    for (const { adoptPaths, member, paths } of groups) {
+      if (!isMachineMember(member)) continue;
+      for (const absolute of [...paths, ...adoptPaths]) {
+        const rejection = await machineArcPathRejection(absolute, member.repoRoot);
+        if (rejection) throw new GitArcRejectionError({ reason: "pathOutsideWorkspaceRoot", rootId: member.roots[0]!.id, path: absolute }, rejection);
+      }
+    }
+  }
+
+  /** Machine members take unowned requested paths' disk content as baseline before scope is published or acquired. */
+  private async absorbMachineBaseline(member: RepoMember, paths: readonly string[], adoptPaths: readonly string[]) {
+    if (!isMachineMember(member) || !paths.length) return;
+    await this.local.absorbMachineBaseline({ cwd: member.repoRoot, paths: [...paths], adoptPaths: [...adoptPaths] });
   }
 
   private mirrorMember(members: readonly RepoMember[], into: string) {
@@ -896,6 +935,7 @@ export default class WorkbenchWorkspaceGitArcController {
     const removals = this.groupRootPaths(project, members, request.removePaths, request.roots.map((root) => ({
       rootId: root.rootId, paths: root.removePaths,
     })));
+    await this.rejectMachinePaths(additions);
     const scopes = new Map(await Promise.all(members.map(async (member) => [
       member.repoRoot,
       await this.local.readScope({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId }),
@@ -927,6 +967,7 @@ export default class WorkbenchWorkspaceGitArcController {
         addPaths: addition?.paths ?? [], adoptPaths: addition?.adoptPaths ?? [], removePaths,
         inherit: request.inherit,
       };
+      await this.absorbMachineBaseline(member, input.addPaths, input.adoptPaths);
       if (request.action === "arcClaims" && scope && !isEmptyPlan(scope)) return await this.local.editArcClaims(input);
       if (!scope && removePaths.length) throw new GitArcRejectionError({ reason: "unclaimedRemoval", paths: removePaths }, "Removed paths must exactly match inherited entries.");
       return await this.local.editPlanClaims({
@@ -946,8 +987,10 @@ export default class WorkbenchWorkspaceGitArcController {
     request: Extract<GitCheckpointRequest, { action: "plan" | "planStart" }>,
   ) {
     const groups = this.groupRootPaths(project, members, request.paths, request.roots, request.adoptPaths, true);
+    await this.rejectMachinePaths(groups);
     const values = await this.runMembers(groups.map(({ member }) => member), async (member) => {
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot)!;
+      await this.absorbMachineBaseline(member, group.paths, group.adoptPaths);
       const input = {
         adoptPaths: group.adoptPaths, cwd: member.repoRoot, harness: request.harness,
         intentDescription: request.intentDescription, intentName: request.intentName, paths: group.paths,
@@ -966,9 +1009,13 @@ export default class WorkbenchWorkspaceGitArcController {
     request: Extract<GitCheckpointRequest, { action: "arcAdd" | "arcAdopt" | "arcRemove" | "planAdd" | "planAdopt" | "planRemove" }>,
   ) {
     const groups = this.groupRootPaths(project, members, request.paths, request.roots);
+    const removes = request.action === "planRemove" || request.action === "arcRemove";
+    const adopts = request.action === "planAdopt" || request.action === "arcAdopt";
+    if (!removes) await this.rejectMachinePaths(groups);
     const values = await this.runMembers(groups.map(({ member }) => member), async (member) => {
       const paths = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot)!.paths;
       const input = { cwd: member.repoRoot, harness: request.harness, paths, threadId: request.threadId };
+      if (!removes && !adopts) await this.absorbMachineBaseline(member, paths, []);
       switch (request.action) {
         case "planAdd": return await this.local.addToPlan(input);
         case "planAdopt": return await this.local.adoptIntoPlan(input);

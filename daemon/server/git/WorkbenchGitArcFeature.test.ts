@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; feature tests prove repository-wide Git arc transition serialization, thread timestamp injection, card-read coalescing, typed failures, and nested worktree owner resolution.
+ * - No production exports; feature tests prove repository-wide Git arc transition serialization, thread timestamp injection, card-read coalescing, typed failures, nested worktree owner resolution, and machine claim approval.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -1310,4 +1310,53 @@ test("nested worktree registries resolve owners bound at the containing checkout
   assert.deepEqual(await owner("main-thread"), { nativeThreadId: "main-thread", threadId: wbThreadId("codex", "main-thread", "main") });
   assert.deepEqual(await owner("lab-thread"), { nativeThreadId: "lab-thread", threadId: wbThreadId("codex", "lab-thread", "lab") });
   assert.equal(await owner("outside-thread"), null);
+});
+
+test("daemon claims ask the approval mode once for exactly the new machine paths, before any Git work", async () => {
+  const machineRoot = path.resolve("/machine-root");
+  const held = path.join(machineRoot, "held.txt");
+  const fresh = path.join(machineRoot, "fresh.txt");
+  const scratch = { id: "daemon", name: "daemon", root: "C:/Git/Project", rootPath: "C:/Git/Project" };
+  const events: string[] = [];
+  const approvals: string[][] = [];
+  let decision: { kind: "allowOnce" } | { kind: "decline"; feedback: string } = { kind: "allowOnce" };
+  const feature = waitFeature({
+    resolveProjectFromCwd: async () => ({
+      cwd: scratch.root, root: scratch,
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "daemon", root: scratch.root, rootPath: scratch.rootPath, roots: [scratch] },
+    }),
+    withMachineRoots: async (resolution: { project: { roots: object[] } }) => ({
+      ...resolution,
+      project: { ...resolution.project, roots: [...resolution.project.roots, { id: "m", machine: true, name: "m", root: machineRoot, rootPath: machineRoot }] },
+    }),
+    approveMachineClaims: async (request: { subject: { kind: string; paths?: string[] } }) => {
+      events.push("approve");
+      approvals.push(request.subject.paths ?? []);
+      return decision;
+    },
+  });
+  const internal = feature as unknown as {
+    workspaceController: {
+      execute: () => Promise<object>;
+      findLifecycleState: () => Promise<object>;
+    };
+  };
+  internal.workspaceController.findLifecycleState = async () => ({ phase: "active", claimedPaths: [held.replace(/\\/gu, "/")] });
+  internal.workspaceController.execute = async () => { events.push("execute"); return {}; };
+  const claim = async () => await feature.executeRequest({
+    action: "arcClaims", addPaths: [held, fresh, path.join(scratch.root, "relative.txt")], adoptPaths: [], removePaths: [], roots: [],
+    inherit: true, cwd: scratch.root, harness: "codex", threadId: "thread",
+  });
+
+  const approved = await claim();
+  assert.equal(approved.ok, true, await approved.text());
+  assert.deepEqual(approvals, [[fresh]]);
+  assert.deepEqual(events, ["approve", "execute"]);
+
+  decision = { kind: "decline", feedback: "not that file" };
+  events.length = 0;
+  const declined = await claim();
+  assert.equal(declined.ok, false);
+  assert.match(await declined.text(), /not that file/u);
+  assert.deepEqual(events, ["approve"]);
 });

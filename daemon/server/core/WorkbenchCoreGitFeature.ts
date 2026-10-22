@@ -1,15 +1,18 @@
 /*
  * Exports:
- * - default WorkbenchCoreGitFeature: build Git arcs, thread Git selections, working-tree reads, Git peers, branch positions
- *   and checkout object reads and ref moves over shared worktree transitions.
+ * - default WorkbenchCoreGitFeature: build Git arcs (machine claims approved through the thread's approval mode), thread Git
+ *   selections, working-tree reads, Git peers, branch positions and checkout object reads and ref moves over shared
+ *   worktree transitions.
  */
-import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
 import GitArcRegistry, { getGitArcLiveClaimPaths } from "../lib/workbench/git/GitArcRegistry";
 import type { GitArcThreadIdentityResolver } from "../lib/workbench/git/git-arc-thread-identity";
 import type WorkbenchStatsController from "../stats/WorkbenchStatsController";
 import type WorkbenchAgentContextController from "../agent/WorkbenchAgentContextController";
+import type WorkbenchApprovalController from "../interactions/WorkbenchApprovalController";
 import WorkbenchBranchPositionController from "../git/WorkbenchBranchPositionController";
 import WorkbenchGitArcFeature from "../git/WorkbenchGitArcFeature";
 import WorkbenchGitCheckoutController from "../git/WorkbenchGitCheckoutController";
@@ -41,6 +44,10 @@ export default class WorkbenchCoreGitFeature {
     threadState: () => WorkbenchThreadStateFeature | null;
     subagents: () => Pick<WorkbenchSubagentFeature, "resolveGitArcPeer">;
     stats: () => Pick<WorkbenchStatsController, "observeClaimSnapshot"> | null;
+    /** Built after this feature, read at call time; decides new machine claims through the thread's approval mode. */
+    approvals: () => Pick<WorkbenchApprovalController, "request">;
+    /** The thread's in-progress turn, so a claim approval sits on the turn that asked for it. */
+    activeTurn(threadId: WorkbenchThreadId, harness: WorkbenchHarness): Promise<WorkbenchTurnId | null>;
     warn(message: string): void;
   }) {
     const { database, identities, projectCatalog, transitions, warn } = ports;
@@ -88,6 +95,9 @@ export default class WorkbenchCoreGitFeature {
       observeClaimSnapshot: (snapshot) => ports.stats()?.observeClaimSnapshot(snapshot),
       listCatalogProjects: async () => (await projectCatalog.readCatalog()).data,
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
+      approveMachineClaims: async (request, signal) => await ports.approvals().request({
+        ...request, turnId: request.turnId ?? await ports.activeTurn(request.threadId, request.harness),
+      }, signal),
       transitions,
     });
     const resolveGitArcIdentity: GitArcThreadIdentityResolver = async input => await gitArc.resolveThreadIdentity(input);

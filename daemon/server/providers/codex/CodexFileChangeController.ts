@@ -3,7 +3,8 @@
  * Exports:
  * - CodexFileChangeTarget: originating patch identity and validated filesystem scope.
  * - CodexFileChangeState: reload handoff for active patch attempts and ordering cursors.
- * - default CodexFileChangeController: own active patch observations, recovery context, and live failure-notification deduplication.
+ * - default CodexFileChangeController: own active patch observations (including the paths a pending patch approval
+ *   writes), recovery context, and live failure-notification deduplication.
  */
 import fs from "node:fs/promises";
 import type { Stats } from "node:fs";
@@ -192,6 +193,14 @@ export default class CodexFileChangeController {
 
   get(threadId: string, turnId: string, itemId: string) {
     return this.state.items.get(getWorkbenchFileChangeFailureKey({ threadId, turnId, itemId }));
+  }
+
+  /** Every path an observed patch item writes, move destinations included; empty before its item is seen. */
+  changedPaths(threadId: string, turnId: string, itemId: string) {
+    const changes = this.get(threadId, turnId, itemId)?.item.changes ?? [];
+    return [...new Set(changes.flatMap(change => [
+      change.path, ...(change.kind.type === "update" && change.kind.move_path ? [change.kind.move_path] : []),
+    ]))];
   }
 
   remember(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
