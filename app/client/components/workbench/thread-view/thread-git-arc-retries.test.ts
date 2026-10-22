@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests protect when failed Git arc starts fold into their successful retry: only a completed
- * retry folds, only work and arc reads fold between, and MCP and CLI starts fold alike.
+ * retry folds, only work and arc reads fold between, waits and continues open retries, and MCP and CLI starts fold alike.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import { test } from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { buildActivityRuns } from "./thread-activity-runs";
 import { foldGitArcRetries } from "./thread-git-arc-retries";
-import { buildRenderableBlocks, type CommandItem } from "./thread-render-blocks";
+import { buildRenderableBlocks, getRenderableBlockItems, type CommandItem } from "./thread-render-blocks";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
@@ -74,6 +74,18 @@ test("a failed wait starts a retry like a failed start", () => {
   assert.equal(rest.length, 0);
   assert.equal(retry?.kind === "gitArcRetry" ? retry.failedAttempts : null, 1);
   assert.deepEqual(fold([cli("waited", "wb git arc wait", 1), cli("started", "wb git arc start")]).map(block => block.kind), ["gitArcRetry"]);
+});
+
+test("a failed continue starts a retry like a failed start", () => {
+  const [retry, ...rest] = fold([mcp("continued", "git_arc_continue", "failed"), mcp("started", "git_arc_start")]);
+  assert.equal(rest.length, 0);
+  assert.equal(retry?.kind === "gitArcRetry" ? retry.failedAttempts : null, 1);
+  // Continues are run steps: work before the failure stays its own run, and nothing splits without a successful start.
+  const [before, after] = fold([thought("earlier"), mcp("continued", "git_arc_continue", "failed"), thought("why"), mcp("started", "git_arc_start")]);
+  assert.deepEqual(before ? getRenderableBlockItems(before).map(item => item.id) : null, ["earlier"]);
+  assert.deepEqual(after?.kind === "gitArcRetry" ? after.items.map(item => item.id) : null, ["continued", "why", "started"]);
+  assert.deepEqual(fold([thought("earlier"), mcp("continued", "git_arc_continue", "failed"), commentary("stuck")]).map(block => block.kind),
+    ["activityRun", "agentCommentarySequence"]);
 });
 
 test("CLI starts fold like MCP starts", () => {
