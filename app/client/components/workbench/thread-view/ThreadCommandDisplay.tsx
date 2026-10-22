@@ -13,8 +13,10 @@ import { getCommandIcon } from "./thread-activity-chips";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 
-export default function ThreadCommandDisplay({ approval = null, command, display, expensive = false, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, live = false, output, previewHeight }: {
+export default function ThreadCommandDisplay({ approval = null, command, display, expensive = false, failed = false, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, live = false, output, previewHeight }: {
   approval?: ThreadItemApprovalState | null;
+  /** The command failed, so its icon and own text read red. */
+  failed?: boolean;
   /** The command is actually running (not queued), so its line shimmers. */
   live?: boolean;
   command: string;
@@ -33,9 +35,10 @@ export default function ThreadCommandDisplay({ approval = null, command, display
   return (
     <ThreadStepRow
       icon={createElement(getCommandIcon(summaryDisplay.summaryStats), { size: 16 })}
+      iconClassName={failed ? "text-danger" : undefined}
       live={live}
       meta={meta}
-      summary={<ThreadCommandSummary approval={approval} display={summaryDisplay} expensive={expensive} line />}
+      summary={<ThreadCommandSummary approval={approval} danger={failed} display={summaryDisplay} expensive={expensive} line />}
     >
       {display.cwdDisplay && !display.hideCommandCwd ? (
         <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">

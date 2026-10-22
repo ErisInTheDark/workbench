@@ -453,8 +453,9 @@ function computeThreadCommandDisplay({
     cwdDisplay: context.cwdDisplay,
     fullCommand: command,
     omitFromDisplay: false,
-    ongoingSummaryParts: [CommandMatcher.Text("Running "), CommandMatcher.Code(rawSummaryText, { clamp: true })],
-    ongoingSummaryText: `Running ${rawSummaryText}`,
+    // The row's shimmer says it is running; the text is the command alone.
+    ongoingSummaryParts: [CommandMatcher.Code(rawSummaryText, { clamp: true })],
+    ongoingSummaryText: rawSummaryText,
     shell: context.shell,
     showShell: Boolean(context.shell),
     summaryKind: "raw",
@@ -724,7 +725,8 @@ export function getThreadCommandOutcomeDisplay(
   display: ThreadCommandSummaryDisplay,
   outcome: ThreadCommandExecutionOutcome,
 ): ThreadCommandSummaryDisplay {
-  if (outcome === "completed") return display;
+  // A raw command is its own text; its row shows failure in red rather than a label.
+  if (outcome === "completed" || (outcome === "failed" && display.summaryKind === "raw")) return display;
   const ongoingSummaryParts = display.ongoingSummaryParts;
   const leadingContextParts = ongoingSummaryParts[0]?.type === "text" && /:\s$/u.test(ongoingSummaryParts[0].text)
     ? ongoingSummaryParts.slice(0, 1)

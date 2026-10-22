@@ -154,9 +154,11 @@ function splitCommandSummaryStages (parts: ThreadCommandDisplayPart[]) {
 }
 
 function ThreadCommandStageParts ({
+  danger,
   parts,
   plainCode,
 }: {
+  danger: boolean;
   parts: ThreadCommandDisplayPart[];
   /** Code reads as plain monospace text instead of a chip, as an unmatched command's own text does. */
   plainCode: boolean;
@@ -186,7 +188,7 @@ function ThreadCommandStageParts ({
         ) : (
           <span key={`text:${index}`} className="contents">
             {part.variant === "code" && plainCode ? (
-              <span className="min-w-0 truncate font-mono text-[0.92em] text-text" title={part.text}>{part.text}</span>
+              <span className={`min-w-0 truncate font-mono text-[0.92em] ${danger ? "text-danger" : "text-text"}`} title={part.text}>{part.text}</span>
             ) : part.variant === "code" ? (
               <ThreadInlineCode
                 className={part.clamp ? "inline-block shrink-1 min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom" : ""}
@@ -234,11 +236,14 @@ export function ThreadExpensiveGlyph () {
 /** `line` fits the summary on one clipped step-row line: no shell label, and an unmatched command reads as its own text. */
 export function ThreadCommandSummary ({
   approval = null,
+  danger = false,
   display,
   expensive = false,
   line = false,
 }: {
   approval?: ThreadItemApprovalState | null;
+  /** The command failed: an unmatched command's own text reads red, standing in for a failure label. */
+  danger?: boolean;
   display: ThreadCommandSummaryDisplay;
   expensive?: boolean;
   line?: boolean;
@@ -265,7 +270,7 @@ export function ThreadCommandSummary ({
         {stages.map((stage, index) => (
           index === 0 ? (
             <span key={`stage:${index}`} className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
-              <ThreadCommandStageParts parts={stage} plainCode={plainCode} />
+              <ThreadCommandStageParts danger={danger} parts={stage} plainCode={plainCode} />
             </span>
           ) : (
             <span
@@ -274,7 +279,7 @@ export function ThreadCommandSummary ({
             >
               <ArrowRightIcon className="shrink-0 opacity-30" size={22} />
               <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
-                <ThreadCommandStageParts parts={stage} plainCode={plainCode} />
+                <ThreadCommandStageParts danger={danger} parts={stage} plainCode={plainCode} />
               </span>
             </span>
           )

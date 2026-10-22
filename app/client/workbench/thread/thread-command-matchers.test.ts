@@ -1137,9 +1137,10 @@ test("raw commands preserve the command operand across lifecycle displays", () =
   assert.equal(display.claimedBy, null);
   assert.equal(display.summaryKind, "raw");
   assert.deepEqual(displayPartKinds(display.summaryParts), ["code"]);
-  assert.deepEqual(displayPartKinds(display.ongoingSummaryParts), ["plain", "code"]);
+  // Running and failed rows say so by shimmer and red, so the raw command stays its own text.
+  assert.deepEqual(display.ongoingSummaryParts, display.summaryParts);
+  assert.deepEqual(getThreadCommandOutcomeDisplay(display, "failed").summaryParts, display.summaryParts);
   assert.deepEqual(codeOperands(display.summaryParts), ["mystery-command --flag"]);
-  assert.deepEqual(codeOperands(display.ongoingSummaryParts), ["mystery-command --flag"]);
   assert.deepEqual(codeOperands(getThreadCommandOutcomeDisplay(display, "timedOut").summaryParts), ["mystery-command --flag"]);
 });
 

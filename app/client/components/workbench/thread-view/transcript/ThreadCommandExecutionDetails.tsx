@@ -36,7 +36,7 @@ import {
 } from "../../../../workbench/thread/thread-item-shell-queue";
 import { resolveWorkbenchSubagentCommandTargets } from "../../../../workbench/thread/thread-subagents";
 import MarkdownRender from "../../../ui/MarkdownRender";
-import { TerminalIcon } from "../../workbench-icons";
+import { LoaderIcon, TerminalIcon } from "../../workbench-icons";
 import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
 import ThreadAgentMessageBody from "../ThreadAgentMessageBody";
@@ -130,11 +130,8 @@ export default function ThreadCommandExecutionDetails ({
   const outcomeCommandDisplay = useMemo(() => {
     const display = commandDisplay.summaryParts.length || !item.resultExpiredAt ? commandDisplay : {
       ...commandDisplay,
-      ongoingSummaryParts: [
-        { text: "Running ", type: "text" as const },
-        { clamp: true, text: commandDisplay.unwrappedCommand, type: "text" as const, variant: "code" as const },
-      ],
-      ongoingSummaryText: `Running ${commandDisplay.unwrappedCommand}`,
+      ongoingSummaryParts: [{ clamp: true, text: commandDisplay.unwrappedCommand, type: "text" as const, variant: "code" as const }],
+      ongoingSummaryText: commandDisplay.unwrappedCommand,
       summaryKind: "raw" as const,
       summaryParts: [{ clamp: true, text: commandDisplay.unwrappedCommand, type: "text" as const, variant: "code" as const }],
       summaryText: commandDisplay.unwrappedCommand,
@@ -372,6 +369,8 @@ export default function ThreadCommandExecutionDetails ({
     );
   }
 
+  // Running, not queued: the line shimmers and a spinner leads its duration.
+  const running = commandOutcome === "inProgress" && liveShellQueue?.admittedAt !== null;
   const commandDisplayView = (
     <ThreadCommandDisplay
       approval={approval}
@@ -380,13 +379,19 @@ export default function ThreadCommandExecutionDetails ({
       detailRows={commandDetailRows}
       display={commandDisplay}
       expensive={Boolean(item.expensive)}
-      live={commandOutcome === "inProgress" && liveShellQueue?.admittedAt !== null}
+      failed={commandOutcome === "failed"}
+      live={running}
       meta={[
         commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0 ? <ThreadSummaryText text={`exit ${item.exitCode}`} /> : null,
         queuedDurationMs !== null && queuedDurationMs !== undefined
           ? <span>queued <ThreadDurationText className="inline" durationMs={queuedDurationMs} /></span>
           : null,
-        visibleDurationMs !== null && visibleDurationMs !== undefined ? <ThreadDurationText durationMs={visibleDurationMs} /> : null,
+        running || (visibleDurationMs !== null && visibleDurationMs !== undefined) ? (
+          <span className="flex items-center gap-1.5">
+            {running ? <LoaderIcon size={14} /> : null}
+            {visibleDurationMs !== null && visibleDurationMs !== undefined ? <ThreadDurationText durationMs={visibleDurationMs} /> : null}
+          </span>
+        ) : null,
       ]}
       output={shownOutput}
       summaryDisplay={outcomeCommandDisplay}

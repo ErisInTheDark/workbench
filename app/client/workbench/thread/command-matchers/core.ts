@@ -169,7 +169,6 @@ export function runThreadCommandMatchers(
       summaryParts.push(CommandMatcher.Separator());
       summaryParts.push(CommandMatcher.Code(collapseWhitespace(remainingCommand), { clamp: true }));
       ongoingSummaryParts.push(CommandMatcher.Separator());
-      ongoingSummaryParts.push(CommandMatcher.Text("Running "));
       ongoingSummaryParts.push(CommandMatcher.Code(collapseWhitespace(remainingCommand), { clamp: true }));
       summaryStats.otherCommands += countCommandStages(remainingCommand, context.shellGroup);
       hadUnmatchedRemainder = true;

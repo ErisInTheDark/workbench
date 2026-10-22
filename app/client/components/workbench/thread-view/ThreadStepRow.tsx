@@ -3,7 +3,7 @@
  * - ThreadStepProgress: a step's state and timing, which the row turns into a spinner or a (live) duration.
  * - default ThreadStepRow: one step of work as a single line: kind icon, what happened (a tensed label and its subject, or a
  *   custom summary), then trailing meta ending in the step's progress; a step with detail opens it on tap. Its lead and
- *   meta are marked `data-thread-step-part` for entry motion; while in progress its words shimmer.
+ *   meta are marked `data-thread-step-part` for entry motion; while in progress its words shimmer at medium weight.
  */
 "use client";
 
@@ -93,7 +93,7 @@ export default function ThreadStepRow({
       <span className="flex min-w-0 flex-1 items-center overflow-hidden whitespace-nowrap">
         {/* Hugs the text, so motion about the lead's centre is about what is written, not the empty row. A step in
             progress shimmers all of it, chips included, like the live status. */}
-        <span className={`flex min-w-0 max-w-full items-center ${isLive && !failed ? shimmerTextClassName : ""}`} data-thread-step-part="lead">
+        <span className={`flex min-w-0 max-w-full items-center ${isLive && !failed ? `${shimmerTextClassName} font-medium` : ""}`} data-thread-step-part="lead">
         {summary ?? (
           <span className="flex min-w-0 items-center gap-1.5">
             {label ? <span className={`shrink-0 ${failed ? "text-danger" : ""}`}>{label}</span> : null}
