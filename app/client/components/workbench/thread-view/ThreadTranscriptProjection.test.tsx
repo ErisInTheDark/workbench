@@ -329,7 +329,7 @@ test("SQLite normal projection keeps command runs and reasoning closed until ope
     command("two", "beta --two"),
   ], null, 1);
   const commandText = commandHtml.replace(/<[^>]+>/gu, "");
-  assert.match(commandText, /2ran/u);
+  assert.match(commandText, /2exec/u);
   assert.match(commandHtml, /aria-expanded="false"/u);
   assert.doesNotMatch(commandText, /alpha --one/u);
 

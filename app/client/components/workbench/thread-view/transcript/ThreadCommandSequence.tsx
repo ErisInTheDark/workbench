@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadCommandSequence: consecutive command-family items split into their render segments: recall, title, status,
- *   lifecycle and approval rows keep their own renderers, plain commands share one group.
+ *   lifecycle and approval rows keep their own renderers, plain commands one row each.
  * - ThreadRegularCommandItem: one shell, MCP or native tool call through its renderer.
  * - ThreadMcpItem: one MCP call: Workbench calls through their specialized renderer, anything else as a tool row.
  * Keep runtime exports component-only for React Refresh.
@@ -12,17 +12,14 @@ import { useContext, useMemo } from "react";
 
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import {
-  getThreadCommandBlockDisplay,
   getThreadCommandExecutionOutcome,
   getWorkbenchCommandRouteSummaryDisplay,
   getWorkbenchMcpCommandRoute,
   shouldUseWorkbenchMcpSpecializedRenderer,
 } from "../../../../workbench/thread/thread-command-matchers";
 import { ThreadItemApprovalsContext, useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
-import ThreadStepRow from "../ThreadStepRow";
 import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
-import { getCommandBlockItems, getCommandIcon } from "../thread-activity-chips";
 import ThreadCommandDetailRows from "../ThreadCommandDetailRows";
 import ThreadContextCommandItem from "../ThreadContextCommandItem";
 import ThreadDynamicToolCallItem from "../ThreadDynamicToolCallItem";
@@ -37,7 +34,6 @@ import {
   buildCommandSequenceRenderSegments, type CommandItem, type CommandSequenceItem,
 } from "../thread-render-blocks";
 import { getThreadSubagentWaitTiming } from "../thread-subagent-wait-groups";
-import { ThreadCommandSummary } from "../thread-view-primitives";
 import { useThreadItemLiveDuration } from "../use-thread-live-duration";
 import ThreadCommandExecutionDetails from "./ThreadCommandExecutionDetails";
 import ThreadRecallItem from "./ThreadRecallItem";
@@ -105,7 +101,7 @@ export function ThreadRegularCommandItem ({
   );
 }
 
-/** Plain commands: one row each, or several under one grouped summary. */
+/** Plain commands: one row each. */
 function ThreadRegularCommandSequence ({
   itemTimeline,
   items,
@@ -113,28 +109,7 @@ function ThreadRegularCommandSequence ({
   itemTimeline: Timeline;
   items: CommandSequenceItem[];
 }) {
-  const project = useProject.contextual();
-  const commandBlockDisplay = useMemo(() => {
-    if (items.length <= 1) return null;
-    const context = { ...project?.matcherContext, cwd: project?.cwd };
-    return getThreadCommandBlockDisplay({ items: getCommandBlockItems(items, context), ...context });
-  }, [items, project]);
-
-  if (items.length === 1) return <ThreadRegularCommandItem item={items[0]} itemTimeline={itemTimeline} />;
-  if (!commandBlockDisplay) return null;
-  const Icon = getCommandIcon(commandBlockDisplay.summaryStats);
-  const expensive = items.some(item => item.type === "commandExecution" && item.expensive);
-  return (
-    <ThreadStepRow icon={<Icon size={16} />} summary={<ThreadCommandSummary display={commandBlockDisplay} expensive={expensive} />}>
-      {items.map((item) => (
-        <ThreadRegularCommandItem
-          item={item}
-          itemTimeline={itemTimeline}
-          key={item.id}
-        />
-      ))}
-    </ThreadStepRow>
-  );
+  return items.map(item => <ThreadRegularCommandItem item={item} itemTimeline={itemTimeline} key={item.id} />);
 }
 
 export default function ThreadCommandSequence ({

@@ -121,6 +121,7 @@ export interface ThreadCommandSummaryStats {
   readFiles: number;
   searchedFiles: number;
   skillLoads: number;
+  threadRecalls: number;
   visChecks: number;
   webRequests: number;
 }

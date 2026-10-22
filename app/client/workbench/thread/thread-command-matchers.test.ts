@@ -18,7 +18,6 @@ import {
 import {
   getGitArcMatcherAction,
   getNativeFileChanges,
-  getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
   isNativeFileOperation,
   getThreadCommandExecutionOutcome,
@@ -402,16 +401,6 @@ test("mcp_call on server wb presents as the deferred Workbench tool it ran", () 
     argumentsValue: { server: "wb", tool: "vis_screenshot", arguments: { path: "mockups/a.tsx" } }, server: "wb", tool: "mcp_call",
   });
   assert.deepEqual(vis, getWorkbenchMcpCommandRoute({ argumentsValue: { path: "mockups/a.tsx" }, server: "wb", tool: "vis_screenshot" }));
-});
-
-test("a grouped command label counts every item, naming vis checks and never dropping unnamed ones", () => {
-  const block = (...commands: string[]) => getThreadCommandBlockDisplay({
-    items: commands.map(command => ({ command, commandActions: [], cwd: PROJECT_ROOT })),
-    projectRootPath: PROJECT_ROOT,
-  }).summaryText;
-  assert.equal(block("wb vis snapshot mockups/a.tsx", "wb vis screenshot mockups/a.tsx"), "Checked vis 2 times");
-  assert.equal(block("wb vis screenshot mockups/a.tsx", 'wb toc "docs/guide.md"'), "Checked a vis, ran 1 other command");
-  assert.equal(block('wb toc "docs/a.md"', 'wb toc "docs/b.md"'), "Ran 2 commands");
 });
 
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {

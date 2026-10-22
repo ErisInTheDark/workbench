@@ -3,16 +3,15 @@
  * - ActivityChip: one counted kind of work in an activity run summary, with change totals for file chips.
  * - CommandChipContext: matcher context for summarising commands.
  * - getCommandIcon: one command step row's kind icon, from the same categories as the chips.
- * - getCommandBlockItems: command items in the shape the command matchers summarise.
  * - getCommandItemDisplay: one command's matcher display.
- * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then its matched command categories (including
- *   merged steps with their own renderer), with Browse screenshots beside browser steps.
+ * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then every step in some command chip
+ *   (unnamed steps as exec), with Browse screenshots beside browser steps.
  */
 import type { ComponentType } from "react";
 
+import { createEmptyCommandSummaryStats, mergeCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
 import {
   getNativeToolDisplay,
-  getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
   getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
@@ -22,7 +21,7 @@ import {
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary } from "workbench-shared/types";
 import {
-  BookBookmarkIcon, BookSearchIcon, BrowserSessionIcon, EyeIcon, FileAddIcon, FileDeleteIcon, FileTextIcon, FileUpdateIcon,
+  BookBookmarkIcon, BookIcon, BookSearchIcon, BrowserSessionIcon, EyeIcon, FileAddIcon, FileDeleteIcon, FileTextIcon, FileUpdateIcon,
   FolderClosedIcon, GitArcProposalIcon, GitGraphIcon, ImageIcon, SearchIcon, TerminalIcon, type IconProps,
 } from "../workbench-icons";
 import { getBrowseItemSteps, getBrowseScreenshots } from "./thread-browse-steps";
@@ -48,48 +47,79 @@ export interface CommandChipContext {
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
-/** Matcher categories in summary order; each chip counts every stat it names. */
-const COMMAND_CHIPS: ReadonlyArray<{ Icon: ComponentType<IconProps>; key: string; stats: ReadonlyArray<keyof ThreadCommandSummaryStats>; verb: string }> = [
-  { Icon: FileTextIcon, key: "read", stats: ["readFiles"], verb: "read" },
-  { Icon: SearchIcon, key: "searched", stats: ["searchedFiles"], verb: "searched" },
-  { Icon: FolderClosedIcon, key: "listed", stats: ["listedFiles"], verb: "listed" },
-  { Icon: EyeIcon, key: "checked", stats: ["pathChecks", "visChecks"], verb: "checked" },
-  { Icon: FileDeleteIcon, key: "removed", stats: ["deletedPaths"], verb: "removed" },
-  { Icon: GitGraphIcon, key: "git", stats: ["gitStatusChecks", "gitDiffChecks"], verb: "git checks" },
-  { Icon: GitArcProposalIcon, key: "arc", stats: ["gitCheckpointCreates", "gitCheckpointDiffs", "gitCheckpointRestores"], verb: "arc steps" },
-  { Icon: BookBookmarkIcon, key: "skills", stats: ["skillLoads"], verb: "skills" },
-  { Icon: BrowserSessionIcon, key: "browse", stats: ["browseActions"], verb: "browser steps" },
-  { Icon: BookSearchIcon, key: "web", stats: ["webRequests"], verb: "web" },
-  { Icon: TerminalIcon, key: "ran", stats: ["otherCommands"], verb: "ran" },
-];
+/** Chips in summary order. */
+const COMMAND_CHIPS = [
+  { Icon: FileTextIcon, key: "read", verb: "read" },
+  { Icon: SearchIcon, key: "searched", verb: "searched" },
+  { Icon: BookIcon, key: "recalled", verb: "recalled" },
+  { Icon: FolderClosedIcon, key: "listed", verb: "listed" },
+  { Icon: EyeIcon, key: "checked", verb: "checked" },
+  { Icon: FileDeleteIcon, key: "removed", verb: "removed" },
+  { Icon: GitGraphIcon, key: "git", verb: "git checks" },
+  { Icon: GitArcProposalIcon, key: "arc", verb: "arc steps" },
+  { Icon: BookBookmarkIcon, key: "skills", verb: "skills" },
+  { Icon: BrowserSessionIcon, key: "browse", verb: "browser steps" },
+  { Icon: BookSearchIcon, key: "web", verb: "web" },
+  { Icon: TerminalIcon, key: "exec", verb: "exec" },
+] as const satisfies ReadonlyArray<{ Icon: ComponentType<IconProps>; key: string; verb: string }>;
 
-/** A command step row's kind icon: its first counted category, else a terminal. */
+type CommandChipKey = typeof COMMAND_CHIPS[number]["key"];
+
+/** Every stat names its chip, so a new stat cannot go uncounted. */
+const STAT_CHIPS = {
+  browseActions: "browse",
+  deletedPaths: "removed",
+  gitCheckpointCreates: "arc",
+  gitCheckpointDiffs: "arc",
+  gitCheckpointRestores: "arc",
+  gitDiffChecks: "git",
+  gitStatusChecks: "git",
+  listedFiles: "listed",
+  otherCommands: "exec",
+  pathChecks: "checked",
+  readFiles: "read",
+  searchedFiles: "searched",
+  skillLoads: "skills",
+  threadRecalls: "recalled",
+  visChecks: "checked",
+  webRequests: "web",
+} satisfies Record<keyof ThreadCommandSummaryStats, CommandChipKey>;
+
+const STAT_KEYS = Object.keys(STAT_CHIPS) as Array<keyof ThreadCommandSummaryStats>;
+
+function countChip(stats: ThreadCommandSummaryStats, key: CommandChipKey) {
+  return STAT_KEYS.reduce((total, stat) => STAT_CHIPS[stat] === key ? total + stats[stat] : total, 0);
+}
+
+/** A command step row's kind icon: its first counted chip, else a terminal. */
 export function getCommandIcon(stats: ThreadCommandSummaryStats | null | undefined): ComponentType<IconProps> {
-  return (stats && COMMAND_CHIPS.find(chip => chip.stats.some(stat => stats[stat] > 0))?.Icon) || TerminalIcon;
+  return (stats && COMMAND_CHIPS.find(chip => countChip(stats, chip.key) > 0)?.Icon) || TerminalIcon;
 }
 
-/** One command's matcher display, or null when no matcher describes it. */
+/** One command's matcher display, or null when no matcher describes it (own-renderer routes have none). */
 export function getCommandItemDisplay(item: CommandSequenceItem, context: CommandChipContext): ThreadCommandSummaryDisplay | null {
-  const [entry] = getCommandBlockItems([item], context);
-  if (!entry) return null;
-  return "display" in entry ? entry.display : getThreadCommandDisplay({ ...entry, knownSkills: context.knownSkills,
-    projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots });
-}
-
-type CommandBlockItem = Parameters<typeof getThreadCommandBlockDisplay>[0]["items"][number];
-
-export function getCommandBlockItems(items: readonly CommandSequenceItem[], context: CommandChipContext): CommandBlockItem[] {
+  if (item.type === "commandExecution") {
+    return getThreadCommandDisplay({ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell,
+      knownSkills: context.knownSkills, projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots });
+  }
+  if (item.type === "dynamicToolCall") return getNativeToolDisplay(item, { knownSkills: context.knownSkills });
   const mcpContext = { knownSkills: context.knownSkills, ...(context.cwd
     ? { cwd: context.cwd, projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots } : {}) };
-  return items.flatMap<CommandBlockItem>(item => {
-    if (item.type === "commandExecution") {
-      return [{ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell }];
-    }
-    const display = item.type === "dynamicToolCall"
-      ? getNativeToolDisplay(item, { knownSkills: context.knownSkills })
-      : getWorkbenchMcpCommandDisplay({ argumentsValue: item.arguments, context: mcpContext, server: item.server, tool: item.tool });
-    return display ? [{ display }] : [];
-  });
+  return getWorkbenchMcpCommandDisplay({ argumentsValue: item.arguments, context: mcpContext, server: item.server, tool: item.tool });
+}
+
+/**
+ * What one step did: its own renderer's stats, else its matcher display's. A step nothing names counts as exec, so
+ * every step lands in some chip.
+ */
+function getCommandItemStats(item: CommandSequenceItem, context: CommandChipContext): ThreadCommandSummaryStats {
+  const route = item.type === "mcpToolCall"
+    ? getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool }) : null;
+  const stats = mergeCommandSummaryStats(createEmptyCommandSummaryStats(), route?.kind === "specialized"
+    ? route.rendering.result.summaryStats
+    : getCommandItemDisplay(item, context)?.summaryStats);
+  if (!STAT_KEYS.some(stat => stats[stat] > 0)) stats.otherCommands = 1;
+  return stats;
 }
 
 const FILE_CHIPS = [
@@ -115,27 +145,15 @@ function fileChips(segments: readonly ActivitySegment[]): ActivityChip[] {
 
 export function getActivityChips(segments: readonly ActivitySegment[], context: CommandChipContext): ActivityChip[] {
   const commands = segments.flatMap(segment => segment.kind === "commands" ? segment.items : []);
-  const searches = segments.reduce((total, segment) => total + (segment.kind === "webSearch" ? segment.items.length : 0), 0);
-  const stats = commands.length
-    ? getThreadCommandBlockDisplay({ items: getCommandBlockItems(commands, context), ...context }).summaryStats
-    : null;
-  const ownRowStats = dedicatedRendererStats(commands);
-  const commandChips = COMMAND_CHIPS.flatMap(({ Icon, key, stats: statKeys, verb }) => {
-    const count = statKeys.reduce((total, stat) => total + (stats?.[stat] ?? 0) + ownRowStats.reduce((sum, entry) => sum + (entry[stat] ?? 0), 0), 0)
-      + (key === "web" ? searches : 0);
+  const stats = createEmptyCommandSummaryStats();
+  for (const item of commands) mergeCommandSummaryStats(stats, getCommandItemStats(item, context));
+  stats.webRequests += segments.reduce((total, segment) => total + (segment.kind === "webSearch" ? segment.items.length : 0), 0);
+  const commandChips = COMMAND_CHIPS.flatMap(({ Icon, key, verb }) => {
+    const count = countChip(stats, key);
     const chip = count ? [{ Icon, count, key, verb }] : [];
     return key === "browse" ? [...chip, ...screenshotChip(commands, context)] : chip;
   });
   return [...fileChips(segments), ...commandChips];
-}
-
-/** wb MCP calls drawn by their own renderer (arc reads, vis, recall) have no summary display, yet still count what they did. */
-function dedicatedRendererStats(commands: readonly CommandSequenceItem[]): Partial<ThreadCommandSummaryStats>[] {
-  return commands.flatMap(item => {
-    if (item.type !== "mcpToolCall") return [];
-    const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
-    return route?.kind === "specialized" && route.rendering.result.summaryStats ? [route.rendering.result.summaryStats] : [];
-  });
 }
 
 /** Screenshots Browse steps captured, next to the browser steps that took them. */

@@ -870,17 +870,17 @@ export function getWorkbenchCommandRoute(
       return specialized("thread-context.read", {
         kind: "threadRecall",
         operation: { action: "search", query: readString(args.query) },
-      }, "Recalling thread history");
+      }, "Recalling thread history", { threadRecalls: 1 });
     case "thread_recall_expand":
       return specialized("thread-context.read", {
         kind: "threadRecall",
         operation: { action: "expand", query: null },
-      }, "Recalling thread history");
+      }, "Recalling thread history", { threadRecalls: 1 });
     case "thread_recall":
       return specialized("thread-context.read", {
         kind: "threadRecall",
         operation: { action: "recall", query: null },
-      }, "Recalling thread history");
+      }, "Recalling thread history", { threadRecalls: 1 });
     case "git_add":
       return simple("workbench-git.selection", actionTarget("Selecting ", "files for commit"), actionTarget("Selected ", "files for commit"));
     case "git_unstage":

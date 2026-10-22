@@ -135,7 +135,7 @@ export function getWorkbenchThreadRecallSummaryDisplay(
     showShell: false,
     summaryKind: "matched",
     summaryParts,
-    summaryStats: createEmptyCommandSummaryStats(),
+    summaryStats: { ...createEmptyCommandSummaryStats(), threadRecalls: 1 },
     summaryText: summarizeDisplayParts(summaryParts),
   };
 }
@@ -153,6 +153,7 @@ export const THREAD_CONTEXT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         remainingCommand: null,
         stop: true,
         summaryParts: display.summaryParts,
+        summaryStats: { threadRecalls: 1 },
       });
     },
   }),

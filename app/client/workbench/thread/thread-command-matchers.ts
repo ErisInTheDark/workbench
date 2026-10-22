@@ -6,7 +6,7 @@
  * - ThreadCommandSummaryDisplay: shared summary-display shape for single-command and grouped command labels.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills.
  * - ThreadCommandDetailRow/ThreadCommandDetailTarget: structured detail rows rendered inside command disclosures.
- * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels.
+ * - ThreadCommandSummaryStats: what a command did, counted for activity chips and step icons.
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text.
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output.
@@ -21,7 +21,6 @@
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries.
  * - getThreadCommandDisplay: reuse immutable command contexts, unwrap shell launchers, and describe common command patterns.
- * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label that counts every item.
  * - getThreadCommandExecutionOutcome/getThreadCommandOutcomeDisplay: classify command lifecycle results and select completed or ongoing structured grammar.
  * - getThreadMcpToolCallOutcome/getThreadSubagentWaitMcpOutcome/isThreadMcpWaitInterruptedBySteer: classify wb MCP call lifecycles, counting a wait ended by an incoming message as completed.
  * - getWorkbenchMcpCommandDisplay/getWorkbenchMcpCommandRoute/getWorkbenchCommandRouteSummaryDisplay: map recorded wb MCP calls and resolved routes into summary or dedicated renderer operations.
@@ -68,7 +67,6 @@ import {
     buildCommandPathPart,
     buildDisplayPathPart,
     buildReadCommandSummary,
-    countKnownCommandSummaryStats,
     createEmptyCommandSummaryStats,
     formatThreadCommandPath,
     mergeCommandSummaryStats,
@@ -121,8 +119,6 @@ import {
     shouldUseWorkbenchMcpSpecializedRenderer,
 } from "./command-matchers/workbench-mcp";
 
-type KnownCommandSummaryStatKey = Exclude<keyof ThreadCommandSummaryStats, "otherCommands">;
-
 const MAX_CACHED_COMMAND_DISPLAY_CONTEXTS = 8;
 const commandDisplayCache = new WeakMap<CommandAction[], Map<string, ThreadCommandDisplay>>();
 const commandDisplayContextIdentity = new WeakMap<object, number>();
@@ -164,127 +160,6 @@ function getCommandDisplayCacheKey({
     getCommandDisplayContextIdentity(workspaceRoots),
   ].join("\0");
 }
-
-const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
-  format: (count: number) => string;
-  formatOngoing: (count: number) => string;
-  key: KnownCommandSummaryStatKey;
-}> = [
-  {
-    key: "skillLoads",
-    format: (count) => `loaded ${count} ${pluralize(count, "skill")}`,
-    formatOngoing: (count) => `loading ${count} ${pluralize(count, "skill")}`,
-  },
-  {
-    key: "readFiles",
-    format: (count) => `read ${count} ${pluralize(count, "file")}`,
-    formatOngoing: (count) => `reading ${count} ${pluralize(count, "file")}`,
-  },
-  {
-    key: "searchedFiles",
-    format: (count) => `searched ${count} ${pluralize(count, "file")}`,
-    formatOngoing: (count) => `searching ${count} ${pluralize(count, "file")}`,
-  },
-  {
-    key: "listedFiles",
-    format: (count) => count === 1
-      ? "listed files"
-      : `listed files ${count} times`,
-    formatOngoing: (count) => count === 1
-      ? "listing files"
-      : `listing files ${count} times`,
-  },
-  {
-    key: "deletedPaths",
-    format: (count) => count === 1
-      ? "deleted 1 path"
-      : `deleted ${count} paths`,
-    formatOngoing: (count) => count === 1
-      ? "deleting 1 path"
-      : `deleting ${count} paths`,
-  },
-  {
-    key: "pathChecks",
-    format: (count) => count === 1
-      ? "checked 1 path"
-      : `checked ${count} paths`,
-    formatOngoing: (count) => count === 1
-      ? "checking 1 path"
-      : `checking ${count} paths`,
-  },
-  {
-    key: "gitStatusChecks",
-    format: (count) => count === 1
-      ? "checked git status"
-      : `checked git status ${count} times`,
-    formatOngoing: (count) => count === 1
-      ? "checking git status"
-      : `checking git status ${count} times`,
-  },
-  {
-    key: "gitDiffChecks",
-    format: (count) => count === 1
-      ? "checked git diff"
-      : `checked git diff ${count} times`,
-    formatOngoing: (count) => count === 1
-      ? "checking git diff"
-      : `checking git diff ${count} times`,
-  },
-  {
-    key: "gitCheckpointCreates",
-    format: (count) => count === 1
-      ? "created a git checkpoint"
-      : `created ${count} git checkpoints`,
-    formatOngoing: (count) => count === 1
-      ? "creating a git checkpoint"
-      : `creating ${count} git checkpoints`,
-  },
-  {
-    key: "gitCheckpointDiffs",
-    format: (count) => count === 1
-      ? "diffed against a git checkpoint"
-      : `diffed against git checkpoints ${count} times`,
-    formatOngoing: (count) => count === 1
-      ? "diffing against a git checkpoint"
-      : `diffing against git checkpoints ${count} times`,
-  },
-  {
-    key: "gitCheckpointRestores",
-    format: (count) => count === 1
-      ? "restored a git checkpoint"
-      : `restored git checkpoints ${count} times`,
-    formatOngoing: (count) => count === 1
-      ? "restoring a git checkpoint"
-      : `restoring git checkpoints ${count} times`,
-  },
-  {
-    key: "visChecks",
-    format: (count) => count === 1
-      ? "checked a vis"
-      : `checked vis ${count} times`,
-    formatOngoing: (count) => count === 1
-      ? "checking a vis"
-      : `checking vis ${count} times`,
-  },
-  {
-    key: "browseActions",
-    format: (count) => count === 1
-      ? "ran 1 browser step"
-      : `ran ${count} browser steps`,
-    formatOngoing: (count) => count === 1
-      ? "running 1 browser step"
-      : `running ${count} browser steps`,
-  },
-  {
-    key: "webRequests",
-    format: (count) => count === 1
-      ? "made a web request"
-      : `made ${count} web requests`,
-    formatOngoing: (count) => count === 1
-      ? "making a web request"
-      : `making ${count} web requests`,
-  },
-];
 
 export {
     CommandMatcher, formatThreadCommandPath, getGitArcMatcherAction,
@@ -477,66 +352,6 @@ export function getThreadCommandDisplay(context: CommandDisplayContext): ThreadC
   return display;
 }
 
-export function getThreadCommandBlockDisplay({
-  items,
-  knownSkills,
-  projectRootPath,
-  workspaceRoots,
-}: {
-  items: Array<
-    | Pick<CommandDisplayContext, "command" | "commandActions" | "cwd" | "shell">
-    | { display: ThreadCommandSummaryDisplay }
-  >;
-  knownSkills?: CommandDisplayContext["knownSkills"];
-  projectRootPath?: string;
-  workspaceRoots?: CommandDisplayContext["workspaceRoots"];
-}): ThreadCommandSummaryDisplay {
-  const summaryStats = createEmptyCommandSummaryStats();
-  const summaryCategoryOrder: KnownCommandSummaryStatKey[] = [];
-  const seenSummaryCategories = new Set<KnownCommandSummaryStatKey>();
-
-  for (const item of items) {
-    const display = "display" in item
-      ? item.display
-      : getThreadCommandDisplay({
-        command: item.command,
-        commandActions: item.commandActions,
-        cwd: item.cwd,
-        knownSkills,
-        projectRootPath,
-        shell: item.shell,
-        workspaceRoots,
-      });
-    const categories = getKnownCommandSummaryCategoryKeys(display.summaryStats);
-    for (const key of categories) {
-      if (seenSummaryCategories.has(key)) {
-        continue;
-      }
-
-      seenSummaryCategories.add(key);
-      summaryCategoryOrder.push(key);
-    }
-    mergeCommandSummaryStats(summaryStats, display.summaryStats);
-    // The label is built only from stats, so an item no category names still counts, never vanishing from its group.
-    if (!categories.length && !display.summaryStats.otherCommands) summaryStats.otherCommands += 1;
-  }
-
-  const summaryText = formatCommandBlockSummaryText(summaryStats, items.length, summaryCategoryOrder);
-  const ongoingSummaryText = formatCommandBlockSummaryText(summaryStats, items.length, summaryCategoryOrder, true);
-  return {
-    claimedBy: "command-block",
-    omitFromDisplay: false,
-    ongoingSummaryParts: [CommandMatcher.Text(ongoingSummaryText)],
-    ongoingSummaryText,
-    shell: null,
-    showShell: false,
-    summaryKind: "matched",
-    summaryParts: [CommandMatcher.Text(summaryText)],
-    summaryStats,
-    summaryText,
-  };
-}
-
 function getShellCommandMatchers(shellGroup: ParsedCommandDisplayContext["shellGroup"]) {
   switch (shellGroup) {
     case "powershell":
@@ -645,33 +460,6 @@ function summarizeCommandAction(
   }
 }
 
-function formatCommandBlockSummaryText(
-  summaryStats: ThreadCommandSummaryStats,
-  fallbackCommandCount: number,
-  summaryCategoryOrder = getKnownCommandSummaryCategoryKeys(summaryStats),
-  ongoing = false,
-) {
-  const segments = summaryCategoryOrder
-    .map((key) => {
-      const count = summaryStats[key];
-      const category = COMMAND_BLOCK_SUMMARY_CATEGORIES.find((candidate) => candidate.key === key);
-      return count && category ? (ongoing ? category.formatOngoing(count) : category.format(count)) : null;
-    })
-    .filter((segment): segment is string => Boolean(segment));
-
-  if (countKnownCommandSummaryStats(summaryStats) && summaryStats.otherCommands) {
-    segments.push(`${ongoing ? "running" : "ran"} ${summaryStats.otherCommands} other ${pluralize(summaryStats.otherCommands, "command")}`);
-  }
-
-  if (!segments.length) {
-    return `${ongoing ? "Running" : "Ran"} ${fallbackCommandCount} ${pluralize(fallbackCommandCount, "command")}`;
-  }
-
-  const [firstSegment, ...remainingSegments] = segments;
-  const normalizedFirstSegment = `${firstSegment.slice(0, 1).toUpperCase()}${firstSegment.slice(1)}`;
-  return [normalizedFirstSegment, ...remainingSegments].join(", ");
-}
-
 export function getThreadCommandExecutionOutcome(
   status: CommandExecutionStatus,
   exitCode: number | null,
@@ -735,16 +523,6 @@ function lowercaseFirstSummaryPart(parts: ThreadCommandDisplayPart[]) {
     changed = true;
     return { ...part, text: `${part.text[0].toLowerCase()}${part.text.slice(1)}` };
   });
-}
-
-function getKnownCommandSummaryCategoryKeys(stats: ThreadCommandSummaryStats) {
-  return COMMAND_BLOCK_SUMMARY_CATEGORIES
-    .map((category) => category.key)
-    .filter((key) => stats[key] > 0);
-}
-
-function pluralize(count: number, singular: string, plural = `${singular}s`) {
-  return count === 1 ? singular : plural;
 }
 
 function countCommandStages(
