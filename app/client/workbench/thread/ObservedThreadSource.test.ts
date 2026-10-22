@@ -159,6 +159,20 @@ test("only a working thread has a live turn, whatever status the provider left o
   working.release();
 });
 
+test("a turn paused on a live approval or question stays live, while a question held after its turn ended does not", () => {
+  // Ending the turn would mark its awaiting call completed, dropping it out of its command row and activity card.
+  const pendingInput = { kind: "needsAttention", reason: "pendingInput", requestKey: "approval", settled: false };
+  const runtime = (turnLive: boolean) => ({ [threadId]: { tokenUsage: null, willAutoCompact: null, turnLive } });
+  const live = fixture(runtime(true), pendingInput);
+  live.publish(projection([{ id: "turn-1" }, { id: "turn-2", status: "inProgress" }]));
+  assert.equal(live.published.turns?.liveTurnId, "turn-2");
+  live.release();
+  const held = fixture(runtime(false), pendingInput);
+  held.publish(projection([{ id: "turn-1" }, { id: "turn-2", status: "inProgress" }]));
+  assert.equal(held.published.turns?.liveTurnId, null);
+  held.release();
+});
+
 test("snoozed retained input is inactive after interruption while an unsnoozed question remains active", () => {
   const lifecycle = { kind: "needsAttention", reason: "pendingInput", requestKey: "question", settled: false };
   const active = fixture({}, lifecycle);

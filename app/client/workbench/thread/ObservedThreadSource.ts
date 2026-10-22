@@ -8,7 +8,9 @@ import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/Workbe
 import { createWorkbenchTextInput, type WorkbenchMessageContext, type WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchRateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
-import type { ThreadRuntime, WorkbenchThreadRouteTarget, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import {
+  isWorkbenchThreadStatusProviderOwned, type ThreadRuntime, type WorkbenchThreadRouteTarget, type WorkbenchThreadSidebarEntry,
+} from "workbench-shared/workbench/thread/thread-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -110,6 +112,13 @@ function pendingOf(entry: ThreadEntry | null, runtime: ThreadRuntime | undefined
     harness: entry.identity.harness, threadId: entry.identity.threadId,
     itemId: pending.itemId, request: pending.request, requestKey: pending.requestKey, turnId: pending.turnId,
   } : null;
+}
+
+/** Working, or paused mid-turn on a live approval or question; a question held after its turn ended is not live. */
+function hasLiveTurn(entry: ThreadEntry | null, runtime: ThreadRuntime | undefined) {
+  if (!entry) return false;
+  return entry.lifecycle.kind === "working"
+    || (isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && runtime?.turnLive === true);
 }
 
 /** Trims each input part and drops the empty ones; the daemon rejects blank parts. */
@@ -256,7 +265,7 @@ export default function createObservedThreadSource(
         subagents, rateLimits: entry ? ports.readRateLimits(entry.identity.harness) : null,
         gitArcProposals: gitArc.proposals, gitArcClaimChanges: gitArcClaims.claimChanges, relatedHeads, draftDocument: null,
       },
-      turns: createThreadTurnsSlice(transcriptState, Boolean(current?.hasPreviousTurns), entry?.lifecycle.kind === "working"),
+      turns: createThreadTurnsSlice(transcriptState, Boolean(current?.hasPreviousTurns), hasLiveTurn(entry, runtime[threadId])),
       questionnaire: { pending: pendingQuestionnaire },
       approvals: { entries: current?.approvalEntries ?? [] },
       shellOutput: { entries: runtime[threadId]?.shellOutput ?? NO_SHELL_OUTPUT },
