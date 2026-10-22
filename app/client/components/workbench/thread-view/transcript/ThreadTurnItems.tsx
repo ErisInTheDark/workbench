@@ -22,7 +22,7 @@ import ThreadMeasuredContent from "../ThreadMeasuredContent";
 import ThreadProgressiveWindow, { type ThreadProgressiveWindowChunk } from "../ThreadProgressiveWindow";
 import ThreadAnimationStyleContext from "../ThreadAnimationStyleContext";
 import { ThreadEntryAnimation, ThreadStreamCaretSlot } from "../ThreadRevealText";
-import ThreadStableChunkIdentities from "../ThreadStableChunkIdentities";
+import ThreadStableChunkIdentities, { ThreadStableKeys } from "../ThreadStableChunkIdentities";
 import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
 import { getGitArcFoldAnchor, isGitArcCardBlock } from "../thread-git-arc-retries";
@@ -92,20 +92,13 @@ export default memo(function ThreadTurnItems({
   let stableBlockIndex = 0;
   const stableEntries: TranscriptEntry[] = entries.map(entry => entry.kind === "block"
     ? { ...entry, block: stableBlocks[stableBlockIndex++]! } : entry);
-  // Content keys, never positions: history landing above must not re-key the rows already on screen,
-  // and a block keeps its key as it grows, so a live activity run never remounts.
-  const keyOccurrences = new Map<string, number>();
-  const entryKeys = stableEntries.map(entry => {
-    // A folded arc card that gains a stitched neighbour keeps its key, so the card grows instead of remounting.
-    const kindKey = entry.kind === "block" && (entry.block.kind === "gitArcHistory" || entry.block.kind === "gitArcSequence")
-      ? "gitArc" : entry.kind === "block" ? entry.block.kind : "generic";
-    const base = entry.kind === "generic"
-      ? `generic:${entry.item.id}`
-      : `${kindKey}:${getRenderableBlockItems(entry.block)[0]?.id}`;
-    const occurrence = (keyOccurrences.get(base) ?? 0) + 1;
-    keyOccurrences.set(base, occurrence);
-    return occurrence > 1 ? `${base}#${occurrence}` : base;
-  });
+  // Content keys, never positions or first items: a block keeps its key as older items join it above and live items
+  // below, so the block under the reader's anchor never remounts as history lands.
+  const entryKeysRef = useRef<ThreadStableKeys | null>(null);
+  entryKeysRef.current ??= new ThreadStableKeys();
+  const entryKeys = entryKeysRef.current.resolve(stableEntries.map(entry => entry.kind === "generic"
+    ? [`generic:${entry.item.id}`]
+    : getRenderableBlockItems(entry.block).map(item => item.id)));
   const chunkIdentitiesRef = useRef<ThreadStableChunkIdentities | null>(null);
   chunkIdentitiesRef.current ??= new ThreadStableChunkIdentities();
   const chunkIdentities = chunkIdentitiesRef.current;

@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import ThreadStableChunkIdentities from "./ThreadStableChunkIdentities";
+import ThreadStableChunkIdentities, { ThreadStableKeys } from "./ThreadStableChunkIdentities";
 
 const keys = (from: number, to: number) => Array.from({ length: to - from }, (_, index) => `e${from + index}`);
 
@@ -41,6 +41,17 @@ test("live entries landing below keep rendered chunks and start new ones", () =>
   assert.equal(after.group, before.group);
   assert.deepEqual(after.chunks.map(([identity]) => identity).slice(0, 2), before.chunks.map(([identity]) => identity));
   assert.deepEqual(after.chunks.map(([, entries]) => entries), [["e0", "e1", "e2"], ["e3", "e4", "e5"], ["e6"]]);
+});
+
+test("a block keeps its key when older items join it, when it grows live, and through a merge", () => {
+  // Remounting the block under the reading line loses the reader's anchor, so keys must not follow the first item.
+  const keys = new ThreadStableKeys();
+  const [block, next] = keys.resolve([["a2", "a3"], ["b1"]]);
+  assert.deepEqual(keys.resolve([["a1", "a2", "a3"], ["b1"]]), [block, next], "older items landing above");
+  assert.deepEqual(keys.resolve([["a1", "a2", "a3", "a4"], ["b1", "b2"]]), [block, next], "live growth below");
+  assert.deepEqual(keys.resolve([["a1", "a2", "a3", "a4", "b1", "b2"]]), [next], "a merge keeps the newer block's key");
+  const split = keys.resolve([["a1"], ["a2"]]);
+  assert.equal(new Set(split).size, 2, "keys stay unique");
 });
 
 test("a split group leaves the original identity with its newer half and gives the older half a new one", () => {

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - ThreadStableChunk: one chunk's identity and entry range within its group.
+ * - ThreadStableKeys: identities for ranges of member keys that survive growth, shrinking and merges in either direction.
  * - default ThreadStableChunkIdentities: keep one turn's group and chunk identities, and chunk boundaries, stable while
  *   history lands above and live entries land below.
  */
@@ -33,24 +34,41 @@ function resolveIdentities(ranges: readonly (readonly string[])[], owners: Map<s
   return identities;
 }
 
+/**
+ * One identity per range of member keys that persists while the range grows, shrinks, or merges in either direction:
+ * a range keeps the identity of its newest member that already had one. Members no range holds any more are forgotten.
+ */
+export class ThreadStableKeys {
+  #owners = new Map<string, string>();
+
+  resolve(ranges: readonly (readonly string[])[]): string[] {
+    const owners = new Map<string, string>();
+    for (const keys of ranges) for (const key of keys) {
+      const known = this.#owners.get(key);
+      if (known !== undefined) owners.set(key, known);
+    }
+    const identities = resolveIdentities(ranges, owners, new Set());
+    this.#owners = owners;
+    return identities;
+  }
+
+  has(key: string) {
+    return this.#owners.has(key);
+  }
+}
+
 export default class ThreadStableChunkIdentities {
-  #groupOwners = new Map<string, string>();
+  readonly #groupKeys = new ThreadStableKeys();
   readonly #chunkOwners = new Map<string, string>();
   readonly #anchors = new Map<string, string>();
   #usedChunks = new Set<string>();
 
   /** Call once per render with every group's entry keys, before `chunks`. */
   groups(groups: readonly (readonly string[])[]): string[] {
-    const owners = new Map<string, string>();
-    for (const keys of groups) for (const key of keys) {
-      const known = this.#groupOwners.get(key);
-      if (known !== undefined) owners.set(key, known);
-    }
-    const identities = resolveIdentities(groups, owners, new Set());
-    this.#groupOwners = owners;
+    const identities = this.#groupKeys.resolve(groups);
     const live = new Set(identities);
     for (const identity of [...this.#anchors.keys()]) if (!live.has(identity)) this.#anchors.delete(identity);
-    for (const key of [...this.#chunkOwners.keys()]) if (!owners.has(key)) this.#chunkOwners.delete(key);
+    for (const key of [...this.#chunkOwners.keys()]) if (!this.#groupKeys.has(key)) this.#chunkOwners.delete(key);
     this.#usedChunks = new Set();
     return identities;
   }
