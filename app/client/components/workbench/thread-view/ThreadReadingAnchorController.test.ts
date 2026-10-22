@@ -1,6 +1,7 @@
 /*
  * No exports. Tests protect flow-box selection, hidden boxes never anchoring, transform-free offsets, nested-scroller
- * boundaries, exact-once layout corrections, held activated controls, and re-anchoring after removal.
+ * boundaries, exact-once layout corrections, browser clamps owed back, chrome never holding, held activated controls,
+ * and re-anchoring after removal.
  */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
@@ -16,6 +17,7 @@ function fixture() {
   const controller = new ThreadReadingAnchorController<FakeAnchor>({
     pick: () => atTop,
     offset: anchor => anchor.connected ? anchor.offset : null,
+    readScroll: () => ({ max: 10_000, top: 0 }),
     shift: delta => { shifts.push(delta); return delta; },
   });
   controller.record();
@@ -64,6 +66,7 @@ test("a correction the scroller can only partly apply at its edge is finished by
   const controller = new ThreadReadingAnchorController<FakeAnchor>({
     pick: () => anchor,
     offset: current => current.offset,
+    readScroll: () => ({ max: 10_000, top: scrollTop }),
     shift: delta => {
       const next = Math.max(0, scrollTop + delta);
       shifts.push(next - scrollTop);
@@ -82,6 +85,34 @@ test("a correction the scroller can only partly apply at its edge is finished by
   assert.deepEqual(shifts, [0, 6_336]);
 });
 
+test("a reader the browser clamps at the bottom while a correction is out still lands where they were reading", () => {
+  const shifts: number[] = [];
+  const scroll = { max: 7_044, top: 4_706 };
+  const anchor = { offset: 5_000, connected: true };
+  const controller = new ThreadReadingAnchorController<FakeAnchor>({
+    pick: () => anchor,
+    offset: current => current.offset,
+    readScroll: () => ({ ...scroll }),
+    shift: delta => {
+      const next = Math.min(scroll.max, Math.max(0, scroll.top + delta));
+      shifts.push(next - scroll.top);
+      const applied = next - scroll.top;
+      scroll.top = next;
+      return applied;
+    },
+  });
+  controller.record();
+  // Chrome below the reader overshoots for one tick, carrying the anchor down with it.
+  anchor.offset += 2_284;
+  controller.reconcile();
+  // Then the page shrinks: the browser clamps the reader to the new bottom, and the anchor is back where it was.
+  Object.assign(scroll, { max: 4_760, top: 4_760 });
+  anchor.offset -= 2_284;
+  controller.reconcile();
+  assert.deepEqual(shifts, [2_284, -54]);
+  assert.equal(scroll.top, 4_706);
+});
+
 test("an unmounted anchor is replaced on the next layout change without inventing a correction", () => {
   const shifts: number[] = [];
   const first = { offset: 100, connected: true };
@@ -90,6 +121,7 @@ test("an unmounted anchor is replaced on the next layout change without inventin
   const controller = new ThreadReadingAnchorController<FakeAnchor>({
     pick: () => atTop,
     offset: anchor => anchor.connected ? anchor.offset : null,
+    readScroll: () => ({ max: 10_000, top: 0 }),
     shift: delta => { shifts.push(delta); return delta; },
   });
   controller.record();
@@ -177,7 +209,7 @@ function layoutFixture(t: TestContext) {
     return element;
   };
   const viewport = box(0, 600);
-  return { box, viewport };
+  return { box, styles, viewport };
 }
 
 test("a nested scroller remains the anchor instead of the lines it scrolls", t => {
@@ -244,21 +276,40 @@ test("boxes the reader cannot see never become the anchor", t => {
   assert.equal(pickThreadReadingAnchor(viewport, box(0, 600, [spacer, hidden, icon, reading])), reading);
 });
 
-test("an anchor's content offset follows layout, not transforms", t => {
-  layoutFixture(t);
-  const positioned = (offsetTop: number, offsetParent: HTMLElement | null, clientTop = 0) => {
+function offsetFixture(t: TestContext) {
+  const { styles } = layoutFixture(t);
+  /** A box laid out `offsetTop` below its offset parent, nested in `parent`. */
+  return (offsetTop: number, offsetParent: HTMLElement | null, { clientTop = 0, parent = offsetParent, position = "static" } = {}) => {
     const element = Object.create(HTMLElement.prototype) as HTMLElement;
-    Object.defineProperties(element, { offsetTop: { value: offsetTop }, offsetParent: { value: offsetParent }, clientTop: { value: clientTop } });
+    Object.defineProperties(element, {
+      clientTop: { value: clientTop }, offsetParent: { value: offsetParent }, offsetTop: { value: offsetTop }, parentElement: { value: parent },
+    });
+    styles.set(element, { display: "block", overflowY: "visible", position });
     return element;
   };
+}
+
+test("an anchor's content offset follows layout, not transforms", t => {
+  const positioned = offsetFixture(t);
   const page = positioned(0, null);
-  const viewport = positioned(40, page, 2);
+  const viewport = positioned(40, page, { clientTop: 2 });
   const content = positioned(10, viewport);
-  const card = positioned(300, viewport, 1);
-  const row = positioned(25, card, 4);
+  const card = positioned(300, viewport, { clientTop: 1, parent: content, position: "relative" });
+  const row = positioned(25, card, { clientTop: 4 });
   // The rows' getBoundingClientRect would include any running animation; the offset never reads it.
   assert.equal(getThreadContentOffset(row, content), 316);
 });
+
+for (const position of ["sticky", "fixed"]) {
+  test(`an anchor in ${position} chrome has no content offset, since its layout moves with the scroll, not the content`, t => {
+    const positioned = offsetFixture(t);
+    const viewport = positioned(0, null);
+    const content = positioned(0, viewport);
+    const chrome = positioned(900, viewport, { parent: content, position });
+    const control = positioned(12, chrome);
+    assert.equal(getThreadContentOffset(control, content), null);
+  });
+}
 
 test("a measured placeholder remains the anchor instead of its skipped descendants", t => {
   const { box, viewport } = layoutFixture(t);

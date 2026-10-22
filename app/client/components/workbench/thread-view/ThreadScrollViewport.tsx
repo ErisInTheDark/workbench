@@ -201,6 +201,10 @@ function ActiveThreadScrollViewport ({
       return content && element.isConnected && content.contains(element) ? getThreadContentOffset(element, content) : null;
     },
     shift: delta => settle.shift(delta),
+    readScroll: () => {
+      const viewport = viewportRef.current;
+      return viewport ? { max: viewport.scrollHeight - viewport.clientHeight, top: viewport.scrollTop } : { max: 0, top: 0 };
+    },
   });
   useEffect(() => () => {
     visibility.current?.dispose();

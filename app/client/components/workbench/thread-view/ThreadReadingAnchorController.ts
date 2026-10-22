@@ -4,7 +4,8 @@
  * - default ThreadReadingAnchorController: keep what the reader sees still across any layout change above them.
  * - pickThreadReadingAnchor: the visible leaf at a scroller's reading line, the element whose content position the reader holds.
  * - pickThreadActivationAnchor: the element a reader holds after activating a control, never content a nested scroller moves.
- * - getThreadContentOffset: an anchor's layout position in the content, untouched by transforms and animations.
+ * - getThreadContentOffset: an anchor's layout position in the content, untouched by transforms and animations; none
+ *   inside sticky or fixed chrome.
  */
 
 export interface ReadingAnchorOptions<Anchor> {
@@ -14,6 +15,8 @@ export interface ReadingAnchorOptions<Anchor> {
   readonly offset: (anchor: Anchor) => number | null;
   /** Move the reader by `delta` so the anchor keeps its on-screen position; returns how much actually moved. */
   readonly shift: (delta: number) => number;
+  /** The scroller's position and the furthest it can go now. */
+  readonly readScroll: () => { max: number; top: number };
 }
 
 /**
@@ -25,6 +28,8 @@ export default class ThreadReadingAnchorController<Anchor> {
   readonly #options: ReadingAnchorOptions<Anchor>;
   #anchor: Anchor | null = null;
   #offset: number | null = null;
+  /** Where the last correction or pick left the reader. */
+  #scrollTop = 0;
 
   constructor(options: ReadingAnchorOptions<Anchor>) {
     this.#options = options;
@@ -47,6 +52,7 @@ export default class ThreadReadingAnchorController<Anchor> {
     this.#correct();
     this.#anchor = anchor;
     this.#offset = this.#options.offset(anchor);
+    this.#scrollTop = this.#options.readScroll().top;
   }
 
   /** Layout changed: put back whatever the anchor drifted by. */
@@ -57,16 +63,22 @@ export default class ThreadReadingAnchorController<Anchor> {
   #correct() {
     const offset = this.#anchor === null ? null : this.#options.offset(this.#anchor);
     if (offset === null || this.#offset === null) return false;
+    // Content below shrinking clamps a reader at the bottom up behind the corrections' back; that undid part of an
+    // earlier correction, so it is owed again. A reader's own scroll never matches: up leaves the edge, down rises.
+    const scroll = this.#options.readScroll();
+    if (scroll.top < this.#scrollTop && scroll.top >= scroll.max - 0.5) this.#offset -= this.#scrollTop - scroll.top;
     const drift = offset - this.#offset;
     // A scroller at its edge cannot take all of a correction (nothing above scrollTop 0); what it could not take
     // stays owed, so the next change (the replacement for an unmounted chunk landing) puts the reader back exactly.
     if (Math.abs(drift) >= 0.5) this.#offset += this.#options.shift(drift);
+    this.#scrollTop = this.#options.readScroll().top;
     return true;
   }
 
   #pick() {
     this.#anchor = this.#options.pick();
     this.#offset = this.#anchor === null ? null : this.#options.offset(this.#anchor);
+    this.#scrollTop = this.#options.readScroll().top;
   }
 }
 
@@ -156,7 +168,12 @@ function layoutTop(element: HTMLElement) {
 /**
  * Where an anchor sits in the content's layout. Transforms are left out: entry motion and slides move pixels for a
  * moment, never the reader's place, so measuring them would read an animation ending as drift and shove the reader.
+ * Sticky and fixed chrome (a stuck composer, a fullscreen cover) has none: its layout moves with the scroll itself,
+ * so holding it would read every correction as fresh drift and scroll forever.
  */
 export function getThreadContentOffset(anchor: HTMLElement, content: HTMLElement) {
+  for (let element: HTMLElement | null = anchor; element && element !== content; element = element.parentElement) {
+    if (/^(?:sticky|fixed)$/.test(getComputedStyle(element).position)) return null;
+  }
   return layoutTop(anchor) - layoutTop(content);
 }
