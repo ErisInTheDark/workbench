@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchMessageWaitHandoff: data retained while message waits and undelivered mail re-enter replacement generations.
  * - WorkbenchMessageWaitOutcome: a selected sender's message, or an interruption by another sender's message.
- * - default WorkbenchMessageWaitController: own sender-filtered readiness, observable pending dependencies, undelivered mail, cancellation, and reload handoff.
+ * - default WorkbenchMessageWaitController: own sender-filtered readiness, observable pending dependencies, undelivered mail and its senders, cancellation, and reload handoff.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
@@ -94,10 +94,20 @@ export default class WorkbenchMessageWaitController {
     else this.inbox.delete(threadId);
   }
 
+  /** Senders of mail admitted for `threadId` that its model has not seen yet. */
+  undeliveredSenders(threadId: string) {
+    return (this.inbox.get(threadId) ?? []).map(message => message.senderThreadId);
+  }
+
+  /** A selected sender's mail answers the wait; any other mail the caller has not seen interrupts it. */
   private takeUndelivered(state: MessageWaitState) {
     const pending = this.inbox.get(state.callerThreadId);
     const index = pending?.findIndex(candidate => state.senderThreadIds.some(id => id === candidate.senderThreadId)) ?? -1;
-    if (!pending || index < 0) return;
+    if (!pending) return;
+    if (index < 0) {
+      state.interrupted = true;
+      return;
+    }
     state.received = pending[index]!;
     const remaining = pending.filter((_, candidate) => candidate !== index);
     if (remaining.length) this.inbox.set(state.callerThreadId, remaining);

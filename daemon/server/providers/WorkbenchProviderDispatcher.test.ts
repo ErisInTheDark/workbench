@@ -72,6 +72,8 @@ test("accepted agent messages wake matching message waits and end others without
       await send("unselected", "unrelated reply");
       assert.deepEqual(await waiter, { kind: "interrupted" });
       assert.equal(registration.signal.aborted, false);
+      // The interrupted wait returned, so the agent now receives the unrelated message.
+      owner.delivered(threadId, { senderThreadId: "unselected", senderName: "luna", message: "unrelated reply" });
       const selected = owner.wait({
         waitId: "selected", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],
       }, registration.signal);

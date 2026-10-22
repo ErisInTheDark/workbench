@@ -14,11 +14,7 @@ import type { WorkbenchProviderHandleOptions, WorkbenchProviderHiddenTurn } from
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
 
 function interruptSteerWaits(threadId: string, senderThreadId?: string) {
-  getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(
-    WorkbenchThreadIdSchema.parse(threadId),
-    senderThreadId ? "Workbench MCP wait was interrupted by an agent message." : undefined,
-    senderThreadId ? ["message_wait"] : [],
-  );
+  getProcessWorkbenchAgentMcpRequestRegistry().interruptForSteer(WorkbenchThreadIdSchema.parse(threadId), senderThreadId);
 }
 
 export type WorkbenchProviderDispatcherOptions = Partial<WorkbenchProviderHandleOptions>;

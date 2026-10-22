@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers (virtual while a questionnaire waits), context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, bounded reads, and batched latest-turn and usage reads.
+ * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers (virtual while a questionnaire waits) and whether a running agent still awaits one, context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, bounded reads, and batched latest-turn and usage reads.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -32,6 +32,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-item-identity";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
+import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import {
   projectWorkbenchTranscriptItems,
@@ -533,6 +534,25 @@ export default class WorkbenchTranscriptRepository {
     }
     const { steers, compactions } = this.#abandonedHolds(before, null);
     return [...new Set([...steers, ...compactions].map(row => row.thread_id))].sort();
+  }
+
+  /**
+   * Whether the thread's running turn holds a user steer its agent has not received. Agent messages have their own
+   * undelivered mail, and compaction-queue holds never reach a running agent.
+   */
+  hasUndeliveredUserSteer(threadId: string) {
+    const steers = this.#database.prepare(`
+      SELECT s.id
+      FROM thread_held_steers s
+      JOIN thread_turns t ON t.id = s.turn_id AND t.thread_id = s.thread_id
+      WHERE s.thread_id = @threadId AND s.state = 'pending' AND t.state IN ('admitted', 'inProgress')
+        AND s.entry_key NOT LIKE 'compaction:%'
+    `).all({ threadId }) as Array<{ id: number }>;
+    if (!steers.length) return false;
+    const agentMessageIds = new Set(this.#all(selectRows(heldSteerTables.threadHeldSteerParts, {
+      whereIn: { steer_id: steers.map(({ id }) => id) },
+    })).filter(part => part.part_type === "text" && part.text && readWorkbenchAgentMessageText(part.text)).map(part => part.steer_id));
+    return steers.some(({ id }) => !agentMessageIds.has(id));
   }
 
   readMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {

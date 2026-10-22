@@ -2,7 +2,7 @@
  * Exports:
  * - default WorkbenchCoreNode: own the core generation's lifecycle (start, drain, reload handoff, dispose order) and registrations, wiring the
  *   feature clusters under ./core with the provider dispatcher, thread state, thread summaries, the thread busy lease, thread actions, launches, daemon requests,
- *   MCP servers and browse cleanup, plus supervisor registrations and direct child declarations (including provider runtime installs).
+ *   MCP servers, browse cleanup and the MCP registry's undelivered-message read, plus supervisor registrations and direct child declarations (including provider runtime installs).
  * Local helpers: construct reloadable modules and the core feature lifecycle.
  */
 import path from "node:path";
@@ -129,6 +129,7 @@ function createWorkbenchCoreFeature(
     warn: logThreadStateWarning,
   });
   let stopShellObservation: (() => void) | null = null;
+  const undeliveredMessagesOwner = {};
   const { admission, autoCompact, compaction, contextRollover: threadContextRollover, continuations, turnLiveness, turnSettlement } = turns;
   const { transcriptReader, transcriptReconciliation } = turns;
   const facts = new WorkbenchThreadFactsFeature({
@@ -397,6 +398,11 @@ function createWorkbenchCoreFeature(
     afterCommit: () => {
       approvals.activate();
       stopShellObservation ??= turns.observeShells();
+      // User steers wait in the transcript's held steers; agent messages in the message waits' undelivered mail.
+      getProcessWorkbenchAgentMcpRequestRegistry().activateUndeliveredMessages(undeliveredMessagesOwner, async threadId => [
+        ...await database.readTranscriptHasUndeliveredUserSteer(threadId) ? [{}] : [],
+        ...messages.undeliveredSenders(threadId).map(senderThreadId => ({ senderThreadId })),
+      ]);
       if (coldStart) void turnSettlement.startColdSweep();
       void compaction.retireStrandedBefore(generationStartedAt);
       void busyThreads.start();
@@ -424,6 +430,7 @@ function createWorkbenchCoreFeature(
     dispose: async (reportPhase = () => undefined) => {
       stopShellObservation?.();
       stopShellObservation = null;
+      getProcessWorkbenchAgentMcpRequestRegistry().releaseUndeliveredMessages(undeliveredMessagesOwner);
       facts.stopObserving();
       unsubscribeAutoCompactSettled();
       unsubscribeTurnStarted();

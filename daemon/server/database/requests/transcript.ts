@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - transcriptRequests: database requests that settle and read canonical transcripts, their assets, context usage, history queries and
- *   approval outcomes.
+ * - transcriptRequests: database requests that settle and read canonical transcripts, their assets, context usage, undelivered user
+ *   steers, history queries and approval outcomes.
  */
 import type { WorkbenchTranscriptItemCursor } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
@@ -72,6 +72,10 @@ export const transcriptRequests = {
   readTranscriptAbandonedHoldThreadIds: defineDatabaseRequest({
     read: "query",
     run: ({ transcripts }, before: number, scope?: "compactionQueue") => transcripts.readAbandonedHoldThreadIds(before, scope),
+  }),
+  readTranscriptHasUndeliveredUserSteer: defineDatabaseRequest({
+    read: "transcript",
+    run: ({ transcripts }, threadId: string) => transcripts.hasUndeliveredUserSteer(threadId),
   }),
   /** Query errors are an expected answer, so they cross the worker boundary as a value. */
   queryTranscriptPage: defineDatabaseRequest({

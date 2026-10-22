@@ -101,13 +101,15 @@ test("another sender's message interrupts a live wait and stays undelivered mail
   owner.dispose();
 });
 
-test("existing undelivered mail from other senders never interrupts a new wait", async () => {
+test("another sender's undelivered mail interrupts a new wait, unless a selected sender's mail is ready", async () => {
   const owner = new WorkbenchMessageWaitController();
   const signal = new AbortController().signal;
   owner.receive("caller", message("unselected", "already pending"));
   const waited = owner.wait(input("narrow", "caller", ["first"]), signal);
   owner.receive("caller", message("first", "selected reply"));
-  assert.deepEqual(await waited, received("first", "selected reply"));
+  assert.deepEqual(await waited, { kind: "interrupted" }, "the caller has not seen the earlier mail, so it must not sit waiting");
+  assert.deepEqual(await owner.wait(input("again", "caller", ["first"]), signal), received("first", "selected reply"));
+  assert.deepEqual(owner.undeliveredSenders("caller"), ["unselected"]);
   owner.dispose();
 });
 

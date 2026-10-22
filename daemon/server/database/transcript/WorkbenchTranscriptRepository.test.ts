@@ -15,6 +15,7 @@ import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/dat
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { resolveSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
+import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import type { WorkbenchItemId } from "workbench-shared/workbench/identity";
@@ -3208,6 +3209,34 @@ test("steers on a turn that ends while a questionnaire waits stay virtual until 
     assert.deepEqual(repository.readAbandonedHoldThreadIds(200), [thread]);
     repository.settle([{ kind: "abandonedHolds", threadId: thread, before: 200, endedAt: 250 }]);
     assert.deepEqual(steerState(), ["interrupted"], "once nothing will answer it, it ends undelivered");
+  } finally {
+    database.close();
+  }
+});
+
+test("only a running turn's pending user steer is undelivered to the agent", () => {
+  const { database, repository } = createRepository();
+  try {
+    const thread = fixtureIdentityValues.WorkbenchThreadId.thread;
+    const held = (entryKey: string, turnId: string, text = entryKey): StoredSteerEntry => ({
+      attemptedAt: 110, canonicalItemId: null, clientUserMessageId: null, entryKey, error: null,
+      input: [{ type: "text", text, text_elements: [] }], requestId: null, resolvedAt: null,
+      status: "pending", threadId: thread, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
+    });
+    const agentMessage = createWorkbenchAgentMessageText({ message: "news", senderName: "luna", senderThreadId: "sibling" });
+    repository.settle([threadObservation(), turnObservation("first", 0), { kind: "steer", entry: held("settled", "first"), observedAt: 110 }]);
+    repository.settle([
+      liveTurn("live", 1),
+      { kind: "steer", entry: held("compaction:queued", "live"), observedAt: 120 },
+      { kind: "steer", entry: held("agent", "live", agentMessage), observedAt: 120 },
+    ]);
+    assert.equal(repository.hasUndeliveredUserSteer(thread), false,
+      "settled-turn holds, compaction-queue holds and agent messages are not user steers waiting on the running agent");
+    const steer = held("steer", "live");
+    repository.settle([{ kind: "steer", entry: steer, observedAt: 130 }]);
+    assert.equal(repository.hasUndeliveredUserSteer(thread), true);
+    repository.settle([{ kind: "steer", entry: { ...steer, status: "sent", canonicalItemId: "delivered", resolvedAt: 140 }, observedAt: 140 }]);
+    assert.equal(repository.hasUndeliveredUserSteer(thread), false, "delivery ends it");
   } finally {
     database.close();
   }

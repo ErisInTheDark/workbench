@@ -10,6 +10,7 @@ import {
   isWorkbenchAgentMcpSteerInterruption,
   isWorkbenchAgentMcpUserStop,
   WorkbenchAgentMcpRequestRegistry,
+  type WorkbenchAgentMcpUndeliveredMessage,
 } from "./workbench-agent-mcp-request-registry";
 
 function registrationOptions(owner: object, toolName = "task_get") {
@@ -564,6 +565,47 @@ test("drain-independent requests stay client-cancellable but leave blocker diagn
   assert.deepEqual(registry.listRuntimeDrainPending(owner), []);
   assert.equal(registry.cancel("client-1", 1), true);
   registration.unregister();
+});
+
+test("a wait attaching while its thread holds an undelivered message is interrupted as if it just arrived", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("caller");
+  let undelivered: WorkbenchAgentMcpUndeliveredMessage[] = [];
+  registry.activateUndeliveredMessages(owner, async () => undelivered);
+  const attach = async (requestId: string, toolName: string) => {
+    const wait = registry.register("client", requestId, { owner, toolName, steerInterruptible: true });
+    wait.setWorkbenchThreadId(threadId);
+    await settle();
+    return wait;
+  };
+  try {
+    const quiet = await attach("quiet", "subagent_wait");
+    assert.equal(quiet.signal.aborted, false, "a delivered or absent message never poisons a future wait");
+    quiet.unregister();
+
+    undelivered = [{ senderThreadId: WorkbenchThreadIdSchema.parse("sibling") }];
+    const messageWait = await attach("message", "message_wait");
+    const subagentWait = await attach("subagent", "subagent_wait");
+    assert.equal(messageWait.signal.aborted, false, "message waits answer agent mail themselves");
+    assert.equal(isWorkbenchAgentMcpSteerInterruption(subagentWait.signal.reason), true);
+    messageWait.unregister();
+    subagentWait.unregister();
+
+    undelivered = [{}];
+    const steered = await attach("steered", "message_wait");
+    assert.equal(isWorkbenchAgentMcpSteerInterruption(steered.signal.reason), true, "a user steer interrupts every long wait");
+    steered.unregister();
+
+    const shell = registry.register("client", "shell", { owner, toolName: "shell", shellItem: { threadId, references: ["queued"] } });
+    shell.shellQueue!.queued(0);
+    await settle();
+    assert.equal(isWorkbenchAgentMcpSteerInterruption(shell.signal.reason), true, "the expensive queue is a long wait too");
+    shell.unregister();
+  } finally {
+    registry.releaseUndeliveredMessages(owner);
+    registry.dispose();
+  }
 });
 
 test("released runtime owners reject late request admission", () => {

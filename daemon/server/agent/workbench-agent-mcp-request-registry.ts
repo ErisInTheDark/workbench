@@ -5,8 +5,10 @@
  * - WorkbenchAgentMcpShellQueueEntry: one live shell's expensive-queue timing and the transcript references naming it.
  * - WorkbenchAgentMcpShellOutputEntry: one live shell's newest output and the transcript references naming it.
  * - WorkbenchAgentBatchTurn: how a serial call's turn in its provider tool batch ended.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, user shell stops and queue skips, provider tool batches and serial call
- *   turns, wait, shell-queue and windowed live shell output observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
+ * - WorkbenchAgentMcpUndeliveredMessage: one message admitted for a thread that its agent has not received; a sender marks an agent message.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, steer interruption of waits (including waits attaching while a message is
+ *   undelivered), user shell stops and queue skips, provider tool batches and serial call turns, wait, shell-queue and windowed live shell
+ *   output observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
  * - isWorkbenchAgentMcpUserStop: identify a user's stop of one shell command across module generations.
@@ -79,6 +81,12 @@ type WorkbenchAgentMcpShellRunner = (
   run: WorkbenchShellRun, signal: AbortSignal, observer?: WorkbenchShellObserver,
 ) => Promise<WorkbenchShellRunResult>;
 
+export interface WorkbenchAgentMcpUndeliveredMessage {
+  senderThreadId?: string;
+}
+
+type WorkbenchAgentMcpUndeliveredMessageReader = (threadId: WorkbenchThreadId) => Promise<readonly WorkbenchAgentMcpUndeliveredMessage[]>;
+
 interface WorkbenchAgentMcpRequestRegistryState {
   commandGeneration: WorkbenchAgentMcpCommandGeneration | null;
   /** The MCP generation that serves requests; held here so in-flight requests never capture one. */
@@ -87,6 +95,8 @@ interface WorkbenchAgentMcpRequestRegistryState {
   /** The exec node's entry for running prepared shells; it leases only that node for each command. */
   shellRunner: { owner: object; run: WorkbenchAgentMcpShellRunner } | null;
   shellRunnerWaiters: Set<() => void>;
+  /** The core node's read of a thread's undelivered messages; absent while it reloads. */
+  undeliveredMessages: { owner: object; read: WorkbenchAgentMcpUndeliveredMessageReader } | null;
   disposed: boolean;
   exitHookInstalled: boolean;
   threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState | WorkbenchAgentMcpLegacyThreadWaitState) => void>;
@@ -205,6 +215,7 @@ function createState(): WorkbenchAgentMcpRequestRegistryState {
     toolGenerationWaiters: new Set(),
     shellRunner: null,
     shellRunnerWaiters: new Set(),
+    undeliveredMessages: null,
     disposed: false,
     exitHookInstalled: false,
     threadWaitListeners: new Set(),
@@ -228,6 +239,7 @@ function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: stri
   for (const wake of [...state.toolGenerationWaiters]) wake();
   state.shellRunner = null;
   for (const wake of [...state.shellRunnerWaiters]) wake();
+  state.undeliveredMessages = null;
   for (const requests of state.requestsByClient.values()) {
     for (const entry of requests.values()) {
       if (!entry.controller.signal.aborted) entry.controller.abort(new Error(reason));
@@ -257,6 +269,7 @@ function getProcessState() {
   state.toolGenerationWaiters ??= new Set();
   state.shellRunner ??= null;
   state.shellRunnerWaiters ??= new Set();
+  state.undeliveredMessages ??= null;
   state.threadWaitListeners ??= new Set();
   state.shellQueueListeners ??= new Set();
   state.shellOutputListeners ??= new Set();
@@ -325,7 +338,10 @@ export class WorkbenchAgentMcpRequestRegistry {
         if (deferredInterruption && entry.steerInterruptible && !entry.controller.signal.aborted) {
           entry.controller.abort(deferredInterruption);
         }
-        if (entry.steerInterruptible && !entry.controller.signal.aborted) this.notifyThreadWaits(workbenchThreadId);
+        if (entry.steerInterruptible && !entry.controller.signal.aborted) {
+          this.notifyThreadWaits(workbenchThreadId);
+          this.replayUndeliveredMessages(entry);
+        }
         if (entry.shellQueue) this.notifyShellQueue(workbenchThreadId);
         if (entry.shellOutput) this.scheduleShellOutput(workbenchThreadId);
       },
@@ -362,6 +378,7 @@ export class WorkbenchAgentMcpRequestRegistry {
         entry.shellQueue = { admittedAt: null, queuedAt: at, skip };
         entry.steerInterruptible = true;
         changed();
+        this.replayUndeliveredMessages(entry);
       },
       admitted: at => {
         if (entry.shellQueue) entry.shellQueue.admittedAt = at;
@@ -441,6 +458,15 @@ export class WorkbenchAgentMcpRequestRegistry {
   /** Runs a prepared shell through the exec node, waiting through its reload gap; only the caller's signal cancels. */
   async executeShell(run: WorkbenchShellRun, signal: AbortSignal, observer?: WorkbenchShellObserver) {
     return await (await this.awaitSlot(() => this.state.shellRunner, this.state.shellRunnerWaiters, signal)).run(run, signal, observer);
+  }
+
+  activateUndeliveredMessages(owner: object, read: WorkbenchAgentMcpUndeliveredMessageReader) {
+    if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
+    this.state.undeliveredMessages = { owner, read };
+  }
+
+  releaseUndeliveredMessages(owner: object) {
+    if (this.state.undeliveredMessages?.owner === owner) this.state.undeliveredMessages = null;
   }
 
   private async awaitSlot<T>(read: () => T | null, waiters: Set<() => void>, signal?: AbortSignal): Promise<T> {
@@ -806,6 +832,30 @@ export class WorkbenchAgentMcpRequestRegistry {
       return interrupted;
     }
     return interrupted + this.interruptQueuedWaits(workbenchThreadId, reason, excludedToolNames);
+  }
+
+  /** A message admitted for the thread interrupts its waits; message waits answer agent messages themselves. */
+  interruptForSteer(threadId: WorkbenchThreadId, senderThreadId?: string) {
+    return senderThreadId
+      ? this.interruptThreadWaits(threadId, "Workbench MCP wait was interrupted by an agent message.", ["message_wait"])
+      : this.interruptThreadWaits(threadId);
+  }
+
+  /**
+   * The agent receives a message only after its pending calls end, so a wait that starts while one is undelivered
+   * would outlast it. Replaying the message treats it as arriving now.
+   */
+  private replayUndeliveredMessages(entry: WorkbenchAgentMcpRequestEntry) {
+    const threadId = entry.workbenchThreadId;
+    const source = this.state.undeliveredMessages;
+    if (!threadId || !source) return;
+    void source.read(threadId).then(messages => {
+      if (!entry.steerInterruptible || entry.controller.signal.aborted) return;
+      for (const { senderThreadId } of messages) this.interruptForSteer(threadId, senderThreadId);
+    }, (error: unknown) => {
+      console.warn("[workbench-mcp] a new wait could not check for undelivered messages",
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+    });
   }
 
   /** A queued shell or batch-turn wait of the thread, which a steer interrupts once nothing else of its thread runs. */
