@@ -25,7 +25,7 @@ import { ThreadEntryAnimation, ThreadStreamCaretSlot } from "../ThreadRevealText
 import ThreadStableChunkIdentities from "../ThreadStableChunkIdentities";
 import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
-import { readGitArcStartAttempt } from "../thread-git-arc-retries";
+import { getGitArcFoldAnchor, isGitArcCardBlock } from "../thread-git-arc-retries";
 import { getRenderableBlockItems } from "../thread-render-blocks";
 import { THREAD_WINDOW_CHUNK_SIZE } from "../thread-progressive-window-policy";
 import { ThreadEntryMotion } from "../thread-scroll-viewport-context";
@@ -96,9 +96,12 @@ export default memo(function ThreadTurnItems({
   // and a block keeps its key as it grows, so a live activity run never remounts.
   const keyOccurrences = new Map<string, number>();
   const entryKeys = stableEntries.map(entry => {
+    // A folded arc card that gains a stitched neighbour keeps its key, so the card grows instead of remounting.
+    const kindKey = entry.kind === "block" && (entry.block.kind === "gitArcHistory" || entry.block.kind === "gitArcSequence")
+      ? "gitArc" : entry.kind === "block" ? entry.block.kind : "generic";
     const base = entry.kind === "generic"
       ? `generic:${entry.item.id}`
-      : `${entry.block.kind}:${getRenderableBlockItems(entry.block)[0]?.id}`;
+      : `${kindKey}:${getRenderableBlockItems(entry.block)[0]?.id}`;
     const occurrence = (keyOccurrences.get(base) ?? 0) + 1;
     keyOccurrences.set(base, occurrence);
     return occurrence > 1 ? `${base}#${occurrence}` : base;
@@ -117,9 +120,9 @@ export default memo(function ThreadTurnItems({
     const identity = entry.kind === "generic"
       ? `item:${entry.item.id}`
       : firstItem ? getThreadEntryMotionIdentity(firstItem) : `empty:${turnId}:${index}`;
-    // A start may later merge into a retry, which then slides up from where that start sat.
-    const trackAs = animateEntries && entry.kind === "block" && firstItem && readGitArcStartAttempt(entry.block) ? identity : null;
-    const absorbed = entry.kind === "block" && entry.block.kind === "gitArcRetry" ? getRenderableBlockItems(entry.block.success)[0] : null;
+    // An arc card may later fold or stitch into a bigger card, which then slides up from where that card sat.
+    const trackAs = animateEntries && entry.kind === "block" && firstItem && isGitArcCardBlock(entry.block) ? identity : null;
+    const absorbed = entry.kind === "block" ? getGitArcFoldAnchor(entry.block) : null;
     const slideFrom = absorbed ? getThreadEntryMotionIdentity(absorbed) : null;
     return (
       <ThreadEntryMotion

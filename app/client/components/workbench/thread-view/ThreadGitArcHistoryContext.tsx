@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default ThreadGitArcHistoryContext: how a retried Git arc start got there (its failed attempts and the steps between),
- *   for the successful start's card to open onto; null everywhere else, including inside that history.
- * - ThreadGitArcHistory: that history's rendered steps and failed attempt count.
+ * - default ThreadGitArcHistoryContext: how a Git arc card got there (a retried start's failed attempts and the steps between,
+ *   or a proposal's lead-in arc steps), for that card to open onto; null everywhere else, including inside that history.
+ * - ThreadGitArcHistory: that history's rendered steps and failed attempt count (0 for a lead-in).
  */
 "use client";
 

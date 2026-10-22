@@ -2,7 +2,7 @@
  * Exports:
  * - default ThreadGitArcItem: one Git arc call (lifecycle, edit session, status or recovery) as a one-line card that opens
  *   into its flat body, previewing its result while closed where that matters, and saying why it failed on its line; in
- *   step chrome it is a step instead. A retried start's card opens onto how it got there first.
+ *   step chrome it is a step instead. A retried start's or a proposal's card opens onto how it got there first.
  */
 "use client";
 
@@ -110,7 +110,7 @@ export default function ThreadGitArcItem ({
     iconLabel: card.iconLabel,
     label: card.label,
     meta: [
-      history ? <span key="attempts">{history.failedAttempts} failed {history.failedAttempts === 1 ? "attempt" : "attempts"}</span> : null,
+      history?.failedAttempts ? <span key="attempts">{history.failedAttempts} failed {history.failedAttempts === 1 ? "attempt" : "attempts"}</span> : null,
       card.stackedProposalCount !== null ? <span key="proposals">{card.stackedProposalCount} {card.stackedProposalCount === 1 ? "proposal" : "proposals"}</span> : null,
       editResult ? <ThreadFileChangeTotals additions={editResult.additions} deletions={editResult.deletions} key="totals" />
         : operationSummaryRows.length ? (

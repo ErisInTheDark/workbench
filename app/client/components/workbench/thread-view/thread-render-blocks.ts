@@ -105,10 +105,12 @@ export type ThreadRenderableBlock =
   /** Consecutive work (reasoning, plain commands, file changes, searches) shown as one summary that expands into its steps. */
   | { kind: "activityRun"; items: ThreadItem[]; segments: ActivitySegment[] }
   /**
-   * A Git arc start that failed, then succeeded after the work between: the successful start's card, opening onto how it
-   * got there (failed attempts and absorbed work as run steps).
+   * A Git arc card opening onto how it got there, as run steps: a start that succeeded after failed attempts and the work
+   * between, or a proposal after the arc-only steps leading into it (no failed attempts).
    */
-  | { failedAttempts: number; history: ActivitySegment[]; items: ThreadItem[]; kind: "gitArcRetry"; success: ThreadRenderableBlock }
+  | { failedAttempts: number; history: ActivitySegment[]; items: ThreadItem[]; kind: "gitArcHistory"; success: ThreadRenderableBlock }
+  /** Back-to-back Git arc cards stitched into one card, each half opening onto its own contents. */
+  | { blocks: ThreadRenderableBlock[]; items: ThreadItem[]; kind: "gitArcSequence" }
   | { kind: "agentMessageSequence"; items: IncomingAgentMessageItem[]; state: "delivered" | "held" }
   /** Consecutive non-final agent messages, which share copy runs. */
   | { kind: "agentCommentarySequence"; items: AgentCommentaryItem[] }

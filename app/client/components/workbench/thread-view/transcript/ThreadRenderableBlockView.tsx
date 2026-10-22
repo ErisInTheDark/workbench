@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - default ThreadRenderableBlockView: one renderable block through its renderer: activity runs (their steps through the
- *   command, file, reasoning and web-search renderers), retried arc starts (their history through the same renderers),
- *   messages, coordination and single items. Memoised per block and timeline.
+ *   command, file, reasoning and web-search renderers), arc cards with history (retried starts, proposals with their
+ *   lead-in steps, through the same renderers), stitched arc cards, messages, coordination and single items. Memoised per block and timeline.
  */
 "use client";
 
@@ -27,7 +27,8 @@ import ThreadToolOutputItem from "../ThreadToolOutputItem";
 import ThreadWebSearchItem, { ThreadWebSearchSequence } from "../ThreadWebSearchItem";
 import { getCommandItemDisplay } from "../thread-activity-chips";
 import { getCurrentBrowseStep, getLiftedBrowseSteps } from "../thread-browse-steps";
-import { hasSameBlockTimeline, type ThreadRenderableBlock } from "../thread-render-blocks";
+import { getRenderableBlockItems, hasSameBlockTimeline, type ThreadRenderableBlock } from "../thread-render-blocks";
+import { ThreadCardGroup } from "../ThreadCard";
 import { ThreadAgentCommentarySequence, ThreadAgentMessageItem, ThreadIncomingAgentMessageRuns } from "./ThreadAgentMessageItems";
 import ThreadCommandSequence, { ThreadMcpItem } from "./ThreadCommandSequence";
 import ThreadReasoningSequence from "./ThreadReasoningSequence";
@@ -38,7 +39,7 @@ import { getActiveItemStartedAtMs } from "./transcript-blocks";
 type Timeline = readonly WorkbenchThreadItemTimelineEntry[] | undefined;
 type ActivityRunBlock = Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
 type ItemBlock = Extract<ThreadRenderableBlock, { kind: "item" }>;
-type GitArcRetryBlock = Extract<ThreadRenderableBlock, { kind: "gitArcRetry" }>;
+type GitArcHistoryBlock = Extract<ThreadRenderableBlock, { kind: "gitArcHistory" }>;
 
 interface BlockViewProps {
   animateEntries: boolean;
@@ -113,8 +114,8 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
   );
 }
 
-/** The successful start, drawn as it always is, whose card opens onto the failed attempts and steps before it. */
-function ThreadGitArcRetryBlock({ block, ...props }: Omit<BlockViewProps, "block"> & { block: GitArcRetryBlock }) {
+/** The arc card (a successful start, or a proposal), drawn as it always is, whose card opens onto the steps before it. */
+function ThreadGitArcHistoryBlock({ block, ...props }: Omit<BlockViewProps, "block"> & { block: GitArcHistoryBlock }) {
   const renderers = useActivityRunRenderers(props.animateEntries, false, props.itemTimeline);
   const history: ThreadGitArcHistory = {
     // The failed attempts inside are arc cards too; they must not open onto this history again.
@@ -233,9 +234,9 @@ function ThreadRenderableBlockViewComponent ({
   switch (block.kind) {
     case "activityRun":
       return <ThreadActivityRunBlock animateEntries={animateEntries} block={block} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} />;
-    case "gitArcRetry":
+    case "gitArcHistory":
       return (
-        <ThreadGitArcRetryBlock
+        <ThreadGitArcHistoryBlock
           animateEntries={animateEntries}
           block={block}
           finalAgentMessageId={finalAgentMessageId}
@@ -243,6 +244,22 @@ function ThreadRenderableBlockViewComponent ({
           itemTimeline={itemTimeline}
           primaryUserBlock={primaryUserBlock}
         />
+      );
+    case "gitArcSequence":
+      return (
+        <ThreadCardGroup>
+          {block.blocks.map((child, index) => (
+            <ThreadRenderableBlockViewComponent
+              animateEntries={animateEntries}
+              block={child}
+              finalAgentMessageId={finalAgentMessageId}
+              isMostRecentBlock={isMostRecentBlock && index === block.blocks.length - 1}
+              itemTimeline={itemTimeline}
+              key={getRenderableBlockItems(child)[0]?.id ?? index}
+              primaryUserBlock={primaryUserBlock}
+            />
+          ))}
+        </ThreadCardGroup>
       );
     case "subagentCoordination":
       return <ThreadSubagentCoordination block={block} itemTimeline={itemTimeline} />;

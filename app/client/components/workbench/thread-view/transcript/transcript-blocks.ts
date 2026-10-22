@@ -26,7 +26,7 @@ import { getThreadItemsRenderChunkSignature } from "../../../../workbench/thread
 import type ContextualProject from "../../../../workbench/project/ContextualProject";
 import { buildActivityRuns } from "../thread-activity-runs";
 import { getBrowseScreenshotUrls } from "../thread-browse-steps";
-import { foldGitArcRetries } from "../thread-git-arc-retries";
+import { foldGitArcBlocks } from "../thread-git-arc-retries";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
 import {
   buildRenderableBlocks, getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, reuseRenderableBlocks,
@@ -84,7 +84,7 @@ export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscr
   let pending: ThreadItem[] = [];
   const flush = () => {
     if (!pending.length) return;
-    entries.push(...foldGitArcRetries(buildActivityRuns(
+    entries.push(...foldGitArcBlocks(buildActivityRuns(
       buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, project?.cwd),
       { browseScreenshotUrls, codeDetails, knownSkills: matchers?.knownSkills, projectRootPath: matchers?.projectRootPath, workspaceRoots: matchers?.workspaceRoots },
     )).map(block => ({ block, kind: "block" as const })));
