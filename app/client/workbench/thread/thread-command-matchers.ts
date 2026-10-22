@@ -231,24 +231,6 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
       : `checking git diff ${count} times`,
   },
   {
-    key: "typescriptValidations",
-    format: (count) => count === 1
-      ? "validated TypeScript"
-      : `validated TypeScript ${count} times`,
-    formatOngoing: (count) => count === 1
-      ? "validating TypeScript"
-      : `validating TypeScript ${count} times`,
-  },
-  {
-    key: "typescriptBuilds",
-    format: (count) => count === 1
-      ? "built TypeScript"
-      : `built TypeScript ${count} times`,
-    formatOngoing: (count) => count === 1
-      ? "building TypeScript"
-      : `building TypeScript ${count} times`,
-  },
-  {
     key: "gitCheckpointCreates",
     format: (count) => count === 1
       ? "created a git checkpoint"

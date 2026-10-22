@@ -121,8 +121,6 @@ export interface ThreadCommandSummaryStats {
   readFiles: number;
   searchedFiles: number;
   skillLoads: number;
-  typescriptBuilds: number;
-  typescriptValidations: number;
   visChecks: number;
   webRequests: number;
 }

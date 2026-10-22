@@ -119,8 +119,6 @@ export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {
     readFiles: 0,
     searchedFiles: 0,
     skillLoads: 0,
-    typescriptBuilds: 0,
-    typescriptValidations: 0,
     visChecks: 0,
     webRequests: 0,
   };

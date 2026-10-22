@@ -121,7 +121,7 @@ function ThreadGitArcHistoryBlock({ block, ...props }: Omit<BlockViewProps, "blo
     // The failed attempts inside are arc cards too; they must not open onto this history again.
     content: (
       <ThreadGitArcHistoryContext.Provider value={null}>
-        <ThreadActivitySteps renderers={renderers} segments={block.history} />
+        <ThreadActivitySteps inset renderers={renderers} segments={block.history} />
       </ThreadGitArcHistoryContext.Provider>
     ),
     failedAttempts: block.failedAttempts,

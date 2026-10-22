@@ -22,7 +22,7 @@ import {
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary } from "workbench-shared/types";
 import {
-  BookBookmarkIcon, BookSearchIcon, BrowserSessionIcon, CodeIcon, EyeIcon, FileAddIcon, FileDeleteIcon, FileTextIcon, FileUpdateIcon,
+  BookBookmarkIcon, BookSearchIcon, BrowserSessionIcon, EyeIcon, FileAddIcon, FileDeleteIcon, FileTextIcon, FileUpdateIcon,
   FolderClosedIcon, GitArcProposalIcon, GitGraphIcon, ImageIcon, SearchIcon, TerminalIcon, type IconProps,
 } from "../workbench-icons";
 import { getBrowseItemSteps, getBrowseScreenshots } from "./thread-browse-steps";
@@ -57,7 +57,6 @@ const COMMAND_CHIPS: ReadonlyArray<{ Icon: ComponentType<IconProps>; key: string
   { Icon: FileDeleteIcon, key: "removed", stats: ["deletedPaths"], verb: "removed" },
   { Icon: GitGraphIcon, key: "git", stats: ["gitStatusChecks", "gitDiffChecks"], verb: "git checks" },
   { Icon: GitArcProposalIcon, key: "arc", stats: ["gitCheckpointCreates", "gitCheckpointDiffs", "gitCheckpointRestores"], verb: "arc steps" },
-  { Icon: CodeIcon, key: "typechecked", stats: ["typescriptBuilds", "typescriptValidations"], verb: "typechecked" },
   { Icon: BookBookmarkIcon, key: "skills", stats: ["skillLoads"], verb: "skills" },
   { Icon: BrowserSessionIcon, key: "browse", stats: ["browseActions"], verb: "browser steps" },
   { Icon: BookSearchIcon, key: "web", stats: ["webRequests"], verb: "web" },

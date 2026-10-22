@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - COMMON_COMMAND_MATCHERS: shell-agnostic command-summary matchers for builds and git commands. Keywords: thread, command, matcher, git, typescript.
+ * - COMMON_COMMAND_MATCHERS: shell-agnostic command-summary matchers for git commands. Keywords: thread, command, matcher, git.
  */
 
 import { CommandMatcher } from "./core";
@@ -8,34 +8,6 @@ import { buildCommandPathPart } from "./helpers";
 import type { CommandMatcherDefinition, ThreadCommandDisplayPart } from "./types";
 
 export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
-  CommandMatcher({
-    id: "typescript-no-emit",
-    match: ({ stage }) => {
-      if (!/\btsc(?:\.(?:cmd|ps1|exe|js))?\b/i.test(stage.text) || !/(?:^|\s)--noEmit(?:\s|$)/i.test(stage.text)) {
-        return null;
-      }
-
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text("Validating TypeScript (no emit)")],
-        summaryStats: { typescriptValidations: 1 },
-        summaryParts: [CommandMatcher.Text("TypeScript build (no emit)")],
-      });
-    },
-  }),
-  CommandMatcher({
-    id: "typescript-build",
-    match: ({ stage }) => {
-      if (!/\btsc(?:\.(?:cmd|ps1|exe|js))?\b/i.test(stage.text)) {
-        return null;
-      }
-
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text("Building TypeScript")],
-        summaryStats: { typescriptBuilds: 1 },
-        summaryParts: [CommandMatcher.Text("TypeScript build")],
-      });
-    },
-  }),
   CommandMatcher({
     id: "git-status",
     match: ({ stage }) => {

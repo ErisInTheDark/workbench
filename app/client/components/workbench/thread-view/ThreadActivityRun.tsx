@@ -62,8 +62,12 @@ function ChipRow({ chips }: { chips: ActivityChip[] }) {
   );
 }
 
-/** Run steps in order: action groups tinted as steps, prose-like steps (reasoning, sleeps) bare with room around them. */
-export function ThreadActivitySteps({ renderers, segments }: {
+/**
+ * Run steps in order: action groups tinted as steps, prose-like steps (reasoning, sleeps) bare with room around them.
+ * `inset` lines untinted action groups (files, searches) up with the tinted groups' padding, inside a card.
+ */
+export function ThreadActivitySteps({ inset = false, renderers, segments }: {
+  inset?: boolean;
   renderers: ThreadActivityRunRenderers;
   segments: readonly ActivitySegment[];
 }) {
@@ -72,8 +76,9 @@ export function ThreadActivitySteps({ renderers, segments }: {
     const kind = RUN_SEGMENT_KINDS[segment.kind];
     const gap = !previous ? "" : !kind.prose && !RUN_SEGMENT_KINDS[previous.kind].prose ? "mt-0.5" : "mt-2";
     const content = renderSegment(renderers, segment, index === segments.length - 1, "step");
+    const className = kind.tinted ? `step-rows-packed rounded-lg bg-fg/4 px-3 py-1.5 ${gap}` : inset && !kind.prose ? `px-3 ${gap}` : gap;
     return (
-      <div className={kind.tinted ? `step-rows-packed rounded-lg bg-fg/4 px-3 py-1.5 ${gap}` : gap} key={getActivitySegmentItems(segment)[0]?.id ?? index}>
+      <div className={className} key={getActivitySegmentItems(segment)[0]?.id ?? index}>
         {kind.tinted ? <ThreadRowChromeContext.Provider value="step">{content}</ThreadRowChromeContext.Provider> : content}
       </div>
     );
@@ -118,11 +123,12 @@ export default function ThreadActivityRun({
   const durationMs = useThreadLiveDuration(live ? 0 : settledDurationMs, live ? startedAtMs : null);
   const statusStep = live ? getActivityStatusStep(block.segments, itemId => shellQueue.get(itemId)?.admittedAt === null) : null;
   const statusItemId = statusStep ? getActivitySegmentItems(statusStep)[0]?.id : null;
-  const steps = <ThreadActivitySteps renderers={renderers} segments={block.segments} />;
-
   const commandRows = (item: ThreadItem) => (item.type === "commandExecution" || item.type === "mcpToolCall" || item.type === "dynamicToolCall")
     ? getLiftedBrowseSteps(item, getCommandItemDisplay(item, context), browseResultEntries)?.length ?? 1 : 1;
-  if (getActivityRunPresentation(block.segments, live, commandRows) === "bare") return <div className="my-1.5">{steps}</div>;
+  if (getActivityRunPresentation(block.segments, live, commandRows) === "bare") {
+    return <div className="my-1.5"><ThreadActivitySteps renderers={renderers} segments={block.segments} /></div>;
+  }
+  const steps = <ThreadActivitySteps inset renderers={renderers} segments={block.segments} />;
 
   return (
     <div className="my-1.5" data-thread-activity-run="true">
