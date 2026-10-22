@@ -6,7 +6,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadScrollSettleController from "./ThreadScrollSettleController";
 
-function fixture(initialTarget = 0) {
+const CLIENT_HEIGHT = 800;
+
+/** A scroller like a browser's: shrinking the reserve clamps scrollTop to the new bottom at once. */
+function fixture(initialTarget = 0, contentHeight = 1_000_000) {
   const pending = new Set<() => void>();
   const scrolls: number[] = [];
   let offset = 0;
@@ -14,16 +17,17 @@ function fixture(initialTarget = 0) {
   let target = initialTarget;
   let scrollTop = 0;
   let locked = false;
+  const clamp = (top: number) => Math.min(Math.max(0, top), Math.max(0, reserve + contentHeight - CLIENT_HEIGHT));
   const controller = new ThreadScrollSettleController({
     schedule: (callback) => {
       pending.add(callback);
       return () => { pending.delete(callback); };
     },
     readScrollTop: () => scrollTop,
-    scrollBy: delta => { scrolls.push(delta); scrollTop += delta; },
+    scrollTo: top => { scrolls.push(top - scrollTop); scrollTop = clamp(top); },
     setScrollLocked: value => { locked = value; },
     setContentOffset: value => { offset = value; },
-    setReserve: value => { reserve = value; },
+    setReserve: value => { reserve = value; scrollTop = clamp(scrollTop); },
     readReserveTarget: () => target,
   });
   controller.reconcileReserve();
@@ -106,6 +110,15 @@ test("the reserve is removed at rest once nothing more can arrive above", () => 
   f.controller.scrollEnded();
   assert.equal(f.reserve, 0);
   assert.deepEqual(f.scrolls, [500, -450]);
+});
+
+test("removing the reserve keeps the reader's place even though the shorter page clamps the scroll first", () => {
+  const f = fixture(1_000, 2_000);
+  f.moveTo(2_100);
+  f.setTarget(0);
+  f.controller.reconcileReserve();
+  assert.equal(f.reserve, 0);
+  assert.equal(f.scrollTop, 1_100, "the reader stays 1,100px into the content");
 });
 
 test("momentum still moving behind a stalled main thread does not count as settled", () => {

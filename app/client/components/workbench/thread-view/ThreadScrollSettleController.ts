@@ -10,8 +10,11 @@ export interface ThreadScrollSettleOptions {
   readonly schedule: (callback: () => void, delayMs: number) => () => void;
   /** Current scroll position; a main-thread stall can delay scroll events while momentum keeps moving it. */
   readonly readScrollTop: () => number;
-  /** Move the scroll position by a delta; in flight only to put a reader who crossed into the reserve back at the top. */
-  readonly scrollBy: (delta: number) => void;
+  /**
+   * Set the scroll position; in flight only to put a reader who crossed into the reserve back at the top. Absolute,
+   * because shrinking the reserve clamps scrollTop at once, so a relative write would start from the clamped value.
+   */
+  readonly scrollTo: (top: number) => void;
   /** Height in px of the empty spacer above the content. */
   readonly setReserve: (heightPx: number) => void;
   /** Desired reserve height at rest: large while more content can arrive above, 0 at the true top. */
@@ -63,7 +66,7 @@ export default class ThreadScrollSettleController {
     if (!delta) return 0;
     if (this.settled) {
       const before = this.#options.readScrollTop();
-      this.#options.scrollBy(delta);
+      this.#options.scrollTo(before + delta);
       return this.#options.readScrollTop() - before;
     }
     // Shrinking content first repays overflow; growth spends the reserve, and only what it cannot cover overflows.
@@ -110,7 +113,7 @@ export default class ThreadScrollSettleController {
     // Momentum the lock did not stop in time already crossed: put the reader back before that frame paints, a stop at
     // the top instead of blank reserve and a bounce back at settle. A scroller that ignores the write is repaid at rest.
     if (!this.settled && scrollTop < this.#reserve) {
-      this.#options.scrollBy(this.#reserve - scrollTop);
+      this.#options.scrollTo(this.#reserve);
       this.#lastScrollTop = this.#options.readScrollTop();
     }
     if (this.#momentum) this.#armIdle();
@@ -170,17 +173,18 @@ export default class ThreadScrollSettleController {
 
   /**
    * Refill the reserve and repay any overflow in one scroll; same task, no paint between, so nothing visibly moves.
-   * A reader who overshot into the reserve is brought back to the loaded top in the same scroll.
+   * A reader who overshot into the reserve is brought back to the loaded top in the same scroll. The position is read
+   * before the reserve shrinks, which clamps it to the shorter page's bottom.
    */
   #rest(pending: number) {
+    const scrollTop = this.#options.readScrollTop();
     const target = Math.max(0, this.#options.readReserveTarget());
     const refill = target - this.#reserve;
     if (refill) {
       this.#reserve = target;
       this.#options.setReserve(this.#reserve);
     }
-    const restingTop = this.#options.readScrollTop() + pending + refill;
-    const overshoot = this.#reserve > 0 && restingTop < this.#reserve ? this.#reserve - restingTop : 0;
-    if (pending + refill + overshoot) this.#options.scrollBy(pending + refill + overshoot);
+    const restingTop = Math.max(scrollTop + pending + refill, this.#reserve);
+    if (refill || restingTop !== scrollTop) this.#options.scrollTo(restingTop);
   }
 }

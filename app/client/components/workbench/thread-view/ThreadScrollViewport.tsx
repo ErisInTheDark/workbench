@@ -166,10 +166,10 @@ function ActiveThreadScrollViewport ({
       return () => window.clearTimeout(timer);
     },
     readScrollTop: () => viewportRef.current?.scrollTop ?? 0,
-    scrollBy: (delta) => {
+    scrollTo: (top) => {
       const viewport = viewportRef.current;
       if (!viewport) return;
-      viewport.scrollTop += delta;
+      viewport.scrollTop = top;
       previousScrollTopRef.current = viewport.scrollTop;
       syncScrollProximity(viewport);
     },
