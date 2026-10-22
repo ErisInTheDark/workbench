@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { registerTranscriptAgentMessageFunction } from "./transcript-agent-message-sql.ts";
 import { TranscriptQueryError, type TranscriptField, type TranscriptQuery, type TranscriptQueryPage, type TranscriptQueryRow } from "./transcript-query-contract.ts";
 import { transcriptQueryFieldsSql, transcriptQueryKindSql } from "./transcript-query-fields.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
@@ -51,7 +51,7 @@ export default class WorkbenchTranscriptQueryRepository {
   constructor(private readonly database: Database.Database) {
     // SQLite's built-in lower() only folds ASCII. Keep literal matching Unicode-aware.
     database.function("wb_transcript_fold", { deterministic: true }, (value: string) => value.toLowerCase());
-    database.function("wb_transcript_agent_message", { deterministic: true }, (value: string) => readWorkbenchAgentMessageText(value) ? 1 : 0);
+    registerTranscriptAgentMessageFunction(database);
   }
 
   read(query: TranscriptQuery): TranscriptQueryPage {

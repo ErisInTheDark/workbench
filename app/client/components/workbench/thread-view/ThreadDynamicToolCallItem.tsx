@@ -291,7 +291,7 @@ function buildMetaParts (item: DynamicToolCallItem): ReactNode[] {
   return [
     item.status !== "completed" ? <ThreadSummaryText text={humanizeThreadLabel(item.status)} /> : null,
     item.durationMs !== null ? <ThreadDurationText durationMs={item.durationMs} /> : null,
-    item.resultExpiredAt ? "Result expired after 1 day." : null,
+    item.resultExpiredAt ? "Result expired." : null,
   ];
 }
 

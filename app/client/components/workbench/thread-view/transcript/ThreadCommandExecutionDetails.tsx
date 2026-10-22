@@ -151,7 +151,7 @@ export default function ThreadCommandExecutionDetails ({
     return (
       <ThreadStepRow
         icon={<TerminalIcon size={16} />}
-        meta={["Result expired after 1 day."]}
+        meta={["Result expired."]}
         summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} expensive={Boolean(item.expensive)} line />}
       />
     );

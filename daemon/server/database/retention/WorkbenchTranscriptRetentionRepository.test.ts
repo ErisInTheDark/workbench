@@ -1,4 +1,4 @@
-/* No production exports. Tests protect exact payload cutoffs, settlement ownership, compact aggregation, retry safety, and retained search narrative. */
+/* No production exports. Tests protect exact payload cutoffs, latest-turn protection, settlement ownership, compact aggregation, retry safety, and retained search narrative. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -10,6 +10,7 @@ import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepo
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import WorkbenchTranscriptRetentionRepository from "./WorkbenchTranscriptRetentionRepository.ts";
 import { createSearchTestDatabase, placeSearchThread, seedSearchThread } from "../search/search.test.fixtures.ts";
+import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 
 function seed(database: Database.Database, threadId: string, settledAt: number | null) {
   database.prepare("INSERT OR IGNORE INTO workbench_projects(id) VALUES (?)").run(testProjectIds.project);
@@ -26,16 +27,20 @@ function seed(database: Database.Database, threadId: string, settledAt: number |
   database.prepare("INSERT INTO workbench_thread_retention(thread_id, settled_at) VALUES (?, ?)").run(threadId, settledAt);
 }
 
-function processItem(
-  database: Database.Database,
-  input: { threadId: string; turnId: string; itemId: number; createdAt: number; state: string; output: string },
-) {
+function turn(database: Database.Database, input: { threadId: string; turnId: string; turnIndex?: number; createdAt: number }) {
   database.prepare(`INSERT INTO thread_turns
     (id, thread_id, turn_index, harness_id, native_location, native_thread_id, state, created_at)
-    VALUES (?, ?, 0, 'codex', 'C:/project', ?, 'completed', ?)`)
-    .run(input.turnId, input.threadId, input.threadId, input.createdAt);
+    VALUES (?, ?, ?, 'codex', 'C:/project', ?, 'completed', ?)`)
+    .run(input.turnId, input.threadId, input.turnIndex ?? 0, input.threadId, input.createdAt);
   database.prepare(`INSERT INTO thread_turn_materializations(turn_id, thread_id, materialized_at)
     VALUES (?, ?, ?)`).run(input.turnId, input.threadId, input.createdAt);
+}
+
+function processItem(
+  database: Database.Database,
+  input: { threadId: string; turnId: string; turnIndex?: number; itemId: number; createdAt: number; state: string; output: string },
+) {
+  turn(database, input);
   const publicId = `item-${input.itemId}`;
   database.prepare("INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES (?, ?)")
     .run(publicId, input.threadId);
@@ -48,6 +53,28 @@ function processItem(
   database.prepare(`INSERT INTO thread_operation_process_sources
     (item_id, source_revision, state, command, cwd, output_text)
     VALUES (?, 0, ?, 'echo', 'C:/project', ?)`).run(input.itemId, input.state, input.output);
+}
+
+type FixtureItem = Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>["item"];
+
+function settleItems(database: Database.Database, threadId: string, turnId: string, observedAt: number, items: FixtureItem[]) {
+  new WorkbenchTranscriptRepository(database).settle(items.map((item): WorkbenchTranscriptAtomicObservation => ({
+    kind: "item",
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
+    lifecycle: "completed", observedAt, item,
+  })));
+}
+
+function userMessage(id: string, text: string): FixtureItem {
+  return { type: "userMessage", id, clientId: null, content: [{ type: "text", text, text_elements: [] }] };
+}
+
+/** Gives a thread a later meaningful turn so its earlier results are no longer the latest. */
+function supersede(database: Database.Database, threadId: string) {
+  const turnId = `${threadId}-next`;
+  turn(database, { threadId, turnId, turnIndex: 1, createdAt: 50_000 });
+  settleItems(database, threadId, turnId, 50_000, [userMessage(`${threadId}-ask`, "next ask")]);
 }
 
 test("observed settled transcripts survive until release while restored threads stay protected", () => {
@@ -84,6 +111,7 @@ test("result expiry preserves the call envelope, honours exact cutoffs, and aggr
     processItem(database, { threadId: "old", turnId: "old-turn", itemId: 1, createdAt: 99, state: "completed", output: "large" });
     processItem(database, { threadId: "boundary", turnId: "boundary-turn", itemId: 2, createdAt: 100, state: "completed", output: "keep" });
     processItem(database, { threadId: "running", turnId: "running-turn", itemId: 3, createdAt: 1, state: "inProgress", output: "streaming" });
+    for (const threadId of ["old", "boundary", "running"]) supersede(database, threadId);
     const repository = new WorkbenchTranscriptRetentionRepository(database);
 
     assert.equal(repository.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 100 }), 1);
@@ -96,11 +124,11 @@ test("result expiry preserves the call envelope, honours exact cutoffs, and aggr
       { item_id: 1, expired_at: 1_000 },
     ]);
     assert.deepEqual(database.prepare("SELECT tool_name, call_count, failure_count FROM thread_tool_daily_aggregates").all(), []);
-    const snapshot = new WorkbenchTranscriptRepository(database).read({ threadId: "old", turnLimit: 1 });
+    const snapshot = new WorkbenchTranscriptRepository(database).read({ threadId: "old", turnLimit: 2 });
     assert.ok(snapshot);
     const projection = projectWorkbenchTranscript(snapshot);
     assert.ok(projection.success);
-    const expiredItem = projection.data.turns[0]?.items[0];
+    const expiredItem = projection.data.turns.flatMap(candidate => candidate.items).find(candidate => candidate.type === "commandExecution");
     assert.equal(expiredItem?.type, "commandExecution");
     assert.equal(expiredItem?.type === "commandExecution" ? expiredItem.resultExpiredAt : null, 1_000);
     assert.equal(repository.expireResultPayloads({ expiredAt: 2_000, resultCutoff: 100 }), 0);
@@ -118,12 +146,14 @@ test("later result expiry epochs never revisit earlier payload cohorts", () => {
       threadId: "earlier", turnId: "earlier-turn", itemId: 1,
       createdAt: 10, state: "completed", output: "earlier payload",
     });
+    supersede(database, "earlier");
     const repository = new WorkbenchTranscriptRetentionRepository(database);
     assert.equal(repository.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 20 }), 1);
     processItem(database, {
-      threadId: "later", turnId: "later-turn", itemId: 2,
+      threadId: "later", turnId: "later-turn", itemId: 20,
       createdAt: 30, state: "completed", output: "later payload",
     });
+    supersede(database, "later");
     database.exec(`
       CREATE TRIGGER reject_earlier_payload_revisit
       BEFORE UPDATE OF output_text ON thread_operation_process_sources
@@ -138,7 +168,7 @@ test("later result expiry epochs never revisit earlier payload cohorts", () => {
       SELECT item_id, expired_at FROM thread_item_payload_retention ORDER BY item_id
     `).all(), [
       { item_id: 1, expired_at: 1_000 },
-      { item_id: 2, expired_at: 2_000 },
+      { item_id: 20, expired_at: 2_000 },
     ]);
   } finally { database.close(); }
 });
@@ -161,7 +191,7 @@ test("settled transcript expiry keeps turn identity and removes only generations
         'snapshot', '{"large":"keep"}', 90)`).run();
 
     const repository = new WorkbenchTranscriptRetentionRepository(database);
-    assert.equal(repository.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 0 }), 0);
+    assert.equal(repository.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 0 }), 2, "settled results expire regardless of age");
     assert.equal(repository.expireTurnPayloads({ expiredAt: 1_000, transcriptCutoff: 100 }, 10), 1);
     assert.deepEqual(database.prepare("SELECT id FROM thread_turns ORDER BY id").all(), [
       { id: "boundary-turn" }, { id: "expired-turn" },
@@ -228,7 +258,7 @@ test("result expiry removes every supported result family while preserving invoc
   try {
     database.pragma("foreign_keys = ON");
     installWorkbenchDatabaseSchema(database);
-    seed(database, "families", null);
+    seed(database, "families", 1);
     processItem(database, {
       threadId: "families", turnId: "families-turn", itemId: 1,
       createdAt: 10, state: "completed", output: "process body",
@@ -304,5 +334,60 @@ test("result expiry removes every supported result family while preserving invoc
       { type: "functionCallOutput", resultExpiredAt: 1_000 },
     ]);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+function expiredProcessIds(database: Database.Database) {
+  return database.prepare(`
+    SELECT retained.item_id FROM thread_item_payload_retention retained
+    JOIN thread_operation_process_sources process ON process.item_id = retained.item_id
+    ORDER BY retained.item_id
+  `).pluck().all();
+}
+
+test("unsettled threads keep old results from their latest meaningful turn onwards, ignoring agent wake-up turns", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    seed(database, "wake", null);
+    processItem(database, { threadId: "wake", turnId: "wake-0", turnIndex: 0, itemId: 1, createdAt: 10, state: "completed", output: "first" });
+    processItem(database, { threadId: "wake", turnId: "wake-1", turnIndex: 1, itemId: 2, createdAt: 20, state: "completed", output: "latest" });
+    turn(database, { threadId: "wake", turnId: "wake-2", turnIndex: 2, createdAt: 30 });
+    settleItems(database, "wake", "wake-2", 30, [
+      userMessage("incoming", createWorkbenchAgentMessageText({ message: "done", senderName: "Child", senderThreadId: "child" })),
+      { type: "reasoning", id: "thinking", summary: [], content: ["nothing to do"] },
+      {
+        type: "mcpToolCall", id: "complete", server: "wb", tool: "task_completed", arguments: {},
+        status: "completed", result: { content: [{ type: "text", text: "ok" }], structuredContent: null, _meta: null },
+        error: null, durationMs: 1, appContext: null, pluginId: null, readOnlyHint: false,
+      },
+      { type: "agentMessage", id: "end", text: "<wb:end />", phase: "final_answer", memoryCitation: null, delivery: null, questions: null },
+    ]);
+    const repository = new WorkbenchTranscriptRetentionRepository(database);
+
+    assert.equal(repository.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 100 }), 1);
+    assert.deepEqual(expiredProcessIds(database), [1]);
+
+    turn(database, { threadId: "wake", turnId: "wake-3", turnIndex: 3, createdAt: 40 });
+    settleItems(database, "wake", "wake-3", 40, [userMessage("ask", "carry on")]);
+    assert.equal(repository.expireResultPayloads({ expiredAt: 2_000, resultCutoff: 100 }), 2, "the old latest turn and wake-up call expire");
+    assert.deepEqual(expiredProcessIds(database), [1, 2]);
+  } finally { database.close(); }
+});
+
+test("settled threads expire results regardless of age while unsettled results wait a day", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    seed(database, "settled", 5);
+    seed(database, "open", null);
+    processItem(database, { threadId: "settled", turnId: "settled-turn", itemId: 1, createdAt: 500, state: "completed", output: "fresh" });
+    processItem(database, { threadId: "open", turnId: "open-turn", itemId: 2, createdAt: 500, state: "completed", output: "fresh" });
+    supersede(database, "open");
+
+    assert.equal(new WorkbenchTranscriptRetentionRepository(database).expireResultPayloads({ expiredAt: 1_000, resultCutoff: 100 }), 1);
+    assert.deepEqual(expiredProcessIds(database), [1]);
   } finally { database.close(); }
 });

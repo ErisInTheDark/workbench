@@ -2947,16 +2947,6 @@ test("provider replay cannot restore expired result or turn payloads", () => {
   const providerReplay = () => providerTurnScope([turnObservation("turn", 0), command], ["turn"]);
   try {
     repository.settle([threadObservation(), providerReplay()]);
-    const retention = new WorkbenchTranscriptRetentionRepository(database);
-    assert.equal(retention.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 100 }), 1);
-
-    repository.settle([providerReplay()]);
-    assert.equal(
-      database.prepare("SELECT output_text FROM thread_operation_process_sources").pluck().get(),
-      null,
-    );
-    assert.equal(database.prepare("SELECT COUNT(*) FROM thread_item_payload_retention").pluck().get(), 1);
-
     database.prepare(`
       INSERT INTO workbench_thread_states
         (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
@@ -2967,6 +2957,16 @@ test("provider replay cannot restore expired result or turn payloads", () => {
       VALUES ('thread', 10)
       ON CONFLICT(thread_id) DO UPDATE SET settled_at = excluded.settled_at
     `).run();
+    const retention = new WorkbenchTranscriptRetentionRepository(database);
+    assert.equal(retention.expireResultPayloads({ expiredAt: 1_000, resultCutoff: 100 }), 1);
+
+    repository.settle([providerReplay()]);
+    assert.equal(
+      database.prepare("SELECT output_text FROM thread_operation_process_sources").pluck().get(),
+      null,
+    );
+    assert.equal(database.prepare("SELECT COUNT(*) FROM thread_item_payload_retention").pluck().get(), 1);
+
     assert.equal(retention.expireTurnPayloads({ expiredAt: 2_000, transcriptCutoff: 100 }, 10), 1);
     assert.equal(database.prepare("SELECT COUNT(*) FROM thread_items").pluck().get(), 0);
 

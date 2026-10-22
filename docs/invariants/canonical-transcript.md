@@ -13,7 +13,7 @@
 - Record Workbench-originated thread events as Workbench items. Never merge client-side overlays into history.
 - Keep provider-native evidence separate from Workbench items.
 - Provider-native evidence does not render or order history.
-- Expire completed result bodies one day after item creation. Keep invocation, outcome, timing, error, exit, and item identity facts plus an expiry tombstone.
+- Expire completed result bodies when their thread settles, or in unsettled threads once a day old and before the latest meaningful turn. Turns holding only reasoning, assistant messages, incoming agent messages and `task_completed` calls are not meaningful. Keep invocation, outcome, timing, error, exit, and item identity facts plus an expiry tombstone.
 - Expire unobserved settled generations three days after settlement. Keep turn identity and tombstones. Keep their user/agent message text only as search narrative, deleted once the thread is archived. Explicit recovery recreates expired payload until the next eligible retention run.
 - Aggregate expired `wb`/`wbex` call and failure facts before deletion. Count each removed call once.
 - Collect only canonically unreachable transcript assets older than the one-hour admission grace. Addresses alone are not reachability.

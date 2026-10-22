@@ -144,7 +144,7 @@ function ThreadItemBlock({ block, finalAgentMessageId, isMostRecent, itemTimelin
   const item = block.item;
   switch (item.type) {
     case "functionCallOutput": {
-      if (item.resultExpiredAt) return <p className="py-2 text-[0.92em] text-fg/muted">Result expired after 1 day.</p>;
+      if (item.resultExpiredAt) return <p className="py-2 text-[0.92em] text-fg/muted">Result expired.</p>;
       const output = readWorkbenchToolOutput(item);
       if (!output) return <ThreadGenericItem item={item} threadId={transcript.threadId} />;
       const timestamp = findWorkbenchThreadItemTimelineEntry(output.id, itemTimeline)?.firstSeenAt ?? output.workbenchInjectionAcceptedAt;

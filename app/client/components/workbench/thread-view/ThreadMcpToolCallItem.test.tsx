@@ -147,7 +147,7 @@ test("expired MCP results keep invocation disclosure without pretending the body
     route: null,
   });
 
-  assert.match(html, /Result expired after 1 day\./u);
+  assert.match(html, /Result expired\./u);
   assert.match(html, /git_add/u);
 });
 

@@ -170,7 +170,7 @@ test("expired command results bypass specialised cards and retain the command en
   };
   const html = renderItems([expired]);
 
-  assert.match(html, /Result expired after 1 day\./u);
+  assert.match(html, /Result expired\./u);
   assert.match(html, /wb git arc propose/u);
   assert.doesNotMatch(html, /data-thread-git-arc-card=/u);
 });

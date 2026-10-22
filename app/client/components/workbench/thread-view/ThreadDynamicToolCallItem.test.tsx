@@ -96,7 +96,7 @@ test("expired dynamic results retain the tool summary and explain the missing bo
   const html = renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, { item }));
 
   assert.match(html, /custom_tool/u);
-  assert.match(html, /Result expired after 1 day\./u);
+  assert.match(html, /Result expired\./u);
 });
 
 test("an unanswered questionnaire starts open", () => {

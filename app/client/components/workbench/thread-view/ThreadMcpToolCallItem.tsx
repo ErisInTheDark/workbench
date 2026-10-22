@@ -102,7 +102,7 @@ export default function ThreadMcpToolCallItem ({
             invocation={formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool })}
             item={item}
             output={body => body.resultExpiredAt
-              ? "Result expired after 1 day."
+              ? "Result expired."
               : body.error?.message || formatToolCallOutput({ content: body.result?.content, fallback: body.result?.structuredContent ?? body.result?._meta })}
           />
         )}

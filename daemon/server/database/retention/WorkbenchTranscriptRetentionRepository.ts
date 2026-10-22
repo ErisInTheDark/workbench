@@ -2,10 +2,17 @@
  * Exports:
  * - WorkbenchTranscriptRetentionCutoffs: expiry clocks and observed threads excluded from whole-turn expiry.
  * - default WorkbenchTranscriptRetentionRepository: aggregate durable tool facts, keep expiring narrative searchable, and expire
- *   eligible result payloads in one atomic step and whole turns in bounded atomic batches.
+ *   eligible result payloads in one atomic step and whole turns in bounded atomic batches. Results expire once their thread
+ *   settles, or once old and superseded by a later meaningful turn.
  */
 import type Database from "better-sqlite3";
 import { purgeArchivedSearchNarrative, retainSearchNarrative } from "../search/WorkbenchSearchNarrativeIndex.ts";
+import { WORKBENCH_TOOL_SERVERS } from "../stats/WorkbenchToolStatsRepository.ts";
+import {
+  agentMessageInputSql,
+  agentMessageOutputSql,
+  registerTranscriptAgentMessageFunction,
+} from "../transcript/transcript-agent-message-sql.ts";
 
 export interface WorkbenchTranscriptRetentionCutoffs {
   expiredAt: number;
@@ -15,9 +22,29 @@ export interface WorkbenchTranscriptRetentionCutoffs {
 }
 
 const DAY_MS = 86_400_000;
+const WORKBENCH_TOOL_SERVERS_SQL = WORKBENCH_TOOL_SERVERS.map(server => `'${server}'`).join(", ");
+
+/** Agent wake-up turns made only of these items never become a thread's latest meaningful turn. */
+const TRIVIAL_ITEM_SQL = `(
+  later_item.type IN ('reasoning', 'assistantMessage')
+  OR (later_item.type = 'userMessage' AND ${agentMessageInputSql("later_item")})
+  OR (later_item.type = 'functionCallOutput' AND ${agentMessageOutputSql("later_item")})
+  OR (later_item.type = 'operation' AND EXISTS (SELECT 1 FROM thread_operation_callable_tool_sources task
+    WHERE task.item_id = later_item.id AND task.server_name IN (${WORKBENCH_TOOL_SERVERS_SQL}) AND task.tool_name = 'task_completed'))
+)`;
+
+const LATEST_MEANINGFUL_TURN_SQL = `(
+  SELECT later.turn_index FROM thread_turns later
+  WHERE later.thread_id = item.thread_id AND EXISTS (
+    SELECT 1 FROM thread_items later_item WHERE later_item.turn_id = later.id AND NOT ${TRIVIAL_ITEM_SQL}
+  )
+  ORDER BY later.turn_index DESC LIMIT 1
+)`;
 
 export default class WorkbenchTranscriptRetentionRepository {
-  constructor(private readonly database: Database.Database) {}
+  constructor(private readonly database: Database.Database) {
+    registerTranscriptAgentMessageFunction(database);
+  }
 
   /** Expires every eligible result payload and purges narrative of archived threads; returns the results expired. */
   expireResultPayloads(cutoffs: Pick<WorkbenchTranscriptRetentionCutoffs, "expiredAt" | "resultCutoff">) {
@@ -48,7 +75,7 @@ export default class WorkbenchTranscriptRetentionRepository {
       JOIN workbench_threads thread ON thread.id = item.thread_id
       JOIN thread_operation_callable_tool_sources callable ON callable.item_id = item.id
       LEFT JOIN thread_item_payload_retention retained ON retained.item_id = item.id
-      WHERE callable.server_name IN ('wb', 'wbex')
+      WHERE callable.server_name IN (${WORKBENCH_TOOL_SERVERS_SQL})
         AND callable.state IN ('completed', 'failed')
         AND ${where}
       GROUP BY project_id, thread_id, day, tool_name
@@ -63,17 +90,22 @@ export default class WorkbenchTranscriptRetentionRepository {
       INSERT OR IGNORE INTO thread_item_payload_retention(item_id, expired_at)
       SELECT item.id, @expiredAt
       FROM thread_items item
+      JOIN thread_turns turn ON turn.id = item.turn_id
+      LEFT JOIN workbench_thread_retention thread ON thread.thread_id = item.thread_id
       LEFT JOIN thread_item_payload_retention retained ON retained.item_id = item.id
       LEFT JOIN thread_operation_process_sources process ON process.item_id = item.id
       LEFT JOIN thread_operation_callable_tool_sources callable ON callable.item_id = item.id
       LEFT JOIN thread_callable_mcp_results mcp ON mcp.item_id = item.id
       LEFT JOIN thread_callable_dynamic_content dynamic ON dynamic.item_id = item.id
       LEFT JOIN thread_item_tool_outputs output ON output.item_id = item.id
-      WHERE retained.item_id IS NULL AND item.created_at < @cutoff AND (
+      WHERE retained.item_id IS NULL AND (
         (process.output_text IS NOT NULL AND process.state NOT IN ('queued', 'inProgress'))
         OR (mcp.item_id IS NOT NULL AND callable.state IN ('completed', 'failed'))
         OR (dynamic.item_id IS NOT NULL AND callable.state IN ('completed', 'failed'))
         OR output.item_id IS NOT NULL
+      ) AND (
+        thread.settled_at IS NOT NULL
+        OR (item.created_at < @cutoff AND turn.turn_index < ${LATEST_MEANINGFUL_TURN_SQL})
       )
     `).run({ cutoff, expiredAt }).changes;
     if (!inserted) return 0;
