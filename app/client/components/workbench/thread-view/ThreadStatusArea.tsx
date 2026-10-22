@@ -1,12 +1,12 @@
 /*
  * Exports:
  * - getThreadStatusAttention: the panel an idle thread opens by itself: pending proposals, then required todos or addressed feedback, then dirty claims.
- * - default ThreadStatusArea: compose a thread's status row from its live verb, skills, live vis, Git arc work
- *   (claim intersections, proposals, claims, stash, accepted commits) and goal/todos with addressed feedback.
+ * - default ThreadStatusArea: compose a thread's status row from its live verb, skills, live vis (and its theatre width),
+ *   Git arc work (claim intersections, proposals, claims, stash, accepted commits) and goal/todos with addressed feedback.
  */
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { VisLiveSession } from "workbench-shared/workbench/vis/vis-contract";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
@@ -131,6 +131,7 @@ export default function ThreadStatusArea({
     accepted && !proposals.length ? `${accepted} accepted commits` : null,
   ].filter(Boolean).join(", ") || "Git arc work";
 
+  const [visTheatre, setVisTheatre] = useState(false);
   const visUpdatedAt = vis ? getVisSessionsUpdatedAt(vis.sessions) : 0;
   const visRendering = vis?.sessions.some(({ rendering }) => rendering) ?? false;
 
@@ -146,7 +147,8 @@ export default function ThreadStatusArea({
     ...(vis?.sessions.length ? [{
       id: "vis",
       label: "Live vis",
-      render: () => <ThreadVisSessionCard {...vis} />,
+      wide: visTheatre,
+      render: () => <ThreadVisSessionCard {...vis} onTheatreChange={setVisTheatre} theatre={visTheatre} />,
       segments: [{
         key: "vis",
         content: <>

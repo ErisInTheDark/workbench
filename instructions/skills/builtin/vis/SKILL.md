@@ -64,7 +64,7 @@ iterating without wiping the user's picks, and lets the agent read picks without
 **Hard rule: check every render against your intent before pointing user at it.**
 
 - `wb vis screenshot <path>`: full-page image of current render, sent to you; user sees it only inside that call's row. `wb vis snapshot <path>`: accessibility tree.
-- Both run in the session's headless Browse session (`vis-…`, 960px wide) with the user's synced state, opened with the vis, stopped when it ends. Clicks there change nothing.
+- Both run in the session's headless Browse session (`vis-…`, 870px square: vis panel's widest) with the user's synced state, opened with the vis, stopped when it ends. Clicks there change nothing.
 - Blank render means a runtime error: wrap frames in an error boundary that prints it.
 - Fix layout, content or styling gaps, then check again.
 

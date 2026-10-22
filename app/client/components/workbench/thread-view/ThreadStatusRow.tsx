@@ -5,11 +5,12 @@
  * - threadStatusSegmentClassName/threadStatusPressedClassName: the default pill segment and open-control looks, for status
  *   pills elsewhere that extend them.
  * - default ThreadStatusRow: a thread's persistent status row; its live verb (or a leading notice that opens a panel) and each segmented pill
- *   opening one shared, animated panel area. Narrow rows hide inline content in favour of narrow-only pills.
+ *   opening one shared, animated panel area, which an open wide panel stretches to the whole thread view. Narrow rows hide
+ *   inline content in favour of narrow-only pills.
  */
 "use client";
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
@@ -17,6 +18,7 @@ import IconButton from "../../ui/IconButton";
 import { LoaderIcon } from "../workbench-icons";
 import SurfacePanels from "./SurfacePanels";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
+import useThreadViewBleed from "./use-thread-view-bleed";
 
 export interface ThreadStatusPanel {
   id: string;
@@ -27,6 +29,8 @@ export interface ThreadStatusPanel {
   pressedClassName?: string;
   /** Shown only on narrow rows, for controls whose wide form is the row's inline content. */
   narrowOnly?: boolean;
+  /** While open, the panel area widens past the thread column to the whole thread view. */
+  wide?: boolean;
   render(): ReactNode;
 }
 
@@ -76,8 +80,11 @@ export default function ThreadStatusRow({ attention = null, busy = false, inline
   }, [panelId]);
 
   const visiblePanels = panels.filter(({ segments }) => segments.length);
-  if (!liveVerb && !leading && !visiblePanels.length && !inline) return null;
   const activePanel = visiblePanels.some(({ id }) => id === panelId) ? panelId : null;
+  const wide = visiblePanels.some(({ id, wide }) => wide && id === activePanel);
+  const panelsAreaRef = useRef<HTMLDivElement>(null);
+  useThreadViewBleed(panelsAreaRef, wide);
+  if (!liveVerb && !leading && !visiblePanels.length && !inline) return null;
   const toggle = (next: string) => setPanel(current => current?.id === next ? null : { id: next, openedBy: "user" });
 
   return (
@@ -134,18 +141,20 @@ export default function ThreadStatusRow({ attention = null, busy = false, inline
             ) : null}
           </div>
           {visiblePanels.length ? (
-            <SurfacePanels
-              activeKey={activePanel}
-              className="min-w-0 overflow-hidden rounded-[0.8rem] border border-fg-alpha/16 bg-fg/3"
-              id={panelsId}
-              onClosed={() => setMounted([])}
-            >
-              {visiblePanels.map(({ id, render }) => mounted.includes(id) || activePanel === id ? (
-                <SurfacePanels.Panel active={activePanel === id} className="min-h-0" data-thread-status-panel={id} key={id}>
-                  {render()}
-                </SurfacePanels.Panel>
-              ) : null)}
-            </SurfacePanels>
+            <div className={wide ? "thread-view-bleed" : ""} ref={panelsAreaRef}>
+              <SurfacePanels
+                activeKey={activePanel}
+                className="min-w-0 overflow-hidden rounded-[0.8rem] border border-fg-alpha/16 bg-fg/3"
+                id={panelsId}
+                onClosed={() => setMounted([])}
+              >
+                {visiblePanels.map(({ id, render }) => mounted.includes(id) || activePanel === id ? (
+                  <SurfacePanels.Panel active={activePanel === id} className="min-h-0" data-thread-status-panel={id} key={id}>
+                    {render()}
+                  </SurfacePanels.Panel>
+                ) : null)}
+              </SurfacePanels>
+            </div>
           ) : null}
         </>
       </ThreadMeasuredContent>

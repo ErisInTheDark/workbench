@@ -55,6 +55,7 @@
  * - DatabaseArrowUpIcon: schema migration glyph.
  * - FolderGit2Icon/AppWindowIcon/RefreshCwIcon: project, browser and refresh glyphs.
  * - WallpaperIcon: live vis glyph.
+ * - FoldHorizontalIcon/UnfoldHorizontalIcon/MaximizeIcon: vis theatre and fullscreen controls.
  * - MessageCircleDashedIcon/MessageCircleQuestionMarkIcon/MessageCircleCheckIcon/MessageCircleGitCommitIcon/MessageCircleMoreIcon/MessageCircleXIcon: message glyphs.
  * - SquarePenIcon/CheckCheckIcon/AlarmClockIcon/ZzzIcon: editing and status glyphs.
  * - Trash2Icon/TriangleAlertIcon: miscellaneous base glyphs.
@@ -914,6 +915,24 @@ export function FoldVerticalIcon(props: IconProps) {
 export function UnfoldVerticalIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M12 22v-6" /><path d="M12 8V2" /><path d="M4 12H2" /><path d="M10 12H8" /><path d="M16 12h-2" /><path d="M22 12h-2" /><path d="m15 19-3 3-3-3" /><path d="m15 5-3-3-3 3" />
+  </OutlinedIcon>;
+}
+
+export function FoldHorizontalIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M2 12h6" /><path d="M22 12h-6" /><path d="M12 2v2" /><path d="M12 8v2" /><path d="M12 14v2" /><path d="M12 20v2" /><path d="m19 9-3 3 3 3" /><path d="m5 15 3-3-3-3" />
+  </OutlinedIcon>;
+}
+
+export function UnfoldHorizontalIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M16 12h6" /><path d="M8 12H2" /><path d="M12 2v2" /><path d="M12 8v2" /><path d="M12 14v2" /><path d="M12 20v2" /><path d="m19 15 3-3-3-3" /><path d="m5 9-3 3 3 3" />
+  </OutlinedIcon>;
+}
+
+export function MaximizeIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" />
   </OutlinedIcon>;
 }
 

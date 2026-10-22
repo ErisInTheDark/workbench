@@ -27,8 +27,12 @@ export interface VisBrowseTarget {
   controls: VisControls;
 }
 
-/** Close to the card's frame width, so layouts break where the user sees them break. */
-const VIEWPORT = "viewport 960 720";
+/**
+ * The card frame at its widest, so layouts break where the user sees them break: the 56rem thread column, less the
+ * status panel's 1px borders and the card's 0.75rem side padding.
+ */
+const FRAME_WIDTH = 870;
+const VIEWPORT = `viewport ${FRAME_WIDTH} ${FRAME_WIDTH}`;
 
 function message(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(0, 500);

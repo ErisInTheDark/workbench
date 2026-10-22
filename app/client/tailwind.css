@@ -119,6 +119,12 @@
   --thread-step-row-py: 0.125rem;
 }
 
+/* Widens past its column to the thread view's inner edges, less the thread's gutter; `useThreadViewBleed` writes the distances. */
+@utility thread-view-bleed {
+  margin-inline-start: min(0px, calc(var(--thread-scroll-inline-padding, 0px) - var(--thread-view-bleed-start, 0px)));
+  margin-inline-end: min(0px, calc(var(--thread-scroll-inline-padding, 0px) - var(--thread-view-bleed-end, 0px)));
+}
+
 @utility bg-checkerboard {
   background-image: conic-gradient(color-mix(in srgb, currentColor 12%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 12%, transparent) 0 75%, transparent 0);
   background-size: 20px 20px;
