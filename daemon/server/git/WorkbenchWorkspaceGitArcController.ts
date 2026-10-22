@@ -15,6 +15,7 @@ import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rej
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcRepositoryScope } from "workbench-shared/workbench/git/git-arc-scope-response";
+import type { GitArcScopeState } from "workbench-shared/workbench/git/git-arc-state";
 
 import type { ResolvedProjectRoot } from "../lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -156,6 +157,14 @@ function unique(values: readonly string[]) {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
+function contributesScope(scope: GitArcScopeState) {
+  return scope.plannedPaths.length > 0 || scope.claimedPaths.length > 0 || (scope.stashedPaths?.length ?? 0) > 0;
+}
+
+function isEmptyPlan(scope: GitArcScopeState) {
+  return scope.phase === "plan" && !scope.plannedPaths.length;
+}
+
 function identityKey(harness: string, threadId: string) {
   return `${harness.toLowerCase()}\0${threadId.toLowerCase()}`;
 }
@@ -231,6 +240,13 @@ export default class WorkbenchWorkspaceGitArcController {
     )) ?? null;
   }
 
+  /** Inactive members with scope; an all-empty plan keeps every member so start still rejects it. */
+  private async inactivePlanRefs(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
+    const members = (await this.findPlanState(project, harness, threadId))?.members ?? [];
+    const scoped = members.filter(({ scopePaths }) => scopePaths.length);
+    return new Map((scoped.length ? scoped : members).map(({ repoRoot, checkpointCommit }) => [repoRoot, checkpointCommit]));
+  }
+
   async listActiveClaims(project: AgentEndpointProjectResolution) {
     const states = await this.listLifecycleStates(project);
     return states.filter((state) => state.phase === "active");
@@ -284,10 +300,7 @@ export default class WorkbenchWorkspaceGitArcController {
     const members = await this.resolveRepoMembers(project);
     const refs = this.refsByRepo(project, members, request.refs);
     if (request.checkpointCommit) refs.set(this.memberForRoot(members, project.root).repoRoot, request.checkpointCommit);
-    if (!refs.size) {
-      const plan = await this.findPlanState(project, request.harness, request.threadId);
-      for (const member of plan?.members ?? []) refs.set(member.repoRoot, member.checkpointCommit);
-    }
+    if (!refs.size) for (const [repoRoot, ref] of await this.inactivePlanRefs(project, request.harness, request.threadId)) refs.set(repoRoot, ref);
     const selected = members.filter((member) => refs.has(member.repoRoot));
     if (!selected.length) throw new GitArcRejectionError({ reason: "missingInactiveMembers" }, "This workspace Git arc has no matching inactive plan members.");
     const values = await Promise.all(selected.map(async (member) => ({
@@ -883,15 +896,30 @@ export default class WorkbenchWorkspaceGitArcController {
     const removals = this.groupRootPaths(project, members, request.removePaths, request.roots.map((root) => ({
       rootId: root.rootId, paths: root.removePaths,
     })));
-    const inventories = await Promise.all(members.map(async (member) => ({
-      member, scope: await this.local.readScope({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId }),
-    })));
-    const inheritedIntent = inventories.find(({ scope }) => scope)?.scope?.intentName;
-    const selected = members.filter((member) => inventories.some((entry) => entry.member === member && entry.scope)
-      || additions.some((group) => group.member === member) || removals.some((group) => group.member === member));
+    const scopes = new Map(await Promise.all(members.map(async (member) => [
+      member.repoRoot,
+      await this.local.readScope({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId }),
+    ] as const)));
+    const inheritedIntent = [...scopes.values()].find((scope) => scope)?.intentName;
+    const changed = new Set([...additions, ...removals].map(({ member }) => member.repoRoot));
+    const candidates = members.filter((member) => scopes.get(member.repoRoot) || changed.has(member.repoRoot));
+    // Unnamed repositories join only when they hold scope this request edits: active claims under arc edits, any scope under plan edits.
+    const joins = (member: RepoMember) => {
+      const scope = scopes.get(member.repoRoot);
+      if (changed.has(member.repoRoot) || !scope) return true;
+      return request.action === "arcClaims" ? scope.phase !== "plan" : contributesScope(scope);
+    };
+    const joined = candidates.filter(joins);
+    const selected = joined.length ? joined : candidates;
     if (!selected.length) selected.push(this.memberForRoot(members, project.root));
+    const starting = request.action === "arcClaims" || request.start;
+    // Non-inherited starts replace unnamed repositories' scope with an empty plan while named repositories start.
+    const startsMember = (member: RepoMember) => request.action === "arcClaims" || request.inherit || changed.has(member.repoRoot);
+    const publishesOnly = starting && selected.some(startsMember)
+      ? (member: RepoMember) => !startsMember(member)
+      : () => false;
     const values = await this.runMembers(selected, async (member) => {
-      const scope = inventories.find((entry) => entry.member === member)?.scope;
+      const scope = scopes.get(member.repoRoot);
       const addition = additions.find((group) => group.member === member);
       const removePaths = removals.find((group) => group.member === member)?.paths ?? [];
       const input = {
@@ -899,14 +927,14 @@ export default class WorkbenchWorkspaceGitArcController {
         addPaths: addition?.paths ?? [], adoptPaths: addition?.adoptPaths ?? [], removePaths,
         inherit: request.inherit,
       };
-      if (request.action === "arcClaims" && scope) return await this.local.editArcClaims(input);
+      if (request.action === "arcClaims" && scope && !isEmptyPlan(scope)) return await this.local.editArcClaims(input);
       if (!scope && removePaths.length) throw new GitArcRejectionError({ reason: "unclaimedRemoval", paths: removePaths }, "Removed paths must exactly match inherited entries.");
       return await this.local.editPlanClaims({
         ...input,
         inherit: Boolean(scope) && request.inherit,
         intentName: request.action === "planClaims" ? request.intentName ?? (!scope ? inheritedIntent : undefined) : inheritedIntent,
         ...(request.action === "planClaims" ? { intentDescription: request.intentDescription } : {}),
-        start: request.action === "arcClaims" || request.start,
+        start: starting && !publishesOnly(member),
       });
     }, undefined, "write", { harness: request.harness, project, threadId: request.threadId });
     return this.aggregateResults(project, values);
@@ -1277,10 +1305,7 @@ export default class WorkbenchWorkspaceGitArcController {
           if (scope && scope.phase !== "plan") refs.set(member.repoRoot, scope.checkpointCommit);
         }
       } else {
-        const plans = await this.listPlanStates(project);
-        for (const plan of plans.filter((state) => state.harness === request.harness && state.threadId === request.threadId)) {
-          for (const member of plan.members) refs.set(member.repoRoot, member.checkpointCommit);
-        }
+        for (const [repoRoot, ref] of await this.inactivePlanRefs(project, request.harness, request.threadId)) refs.set(repoRoot, ref);
       }
     }
     const selected = members.filter((member) => refs.has(member.repoRoot));

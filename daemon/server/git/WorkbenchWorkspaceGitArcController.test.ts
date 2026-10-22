@@ -108,8 +108,66 @@ test("inherited scope revisions retain unmentioned repositories and qualify exac
   assert.deepEqual(local.snapshotCalls, []);
 });
 
+test("repositories without workspace plan scope never block the repositories a request names", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(local as unknown as WorkbenchGitCheckpointController, new WorkbenchThreadTransitionCoordinator(), async (root) => root);
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  const root = (rootId: string, addPaths: string[]) => ({ rootId, addPaths, removePaths: [], adoptPaths: [] });
+  const planClaims = (change: { inherit?: boolean; start?: boolean; roots?: ReturnType<typeof root>[] }) => controller.execute(project, {
+    ...identity, action: "planClaims", inherit: false, start: false, intentName: "web work",
+    addPaths: [], removePaths: [], adoptPaths: [], roots: [], ...change,
+  });
+  const arcClaims = (addPaths: string[]) => controller.execute(project, {
+    ...identity, action: "arcClaims", inherit: true, addPaths, removePaths: [], adoptPaths: [], roots: [],
+  });
+
+  await planClaims({ roots: [root("api", ["old.ts"])] });
+  await planClaims({ roots: [root("web", ["one.ts"])] });
+  assert.deepEqual((await local.findPlanState({ cwd: "C:/repo/api" }))?.scopePaths, [], "a non-inherited plan replaces scope it omits");
+  const republished = local.claimEditCalls.length;
+  await planClaims({ roots: [root("web", ["one.ts"])] });
+  assert.deepEqual(local.claimEditCalls.slice(republished).map(({ cwd }) => cwd), ["C:/repo/web"]);
+
+  await controller.execute(project, { ...identity, action: "arcStart", refs: [] });
+  assert.deepEqual(local.startCalls, ["C:/repo/web"]);
+  await arcClaims(["web:two.ts"]);
+  assert.deepEqual(local.arcClaimEditCalls, ["C:/repo/web"]);
+  await planClaims({ inherit: true, start: true });
+  assert.deepEqual(local.startCalls, ["C:/repo/web", "C:/repo/web"]);
+
+  await arcClaims(["api:new.ts"]);
+  assert.deepEqual((await local.findLifecycleState({ ...identity, cwd: "C:/repo/api" }))?.claimedPaths, ["new.ts"]);
+
+  const replaced = local.claimEditCalls.length;
+  await planClaims({ start: true, roots: [root("web", ["three.ts"])] });
+  assert.deepEqual(local.claimEditCalls.slice(replaced).map(({ cwd, start }) => ({ cwd, start })), [
+    { cwd: "C:/repo/api", start: false },
+    { cwd: "C:/repo/web", start: true },
+  ]);
+});
+
+test("arc claims join a repository with no arc state while another repository holds an empty plan", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  project.project.roots.push({ id: "docs", name: "Docs", root: "C:/repo/docs", rootPath: "C:/repo/docs" });
+  const controller = new WorkbenchWorkspaceGitArcController(local as unknown as WorkbenchGitCheckpointController, new WorkbenchThreadTransitionCoordinator(), async (root) => root);
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  await local.createPlan({ ...identity, cwd: "C:/repo/api", intentDescription: "", intentName: "web work", paths: [] });
+  await local.createPlan({ ...identity, cwd: "C:/repo/web", intentDescription: "", intentName: "web work", paths: ["C:/repo/web/one.ts"] });
+  await local.startArc({ cwd: "C:/repo/web" });
+
+  await controller.execute(project, {
+    ...identity, action: "arcClaims", inherit: true, addPaths: ["docs:guide.md"], removePaths: [], adoptPaths: [], roots: [],
+  });
+  assert.deepEqual(local.claimEditCalls.map(({ cwd }) => cwd), ["C:/repo/docs"]);
+  assert.deepEqual(local.arcClaimEditCalls, ["C:/repo/web"]);
+  assert.deepEqual((await local.findLifecycleState({ ...identity, cwd: "C:/repo/docs" }))?.claimedPaths, ["guide.md"]);
+});
+
 class FakeLocalGitArcController {
-  readonly claimEditCalls: Array<GitArcClaimChanges & { cwd: string }> = [];
+  readonly arcClaimEditCalls: string[] = [];
+  readonly claimEditCalls: Array<GitArcClaimChanges & { cwd: string; start?: boolean }> = [];
   readonly blockedRoots = new Set<string>();
   readonly claimPresenceCalls: string[] = [];
   readonly collisionCalls: Array<{ checkpointCommit?: string; cwd: string }> = [];
@@ -179,7 +237,7 @@ class FakeLocalGitArcController {
     this.claimEditCalls.push(input);
     const current = await this.readScope(input);
     const normalize = (values: string[] | undefined) => (values ?? []).map((value) => path.relative(input.cwd, value).replace(/\\/gu, "/"));
-    const final = applyGitClaimChanges(current?.plannedPaths ?? [], {
+    const final = applyGitClaimChanges([...current?.plannedPaths ?? [], ...current?.claimedPaths ?? []], {
       ...input, addPaths: normalize(input.addPaths), removePaths: normalize(input.removePaths), adoptPaths: normalize(input.adoptPaths),
     });
     const result = await this.createPlan({
@@ -187,6 +245,17 @@ class FakeLocalGitArcController {
       paths: final.map((value) => path.join(input.cwd, value)),
     });
     return input.start ? await this.startArc(input) : result;
+  }
+
+  async editArcClaims(input: GitArcClaimChanges & { cwd: string }) {
+    this.arcClaimEditCalls.push(input.cwd);
+    const state = this.states.get(input.cwd);
+    if (!state || state.pendingPlan) throw new GitArcRejectionError({ reason: "inactiveArcRequiresStart" }, "Activate the inactive plan before editing active claims.");
+    const claimedPaths = applyGitClaimChanges(state.claimedPaths, {
+      inherit: true, addPaths: (input.addPaths ?? []).map((value) => path.relative(input.cwd, value).replace(/\\/gu, "/")),
+    });
+    this.states.set(input.cwd, { ...state, claimedPaths });
+    return { checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`, kind: "arc", phase: "active", repoRoot: input.cwd, scopePaths: claimedPaths };
   }
 
   async createPlan(input: { cwd: string; harness: string; intentDescription: string; intentName: string; paths: string[]; threadId: string }) {
@@ -212,6 +281,7 @@ class FakeLocalGitArcController {
   async startArc(input: { cwd: string }) {
     this.startCalls.push(input.cwd);
     const plan = this.plans.get(input.cwd)!;
+    if (!plan.scopePaths.length) throw new GitArcRejectionError({ reason: "emptyPlan" }, "An empty Git arc plan cannot start.");
     this.states.set(input.cwd, {
       checkpointCommit: plan.checkpointCommit,
       claimedPaths: plan.scopePaths,
