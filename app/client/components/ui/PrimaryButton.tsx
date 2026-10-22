@@ -101,7 +101,10 @@ export default function PrimaryButton ({
         baseClassName,
         shapeClassNames[shape],
         toneClassNames[tone],
-        hold.enabled && "touch-none select-none [-webkit-touch-callout:none]",
+        hold.enabled && `
+          touch-none select-none [-webkit-touch-callout:none]
+          hold-filled:![color:var(--app-bg-solid)] hold-filled:duration-200 hold-filled:ease-hold
+        `,
         pendingHalo
           ? "disabled:text-fg/32"
           : "disabled:text-fg/10",
@@ -118,9 +121,10 @@ export default function PrimaryButton ({
             : "bg-[color:var(--primary-button-bg)]",
           pendingHalo ? "inset-[3px]" : "inset-0",
         )}
-      />
+      >
+        {hold.enabled ? <HoldConfirmationRail holding={hold.holding !== null} progress={hold.progressProps} /> : null}
+      </span>
       <span className="relative z-20 inline-flex items-center justify-center">{children}</span>
-      {hold.enabled ? <HoldConfirmationRail holding={hold.holding !== null} progress={hold.progressProps} /> : null}
     </button>
   );
 }

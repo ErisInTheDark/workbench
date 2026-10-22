@@ -28,7 +28,7 @@ export function holdProgressStyle(holding: boolean, holdMs: number | null) {
   return {
     transform: holding ? "scaleX(1)" : "scaleX(0)",
     transitionDuration: holding ? `${holdMs ?? 0}ms` : "0ms",
-    transitionTimingFunction: "var(--ease-surface)",
+    transitionTimingFunction: "var(--ease-hold)",
   };
 }
 

@@ -10,6 +10,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import { getWorkbenchThreadStatusControlClassName } from "./workbench-thread-status-colors";
+import HoldConfirmationRail from "../ui/HoldConfirmationRail";
 import useHoldToConfirm from "../ui/use-hold-to-confirm";
 import type {
   WorkbenchContextMenuAction, WorkbenchContextMenuControl, WorkbenchContextMenuControlGroup, WorkbenchContextMenuDefinition,
@@ -68,25 +69,17 @@ function ContextMenuActionRow({ action, onClose }: { action: WorkbenchContextMen
       })}
       disabled={action.disabled}
       data-tone={action.tone ?? "default"}
-      className={hold.enabled ? "relative touch-none select-none overflow-hidden [-webkit-touch-callout:none]" : ""}
+      className={hold.enabled ? `
+        relative isolate touch-none select-none overflow-hidden [-webkit-touch-callout:none]
+        hold-filled:![color:var(--app-bg-solid)] hold-filled:duration-200 hold-filled:ease-hold
+        ${danger
+          ? "[--hold-rail-fill:var(--danger)] [--hold-rail-track:color-mix(in_srgb,var(--danger)_18%,transparent)]"
+          : "[--hold-rail-fill:var(--accent)] [--hold-rail-track:color-mix(in_srgb,var(--text)_10%,transparent)]"}
+      ` : ""}
     >
       {action.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center">{action.icon}</span> : null}
       <span className="min-w-0 truncate">{action.label}</span>
-      {hold.enabled ? (
-        <span
-          aria-hidden="true"
-          className={`
-            pointer-events-none absolute inset-x-0 bottom-0 h-1 transition-opacity duration-100
-            ${danger ? "bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]" : "bg-fg/10"}
-            ${hold.holding ? "opacity-100" : "opacity-0"}
-          `}
-        >
-          <span
-            className={`block h-full origin-left transition-transform ${danger ? "bg-danger" : "bg-accent"}`}
-            {...hold.progressProps}
-          />
-        </span>
-      ) : null}
+      {hold.enabled ? <HoldConfirmationRail holding={hold.holding !== null} progress={hold.progressProps} /> : null}
     </WorkbenchMenuAction>
   );
 }

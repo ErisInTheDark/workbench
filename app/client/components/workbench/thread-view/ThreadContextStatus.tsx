@@ -104,7 +104,7 @@ export default function ThreadContextStatus ({
         {canCompact ? (
           <button
             type="button"
-            className="relative isolate inline-flex h-8 items-center gap-2 rounded-full px-2.5 font-medium text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-fg/muted"
+            className="relative isolate inline-flex h-8 items-center gap-2 rounded-full px-2.5 font-medium text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-fg/muted hold-filled:![color:var(--app-bg-solid)] hold-filled:duration-200 hold-filled:ease-hold"
             disabled={compactDisabled}
             title={compactTitle}
             aria-label={compactTitle}

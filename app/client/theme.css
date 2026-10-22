@@ -7,6 +7,8 @@
   --container-content: 56rem;
   /* Composer and status row surfaces open, close and switch on one rhythm; leaving content uses the short exit. */
   --ease-surface: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Hold-to-confirm fills and their completion cover. */
+  --ease-hold: cubic-bezier(0.1, 1.1, 1, 0.8);
   --transition-duration-surface: 220ms;
   --transition-duration-surface-exit: calc(var(--transition-duration-surface) * 0.3);
   --text-detail: 0.8125rem;

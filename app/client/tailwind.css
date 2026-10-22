@@ -9,6 +9,7 @@
 @custom-variant coarse-touch (@media (hover: none) and (pointer: coarse));
 @custom-variant code-wrap (&:where([data-thread-codeblock-wrap=true] *));
 @custom-variant thread-rows (& > li[data-thread-status-tone]);
+@custom-variant hold-filled (&:has([data-hold-filled]));
 @custom-variant stuck {
   &:where([data-sticky-stuck="true"] *) {
     @slot;
