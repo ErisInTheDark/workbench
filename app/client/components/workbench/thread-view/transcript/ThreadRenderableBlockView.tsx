@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - default ThreadRenderableBlockView: one renderable block through its renderer: activity runs (their steps through the
- *   command, file, reasoning and web-search renderers), arc cards with history (retried starts, proposals with their
- *   lead-in steps, through the same renderers), stitched arc cards, messages, coordination and single items. Memoised per block and timeline.
+ *   command, file, reasoning and web-search renderers), cards with history (retried arc starts, proposals with their
+ *   lead-in steps, todo changes after a listing, through the same renderers), stitched cards, messages, coordination and
+ *   single items. Memoised per block and timeline.
  */
 "use client";
 
@@ -13,7 +14,7 @@ import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/threa
 import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
 import ThreadActivityRun, { ThreadActivitySteps, type ThreadActivityRunRenderers } from "../ThreadActivityRun";
-import ThreadGitArcHistoryContext, { type ThreadGitArcHistory } from "../ThreadGitArcHistoryContext";
+import ThreadCardHistoryContext, { type ThreadCardHistory } from "../ThreadCardHistoryContext";
 import ThreadBrowseStepIcon from "../ThreadBrowseStepIcon";
 import ThreadCommandDetailRows from "../ThreadCommandDetailRows";
 import ThreadContextCompactionItem from "../ThreadContextCompactionItem";
@@ -39,7 +40,7 @@ import { getActiveItemStartedAtMs } from "./transcript-blocks";
 type Timeline = readonly WorkbenchThreadItemTimelineEntry[] | undefined;
 type ActivityRunBlock = Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
 type ItemBlock = Extract<ThreadRenderableBlock, { kind: "item" }>;
-type GitArcHistoryBlock = Extract<ThreadRenderableBlock, { kind: "gitArcHistory" }>;
+type CardHistoryBlock = Extract<ThreadRenderableBlock, { kind: "cardHistory" }>;
 
 interface BlockViewProps {
   animateEntries: boolean;
@@ -114,22 +115,22 @@ function ThreadActivityRunBlock({ animateEntries, block, isMostRecent, itemTimel
   );
 }
 
-/** The arc card (a successful start, or a proposal), drawn as it always is, whose card opens onto the steps before it. */
-function ThreadGitArcHistoryBlock({ block, ...props }: Omit<BlockViewProps, "block"> & { block: GitArcHistoryBlock }) {
+/** The card (a successful arc start, a proposal, a todo change), drawn as it always is, opening onto the steps before it. */
+function ThreadCardHistoryBlock({ block, ...props }: Omit<BlockViewProps, "block"> & { block: CardHistoryBlock }) {
   const renderers = useActivityRunRenderers(props.animateEntries, false, props.itemTimeline);
-  const history: ThreadGitArcHistory = {
-    // The failed attempts inside are arc cards too; they must not open onto this history again.
+  const history: ThreadCardHistory = {
+    // The steps inside may be cards too (failed arc attempts); they must not open onto this history again.
     content: (
-      <ThreadGitArcHistoryContext.Provider value={null}>
+      <ThreadCardHistoryContext.Provider value={null}>
         <ThreadActivitySteps inset renderers={renderers} segments={block.history} />
-      </ThreadGitArcHistoryContext.Provider>
+      </ThreadCardHistoryContext.Provider>
     ),
     failedAttempts: block.failedAttempts,
   };
   return (
-    <ThreadGitArcHistoryContext.Provider value={history}>
+    <ThreadCardHistoryContext.Provider value={history}>
       <ThreadRenderableBlockViewComponent {...props} block={block.success} />
-    </ThreadGitArcHistoryContext.Provider>
+    </ThreadCardHistoryContext.Provider>
   );
 }
 
@@ -234,9 +235,9 @@ function ThreadRenderableBlockViewComponent ({
   switch (block.kind) {
     case "activityRun":
       return <ThreadActivityRunBlock animateEntries={animateEntries} block={block} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} />;
-    case "gitArcHistory":
+    case "cardHistory":
       return (
-        <ThreadGitArcHistoryBlock
+        <ThreadCardHistoryBlock
           animateEntries={animateEntries}
           block={block}
           finalAgentMessageId={finalAgentMessageId}
@@ -245,7 +246,7 @@ function ThreadRenderableBlockViewComponent ({
           primaryUserBlock={primaryUserBlock}
         />
       );
-    case "gitArcSequence":
+    case "cardSequence":
       return (
         <ThreadCardGroup>
           {block.blocks.map((child, index) => (

@@ -25,7 +25,7 @@ import ThreadGitArcCardBody from "./ThreadGitArcCardBody";
 import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 import ThreadGitArcCollapsedSummary, { ThreadGitArcStatusCounts } from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
-import ThreadGitArcHistoryContext from "./ThreadGitArcHistoryContext";
+import ThreadCardHistoryContext from "./ThreadCardHistoryContext";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadStepRow from "./ThreadStepRow";
 import { buildGitArcCard, type GitArcCard } from "./thread-git-arc-card";
@@ -97,7 +97,7 @@ export default function ThreadGitArcItem ({
   typedFailure?: GitArcFailure | null;
 }) {
   const presentation = useContext(ThreadGitArcPresentationContext);
-  const history = useContext(ThreadGitArcHistoryContext);
+  const history = useContext(ThreadCardHistoryContext);
   const asRunStep = useContext(ThreadRowChromeContext) === "step";
   const card = buildGitArcCard({
     asRunStep, currentPlan: presentation?.gitArcPlan ?? null, editResult, failureReason, intent: commandIntent, interruptedBySteer,

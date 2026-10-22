@@ -22,8 +22,8 @@ export interface ThreadTodoResult {
   todos: WorkbenchThreadTodo[];
   /** The todo an add created. */
   added: WorkbenchThreadTodo | null;
-  /** Ids a remove actually deleted. */
-  removed: number[];
+  /** The todos a remove actually deleted, in serial order. */
+  removed: WorkbenchThreadTodo[];
   /** A move's destination list and the ids its todos received there. */
   moved: { todos: WorkbenchThreadTodo[]; ids: number[] } | null;
 }
@@ -60,7 +60,7 @@ export default class WorkbenchThreadTodoStore {
   execute(command: ThreadTodoCommand): ThreadTodoResult {
     return this.database.transaction((): ThreadTodoResult => {
       let added: WorkbenchThreadTodo | null = null;
-      let removed: number[] = [];
+      let removed: WorkbenchThreadTodo[] = [];
       let moved: ThreadTodoResult["moved"] = null;
       switch (command.kind) {
         case "move": {
@@ -93,8 +93,8 @@ export default class WorkbenchThreadTodoStore {
         case "remove": {
           if (!command.ids.length) break;
           removed = (this.database.prepare(`DELETE FROM workbench_thread_todos
-            WHERE thread_id = ? AND id IN (SELECT value FROM json_each(?)) RETURNING id`)
-            .all(command.threadId, JSON.stringify(command.ids)) as Array<{ id: number }>).map(({ id }) => id).sort((a, b) => a - b);
+            WHERE thread_id = ? AND id IN (SELECT value FROM json_each(?)) RETURNING id, text, required, created_at`)
+            .all(command.threadId, JSON.stringify(command.ids)) as ThreadTodoRow[]).map(toTodo).sort((a, b) => a.id - b.id);
           break;
         }
         case "setRequired":

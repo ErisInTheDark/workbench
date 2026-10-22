@@ -25,7 +25,7 @@ import { ThreadEntryAnimation, ThreadStreamCaretSlot } from "../ThreadRevealText
 import ThreadStableChunkIdentities, { ThreadStableKeys } from "../ThreadStableChunkIdentities";
 import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
-import { getGitArcFoldAnchor, isGitArcCardBlock } from "../thread-git-arc-retries";
+import { getCardFoldAnchor, isCardBlock } from "../thread-card-folds";
 import { getRenderableBlockItems } from "../thread-render-blocks";
 import { THREAD_WINDOW_CHUNK_SIZE } from "../thread-progressive-window-policy";
 import { ThreadEntryMotion } from "../thread-scroll-viewport-context";
@@ -113,9 +113,9 @@ export default memo(function ThreadTurnItems({
     const identity = entry.kind === "generic"
       ? `item:${entry.item.id}`
       : firstItem ? getThreadEntryMotionIdentity(firstItem) : `empty:${turnId}:${index}`;
-    // An arc card may later fold or stitch into a bigger card, which then slides up from where that card sat.
-    const trackAs = animateEntries && entry.kind === "block" && firstItem && isGitArcCardBlock(entry.block) ? identity : null;
-    const absorbed = entry.kind === "block" ? getGitArcFoldAnchor(entry.block) : null;
+    // A card may later fold or stitch into a bigger card, which then slides up from where that card sat.
+    const trackAs = animateEntries && entry.kind === "block" && firstItem && isCardBlock(entry.block) ? identity : null;
+    const absorbed = entry.kind === "block" ? getCardFoldAnchor(entry.block) : null;
     const slideFrom = absorbed ? getThreadEntryMotionIdentity(absorbed) : null;
     return (
       <ThreadEntryMotion

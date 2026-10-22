@@ -2,7 +2,7 @@
  * Exports:
  * - TranscriptEntry: one rendered turn entry: a renderable block, or a generic item that renders alone.
  * - buildTranscriptEntries: the one pipeline from turn items to entries: an ended turn's running calls ended, renderable
- *   blocks folded into activity runs, then retried Git arc starts folded into their success.
+ *   blocks folded into activity runs, then the steps leading into cards folded into them and same-family cards stitched.
  * - withInteractionTimeline: a turn's item timeline with relational questionnaire and approval resolution times.
  * - useStableRenderableBlocks: keep unchanged blocks' identities across renders so memoised block views skip them.
  * - getMostRecentDeliveredIndex: the newest entry actually in the turn, skipping trailing undelivered steers and held messages.
@@ -26,7 +26,7 @@ import { getThreadItemsRenderChunkSignature } from "../../../../workbench/thread
 import type ContextualProject from "../../../../workbench/project/ContextualProject";
 import { buildActivityRuns } from "../thread-activity-runs";
 import { getBrowseScreenshotUrls } from "../thread-browse-steps";
-import { foldGitArcBlocks } from "../thread-git-arc-retries";
+import { foldCardBlocks } from "../thread-card-folds";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
 import {
   buildRenderableBlocks, getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, reuseRenderableBlocks,
@@ -84,7 +84,7 @@ export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscr
   let pending: ThreadItem[] = [];
   const flush = () => {
     if (!pending.length) return;
-    entries.push(...foldGitArcBlocks(buildActivityRuns(
+    entries.push(...foldCardBlocks(buildActivityRuns(
       buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, project?.cwd),
       { browseScreenshotUrls, codeDetails, knownSkills: matchers?.knownSkills, projectRootPath: matchers?.projectRootPath, workspaceRoots: matchers?.workspaceRoots },
     )).map(block => ({ block, kind: "block" as const })));

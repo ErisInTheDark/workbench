@@ -8,6 +8,7 @@
  * - getActivitySegmentItems: the items one run segment shows.
  * - getActivityStatusStep: the one step an activity card's status shows.
  * - pushActivitySegment: add one step to a segment list under the kind's merge rule.
+ * - buildCardHistory: a card opening onto the runs and lone calls folded into it, as run steps.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getAgentScreenshotSteerImages, isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
@@ -16,8 +17,10 @@ import { getNativeFileChanges } from "../../../workbench/thread/thread-command-m
 import { stitchFileOperationRows } from "./thread-file-change-stitching";
 import {
   buildCommandSequenceRenderSegments,
+  getRenderableBlockItems,
   isRunStepSegment,
   type ActivitySegment,
+  type CommandSequenceItem,
   type ThreadRenderableBlock,
 } from "./thread-render-blocks";
 
@@ -199,6 +202,24 @@ export function buildActivityRuns(blocks: readonly ThreadRenderableBlock[], cont
 }
 
 type ListSegment = Extract<ActivitySegment, { items: readonly unknown[] }>;
+
+/** The card `success` opening onto `span` (runs and lone calls before it) as run steps. */
+export function buildCardHistory(
+  span: ReadonlyArray<ActivityRunBlock | CommandSequenceItem>, success: ThreadRenderableBlock, failedAttempts: number,
+): Extract<ThreadRenderableBlock, { kind: "cardHistory" }> {
+  const history: ActivitySegment[] = [];
+  const items: ThreadItem[] = [];
+  for (const entry of span) {
+    if ("segments" in entry) {
+      for (const segment of entry.segments) pushActivitySegment(history, segment);
+      items.push(...entry.items);
+      continue;
+    }
+    pushActivitySegment(history, { items: [entry], kind: "commands" });
+    items.push(entry);
+  }
+  return { failedAttempts, history, items: [...items, ...getRenderableBlockItems(success)], kind: "cardHistory", success };
+}
 
 /** Add one step, joining the last segment when its kind merges; the segments own their lists. */
 export function pushActivitySegment(segments: ActivitySegment[], segment: ActivitySegment) {

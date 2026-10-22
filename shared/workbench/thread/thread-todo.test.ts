@@ -1,7 +1,17 @@
+/* No production exports. Tests protect todo titles and reading printed todos back. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { workbenchThreadTodoTitle } from "./thread-todo";
+import { formatWorkbenchThreadTodos, parseWorkbenchThreadTodos, workbenchThreadTodoTitle } from "./thread-todo";
+
+test("todos printed for an agent read back whole, after any heading, multi-line text included", () => {
+  const todos = [
+    { id: 1, required: false, text: "Fix stale pill — cache\n\nkeeps old text" },
+    { id: 12, required: true, text: "Rerun tests — after the fix" },
+  ];
+  assert.deepEqual(parseWorkbenchThreadTodos(`Removed todos 1, 12:\n\n${formatWorkbenchThreadTodos(todos)}\n`), todos);
+  assert.deepEqual(parseWorkbenchThreadTodos("Removed todo 1.\n"), [], "outputs without todo text read as none");
+});
 
 test("todo title is the text before the first separator", () => {
   assert.equal(workbenchThreadTodoTitle("Fix stale pill — the cache keeps old text — even after save"), "Fix stale pill");

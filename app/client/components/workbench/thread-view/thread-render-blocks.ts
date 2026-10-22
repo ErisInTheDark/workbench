@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds/ActivitySegment: shared render-plan shapes,
- *   including the retried Git arc start that thread-git-arc-retries folds.
+ *   including the card histories and stitched cards that thread-card-folds builds.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
  * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
  * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context and calls a batch never started), preserve wait folds, then give qualifying subagent coordination one outer render block.
@@ -105,12 +105,13 @@ export type ThreadRenderableBlock =
   /** Consecutive work (reasoning, plain commands, file changes, searches) shown as one summary that expands into its steps. */
   | { kind: "activityRun"; items: ThreadItem[]; segments: ActivitySegment[] }
   /**
-   * A Git arc card opening onto how it got there, as run steps: a start that succeeded after failed attempts and the work
-   * between, or a proposal after the arc-only steps leading into it (no failed attempts).
+   * A card opening onto how it got there, as run steps: an arc start that succeeded after failed attempts and the work
+   * between, a proposal after the arc-only steps leading into it, or a todo add or removal after the listing before it
+   * (the last two with no failed attempts).
    */
-  | { failedAttempts: number; history: ActivitySegment[]; items: ThreadItem[]; kind: "gitArcHistory"; success: ThreadRenderableBlock }
-  /** Back-to-back Git arc cards stitched into one card, each half opening onto its own contents. */
-  | { blocks: ThreadRenderableBlock[]; items: ThreadItem[]; kind: "gitArcSequence" }
+  | { failedAttempts: number; history: ActivitySegment[]; items: ThreadItem[]; kind: "cardHistory"; success: ThreadRenderableBlock }
+  /** Back-to-back cards of one family (Git arc, todo) stitched into one card, each half opening onto its own contents. */
+  | { blocks: ThreadRenderableBlock[]; items: ThreadItem[]; kind: "cardSequence" }
   | { kind: "agentMessageSequence"; items: IncomingAgentMessageItem[]; state: "delivered" | "held" }
   /** Consecutive non-final agent messages, which share copy runs. */
   | { kind: "agentCommentarySequence"; items: AgentCommentaryItem[] }

@@ -8,7 +8,7 @@ import { test } from "node:test";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { buildActivityRuns } from "./thread-activity-runs";
-import { foldGitArcBlocks } from "./thread-git-arc-retries";
+import { foldCardBlocks } from "./thread-card-folds";
 import { buildRenderableBlocks, getRenderableBlockItems, type CommandItem } from "./thread-render-blocks";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
@@ -29,7 +29,7 @@ function commentary(id: string): ThreadItem {
 }
 
 function fold(items: ThreadItem[]) {
-  return foldGitArcBlocks(buildActivityRuns(buildRenderableBlocks(items)));
+  return foldCardBlocks(buildActivityRuns(buildRenderableBlocks(items)));
 }
 
 test("a failed start, the work after it and the start that succeeded become one retry", () => {
@@ -39,8 +39,8 @@ test("a failed start, the work after it and the start that succeeded become one 
   ]);
   assert.equal(blocks.length, 1);
   const [retry] = blocks;
-  assert.equal(retry?.kind, "gitArcHistory");
-  if (retry?.kind !== "gitArcHistory") return;
+  assert.equal(retry?.kind, "cardHistory");
+  if (retry?.kind !== "cardHistory") return;
   assert.equal(retry.failedAttempts, 1);
   assert.deepEqual(retry.items.map(item => item.id), ["failed", "why", "diffed", "status", "started"]);
   assert.deepEqual(retry.success.kind === "item" ? retry.success.item.id : null, "started");
@@ -62,16 +62,16 @@ test("words to the user and other cards keep the failure and the retry apart", (
   // Another arc card between them ends the retry; the three cards stitch into one instead.
   const [stitched, ...rest] = fold([mcp("failed", "git_arc_start", "failed"), mcp("proposed", "git_arc_propose"), mcp("started", "git_arc_start")]);
   assert.equal(rest.length, 0);
-  assert.deepEqual(stitched?.kind === "gitArcSequence" ? stitched.blocks.map(block => block.kind) : null, ["item", "item", "item"]);
+  assert.deepEqual(stitched?.kind === "cardSequence" ? stitched.blocks.map(block => block.kind) : null, ["item", "item", "item"]);
 });
 
 test("the arc-only steps before a completed proposal fold into it, and its stack stitches on", () => {
   const blocks = fold([mcp("compared", "git_arc_compare"), mcp("diffed", "git_arc_diff"), mcp("proposed", "git_arc_propose"), mcp("stacked", "git_arc_stack")]);
   assert.equal(blocks.length, 1);
   const [sequence] = blocks;
-  if (sequence?.kind !== "gitArcSequence") return assert.fail("expected one stitched card");
+  if (sequence?.kind !== "cardSequence") return assert.fail("expected one stitched card");
   const [proposal, stack] = sequence.blocks;
-  assert.equal(proposal?.kind === "gitArcHistory" ? proposal.failedAttempts : null, 0);
+  assert.equal(proposal?.kind === "cardHistory" ? proposal.failedAttempts : null, 0);
   assert.deepEqual(proposal ? getRenderableBlockItems(proposal).map(item => item.id) : null, ["compared", "diffed", "proposed"]);
   assert.deepEqual(stack ? getRenderableBlockItems(stack).map(item => item.id) : null, ["stacked"]);
 });
@@ -87,31 +87,31 @@ test("every failed attempt before the success folds and counts", () => {
   const [retry] = fold([
     mcp("one", "git_arc_start", "failed"), thought("hm"), mcp("two", "git_arc_start", "failed"), mcp("started", "git_arc_start"),
   ]);
-  assert.equal(retry?.kind === "gitArcHistory" ? retry.failedAttempts : null, 2);
+  assert.equal(retry?.kind === "cardHistory" ? retry.failedAttempts : null, 2);
 });
 
 test("a failed wait starts a retry like a failed start", () => {
   const [retry, ...rest] = fold([mcp("waited", "git_arc_wait", "failed"), mcp("diffed", "git_arc_diff"), mcp("started", "git_arc_start")]);
   assert.equal(rest.length, 0);
-  assert.equal(retry?.kind === "gitArcHistory" ? retry.failedAttempts : null, 1);
-  assert.deepEqual(fold([cli("waited", "wb git arc wait", 1), cli("started", "wb git arc start")]).map(block => block.kind), ["gitArcHistory"]);
+  assert.equal(retry?.kind === "cardHistory" ? retry.failedAttempts : null, 1);
+  assert.deepEqual(fold([cli("waited", "wb git arc wait", 1), cli("started", "wb git arc start")]).map(block => block.kind), ["cardHistory"]);
 });
 
 test("a failed continue starts a retry like a failed start", () => {
   const [retry, ...rest] = fold([mcp("continued", "git_arc_continue", "failed"), mcp("started", "git_arc_start")]);
   assert.equal(rest.length, 0);
-  assert.equal(retry?.kind === "gitArcHistory" ? retry.failedAttempts : null, 1);
+  assert.equal(retry?.kind === "cardHistory" ? retry.failedAttempts : null, 1);
   // Continues are run steps: work before the failure stays its own run, and nothing splits without a successful start.
   const [before, after] = fold([thought("earlier"), mcp("continued", "git_arc_continue", "failed"), thought("why"), mcp("started", "git_arc_start")]);
   assert.deepEqual(before ? getRenderableBlockItems(before).map(item => item.id) : null, ["earlier"]);
-  assert.deepEqual(after?.kind === "gitArcHistory" ? after.items.map(item => item.id) : null, ["continued", "why", "started"]);
+  assert.deepEqual(after?.kind === "cardHistory" ? after.items.map(item => item.id) : null, ["continued", "why", "started"]);
   assert.deepEqual(fold([thought("earlier"), mcp("continued", "git_arc_continue", "failed"), commentary("stuck")]).map(block => block.kind),
     ["activityRun", "agentCommentarySequence"]);
 });
 
 test("CLI starts fold like MCP starts", () => {
   const blocks = fold([cli("failed", "wb git arc start", 1), thought("why"), cli("started", "wb git plan start --inherit")]);
-  assert.deepEqual(blocks.map(block => block.kind), ["gitArcHistory"]);
+  assert.deepEqual(blocks.map(block => block.kind), ["cardHistory"]);
   const [unresolved] = fold([cli("failed", "wb git arc start", 1), cli("running", "wb git arc start", null)]);
-  assert.deepEqual(unresolved?.kind === "gitArcSequence" ? unresolved.blocks.map(block => block.kind) : null, ["commandSequence", "commandSequence"]);
+  assert.deepEqual(unresolved?.kind === "cardSequence" ? unresolved.blocks.map(block => block.kind) : null, ["commandSequence", "commandSequence"]);
 });

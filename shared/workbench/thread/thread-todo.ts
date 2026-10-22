@@ -5,6 +5,7 @@
  * - WorkbenchThreadTodoSchema/WorkbenchThreadTodo: one follow-up recorded on a thread by its agent or user.
  * - workbenchThreadTodoReference: the composer reference that hands a todo to the agent.
  * - workbenchThreadTodoTitle: the short title of a `Title — context` todo, or null when it lacks that form.
+ * - formatWorkbenchThreadTodos/parseWorkbenchThreadTodos: todos as `wb todo` prints them for agents, and read back from that output.
  */
 import { z } from "zod";
 import type { ComposerReference } from "./composer-reference.ts";
@@ -23,6 +24,25 @@ export type WorkbenchThreadTodo = z.infer<typeof WorkbenchThreadTodoSchema>;
 
 export function workbenchThreadTodoReference(todo: WorkbenchThreadTodo): Extract<ComposerReference, { kind: "todo" }> {
   return { kind: "todo", id: todo.id, required: todo.required, createdAt: todo.createdAt, text: todo.text };
+}
+
+type PrintedTodo = Pick<WorkbenchThreadTodo, "id" | "required" | "text">;
+
+/** Todos as `wb todo` prints them for agents: a `#id required|optional` line, then the text; blank lines between. */
+export function formatWorkbenchThreadTodos(todos: readonly PrintedTodo[]) {
+  return todos.map(todo => `#${todo.id} ${todo.required ? "required" : "optional"}\n${todo.text}`).join("\n\n");
+}
+
+const PRINTED_TODO_HEADER = /^#(\d+) (required|optional)$/gmu;
+
+/** The todos printed in a `wb todo` output, wherever they start; outputs without any read as none. */
+export function parseWorkbenchThreadTodos(output: string): PrintedTodo[] {
+  const headers = [...output.matchAll(PRINTED_TODO_HEADER)];
+  return headers.map((header, index) => ({
+    id: Number(header[1]),
+    required: header[2] === "required",
+    text: output.slice(header.index + header[0].length, headers[index + 1]?.index ?? output.length).trim(),
+  }));
 }
 
 const TITLE_SEPARATOR = " — ";

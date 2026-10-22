@@ -4,7 +4,9 @@
  * - default WorkbenchThreadTodoController: own each thread's follow-up todos for agents (wb todo), the browser and settle handover.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import { WorkbenchThreadTodoTextSchema, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
+import {
+  WorkbenchThreadTodoTextSchema, formatWorkbenchThreadTodos, type WorkbenchThreadTodo,
+} from "workbench-shared/workbench/thread/thread-todo";
 import type { ThreadTodoCommand, ThreadTodoResult } from "../database/todos/WorkbenchThreadTodoStore";
 
 export interface WorkbenchThreadTodosOptions {
@@ -14,10 +16,6 @@ export interface WorkbenchThreadTodosOptions {
   /** The thread's todos changed; observers show the new list. */
   changed(threadId: WorkbenchThreadId, todos: WorkbenchThreadTodo[]): void;
   now?(): number;
-}
-
-function describe(todo: WorkbenchThreadTodo) {
-  return `#${todo.id} ${todo.required ? "required" : "optional"}\n${todo.text}`;
 }
 
 export default class WorkbenchThreadTodoController {
@@ -61,7 +59,7 @@ export default class WorkbenchThreadTodoController {
   /** Agent-facing text for `wb todo`. */
   async renderList(threadId: string) {
     const todos = await this.read(threadId);
-    return todos.length ? `${todos.map(describe).join("\n\n")}\n` : "No todos for this thread.\n";
+    return todos.length ? `${formatWorkbenchThreadTodos(todos)}\n` : "No todos for this thread.\n";
   }
 
   async renderAdd(threadId: string, text: string, required: boolean) {
@@ -69,12 +67,15 @@ export default class WorkbenchThreadTodoController {
     return `Added todo ${todo.id} (${todo.required ? "required" : "optional"}).\n`;
   }
 
+  /** Missing ids come first, so nothing follows the removed todos' text. */
   async renderRemove(threadId: string, ids: readonly number[]) {
     const removed = await this.remove(threadId, ids);
-    const missing = ids.filter(id => !removed.includes(id));
+    const missing = ids.filter(id => !removed.some(todo => todo.id === id));
     return [
-      removed.length ? `Removed todo${removed.length === 1 ? "" : "s"} ${removed.join(", ")}.` : "",
       missing.length ? `No todo${missing.length === 1 ? "" : "s"} ${missing.join(", ")} on this thread.` : "",
+      removed.length
+        ? `Removed todo${removed.length === 1 ? "" : "s"} ${removed.map(todo => todo.id).join(", ")}:\n\n${formatWorkbenchThreadTodos(removed)}`
+        : "",
     ].filter(Boolean).join("\n") + "\n";
   }
 

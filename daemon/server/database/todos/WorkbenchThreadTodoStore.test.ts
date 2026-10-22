@@ -38,7 +38,7 @@ test("todos stay in creation order and every edit is scoped to its own thread", 
   assert.equal(foreign.id, 1, "each thread numbers its own todos");
 
   const removed = todos.execute({ kind: "remove", threadId, ids: [foreign.id, first.id, 999] });
-  assert.deepEqual(removed.removed, [first.id], "another thread's todo is never removed");
+  assert.deepEqual(removed.removed, [first], "another thread's todo is never removed, and the removed one comes back whole");
   todos.execute({ kind: "setRequired", threadId, id: foreign.id, required: true });
   todos.execute({ kind: "setText", threadId, id: foreign.id, text: "hijacked" });
   assert.deepEqual(todos.execute({ kind: "list", threadId: otherThreadId }).todos.map(todo => [todo.text, todo.required]), [["theirs", false]]);

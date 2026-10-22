@@ -1,9 +1,8 @@
 /*
  * Exports:
- * - foldGitArcBlocks: fold failed arc starts, waits or continues (with the work between) into the start that finally succeeded,
- *   fold the arc-only steps leading into a completed proposal into it, then stitch back-to-back arc cards into one.
- * - isGitArcCardBlock: a block drawn as one Git arc card.
- * - getGitArcFoldAnchor: the arc card a folded or stitched block grew from.
+ * - foldGitArcHistories: fold failed arc starts, waits or continues (with the work between) into the start that finally
+ *   succeeded, then fold the arc-only steps leading into a completed proposal into it.
+ * - isGitArcCall: a block that is one Git arc call, drawn as one Git arc card.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
@@ -11,9 +10,9 @@ import {
   getGitArcMatcherAction, getThreadCommandDisplay, getThreadCommandExecutionOutcome, getThreadMcpToolCallOutcome,
   getWorkbenchMcpCommandRoute, isGitArcWaitMatcherClaim, type GitArcCommandAction,
 } from "../../../workbench/thread/thread-command-matchers";
-import { pushActivitySegment } from "./thread-activity-runs";
+import { buildCardHistory } from "./thread-activity-runs";
 import {
-  getRenderableBlockItems, type ActivitySegment, type CommandItem, type CommandSequenceItem, type ThreadRenderableBlock,
+  getRenderableBlockItems, type CommandItem, type CommandSequenceItem, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
 
 type ActivityRunBlock = Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
@@ -94,24 +93,10 @@ function isAbsorbable(block: ThreadRenderableBlock) {
   return Boolean(call && READS.has(call.action) && call.outcome !== "other");
 }
 
-/** The card `success` opening onto `span` as run steps. */
+/** The card `success` opening onto `span` (runs and absorbable arc calls) as run steps. */
 function historyBlock(span: readonly ThreadRenderableBlock[], success: ThreadRenderableBlock): ThreadRenderableBlock {
-  const history: ActivitySegment[] = [];
-  for (const absorbed of span) {
-    if (absorbed.kind === "activityRun") {
-      for (const segment of absorbed.segments) pushActivitySegment(history, segment);
-      continue;
-    }
-    pushActivitySegment(history, { items: [readArcCall(absorbed)!.item], kind: "commands" });
-  }
-  const items = span.flatMap(entry => getRenderableBlockItems(entry));
-  return {
-    failedAttempts: items.filter(isFailedAttempt).length,
-    history,
-    items: [...items, ...getRenderableBlockItems(success)],
-    kind: "gitArcHistory",
-    success,
-  };
+  const failedAttempts = span.flatMap(entry => getRenderableBlockItems(entry)).filter(isFailedAttempt).length;
+  return buildCardHistory(span.map(entry => entry.kind === "activityRun" ? entry : readArcCall(entry)!.item), success, failedAttempts);
 }
 
 /**
@@ -166,41 +151,12 @@ function foldLeadIns(blocks: readonly ThreadRenderableBlock[]): ThreadRenderable
   return folded;
 }
 
-/** A block drawn as one Git arc card: a lone arc call, or a card opening onto its history. */
-export function isGitArcCardBlock(block: ThreadRenderableBlock) {
-  return block.kind === "gitArcHistory" || readArcCall(block) !== null;
+/** A block that is one Git arc call, drawn as one Git arc card. */
+export function isGitArcCall(block: ThreadRenderableBlock) {
+  return readArcCall(block) !== null;
 }
 
-/** Back-to-back arc cards become one stitched card. */
-function stitchCards(blocks: readonly ThreadRenderableBlock[]): ThreadRenderableBlock[] {
-  const stitched: ThreadRenderableBlock[] = [];
-  let run: ThreadRenderableBlock[] = [];
-  const flush = () => {
-    if (run.length > 1) stitched.push({ blocks: run, items: run.flatMap(entry => [...getRenderableBlockItems(entry)]), kind: "gitArcSequence" });
-    else stitched.push(...run);
-    run = [];
-  };
-  for (const block of blocks) {
-    if (isGitArcCardBlock(block)) {
-      run.push(block);
-      continue;
-    }
-    flush();
-    stitched.push(block);
-  }
-  flush();
-  return stitched;
-}
-
-/** Fold retried starts and proposals' lead-in steps into their cards, then stitch back-to-back arc cards together. */
-export function foldGitArcBlocks(blocks: readonly ThreadRenderableBlock[]): ThreadRenderableBlock[] {
-  return stitchCards(foldLeadIns(foldRetries(blocks)));
-}
-
-/** The arc card a folded or stitched block grew from, so it can move in from where that card sat. */
-export function getGitArcFoldAnchor(block: ThreadRenderableBlock): ThreadItem | null {
-  if (block.kind === "gitArcHistory") return getRenderableBlockItems(block.success)[0] ?? null;
-  if (block.kind !== "gitArcSequence") return null;
-  const [first] = block.blocks;
-  return first ? getGitArcFoldAnchor(first) ?? getRenderableBlockItems(first)[0] ?? null : null;
+/** Fold retried starts, then proposals' lead-in steps, into their cards. */
+export function foldGitArcHistories(blocks: readonly ThreadRenderableBlock[]): ThreadRenderableBlock[] {
+  return foldLeadIns(foldRetries(blocks));
 }
