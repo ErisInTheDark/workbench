@@ -1,12 +1,13 @@
 /*
  * Exports:
  * - WorkbenchAppRuntimeClientOptions: workspace facts, loaded bundle identity and reload handoff transport.
- * - default WorkbenchAppRuntimeClient: project pushed runtime facts and the app's reload/pull operation, and send reload, reload-all and pull intents.
+ * - default WorkbenchAppRuntimeClient: project pushed runtime facts (incl. the update's predicted app scopes) and the app's
+ *   reload/pull operation, and send reload, per-device reload-all and pull intents.
  */
+import type { WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
 import {
-  IDLE_RELOAD_OPERATION,
-  type WorkbenchReloadOperation, type WorkbenchReloadResponse, type WorkbenchReloadScope,
-} from "workbench-shared/reload/workbench-reload";
+  IDLE_DEVICE_RELOAD_OPERATION, type DeviceReloadOperation,
+} from "workbench-shared/reload/device-reload-operation";
 import { WorkbenchAppOperationAdmissionSchema, type WorkbenchAppRpcIntent } from "workbench-shared/http/workbench-app-rpc";
 
 import type {
@@ -17,12 +18,14 @@ import { DaemonReloadResponseSchema } from "workbench-shared/workbench/daemon-re
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type WorkbenchWorkspaceClient from "./WorkbenchWorkspaceClient";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import type { DaemonId } from "workbench-shared/workbench/identity";
 
 const EMPTY: WorkbenchAppRuntimeSnapshot = {
   dirtyScopes: [],
   error: null,
   pendingScopes: [],
   tabOutOfDate: false,
+  updateScopes: null,
 };
 
 export interface WorkbenchAppRuntimeClientOptions {
@@ -40,7 +43,7 @@ export default class WorkbenchAppRuntimeClient {
   #snapshot: WorkbenchAppRuntimeSnapshot = EMPTY;
   readonly #operationListeners = new Set<() => void>();
   #operationObservation: Pick<ReturnType<WorkbenchWorkspaceClient["observe"]>, "release"> | null = null;
-  #operation: WorkbenchReloadOperation = IDLE_RELOAD_OPERATION;
+  #operation: DeviceReloadOperation = IDLE_DEVICE_RELOAD_OPERATION;
 
   constructor(options: WorkbenchAppRuntimeClientOptions) {
     const fetcher = options.fetcher ?? globalThis.fetch;
@@ -63,12 +66,12 @@ export default class WorkbenchAppRuntimeClient {
     return () => this.#operationListeners.delete(listener);
   };
 
-  async reloadAll() {
-    await this.#admit({ method: "app/reload/all", params: {} });
+  async reloadAll({ daemonId }: { daemonId?: DaemonId } = {}) {
+    await this.#admit({ method: "app/reload/all", params: daemonId ? { daemonId } : {} });
   }
 
-  async pull({ reload }: { reload: boolean }) {
-    await this.#admit({ method: "app/update/pull", params: { reload } });
+  async pull({ reload, daemonId }: { reload: boolean; daemonId?: DaemonId }) {
+    await this.#admit({ method: "app/update/pull", params: daemonId ? { reload, daemonId } : { reload } });
   }
 
   async #admit(intent: Extract<WorkbenchAppRpcIntent, { method: "app/reload/all" | "app/update/pull" }>) {
@@ -92,6 +95,7 @@ export default class WorkbenchAppRuntimeClient {
         dirtyScopes: current.reloadDirt.dirtyScopes, pendingScopes: current.reloadDirt.pendingScopes,
         error: fact.failure ?? current.reloadDirt.error,
         tabOutOfDate: this.#isTabOutOfDate(current.frontendGeneration),
+        updateScopes: current.updateScopes ?? null,
       });
     };
     const observation = this.#workspace.observe({ kind: "runtime" }, update);

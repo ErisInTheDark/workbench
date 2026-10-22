@@ -4,8 +4,9 @@
  * - GitPeerAddressSchema/GitPeerAddress: one folder on another daemon sharing a folder's logical project.
  * - GitPeerCommitsRequestSchema/GitPeerCommitsRequest: directional preview or full-history demand.
  * - GitPeerCommitSchema/GitPeerCommitsSchema/GitPeerCommits: transferable commit subjects from captured branch tips.
- * - GitBranchPositionSchema/GitBranchPosition: a checkout's branch, HEAD and counts against each requested peer's tracking ref.
- * - GitPeerStatusSchema/GitPeerStatus, WorkspaceGitPeersSchema/WorkspaceGitPeers: the app's peer rows for one folder.
+ * - GitUpstreamSchema/GitUpstream: a branch's upstream name and counts against it.
+ * - GitBranchPositionSchema/GitBranchPosition: a checkout's branch, HEAD, upstream and counts against each requested peer's tracking ref.
+ * - GitPeerStatusSchema/GitPeerStatus, WorkspaceGitPeersSchema/WorkspaceGitPeers: the app's upstream and peer rows for one folder.
  * - GitPeerTransferSchema/GitPeerTransfer: a browser Pull or Send, including fast-forward-only intent.
  * - GitPeerSyncModeSchema/GitPeerSyncMode: user-selected merge or sender-side rebase policy.
  * - GitPeerTransferResultSchema/GitPeerTransferResult: complete or device-specific interrupted transfer.
@@ -54,11 +55,23 @@ export const GitPeerCommitsSchema = z.object({
 }).strict();
 export type GitPeerCommits = z.infer<typeof GitPeerCommitsSchema>;
 
+export const GitUpstreamSchema = z.object({
+  /** Such as `origin/main`. */
+  name: z.string().min(1).max(512),
+  /** Commits the upstream lacks. */
+  ahead: count,
+  /** Commits this checkout lacks. */
+  behind: count,
+}).strict();
+export type GitUpstream = z.infer<typeof GitUpstreamSchema>;
+
 export const GitBranchPositionSchema = z.object({
   /** Null while HEAD is detached. */
   branch: GitBranchNameSchema.nullable(),
   /** Null on an unborn branch. */
   head: sha.nullable(),
+  /** The branch's configured upstream; null without one, absent from daemons that predate it. */
+  upstream: GitUpstreamSchema.nullable().optional(),
   peers: z.array(GitPeerAddressSchema.extend({
     /** This checkout's copy of the peer's same-named branch; null until first fetched. */
     tip: sha.nullable(),
@@ -85,6 +98,8 @@ export const GitPeerStatusSchema = GitPeerAddressSchema.extend({
 export type GitPeerStatus = z.infer<typeof GitPeerStatusSchema>;
 export const WorkspaceGitPeersSchema = z.object({
   branch: GitBranchNameSchema.nullable(),
+  /** The folder's upstream position; null without one or while unknown. */
+  upstream: GitUpstreamSchema.nullable().optional(),
   peers: z.array(GitPeerStatusSchema),
 }).strict();
 export type WorkspaceGitPeers = z.infer<typeof WorkspaceGitPeersSchema>;

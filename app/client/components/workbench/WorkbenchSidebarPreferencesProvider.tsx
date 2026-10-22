@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchSidebarPreferencesProvider: compose global and project-scoped persisted preferences, folder-owned
- *   folder disclosure, and memory-only Git/settled disclosure state.
+ *   folder disclosure, and memory-only panel choice and settled/snoozed disclosure state.
  */
 "use client";
 
@@ -48,7 +48,7 @@ export default function WorkbenchSidebarPreferencesProvider({
   const schemaVersion = useWorkbenchClientState(state => state.schemaVersion);
   const globalPreferences = useWorkbenchSidebarPreferences.global();
   const [displayState, setDisplayState] = useState<WorkbenchSidebarDisplayState>({
-    gitOpen: true,
+    panel: "threads",
     settledThreadItemLimit: 50,
     settledThreadsOpen: false,
     snoozedThreadsOpen: false,
@@ -74,9 +74,7 @@ export default function WorkbenchSidebarPreferencesProvider({
   }, [controller, persistedPreferences, projectId]);
   const setDisclosureOpen = useCallback<WorkbenchSidebarPreferencesValue["setDisclosureOpen"]>(
     (key, open) => {
-      if (key === "gitOpen") {
-        setDisplayState(previous => ({ ...previous, gitOpen: open }));
-      } else if (key === "settledThreadsOpen") {
+      if (key === "settledThreadsOpen") {
         setDisplayState(previous => previous.settledThreadsOpen === open ? previous : {
           ...previous,
           settledThreadsOpen: open,
@@ -134,7 +132,7 @@ export default function WorkbenchSidebarPreferencesProvider({
       const boundedCount = Math.max(1, Math.min(100, Math.floor(count)));
       globalPreferences.set("projectTimeGroupCount", boundedCount);
     },
-    setReloadNecessaryOpen: (open) => globalPreferences.set("reloadNecessaryOpen", open),
+    setPanel: (panel) => setDisplayState(previous => previous.panel === panel ? previous : { ...previous, panel }),
     setSettledThreadItemLimit: (limit) => {
       const boundedLimit = Math.max(50, Math.min(5_000, Math.floor(limit)));
       setDisplayState(previous => previous.settledThreadItemLimit === boundedLimit ? previous : {

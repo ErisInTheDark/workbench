@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchFolderSidebar: folder-scoped sidebar section with its folder picker above the children.
+ * - default WorkbenchFolderSidebar: folder-scoped sidebar panel content with its folder picker above the children.
  */
 "use client";
 
@@ -24,8 +24,8 @@ export default function WorkbenchFolderSidebar({
   selected: ProjectLocationReference | null;
 }) {
   return (
-    <section className="shrink-0 border-t border-fg/10 pt-2 pb-3">
-      <div className="px-1 pb-1">
+    <section className="shrink-0 pb-3">
+      <div className="px-1 pb-2">
         <WorkbenchProjectLocationMenu
           folders={folders}
           label={label}

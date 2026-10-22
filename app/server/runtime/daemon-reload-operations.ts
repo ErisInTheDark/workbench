@@ -8,9 +8,11 @@
 import { z } from "zod";
 import {
   WORKBENCH_RELOAD_DIRT_READ_METHOD, WORKBENCH_RELOAD_METHOD,
-  DaemonReloadResponseSchema, WorkbenchDaemonReloadDirtEnvelopeSchema,
+  DaemonReloadResponseSchema,
 } from "workbench-shared/workbench/daemon-reload";
 import { InstallationPullResultSchema } from "workbench-shared/workbench/installation-update";
+import type { InstallationPullOptions } from "workbench-shared/workbench/installation-update-prediction";
+import { DaemonReloadDirtEnvelopeSchema } from "workbench-shared/reload/reload-dirt-scope";
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type WorkbenchDaemonSource from "../workspace/WorkbenchDaemonSource";
@@ -75,13 +77,13 @@ async function withCurrentRuntime<Value>(
 }
 
 export function readDaemonReloadDirt(source: WorkbenchDaemonSource, signal?: AbortSignal) {
-  return withCurrentRuntime(source, signal, async () => validate(WorkbenchDaemonReloadDirtEnvelopeSchema,
+  return withCurrentRuntime(source, signal, async () => validate(DaemonReloadDirtEnvelopeSchema,
     await source.request<object>(WORKBENCH_RELOAD_DIRT_READ_METHOD, {}, {}, { signal }), "Invalid daemon reload dirt.").snapshot);
 }
 
-export function pullDaemonInstallation(source: WorkbenchDaemonSource, signal?: AbortSignal) {
+export function pullDaemonInstallation(source: WorkbenchDaemonSource, request: InstallationPullOptions, signal?: AbortSignal) {
   return withCurrentRuntime(source, signal, async () => validate(InstallationPullResultSchema,
-    await source.request<object>("installation/update/pull", {}, {}, { signal }), "Invalid daemon update result."));
+    await source.request<object>("installation/update/pull", request, {}, { signal }), "Invalid daemon update result."));
 }
 
 export function reloadDaemonScopes(source: WorkbenchDaemonSource, scopes: string[], signal?: AbortSignal) {

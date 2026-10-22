@@ -1,10 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchBranchPositionController: own demanded branch positions and peer commit previews, refreshed by one checkout ref watcher.
+ * - default WorkbenchBranchPositionController: own demanded branch positions, peer commit previews and HEAD history, refreshed
+ *   by one checkout ref watcher, and pushes to a branch's upstream.
  * - WorkbenchBranchPositionFact: one observation's freshness, failure and position.
  */
 import path from "node:path";
 import type { GitBranchPosition, GitPeerAddress, GitPeerCommitsRequest } from "workbench-shared/workbench/git/git-peer-contracts";
+import type { GitHistoryRequest } from "workbench-shared/workbench/git/git-history-contracts";
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 import watchGitRefs from "../lib/workbench/git/git-ref-watch";
 import WorkbenchGitPeerTransport from "../lib/workbench/git/WorkbenchGitPeerTransport";
@@ -53,6 +55,18 @@ export default class WorkbenchBranchPositionController {
 
   observeCommits(projectId: string, request: GitPeerCommitsRequest, listener: () => void) {
     return this.observeValue(projectId, repository => new WorkbenchGitPeerTransport(repository).commits(request), listener);
+  }
+
+  observeHistory(projectId: string, request: GitHistoryRequest, listener: () => void) {
+    return this.observeValue(projectId, repository => new WorkbenchGitPeerTransport(repository).history(request), listener);
+  }
+
+  /** Pushing moves the upstream tracking ref, so the ref watcher refreshes every observer afterwards. */
+  async push(projectId: string, signal?: AbortSignal) {
+    if (this.closed) throw new Error("Branch positions are reloading.");
+    const repository = await this.open(projectId);
+    if (!repository) throw new Error("This folder is not a Git checkout.");
+    return await new WorkbenchGitPeerTransport(repository).push(signal);
   }
 
   private observeValue<Value>(projectId: string, load: (repository: WorkbenchGitRepository) => Promise<Value>, listener: () => void) {

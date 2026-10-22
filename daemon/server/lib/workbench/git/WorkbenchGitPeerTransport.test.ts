@@ -1,4 +1,5 @@
-/* Exports: none; real Git tests protect incremental peer bundles, tracking-ref-only receives and peer counts. */
+/* Exports: none; real Git tests protect incremental peer bundles, tracking-ref-only receives, peer and upstream counts,
+ * marked history and non-forced pushes. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
@@ -115,6 +116,61 @@ test("commit previews show only transferable history in either direction and exp
   assert.deepEqual(send.commits.map(commit => commit.commit), [outgoing]);
   assert.equal(await f.receiver.git("rev-parse", "HEAD"), outgoing);
   assert.equal(await f.receiver.git("status", "--porcelain"), before);
+});
+
+/** A checkout cloned from a bare origin, so the branch has a real upstream. */
+async function withOrigin(t: test.TestContext) {
+  const temporary = await WorkbenchTemporaryDirectory.create("git-upstream-");
+  t.after(() => temporary.dispose());
+  const seed = await repository(path.join(temporary.path, "seed"));
+  await seed.commit("base.txt");
+  const origin = path.join(temporary.path, "origin.git");
+  await execute("git", ["clone", "--quiet", "--bare", seed.root, origin], { windowsHide: true });
+  const clone = path.join(temporary.path, "clone");
+  await execute("git", ["clone", "--quiet", origin, clone], { windowsHide: true });
+  const local = await repository(clone);
+  return { origin, local, other: seed };
+}
+
+test("upstream counts, history marks and pushes follow the branch's real upstream", async t => {
+  const { local } = await withOrigin(t);
+  const pushed = await local.git("rev-parse", "HEAD");
+  const first = await local.commit("one.txt");
+  const second = await local.commit("two.txt");
+  assert.deepEqual((await local.transport.position([])).upstream, { name: "origin/main", ahead: 2, behind: 0 });
+
+  const history = await local.transport.history({ limit: 2, peers: [] });
+  assert.deepEqual(history.commits.map(({ commit, unpushed }) => ({ commit, unpushed })),
+    [{ commit: second, unpushed: true }, { commit: first, unpushed: true }]);
+  assert.equal(history.complete, false, "the base commit lies beyond the page");
+  const all = await local.transport.history({ limit: 10, peers: [] });
+  assert.equal(all.complete, true);
+  assert.deepEqual(all.commits.at(-1), { ...all.commits.at(-1)!, commit: pushed, unpushed: false, subject: "base.txt" });
+
+  assert.deepEqual(await local.transport.push(), { branch: "main", upstream: "origin/main", pushed: 2 });
+  assert.deepEqual((await local.transport.position([])).upstream, { name: "origin/main", ahead: 0, behind: 0 });
+  assert.ok((await local.transport.history({ limit: 10, peers: [] })).commits.every(commit => !commit.unpushed));
+});
+
+test("a push never overwrites upstream commits this branch lacks", async t => {
+  const { origin, local, other } = await withOrigin(t);
+  await other.git("remote", "add", "origin", origin);
+  await other.commit("theirs.txt");
+  await other.git("push", "--quiet", "origin", "main");
+  const theirs = await other.git("rev-parse", "HEAD");
+  await local.commit("mine.txt");
+  await local.git("fetch", "--quiet");
+  await assert.rejects(local.transport.push(), /pull them first/u);
+  assert.equal((await execute("git", ["rev-parse", "main"], { cwd: origin, windowsHide: true })).stdout.trim(), theirs);
+});
+
+test("history marks commits missing from a fetched peer as unsent", async t => {
+  const f = await fixture(t);
+  await f.transfer();
+  const mine = await f.receiver.commit("mine.txt");
+  const history = await f.receiver.transport.history({ limit: 10, peers: [senderAddress] });
+  assert.deepEqual(history.commits.map(({ commit, unsent }) => ({ commit, unsent })),
+    [{ commit: mine, unsent: true }, { commit: f.base, unsent: false }]);
 });
 
 test("commit previews reject a changed branch or missing tracking history instead of showing an empty list", async t => {

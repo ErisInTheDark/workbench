@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default PrimaryButton: high-emphasis actions with optional pending halos and hold confirmation.
+ * - default PrimaryButton: high-emphasis actions with optional pending halos, hold confirmation and joined segments.
  */
 "use client";
 
@@ -13,10 +13,14 @@ import useHoldToConfirm from "./use-hold-to-confirm";
 type PrimaryButtonShape = "pill" | "circle" | "compact";
 type PrimaryButtonTone = "attention" | "danger" | "default";
 
+type PrimaryButtonSegment = "start" | "end";
+
 type PrimaryButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
   holdToConfirmMs?: number;
   pendingHalo?: boolean;
+  /** Joins two buttons into one pill: the joined edges go square and flush, with a hairline before the end segment. */
+  segment?: PrimaryButtonSegment;
   shape?: PrimaryButtonShape;
   tone?: PrimaryButtonTone;
 };
@@ -67,6 +71,16 @@ const toneClassNames: Record<PrimaryButtonTone, string> = {
   `,
 };
 
+// The fill's flush side uses the same selector callers inset the fill with, so it wins and the halves meet without a gap.
+const segmentClassNames: Record<PrimaryButtonSegment, string> = {
+  start: "!rounded-r-none !pr-2 [&>span:first-of-type]:(!rounded-r-none !right-0)",
+  end: `
+    !rounded-l-none !pl-2 [&>span:first-of-type]:(!rounded-l-none !left-0)
+    after:(pointer-events-none absolute inset-y-[9px] left-0 z-20 w-px content-[''])
+    after:bg-[color-mix(in_srgb,var(--text)_16%,transparent)]
+  `,
+};
+
 export default function PrimaryButton ({
   children,
   className,
@@ -80,6 +94,7 @@ export default function PrimaryButton ({
   onPointerDown,
   onPointerUp,
   pendingHalo = false,
+  segment,
   shape = "pill",
   tone = "default",
   type = "button",
@@ -109,6 +124,7 @@ export default function PrimaryButton ({
           ? "disabled:text-fg/32"
           : "disabled:text-fg/10",
         className,
+        segment && segmentClassNames[segment],
       )}
     >
       {pendingHalo ? <WorkbenchSpinningBorder radius="50cqb" /> : null}

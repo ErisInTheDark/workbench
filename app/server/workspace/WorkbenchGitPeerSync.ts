@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchGitPeerSync: own each observed folder's peers (its logical project's other visible folders on other
- *   daemons), fetch a peer's branch whenever its HEAD moves, run Pull and Send between a folder and one peer, and fetch a
- *   named peer for a daemon's agent.
+ * - default WorkbenchGitPeerSync: own each observed folder's upstream position and peers (its logical project's other visible
+ *   folders on other daemons), fetch a peer's branch whenever its HEAD moves, run Pull and Send between a folder and one
+ *   peer, and fetch a named peer for a daemon's agent.
  * - WorkbenchGitPeersFact: observed peer rows and freshness.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -237,7 +237,7 @@ export default class WorkbenchGitPeerSync {
       entry.own.observation.release();
       entry.own = null;
     }
-    if (!entry.own && source && addresses.length) {
+    if (!entry.own && source) {
       entry.own = { key: ownKey, observation: source.observe({
         kind: "branchPosition", projectId: entry.location.projectId, peers: addresses,
       }, () => this.refresh(entry)) };
@@ -263,10 +263,11 @@ export default class WorkbenchGitPeerSync {
     const own = entry.own?.observation.getSnapshot();
     const position = own?.value?.kind === "branchPosition" ? own.value.position : null;
     const peers = entry.peers.map(peer => this.peerStatus(entry, peer, position));
-    const fact: WorkbenchGitPeersFact = !entry.peers.length
-      ? { phase: "current", failure: null, data: { branch: null, peers: [] } }
+    const upstream = position?.upstream ?? null;
+    const fact: WorkbenchGitPeersFact = !entry.own && !entry.peers.length
+      ? { phase: "current", failure: null, data: { branch: null, upstream: null, peers: [] } }
       : { phase: own?.phase ?? "pending", failure: own?.failure ?? null,
-        data: position || peers.length ? { branch: position?.branch ?? null, peers } : null };
+        data: position || peers.length ? { branch: position?.branch ?? null, upstream, peers } : null };
     if (areDeeplyEqual(entry.fact, fact)) return;
     entry.fact = fact;
     for (const listener of [...entry.listeners]) {

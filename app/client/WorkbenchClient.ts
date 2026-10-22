@@ -760,10 +760,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       }
       const project = threadProject(data.location);
       if (!project) return { ok: false, pending: true };
-      // With no project selected, a thread browses its own folder.
-      selectFolder(browseFolder ?? (route.logical
-        ? browseTarget ?? (route.selectedProjectIds === null ? data.location : null)
-        : location ?? data.location));
+      // The sidebar folder follows the thread being viewed; picking a folder while it shows re-scopes until the next view.
+      selectFolder(data.location);
       selectRenderer(data.location);
       draftLocation = null;
       const outcome = await threadClient.openThread(data.identity.threadId, {
@@ -794,7 +792,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       && !logical.observedLocations?.some(item => item.daemonId === location!.daemonId && item.projectId === location!.projectId)) {
       return { ok: false, error: "The chosen folder does not belong to this project." };
     }
-    selectFolder(browseFolder ?? (draftRouteTarget ? browseTarget : location));
+    selectFolder(draftRouteTarget ? location : browseFolder ?? location);
     if (route.view === "thread" && target && (target.kind === "new" || target.kind === "draft")) {
       if (target.kind === "draft" && !saved) {
         return presentation.snapshot().data ? { ok: false, error: "The saved draft is unavailable." }

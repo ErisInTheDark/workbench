@@ -3,21 +3,16 @@
  * - WorkbenchDaemonRuntimeClientOptions: app workspace and optional installation selection.
  * - default WorkbenchDaemonRuntimeClient: project source runtime facts and the checkout update position, and send app-routed reload intent.
  */
-import type {
-  WorkbenchReloadDirtSnapshot,
-  WorkbenchReloadResponse,
-  WorkbenchReloadScope,
-} from "workbench-shared/reload/workbench-reload";
+import type { WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
+import type { ReloadDirtSnapshot as WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/reload-dirt-scope";
 
-import {
-  DaemonReloadResponseSchema,
-  WorkbenchDaemonReloadDirtEnvelopeSchema,
-} from "workbench-shared/workbench/daemon-reload";
+import { DaemonReloadResponseSchema } from "workbench-shared/workbench/daemon-reload";
+import { DaemonReloadDirtEnvelopeSchema } from "workbench-shared/reload/reload-dirt-scope";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type WorkbenchWorkspaceClient from "./app/WorkbenchWorkspaceClient";
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import type { InstallationUpdate } from "workbench-shared/workbench/installation-update";
+import type { PredictedInstallationUpdate as InstallationUpdate } from "workbench-shared/workbench/installation-update-prediction";
 
 const EMPTY: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
 
@@ -132,7 +127,7 @@ export default class WorkbenchDaemonRuntimeClient {
 
   private acceptEnvelope(value: unknown, message: string) {
     if (this.#disposed) return false;
-    const parsed = WorkbenchDaemonReloadDirtEnvelopeSchema.safeParse(value);
+    const parsed = DaemonReloadDirtEnvelopeSchema.safeParse(value);
     if (!parsed.success) {
       reportClientSchemaError(message, parsed.error);
       return false;

@@ -2,7 +2,8 @@
  * Exports:
  * - ThreadStatusPanel: one status-row control: its segmented pill and the panel it opens.
  * - ThreadStatusAttention: the panel an idle thread wants open, keyed so each change opens it once.
- * - threadStatusSegmentClassName: the default pill segment look, for segments that extend it.
+ * - threadStatusSegmentClassName/threadStatusPressedClassName: the default pill segment and open-control looks, for status
+ *   pills elsewhere that extend them.
  * - default ThreadStatusRow: a thread's persistent status row; its live verb (or a leading notice that opens a panel) and each segmented pill
  *   opening one shared, animated panel area. Narrow rows hide inline content in favour of narrow-only pills.
  */
@@ -43,7 +44,7 @@ export const threadStatusSegmentClassName = `
   @max-[32rem]/status:(px-0.5 first:pl-1.5 last:pr-1.5)
 `;
 /** An open panel's control keeps its hover chrome, so it reads as the thing that closes it. */
-const pressedControlClassName = "!border-[color-mix(in_srgb,var(--text)_18%,transparent)] !bg-[color-mix(in_srgb,var(--text)_5%,transparent)]";
+export const threadStatusPressedClassName = "!border-[color-mix(in_srgb,var(--text)_18%,transparent)] !bg-[color-mix(in_srgb,var(--text)_5%,transparent)]";
 const titleClassName = "flex min-w-0 flex-1 items-center text-left text-[0.92em] font-medium leading-[1.6] text-fg/muted";
 
 export default function ThreadStatusRow({ attention = null, busy = false, inline, leading = null, liveVerb, panels = [] }: {
@@ -114,7 +115,7 @@ export default function ThreadStatusRow({ attention = null, busy = false, inline
                       aria-controls={panelsId}
                       aria-expanded={pressed}
                       aria-pressed={pressed}
-                      className={pressed ? pressedClassName ?? pressedControlClassName : ""}
+                      className={pressed ? pressedClassName ?? threadStatusPressedClassName : ""}
                       display="hover-border"
                       key={id}
                       label={label}

@@ -2,7 +2,7 @@
  * Exports:
  * - WORKBENCH_GIT_ARC_ACTION_BY_METHOD/WorkbenchDaemonGitArcMethod: map browser Git arc methods to existing Git actions.
  * - WorkbenchGitArcSuccess: exact acknowledgement for browser Git arc mutations.
- * - gitDaemonRequests: daemon requests for working-tree reads and edits and browser Git arc actions.
+ * - gitDaemonRequests: daemon requests for working-tree reads and edits, upstream pushes and browser Git arc actions.
  */
 import { z } from "zod";
 import {
@@ -21,6 +21,7 @@ import {
   type WorkingTreeDiff, type WorkingTreeFileRequest, type WorkingTreeMutation, type WorkingTreePreview, type WorkingTreeRead,
   type WorkingTreeResult,
 } from "../../git/working-tree-contracts.ts";
+import { GitPushResultSchema, type GitPushResult } from "../../git/git-history-contracts.ts";
 import { defineDaemonRequest } from "../define-daemon-request.ts";
 
 export interface WorkbenchGitArcSuccess {
@@ -60,6 +61,7 @@ export const gitDaemonRequests = {
   "git/working-tree/diff": defineDaemonRequest<WorkingTreeFileRequest, WorkingTreeDiff>()({ route: "folder", result: WorkingTreeDiffSchema }),
   "git/working-tree/preview": defineDaemonRequest<WorkingTreeFileRequest, WorkingTreePreview>()({ route: "folder", result: WorkingTreePreviewSchema }),
   "git/working-tree/mutate": defineDaemonRequest<WorkingTreeMutation, WorkingTreeResult>()({ route: "folder", result: WorkingTreeResultSchema }),
+  "git/push": defineDaemonRequest<{ projectId: string }, GitPushResult>()({ route: "folder", result: GitPushResultSchema }),
   "git/arc/compare": arc<"compare", GitCheckpointCompareResult>(GitCheckpointCompareResultSchema),
   "git/arc/diff-artifact/read": arc<"readDiffArtifact", string>(z.string()),
   "git/arc/proposal/commit": arc<"proposalCommit", GitCheckpointProposal>(GitCheckpointProposalSchema),

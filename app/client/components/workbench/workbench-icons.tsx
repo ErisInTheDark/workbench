@@ -51,7 +51,8 @@
  * - EyeIcon/EyeOffIcon/SearchIcon: visibility and search glyphs.
  * - FilePlusIcon/ExternalLinkIcon: file creation and external navigation glyphs.
  * - DownloadIcon: downloaded file glyph.
- * - ArrowRightIcon/ArrowUpIcon/ChevronDownIcon/ChevronUpIcon: directional glyphs.
+ * - ArrowRightIcon/ArrowUpIcon/ArrowDownIcon/ChevronDownIcon/ChevronUpIcon: directional glyphs.
+ * - DatabaseArrowUpIcon: schema migration glyph.
  * - FolderGit2Icon/AppWindowIcon/RefreshCwIcon: project, browser and refresh glyphs.
  * - WallpaperIcon: live vis glyph.
  * - MessageCircleDashedIcon/MessageCircleQuestionMarkIcon/MessageCircleCheckIcon/MessageCircleGitCommitIcon/MessageCircleMoreIcon/MessageCircleXIcon: message glyphs.
@@ -630,6 +631,15 @@ export function MessagesCircleIcon(props: IconProps) {
 }
 export function CheckCheckIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={["M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"]} />; }
 export function ArrowUpIcon(props: IconProps) { return <OutlinedIcon {...props}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></OutlinedIcon>; }
+export function ArrowDownIcon(props: IconProps) { return <OutlinedIcon {...props}><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></OutlinedIcon>; }
+export function DatabaseArrowUpIcon(props: IconProps) {
+  return (
+    <OutlinedIcon {...props}>
+      <path d="M19 22v-6" /><path d="M21 12.536V5" /><path d="m22 19-3-3-3 3" />
+      <path d="M3 12A9 3 0 0 0 14.457 14.886" /><path d="M3 5V19A9 3 0 0 0 13.318 21.968" /><ellipse cx="12" cy="5" rx="9" ry="3" />
+    </OutlinedIcon>
+  );
+}
 export function AlarmClockIcon(props: IconProps) { return <OutlinedIcon {...props}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></OutlinedIcon>; }
 export function ZzzIcon(props: IconProps) { return <OutlinedIcon {...props}><path d="M4 11h8l-8 10h8" /><path d="M15 4h5l-5 8h5" /></OutlinedIcon>; }
 

@@ -311,6 +311,7 @@ function createWorkbenchCoreFeature(
     mcpServers,
     projectStore,
     workingTree,
+    branchPositions,
     providers,
     threadActions,
     launches,

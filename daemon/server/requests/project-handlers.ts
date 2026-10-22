@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - projectRequestHandlers: daemon handlers for project trees, files, stores, discovery, creation, file indexes, working trees, search,
+ * - projectRequestHandlers: daemon handlers for project trees, files, stores, discovery, creation, file indexes, working trees, pushes, search,
  *   native file actions, and the agent and skill catalogues.
  */
 import type { OpenFileInEditorRequest, ResolveExternalFileLinkRootsRequest, RevealProjectEntryRequest } from "workbench-shared/types";
 import { WorkingTreeFileRequestSchema, WorkingTreeMutationSchema, WorkingTreeReadRequestSchema } from "workbench-shared/workbench/git/working-tree-contracts";
+import { GitPushRequestSchema } from "workbench-shared/workbench/git/git-history-contracts";
 import { ProjectCreateRequestSchema, ProjectFolderListRequestSchema } from "workbench-shared/workbench/project/project-creation";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
@@ -149,6 +150,12 @@ export const projectRequestHandlers = defineDaemonRequestHandlers({
   "git/working-tree/mutate": async (params, context) => {
     const tree = workingTree(context);
     return await tree.mutate(WorkingTreeMutationSchema.parse(params));
+  },
+  "git/push": async (params, { owners }) => {
+    if (!owners.branchPositions) throw new Error("Pushing is unavailable.");
+    const request = GitPushRequestSchema.safeParse(params);
+    if (!request.success) throw new InvalidParamsError("A project ID is required to push.");
+    return await owners.branchPositions.push(request.data.projectId);
   },
   "search/query": async (params, { owners }) => {
     // A newer app may send fields this daemon does not know; they drop instead of failing the search.

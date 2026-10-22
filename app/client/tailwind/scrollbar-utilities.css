@@ -27,3 +27,22 @@
     background-color: var(--fg);
   }
 }
+
+/*
+ * Fades a scroller's content out under fixed chrome above and below it. A second, fully opaque layer covers the
+ * scrollbar gutter on the right, so the thumb stays crisp while content beside it fades.
+ */
+@utility scroll-fade-y {
+  --scroll-fade-gutter: 0.7rem;
+  --scroll-fade-ramp: 2rem;
+  mask-image:
+    linear-gradient(to bottom,
+      transparent var(--scroll-fade-top, 0px),
+      black calc(var(--scroll-fade-top, 0px) + var(--scroll-fade-ramp)),
+      black calc(100% - var(--scroll-fade-bottom, 0px) - var(--scroll-fade-ramp)),
+      transparent calc(100% - var(--scroll-fade-bottom, 0px))),
+    linear-gradient(black, black);
+  mask-position: left top, right top;
+  mask-repeat: no-repeat;
+  mask-size: calc(100% - var(--scroll-fade-gutter)) 100%, var(--scroll-fade-gutter) 100%;
+}

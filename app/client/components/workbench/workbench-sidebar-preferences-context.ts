@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchSidebarPreferencesContext/useWorkbenchSidebarPreferences: provide and consume global and active-project sidebar preferences;
  *   `.global` reads and persists global preferences (such as sidebar collapse) straight from client state, without the provider.
- * - WorkbenchSidebarDisplayState: memory-only git/settled/snoozed disclosure and pagination.
+ * - WorkbenchSidebarDisplayState: memory-only panel choice, settled/snoozed disclosure and pagination.
  * - WorkbenchSidebarDisclosurePreferenceKey/WorkbenchSidebarPreferencesValue: describe disclosure keys and persistent or transient intents.
  */
 import { createContext, useCallback, useContext, useMemo } from "react";
@@ -13,10 +13,10 @@ import {
   type WorkbenchGlobalSidebarPreferences,
   type WorkbenchSidebarPreferences,
 } from "../../workbench/state/workbench-settings";
+import type { WorkbenchSidebarPanel } from "./sidebar/sidebar-panel";
 import { useWorkbenchClientState, useWorkbenchClientStateController } from "./workbench-client-state-context";
 
 export type WorkbenchSidebarDisclosurePreferenceKey =
-  | "gitOpen"
   | "browseSessionsOpen"
   | "explorerOpen"
   | "pinnedThreadsOpen"
@@ -26,7 +26,8 @@ export type WorkbenchSidebarDisclosurePreferenceKey =
   | "threadsOpen";
 
 export interface WorkbenchSidebarDisplayState {
-  gitOpen: boolean;
+  /** The panel between the fixed header and status footer. */
+  panel: WorkbenchSidebarPanel;
   settledThreadItemLimit: number;
   settledThreadsOpen: boolean;
   snoozedThreadsOpen: boolean;
@@ -39,8 +40,8 @@ export interface WorkbenchSidebarPreferencesValue {
   setDisclosureOpen(key: WorkbenchSidebarDisclosurePreferenceKey, open: boolean): void;
   /** `projectId` is the folder's own logical project. */
   setFolderOpen(projectId: string, folderId: string, open: boolean): void;
+  setPanel(panel: WorkbenchSidebarPanel): void;
   setProjectTimeGroupCount(count: number): void;
-  setReloadNecessaryOpen(open: boolean): void;
   setSettledThreadItemLimit(limit: number): void;
   setStatusCountsExpanded(scope: "pinned" | "project", expanded: boolean): void;
 }

@@ -6,6 +6,7 @@
 import { z } from "zod";
 import type { WorkbenchModelContextCapability } from "../../../types.ts";
 import { InstallationPullResultSchema, type InstallationPullResult } from "../../installation-update.ts";
+import type { InstallationPullOptions } from "../../installation-update-prediction.ts";
 import { WorkbenchAccountLimitsSchema, type WorkbenchAccountLimits } from "../../provider/provider-account.ts";
 import {
   ProviderAccountSnapshotSchema, type ProviderAccountRequest, type ProviderAccountSnapshot, type ProviderSignInAttemptRequest,
@@ -61,7 +62,7 @@ export const providerDaemonRequests = {
   "provider/runtime/install": defineDaemonRequest<ProviderRuntimeInstallRequest, ProviderRuntimesSnapshot>()({
     route: "installation", result: ProviderRuntimesSnapshotSchema,
   }),
-  "installation/update/pull": defineDaemonRequest<object, InstallationPullResult>()({ route: "installation", result: InstallationPullResultSchema }),
+  "installation/update/pull": defineDaemonRequest<InstallationPullOptions, InstallationPullResult>()({ route: "installation", result: InstallationPullResultSchema }),
   "installation/update/failure/dismiss": defineDaemonRequest<object, { ok: true }>()({ route: "installation", result: ok }),
   "repo/runtime/read": defineDaemonRequest<object, VirtualRepoAvailability>()({ route: "installation", result: VirtualRepoAvailabilitySchema }),
 };

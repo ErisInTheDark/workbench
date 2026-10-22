@@ -39,6 +39,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       dependencySources: [{ kind: "loaded", scope: "server:process", importers: DAEMON_DEPENDENCY_IMPORTERS }],
       getSourceState: build.getSourceState,
       repoRoot: context.legacyMigrationProjectRoot,
+      schemaManifests: [{ path: "shared/workbench/database/schema/releases.ts", label: "database" }],
     }, state?.reloadDirt);
     const reloadController = new WorkbenchDaemonReloadController({
       dirt: reloadDirt,

@@ -60,7 +60,7 @@ import type { TranscriptStreamUpdate } from "workbench-shared/workbench/transcri
 import type { WorkbenchTranscriptReservoirLease } from "./WorkbenchTranscriptReservoir";
 import WorkbenchDeliveredTranscriptWindow from "./WorkbenchDeliveredTranscriptWindow";
 import type WorkbenchAppReloadOrchestrator from "../runtime/WorkbenchAppReloadOrchestrator";
-import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
+import { IDLE_DEVICE_RELOAD_OPERATION } from "workbench-shared/reload/device-reload-operation";
 import { mergeStatsSections } from "workbench-shared/workbench/stats/workbench-stats-merge";
 import { EMPTY_WORKBENCH_STATS_SECTIONS } from "workbench-shared/workbench/stats/workbench-stats-conformance";
 
@@ -625,6 +625,7 @@ export default class WorkbenchWorkspaceRequestController {
       }
       case "accountLimits":
       case "gitPeerCommits":
+      case "gitHistory":
       case "projectFile":
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
@@ -712,7 +713,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "search": return { ...base, kind: "search", data: { results: [] }, sources: [] };
       case "daemonRuntime": return { ...base, kind: "daemonRuntime", daemonId: request.query.daemonId ?? null, data: null };
       case "daemonUpdate": return { ...base, kind: "daemonUpdate", daemonId: request.query.daemonId ?? null, data: null };
-      case "reloadOperation": return { ...base, kind: "reloadOperation", data: this.options.reloadOperation?.read() ?? IDLE_RELOAD_OPERATION };
+      case "reloadOperation": return { ...base, kind: "reloadOperation", data: this.options.reloadOperation?.read() ?? IDLE_DEVICE_RELOAD_OPERATION };
       case "network": return this.options.network.read();
       case "runtime": return { ...base, kind: "runtime", data: this.options.runtime.read() };
       case "presentation": return { phase: "current", failure: null, kind: "presentation", data: this.options.presentation.read() };
@@ -731,6 +732,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
       case "gitPeers": return { ...base, kind: "gitPeers", data: null };
       case "gitPeerCommits": return { ...base, kind: "gitPeerCommits", data: null };
+      case "gitHistory": return { ...base, kind: "gitHistory", data: null };
       case "accountLimits": return { ...base, kind: "accountLimits", data: null };
       case "stats": return { ...base, kind: "stats", refinement: "pending", data: null };
       case "threadVis": return { ...base, kind: "threadVis", data: null };
@@ -803,7 +805,7 @@ export default class WorkbenchWorkspaceRequestController {
         return;
       }
       case "reloadOperation": this.update(interest, { kind: "reloadOperation", phase: "current",
-        failure: null, data: this.options.reloadOperation?.read() ?? IDLE_RELOAD_OPERATION }); return;
+        failure: null, data: this.options.reloadOperation?.read() ?? IDLE_DEVICE_RELOAD_OPERATION }); return;
       case "network": this.update(interest, this.options.network.read()); return;
       case "runtime": this.update(interest, { kind: "runtime", phase: "current", failure: null, data: this.options.runtime.read() }); return;
       case "presentation": this.update(interest, { kind: "presentation", phase: "current", failure: null, data: this.options.presentation.read() }); return;
@@ -897,6 +899,23 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, { kind: "gitPeerCommits",
           phase: fact?.phase ?? "unavailable", failure: fact?.failure ?? (source ? null : "Device unavailable."),
           data: fact?.value?.kind === "branchCommits" ? fact.value.data : null });
+        return;
+      }
+      case "gitHistory": {
+        const source = this.options.sources.get(query.location.daemonId);
+        const key = source ? JSON.stringify(query) : null;
+        if (interest.thread?.key !== key) {
+          interest.thread?.observation.release();
+          interest.thread = source && key ? {
+            key, observation: source.observe({
+              kind: "branchHistory", projectId: query.location.projectId, limit: query.limit, peers: query.peers,
+            }, () => this.refresh(interest)),
+          } : null;
+        }
+        const fact = interest.thread?.observation.getSnapshot();
+        this.update(interest, { kind: "gitHistory",
+          phase: fact?.phase ?? "unavailable", failure: fact?.failure ?? (source ? null : "Device unavailable."),
+          data: fact?.value?.kind === "branchHistory" ? fact.value.data : null });
         return;
       }
       case "projectFile": {

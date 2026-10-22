@@ -32,11 +32,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         if (!id) throw new Error("The running checkout is not catalogued.");
         return snapshots.observe(id, changed, error => console.warn(`[installation-update] Project observation failed: ${error}`));
       },
+      predict: (incomingPaths, target, signal) => dirt.predict(incomingPaths, target, signal),
       warn: warning => console.warn(`[installation-update] ${warning}`),
     });
     const unregister = get("daemonRequests").registerInstallationUpdate({
-      pull: () => run("installationUpdate", async update => {
-        const result = await update.pull();
+      pull: request => run("installationUpdate", async update => {
+        const result = await update.pull(request);
         await dirt.refresh();
         return result;
       }, "installation pull"),

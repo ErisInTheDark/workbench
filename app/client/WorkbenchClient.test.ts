@@ -674,6 +674,45 @@ test("a thread owner uses its projected folder label", async context => {
   }
 });
 
+test("viewing a thread browses the thread's own folder over the folder the url last chose", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  const data = facts(true);
+  const other = { daemonId, projectId: ProjectIdSchema.parse("other-folder") };
+  data.projects[0]!.locations.push({
+    target: other, daemonId, hostname: "local", name: "convex-lab",
+    rootPath: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
+    displayPath: "+convex-lab", project: { ...project, id: other.projectId, name: "convex-lab" },
+  });
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+  const threadId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
+  const route = { ...createLogicalExistingThreadRoute(logicalId,
+    { kind: "provider", harness: "codex", threadId }, null), folderAddress: ["bak"] };
+  assert.equal((await client.controls.applyRoute(route)).pending, true);
+  const owner = await socket.request("workspace/observe", 0, request => request.params.query.kind === "threadOwner");
+  await socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
+    phase: "current", identity: { threadId, projectId: other.projectId, harness: "codex" },
+    location: other, logicalProjectId: logicalId,
+  } });
+  const opening = client.controls.applyRoute(route);
+  const read = await socket.request("workspace/observe", 0, request => request.params.query.kind === "thread");
+  assert.equal(browsedProjectIds(socket).at(-1), other.projectId);
+  await client.controls.applyRoute(createHomeRoute());
+  await socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
+    data: null, runtime: {}, owner: { phase: "unavailable", failure: "source read unavailable" } });
+  await opening;
+  for (const request of socket.sent) {
+    if (request.method === "workspace/command" && request.params.method === "questionnaires/pending/read") {
+      socket.reply(request, { data: [] });
+    }
+  }
+});
+
 test("a resolved existing thread starts its observation while catalogue metadata remains pending", async context => {
   const warnings: string[] = [];
   context.mock.method(console, "warn", (message: string) => warnings.push(message));

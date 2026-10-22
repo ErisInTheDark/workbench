@@ -6,7 +6,7 @@ import test from "node:test";
 import WebSocket from "ws";
 import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import { createEmptyWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state";
-import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
+import { IDLE_DEVICE_RELOAD_OPERATION } from "workbench-shared/reload/device-reload-operation";
 import WorkbenchNetworkRoutes from "../network/WorkbenchNetworkRoutes";
 import WorkbenchAppEventSocketController from "./WorkbenchAppEventSocketController";
 
@@ -32,7 +32,7 @@ test("connected devices can admit reload and update operations without app-manag
       read: () => ({}),
       subscribe: () => () => {},
       operations: {
-        read: () => IDLE_RELOAD_OPERATION,
+        read: () => IDLE_DEVICE_RELOAD_OPERATION,
         subscribe: () => () => {},
         admitReloadAll: () => admission("reload"),
         admitPull: (_daemonId, reload) => admission(reload ? "pull-and-reload" : "pull"),

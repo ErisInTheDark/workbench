@@ -75,7 +75,11 @@ class ControlledRepository implements ReloadDirtSnapshotRepositoryPort {
     blocked.start();
     return await blocked.changes;
   }
-  async listWorktreePaths() { return []; }
+  worktreePaths: string[] = [];
+  /** `${treeish ?? "worktree"}:${path}` to file text. */
+  files = new Map<string, string>();
+  async listWorktreePaths() { return this.worktreePaths; }
+  async readFile(treeish: string | null, sourcePath: string) { return this.files.get(`${treeish ?? "worktree"}:${sourcePath}`) ?? null; }
   async readRef() { return "base-snapshot"; }
   async updateRef() { this.refUpdates += 1; }
   async writeWorktreeTree() { return "snapshot-tree"; }
@@ -197,6 +201,98 @@ test("dirty scopes carry dependant metadata from the source graph owner", async 
     destructive: false,
     scope: "client:core",
   }]);
+  await controller.dispose();
+});
+
+const manifestDescriptor: ReloadDirtSourceDescriptor = {
+  ...descriptor, description: "Database", paths: ["app/database.ts", "shared/releases.ts"], scope: "client:database",
+};
+const releases = (...versions: number[]) => versions.map(version => `release(${version}, null),`).join("\n");
+
+function manifestController(repository: ControlledRepository) {
+  return new ReloadDirtController({
+    getSourceState: () => sourceState([descriptor, manifestDescriptor]),
+    repoRoot: "C:/repo",
+    repository,
+    schemaManifests: [{ path: "shared/releases.ts", label: "database" }],
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: (() => ({ close: () => {}, on: () => {} })) as never,
+  }, {
+    ...transferredState(),
+    baselines: new Map([["client:core", "base-snapshot"], ["client:database", "base-snapshot"]]),
+    descriptors: new Map([["client:core", descriptor], ["client:database", manifestDescriptor]]),
+  });
+}
+
+test("a dirty manifest owner reports the migration from its loaded release to the worktree release", async () => {
+  const repository = new ControlledRepository();
+  repository.files.set("base-snapshot:shared/releases.ts", releases(1, 30));
+  repository.files.set("worktree:shared/releases.ts", releases(1, 30, 31));
+  repository.changedPaths = ["shared/releases.ts", "app/core.ts"];
+  const controller = manifestController(repository);
+  const snapshot = await controller.refresh();
+  assert.deepEqual(snapshot.dirtyScopes.map(({ scope, migration }) => ({ scope, migration })), [
+    { scope: "client:core", migration: undefined },
+    { scope: "client:database", migration: { label: "database", from: 30, to: 31 } },
+  ]);
+  repository.changedPaths = ["app/database.ts"];
+  assert.equal((await controller.refresh()).dirtyScopes[0]?.migration, undefined, "an untouched manifest never migrates");
+  await controller.dispose();
+});
+
+test("prediction dirties the owners of incoming paths and reads migrations at the incoming target", async () => {
+  const repository = new ControlledRepository();
+  repository.files.set("base-snapshot:shared/releases.ts", releases(1, 30));
+  repository.files.set("upstream:shared/releases.ts", releases(1, 30, 31, 32));
+  const controller = manifestController(repository);
+  await controller.start();
+  assert.deepEqual(await controller.predict(["shared/releases.ts", "README.md"], "upstream"), [{
+    dependantScopes: [], description: "Database", destructive: false, scope: "client:database",
+    migration: { label: "database", from: 30, to: 32 },
+  }]);
+  assert.deepEqual(await controller.predict(["docs/notes.md"], "upstream"), []);
+  await controller.dispose();
+});
+
+test("anchored process assets ignore same-named manifests in other packages, now and when predicted", async () => {
+  const repository = new ControlledRepository();
+  const process: ReloadDirtSourceDescriptor = {
+    ...descriptor, description: "Process", destructive: true, paths: [], scope: "client:process",
+    boundaryPatterns: ["app/package.json", "/package.json", "!**/node_modules/**"],
+  };
+  repository.worktreePaths = ["package.json", "app/package.json", "package/package.json"];
+  repository.changedPaths = ["package/package.json"];
+  const controller = new ReloadDirtController({
+    getSourceState: () => sourceState([process]),
+    repoRoot: "C:/repo",
+    repository,
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: (() => ({ close: () => {}, on: () => {} })) as never,
+  }, { ...transferredState(), baselines: new Map([["client:process", "base-snapshot"]]), descriptors: new Map([["client:process", process]]) });
+  assert.deepEqual((await controller.refresh()).dirtyScopes, []);
+  assert.deepEqual(await controller.predict(["package/package.json"], "upstream"), []);
+  assert.deepEqual((await controller.predict(["package.json"], "upstream")).map(({ scope }) => scope), ["client:process"]);
+  await controller.dispose();
+});
+
+test("an incoming lockfile predicts the install scope even though no source path names it", async () => {
+  const repository = new ControlledRepository();
+  const install: ReloadDirtSourceDescriptor = {
+    ...descriptor, description: "Install", destructive: true, paths: [], scope: "client:install",
+  };
+  const controller = new ReloadDirtController({
+    dependencySources: [{ kind: "install", scope: "client:install" }],
+    getSourceState: () => sourceState([descriptor, install]),
+    repoRoot: "C:/repo",
+    repository,
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: (() => ({ close: () => {}, on: () => {} })) as never,
+  }, {
+    ...transferredState(), baselines: new Map([["client:core", "base-snapshot"], ["client:install", "base-snapshot"]]),
+    descriptors: new Map([["client:core", descriptor], ["client:install", install]]),
+  });
+  assert.deepEqual((await controller.predict(["pnpm-lock.yaml"], "upstream")).map(({ scope }) => scope), ["client:install"]);
+  assert.deepEqual(await controller.predict(["docs/notes.md"], "upstream"), []);
   await controller.dispose();
 });
 

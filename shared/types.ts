@@ -187,7 +187,7 @@ import type { UserInput } from "./workbench/thread/workbench-thread-items.ts";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route.ts";
 import type WorkbenchDaemonClient from "./workbench/daemon/WorkbenchDaemonClient.ts";
 import type { DaemonReloadResponse, DaemonReloadScope } from "./workbench/daemon-reload.ts";
-import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, WorkbenchReloadDirtScope as SharedWorkbenchReloadDirtScope, WorkbenchReloadResponse, WorkbenchReloadScope } from "./reload/workbench-reload.ts";
+import type { WorkbenchReloadResponse, WorkbenchReloadScope } from "./reload/workbench-reload.ts";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex.ts";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline.ts";
 import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
@@ -206,11 +206,14 @@ export type {
   DaemonReloadState,
 } from "./workbench/daemon-reload.ts";
 
-export type WorkbenchReloadDirtScope = SharedWorkbenchReloadDirtScope;
-export type WorkbenchReloadDirtSnapshot = SharedWorkbenchReloadDirtSnapshot;
+/** Dirty scopes as browsers see them, migrations included. */
+export type WorkbenchReloadDirtScope = import("./reload/reload-dirt-scope.ts").ReloadDirtScope;
+export type WorkbenchReloadDirtSnapshot = import("./reload/reload-dirt-scope.ts").ReloadDirtSnapshot;
 
 export interface WorkbenchAppRuntimeSnapshot extends WorkbenchReloadDirtSnapshot {
   tabOutOfDate: boolean;
+  /** Client and host scopes the attached daemon's pending update would dirty; null while unknown. */
+  updateScopes: WorkbenchReloadDirtScope[] | null;
 }
 
 export interface WorkbenchAppRuntimeStore {
@@ -218,10 +221,11 @@ export interface WorkbenchAppRuntimeStore {
   reloadScopes(scopes: readonly WorkbenchReloadScope[]): Promise<WorkbenchReloadResponse>;
   subscribe(listener: () => void): () => void;
   /** The app's in-flight reload-all / pull sequence. */
-  getOperation(): import("./reload/workbench-reload.ts").WorkbenchReloadOperation;
+  getOperation(): import("./reload/device-reload-operation.ts").DeviceReloadOperation;
   subscribeOperation(listener: () => void): () => void;
-  reloadAll(): Promise<void>;
-  pull(options: { reload: boolean }): Promise<void>;
+  /** `daemonId` targets another device's daemon alone; omitted reloads this device's app, host and daemon. */
+  reloadAll(options?: { daemonId?: import("./workbench/identity.ts").DaemonId }): Promise<void>;
+  pull(options: { reload: boolean; daemonId?: import("./workbench/identity.ts").DaemonId }): Promise<void>;
 }
 
 export type { WorkbenchFrontendGeneration };
@@ -230,7 +234,7 @@ export interface WorkbenchDaemonRuntimeStore {
   getSnapshot(): WorkbenchReloadDirtSnapshot;
   reloadScopes(scopes: readonly DaemonReloadScope[]): Promise<DaemonReloadResponse>;
   subscribe(listener: () => void): () => void;
-  getUpdate(): import("./workbench/installation-update.ts").InstallationUpdate | null;
+  getUpdate(): import("./workbench/installation-update-prediction.ts").PredictedInstallationUpdate | null;
   subscribeUpdate(listener: () => void): () => void;
   dismissUpdateFailure(): Promise<void>;
 }

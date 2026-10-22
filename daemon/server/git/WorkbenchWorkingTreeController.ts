@@ -177,14 +177,14 @@ export default class WorkbenchWorkingTreeController {
       const result: WorkingTreeSummary = { repositories: [], errors };
       for (const root of roots) {
         try {
-          const dirty = await this.options.transitions.read(root.repository.git.root, async () => {
+          const unclaimed = await this.options.transitions.read(root.repository.git.root, async () => {
             const [paths, claims] = await Promise.all([
               root.repository.summary(), this.claims(root.repository.git),
             ]);
             const claimed = new GitArcPathSet(claims.flatMap(claim => getGitArcLiveClaimPaths(claim)));
-            return paths.some(path => !claimed.overlaps(path));
+            return paths.filter(path => !claimed.overlaps(path)).length;
           });
-          result.repositories.push({ rootId: root.id, label: root.name, dirty });
+          result.repositories.push({ rootId: root.id, label: root.name, dirty: unclaimed > 0, unclaimed });
         } catch {
           (this.options.warn ?? console.warn)("Working-tree summary failed for one selected-project root.");
           result.errors.push({ rootId: root.id, message: "Unable to inspect this repository. Retry after checking Git access." });

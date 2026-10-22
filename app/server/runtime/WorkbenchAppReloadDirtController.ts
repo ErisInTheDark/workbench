@@ -6,6 +6,7 @@
  */
 import ReloadDirtController, {
   type ReloadDependencySource,
+  type ReloadDirtControllerOptions,
   type ReloadDirtControllerState,
   type ReloadDirtSourceState,
 } from "workbench-shared/reload/ReloadDirtController";
@@ -19,6 +20,7 @@ export interface WorkbenchAppReloadDirtControllerOptions {
   getSourceState(): ReloadDirtSourceState;
   onChange?(): void;
   repositoryRootPath: string;
+  schemaManifests?: ReloadDirtControllerOptions["schemaManifests"];
   watchSource?: typeof import("node:fs").watch;
 }
 
@@ -42,6 +44,7 @@ export default class WorkbenchAppReloadDirtController extends ReloadDirtControll
       getSourceState: options.getSourceState,
       onChange: options.onChange,
       repoRoot: options.repositoryRootPath,
+      schemaManifests: options.schemaManifests,
       snapshotRef: APP_RELOAD_SNAPSHOT_REF,
       watchSource: options.watchSource,
     }, sharedStateOrNull(state));

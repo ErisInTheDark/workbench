@@ -9,6 +9,7 @@ import { z } from "zod";
 import { WorkbenchNetworkActionSchema } from "./workbench-network";
 import { WorkbenchClientStateMutationSchema } from "../state/workbench-client-state";
 import { WORKBENCH_RELOAD_SCOPE_PATTERN } from "../reload/workbench-reload";
+import { ReloadDirtScopeSchema } from "../reload/reload-dirt-scope";
 import { PresentationMutationSchema, type PresentationMutation } from "../state/workbench-presentation-state";
 import { WorkbenchAppSettingsUpdateRequestSchema } from "./workbench-app-settings";
 import { DaemonReloadRequestSchema } from "../workbench/daemon-reload";
@@ -17,21 +18,22 @@ import { GitPeerTransferSchema } from "../workbench/git/git-peer-contracts";
 import { WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema } from "../workbench/workspace/workspace-observation";
 import { WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, WorkspaceDraftLaunchSchema, WorkspaceLayoutRequestSchema, WorkspaceThreadActionSchema } from "../workbench/workspace/workspace-commands";
 
+const dirtyScope = ReloadDirtScopeSchema.extend({
+  dependantScopes: z.array(z.string().regex(WORKBENCH_RELOAD_SCOPE_PATTERN)).default([]),
+  scope: z.string().regex(WORKBENCH_RELOAD_SCOPE_PATTERN),
+});
+
 export const WorkbenchAppRuntimeResponseSchema = z.object({
   frontendGeneration: z.object({
     javascript: z.string().min(1).max(200),
     stylesheet: z.string().min(1).max(200),
   }).strict().nullable().optional().default(null),
   reloadDirt: z.object({
-    dirtyScopes: z.array(z.object({
-      dependantScopes: z.array(z.string().regex(WORKBENCH_RELOAD_SCOPE_PATTERN)).default([]),
-      description: z.string(),
-      destructive: z.boolean(),
-      scope: z.string().regex(WORKBENCH_RELOAD_SCOPE_PATTERN),
-    }).strict()),
+    dirtyScopes: z.array(dirtyScope),
     error: z.string().max(500).nullable(),
     pendingScopes: z.array(z.string().regex(WORKBENCH_RELOAD_SCOPE_PATTERN)),
   }).strict(),
+  updateScopes: z.array(dirtyScope).nullable().optional(),
 }).strict();
 
 /** `daemonId` selects whose server scopes and checkout; omitted means the attached daemon. */

@@ -11,10 +11,15 @@ import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import {
   INSTALLATION_REPAIR_JOURNAL_SEGMENTS, INSTALLATION_UPDATE_MAX_CONFLICTS,
   InstallationRepairJournalSchema, InstallationUpdateFailureSchema,
-  type InstallationUpdateFailure, type InstallationUpdate, type InstallationPullResult,
+  type InstallationUpdateFailure, type InstallationPullResult,
 } from "workbench-shared/workbench/installation-update";
+import {
+  INSTALLATION_UPDATE_MAX_INCOMING_PATHS,
+  type InstallationPullOptions, type PredictedInstallationUpdate as InstallationUpdate,
+} from "workbench-shared/workbench/installation-update-prediction";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { ProjectId } from "workbench-shared/workbench/identity";
+import type { ReloadDirtScope } from "workbench-shared/reload/reload-dirt-scope";
 import WorkbenchGitIntegration from "../lib/workbench/git/WorkbenchGitIntegration";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 import watchGitRefs from "../lib/workbench/git/git-ref-watch";
@@ -38,6 +43,8 @@ type Options = {
   schedule?: (check: () => void, intervalMs: number) => () => void;
   watch?: (changed: () => void) => (() => void) | Promise<() => void>;
   observe?: (changed: () => void) => Promise<() => void>;
+  /** The daemon scopes `incomingPaths` would dirty once `target` is checked out. */
+  predict?: (incomingPaths: readonly string[], target: string, signal: AbortSignal) => Promise<ReloadDirtScope[]>;
   /** Runs one git command; `signal` aborts it when the controller is disposed. */
   git?: (args: string[], signal: AbortSignal) => Promise<GitResult>;
 };
@@ -50,7 +57,8 @@ function message(error: unknown) {
 export default class WorkbenchInstallationUpdateController {
   private value: InstallationUpdate = {
     state: "unavailable", reason: "not checked", upstream: null, behind: 0, ahead: 0,
-    conflicts: [], lockfileChanged: false, checkedAt: null, projectId: null, failure: null,
+    conflicts: [], lockfileChanged: false, incomingPaths: null, predictedScopes: null,
+    checkedAt: null, projectId: null, failure: null,
   };
   private readonly listeners = new Set<() => void>();
   private readonly journalPath: string;
@@ -203,7 +211,8 @@ export default class WorkbenchInstallationUpdateController {
           if (branch.code) throw new Error("Running checkout is not a Git worktree.");
           this.fetchFailure = null;
           this.publish({ ...this.value, state: "unavailable", reason: "no upstream", upstream: null,
-            ahead: 0, behind: 0, conflicts: [], lockfileChanged: false, checkedAt: Date.now(),
+            ahead: 0, behind: 0, conflicts: [], lockfileChanged: false, incomingPaths: null, predictedScopes: null,
+            checkedAt: Date.now(),
             projectId: await this.options.projectId(), failure: (await this.readJournal())?.failure ?? null });
           return this.value;
         }
@@ -233,20 +242,37 @@ export default class WorkbenchInstallationUpdateController {
     const conflicts = plan.kind === "blocked" ? plan.conflicts : [];
     const state = this.fetchFailure ? "unavailable"
       : plan.kind === "current" ? "current" : plan.kind === "blocked" ? "conflict" : "available";
+    const incomingPaths = plan.incomingPaths.length <= INSTALLATION_UPDATE_MAX_INCOMING_PATHS ? plan.incomingPaths : null;
     this.publish({
       state, reason: this.fetchFailure ?? (plan.kind === "blocked" ? plan.reason : null), upstream,
       ahead: plan.ahead, behind: plan.behind,
       conflicts: conflicts.slice(0, INSTALLATION_UPDATE_MAX_CONFLICTS),
-      lockfileChanged: plan.incomingPaths.includes("pnpm-lock.yaml"), checkedAt: Date.now(),
+      lockfileChanged: plan.incomingPaths.includes("pnpm-lock.yaml"),
+      incomingPaths, predictedScopes: await this.predict(incomingPaths, incoming),
+      checkedAt: Date.now(),
       projectId: await this.options.projectId(), failure: (await this.readJournal())?.failure ?? null,
     });
     return plan;
   }
 
-  async pull(): Promise<InstallationPullResult> {
+  /** A failed prediction degrades to unknown impact; it never blocks the update itself. */
+  private async predict(incomingPaths: readonly string[] | null, target: string) {
+    if (!incomingPaths || !this.options.predict) return null;
+    if (!incomingPaths.length) return [];
+    try {
+      return await this.options.predict(incomingPaths, target, this.lifetime.signal);
+    } catch (error) {
+      if (this.lifetime.signal.aborted) throw error;
+      this.options.warn(`Installation update prediction failed: ${message(error)}`);
+      return null;
+    }
+  }
+
+  async pull({ withoutInstall = false }: InstallationPullOptions = {}): Promise<InstallationPullResult> {
     return this.options.transitions.run(this.options.repoRoot, async () => {
       const plan = await this.recompute();
       if (this.value.state !== "available") throw new Error("Installation update is not available for a clean pull.");
+      if (withoutInstall && this.value.lockfileChanged) throw new Error("Dependencies changed; update from that device.");
       const { fromSha, toSha, warnings } = await this.integration.apply(plan);
       for (const warning of warnings) this.options.warn(`Installation pull: ${message(warning)}`);
       await this.recompute();

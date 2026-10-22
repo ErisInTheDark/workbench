@@ -1,6 +1,7 @@
 /*
  * Default export:
- * - AppRuntimeNode: own reload dirt, reload execution and the reload-all/pull orchestrator above every replaceable app feature.
+ * - AppRuntimeNode: own reload dirt, reload execution, update dirt prediction and the reload-all/pull orchestrator above every
+ *   replaceable app feature.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import { preparePulledInstallationRuntime } from "../../../scripts/installation/update-repair.mjs";
@@ -11,10 +12,12 @@ import {
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppDatabaseNode from "./AppDatabaseNode.ts";
+import AppHttpNode from "./AppHttpNode.ts";
 import AppTopologyNode from "./AppTopologyNode.ts";
 import WorkbenchAppReloadController, { type WorkbenchAppReloadControllerState } from "./WorkbenchAppReloadController.ts";
 import WorkbenchAppReloadDirtController, { type WorkbenchAppReloadDirtControllerState } from "./WorkbenchAppReloadDirtController.ts";
 import WorkbenchAppReloadOrchestrator, { type WorkbenchAppReloadOrchestratorState } from "./WorkbenchAppReloadOrchestrator";
+import WorkbenchAppUpdatePrediction from "./WorkbenchAppUpdatePrediction.ts";
 import {
   pullDaemonInstallation, readDaemonReloadDirt, reloadDaemonScopes, resolveOperationDaemon,
 } from "./daemon-reload-operations.ts";
@@ -27,7 +30,8 @@ interface AppRuntimeNodeState {
 
 export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
-  children: [AppDatabaseNode, AppTopologyNode],
+  // The HTTP node also reads update predictions, so it hangs directly under their provider.
+  children: [AppDatabaseNode, AppTopologyNode, AppHttpNode],
   create: (context, build) => {
     const state = build.handoffState as AppRuntimeNodeState | undefined;
     const dirt = new WorkbenchAppReloadDirtController({
@@ -37,7 +41,12 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       ],
       getSourceState: build.getSourceState,
       repositoryRootPath: context.repositoryRootPath,
+      schemaManifests: [{ path: "shared/state/workbench-app-state-releases.ts", label: "app state" }],
     }, state?.dirt);
+    const updatePrediction = new WorkbenchAppUpdatePrediction({
+      predict: (incomingPaths, target, signal) => dirt.predict(incomingPaths, target, signal),
+      warn: message => context.processLogger.error("app", message),
+    });
     const reload = new WorkbenchAppReloadController({
       dirt,
       execute: context.executeReloadScopes,
@@ -56,8 +65,8 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       // Without an attached daemon, reload-all still reloads the app and host.
       readDaemonDirt: (daemonId, signal) => context.runRuntimeObject("sources", async sources =>
         !daemonId && !sources.attached ? null : readDaemonReloadDirt(resolveOperationDaemon(sources, daemonId), signal)),
-      pullDaemon: (daemonId, signal) => context.runRuntimeObject("sources", sources =>
-        pullDaemonInstallation(resolveOperationDaemon(sources, daemonId), signal)),
+      pullDaemon: (daemonId, request, signal) => context.runRuntimeObject("sources", sources =>
+        pullDaemonInstallation(resolveOperationDaemon(sources, daemonId), request, signal)),
       prepareInstallationRuntime: signal =>
         preparePulledInstallationRuntime(context.repositoryRootPath, { signal }),
       installRestartsHost: () => hasDependencyDrift(context.repositoryRootPath, DAEMON_DEPENDENCY_IMPORTERS),
@@ -85,22 +94,23 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
           reload.resumeAfterFailedReload();
           detached = false;
         },
-        commit: () => { reload.dispose(); },
+        commit: () => { reload.dispose(); updatePrediction.dispose(); },
       }),
       detachForReload: detach,
       dispose: () => {
         if (detached) return;
         reload.dispose();
         orchestrator.dispose();
+        updatePrediction.dispose();
         return dirt.dispose();
       },
-      registrations: { reloadController: reload, reloadDirt: dirt, reloadOrchestrator: orchestrator },
+      registrations: { reloadController: reload, reloadDirt: dirt, reloadOrchestrator: orchestrator, updatePrediction },
       start: () => dirt.start(),
     };
   },
   description: "Reload app source-dirt and reload policy with every dependent app feature.",
   lifecycle: "handoff",
-  provides: ["reloadController", "reloadDirt", "reloadOrchestrator"],
+  provides: ["reloadController", "reloadDirt", "reloadOrchestrator", "updatePrediction"],
   requires: [],
   safeAll: false,
   scope: "client:runtime",

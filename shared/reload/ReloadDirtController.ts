@@ -3,17 +3,19 @@
  * - ReloadDirtSourceDescriptor/ReloadDirtSourceState: current source ownership and dependant metadata.
  * - ReloadDirtControllerState: transferable snapshots, baselines, pending scopes and refresh lifecycle.
  * - ReloadDependencySource: dependency-backed dirt; `loaded` closures changed since process start, `install` lockfile drift.
- * - ReloadDirtControllerOptions: snapshot, watcher, dependency and dynamic-source ports.
- * - default ReloadDirtController: reconcile source content against per-scope Git baselines.
+ * - ReloadDirtControllerOptions: snapshot, watcher, dependency, schema manifest and dynamic-source ports.
+ * - default ReloadDirtController: reconcile source content against per-scope Git baselines, mark schema migrations a
+ *   reload would apply, and predict the dirt an incoming change set would cause.
  */
 import { type watch } from "node:fs";
 
 import { hasDependencyDrift, readDependencyFingerprint } from "../pnpm-dependency-state.mjs";
 import type {
-  WorkbenchReloadDirtSnapshot,
   WorkbenchReloadScope,
   WorkbenchReloadScopeDescriptor,
 } from "./workbench-reload.ts";
+import type { ReloadDirtScope, ReloadDirtSnapshot } from "./reload-dirt-scope.ts";
+import { schemaMigrationBetween, type ReloadSchemaManifest } from "./reload-schema-manifest.ts";
 import ReloadDirtSnapshotRepository, {
   type ReloadDirtSnapshotRepositoryPort,
 } from "./ReloadDirtSnapshotRepository.ts";
@@ -58,6 +60,8 @@ export interface ReloadDirtControllerOptions {
   onChange?(): void;
   repository?: ReloadDirtSnapshotRepositoryPort;
   repoRoot: string;
+  /** Release manifests whose newer versions migrate a store when their owning scopes reload. */
+  schemaManifests?: readonly ReloadSchemaManifest[];
   snapshotRef: string;
   watchSource?: typeof watch;
 }
@@ -66,7 +70,7 @@ function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(0, MAX_ERROR_LENGTH);
 }
 
-function sameSnapshot(left: WorkbenchReloadDirtSnapshot, right: WorkbenchReloadDirtSnapshot) {
+function sameSnapshot(left: ReloadDirtSnapshot, right: ReloadDirtSnapshot) {
   return left.error === right.error
     && left.pendingScopes.length === right.pendingScopes.length
     && left.pendingScopes.every((scope, index) => scope === right.pendingScopes[index])
@@ -78,6 +82,8 @@ function sameSnapshot(left: WorkbenchReloadDirtSnapshot, right: WorkbenchReloadD
       return candidate?.scope === scope.scope
         && candidate.description === scope.description
         && candidate.destructive === scope.destructive
+        && candidate.migration?.from === scope.migration?.from
+        && candidate.migration?.to === scope.migration?.to
         && dependantScopes.length === candidateDependantScopes.length
         && dependantScopes.every((dependantScope, dependantIndex) => dependantScope === candidateDependantScopes[dependantIndex]);
     });
@@ -105,7 +111,7 @@ export default class ReloadDirtController {
   private refreshAbort: AbortController;
   private readonly repository: ReloadDirtSnapshotRepositoryPort;
   private readonly listeners = new Set<() => void>();
-  private snapshot: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
+  private snapshot: ReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
   private tail: Promise<void>;
   private watcher: ReloadSourceWatcher | null = null;
   private watcherRefreshPending = false;
@@ -316,7 +322,7 @@ export default class ReloadDirtController {
       }
       await this.watcher?.refresh();
       if (signal?.aborted) throw signal.reason;
-      const dirtyScopes = [] as WorkbenchReloadDirtSnapshot["dirtyScopes"];
+      const dirtyScopes = [] as ReloadDirtSnapshot["dirtyScopes"];
       const descriptors = [...state.descriptors.values()];
       const hasBoundaryPatterns = descriptors.some(({ boundaryPatterns }) => boundaryPatterns?.length);
       const worktreePaths = hasBoundaryPatterns
@@ -360,14 +366,12 @@ export default class ReloadDirtController {
       for (const scope of await this.dependencyDirt()) dirtyScopeNames.add(scope);
       if (signal?.aborted) throw signal.reason;
       for (const descriptor of descriptors) {
-        if (dirtyScopeNames.has(descriptor.scope)) {
-          dirtyScopes.push({
-            dependantScopes: sourceState.dependantClosure([descriptor.scope]).filter((scope) => scope !== descriptor.scope),
-            description: descriptor.description,
-            destructive: descriptor.destructive === true,
-            scope: descriptor.scope,
-          });
-        }
+        if (!dirtyScopeNames.has(descriptor.scope)) continue;
+        const baseline = state.baselines.get(descriptor.scope) ?? state.snapshotCommit;
+        const owned = resolvedPaths.get(descriptor.scope) ?? [];
+        const changed = changedByBaseline.get(baseline) ?? new Set<string>();
+        dirtyScopes.push(await this.describeDirtyScope(sourceState, descriptor, baseline, null,
+          manifest => owned.includes(manifest.path) && changed.has(manifest.path), signal));
       }
       if (signal?.aborted) throw signal.reason;
       state.error = null;
@@ -393,6 +397,55 @@ export default class ReloadDirtController {
       else if (baselines.get(source.scope) !== current) dirty.push(source.scope);
     }
     return dirty;
+  }
+
+  /**
+   * The scopes an incoming change set would dirty, as if `target` were checked out now: a scope is predicted when one of
+   * its sources or boundary patterns names an incoming path, or an incoming lockfile drives its install. Migrations compare
+   * each owned manifest at the scope's loaded baseline with `target`.
+   */
+  async predict(incomingPaths: readonly string[], target: string, signal?: AbortSignal): Promise<ReloadDirtScope[]> {
+    const state = this.requireState();
+    const sourceState = this.options.getSourceState();
+    const incoming = new Set(incomingPaths);
+    const installScopes = new Set(incoming.has("pnpm-lock.yaml")
+      ? (this.options.dependencySources ?? []).filter(({ kind }) => kind === "install").map(({ scope }) => scope)
+      : []);
+    const predicted: ReloadDirtScope[] = [];
+    for (const descriptor of state.descriptors.values()) {
+      const matcher = boundaryMatcher(descriptor);
+      const owns = (sourcePath: string) => descriptor.paths.includes(sourcePath) || Boolean(matcher?.matches(sourcePath));
+      if (!installScopes.has(descriptor.scope) && !incomingPaths.some(owns)) continue;
+      const baseline = state.baselines.get(descriptor.scope) ?? state.snapshotCommit;
+      predicted.push(await this.describeDirtyScope(sourceState, descriptor, baseline, target,
+        manifest => incoming.has(manifest.path) && owns(manifest.path), signal));
+      signal?.throwIfAborted();
+    }
+    return predicted;
+  }
+
+  private async describeDirtyScope(
+    sourceState: ReloadDirtSourceState,
+    descriptor: ReloadDirtSourceDescriptor,
+    baseline: string,
+    target: string | null,
+    migrates: (manifest: ReloadSchemaManifest) => boolean,
+    signal?: AbortSignal,
+  ): Promise<ReloadDirtScope> {
+    const scope: ReloadDirtScope = {
+      dependantScopes: sourceState.dependantClosure([descriptor.scope]).filter((candidate) => candidate !== descriptor.scope),
+      description: descriptor.description,
+      destructive: descriptor.destructive === true,
+      scope: descriptor.scope,
+    };
+    for (const manifest of this.options.schemaManifests ?? []) {
+      if (!migrates(manifest)) continue;
+      const migration = schemaMigrationBetween(manifest,
+        await this.repository.readFile(baseline, manifest.path, signal),
+        await this.repository.readFile(target, manifest.path, signal));
+      if (migration) return { ...scope, migration };
+    }
+    return scope;
   }
 
   private async writeSnapshot(message: string) {
@@ -453,7 +506,7 @@ export default class ReloadDirtController {
     this.publish({ ...this.snapshot, error: state.error, pendingScopes: state.pendingScopes });
   }
 
-  private publish(snapshot: WorkbenchReloadDirtSnapshot) {
+  private publish(snapshot: ReloadDirtSnapshot) {
     if (sameSnapshot(this.snapshot, snapshot)) return;
     this.snapshot = snapshot;
     if (!this.attached) return;

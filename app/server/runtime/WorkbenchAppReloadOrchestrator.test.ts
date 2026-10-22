@@ -194,14 +194,36 @@ test("daemon failure stops later owners and survives an orchestrator handoff", a
   assert.equal(events.length, 1);
 });
 
-test("remote update targets are rejected before reserving or pulling", async () => {
-  const { owner, events } = harness({ isLocalDaemon: () => false });
+test("another device reloads and updates only its own daemon, never this app's install or scopes", async () => {
   const remote = DaemonIdSchema.parse("67e323d5-949a-4c41-956f-1fa28905f034");
-  assert.throws(() => owner.admitPull(remote, true), /only to this device/u);
-  assert.equal(owner.read().phase, "idle");
-  assert.deepEqual(events, []);
+  const requests: unknown[] = [];
+  const { owner, events } = harness({
+    isLocalDaemon: () => false,
+    readAppDirt: () => dirt("host:network", "client:process"),
+    pullDaemon: async (daemonId, request) => {
+      requests.push({ daemonId, request });
+      return { fromSha: "a".repeat(40), toSha: "b".repeat(40), lockfileChanged: true };
+    },
+  });
   await owner.admitReloadAll(remote).start();
+  assert.deepEqual(events, ["daemon:server:workspace"]);
   assert.equal(owner.read().phase, "idle");
+
+  events.length = 0;
+  await owner.admitPull(remote, true).start();
+  assert.deepEqual(requests, [{ daemonId: remote, request: { withoutInstall: true } }]);
+  assert.deepEqual(events, ["daemon:server:workspace"], "no local runtime prep, app refresh, install or app reload");
+  assert.equal(owner.read().phase, "idle");
+});
+
+test("this device's pull may install", async () => {
+  const requests: unknown[] = [];
+  const { owner } = harness({ pullDaemon: async (_daemonId, request) => {
+    requests.push(request);
+    return { fromSha: "a".repeat(40), toSha: "b".repeat(40), lockfileChanged: false };
+  } });
+  await owner.admitPull(undefined, false).start();
+  assert.deepEqual(requests, [{}]);
 });
 
 test("owner retirement cancels an active wait without advancing to reload", async () => {

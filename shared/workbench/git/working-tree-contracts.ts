@@ -31,7 +31,11 @@ export const WorkingTreeReadSchema = z.object({
   cacheHit: z.boolean().optional(),
 });
 export const WorkingTreeSummarySchema = z.object({
-  repositories: z.array(z.object({ rootId: z.string(), label: z.string(), dirty: z.boolean() }).strict()),
+  repositories: z.array(z.object({
+    rootId: z.string(), label: z.string(), dirty: z.boolean(),
+    /** Changed files no thread claims; absent from daemons that report only `dirty`. */
+    unclaimed: z.number().int().nonnegative().optional(),
+  }).strict()),
   errors: z.array(z.object({ rootId: z.string(), message: z.string() }).strict()),
 }).strict();
 const projectRequest = z.object({ projectId: z.string().min(1) });

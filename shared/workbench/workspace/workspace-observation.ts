@@ -6,7 +6,7 @@
  * - DaemonWorkspaceObserveSchema/DaemonWorkspaceObserve: named daemon observation arguments.
  * - DaemonWorkspaceObservationSchema/DaemonWorkspaceObservation: versioned partial daemon results.
  * - WorkspaceProjectReferenceSchema/WorkspaceProjectReference: registered project or explicit observed location.
- * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations (incl. relayed `daemonUpdate`, the app's `reloadOperation` and a folder's `gitPeers`).
+ * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations (incl. relayed `daemonUpdate`, the app's `reloadOperation`, a folder's `gitPeers` and its paged `gitHistory`).
  * - WorkspaceDaemonFactSchema/WorkspaceDaemonFact: app-owned daemon connection facts.
  * - WorkspaceProjectsSchema/WorkspaceProjects: merged and not-yet-registered projects.
  * - WorkspaceProjectGroupsSchema/WorkspaceProjectGroups: app-owned cross-daemon sidebar project pools.
@@ -56,9 +56,9 @@ import { conformWorkbenchClientStateResponse } from "../../state/workbench-clien
 import { appStateClientTables } from "../../state/workbench-app-state-schema";
 import { tablePrimaryKeyColumns } from "../../database/schema/schema-definition";
 import { WorkbenchNetworkSnapshotSchema } from "../../http/workbench-network";
-import { WorkbenchDaemonReloadDirtEnvelopeSchema } from "../daemon-reload";
-import { InstallationUpdateSchema } from "../installation-update";
-import { WorkbenchReloadOperationSchema } from "../../reload/workbench-reload";
+import { PredictedInstallationUpdateSchema } from "../installation-update-prediction";
+import { DaemonReloadDirtEnvelopeSchema, ReloadDirtScopeSchema } from "../../reload/reload-dirt-scope";
+import { DeviceReloadOperationSchema } from "../../reload/device-reload-operation";
 import { WorkbenchSearchRequestSchema } from "../search/workbench-search";
 import { WorkspaceSearchResponseSchema } from "./workspace-commands";
 import { WorkbenchStatsReadRequestSchema } from "../stats/workbench-stats-contract";
@@ -67,6 +67,7 @@ import { statsDataShape } from "../stats/workbench-stats-observation-shape";
 import { ObservationDeltaSchema, observationShape, type ObservationShape } from "./observation-patch";
 import { WorkingTreeSummarySchema } from "../git/working-tree-contracts";
 import { GitBranchPositionSchema, GitPeerAddressSchema, GitPeerCommitSchema, GitPeerCommitsRequestSchema, GitPeerCommitsSchema, WorkspaceGitPeersSchema } from "../git/git-peer-contracts";
+import { GitHistoryCommitSchema, GitHistoryRequestSchema, GitHistorySchema } from "../git/git-history-contracts";
 import { WorkbenchAccountLimitsSchema } from "../provider/provider-account";
 import { ProviderKeySchema } from "../provider/provider-key";
 import { VisSnapshotKindSchema, VisSnapshotSchema, VisThreadSchema, type VisLiveSession } from "../vis/vis-contract";
@@ -115,6 +116,7 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("workingTreeSummary"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("branchPosition"), projectId: ProjectIdSchema, peers: z.array(GitPeerAddressSchema).max(32) }).strict(),
   GitPeerCommitsRequestSchema.extend({ kind: z.literal("branchCommits"), projectId: ProjectIdSchema }).strict(),
+  GitHistoryRequestSchema.extend({ kind: z.literal("branchHistory"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("accountLimits"), provider: ProviderKeySchema }).strict(),
   z.object({ kind: z.literal("threadIdentity"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), projectId: ProjectIdSchema, threadId: ThreadReferenceSchema }).strict(),
@@ -198,8 +200,8 @@ const archivedProject = z.object({
 export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("projectFile"), data: ProjectFileSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("projectSelection") }).strict(),
-  z.object({ ...envelope, kind: z.literal("runtime"), data: WorkbenchDaemonReloadDirtEnvelopeSchema.shape.snapshot }).strict(),
-  z.object({ ...envelope, kind: z.literal("update"), data: InstallationUpdateSchema }).strict(),
+  z.object({ ...envelope, kind: z.literal("runtime"), data: DaemonReloadDirtEnvelopeSchema.shape.snapshot }).strict(),
+  z.object({ ...envelope, kind: z.literal("update"), data: PredictedInstallationUpdateSchema }).strict(),
   z.object({
     ...envelope, kind: z.literal("catalogue"),
     catalogue: WorkbenchProjectsPayloadSchema.nullable(),
@@ -228,6 +230,7 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({ ...envelope, kind: z.literal("branchPosition"), position: GitBranchPositionSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("branchCommits"), data: GitPeerCommitsSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("branchHistory"), data: GitHistorySchema.nullable() }).strict(),
   z.object({
     ...envelope, kind: z.literal("accountLimits"), limits: WorkbenchAccountLimitsSchema.nullable(),
   }).strict(),
@@ -274,6 +277,8 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   /** The folder's branch against its logical project's other visible folders on other daemons. */
   z.object({ kind: z.literal("gitPeers"), location: ProjectLocationReferenceSchema }).strict(),
   GitPeerCommitsRequestSchema.extend({ kind: z.literal("gitPeerCommits"), location: ProjectLocationReferenceSchema }).strict(),
+  /** The folder's HEAD history, newest first; the caller grows `limit` as it scrolls. */
+  GitHistoryRequestSchema.extend({ kind: z.literal("gitHistory"), location: ProjectLocationReferenceSchema }).strict(),
   /** `daemonId` null observes the app's attached daemon. */
   z.object({ kind: z.literal("accountLimits"), provider: ProviderKeySchema, daemonId: DaemonIdSchema.nullable() }).strict(),
   z.object({ kind: z.literal("threadOwner"), threadId: ThreadReferenceSchema }).strict(),
@@ -481,15 +486,12 @@ const appState = z.custom<WorkbenchClientStateResponse>(value =>
 const runtime = z.object({
   frontendGeneration: z.object({ javascript: z.string(), stylesheet: z.string() }).nullable(),
   reloadDirt: z.object({
-    dirtyScopes: z.array(z.object({
-      dependantScopes: z.array(z.string()),
-      description: z.string(),
-      destructive: z.boolean(),
-      scope: z.string(),
-    }).strict()),
+    dirtyScopes: z.array(ReloadDirtScopeSchema),
     error: failure,
     pendingScopes: z.array(z.string()),
   }).strict(),
+  /** Client and host scopes the attached daemon's pending update would dirty; null without an update. */
+  updateScopes: z.array(ReloadDirtScopeSchema).nullable().optional(),
 }).strict();
 
 export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
@@ -501,9 +503,9 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
       phase: WorkspaceSourcePhaseSchema, failure,
     }).strict()) }).strict(),
   z.object({ ...envelope, kind: z.literal("daemonRuntime"), daemonId: DaemonIdSchema.nullable(),
-    data: WorkbenchDaemonReloadDirtEnvelopeSchema.shape.snapshot.nullable() }).strict(),
+    data: DaemonReloadDirtEnvelopeSchema.shape.snapshot.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("daemonUpdate"), daemonId: DaemonIdSchema.nullable(),
-    data: InstallationUpdateSchema.nullable() }).strict(),
+    data: PredictedInstallationUpdateSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("network"), data: WorkbenchNetworkSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("projects"), data: WorkspaceProjectsSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("projectGroups"), data: WorkspaceProjectGroupsSchema }).strict(),
@@ -513,6 +515,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("workingTreeSummary"), data: WorkingTreeSummarySchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("gitPeers"), data: WorkspaceGitPeersSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("gitPeerCommits"), data: GitPeerCommitsSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("gitHistory"), data: GitHistorySchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("accountLimits"), data: WorkbenchAccountLimitsSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("threadOwner"), data: WorkspaceThreadOwnerSchema }).strict(),
   z.object({
@@ -523,7 +526,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("presentation"), data: PresentationSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("appState"), data: appState.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: runtime.nullable() }).strict(),
-  z.object({ ...envelope, kind: z.literal("reloadOperation"), data: WorkbenchReloadOperationSchema }).strict(),
+  z.object({ ...envelope, kind: z.literal("reloadOperation"), data: DeviceReloadOperationSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
   z.object({ ...envelope, kind: z.literal("archivedThreads"), data: WorkspaceArchivedThreadsSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("threadVis"), data: VisThreadSchema.nullable() }).strict(),
@@ -644,6 +647,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
   const schema = memberSchema(DaemonWorkspaceObservationSchema, kind);
   switch (kind) {
     case "branchCommits": return { schema, fields: { data: peerCommitsShape } };
+    case "branchHistory": return { schema, fields: { data: historyShape } };
     case "projectThreads": return { schema, fields: {
       projects: byProject(projectRows, { schema: projectRows, fields: { sidebar: sidebarRowsShape } }),
     } };
@@ -685,6 +689,7 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
   const schema = memberSchema(WorkspaceObservationSchema, kind);
   switch (kind) {
     case "gitPeerCommits": return { schema, fields: { data: peerCommitsShape } };
+    case "gitHistory": return { schema, fields: { data: historyShape } };
     case "projectThreads": return { schema, fields: { data: membersShape(WorkspaceThreadRowsSchema, WorkspaceThreadRowProjectSchema) } };
     case "archivedThreads": return { schema, fields: {
       data: membersShape(WorkspaceArchivedThreadsSchema, WorkspaceArchivedThreadsSchema.shape.projects.element),
@@ -718,6 +723,11 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
 const peerCommitsShape = observationShape.object({
   schema: GitPeerCommitsSchema,
   fields: { commits: observationShape.keyed((commit: { commit: string }) => commit.commit, GitPeerCommitSchema) },
+});
+// Scrolling further or one new commit ships only the commits it adds; a push ships only the flipped marks.
+const historyShape = observationShape.object({
+  schema: GitHistorySchema,
+  fields: { commits: observationShape.keyed((commit: { commit: string }) => commit.commit, GitHistoryCommitSchema) },
 });
 
 // A rendering flag flip ships one session's field, not every session's whole document.

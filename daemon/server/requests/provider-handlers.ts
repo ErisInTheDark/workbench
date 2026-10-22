@@ -11,6 +11,7 @@ import {
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { ProviderRuntimeInstallRequestSchema } from "workbench-shared/workbench/provider/provider-runtime";
 import { WorkbenchSandboxNetworkUpdateSchema } from "workbench-shared/workbench/provider/provider-settings";
+import { InstallationPullOptionsSchema } from "workbench-shared/workbench/installation-update-prediction";
 import { defineDaemonRequestHandlers, InvalidParamsError, requiredString, type DaemonRequestContext } from "./daemon-request-handler";
 
 function provider(params: Record<string, unknown>, { owners }: DaemonRequestContext) {
@@ -112,7 +113,11 @@ export const providerRequestHandlers = defineDaemonRequestHandlers({
   "provider/account/sign-out": async (params, context) => (
     await signIn(params, context).signOut(parse(ProviderSignOutRequestSchema, params).integrationId)
   ),
-  "installation/update/pull": async (_params, context) => await installationUpdate(context).pull(),
+  "installation/update/pull": async (params, context) => {
+    const request = InstallationPullOptionsSchema.safeParse(params);
+    if (!request.success) throw new InvalidParamsError("Invalid installation pull request.");
+    return await installationUpdate(context).pull(request.data);
+  },
   "installation/update/failure/dismiss": async (_params, context) => await installationUpdate(context).dismissFailure(),
   "provider/runtime/read": async (_params, context) => {
     const runtimes = context.providerRuntimes();

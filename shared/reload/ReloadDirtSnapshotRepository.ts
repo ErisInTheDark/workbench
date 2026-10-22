@@ -70,6 +70,8 @@ export interface ReloadDirtSnapshotRepositoryPort {
   createCommitFromTree(tree: string, parent: string, message: string): Promise<string>;
   listWorktreeChangedPaths(baseTreeish: string, paths: string[], signal?: AbortSignal): Promise<string[]>;
   listWorktreePaths(signal?: AbortSignal): Promise<string[]>;
+  /** A text file at a commit, or in the worktree when `treeish` is null; null when absent. */
+  readFile(treeish: string | null, sourcePath: string, signal?: AbortSignal): Promise<string | null>;
   readRef(ref: string): Promise<string | null>;
   updateRef(ref: string, newValue: string, oldValue?: string): Promise<void>;
   writeWorktreeTree(): Promise<string>;
@@ -114,6 +116,23 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     return parseNullPaths(await this.runRead([
       "ls-files", "-z", "--cached", "--others", "--exclude-standard",
     ], process.env, signal)).sort((left, right) => left.localeCompare(right));
+  }
+
+  async readFile(treeish: string | null, sourcePath: string, signal?: AbortSignal) {
+    if (treeish === null) {
+      try { return await fs.readFile(path.join(this.root, sourcePath), { encoding: "utf8", signal }); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+    }
+    try {
+      return await this.run(["show", `${treeish}:${sourcePath}`], process.env, signal);
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (hasExitCode(error, 128)) return null;
+      throw error;
+    }
   }
 
   async readRef(ref: string) {
