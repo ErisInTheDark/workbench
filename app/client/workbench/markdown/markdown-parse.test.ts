@@ -153,7 +153,9 @@ test("partial thread text closes unclosed formatting at the frontier and stays l
 test("partial thread text hides its unfinished frontier token, even inside optimistic formatting", () => {
   assert.deepEqual(parseInlineMarkdown("see app/client/Fo", PARTIAL), [{ text: "see ", type: "text" }]);
   assert.deepEqual(parseInlineMarkdown('ok <icon color="re', PARTIAL), [{ text: "ok ", type: "text" }]);
-  assert.deepEqual(parseInlineMarkdown("**bold wor", PARTIAL), [{ children: [{ text: "bold ", type: "text" }], type: "strong" }]);
+  assert.deepEqual(parseInlineMarkdown("**bold app/cli", PARTIAL), [{ children: [{ text: "bold ", type: "text" }], type: "strong" }]);
+  // A plain word cannot change shape as it grows, so it shows.
+  assert.deepEqual(parseInlineMarkdown("**bold wor", PARTIAL), [{ children: [{ text: "bold wor", type: "text" }], type: "strong" }]);
   assert.deepEqual(parseInlineMarkdown("**done** then wor", { profile: "thread", partial: false }).at(-1), { text: " then wor", type: "text" });
 });
 
@@ -169,7 +171,7 @@ test("thread colour tags wrap inline markdown and colour streamed text before th
     { text: " c", type: "text" },
   ]);
   assert.deepEqual(parseInlineMarkdown('<color color="#FF8800">streaming wor', PARTIAL), [
-    { children: [{ text: "streaming ", type: "text" }], color: "#ff8800", type: "threadColor" },
+    { children: [{ text: "streaming wor", type: "text" }], color: "#ff8800", type: "threadColor" },
   ]);
   assert.deepEqual(parseInlineMarkdown("ok <colo", PARTIAL), [{ text: "ok ", type: "text" }]);
   assert.ok(parseInlineMarkdown('<color color="red">a</color>').every(node => node.type === "text"));
@@ -183,8 +185,10 @@ test("partial thread blocks hide unfinished frontier lines and close open contai
   assert.deepEqual(types("| a | b |\n| --- | --- |\n| 1 | 2"), ["table"]);
   assert.deepEqual(types("text\n```t"), ["paragraph"]);
   assert.deepEqual(types("text\n\n#"), ["paragraph"]);
-  assert.deepEqual(types("text\n\n- word"), ["paragraph"]);
-  assert.deepEqual(types("<details>\n<summary>wh"), []);
+  assert.deepEqual(types("text\n\n12"), ["paragraph"]);
+  assert.deepEqual(types("text\n\n- word"), ["paragraph", "ul"]);
+  assert.deepEqual(types("<details>\n<summary>"), []);
+  assert.deepEqual(types("<details>\n<summary>wh"), ["details"]);
   assert.deepEqual(parseBlocks("```ts\ncode\n``", PARTIAL), [{ language: "ts", text: "code", type: "code" }]);
 
   const [notice] = parseBlocks('<notice title="n" color="blue">\nbody ', PARTIAL);

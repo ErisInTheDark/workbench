@@ -437,7 +437,7 @@ function typewriter(markdown: string, holdIncompleteBlocks = false) {
 test("the typewriter caret rides text mid-block, and waits in a fresh slot once the block ends", () => {
   const midBlock = typewriter("first paragraph\n\nsecond para");
   assert.doesNotMatch(midBlock, new RegExp(SLOT, "u"));
-  assert.match(midBlock, new RegExp(`second <span[^>]*${CARET}`, "u"));
+  assert.match(midBlock, new RegExp(`second para<span[^>]*${CARET}`, "u"));
 
   const betweenBlocks = typewriter("first paragraph\n\n");
   assert.match(betweenBlocks, new RegExp(`first paragraph</p><p[^>]*${SLOT}[^>]*><span[^>]*${CARET}`, "u"));

@@ -27,19 +27,21 @@ test("links and file mentions stay hidden until they close", () => {
   assert.equal(held("see #[app/a.ts] "), null);
 });
 
-test("the trailing word waits for whitespace so paths and urls never flip into links", () => {
-  assert.equal(held("open app/client/Fo"), "app/client/Fo");
-  assert.equal(held("visit https://exa"), "https://exa");
-  assert.equal(held("**bol"), "**bol");
-  assert.equal(held("done.\n"), null);
-  assert.equal(held("done "), null);
+test("a trailing word waits only while it could still become a url or path link", () => {
+  for (const tail of ["app/client/Fo", "C:", ".", "h", "htt", "https:", "https://exa", "www.ex"]) {
+    assert.equal(held(`open ${tail}`), tail, tail);
+  }
+  // Plain words, emphasis and inline code never change shape as they grow, so the last word shows as it streams.
+  for (const text of ["it is compl", "**bol", "`co", "Done", "done.\n", "done "]) {
+    assert.equal(held(text), null, text);
+  }
 });
 
-test("final lines that render nothing yet hold their whole block", () => {
-  for (const line of ["#", "## ", "-", "--", "1.", "12", ">", "- word", "```t", "- ```ts", '<notice title="x" col', "<plan>"]) {
+test("final lines that render nothing yet, or could still become a block marker, hold their whole block", () => {
+  for (const line of ["#", "## ", "-", "--", "1.", "12", ">", "```t", "- ```ts", '<notice title="x" col', "<plan>"]) {
     assert.equal(isHeldFrontierLine(line), true, line);
   }
-  for (const line of ["## Title ", "- two words", "| a | b", "plain text"]) {
+  for (const line of ["## Title ", "- word", "- two words", "| a | b", "plain text", "Done"]) {
     assert.equal(isHeldFrontierLine(line), false, line);
   }
 });
