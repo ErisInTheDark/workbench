@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default Tooltip: clone a trigger without wrapper DOM and own a delayed, surface-styleable portal tooltip, opening right of or above it while isolating interactive surface events from the trigger tree.
+ * - default Tooltip: clone a trigger without wrapper DOM and own a delayed, surface-styleable portal tooltip, opening right of or above it while isolating interactive surface events from the trigger tree. A context menu on the trigger closes it.
  *   Tooltips on triggers nested inside another trigger stack in the outermost tooltip's panel; tooltips on triggers
  *   inside tooltip content open one layer higher. Open state, exclusivity and pointer safety live in tooltip-layers.
  */
@@ -21,6 +21,7 @@ import {
   type ReactElement,
   type ReactNode,
   type Ref,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -50,6 +51,7 @@ interface TooltipTriggerProps {
   "aria-describedby"?: string;
   "aria-expanded"?: boolean;
   "aria-haspopup"?: "dialog";
+  onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
   onPointerEnter?: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
   ref?: Ref<HTMLElement>;
@@ -274,6 +276,11 @@ export default function Tooltip({
     "aria-describedby": describedBy,
     "aria-expanded": enabled && interactive ? visible : childProps["aria-expanded"],
     "aria-haspopup": enabled && interactive ? "dialog" : childProps["aria-haspopup"],
+    // A context menu opening on the trigger replaces its hover card instead of stacking under it.
+    onContextMenu: (event: ReactMouseEvent<HTMLElement>) => {
+      childProps.onContextMenu?.(event);
+      hide();
+    },
     onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => {
       childProps.onPointerEnter?.(event);
       if (isTooltipPointerSupported(event.pointerType)) beginShowing();

@@ -174,7 +174,7 @@ function createWorkbenchCoreFeature(
     stats: () => coreStats?.stats ?? null,
     warn: logThreadStateWarning,
   });
-  const { gitArc, threadGit, workingTree, gitPeer, branchPositions } = git;
+  const { gitArc, threadGit, workingTree, gitPeer, branchPositions, gitCheckout } = git;
   coreStats = new WorkbenchCoreStatsFeature({
     context, database, providers, harnesses, projectCatalog, gitArc, run, warn: logThreadStateWarning,
   });
@@ -312,6 +312,7 @@ function createWorkbenchCoreFeature(
     projectStore,
     workingTree,
     branchPositions,
+    gitCheckout,
     providers,
     threadActions,
     launches,

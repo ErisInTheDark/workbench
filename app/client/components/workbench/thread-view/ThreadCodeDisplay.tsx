@@ -5,10 +5,12 @@
  */
 "use client";
 
-import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
+import { useId, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 
+import { describeUnifiedDiff } from "workbench-shared/workbench/git/working-tree-selection";
 import { compactCommandOutput } from "workbench-shared/workbench/thread/thread-command-output";
-import type { ParsedUnifiedDiff, UnifiedDiffLine } from "workbench-shared/workbench/thread/unified-diff";
+import type { ParsedUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
+import WorkbenchDiffLines from "../diff/WorkbenchDiffLines";
 import ThreadAnsiOutput from "./ThreadAnsiOutput";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
@@ -76,6 +78,7 @@ export function ThreadCommandHeader ({
   );
 }
 
+/** Thread diffs share the git review renderer, so both read the same rows, highlighting and change marks. */
 function ThreadUnifiedDiff ({
   diff,
   surface = "default",
@@ -83,125 +86,9 @@ function ThreadUnifiedDiff ({
   diff: ParsedUnifiedDiff;
   surface?: ThreadCodeDisplaySurface;
 }) {
-  const isFramed = surface === "framed";
-  const contentColumn = isFramed ? "minmax(min-content,1fr)" : "max-content";
-  const lineNumberWidth = Math.max(
-    2,
-    ...diff.hunks.flatMap((hunk) => hunk.lines.flatMap((line) => [
-      line.oldLineNumber ? String(line.oldLineNumber).length : 0,
-      line.newLineNumber ? String(line.newLineNumber).length : 0,
-    ])),
-  );
-
-  return (
-    <div
-      className="grid w-max min-w-full"
-      style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem ${contentColumn}` }}
-    >
-      {diff.hunks.map((hunk, hunkIndex) => (
-        <Fragment key={`hunk:${hunkIndex}`}>
-          <div
-            className={`col-span-4 ml-4 whitespace-pre px-0 py-1 font-mono text-[0.78em] leading-[1.65] text-accent md:ml-12${hunkIndex ? " pt-4" : ""}`}
-          >
-            {hunk.header}
-          </div>
-          {hunk.lines.map((line, lineIndex) => (
-            <ThreadUnifiedDiffLine
-              key={`line:${hunkIndex}:${lineIndex}`}
-              line={line}
-              surface={surface}
-            />
-          ))}
-        </Fragment>
-      ))}
-    </div>
-  );
-}
-
-function ThreadUnifiedDiffLine ({
-  line,
-  surface = "default",
-}: {
-  line: UnifiedDiffLine;
-  surface?: ThreadCodeDisplaySurface;
-}) {
-  if (line.type === "note") {
-    return (
-      <div className="col-span-4 ml-4 whitespace-pre px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-fg/muted italic md:ml-12">
-        {line.text}
-      </div>
-    );
-  }
-
-  const lineStyle = getDiffLineStyle(line.type);
-  const edgeStyle = surface === "framed" && line.type === "context" ? undefined : lineStyle.edgeStyle;
-
-  return (
-    <div
-      className={`
-        col-span-4 grid grid-cols-subgrid px-4 font-mono tabular-nums text-[0.78em] leading-[1.65] md:px-12 ${getDiffRowClassName(lineStyle.rowClassName, line.type, surface)}
-      `}
-      style={edgeStyle}
-    >
-      <span className={`px-3 py-1 text-right ${lineStyle.gutterTextClassName}`}>
-        {line.oldLineNumber ?? ""}
-      </span>
-      <span className={`px-3 py-1 text-right ${lineStyle.gutterTextClassName}`}>
-        {line.newLineNumber ?? ""}
-      </span>
-      <span className={`px-3 py-1 text-center ${lineStyle.prefixClassName}`}>
-        {lineStyle.prefix}
-      </span>
-      <span className={`whitespace-pre px-3 py-1 ${lineStyle.contentClassName}`}>
-        {line.text || " "}
-      </span>
-    </div>
-  );
-}
-
-function getDiffRowClassName (
-  rowClassName: string,
-  type: UnifiedDiffLine["type"],
-  surface: ThreadCodeDisplaySurface,
-) {
-  if (surface !== "framed" || type !== "context") {
-    return rowClassName;
-  }
-
-    return "";
-}
-
-function getDiffLineStyle (type: UnifiedDiffLine["type"]) {
-  switch (type) {
-    case "addition":
-      return {
-        contentClassName: "text-text",
-        edgeStyle: createEdgeGradientStyle("color-mix(in srgb, var(--success) 10%, transparent)"),
-        gutterTextClassName: "text-[color:color-mix(in_srgb,var(--success)_70%,var(--text)_30%)]",
-        prefix: "+",
-        prefixClassName: "text-[color:color-mix(in_srgb,var(--success)_82%,var(--text)_18%)]",
-        rowClassName: "",
-      };
-    case "deletion":
-      return {
-        contentClassName: "text-text",
-        edgeStyle: createEdgeGradientStyle("color-mix(in srgb, var(--danger) 10%, transparent)"),
-        gutterTextClassName: "text-[color:color-mix(in_srgb,var(--danger)_70%,var(--text)_30%)]",
-        prefix: "-",
-        prefixClassName: "text-[color:color-mix(in_srgb,var(--danger)_82%,var(--text)_18%)]",
-        rowClassName: "",
-      };
-    case "context":
-    default:
-      return {
-        contentClassName: "text-text",
-        edgeStyle: CODE_SURFACE_EDGE_STYLE,
-        gutterTextClassName: "text-fg/muted",
-        prefix: "\u00a0",
-        prefixClassName: "text-fg/muted",
-        rowClassName: "",
-      };
-  }
+  const identity = useId();
+  const model = useMemo(() => describeUnifiedDiff(diff), [diff]);
+  return <WorkbenchDiffLines model={model} identity={identity} surface={surface === "framed" ? "framed" : "thread"} />;
 }
 
 function ThreadPlainOutput ({

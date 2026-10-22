@@ -1,8 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchGitPeerTransport: one checkout's side of a peer transfer: list held commits, stream a bundle of a
- *   branch's new commits, receive a bundle into the peer's tracking ref, read directional upstream and peer counts, commit
- *   previews and marked HEAD history, and push the branch to its upstream.
+ *   branch's new commits, receive a bundle into the peer's tracking ref, and preview directional peer commits.
  * - GitPeerMissingBranchError: the sender has no branch of the requested name.
  */
 import { spawn } from "node:child_process";
@@ -11,8 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { GitBranchPosition, GitPeerAddress, GitPeerCommits, GitPeerCommitsRequest } from "workbench-shared/workbench/git/git-peer-contracts";
-import type { GitHistory, GitHistoryRequest, GitPushResult } from "workbench-shared/workbench/git/git-history-contracts";
+import type { GitPeerAddress, GitPeerCommits, GitPeerCommitsRequest } from "workbench-shared/workbench/git/git-peer-contracts";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 export class GitPeerMissingBranchError extends Error {}
@@ -146,102 +144,5 @@ export default class WorkbenchGitPeerTransport {
       commits.push({ commit: fields[index]!, subject: fields[index + 1]! });
     }
     return { branch: request.branch, head, tip, total, commits };
-  }
-
-  private async branch() {
-    let branchRef: string | null = null;
-    try { branchRef = (await this.repository.run(["symbolic-ref", "-q", "HEAD"])).trim() || null; }
-    catch { branchRef = null; }
-    return branchRef?.startsWith("refs/heads/") ? branchRef.slice("refs/heads/".length) : null;
-  }
-
-  /** `ahead`: commits `tip` lacks. `behind`: commits HEAD lacks; an unborn HEAD lacks all of `tip`. */
-  private async counts(head: string | null, tip: string | null) {
-    if (!tip || tip === head) return { ahead: 0, behind: 0 };
-    if (!head) return { ahead: 0, behind: Number((await this.repository.run(["rev-list", "--count", tip])).trim()) };
-    const [ahead, behind] = (await this.repository.run(["rev-list", "--left-right", "--count", `${head}...${tip}`]))
-      .trim().split(/\s+/u).map(Number) as [number, number];
-    return { ahead, behind };
-  }
-
-  /** The branch's configured upstream (`origin/main`) and its tip; null without one. */
-  private async upstream(branch: string | null) {
-    if (!branch) return null;
-    let name: string;
-    try { name = (await this.repository.run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${branch}@{upstream}`])).trim(); }
-    catch { return null; }
-    if (!name) return null;
-    const tip = await this.ref(`refs/remotes/${name}`);
-    return tip ? { name, tip } : null;
-  }
-
-  async position(peers: readonly GitPeerAddress[]): Promise<GitBranchPosition> {
-    const branch = await this.branch();
-    const head = await this.head();
-    const upstream = await this.upstream(branch);
-    const counted = [];
-    for (const peer of peers) {
-      const tip = branch ? await this.ref(WorkbenchGitPeerTransport.trackingRef(peer, branch)) : null;
-      counted.push({ daemonId: peer.daemonId, projectId: peer.projectId, tip, ...await this.counts(head, tip) });
-    }
-    return {
-      branch, head, peers: counted,
-      upstream: upstream ? { name: upstream.name, ...await this.counts(head, upstream.tip) } : null,
-    };
-  }
-
-  /** Commits reachable from HEAD but not `tip`, within HEAD's newest `limit` commits. */
-  private async missingFrom(tip: string, limit: number) {
-    const output = await this.repository.run(["rev-list", `--max-count=${limit}`, "HEAD", "--not", tip, "--"]);
-    return new Set(output.split(/\r?\n/u).filter(Boolean));
-  }
-
-  async history(request: GitHistoryRequest): Promise<GitHistory> {
-    const branch = await this.branch();
-    const head = await this.head();
-    if (!head) return { branch, head, commits: [], complete: true };
-    const output = await this.repository.run(["log", "--date-order", `--max-count=${request.limit + 1}`,
-      "--format=%H%x1f%an%x1f%at%x1f%s", "-z", "HEAD", "--"]);
-    const records = output.split("\0").filter(Boolean);
-    const upstream = await this.upstream(branch);
-    const unpushed = upstream ? await this.missingFrom(upstream.tip, request.limit) : new Set<string>();
-    const unsent = new Set<string>();
-    for (const peer of branch ? request.peers : []) {
-      const tip = await this.ref(WorkbenchGitPeerTransport.trackingRef(peer, branch!));
-      if (tip) for (const commit of await this.missingFrom(tip, request.limit)) unsent.add(commit);
-    }
-    const commits = records.slice(0, request.limit).map(record => {
-      const [commit = "", author = "", authoredAt = "0", ...subject] = record.replace(/^\r?\n/u, "").split("\u001f");
-      return {
-        commit, author, authoredAt: Number(authoredAt) * 1000, subject: subject.join("\u001f"),
-        unpushed: unpushed.has(commit), unsent: unsent.has(commit),
-      };
-    });
-    return { branch, head, commits, complete: records.length <= request.limit };
-  }
-
-  /** Pushes the checked-out branch to its upstream without force, so a diverged upstream rejects instead of losing work. */
-  async push(signal?: AbortSignal): Promise<GitPushResult> {
-    const branch = await this.branch();
-    if (!branch) throw new Error("Pushing needs a checked-out branch.");
-    const upstream = await this.upstream(branch);
-    if (!upstream) throw new Error(`Branch ${branch} has no upstream to push to.`);
-    const remote = (await this.repository.run(["config", "--get", `branch.${branch}.remote`])).trim();
-    const merge = (await this.repository.run(["config", "--get", `branch.${branch}.merge`])).trim();
-    if (!remote || !merge.startsWith("refs/heads/")) throw new Error(`Branch ${branch} has no pushable upstream.`);
-    const { ahead } = await this.counts(await this.head(), upstream.tip);
-    try {
-      await this.repository.run(["push", "--porcelain", remote, `refs/heads/${branch}:${merge}`], GIT_ENV, signal);
-    } catch (error) {
-      // Git stderr can echo remote URLs with embedded credentials, so only the rejection survives.
-      const fields = error && typeof error === "object" ? error as { message?: unknown; stderr?: unknown; stdout?: unknown } : {};
-      const text = [fields.message, fields.stderr, fields.stdout].filter(value => typeof value === "string").join("\n");
-      throw new Error(/\[rejected\]|non-fast-forward|fetch first/u.test(text)
-        ? `${upstream.name} has commits this branch lacks; pull them first.`
-        : `Could not push to ${upstream.name}.`);
-    } finally {
-      WorkbenchGitRepository.forgetRefFacts(this.repository.root);
-    }
-    return { branch, upstream: upstream.name, pushed: ahead };
   }
 }

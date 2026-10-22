@@ -52,7 +52,7 @@ export default function WorkbenchWorkingTreeProvider({ projectId, children, sour
         release: () => handle.release(),
       };
     } : null;
-    return new WorkbenchWorkingTreeState(projectId, daemon?.git.workingTree ?? null, summary);
+    return new WorkbenchWorkingTreeState(projectId, daemon?.git.workingTree ?? null, summary, daemon?.git ?? null);
   }, [daemon, daemonId, inheritedState, projectId, reuse, workspace]);
   useEffect(() => {
     if (!daemon || reuse) return;

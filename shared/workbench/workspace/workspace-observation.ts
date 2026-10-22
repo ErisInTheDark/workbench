@@ -6,7 +6,7 @@
  * - DaemonWorkspaceObserveSchema/DaemonWorkspaceObserve: named daemon observation arguments.
  * - DaemonWorkspaceObservationSchema/DaemonWorkspaceObservation: versioned partial daemon results.
  * - WorkspaceProjectReferenceSchema/WorkspaceProjectReference: registered project or explicit observed location.
- * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations (incl. relayed `daemonUpdate`, the app's `reloadOperation`, a folder's `gitPeers` and its paged `gitHistory`).
+ * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations (incl. relayed `daemonUpdate`, the app's `reloadOperation`, a folder's `gitPeers`, its paged `gitHistory`, `gitBranches` and `gitStashes`).
  * - WorkspaceDaemonFactSchema/WorkspaceDaemonFact: app-owned daemon connection facts.
  * - WorkspaceProjectsSchema/WorkspaceProjects: merged and not-yet-registered projects.
  * - WorkspaceProjectGroupsSchema/WorkspaceProjectGroups: app-owned cross-daemon sidebar project pools.
@@ -68,6 +68,7 @@ import { ObservationDeltaSchema, observationShape, type ObservationShape } from 
 import { WorkingTreeSummarySchema } from "../git/working-tree-contracts";
 import { GitBranchPositionSchema, GitPeerAddressSchema, GitPeerCommitSchema, GitPeerCommitsRequestSchema, GitPeerCommitsSchema, WorkspaceGitPeersSchema } from "../git/git-peer-contracts";
 import { GitHistoryCommitSchema, GitHistoryRequestSchema, GitHistorySchema } from "../git/git-history-contracts";
+import { GitBranchListSchema, GitBranchSchema, GitStashEntrySchema, GitStashListSchema } from "../git/git-object-contracts";
 import { WorkbenchAccountLimitsSchema } from "../provider/provider-account";
 import { ProviderKeySchema } from "../provider/provider-key";
 import { VisSnapshotKindSchema, VisSnapshotSchema, VisThreadSchema, type VisLiveSession } from "../vis/vis-contract";
@@ -117,6 +118,8 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("branchPosition"), projectId: ProjectIdSchema, peers: z.array(GitPeerAddressSchema).max(32) }).strict(),
   GitPeerCommitsRequestSchema.extend({ kind: z.literal("branchCommits"), projectId: ProjectIdSchema }).strict(),
   GitHistoryRequestSchema.extend({ kind: z.literal("branchHistory"), projectId: ProjectIdSchema }).strict(),
+  z.object({ kind: z.literal("branchList"), projectId: ProjectIdSchema }).strict(),
+  z.object({ kind: z.literal("stashList"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("accountLimits"), provider: ProviderKeySchema }).strict(),
   z.object({ kind: z.literal("threadIdentity"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), projectId: ProjectIdSchema, threadId: ThreadReferenceSchema }).strict(),
@@ -231,6 +234,8 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("branchPosition"), position: GitBranchPositionSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("branchCommits"), data: GitPeerCommitsSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("branchHistory"), data: GitHistorySchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("branchList"), data: GitBranchListSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("stashList"), data: GitStashListSchema.nullable() }).strict(),
   z.object({
     ...envelope, kind: z.literal("accountLimits"), limits: WorkbenchAccountLimitsSchema.nullable(),
   }).strict(),
@@ -279,6 +284,10 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   GitPeerCommitsRequestSchema.extend({ kind: z.literal("gitPeerCommits"), location: ProjectLocationReferenceSchema }).strict(),
   /** The folder's HEAD history, newest first; the caller grows `limit` as it scrolls. */
   GitHistoryRequestSchema.extend({ kind: z.literal("gitHistory"), location: ProjectLocationReferenceSchema }).strict(),
+  /** The folder's local branches with upstream counts. */
+  z.object({ kind: z.literal("gitBranches"), location: ProjectLocationReferenceSchema }).strict(),
+  /** The folder's stashes, newest first. */
+  z.object({ kind: z.literal("gitStashes"), location: ProjectLocationReferenceSchema }).strict(),
   /** `daemonId` null observes the app's attached daemon. */
   z.object({ kind: z.literal("accountLimits"), provider: ProviderKeySchema, daemonId: DaemonIdSchema.nullable() }).strict(),
   z.object({ kind: z.literal("threadOwner"), threadId: ThreadReferenceSchema }).strict(),
@@ -516,6 +525,8 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("gitPeers"), data: WorkspaceGitPeersSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("gitPeerCommits"), data: GitPeerCommitsSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("gitHistory"), data: GitHistorySchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("gitBranches"), data: GitBranchListSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("gitStashes"), data: GitStashListSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("accountLimits"), data: WorkbenchAccountLimitsSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("threadOwner"), data: WorkspaceThreadOwnerSchema }).strict(),
   z.object({
@@ -648,6 +659,8 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
   switch (kind) {
     case "branchCommits": return { schema, fields: { data: peerCommitsShape } };
     case "branchHistory": return { schema, fields: { data: historyShape } };
+    case "branchList": return { schema, fields: { data: branchesShape } };
+    case "stashList": return { schema, fields: { data: stashesShape } };
     case "projectThreads": return { schema, fields: {
       projects: byProject(projectRows, { schema: projectRows, fields: { sidebar: sidebarRowsShape } }),
     } };
@@ -690,6 +703,8 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
   switch (kind) {
     case "gitPeerCommits": return { schema, fields: { data: peerCommitsShape } };
     case "gitHistory": return { schema, fields: { data: historyShape } };
+    case "gitBranches": return { schema, fields: { data: branchesShape } };
+    case "gitStashes": return { schema, fields: { data: stashesShape } };
     case "projectThreads": return { schema, fields: { data: membersShape(WorkspaceThreadRowsSchema, WorkspaceThreadRowProjectSchema) } };
     case "archivedThreads": return { schema, fields: {
       data: membersShape(WorkspaceArchivedThreadsSchema, WorkspaceArchivedThreadsSchema.shape.projects.element),
@@ -728,6 +743,16 @@ const peerCommitsShape = observationShape.object({
 const historyShape = observationShape.object({
   schema: GitHistorySchema,
   fields: { commits: observationShape.keyed((commit: { commit: string }) => commit.commit, GitHistoryCommitSchema) },
+});
+
+// One branch moving or one stash landing ships only that entry.
+const branchesShape = observationShape.object({
+  schema: GitBranchListSchema,
+  fields: { branches: observationShape.keyed((branch: { name: string }) => branch.name, GitBranchSchema) },
+});
+const stashesShape = observationShape.object({
+  schema: GitStashListSchema,
+  fields: { stashes: observationShape.keyed((stash: { sha: string }) => stash.sha, GitStashEntrySchema) },
 });
 
 // A rendering flag flip ships one session's field, not every session's whole document.

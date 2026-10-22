@@ -1,14 +1,14 @@
 /*
  * Exports:
- * - default WorkingTreeContentCache: bound and coalesce immutable working-tree content.
+ * - default GitContentCache: bound and coalesce immutable Git file content (diffs and previews) by an identity key the
+ *   caller builds from everything the content depends on.
  */
-import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import type { WorkingTreeDiff, WorkingTreeFileRequest, WorkingTreePreview } from "workbench-shared/workbench/git/working-tree-contracts";
-type Port = Pick<WorkbenchDaemonClient["git"]["workingTree"], "diff" | "preview">;
+import type { WorkingTreeDiff, WorkingTreePreview } from "workbench-shared/workbench/git/working-tree-contracts";
+
 type Values = { diff: WorkingTreeDiff; preview: WorkingTreePreview };
 type Entry = { value: Values[keyof Values]; expires: number; bytes: number };
 
-export default class WorkingTreeContentCache {
+export default class GitContentCache {
   private readonly entries = new Map<string, Entry>();
   private readonly pending = new Map<string, Promise<Values[keyof Values]>>();
   private generation = {};
@@ -17,19 +17,15 @@ export default class WorkingTreeContentCache {
   private readonly maxEntries: number;
   private readonly maxBytes: number;
 
-  constructor(private readonly port: Port, options: { now?: () => number; ttl?: number; maxEntries?: number; maxBytes?: number } = {}) {
+  constructor(options: { now?: () => number; ttl?: number; maxEntries?: number; maxBytes?: number } = {}) {
     this.now = options.now ?? Date.now;
     this.ttl = options.ttl ?? 60 * 60 * 1000;
     this.maxEntries = options.maxEntries ?? 64;
     this.maxBytes = options.maxBytes ?? 32 * 1024 * 1024;
   }
 
-  private key(kind: keyof Values, request: WorkingTreeFileRequest, cwd: string) {
-    return JSON.stringify([kind, request.projectId, request.rootId, cwd, request.path, request.identity]);
-  }
-
-  private peek<K extends keyof Values>(kind: K, request: WorkingTreeFileRequest, cwd: string): Values[K] | null {
-    const key = this.key(kind, request, cwd);
+  peek<K extends keyof Values>(kind: K, identity: string): Values[K] | null {
+    const key = `${kind}\0${identity}`;
     const entry = this.entries.get(key);
     if (!entry) return null;
     if (entry.expires <= this.now()) { this.entries.delete(key); return null; }
@@ -39,15 +35,10 @@ export default class WorkingTreeContentCache {
     return entry.value as Values[K];
   }
 
-  peekDiff(request: WorkingTreeFileRequest, cwd: string) { return this.peek("diff", request, cwd); }
-  peekPreview(request: WorkingTreeFileRequest, cwd: string) { return this.peek("preview", request, cwd); }
-  readDiff(request: WorkingTreeFileRequest, cwd: string) { return this.read("diff", request, cwd, () => this.port.diff(request)); }
-  readPreview(request: WorkingTreeFileRequest, cwd: string) { return this.read("preview", request, cwd, () => this.port.preview(request)); }
-
-  private async read<K extends keyof Values>(kind: K, request: WorkingTreeFileRequest, cwd: string, fetch: () => Promise<Values[K]>): Promise<Values[K]> {
-    const cached = this.peek(kind, request, cwd);
+  async read<K extends keyof Values>(kind: K, identity: string, fetch: () => Promise<Values[K]>): Promise<Values[K]> {
+    const cached = this.peek(kind, identity);
     if (cached) return cached;
-    const key = this.key(kind, request, cwd);
+    const key = `${kind}\0${identity}`;
     const existing = this.pending.get(key);
     if (existing) return await existing as Values[K];
     const generation = this.generation;

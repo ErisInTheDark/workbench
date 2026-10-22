@@ -626,6 +626,8 @@ export default class WorkbenchWorkspaceRequestController {
       case "accountLimits":
       case "gitPeerCommits":
       case "gitHistory":
+      case "gitBranches":
+      case "gitStashes":
       case "projectFile":
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
@@ -733,6 +735,8 @@ export default class WorkbenchWorkspaceRequestController {
       case "gitPeers": return { ...base, kind: "gitPeers", data: null };
       case "gitPeerCommits": return { ...base, kind: "gitPeerCommits", data: null };
       case "gitHistory": return { ...base, kind: "gitHistory", data: null };
+      case "gitBranches": return { ...base, kind: "gitBranches", data: null };
+      case "gitStashes": return { ...base, kind: "gitStashes", data: null };
       case "accountLimits": return { ...base, kind: "accountLimits", data: null };
       case "stats": return { ...base, kind: "stats", refinement: "pending", data: null };
       case "threadVis": return { ...base, kind: "threadVis", data: null };
@@ -916,6 +920,26 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, { kind: "gitHistory",
           phase: fact?.phase ?? "unavailable", failure: fact?.failure ?? (source ? null : "Device unavailable."),
           data: fact?.value?.kind === "branchHistory" ? fact.value.data : null });
+        return;
+      }
+      case "gitBranches":
+      case "gitStashes": {
+        const source = this.options.sources.get(query.location.daemonId);
+        const kind = query.kind === "gitBranches" ? "branchList" as const : "stashList" as const;
+        const key = source ? JSON.stringify(query) : null;
+        if (interest.thread?.key !== key) {
+          interest.thread?.observation.release();
+          interest.thread = source && key ? {
+            key, observation: source.observe({ kind, projectId: query.location.projectId }, () => this.refresh(interest)),
+          } : null;
+        }
+        const fact = interest.thread?.observation.getSnapshot();
+        const envelope = { phase: fact?.phase ?? "unavailable" as const, failure: fact?.failure ?? (source ? null : "Device unavailable.") };
+        if (query.kind === "gitBranches") {
+          this.update(interest, { kind: "gitBranches", ...envelope, data: fact?.value?.kind === "branchList" ? fact.value.data : null });
+        } else {
+          this.update(interest, { kind: "gitStashes", ...envelope, data: fact?.value?.kind === "stashList" ? fact.value.data : null });
+        }
         return;
       }
       case "projectFile": {

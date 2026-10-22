@@ -1,36 +1,27 @@
-/* Exports: default WorkbenchGitRepositoryControl: repository navigation and branch metadata within the shell header; syncing
- * with the upstream and peer devices belongs to the sidebar git panel. */
+/* Exports: default WorkbenchGitRepositoryControl: pick which of a multi-root folder's repositories the changes view shows; absent for one repository. */
 "use client";
-import PrimaryButton from "../../ui/PrimaryButton";
-import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
-import WorkbenchTag from "../WorkbenchTag";
-import { ChevronDownIcon } from "../workbench-icons";
+import PressDragMenu from "../../ui/PressDragMenu";
+import { ChevronDownIcon, FolderGit2Icon } from "../workbench-icons";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
-export default function WorkbenchGitRepositoryControl () {
+export default function WorkbenchGitRepositoryControl() {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
-  const menu = useWorkbenchContextMenu();
-  return <span className="inline-flex max-w-full flex-wrap items-center gap-2">
-    {snapshot.data.repositories.length > 1 ? <PrimaryButton aria-label="Git repository" disabled={snapshot.busy}
-      onClick={event => {
-        const bounds = event.currentTarget.getBoundingClientRect();
-        menu.openContextMenu({
-          x: bounds.left, y: bounds.bottom, menu: {
-            id: "working-tree-repositories", label: "Git repository",
-            items: snapshot.data.repositories.map(repository => ({
-              id: repository.rootId, label: repository.label,
-              onSelect: () => state.selectRoot(repository.rootId),
-            })),
-          }
-        });
-      }}>
-      <span className="max-w-48 truncate">{state.repository?.label}</span><ChevronDownIcon size={14} />
-    </PrimaryButton> : null}
-    {snapshot.initialising && !state.repository ? <span aria-label="Loading repository" className="inline-block h-5 w-16 rounded-full workbench-skeleton" />
-      : <>
-        <WorkbenchTag>{state.repository?.branch ?? (state.repository?.head ? "Detached HEAD" : "Working-tree changes")}</WorkbenchTag>
-        {snapshot.result && <span>{snapshot.result.message}</span>}
-      </>}
-  </span>;
+  const repositories = snapshot.data.repositories;
+  if (repositories.length < 2) return null;
+  return <PressDragMenu label="Repository" align="start" disabled={snapshot.busy} triggerClassName="text-text"
+    items={repositories.map(repository => ({
+      id: repository.rootId, checked: repository.rootId === snapshot.rootId,
+      content: <span className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate">{repository.label}</span>
+        {repository.files.some(file => !file.ownerIds.length) ? <span className="text-xs tabular-nums text-fg/muted">
+          {repository.files.filter(file => !file.ownerIds.length).length}
+        </span> : null}
+      </span>,
+    }))}
+    onSelect={rootId => state.selectRoot(rootId)}>
+    <FolderGit2Icon size={16} className="shrink-0" />
+    <span className="min-w-0 max-w-48 truncate">{state.repository?.label}</span>
+    <ChevronDownIcon size={14} className="shrink-0 text-fg/muted" />
+  </PressDragMenu>;
 }

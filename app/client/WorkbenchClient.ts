@@ -675,6 +675,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     const explicit = route.logical?.browseLocation ?? route.logical?.location;
     // The url folder owns the browse scope; the draft channel keeps its own folder intent.
     const browseFolder = projectNavigator.folderForRoute(route) ?? null;
+    // A url folder resolves only once the folder catalogue has arrived; until then the route waits instead of browsing nothing.
+    if (route.folderAddress?.length && !browseFolder && !projectFacts()) return { ok: false, pending: true };
     selectRowsForRoute(route);
     if (route.view === "file") {
       selectFolder(browseFolder);

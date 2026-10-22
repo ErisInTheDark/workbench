@@ -1,18 +1,22 @@
 /*
  * Exports:
- * - default WorkbenchGitHistoryList: a folder's HEAD history, newest first, growing as it scrolls; an accent bar and arrow
- *   mark commits not on the upstream, and a send glyph marks commits a peer still lacks.
+ * - default WorkbenchGitHistoryList: a folder's HEAD history, newest first, growing as it scrolls; each row opens its commit
+ *   in a git tab, hovers a commit card and right-clicks a commit menu. An accent bar and arrow mark commits not on the
+ *   upstream, and a send glyph marks commits a peer lacks.
  */
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
-import { GIT_HISTORY_MAX_LIMIT, type GitHistory } from "workbench-shared/workbench/git/git-history-contracts";
+import { GIT_HISTORY_MAX_LIMIT, type GitHistory, type GitHistoryCommit } from "workbench-shared/workbench/git/git-history-contracts";
 import type { GitPeerAddress } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
-import { formatLongTimestamp, formatThreadRelativeTimestamp } from "../thread-view/thread-view-formatters";
+import { formatThreadRelativeTimestamp } from "../thread-view/thread-view-formatters";
+import Tooltip from "../../ui/Tooltip";
 import { ArrowUpIcon, SendHorizontalIcon } from "../workbench-icons";
 import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
+import type { GitMenuObject } from "./use-git-object-menu";
+import WorkbenchGitObjectTooltip from "./WorkbenchGitObjectTooltip";
 
 const PAGE = 50;
 
@@ -44,11 +48,48 @@ function useGitHistory(location: ProjectLocationReference, peers: readonly GitPe
   return state;
 }
 
-export default function WorkbenchGitHistoryList({ location, peers, href }: {
+/** Rows re-render only when their own commit, link or highlight changes, so switching tabs stays cheap in long histories. */
+const HistoryRow = memo(function HistoryRow({ location, commit, active, href, onMenu }: {
+  location: ProjectLocationReference;
+  commit: GitHistoryCommit;
+  active: boolean;
+  href: string | undefined;
+  onMenu(event: MouseEvent, object: GitMenuObject): void;
+}) {
+  const object = useMemo<GitMenuObject>(() => ({ kind: "commit", sha: commit.commit, named: Boolean(commit.subject) }),
+    [commit.commit, commit.subject]);
+  return <li>
+    <Tooltip placement="right" content={<WorkbenchGitObjectTooltip location={location} object={object} subject={commit.subject}
+      author={commit.author} at={commit.authoredAt} unpushed={commit.unpushed} unsent={commit.unsent} />}>
+      <a
+        aria-current={active ? "page" : undefined}
+        className={`
+          relative block rounded-lg py-1.5 pl-3 pr-2
+          ${active ? "bg-fg/5" : "hover:bg-fg/3"}
+          ${commit.unpushed ? "before:(absolute inset-y-2 left-0 w-[3px] rounded-full bg-accent content-[''])" : ""}
+        `}
+        href={href}
+        onContextMenu={event => onMenu(event, object)}
+      >
+        <span className="line-clamp-2 block text-[0.88rem] leading-snug text-text">{commit.subject}</span>
+        <span className="mt-0.5 flex items-center gap-1.5 text-[0.74rem] text-fg/muted">
+          <span className="truncate">{commit.author} · {formatThreadRelativeTimestamp(commit.authoredAt / 1000, Date.now())}</span>
+          {commit.unpushed ? <span className="inline-flex items-center text-accent"><ArrowUpIcon size={12} /></span> : null}
+          {commit.unsent ? <span className="inline-flex items-center text-accent"><SendHorizontalIcon size={12} /></span> : null}
+        </span>
+      </a>
+    </Tooltip>
+  </li>;
+});
+
+export default function WorkbenchGitHistoryList({ location, peers, href, activeSha, onMenu }: {
   location: ProjectLocationReference;
   peers: readonly GitPeerAddress[];
   /** Where a commit row leads. */
-  href: string | undefined;
+  href(sha: string): string | undefined;
+  /** The commit the focused git tab shows. */
+  activeSha: string | null;
+  onMenu(event: MouseEvent, object: GitMenuObject): void;
 }) {
   const [limit, setLimit] = useState(PAGE);
   const { data, loading, failure } = useGitHistory(location, peers, limit);
@@ -63,7 +104,6 @@ export default function WorkbenchGitHistoryList({ location, peers, href }: {
     observer.observe(element);
     return () => observer.disconnect();
   }, [loading, more]);
-  const now = Date.now();
   if (!data) {
     return failure ? <p className="m-0 px-3 py-1 text-[0.8rem] text-fg/muted">{failure}</p> : (
       <div aria-label="Loading commits" className="space-y-2 px-3 py-2">
@@ -74,31 +114,8 @@ export default function WorkbenchGitHistoryList({ location, peers, href }: {
   if (!data.commits.length) return <p className="m-0 px-3 py-1 text-[0.8rem] text-fg/muted">No commits yet.</p>;
   return (
     <ol aria-label="Commit history" className="m-0 list-none p-0">
-      {data.commits.map(commit => (
-        <li key={commit.commit}>
-          <a
-            className={`
-              relative block rounded-lg py-1.5 pl-3 pr-2 hover:bg-fg/3
-              ${commit.unpushed ? "before:(absolute inset-y-2 left-0 w-[3px] rounded-full bg-accent content-[''])" : ""}
-            `}
-            href={href}
-            title={`${commit.commit.slice(0, 12)} · ${formatLongTimestamp(commit.authoredAt)}`}
-          >
-            <span className="line-clamp-2 block text-[0.88rem] leading-snug text-text">{commit.subject}</span>
-            <span className="mt-0.5 flex items-center gap-1.5 text-[0.74rem] text-fg/muted">
-              <span className="truncate">
-                {commit.author} · {formatThreadRelativeTimestamp(commit.authoredAt / 1000, now)}
-              </span>
-              {commit.unpushed ? (
-                <span className="inline-flex items-center text-accent" title="Not on the upstream yet"><ArrowUpIcon size={12} /></span>
-              ) : null}
-              {commit.unsent ? (
-                <span className="inline-flex items-center text-accent" title="A peer device lacks this commit"><SendHorizontalIcon size={12} /></span>
-              ) : null}
-            </span>
-          </a>
-        </li>
-      ))}
+      {data.commits.map(commit => <HistoryRow key={commit.commit} location={location} commit={commit}
+        active={activeSha === commit.commit} href={href(commit.commit)} onMenu={onMenu} />)}
       {more ? (
         <li>
           <div ref={sentinel} aria-label="Loading older commits" className="space-y-2 px-3 py-2">

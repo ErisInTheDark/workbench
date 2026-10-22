@@ -79,7 +79,7 @@ import {
 import { useSettings } from "./workbench/use-settings";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
-import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
+import WorkbenchGitView from "./workbench/git/WorkbenchGitView";
 import WorkbenchFileView from "./workbench/layout/WorkbenchFileView";
 import WorkbenchSvgFileView from "./workbench/svg/WorkbenchSvgFileView";
 import WorkbenchShellTabs from "./workbench/shell-tabs/WorkbenchShellTabs";
@@ -249,6 +249,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     if (route.view === "settings") {
       return route;
     }
+    if (route.view === "git" && route.gitTarget?.folderAddress?.length) {
+      // The sidebar browses the git tab's own folder, so its git panel always describes what the tab shows.
+      return { ...route.projectId ? createProjectRoute(route.projectId) : createHomeRoute(), folderAddress: [...route.gitTarget.folderAddress] };
+    }
     if (route.view === "stats" || route.view === "git") {
       return route.projectId ? createProjectRoute(route.projectId) : createHomeRoute();
     }
@@ -271,6 +275,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     route.threadId,
     route.threadTarget,
     route.view,
+    route.gitTarget?.folderAddress?.join("/"),
   ]);
 
   useWorkbenchRouteIntent(workbenchClient, routeToApplyToControls, navigateToRoute);
@@ -876,7 +881,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               projectSourceError={workbenchMount.projectSourceError}
               renderThreadTooltipDetails={renderThreadTooltipDetails}
               route={route}
-              showGitView={showGitView}
               viewedProjectId={viewedProjectId}
             />
 
@@ -1094,17 +1098,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 {showGitView && selectionError ? (
                   <p role="alert" className="mx-auto max-w-content px-5 py-8 text-danger">{selectionError}</p>
                 ) : null}
-                {showGitView && !selectionError ? (
-                  !browseLocation ? (
-                    <p className="mx-auto max-w-content px-5 py-8 text-fg/muted">Choose a folder to see its working tree and files.</p>
-                  ) : (
-                    <WorkbenchDaemonClientContext.Provider value={selectedDaemon ?? null}>
-                      <WorkbenchDaemonAssetOriginContext.Provider value={selectedAssetSource}>
-                        <WorkbenchWorkingTreeView />
-                      </WorkbenchDaemonAssetOriginContext.Provider>
-                    </WorkbenchDaemonClientContext.Provider>
-                  )
-                ) : null}
+                {showGitView && !selectionError ? <WorkbenchGitView route={route} /> : null}
                 {routeView ? (
                   <routeView.Component key={route.view} route={route} />
                 ) : null}

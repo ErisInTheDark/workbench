@@ -1,21 +1,28 @@
 /*
  * Exports:
- * - default WorkbenchGitSidebar: the sidebar git panel for the browsed folder: one sync card (branch, upstream push, pull
- *   and send for each peer device), the unclaimed-changes row opening the git view, then the folder's commit history.
+ * - default WorkbenchGitSidebar: the sidebar git panel for the browsed folder: one sync card (branch menu, upstream push, pull
+ *   and send for each peer device), the unclaimed-changes row, the folder's stashes, then its commit history; each row opens
+ *   a git tab for what it names.
  */
 "use client";
-import { useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
+import type { GitPeerAddress } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { WorkbenchGitTarget, type WorkbenchGitObject } from "workbench-shared/workbench/navigation/git-route-target";
 import { useGitPeerState, type WorkbenchGitPeerOutcome } from "../../../workbench/git/WorkbenchGitPeerState";
-import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
+import { useWorkbenchNavigate, useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import PrimaryButton from "../../ui/PrimaryButton";
 import Tooltip from "../../ui/Tooltip";
+import { useWorkbenchClientController } from "../workbench-client-context";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListLabelClassName } from "../workbench-class-names";
-import { ArrowUpIcon, BotIcon, GitArcCleanClaimIcon, GitArcDirtyClaimIcon, GitGraphIcon } from "../workbench-icons";
-import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
+import { ArrowUpIcon, BotIcon, GitArcCleanClaimIcon, GitArcDirtyClaimIcon } from "../workbench-icons";
+import { useWorkbenchWorkspace, WorkbenchOperationsContext } from "../WorkbenchWorkspaceContext";
+import useGitObjectMenu, { type GitObjectOpen } from "./use-git-object-menu";
+import WorkbenchGitBranchMenu from "./WorkbenchGitBranchMenu";
 import WorkbenchGitHistoryList from "./WorkbenchGitHistoryList";
+import WorkbenchGitStashRows from "./WorkbenchGitStashRows";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 import WorkbenchGitPeerTransferButton from "./WorkbenchGitPeerTransferButton";
 
@@ -38,22 +45,29 @@ function blockedPrompt(outcome: WorkbenchGitPeerOutcome, branch: string | null) 
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+type OpenGit = (folder: ProjectLocationReference) => void;
+/** A valid object id no real object has, standing in for each row's sha in a shared href. */
+const SHA_SLOT = "0".repeat(40);
 
-/** Push to the upstream and pull or send for each peer folder, each shown only while it has something to move. */
-function SyncCard({ location, onAskAgent }: { location: ProjectLocationReference; onAskAgent: AskAgent }) {
+/** The branch, then push to the upstream and pull or send for each peer folder, each shown only while it has something to move. */
+function SyncCard({ location, onAskAgent, openGit }: { location: ProjectLocationReference; onAskAgent: AskAgent; openGit: OpenGit }) {
   const { state, snapshot } = useGitPeerState(useWorkbenchWorkspace(), location);
+  const client = useWorkbenchClientController();
   const data = snapshot.data;
   if (!state || !data) return null;
   const upstream = data.upstream ?? null;
   const remote = upstream?.name.split("/")[0] ?? "upstream";
+  const folderAt = (worktree: string) => {
+    const key = worktree.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+    return client.mounted?.projectNavigator.folderOptions().find(folder => folder.target.daemonId === location.daemonId
+      && folder.rootPath.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase() === key)?.target ?? null;
+  };
   return (
     <div className="mb-2 space-y-1 rounded-[0.9rem] border border-fg-alpha/16 bg-fg/3 p-2">
-      <div className="flex min-w-0 items-center gap-2 px-1 text-[0.8rem] text-fg/muted">
-        <GitGraphIcon size={14} />
-        <span className="min-w-0 max-w-[60%] truncate rounded-full bg-fg/8 px-2 py-0.5 text-[0.72rem] text-text">
-          {data.branch ?? "Detached HEAD"}
-        </span>
-        <span className="min-w-0 truncate">{upstream ? `tracking ${upstream.name}` : data.branch ? "no upstream" : ""}</span>
+      <div className="min-w-0 px-1 text-[0.8rem] text-fg/muted">
+        <WorkbenchGitBranchMenu location={location} current={data.branch}
+          openFolder={worktree => { const folder = folderAt(worktree); if (folder) openGit(folder); }}
+          openWorktree={openGit} />
       </div>
       {upstream?.ahead || snapshot.pushing ? (
         <div className={SYNC_ROW}>
@@ -141,26 +155,72 @@ function UnclaimedRow({ active, href }: { active: boolean; href: string | undefi
   );
 }
 
-export default function WorkbenchGitSidebar({ active, location, route, onAskAgent }: {
-  active: boolean; location: ProjectLocationReference; route: WorkbenchRoute; onAskAgent: AskAgent;
+export default function WorkbenchGitSidebar({ location, route, onAskAgent }: {
+  location: ProjectLocationReference;
+  /** The current route; git rows open tabs from it and highlight what its git tab shows. */
+  route: WorkbenchRoute;
+  onAskAgent: AskAgent;
 }) {
   const state = useWorkingTree();
   useEffect(() => state.acquireDemand("summary"), [state]);
   const projectHref = useWorkbenchProjectNavigation();
+  const navigate = useWorkbenchNavigate();
+  const mounted = useWorkbenchClientController().mounted;
+  const navigator = mounted?.projectNavigator;
+  const daemon = useMemo(() => mounted?.workspace.daemon({ kind: "folder", location }) ?? null,
+    [location.daemonId, location.projectId, mounted]);
   const { snapshot } = useGitPeerState(useWorkbenchWorkspace(), location);
-  const peers = (snapshot.data?.peers ?? []).filter(peer => peer.state === "current");
-  if (!state.projectId) return null;
-  const href = projectHref(route, { selection: "exact" });
+  const peers = useMemo(() => (snapshot.data?.peers ?? []).filter(peer => peer.state === "current"), [snapshot.data?.peers]);
+  // One href per object kind, built once per route; rows swap in their sha so thousands of rows cost no route work.
+  const templates = useMemo(() => {
+    if (!navigator) return null;
+    const build = (object: WorkbenchGitObject) => projectHref(navigator.gitRoute(route, location, object));
+    return { commit: build({ kind: "commit", sha: SHA_SLOT }), stash: build({ kind: "stash", sha: SHA_SLOT }), changes: build(WorkbenchGitTarget.changes) };
+  }, [location, navigator, projectHref, route]);
+  const commitHref = useCallback((sha: string) => templates?.commit?.replace(SHA_SLOT, sha), [templates?.commit]);
+  const stashHref = useCallback((sha: string) => templates?.stash?.replace(SHA_SLOT, sha), [templates?.stash]);
+  // The latest route is read at open time, so the callback (and every memoized row holding it) survives navigation.
+  const latest = useRef({ route, navigator });
+  latest.current = { route, navigator };
+  const openObject = useCallback<GitObjectOpen>((target, tab) => {
+    const { route: current, navigator: owner } = latest.current;
+    if (owner) navigate(owner.gitRoute(current, location, target), { tab });
+  }, [location, navigate]);
+  if (!state.projectId || !navigator || !daemon) return null;
+  const shown = route.view === "git" ? navigator.gitLocationFor(route) : null;
+  const here = shown?.daemonId === location.daemonId && shown.projectId === location.projectId;
+  const object = here ? route.gitTarget?.object ?? WorkbenchGitTarget.changes : null;
+  const openGit: OpenGit = folder => navigate(navigator.gitRoute(route, folder));
   return (
-    <section className="shrink-0 pb-3 pl-2">
-      <SyncCard location={location} onAskAgent={onAskAgent} />
-      <UnclaimedRow active={active} href={href} />
-      <WorkbenchGitHistoryList
-        href={href}
-        key={`${location.daemonId}/${location.projectId}`}
-        location={location}
-        peers={peers}
-      />
-    </section>
+    <WorkbenchOperationsContext.Provider value={daemon}>
+      <section className="shrink-0 pb-3 pl-2">
+        <SyncCard location={location} onAskAgent={onAskAgent} openGit={openGit} />
+        <UnclaimedRow active={object?.kind === "changes"} href={templates?.changes} />
+        <ObjectRows location={location} object={object} open={openObject} commitHref={commitHref} stashHref={stashHref} peers={peers} />
+      </section>
+    </WorkbenchOperationsContext.Provider>
   );
+}
+
+/** Stash and history rows, inside the folder's daemon so their menus and hover cards reach it. */
+function ObjectRows({ location, object, open, commitHref, stashHref, peers }: {
+  location: ProjectLocationReference;
+  object: WorkbenchGitObject | null;
+  open: GitObjectOpen;
+  commitHref(sha: string): string | undefined;
+  stashHref(sha: string): string | undefined;
+  peers: readonly GitPeerAddress[];
+}) {
+  const onMenu = useGitObjectMenu(location, open);
+  return <>
+    <WorkbenchGitStashRows location={location} activeSha={object?.kind === "stash" ? object.sha : null} href={stashHref} onMenu={onMenu} />
+    <WorkbenchGitHistoryList
+      activeSha={object?.kind === "commit" ? object.sha : null}
+      href={commitHref}
+      key={`${location.daemonId}/${location.projectId}`}
+      location={location}
+      onMenu={onMenu}
+      peers={peers}
+    />
+  </>;
 }

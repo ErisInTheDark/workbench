@@ -237,6 +237,27 @@ test("refreshes coalesce and changed/claimed files lose selection without accept
   assert.equal(state.getSnapshot().data.repositories.length, 1);
 });
 
+test("picks survive HEAD moving under them only while each file still holds the same change", async () => {
+  const file = (path: string, identity: string) => ({ path, oldPath: null, identity, status: "M" as const, baseBlob: null, blob: null,
+    mode: "100644", baseMode: "100644", partial: true, binary: false, additions: 1, deletions: 1, ownerIds: [] });
+  const data = repositoryData();
+  data.repositories[0]!.files = [file("kept", "same"), file("rebased", "before")];
+  const state = new WorkbenchWorkingTreeState("project", {
+    read: async () => structuredClone(data),
+    diff: async request => ({ identity: request.identity, patch: "", unavailable: null }),
+    preview: async request => ({ identity: request.identity, before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
+    mutate: async () => ({ status: "complete", commit: null, stash: null, message: "", warnings: [] }),
+  });
+  await state.refresh();
+  assert.equal(state.getSnapshot().selections.length, 2);
+  // Another thread's commit lands: HEAD moves, one file's base changed with it, the other is untouched.
+  data.repositories[0]!.head = "c".repeat(40);
+  data.repositories[0]!.files = [file("kept", "same"), file("rebased", "after")];
+  await state.refresh();
+  assert.deepEqual(state.getSnapshot().selections.map(selection => selection.path), ["kept"]);
+  state.dispose();
+});
+
 test("preview readers coalesce and a later file cannot receive an old preview", async () => {
   const data = repositoryData();
   data.repositories[0]!.files = [{

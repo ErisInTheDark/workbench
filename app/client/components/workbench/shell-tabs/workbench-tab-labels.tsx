@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchTabKindProps: the destination of one tab and the strip's frame facts.
  * - workbenchTabKinds: per-view tab renderers naming the destination with its icon, live state, project row and extra
- *   actions; draft tabs name their prompt and folder like their sidebar row, reading as working while they launch.
+ *   actions; draft tabs name their prompt and folder like their sidebar row, reading as working while they launch; git tabs
+ *   name their changes, commit or stash under their own folder.
  */
 "use client";
 
@@ -21,11 +22,14 @@ import { useThread } from "../use-thread";
 import WorkbenchProjectLabel from "../WorkbenchProjectLabel";
 import WorkbenchClientContext from "../workbench-client-context";
 import {
-  BookBookmarkIcon, DraftThreadIcon, FolderClosedIcon, GearIcon, GitGraphIcon, StatsIcon, WorkingThreadIcon,
+  BookBookmarkIcon, DraftThreadIcon, FolderClosedIcon, GearIcon, StatsIcon, WorkingThreadIcon,
 } from "../workbench-icons";
 import FileKindIcon from "../file-kind-icon";
 import { folderOf } from "../../../workbench/file/use-folder-entries";
 import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
+import Tooltip from "../../ui/Tooltip";
+import WorkbenchGitTabLabel from "../git/WorkbenchGitTabLabel";
+import { WorkbenchGitTarget } from "workbench-shared/workbench/navigation/git-route-target";
 import WorkbenchShellTab, { type WorkbenchShellTabFrameProps } from "./WorkbenchShellTab";
 
 export interface WorkbenchTabKindProps {
@@ -146,10 +150,21 @@ function ThreadTab({ frame, route }: WorkbenchTabKindProps) {
   );
 }
 
+/** A git tab names its object (changes, commit or stash, and focused file) under its own folder's project row. */
+function GitTab({ frame, route }: WorkbenchTabKindProps) {
+  const mounted = useContext(WorkbenchClientContext)?.mounted;
+  const location = mounted?.projectNavigator.gitLocationFor(route) ?? null;
+  const target = route.gitTarget;
+  return <WorkbenchGitTabLabel location={location} object={target?.object ?? WorkbenchGitTarget.changes} path={target?.path ?? null}
+    render={({ icon, label, tooltip }) => <WorkbenchShellTab {...frame} icon={icon} label={label}
+      project={<TabProjectRow location={location} />}
+      wrap={(element: TooltipTrigger) => <Tooltip content={tooltip} placement="bottom">{element}</Tooltip>} />} />;
+}
+
 /** Views that are tabs; home and project views are the selection itself. */
 export const workbenchTabKinds: Partial<Record<WorkbenchRouteView, ComponentType<WorkbenchTabKindProps>>> = {
   file: FileTab,
-  git: staticTab("Git", GitGraphIcon),
+  git: GitTab,
   "new-project": staticTab("New project", FolderClosedIcon),
   settings: staticTab("Settings", GearIcon),
   stats: staticTab("Statistics", StatsIcon),

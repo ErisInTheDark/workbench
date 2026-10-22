@@ -56,6 +56,7 @@ export interface WorkbenchDaemonRequestOwners {
   gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
   workingTree?: Pick<WorkbenchWorkingTreeController, "read" | "summary" | "diff" | "preview" | "mutate">;
   branchPositions?: Pick<import("../git/WorkbenchBranchPositionController").default, "push">;
+  gitCheckout?: Pick<import("../git/WorkbenchGitCheckoutController").default, "detail" | "diff" | "preview" | "mutate">;
   nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
   profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
   modelUsage: Pick<WorkbenchModelUsageStore, "read">;

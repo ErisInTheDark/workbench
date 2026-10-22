@@ -89,6 +89,30 @@ test("initial commit works while stale selections and publication failures prese
   assert.equal(await git.run(["show", "HEAD:new.txt"]), "new\n");
 });
 
+for (const mode of ["commit", "stash"] as const) {
+  test(`${mode} takes picked lines of a brand-new file and leaves the rest in the worktree`, async context => {
+    const fixture = await fixtures.copy(THREAD_GIT_BASE_FIXTURE);
+    context.after(fixture.dispose);
+    const git = await WorkbenchGitRepository.open(fixture.root);
+    const owner = new WorkbenchWorkingTreeRepository(git);
+    await fs.writeFile(path.join(fixture.root, "fresh.txt"), "keep\nlater\n");
+    const snapshot = await owner.read();
+    const file = snapshot.files.find(candidate => candidate.path === "fresh.txt")!;
+    assert.equal(file.partial, true);
+    const rows = describeWorkingTreeDiff((await owner.diff(snapshot, file)).patch).rows;
+    const result = await owner.mutate(snapshot, {
+      projectId: "project", rootId: "root", mode, expectedHead: snapshot.head, targetCommit: null,
+      title: "first line", description: "",
+      selections: [{ path: file.path, identity: file.identity, lineIds: rows.filter(row => row.text === "keep").map(row => row.id) }],
+    }, async () => {});
+    assert.equal(result.status, "complete");
+    const taken = mode === "commit" ? "HEAD" : result.stash!;
+    assert.equal(await git.run(["show", `${taken}:fresh.txt`]), "keep\n");
+    assert.equal(await fs.readFile(path.join(fixture.root, "fresh.txt"), "utf8"), mode === "commit" ? "keep\nlater\n" : "later\n");
+    if (mode === "stash") assert.match(await git.run(["stash", "list"]), /: On [^:]+: first line/u, "the stash records its branch");
+  });
+}
+
 test("submodule diffs do not require objects from the nested repository", async context => {
   const fixture = await fixtures.copy(THREAD_GIT_BASE_FIXTURE);
   context.after(fixture.dispose);

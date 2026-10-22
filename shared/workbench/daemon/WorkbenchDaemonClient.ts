@@ -291,6 +291,12 @@ class WorkbenchDaemonClient {
       preview: (params: WorkbenchDaemonParams<"git/working-tree/preview">) => this.request("git/working-tree/preview", params),
       mutate: (params: WorkbenchDaemonParams<"git/working-tree/mutate">) => this.request("git/working-tree/mutate", params),
     },
+    object: {
+      read: (params: WorkbenchDaemonParams<"git/object/read">) => this.request("git/object/read", params),
+      diff: (params: WorkbenchDaemonParams<"git/object/diff">) => this.request("git/object/diff", params),
+      preview: (params: WorkbenchDaemonParams<"git/object/preview">) => this.request("git/object/preview", params),
+    },
+    mutateRef: (params: WorkbenchDaemonParams<"git/ref/mutate">) => this.request("git/ref/mutate", params),
     arc: {
       compare: (params: WorkbenchDaemonParams<"git/arc/compare">) => this.requestGitArc("git/arc/compare", params),
       release: (params: WorkbenchDaemonParams<"git/arc/release">) => this.requestGitArc("git/arc/release", params),

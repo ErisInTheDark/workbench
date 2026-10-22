@@ -110,7 +110,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     files?: Pick<WorkbenchProjectFileController, "observe">;
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
-    branchPositions?: Pick<WorkbenchBranchPositionController, "observe" | "observeCommits" | "observeHistory">;
+    branchPositions?: Pick<WorkbenchBranchPositionController, "observe" | "observeCommits" | "observeHistory" | "observeBranches" | "observeStashes">;
     accountLimits?: Pick<WorkbenchAccountLimitsController, "observe">;
     vis?: Pick<WorkbenchVisController, "observe" | "readSnapshot">;
     /** Live per-thread provider facts; `subscribe` names threads whose runtime changed. */
@@ -267,6 +267,36 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         const opened = handle;
         observation.stopTree = () => opened.release();
         this.update(observation, { kind: "branchHistory", ...opened.read() });
+        break;
+      }
+      case "branchList": {
+        const positions = this.owners.branchPositions;
+        if (!positions) {
+          this.update(observation, { kind: "branchList", phase: "unavailable", failure: "Branches are unavailable.", data: null });
+          break;
+        }
+        let handle: ReturnType<typeof positions.observeBranches> | null = null;
+        handle = positions.observeBranches(request.query.projectId, () => {
+          if (handle) this.update(observation, { kind: "branchList", ...handle.read() });
+        });
+        const opened = handle;
+        observation.stopTree = () => opened.release();
+        this.update(observation, { kind: "branchList", ...opened.read() });
+        break;
+      }
+      case "stashList": {
+        const positions = this.owners.branchPositions;
+        if (!positions) {
+          this.update(observation, { kind: "stashList", phase: "unavailable", failure: "Stashes are unavailable.", data: null });
+          break;
+        }
+        let handle: ReturnType<typeof positions.observeStashes> | null = null;
+        handle = positions.observeStashes(request.query.projectId, () => {
+          if (handle) this.update(observation, { kind: "stashList", ...handle.read() });
+        });
+        const opened = handle;
+        observation.stopTree = () => opened.release();
+        this.update(observation, { kind: "stashList", ...opened.read() });
         break;
       }
       case "threadVis": {
@@ -451,6 +481,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "branchPosition": return { ...envelope, kind: "branchPosition", phase: "pending", failure: null, position: null };
       case "branchCommits": return { ...envelope, kind: "branchCommits", phase: "pending", failure: null, data: null };
       case "branchHistory": return { ...envelope, kind: "branchHistory", phase: "pending", failure: null, data: null };
+      case "branchList": return { ...envelope, kind: "branchList", phase: "pending", failure: null, data: null };
+      case "stashList": return { ...envelope, kind: "stashList", phase: "pending", failure: null, data: null };
       case "accountLimits": return { ...envelope, kind: "accountLimits", phase: "pending", failure: null, limits: null };
       case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, refinement: "pending", data: null };
       case "threadVis": return { ...envelope, kind: "threadVis", phase: "pending", failure: null, data: null };

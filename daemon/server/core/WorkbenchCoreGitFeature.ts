@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchCoreGitFeature: build Git arcs, thread Git selections, working-tree reads, Git peers and branch positions over shared worktree transitions.
+ * - default WorkbenchCoreGitFeature: build Git arcs, thread Git selections, working-tree reads, Git peers, branch positions
+ *   and checkout object reads and ref moves over shared worktree transitions.
  */
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
 import GitArcRegistry, { getGitArcLiveClaimPaths } from "../lib/workbench/git/GitArcRegistry";
@@ -11,6 +12,7 @@ import type WorkbenchStatsController from "../stats/WorkbenchStatsController";
 import type WorkbenchAgentContextController from "../agent/WorkbenchAgentContextController";
 import WorkbenchBranchPositionController from "../git/WorkbenchBranchPositionController";
 import WorkbenchGitArcFeature from "../git/WorkbenchGitArcFeature";
+import WorkbenchGitCheckoutController from "../git/WorkbenchGitCheckoutController";
 import WorkbenchGitPeerController from "../git/WorkbenchGitPeerController";
 import type WorkbenchProjectCatalogController from "../project/WorkbenchProjectCatalogController";
 import type WorkbenchSubagentFeature from "../subagents/WorkbenchSubagentFeature";
@@ -26,6 +28,7 @@ export default class WorkbenchCoreGitFeature {
   readonly workingTree: WorkbenchWorkingTreeController;
   readonly gitPeer: WorkbenchGitPeerController;
   readonly branchPositions: WorkbenchBranchPositionController;
+  readonly gitCheckout: WorkbenchGitCheckoutController;
 
   constructor(ports: {
     database: DaemonDatabaseRegistration;
@@ -99,19 +102,37 @@ export default class WorkbenchCoreGitFeature {
         waitForClaims: (attempt, signal) => gitArc.waitForClaimChanges(attempt, signal),
       },
     });
+    const readOwner = async (threadId: string, harness: string) => {
+      const identity = await identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+      if (!identity) return null;
+      const entry = await requireThreadState("ownership").getThreadEntry(identity.projectId, WorkbenchHarnessSchema.parse(harness), identity.threadId);
+      return entry ? { id: identity.threadId, projectId: identity.projectId, entry } : null;
+    };
     this.workingTree = new WorkbenchWorkingTreeController({
       resolveProject: projectId => projectCatalog.resolveProjectById(projectId),
       resolveIdentity: resolveGitArcIdentity,
-      readOwner: async (threadId, harness) => {
-        const identity = await identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
-        if (!identity) return null;
-        const entry = await requireThreadState("ownership").getThreadEntry(identity.projectId, WorkbenchHarnessSchema.parse(harness), identity.threadId);
-        return entry ? { id: identity.threadId, projectId: identity.projectId, entry } : null;
-      },
+      readOwner,
       transitions,
     });
     const resolveCheckoutRoot = async (projectId: string) => (await projectCatalog.resolveProjectById(projectId)).rootPath;
     this.gitPeer = new WorkbenchGitPeerController({ resolveRoot: resolveCheckoutRoot, transitions, warn });
     this.branchPositions = new WorkbenchBranchPositionController({ resolveRoot: resolveCheckoutRoot, warn });
+    this.gitCheckout = new WorkbenchGitCheckoutController({
+      resolveRoot: resolveCheckoutRoot,
+      resolveIdentity: resolveGitArcIdentity,
+      readOwner,
+      transitions,
+      discoverProject: async rootPath => await projectCatalog.discoverCreatedProject(rootPath),
+      commitThreads: async (projectId, sha) => {
+        const owners = [];
+        for (const threadId of await database.findThreadGitCommitOwners(ProjectIdSchema.parse(projectId), sha)) {
+          const identity = await identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+          const harness = identity?.bindings[0]?.harness;
+          const owner = harness ? await readOwner(threadId, harness) : null;
+          if (owner) owners.push(owner);
+        }
+        return owners;
+      },
+    });
   }
 }

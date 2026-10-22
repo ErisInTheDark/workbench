@@ -1,10 +1,11 @@
 /*
  * Exports:
  * - WorkingTreeDiffRow: stable selectable row and presentation pairing.
- * - describeWorkingTreeDiff: derive unified rows, chunks and split pairing from one patch.
+ * - describeWorkingTreeDiff/describeUnifiedDiff/WorkingTreeDiffModel: derive unified rows, chunks and split pairing from one
+ *   patch or one already parsed diff.
  * - buildSelectedContent: apply only selected change rows to a verified base.
  */
-import { parseUnifiedDiff, type UnifiedDiffLine } from "../thread/unified-diff";
+import { parseUnifiedDiff, type ParsedUnifiedDiff, type UnifiedDiffLine } from "../thread/unified-diff";
 
 export interface WorkingTreeDiffRow extends UnifiedDiffLine {
   id: string;
@@ -16,8 +17,13 @@ export interface WorkingTreeDiffRow extends UnifiedDiffLine {
   noNewline: boolean;
 }
 
+export type WorkingTreeDiffModel = ReturnType<typeof describeUnifiedDiff>;
+
 export function describeWorkingTreeDiff(patch: string) {
-  const parsed = parseUnifiedDiff(patch);
+  return describeUnifiedDiff(parseUnifiedDiff(patch));
+}
+
+export function describeUnifiedDiff(parsed: ParsedUnifiedDiff) {
   const rows: WorkingTreeDiffRow[] = [];
   parsed.hunks.forEach((hunk, hunkIndex) => {
     let chunkIndex = 0;

@@ -83,6 +83,8 @@
  * - GitArcCleanClaimIcon/GitArcDirtyClaimIcon: clean and dirty claim glyphs.
  * - GitArcWaitIcon, with SquareXIcon/GitArcConflictIcon: waiting and conflict glyphs.
  * - GitGraphIcon: sidebar Git section graph glyph.
+ * - GitBranchIcon/GitCommitIcon/GitStashIcon: git tab branch, commit and stash glyphs.
+ * - PilcrowIcon: diff whitespace toggle.
  * - GitMergeIcon/GitRebaseIcon/GitFastForwardIcon: device sync history modes.
  * - ShieldQuestionIcon/ShieldCheckIcon/ShieldCogCornerIcon/ShieldMinusIcon: tool approval requested, approved, auto-approved and denied glyphs.
  * - ShieldAlertIcon: skip-approvals mode glyph.
@@ -151,6 +153,26 @@ export function GitGraphIcon(props: IconProps) {
     <circle cx="5" cy="6" r="3" /><path d="M5 9v6" /><circle cx="5" cy="18" r="3" />
     <path d="M12 3v18" /><circle cx="19" cy="6" r="3" /><path d="M16 15.7A9 9 0 0 0 19 9" />
   </OutlinedIcon>;
+}
+
+export function GitBranchIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <line x1="6" x2="6" y1="3" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" />
+  </OutlinedIcon>;
+}
+
+export function GitCommitIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><circle cx="12" cy="12" r="3" /><line x1="3" x2="9" y1="12" y2="12" /><line x1="15" x2="21" y1="12" y2="12" /></OutlinedIcon>;
+}
+
+export function GitStashIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <rect width="20" height="5" x="2" y="3" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /><path d="M10 12h4" />
+  </OutlinedIcon>;
+}
+
+export function PilcrowIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M13 4v16" /><path d="M17 4v16" /><path d="M19 4H9.5a4.5 4.5 0 0 0 0 9H13" /></OutlinedIcon>;
 }
 
 export function GitMergeIcon(props: IconProps) {

@@ -565,17 +565,33 @@ test("an own folder is implicit only for its sole selected project and survives 
     const opened = navigation.readRoute(navigation.href(git)!);
     assert.equal(opened.view, "git");
     assert.deepEqual(opened.selectedProjectIds, current.selectedProjectIds);
-    assert.deepEqual(navigation.folderForRoute(opened), folder.target);
-    assert.equal(opened.folderAddress?.length ?? 0, current === single ? 0 : 1);
+    assert.deepEqual(navigation.gitLocationFor(opened), folder.target);
   }
   const unscoped = navigation.readRoute(navigation.href(navigation.gitRoute(multi))!);
   assert.deepEqual(unscoped.selectedProjectIds, [first, second]);
-  assert.equal(navigation.folderForRoute(unscoped), null);
-  // Home threads can browse their owner's folder without narrowing the project list.
-  const home = navigation.gitRoute(createHomeThreadRoute("repo", "thread"), folder.target);
-  const homeOpened = navigation.readRoute(navigation.href(home)!);
-  assert.equal(homeOpened.selectedProjectIds, null);
-  assert.deepEqual(navigation.folderForRoute(homeOpened), folder.target);
+  assert.equal(navigation.gitLocationFor(unscoped), null, "no folder is guessed for a multi-project selection");
+});
+
+test("a git tab names its own folder, so opening it from any route never loses the folder", () => {
+  const { navigation, worktree, workbenchOnOne } = createFolderNavigation();
+  // A home thread's route selects no folder of its own; the git tab must still show the thread's folder.
+  for (const current of [createHomeThreadRoute("repo", "thread"), createHomeRoute()]) {
+    for (const location of [worktree.target, workbenchOnOne.target]) {
+      const opened = navigation.readRoute(navigation.href(navigation.gitRoute(current, location))!);
+      assert.equal(opened.view, "git");
+      assert.deepEqual(navigation.gitLocationFor(opened), location);
+    }
+  }
+  const sha = "a".repeat(40);
+  const commit = navigation.gitRoute(createHomeRoute(), worktree.target, { kind: "commit", sha }, "src/a.ts");
+  const tab = navigation.tabFor(commit)!;
+  assert.equal(tab, `git/%2Bconvex-lab/*/commit/${sha}/src/a.ts`);
+  const reopened = navigation.readRoute(navigation.href(navigation.routeForTab(tab), createHomeRoute(), "inherit")!);
+  assert.deepEqual(navigation.gitLocationFor(reopened), worktree.target);
+  assert.deepEqual(reopened.gitTarget?.object, { kind: "commit", sha });
+  assert.equal(reopened.gitTarget?.path, "src/a.ts");
+  assert.notEqual(navigation.tabFor(navigation.gitRoute(createHomeRoute(), workbenchOnOne.target)), navigation.tabFor(navigation.gitRoute(createHomeRoute(), worktree.target)),
+    "two folders' git tabs are different tabs");
 });
 
 test("folder selection rides hrefs and stays scoped to its owning project", () => {

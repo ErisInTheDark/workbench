@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchBranchPositionController: own demanded branch positions, peer commit previews and HEAD history, refreshed
- *   by one checkout ref watcher, and pushes to a branch's upstream.
+ * - default WorkbenchBranchPositionController: own demanded checkout ref facts (branch positions, peer commit previews,
+ *   HEAD history, local branches and stashes), refreshed by one checkout ref watcher, and pushes to a branch's upstream.
  * - WorkbenchBranchPositionFact: one observation's freshness, failure and position.
  */
 import path from "node:path";
@@ -10,6 +10,7 @@ import type { GitHistoryRequest } from "workbench-shared/workbench/git/git-histo
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 import watchGitRefs from "../lib/workbench/git/git-ref-watch";
 import WorkbenchGitPeerTransport from "../lib/workbench/git/WorkbenchGitPeerTransport";
+import WorkbenchGitRefs from "../lib/workbench/git/WorkbenchGitRefs";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 
 export interface WorkbenchBranchPositionFact {
@@ -46,7 +47,7 @@ export default class WorkbenchBranchPositionController {
   }) {}
 
   observe(projectId: string, peers: readonly GitPeerAddress[], listener: () => void) {
-    const handle = this.observeValue(projectId, repository => new WorkbenchGitPeerTransport(repository).position(peers), listener);
+    const handle = this.observeValue(projectId, repository => new WorkbenchGitRefs(repository).position(peers), listener);
     return { read: (): WorkbenchBranchPositionFact => {
       const { data, ...fact } = handle.read();
       return { ...fact, position: data };
@@ -58,7 +59,15 @@ export default class WorkbenchBranchPositionController {
   }
 
   observeHistory(projectId: string, request: GitHistoryRequest, listener: () => void) {
-    return this.observeValue(projectId, repository => new WorkbenchGitPeerTransport(repository).history(request), listener);
+    return this.observeValue(projectId, repository => new WorkbenchGitRefs(repository).history(request), listener);
+  }
+
+  observeBranches(projectId: string, listener: () => void) {
+    return this.observeValue(projectId, repository => new WorkbenchGitRefs(repository).branches(), listener);
+  }
+
+  observeStashes(projectId: string, listener: () => void) {
+    return this.observeValue(projectId, repository => new WorkbenchGitRefs(repository).stashes(), listener);
   }
 
   /** Pushing moves the upstream tracking ref, so the ref watcher refreshes every observer afterwards. */
@@ -66,7 +75,7 @@ export default class WorkbenchBranchPositionController {
     if (this.closed) throw new Error("Branch positions are reloading.");
     const repository = await this.open(projectId);
     if (!repository) throw new Error("This folder is not a Git checkout.");
-    return await new WorkbenchGitPeerTransport(repository).push(signal);
+    return await new WorkbenchGitRefs(repository).push(signal);
   }
 
   private observeValue<Value>(projectId: string, load: (repository: WorkbenchGitRepository) => Promise<Value>, listener: () => void) {

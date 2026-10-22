@@ -1,11 +1,13 @@
 /*
  * Exports:
- * - projectRequestHandlers: daemon handlers for project trees, files, stores, discovery, creation, file indexes, working trees, pushes, search,
+ * - projectRequestHandlers: daemon handlers for project trees, files, stores, discovery, creation, file indexes, working trees,
+ *   commit and stash reads, ref moves, pushes, search,
  *   native file actions, and the agent and skill catalogues.
  */
 import type { OpenFileInEditorRequest, ResolveExternalFileLinkRootsRequest, RevealProjectEntryRequest } from "workbench-shared/types";
 import { WorkingTreeFileRequestSchema, WorkingTreeMutationSchema, WorkingTreeReadRequestSchema } from "workbench-shared/workbench/git/working-tree-contracts";
 import { GitPushRequestSchema } from "workbench-shared/workbench/git/git-history-contracts";
+import { GitObjectFileRequestSchema, GitObjectRequestSchema, GitRefMutationSchema } from "workbench-shared/workbench/git/git-object-contracts";
 import { ProjectCreateRequestSchema, ProjectFolderListRequestSchema } from "workbench-shared/workbench/project/project-creation";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
@@ -33,6 +35,16 @@ async function projectState(method: keyof typeof PROJECT_STATE_METHODS, params: 
 function workingTree({ owners }: DaemonRequestContext) {
   if (!owners.workingTree) throw new Error("Working tree is unavailable.");
   return owners.workingTree;
+}
+
+function gitCheckout({ owners }: DaemonRequestContext) {
+  if (!owners.gitCheckout) throw new Error("Git history is unavailable.");
+  return owners.gitCheckout;
+}
+
+function parsed<Value>(result: { success: true; data: Value } | { success: false }, message: string): Value {
+  if (!result.success) throw new InvalidParamsError(message);
+  return result.data;
 }
 
 function projectCreation({ owners }: DaemonRequestContext) {
@@ -150,6 +162,21 @@ export const projectRequestHandlers = defineDaemonRequestHandlers({
   "git/working-tree/mutate": async (params, context) => {
     const tree = workingTree(context);
     return await tree.mutate(WorkingTreeMutationSchema.parse(params));
+  },
+  "git/object/read": async (params, context) => {
+    const request = parsed(GitObjectRequestSchema.safeParse(params), "A commit or stash is required.");
+    return await gitCheckout(context).detail(request.projectId, request.object);
+  },
+  "git/object/diff": async (params, context) => {
+    const request = parsed(GitObjectFileRequestSchema.safeParse(params), "A commit or stash file is required.");
+    return await gitCheckout(context).diff(request.projectId, request.object, request.path);
+  },
+  "git/object/preview": async (params, context) => {
+    const request = parsed(GitObjectFileRequestSchema.safeParse(params), "A commit or stash file is required.");
+    return await gitCheckout(context).preview(request.projectId, request.object, request.path);
+  },
+  "git/ref/mutate": async (params, context) => {
+    return await gitCheckout(context).mutate(parsed(GitRefMutationSchema.safeParse(params), "Invalid Git action."));
   },
   "git/push": async (params, { owners }) => {
     if (!owners.branchPositions) throw new Error("Pushing is unavailable.");

@@ -8,6 +8,7 @@ import {
   formatWorkbenchTab, parseWorkbenchRouteFromLocation, withProjectSelection, withFileTabs, WORKBENCH_ROUTE_MARKER,
   type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
+import { WorkbenchGitTarget, type WorkbenchGitObject } from "workbench-shared/workbench/navigation/git-route-target";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -173,13 +174,20 @@ export default class WorkbenchProjectNavigation {
     return implicit?.daemonId === target.daemonId && implicit.projectId === target.projectId ? null : address;
   }
 
-  /** Open Git without replacing the project selection or its url folder with a physical project id. */
-  gitRoute(route: WorkbenchRoute, location: ProjectLocationReference | null = this.folderForRoute(route)): WorkbenchRoute {
+  /**
+   * Open a git tab on `location` (default: the route's folder) without replacing the project selection. The tab names
+   * its folder itself, so it never depends on which folder the destination route would select implicitly.
+   */
+  gitRoute(route: WorkbenchRoute, location: ProjectLocationReference | null = this.folderForRoute(route),
+    object: WorkbenchGitObject = WorkbenchGitTarget.changes, path: string | null = null): WorkbenchRoute {
+    const address = location ? ProjectFolderAddress.forFolder(this.folders, location) : [];
+    const selection = createProjectSelectionRoute(route.selectedProjectIds);
     return this.resolveRoute({
-      ...createProjectSelectionRoute(route.selectedProjectIds),
-      folderAddress: route.folderAddress?.length ? route.folderAddress
-        : location ? this.folderAddressFor(location, route) : route.folderAddress,
+      ...selection,
+      // The sidebar follows the tab's folder, so its git panel always describes what the tab shows.
+      folderAddress: location ? this.folderAddressFor(location, selection) : route.folderAddress,
       view: "git",
+      gitTarget: { folderAddress: address.length ? address : null, object, path },
     });
   }
 
@@ -220,6 +228,14 @@ export default class WorkbenchProjectNavigation {
     return resolved.logical?.location ?? this.folderForRoute(resolved);
   }
 
+  /** A git tab's own folder, else the route's sidebar folder. */
+  gitLocationFor(route: WorkbenchRoute): ProjectLocationReference | null {
+    const resolved = this.resolveRoute(route);
+    const address = resolved.gitTarget?.folderAddress;
+    if (address?.length) return this.folderForAddress(address);
+    return resolved.logical?.browseLocation ?? resolved.logical?.location ?? this.folderForRoute(resolved);
+  }
+
   /** `inherit` keeps the current sidebar selection for every destination except home and project views, which are selections. */
   href(route: WorkbenchRoute, current?: WorkbenchRoute,
     selection: "inherit" | "exact" = "exact"): string | undefined {
@@ -254,6 +270,22 @@ export default class WorkbenchProjectNavigation {
     let withFolder = intent.folderAddress === undefined && selection === "inherit" && current?.folderAddress?.length
       ? { ...intent, folderAddress: [...current.folderAddress] }
       : intent;
+    // A git tab names its folder, so two git tabs on two folders stay apart, and the sidebar follows the tab's folder.
+    if (withFolder.view === "git") {
+      const location = this.gitLocationFor(withFolder);
+      const address = location ? ProjectFolderAddress.forFolder(this.folders, location) : [];
+      if (location && address.length) {
+        withFolder = {
+          ...withFolder,
+          folderAddress: this.folderAddressFor(location, withFolder),
+          gitTarget: {
+            object: withFolder.gitTarget?.object ?? WorkbenchGitTarget.changes,
+            path: withFolder.gitTarget?.path ?? null,
+            folderAddress: address,
+          },
+        };
+      }
+    }
     // A file tab names its own folder, so its tab reads the same under any sidebar folder or selection. A folder the
     // picker does not list yet has no address, and only opens as the sidebar's own folder.
     if (fileLocation) {

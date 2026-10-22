@@ -89,6 +89,11 @@
   background-color: color-mix(in srgb, --value(--default(var(--app-bg-solid))) --modifier(--opacity-*), transparent);
 }
 
+/* Bold selected fills: the vivid accent sliding slightly round the hue wheel; solid fills beside it use bg-accent-vivid. */
+@utility bg-accent-shift {
+  background-image: linear-gradient(to right, --theme(--color-accent-vivid), oklch(from --theme(--color-accent-vivid) l c calc(h + 15)));
+}
+
 /* Hue degrees: text-hue-210, border-hue-300/35, bg-hue-(--identity-hue)/22.
  * Set --hue-chroma to a percentage to override 90%; lightness follows the theme.
  * Keep each colour local so text, border, and background can use different hues.

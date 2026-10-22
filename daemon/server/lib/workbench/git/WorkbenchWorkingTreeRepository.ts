@@ -8,10 +8,12 @@ import type {
   WorkingTreeDiff, WorkingTreeFile, WorkingTreeMutation, WorkingTreePreview,
   WorkingTreeRepository, WorkingTreeResult,
 } from "workbench-shared/workbench/git/working-tree-contracts";
+import type { GitObjectFile } from "workbench-shared/workbench/git/git-object-contracts";
 import { buildSelectedContent, describeWorkingTreeDiff } from "workbench-shared/workbench/git/working-tree-selection";
 import { WORKING_TREE_STASH_MESSAGE } from "workbench-shared/workbench/git/working-tree-message";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
+import { listTreeFileChanges } from "./git-tree-file-changes";
 
 const TEXT_LIMIT = 1_000_000;
 const IMAGE_LIMIT = 4_000_000;
@@ -19,7 +21,6 @@ const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
   ".webp": "image/webp", ".svg": "image/svg+xml", ".avif": "image/avif", ".bmp": "image/bmp", ".ico": "image/x-icon",
 };
-const zeroToNull = (value: string) => /^0+$/u.test(value) ? null : value;
 
 export default class WorkbenchWorkingTreeRepository {
   constructor(readonly git: WorkbenchGitRepository) {}
@@ -33,42 +34,11 @@ export default class WorkbenchWorkingTreeRepository {
 
   async read(): Promise<WorkingTreeRepository> {
     const { head, tree } = await this.git.writeWorktreeSnapshot();
-    const base = await this.git.resolveTree(head);
-    const raw = (await this.git.run(["diff", "--raw", "--no-abbrev", "-z", "-M", base, tree])).split("\0");
-    const counts = (await this.git.run(["diff", "--numstat", "-z", "-M", base, tree])).split("\0");
-    const stats = new Map<string, { additions: number | null; deletions: number | null }>();
-    for (let i = 0; i < counts.length && counts[i]; i++) {
-      const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/u.exec(counts[i]!);
-      if (!match) throw new Error("Invalid Git change counts.");
-      let name = match[3]!;
-      if (!name) { i++; name = counts[++i]!; }
-      stats.set(name, {
-        additions: match[1] === "-" ? null : Number(match[1]),
-        deletions: match[2] === "-" ? null : Number(match[2]),
-      });
-    }
-    const files: WorkingTreeFile[] = [];
-    for (let i = 0; i < raw.length && raw[i]; i++) {
-      const match = /^:(\d{6}) (\d{6}) ([a-f0-9]+) ([a-f0-9]+) ([AMDRT])\d*$/u.exec(raw[i]!);
-      if (!match) throw new Error("Unsupported Git change metadata.");
-      const oldName = raw[++i]!;
-      const status = match[5] as WorkingTreeFile["status"];
-      const name = status === "R" ? raw[++i]! : oldName;
-      const count = stats.get(name);
-      if (!count) throw new Error("Git change counts are missing.");
-      const baseBlob = zeroToNull(match[3]!);
-      const blob = zeroToNull(match[4]!);
-      const baseMode = match[1]!;
-      const mode = match[2]!;
-      const binary = count.additions === null;
-      files.push({
-        path: name, oldPath: status === "R" ? oldName : null, status,
-        baseBlob, blob, baseMode, mode, ...count, binary,
-        identity: `${oldName}\0${name}\0${baseMode}:${baseBlob}:${mode}:${blob}`,
-        partial: status === "M" && baseMode === mode && mode.startsWith("100") && !binary,
-        ownerIds: [],
-      });
-    }
+    const files: WorkingTreeFile[] = (await listTreeFileChanges(this.git, await this.git.resolveTree(head), tree)).map(file => ({
+      ...file, ownerIds: [],
+      // A new file's base is empty, so its lines pick exactly like a modified file's.
+      partial: (file.status === "M" && file.baseMode === file.mode || file.status === "A") && file.mode.startsWith("100") && !file.binary,
+    }));
     const branchRef = await this.git.symbolicHead();
     const amend = head ? await new WorkbenchGitHistoryRewriter(this.git).classifyAmendability(head, { refresh: false }) : null;
     return {
@@ -105,7 +75,8 @@ export default class WorkbenchWorkingTreeRepository {
     catch { throw new Error("File is not UTF-8 text. Use whole-file selection."); }
   }
 
-  async diff(snapshot: WorkingTreeRepository, file: WorkingTreeFile): Promise<WorkingTreeDiff> {
+  /** `snapshot.head` names the base commit (null: empty tree) and `snapshot.tree` the changed side, so commits reuse it. */
+  async diff(snapshot: Pick<WorkingTreeRepository, "head" | "tree">, file: GitObjectFile | WorkingTreeFile): Promise<WorkingTreeDiff> {
     if (file.binary || file.mode === "160000" || file.baseMode === "160000") {
       return { identity: file.identity, patch: "", unavailable: "Binary or submodule change. Whole-file selection is available." };
     }
@@ -121,7 +92,7 @@ export default class WorkbenchWorkingTreeRepository {
     return { identity: file.identity, patch, unavailable: null };
   }
 
-  async preview(file: WorkingTreeFile): Promise<WorkingTreePreview> {
+  async preview(file: GitObjectFile | WorkingTreeFile): Promise<WorkingTreePreview> {
     const mime = IMAGE_TYPES[path.extname(file.path).toLowerCase()] ?? "text/plain";
     const encoding = mime.startsWith("image/") ? "base64" : "text";
     const limit = encoding === "base64" ? IMAGE_LIMIT : TEXT_LIMIT;
@@ -221,7 +192,9 @@ export default class WorkbenchWorkingTreeRepository {
     if (request.mode === "stash") {
       const indexCommit = await this.git.createCommitFromTree(base, [snapshot.head!], "index for selected stash");
       const stash = await this.git.createCommitFromTree(tree, [snapshot.head!, indexCommit], message || WORKING_TREE_STASH_MESSAGE);
-      await this.git.run(["stash", "store", "-m", message || WORKING_TREE_STASH_MESSAGE, stash]);
+      // Git's own `On <branch>:` form, so stash lists know which branch a stash belongs to.
+      const branch = (await this.git.symbolicHead())?.replace(/^refs\/heads\//u, "") ?? "(no branch)";
+      await this.git.run(["stash", "store", "-m", `On ${branch}: ${message || WORKING_TREE_STASH_MESSAGE}`, stash]);
       result.stash = stash;
     }
     try {

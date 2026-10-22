@@ -108,6 +108,8 @@
   --color-text-strong: color-mix(in srgb, currentColor, light-dark(black, white) 60%);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
+  /* The accent a touch more saturated, for bold selected fills. */
+  --color-accent-vivid: oklch(from var(--accent) l calc(c * 1.2) h);
   --color-danger: var(--danger);
   --color-success: var(--success);
   --color-approval-skip: color-mix(in oklch, oklch(76.9% 0.188 70.08) 55%, var(--text));

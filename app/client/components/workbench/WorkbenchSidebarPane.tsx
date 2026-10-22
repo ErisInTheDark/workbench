@@ -59,7 +59,7 @@ export default function WorkbenchSidebarPane({
   browseSessionController, collapsed, createThread, currentFilePath,
   onFileDeleted, onOpenQualifiedThread, onOpenThread,
   onPresentationDraftDeleted, onThreadSettled, projectSourceError,
-  renderThreadTooltipDetails, route, showGitView,
+  renderThreadTooltipDetails, route,
   viewedProjectId,
 }: {
   activeProjectId: ActionsProps["projectId"];
@@ -80,7 +80,6 @@ export default function WorkbenchSidebarPane({
   projectSourceError: string;
   renderThreadTooltipDetails: ThreadSidebarProps["renderThreadTooltipDetails"];
   route: WorkbenchRoute;
-  showGitView: boolean;
   viewedProjectId: string;
 }) {
   const client = useWorkbenchClientController();
@@ -108,7 +107,6 @@ export default function WorkbenchSidebarPane({
   // A daemon project's workspace is agent scratch: no working tree or explorer to browse.
   const folderOptions = (navigator?.folderOptions([...selection.selectionProjectIds]) ?? [])
     .filter(folder => folder.project?.kind !== "daemon");
-  const gitRoute = navigator?.gitRoute(route, browseLocation) ?? null;
   const projects = (
     <ProjectSidebar
       activeProjectId={viewedProjectId}
@@ -216,9 +214,9 @@ export default function WorkbenchSidebarPane({
             <WorkbenchBrowseSessionsSection controller={browseSessionController} />
           </> : null}
         </WorkbenchThreadSidebarActionsProvider>
-        {panel === "git" ? folder(location => gitRoute ? (
-          <WorkbenchGitSidebar active={showGitView} location={location} route={gitRoute} onAskAgent={askAgentWithReferences} />
-        ) : null) : null}
+        {panel === "git" ? folder(location => (
+          <WorkbenchGitSidebar location={location} route={route} onAskAgent={askAgentWithReferences} />
+        )) : null}
         {panel === "explorer" ? folder(() => (
           <WorkbenchExplorerSection currentPath={currentFilePath} onFileDeleted={onFileDeleted} route={route} />
         )) : null}

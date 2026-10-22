@@ -1,17 +1,27 @@
 /*
  * Exports:
- * - default WorkbenchWorkingTreeState: own selected-project refresh, the pushed unclaimed-changes summary, selection freshness and mutation drafts.
+ * - default WorkbenchWorkingTreeState: own selected-project refresh, the pushed unclaimed-changes summary, selection freshness and
+ *   commit, amend, stash and new-branch drafts.
  * - WorkingTreeDraft/WorkingTreeStateSnapshot: observable browser state.
  * - WorkingTreeSummarySource: opens the daemon-pushed summary observation.
  */
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import type { WorkingTreeDiff, WorkingTreeMutation, WorkingTreePreview, WorkingTreeRead, WorkingTreeRepository, WorkingTreeResult, WorkingTreeSelection, WorkingTreeSummary } from "workbench-shared/workbench/git/working-tree-contracts";
+import type { WorkingTreeDiff, WorkingTreeFileRequest, WorkingTreeMutation, WorkingTreePreview, WorkingTreeRead, WorkingTreeRepository, WorkingTreeResult, WorkingTreeSelection, WorkingTreeSummary } from "workbench-shared/workbench/git/working-tree-contracts";
 import { describeWorkingTreeDiff } from "workbench-shared/workbench/git/working-tree-selection";
-import WorkingTreeContentCache from "./WorkingTreeContentCache";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import GitContentCache from "./GitContentCache";
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 
-export interface WorkingTreeDraft { mode: "commit" | "amend" | "stash"; title: string; description: string; targetCommit: string | null }
+export interface WorkingTreeDraft {
+  /** `branch` commits the selection onto a new branch made at HEAD. */
+  mode: "commit" | "amend" | "stash" | "branch";
+  title: string;
+  description: string;
+  targetCommit: string | null;
+  /** The new branch's name in `branch` mode. */
+  branch: string;
+}
 export interface WorkingTreeStateSnapshot {
   data: WorkingTreeRead;
   summary: WorkingTreeSummary;
@@ -38,7 +48,8 @@ export type WorkingTreeSummarySource = (changed: () => void) => {
   getSnapshot(): { phase: WorkspaceSourcePhase; failure: string | null; summary: WorkingTreeSummary | null };
   release(): void;
 };
-const blankDraft = (): WorkingTreeDraft => ({ mode: "commit", title: "", description: "", targetCommit: null });
+type RefPort = Pick<WorkbenchDaemonClient["git"], "mutateRef">;
+const blankDraft = (): WorkingTreeDraft => ({ mode: "commit", title: "", description: "", targetCommit: null, branch: "" });
 
 export default class WorkbenchWorkingTreeState {
   private snapshot: WorkingTreeStateSnapshot = {
@@ -50,9 +61,10 @@ export default class WorkbenchWorkingTreeState {
   private readonly listeners = new Set<() => void>();
   private readonly drafts = new Map<string, WorkingTreeDraft>();
   private readonly reviews = new Map<string, { repository: WorkingTreeRepository; selections: WorkingTreeSelection[] }>();
-  private readonly content: WorkingTreeContentCache | null;
+  private readonly content: GitContentCache | null;
   private refreshWork: { lifetime: object; promise: Promise<void> } | null = null;
   private summaryObservation: ReturnType<WorkingTreeSummarySource> | null = null;
+  private lastSummary: WorkingTreeSummary | null = null;
   private statusRequest: object = {};
   private readonly demands = new Map<object, "summary" | "full">();
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -60,8 +72,18 @@ export default class WorkbenchWorkingTreeState {
   private lifetime: object | null = {};
   private contentRequest: object | null = null;
   private previewWork: { token: object; promise: Promise<void> } | null = null;
-  constructor(readonly projectId: string, private readonly port: Port | null, private readonly summarySource: WorkingTreeSummarySource | null = null) {
-    this.content = port ? new WorkingTreeContentCache(port) : null;
+  constructor(
+    readonly projectId: string,
+    private readonly port: Port | null,
+    private readonly summarySource: WorkingTreeSummarySource | null = null,
+    private readonly refs: RefPort | null = null,
+  ) {
+    this.content = port ? new GitContentCache() : null;
+  }
+
+  /** Working-tree content is immutable per file identity within one checkout. */
+  private contentKey(request: WorkingTreeFileRequest, cwd: string) {
+    return JSON.stringify([request.projectId, request.rootId, cwd, request.path, request.identity]);
   }
   readonly getSnapshot = () => this.snapshot;
   readonly subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -131,11 +153,15 @@ export default class WorkbenchWorkingTreeState {
     const summaryStatus = fact.phase === "unavailable" ? "unavailable" as const
       : fact.phase === "failed" ? "error" as const
         : fact.summary ? fact.summary.errors.length ? "error" as const : "ready" as const : "loading" as const;
+    const changed = fact.summary !== null && fact.summary !== this.lastSummary;
+    if (fact.summary) this.lastSummary = fact.summary;
     this.publish({
       summaryStatus,
       summary: fact.summary ?? (fact.failure
         ? { ...this.snapshot.summary, errors: [{ rootId: "", message: fact.failure }] } : this.snapshot.summary),
     });
+    // A pushed change to which paths are dirty or claimed refreshes an open review at once instead of at the next poll.
+    if (changed && this.wantsFull && this.visible && this.snapshot.status !== "idle") void this.refresh();
   }
 
   private scheduleNext() {
@@ -226,7 +252,8 @@ export default class WorkbenchWorkingTreeState {
     for (const repository of data.repositories) {
       const previous = this.reviews.get(repository.rootId);
       const sameHead = previous?.repository.head === repository.head && previous.repository.cwd === repository.cwd;
-      const selections = sameHead ? previous.selections.filter(selection =>
+      // A file's identity covers both its base and worktree content, so a pick survives HEAD moving exactly when it still means the same change.
+      const selections = previous?.repository.cwd === repository.cwd ? previous.selections.filter(selection =>
         repository.files.some(file => file.path === selection.path && file.identity === selection.identity && !file.ownerIds.length),
       ) : [];
       for (const file of repository.files) {
@@ -245,6 +272,7 @@ export default class WorkbenchWorkingTreeState {
       ...(this.statusRequest === statusRequest ? { summary: {
         repositories: data.repositories.map(item => ({
           rootId: item.rootId, label: item.label, dirty: item.files.some(changed => !changed.ownerIds.length),
+          unclaimed: item.files.filter(changed => !changed.ownerIds.length).length,
         })),
         errors: data.errors,
       }, summaryStatus: data.errors.length ? "error" as const : "ready" as const } : {}),
@@ -280,14 +308,16 @@ export default class WorkbenchWorkingTreeState {
     }
     const request = { projectId: this.projectId, rootId: this.snapshot.rootId, path: file.path, identity: file.identity };
     const cwd = this.repository.cwd;
-    const cached = this.content.peekDiff(request, cwd);
+    const key = this.contentKey(request, cwd);
+    const cached = this.content.peek("diff", key);
     this.publish({
-      diff: cached, preview: this.content.peekPreview(request, cwd), contentError: "",
+      diff: cached, preview: this.content.peek("preview", key), contentError: "",
       contentStatus: cached ? "ready" : "loading",
     });
     if (cached) { this.publish({ initialising: false }); return; }
+    const port = this.port!;
     try {
-      const diff = await this.content.readDiff(request, cwd);
+      const diff = await this.content.read("diff", key, () => port.diff(request));
       if (this.contentRequest !== token || !this.lifetime) return;
       this.publish({ diff, contentStatus: "ready" });
     } catch (error) {
@@ -303,9 +333,11 @@ export default class WorkbenchWorkingTreeState {
     const content = this.content;
     if (!this.lifetime || !content || !token || !file || this.snapshot.preview?.identity === file.identity) return;
     if (this.previewWork?.token === token) return await this.previewWork.promise;
+    const port = this.port!;
+    const request = { projectId: this.projectId, rootId: this.snapshot.rootId, path: file.path, identity: file.identity };
     const work = async () => {
       try {
-        const preview = await content.readPreview({ projectId: this.projectId, rootId: this.snapshot.rootId, path: file.path, identity: file.identity }, this.repository!.cwd);
+        const preview = await content.read("preview", this.contentKey(request, this.repository!.cwd), () => port.preview(request));
         if (this.contentRequest === token) this.publish({ preview });
       } catch (error) {
         if (this.contentRequest === token) this.publish({ contentError: error instanceof Error ? error.message : "Unable to load preview." });
@@ -356,19 +388,22 @@ export default class WorkbenchWorkingTreeState {
     this.drafts.set(`${this.snapshot.rootId}:${this.snapshot.draft.mode}`, this.snapshot.draft);
     const stored = this.drafts.get(`${this.snapshot.rootId}:${mode}`);
     const [title = "", ...body] = (this.repository?.message.trimEnd() ?? "").split("\n");
-    this.publish({ draft: stored ?? {
+    // Commit and branch drafts are the same message, so moving between them keeps what was typed.
+    const carried = (mode === "branch" && this.snapshot.draft.mode === "commit") || (mode === "commit" && this.snapshot.draft.mode === "branch")
+      ? { ...this.snapshot.draft, mode, branch: stored?.branch ?? "" } : null;
+    this.publish({ draft: carried ?? stored ?? {
       mode, title: mode === "amend" ? title : "", description: mode === "amend" ? body.join("\n").trim() : "",
-      targetCommit: mode === "amend" ? this.repository?.head ?? null : null,
+      targetCommit: mode === "amend" ? this.repository?.head ?? null : null, branch: "",
     }, result: null });
   }
 
   reviewHead() {
     if (this.snapshot.busy || this.snapshot.draft.mode !== "amend") return;
     const [title = "", ...body] = (this.repository?.message.trimEnd() ?? "").split("\n");
-    this.publish({ draft: { mode: "amend", title, description: body.join("\n").trim(), targetCommit: this.repository?.head ?? null }, operationError: "" });
+    this.publish({ draft: { ...this.snapshot.draft, title, description: body.join("\n").trim(), targetCommit: this.repository?.head ?? null }, operationError: "" });
   }
 
-  async submit(mode: "commit" | "amend" | "stash" | "discard" = this.snapshot.draft.mode, scope?: Pick<WorkingTreeMutation, "rootId" | "expectedHead" | "selections">) {
+  async submit(mode: "commit" | "amend" | "stash" | "discard" | "branch" = this.snapshot.draft.mode, scope?: Pick<WorkingTreeMutation, "rootId" | "expectedHead" | "selections">) {
     const repository = this.repository;
     if (!repository || !this.port || this.mutationBlocked) return;
     if (mode === "amend" && this.snapshot.draft.targetCommit !== repository.head) {
@@ -377,16 +412,27 @@ export default class WorkbenchWorkingTreeState {
     }
     const selections = scope?.selections ?? this.snapshot.selections;
     this.publish({ busy: true, result: null, operationError: "" });
+    let branched = false;
     try {
+      // The new branch starts at HEAD, so the commit's expected HEAD still holds after creating it.
+      if (mode === "branch") {
+        if (!this.refs) throw new Error("Branching is unavailable on this device.");
+        await this.refs.mutateRef({ projectId: ProjectIdSchema.parse(this.projectId), action: "createBranch", branch: this.snapshot.draft.branch.trim() });
+        branched = true;
+      }
       const result = await this.port.mutate({
         projectId: this.projectId, rootId: scope?.rootId ?? repository.rootId, expectedHead: scope ? scope.expectedHead : repository.head,
-        targetCommit: mode === "amend" ? this.snapshot.draft.targetCommit : null, mode, selections,
+        targetCommit: mode === "amend" ? this.snapshot.draft.targetCommit : null, mode: mode === "branch" ? "commit" : mode, selections,
         title: this.snapshot.draft.title, description: this.snapshot.draft.description,
       });
       this.publish({ result, selections: result.status === "complete" ? [] : this.snapshot.selections });
       if (result.status === "complete" && !scope) this.setDraftAfterSubmit();
     } catch (error) {
-      this.publish({ operationError: `${error instanceof Error ? error.message : "Git operation failed."} Inspect the refreshed tree before retrying.` });
+      this.publish({
+        operationError: error instanceof Error ? error.message : "Git operation failed.",
+        // The branch exists and is checked out now, so a retry only needs to commit.
+        ...branched ? { draft: { ...this.snapshot.draft, mode: "commit" as const, branch: "" } } : {},
+      });
     } finally {
       this.publish({ busy: false });
       await this.refresh();

@@ -11,6 +11,7 @@
  * - createDiscardedDraftExitRoute: leave only the draft still viewed when deletion completes.
  * - WORKBENCH_STATS_TABS/WorkbenchStatsTab: stats view tabs carried in the url.
  * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createNewProjectRoute/createStatsRoute/createGitRoute/createInvalidWorkbenchRoute: construct routes.
+ * - createGitObjectRoute: a git tab showing one object (changes, commit or stash) of its own folder, optionally one file.
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute: internal project, target and UUID routes.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
@@ -29,6 +30,7 @@ import { z } from "zod";
 import { WorkbenchThreadRouteTargetSchema, type WorkbenchThreadRouteTarget } from "../thread/thread-state.ts";
 import { DraftIdSchema, LogicalProjectIdSchema, type LogicalProjectId, type ProjectId } from "../identity.ts";
 import { ProjectLocationReferenceSchema, type ProjectLocationReference } from "../project/project-location.ts";
+import { WorkbenchGitTarget, type WorkbenchGitObject } from "./git-route-target.ts";
 
 export const WORKBENCH_ROUTE_MARKER = "@";
 export const WORKBENCH_FOLDER_MARKER = "*";
@@ -60,6 +62,8 @@ export interface WorkbenchRoute {
   fileTabIndex?: number;
   /** The tab shows the index of `filePath`'s folder, focused on that entry, instead of the file itself. */
   fileIndex?: boolean;
+  /** A git tab's own folder and object; absent means the sidebar folder's changes. */
+  gitTarget?: WorkbenchGitTarget;
   /** Sidebar folder selection from the `*` url slot. Absent means inherit; null means explicitly no folder. */
   folderAddress?: string[] | null;
   projectId: ProjectId | "";
@@ -227,6 +231,15 @@ export function createLogicalExistingThreadRoute(
 
 export function createGitRoute(projectId: string): WorkbenchRoute {
   return { ...createProjectRoute(projectId), view: "git" };
+}
+
+/** Keeps `route`'s selection and git folder; a route without one names the sidebar folder until its tab pins it. */
+export function createGitObjectRoute(route: WorkbenchRoute, object: WorkbenchGitObject, path: string | null = null): WorkbenchRoute {
+  const { fileTabs: _tabs, fileTabIndex: _index, fileIndex: _fileIndex, tabStrip: _strip, ...base } = route;
+  return {
+    ...base, view: "git", filePath: "", threadId: "", threadTarget: null,
+    gitTarget: { folderAddress: route.view === "git" ? route.gitTarget?.folderAddress ?? null : null, object, path },
+  };
 }
 
 export function createFileRoute(projectId: string, filePath: string): WorkbenchRoute {
@@ -523,6 +536,10 @@ function parseTabSegments(rawSegments: string[]): WorkbenchRoute {
   if (mode === "settings" && !rest.length) return createSettingsRoute("");
   if (mode === "new-project" && !rest.length) return createNewProjectRoute();
   if (mode === "git" && !rest.length) return { ...createGitRoute(""), selectedProjectIds: null };
+  if (mode === "git") {
+    const gitTarget = WorkbenchGitTarget.parse(rest, WORKBENCH_FOLDER_MARKER);
+    return gitTarget ? { ...createGitRoute(""), selectedProjectIds: null, gitTarget } : createInvalidWorkbenchRoute("Invalid git tab.");
+  }
   if (mode === "stats" && rest.length <= 1) {
     const tab = rest.length ? WORKBENCH_STATS_TABS.find(candidate => candidate === rest[0]) : "usage";
     if (tab) return createStatsRoute(null, tab);
@@ -843,6 +860,7 @@ export function formatWorkbenchTab(route: WorkbenchRoute): string | undefined {
     const folder = tabs[index]?.folderAddress;
     return `${route.fileIndex ? "index" : "file"}/${folder?.length ? `${folder.map(encodeRouteSegment).join("/")}/${WORKBENCH_FOLDER_MARKER}/` : ""}${encodeWorkbenchRoutePath(route.filePath)}`;
   }
+  if (route.view === "git" && route.gitTarget) return `git/${WorkbenchGitTarget.format(route.gitTarget, WORKBENCH_FOLDER_MARKER)}`;
   if (route.view === "settings" || route.view === "new-project" || route.view === "git") return route.view;
   if (route.view === "stats") return route.statsTab && route.statsTab !== "usage" ? `stats/${route.statsTab}` : "stats";
   return undefined;
@@ -889,6 +907,7 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
     && Boolean(left.fileIndex) === Boolean(right.fileIndex)
     && areDeeplyEqual(left.fileTabs ?? null, right.fileTabs ?? null)
     && (left.fileTabIndex ?? 0) === (right.fileTabIndex ?? 0)
+    && areDeeplyEqual(left.gitTarget ?? null, right.gitTarget ?? null)
     && left.threadId === right.threadId
     && (left.statsTab ?? "usage") === (right.statsTab ?? "usage")
     && left.threadOwnerProjectId === right.threadOwnerProjectId

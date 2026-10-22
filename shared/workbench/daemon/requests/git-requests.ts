@@ -2,7 +2,8 @@
  * Exports:
  * - WORKBENCH_GIT_ARC_ACTION_BY_METHOD/WorkbenchDaemonGitArcMethod: map browser Git arc methods to existing Git actions.
  * - WorkbenchGitArcSuccess: exact acknowledgement for browser Git arc mutations.
- * - gitDaemonRequests: daemon requests for working-tree reads and edits, upstream pushes and browser Git arc actions.
+ * - gitDaemonRequests: daemon requests for working-tree reads and edits, commit and stash reads, ref moves, upstream pushes
+ *   and browser Git arc actions.
  */
 import { z } from "zod";
 import {
@@ -22,6 +23,10 @@ import {
   type WorkingTreeResult,
 } from "../../git/working-tree-contracts.ts";
 import { GitPushResultSchema, type GitPushResult } from "../../git/git-history-contracts.ts";
+import {
+  GitObjectDetailSchema, GitRefMutationResultSchema,
+  type GitObjectDetail, type GitObjectRef, type GitRefMutation, type GitRefMutationResult,
+} from "../../git/git-object-contracts.ts";
 import { defineDaemonRequest } from "../define-daemon-request.ts";
 
 export interface WorkbenchGitArcSuccess {
@@ -62,6 +67,16 @@ export const gitDaemonRequests = {
   "git/working-tree/preview": defineDaemonRequest<WorkingTreeFileRequest, WorkingTreePreview>()({ route: "folder", result: WorkingTreePreviewSchema }),
   "git/working-tree/mutate": defineDaemonRequest<WorkingTreeMutation, WorkingTreeResult>()({ route: "folder", result: WorkingTreeResultSchema }),
   "git/push": defineDaemonRequest<{ projectId: string }, GitPushResult>()({ route: "folder", result: GitPushResultSchema }),
+  "git/object/read": defineDaemonRequest<{ projectId: string; object: GitObjectRef }, GitObjectDetail>()({
+    route: "folder", result: GitObjectDetailSchema,
+  }),
+  "git/object/diff": defineDaemonRequest<{ projectId: string; object: GitObjectRef; path: string }, WorkingTreeDiff>()({
+    route: "folder", result: WorkingTreeDiffSchema,
+  }),
+  "git/object/preview": defineDaemonRequest<{ projectId: string; object: GitObjectRef; path: string }, WorkingTreePreview>()({
+    route: "folder", result: WorkingTreePreviewSchema,
+  }),
+  "git/ref/mutate": defineDaemonRequest<GitRefMutation, GitRefMutationResult>()({ route: "folder", result: GitRefMutationResultSchema }),
   "git/arc/compare": arc<"compare", GitCheckpointCompareResult>(GitCheckpointCompareResultSchema),
   "git/arc/diff-artifact/read": arc<"readDiffArtifact", string>(z.string()),
   "git/arc/proposal/commit": arc<"proposalCommit", GitCheckpointProposal>(GitCheckpointProposalSchema),
