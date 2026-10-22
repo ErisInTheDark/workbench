@@ -97,11 +97,11 @@ test("stashed pending proposals can be reworded without changing frozen work", a
     proposalId: reworded.proposalId,
     status: "proposed",
     summary: {
-      changes: [{ additions: 1, deletions: 1, kind: "update", path: "one.txt" }],
       committedSha: null,
       description: "Keep the frozen content.",
       mode: "commit",
       title: "clear saved title",
+      totals: { files: 1, premise: { additions: 1, deletions: 1 }, tests: { additions: 0, deletions: 0 } },
     },
   }]);
   assert.equal(await repository.readRef(stashRef), frozenBefore);
