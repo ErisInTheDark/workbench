@@ -498,7 +498,7 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
     ["wb task blocked", "task_blocked", {}],
     ['wb task set --title "Render typed wb tools"', "task_set", { title: "Render typed wb tools" }],
     ["wb subagent wait --name Lumi --name Nova", "subagent_wait", { names: ["Lumi", "Nova"] }],
-    ['wb message --thread review-target --message "progress"', "message", { message: "progress", threadId: "review-target" }],
+    ['wb message agent --thread review-target --message "progress"', "message_agent", { message: "progress", threadId: "review-target" }],
     ["wb git arc wait", "git_arc_wait", {}],
     ["wb git arc release --disown", "git_arc_release", { disown: true }],
     ["wb git arc stash", "git_arc_stash", {}],

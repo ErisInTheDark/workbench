@@ -6,7 +6,6 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchAgentMcpRequestRegistry } from "../../agent/workbench-agent-mcp-request-registry";
 import ClaudeSessionHost, { type ClaudeSessionHandlers } from "./ClaudeSessionHost";
-import { CLAUDE_COMMENTARY_SERVER_NAME } from "./claude-commentary-tool";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const request = { cwd: "C:/repo", threadId, paths: ["C:/repo/a.ts"] };
@@ -48,12 +47,10 @@ test("host-owned session hooks see output before they run, without consuming it,
   let drained!: () => void;
   const finished = new Promise<void>(resolve => { drained = resolve; });
   let hooks!: Hooks;
-  let servers!: Record<string, unknown>;
   const host = new ClaudeSessionHost({
     viewsRoot: null,
-    createQuery: (({ options }: { options: { hooks: typeof hooks; mcpServers: typeof servers } }) => {
+    createQuery: (({ options }: { options: { hooks: typeof hooks } }) => {
       hooks = options.hooks;
-      servers = options.mcpServers;
       return {
         async *[Symbol.asyncIterator]() { yield stray; drained(); },
         close: () => undefined,
@@ -71,7 +68,6 @@ test("host-owned session hooks see output before they run, without consuming it,
   await editHook(hooks)(
     { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "a.ts" } }, "tool", { signal: new AbortController().signal });
   assert.deepEqual(checked, [{ cwd: "C:/repo", threadId, paths: [path.resolve("C:/repo", "a.ts")] }]);
-  assert.deepEqual(Object.keys(servers).sort(), [CLAUDE_COMMENTARY_SERVER_NAME, "wb"].sort());
   await host.dispose();
 });
 

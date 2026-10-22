@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - default ClaudeToolsController: resolve server-owned Claude MCP scopes, say where requests name their tool_use (which
- *   also places each call's transcript item), and prepare admitted commands; Workbench hosts the shell tool and may run
- *   marked shells in parallel.
+ *   also places each call's transcript item), and prepare admitted commands; Workbench hosts the shell and user-message
+ *   tools and may run marked shells in parallel.
  */
 import type { WorkbenchProviderTools } from "../provider-execution";
 import type ClaudeThreadOperations from "./ClaudeThreadOperations";
@@ -56,6 +56,8 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
       shellEscalation: true,
       // Claude names each MCP request's tool_use; the session host declares the same ids as its batches.
       toolUseIdMeta: CLAUDE_TOOL_USE_ID_META,
+      // Claude summarises prose between tool calls, so commentary travels as this tool's input.
+      hostsUserMessage: true,
     };
   }
 

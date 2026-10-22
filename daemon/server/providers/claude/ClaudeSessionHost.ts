@@ -19,7 +19,6 @@ import { lowerAgentProcessPriority } from "../../process-helpers";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import ClaudeConfigView from "./ClaudeConfigView";
-import { CLAUDE_COMMENTARY_SERVER_NAME, createClaudeCommentaryServer } from "./claude-commentary-tool";
 import { claudeToolResults, claudeToolUseIds, createClaudeSessionHooks } from "./claude-session-hooks";
 import type { WorkbenchAgentMcpRequestRegistry } from "../../agent/workbench-agent-mcp-request-registry";
 
@@ -93,7 +92,7 @@ export interface ClaudeSessionLaunch {
   captureStderr: boolean;
   /** Plain facts the host's own session hooks need; the host builds them so no bridge generation's code outlives it. */
   binding: { cwd: string; threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
-  /** SDK options for this process; the host owns process spawning, stderr capture, session hooks and the commentary server. */
+  /** SDK options for this process; the host owns process spawning, stderr capture and session hooks. */
   options(viewEnv: NodeJS.ProcessEnv | undefined): Omit<Options, "spawnClaudeCodeProcess" | "stderr" | "hooks">;
 }
 
@@ -249,7 +248,7 @@ export default class ClaudeSessionHost {
   /**
    * Sessions outlive the bridge generation that launched them. Every closure here shares one context, so none of
    * them may see the launch request: its `options` builder belongs to that generation and would pin all of it.
-   * For the same reason the nudge, hooks and commentary server are built here from plain facts, reaching the
+   * For the same reason the nudge and hooks are built here from plain facts, reaching the
    * attached bridge through `call`.
    */
   private async start(
@@ -307,7 +306,6 @@ export default class ClaudeSessionHost {
               end: () => batchCall(batch => batch.endToolBatch(threadId)),
             },
           }),
-          mcpServers: { ...sdkOptions.mcpServers, [CLAUDE_COMMENTARY_SERVER_NAME]: createClaudeCommentaryServer() },
           spawnClaudeCodeProcess: options => spawnTrackedClaude(options, value => { exit = value; }),
           ...(captureStderr ? { stderr: (data: string) => { stderr = (stderr + data).slice(-2000); } } : {}),
         },

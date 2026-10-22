@@ -65,6 +65,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "vis_snapshot",
   "vis_screenshot",
   "request_user_input",
+  "message_agent",
+  // Former name of `message_agent`; keeps earlier calls rendering.
   "message",
   "message_wait",
   "subagent_list",
@@ -723,7 +725,7 @@ export function getWorkbenchCommandRoute(
   const args = asRecord(argumentsValue) ?? {};
   const gitArc = renderGitArc(name, args);
   if (gitArc) return gitArc;
-  if (name === "message") return renderMessage(args);
+  if (name === "message_agent" || name === "message") return renderMessage(args);
   if (name.startsWith("subagent_")) return renderSubagent(name, args);
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {

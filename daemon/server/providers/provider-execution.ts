@@ -110,6 +110,11 @@ export interface WorkbenchProviderTools {
     toolUseIdMeta?: string;
     /** One connection serves every thread, so its preloaded list carries every audience's tools and each call is gated. */
     connectionSpansThreads?: boolean;
+    /**
+     * Workbench lists the user-message tool and acknowledges it without a transcript item: the provider's transcript
+     * adapter renders the call's streamed input as commentary under the call's own reference.
+     */
+    hostsUserMessage?: boolean;
   }>;
   caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
   /** Prepare the provider-native shell, required only when `describe().shellEscalation` is false. */

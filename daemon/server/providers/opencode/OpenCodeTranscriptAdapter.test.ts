@@ -644,7 +644,7 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
   ]);
 });
 
-test("history replays commentary-tool input as exact commentary and keeps the hidden hint out", async () => {
+test("history replays current and pre-rename commentary-tool input as exact commentary and keeps the hidden hint out", async () => {
   let recorded: readonly WorkbenchTranscriptObservation[] = [];
   const adapter = new OpenCodeTranscriptAdapter({
     threads: {
@@ -682,15 +682,19 @@ test("history replays commentary-tool input as exact commentary and keeps the hi
         type: "tool", id: "message-1", name: OPENCODE_COMMENTARY_TOOL_NAME,
         state: { status: "completed", input: { text: "**on it**" }, output: "", content: [{ type: "text", text: "Message delivered to user." }] },
         time: { created: 3, ran: 3, completed: 3 },
+      } as never, {
+        type: "tool", id: "message-2", name: "mcp__user__message",
+        state: { status: "completed", input: { text: "older session" }, output: "", content: [{ type: "text", text: "Message delivered to user." }] },
+        time: { created: 3, ran: 3, completed: 3 },
       } as never],
       time: { created: 3, completed: 3 },
     },
   ], { id: "00000000-0000-4000-8000-000000000010", rootPath: "C:/repo" }, { settleUsage: true });
   const items = recorded.flatMap(entry => entry.kind === "item" ? [entry.item] : []);
-  assert.deepEqual(items.map(item => item.type), ["userMessage", "agentMessage"]);
-  const commentary = items[1]!;
-  assert.ok(commentary.type === "agentMessage");
-  assert.deepEqual([commentary.text, commentary.phase], ["**on it**", "commentary"]);
+  assert.deepEqual(items.map(item => item.type), ["userMessage", "agentMessage", "agentMessage"]);
+  assert.deepEqual(items.slice(1).map(item => item.type === "agentMessage" ? [item.text, item.phase] : null), [
+    ["**on it**", "commentary"], ["older session", "commentary"],
+  ]);
   assert.doesNotMatch(JSON.stringify(recorded), /Plain text output is not shown/u);
 });
 

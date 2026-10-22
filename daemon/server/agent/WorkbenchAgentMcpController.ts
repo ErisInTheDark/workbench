@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, caller audience, cancellation, hosted-shell approval, and command execution ports.
- * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, per-caller parent-only and root-only gates, plus the served tool specs for prompt-cost accounting.
+ * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, per-caller parent-only and root-only gates, the transcript-free user-message acknowledgement for providers that host it, plus the served tool specs for prompt-cost accounting.
  */
 import type http from "node:http";
 
@@ -67,6 +67,10 @@ import {
   type WorkbenchMcpToolGeneration,
   type WorkbenchMcpToolStep,
 } from "./workbench-mcp-ingress";
+import {
+  WORKBENCH_USER_MESSAGE_DELIVERED, WORKBENCH_USER_MESSAGE_TEXT_DESCRIPTION,
+  WORKBENCH_USER_MESSAGE_TOOL_DESCRIPTION, WORKBENCH_USER_MESSAGE_TOOL_NAME,
+} from "./workbench-user-message-tool";
 
 const LEGACY_MCP_CLIENT_SCOPE = "legacy";
 /** McpServer's schema for tools without an object input, so hand-served lists match what it served before. */
@@ -165,6 +169,14 @@ function toolJsonSchema(schema: AnySchema, pipeStrategy: "input" | "output") {
   const object = normalizeObjectSchema(schema);
   return object ? toJsonSchemaCompat(object, { strictUnions: true, pipeStrategy }) : EMPTY_OBJECT_JSON_SCHEMA;
 }
+
+const UserMessageInputSchema = z.object({ text: z.string().describe(WORKBENCH_USER_MESSAGE_TEXT_DESCRIPTION) }).strict();
+const USER_MESSAGE_TOOL: Tool = {
+  name: WORKBENCH_USER_MESSAGE_TOOL_NAME,
+  description: WORKBENCH_USER_MESSAGE_TOOL_DESCRIPTION,
+  inputSchema: toolJsonSchema(UserMessageInputSchema, "input") as Tool["inputSchema"],
+  annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false, readOnlyHint: true },
+};
 
 function readClientScope(value: string | null) {
   if (!value) return LEGACY_MCP_CLIENT_SCOPE;
@@ -281,7 +293,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
    * Duplicate names are a catalogue defect.
    */
   private visibleCommands(scope: WorkbenchMcpScope) {
-    const names = new Set<string>([WORKBENCH_SHELL_MCP_TOOL_NAME]);
+    const names = new Set<string>([WORKBENCH_SHELL_MCP_TOOL_NAME, WORKBENCH_USER_MESSAGE_TOOL_NAME]);
     const direct = new Map<string, WorkbenchAgentCommandDefinition>();
     const deferred = new Map<string, WorkbenchAgentCommandDefinition>();
     for (const definition of this.listCommands()) {
@@ -344,6 +356,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       outputSchema: toolJsonSchema(WorkbenchShellResultSchema, "output") as Tool["outputSchema"],
       _meta: CODE_MODE_META,
     }];
+    if (description.hostsUserMessage) tools.push(USER_MESSAGE_TOOL);
     for (const [name, definition] of this.visibleCommands(this.listingScope(scope, description)).direct) {
       tools.push(this.toolSpec(name, definition));
     }
@@ -368,7 +381,12 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         }
         return await this.callShell(scope, call, input, tools, description.shellEscalation);
       }
-      const { direct } = this.visibleCommands(this.listingScope(scope, await tools.describe()));
+      const description = await tools.describe();
+      if (call.name === WORKBENCH_USER_MESSAGE_TOOL_NAME && description.hostsUserMessage) {
+        await validateToolInput(UserMessageInputSchema, call.arguments, call.name);
+        return { kind: "result", result: { content: [{ type: "text", text: WORKBENCH_USER_MESSAGE_DELIVERED }] } };
+      }
+      const { direct } = this.visibleCommands(this.listingScope(scope, description));
       // `mcp_call` reaches root-only commands from any connection; `prepareCommand` gates each caller.
       const { deferred } = this.visibleCommands({ ...scope, projectLocal: true });
       const definition = direct.get(call.name);
@@ -399,7 +417,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         ? await this.deferredTarget(deferred, routing)
         : { definition, input };
       // The provider's call id orders this call in its tool batch; the provider reports each call's result there.
-      const toolUseKey = call.batchTurns && !target.definition.effects.readOnly ? readToolUseKey(await tools.describe(), call) : null;
+      const toolUseKey = call.batchTurns && !target.definition.effects.readOnly ? readToolUseKey(description, call) : null;
       if (toolUseKey) {
         const turn = await this.batchTurn(scope, call, tools, toolUseKey, getWorkbenchAgentCommandToolName(target.definition), input);
         if (turn) return turn;

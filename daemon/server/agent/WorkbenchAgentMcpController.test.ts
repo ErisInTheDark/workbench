@@ -158,6 +158,38 @@ test("OpenCode context handoff executes without admitting MCP arguments or resul
   }
 });
 
+for (const hosts of [true, false]) {
+  test(`the user-message tool is ${hosts ? "acknowledged without a transcript item or command" : "absent"} when the provider ${hosts ? "hosts" : "does not host"} it`, async () => {
+    const recorded: string[] = [];
+    const tools: WorkbenchProviderTools = {
+      caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
+      describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true, hostsUserMessage: hosts }),
+      patchClaims: async () => "",
+      transcript: {
+        start: async input => { recorded.push(input.tool); throw new Error("commentary must not be recorded as a wb call"); },
+        finish: async () => undefined,
+      },
+    };
+    const controller = new WorkbenchAgentMcpController({
+      tools: () => tools, daemonOrigin: "http://127.0.0.1:4500",
+      requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+      executeCommand: async request => { recorded.push(request.path); return Response.json({}); },
+    });
+    const server = await startController(controller);
+    const client = await connectClient(server.url);
+    try {
+      const listed = (await client.listTools()).tools.some(tool => tool.name === "message_user");
+      assert.equal(listed, hosts);
+      const result = await client.callTool({ name: "message_user", arguments: { text: "hello" } });
+      assert.equal(result.isError === true, !hosts, responseText(result));
+      assert.deepEqual(recorded, []);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+}
+
 for (const phase of ["start", "finish", "operation"] as const) {
   test(`capture ${phase} failure never retries or discards executed output`, async () => {
     let executions = 0;
@@ -730,7 +762,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(inventory.tools.some(({ name }) => name === "tokens"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_project"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_instructions"), false);
-    assert.equal(inventory.tools.some(({ name }) => name === "message"), true);
+    assert.equal(inventory.tools.some(({ name }) => name === "message_agent"), true);
     const projectInventory = await projectClient.listTools();
     assert.equal(projectInventory.tools.some(({ name }) => name === "tokens_instructions"), true);
     const instructionTools = controller.listInstructionTools();
@@ -1003,7 +1035,7 @@ test("child catalogues omit every parent-only tool while retaining child coordin
       assert.equal(parentTools.has(tool), true, `${tool} should remain available to parents`);
       assert.equal(childTools.has(tool), false, `${tool} should be absent for children`);
     }
-    for (const tool of ["git_arc_claims", "message", "message_wait", "subagent_dequeue", "subagent_queue"]) {
+    for (const tool of ["git_arc_claims", "message_agent", "message_wait", "subagent_dequeue", "subagent_queue"]) {
       assert.equal(childTools.has(tool), true, `${tool} should remain available to children`);
     }
   } finally {

@@ -752,7 +752,7 @@ test("dispatches global messages through the direct managed-thread transport", a
   try {
     const response = await fetch(`${server.origin}/daemon/agent-command`, {
       body: subagentCommandBody([
-        "message", "--thread", "review-target", "--message", "Review feedback.", "--user-visible-simple-version", "Sent review notes.",
+        "message", "agent", "--thread", "review-target", "--message", "Review feedback.", "--user-visible-simple-version", "Sent review notes.",
       ]),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       method: "POST",

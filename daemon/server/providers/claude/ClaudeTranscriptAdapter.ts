@@ -31,7 +31,7 @@ import type WorkbenchThreadIdentityController from "../../thread/WorkbenchThread
 import type WorkbenchTranscriptIdentityController from "../../transcript/WorkbenchTranscriptIdentityController";
 import type { DaemonTranscriptRegistration } from "../../daemon-runtime-objects";
 import type { WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
-import { CLAUDE_COMMENTARY_TOOL_NAME, readStreamedCommentaryText } from "./claude-commentary-tool";
+import { CLAUDE_COMMENTARY_TOOL_NAME, CLAUDE_LEGACY_COMMENTARY_TOOL_NAME, readStreamedCommentaryText } from "./claude-commentary-tool";
 import type { ClaudeSessionLogRecord } from "./claude-session-log";
 
 interface TurnScope {
@@ -306,7 +306,8 @@ export default class ClaudeTranscriptAdapter {
     if (!stream.messageId) return;
     if (event.type === "content_block_start") {
       const block = event.content_block;
-      if (block.type === "tool_use" && block.name.startsWith(WORKBENCH_TOOL_PREFIX)) {
+      // Commentary is served by wb MCP, yet it is the agent's message, not a recorded wb call.
+      if (block.type === "tool_use" && block.name !== CLAUDE_COMMENTARY_TOOL_NAME && block.name.startsWith(WORKBENCH_TOOL_PREFIX)) {
         stream.tools.set(event.index, { id: block.id, name: block.name, partialJson: "" });
         return;
       }
@@ -637,7 +638,7 @@ export default class ClaudeTranscriptAdapter {
           entries.set(native, { observedAt: occurredAt, item: blockItem("thinking", block.thinking) });
         } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
           const reference = `tool:${block.id}`;
-          if (block.name === CLAUDE_COMMENTARY_TOOL_NAME) {
+          if (block.name === CLAUDE_COMMENTARY_TOOL_NAME || block.name === CLAUDE_LEGACY_COMMENTARY_TOOL_NAME) {
             const text = record(block.input)?.text;
             if (typeof text === "string") entries.set(reference, { observedAt: occurredAt, item: blockItem("commentary", text) });
             continue;

@@ -364,7 +364,7 @@ test("CLI help and dispatch enforce every command audience", async () => {
     if (help.kind === "help") assert.doesNotMatch(help.help, new RegExp(definition.usage.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
   }
   const allowedChildCommands = new Map<string, string[]>([
-    ["message", ["--parent", "--message", "progress", "--user-visible-simple-version", "Shared progress."]],
+    ["message_agent", ["--parent", "--message", "progress", "--user-visible-simple-version", "Shared progress."]],
     ["message_wait", ["--thread", "parent"]],
     ["subagent_dequeue", ["builds"]],
     ["subagent_queue", ["builds", "--description", "run tests"]],
@@ -1276,7 +1276,7 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
   assert.equal(missingCreateSummary.kind, "error");
 
   const globalMessage = await parseWorkbenchAgentCliCommand([
-    "message", "--thread", "review-target", "--message", "Please fix the cancellation race.",
+    "message", "agent", "--thread", "review-target", "--message", "Please fix the cancellation race.",
     "--user-visible-simple-version", "Asked for the race fix.",
   ], options);
   assert.equal(globalMessage.kind, "request");
@@ -1295,10 +1295,10 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
   });
 
   assert.equal((await parseWorkbenchAgentCliCommand([
-    "message", "--thread", "target", "--parent", "--message", "Ambiguous.", "--user-visible-simple-version", "Ambiguous.",
+    "message", "agent", "--thread", "target", "--parent", "--message", "Ambiguous.", "--user-visible-simple-version", "Ambiguous.",
   ], options)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([
-    "message", "--thread", "target", "--message", "Missing simple version.",
+    "message", "agent", "--thread", "target", "--message", "Missing simple version.",
   ], options)).kind, "error");
 
   const wait = await parseWorkbenchAgentCliCommand([

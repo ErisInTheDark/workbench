@@ -1,32 +1,14 @@
 /*
  * Exports:
- * - CLAUDE_COMMENTARY_SERVER_NAME: in-process MCP server name that hosts the commentary tool.
- * - CLAUDE_COMMENTARY_TOOL_NAME: model-visible tool name whose `text` input becomes exact user-visible commentary.
- * - createClaudeCommentaryServer: build the stateless in-process MCP server for one Claude launch.
+ * - CLAUDE_COMMENTARY_TOOL_NAME: model-visible wb MCP tool whose `text` input becomes exact user-visible commentary.
+ * - CLAUDE_LEGACY_COMMENTARY_TOOL_NAME: the commentary tool's pre-rename name, still present in older session logs.
  * - readStreamedCommentaryText: decode the complete prefix of the top-level `text` string from partial tool-input JSON.
  */
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
+import { WORKBENCH_USER_MESSAGE_TOOL_NAME } from "../../agent/workbench-user-message-tool";
 
 // Claude replaces prose between tool calls with server summaries; tool input reaches us verbatim.
-export const CLAUDE_COMMENTARY_SERVER_NAME = "user";
-const TOOL = "message";
-export const CLAUDE_COMMENTARY_TOOL_NAME = `mcp__${CLAUDE_COMMENTARY_SERVER_NAME}__${TOOL}`;
-
-/** The transcript adapter owns the visible item from the streamed tool_use; the handler only acknowledges. */
-export function createClaudeCommentaryServer() {
-  return createSdkMcpServer({
-    name: CLAUDE_COMMENTARY_SERVER_NAME,
-    alwaysLoad: true,
-    tools: [tool(
-      TOOL,
-      "Send the user a message they read exactly as written, streamed live. Use it for every ack, progress update, plan, brief, and review; text outside this tool is summarized away.",
-      { text: z.string().describe("Markdown message, including any Workbench markup.") },
-      async () => ({ content: [{ type: "text", text: "Message delivered to user." }] }),
-      { annotations: { readOnlyHint: true } },
-    )],
-  });
-}
+export const CLAUDE_COMMENTARY_TOOL_NAME = `mcp__wb__${WORKBENCH_USER_MESSAGE_TOOL_NAME}`;
+export const CLAUDE_LEGACY_COMMENTARY_TOOL_NAME = "mcp__user__message";
 
 const ESCAPES: Record<string, string> = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;

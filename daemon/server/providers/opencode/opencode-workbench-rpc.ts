@@ -9,22 +9,29 @@
  * - OPENCODE_WORKBENCH_NAMESPACE/OPENCODE_WORKBENCH_DIRECT_NAMESPACE: companion tool namespaces for nested code-mode and direct wb tools.
  * - isOpenCodeWorkbenchToolName: whether a native OpenCode tool name belongs to a companion-registered wb tool.
  * - OPENCODE_COMMENTARY_TOOL_NAME: direct companion tool whose `text` input is the agent's exact user-visible commentary.
+ * - isOpenCodeCommentaryToolName: whether a recorded tool part is commentary, including the pre-rename name in older sessions.
  * - OPENCODE_TASK_STATUS_TOOLS: companion tool names whose success means the agent may end its turn.
  */
 import { z } from "zod";
 import { ToolPatchPreviewFileSchema } from "workbench-shared/workbench/thread/tool-patch-preview";
+import { WORKBENCH_USER_MESSAGE_TOOL_NAME } from "../../agent/workbench-user-message-tool";
 
 export const OPENCODE_WORKBENCH_NAMESPACE = "wb";
 export const OPENCODE_WORKBENCH_DIRECT_NAMESPACE = "wbex";
-/** Shares Claude's commentary tool name so instructions and agent habits match across harnesses. */
-export const OPENCODE_COMMENTARY_TOOL_NAME = "mcp__user__message";
+/** Named like a direct wb tool, but the companion answers it locally; its input renders as commentary. */
+export const OPENCODE_COMMENTARY_TOOL_NAME = `${OPENCODE_WORKBENCH_DIRECT_NAMESPACE}_${WORKBENCH_USER_MESSAGE_TOOL_NAME}`;
+const LEGACY_COMMENTARY_TOOL_NAME = "mcp__user__message";
 /** Workbench resumes a turn that ends before one of these succeeds. */
 export const OPENCODE_TASK_STATUS_TOOLS: ReadonlySet<string> = new Set(["task_completed", "task_blocked"]);
 
 /** Direct tools surface as `<namespace>_<name>`; Workbench records every wb call itself. */
 export function isOpenCodeWorkbenchToolName(name: string) {
-  return [OPENCODE_WORKBENCH_NAMESPACE, OPENCODE_WORKBENCH_DIRECT_NAMESPACE]
+  return name !== OPENCODE_COMMENTARY_TOOL_NAME && [OPENCODE_WORKBENCH_NAMESPACE, OPENCODE_WORKBENCH_DIRECT_NAMESPACE]
     .some(namespace => name === namespace || name.startsWith(`${namespace}_`));
+}
+
+export function isOpenCodeCommentaryToolName(name: string) {
+  return name === OPENCODE_COMMENTARY_TOOL_NAME || name === LEGACY_COMMENTARY_TOOL_NAME;
 }
 
 export const OpenCodeFileClaimRequestSchema = z.object({
