@@ -629,7 +629,10 @@ before(async () => {
     origin,
   };
   await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), publishedEndpoint);
-  launcherPath = await verifyNativeSidecarArtifact(repositoryRoot, WORKBENCH_LAUNCHER_ARTIFACT);
+  // Stage where the root `wb` script looks, as the daemon does.
+  launcherPath = await verifyNativeSidecarArtifact(
+    repositoryRoot, WORKBENCH_LAUNCHER_ARTIFACT, new NativeArtifactStage({ runtimeRoot: temporaryDataRootPath }),
+  );
 });
 
 after(async () => {
