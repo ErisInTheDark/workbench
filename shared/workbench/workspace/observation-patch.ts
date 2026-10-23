@@ -86,7 +86,14 @@ export function diffObservationValue(previous: object, next: object, shape: Obse
   return empty(delta) ? null : delta;
 }
 
-function diffFields(previous: Fields, next: Fields, shape: ObservationShape): ObservationDelta {
+/** A record's value shape applies to each of its keys, so it is named once as `everyField` instead of per key. */
+type FieldShape = ObservationShape & { everyField?: ObservationShapeNode };
+
+function fieldNode(shape: FieldShape, field: string) {
+  return shape.fields?.[field] ?? shape.everyField;
+}
+
+function diffFields(previous: Fields, next: Fields, shape: FieldShape): ObservationDelta {
   const incidental = new Set(shape.incidental ?? []);
   const delta = diffSelectedFields(previous, next, shape, field => !incidental.has(field));
   if (!incidental.size || empty(delta)) return delta;
@@ -98,7 +105,7 @@ function diffFields(previous: Fields, next: Fields, shape: ObservationShape): Ob
   };
 }
 
-function diffSelectedFields(previous: Fields, next: Fields, shape: ObservationShape, include: (field: string) => boolean): ObservationDelta {
+function diffSelectedFields(previous: Fields, next: Fields, shape: FieldShape, include: (field: string) => boolean): ObservationDelta {
   const delta: ObservationDelta = {};
   for (const field of Object.keys(previous)) {
     if (include(field) && present(previous, field) && !present(next, field)) (delta.unset ??= []).push(field);
@@ -108,9 +115,9 @@ function diffSelectedFields(previous: Fields, next: Fields, shape: ObservationSh
     const before = previous[field];
     const after = next[field];
     if (before === after) continue;
-    const node = shape.fields?.[field];
+    const node = fieldNode(shape, field);
     if (node && isFields(before) && isFields(after) && (node.kind === "object" || node.kind === "record")) {
-      const nested = node.kind === "object" ? diffFields(before, after, node.shape) : diffFields(before, after, recordShape(node, after));
+      const nested = node.kind === "object" ? diffFields(before, after, node.shape) : diffFields(before, after, recordShape(node));
       if (!empty(nested)) (delta.objects ??= {})[field] = nested;
       continue;
     }
@@ -126,11 +133,15 @@ function diffSelectedFields(previous: Fields, next: Fields, shape: ObservationSh
   return delta;
 }
 
-/** Every record key decomposes with the record's value shape. */
-function recordShape(node: Extract<ObservationShapeNode, { kind: "record" }>, record: Fields): ObservationShape {
-  if (!node.shape) return {};
-  const shape = node.shape;
-  return { fields: Object.fromEntries(Object.keys(record).map(key => [key, { kind: "object" as const, shape }])) };
+/** Every record key decomposes with the record's value shape; built once per node, since diffs run on every publish. */
+const recordShapes = new WeakMap<ObservationShapeNode, FieldShape>();
+function recordShape(node: Extract<ObservationShapeNode, { kind: "record" }>): FieldShape {
+  let shape = recordShapes.get(node);
+  if (!shape) {
+    shape = node.shape ? { everyField: { kind: "object", shape: node.shape } } : {};
+    recordShapes.set(node, shape);
+  }
+  return shape;
 }
 
 function diffKeyed(previous: readonly unknown[], next: readonly unknown[], node: Extract<ObservationShapeNode, { kind: "keyed" }>): KeyedDelta | null | "replace" {
@@ -204,25 +215,25 @@ function validateField(shape: ObservationShape, field: string, value: unknown, p
   return parseItem(fieldSchema, value, `${path}.${field}`, repairs);
 }
 
-function applyFields(target: Fields, delta: ObservationDelta, shape: ObservationShape, path: string, repairs: PropertyKey[][]): Fields {
+function applyFields(target: Fields, delta: ObservationDelta, shape: FieldShape, path: string, repairs: PropertyKey[][]): Fields {
   const next: Fields = { ...target };
   for (const field of delta.unset ?? []) {
     if (shape.schema && !shape.schema.shape[field]) throw new Error(`Observation delta unsets unknown field ${path}.${field}.`);
     delete next[field];
   }
   for (const [field, value] of Object.entries(delta.set ?? {})) {
-    const node = shape.fields?.[field];
+    const node = fieldNode(shape, field);
     next[field] = node?.kind === "record" && isFields(value)
       ? Object.fromEntries(Object.entries(value).map(([recordKey, item]) => [recordKey, parseItem(node.value, item, `${path}.${field}.${recordKey}`, repairs)]))
       : validateField(shape, field, value, path, repairs);
   }
   for (const [field, nested] of Object.entries(delta.objects ?? {})) {
-    const node = shape.fields?.[field];
+    const node = fieldNode(shape, field);
     const current = next[field];
     if (!node || node.kind === "keyed") throw new Error(`Observation delta patches unknown object ${path}.${field}.`);
     if (!isFields(current)) throw new Error(`Observation delta patches missing object ${path}.${field}.`);
     if (node.kind === "record") {
-      const record = applyFields(current, nested, recordShape(node, current), `${path}.${field}`, repairs);
+      const record = applyFields(current, nested, recordShape(node), `${path}.${field}`, repairs);
       for (const recordKey of [...Object.keys(nested.set ?? {}), ...Object.keys(nested.objects ?? {})]) {
         record[recordKey] = parseItem(node.value, record[recordKey], `${path}.${field}.${recordKey}`, repairs);
       }
@@ -233,7 +244,7 @@ function applyFields(target: Fields, delta: ObservationDelta, shape: Observation
     }
   }
   for (const [field, keyed] of Object.entries(delta.collections ?? {})) {
-    const node = shape.fields?.[field];
+    const node = fieldNode(shape, field);
     const current = next[field];
     if (node?.kind !== "keyed" || !Array.isArray(current)) throw new Error(`Observation delta patches unknown collection ${path}.${field}.`);
     next[field] = applyKeyed(current, keyed, node, `${path}.${field}`, repairs);

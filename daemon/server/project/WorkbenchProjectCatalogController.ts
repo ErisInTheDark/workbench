@@ -194,6 +194,12 @@ export default class WorkbenchProjectCatalogController {
   private readonly discoverIcon: typeof discoverWorkbenchProjectIcon;
   private readonly cacheTtlMs: number;
   private catalog: ProjectCatalogSnapshot | null = null;
+  /** Facts derived from `catalog.records`; records are replaced, never mutated, so identity marks them current. */
+  private recordFacts: {
+    records: WorkbenchProjectCacheRecord[] | null;
+    incomplete: boolean;
+    locations: { data: Array<Required<Pick<WorkbenchProjectCacheRecord, "project" | "identityKey" | "rootIdentityKeys">>> } | null;
+  } | null = null;
   private catalogExpiresAt = 0;
   private catalogGeneration = 0;
   private readonly cwdResolutions = new Map<string, Promise<AgentEndpointProjectResolution>>();
@@ -415,10 +421,21 @@ export default class WorkbenchProjectCatalogController {
     };
   }
 
+  /** Callers read this in loops (canonical project checks per observation), so record-derived facts are built once per records. */
   getFacts() {
     const catalogue = this.catalog?.payload ?? null;
-    const records = this.catalog?.records ?? [];
-    const incomplete = records.some(record => !record.identityKey || !record.rootIdentityKeys);
+    const records = this.catalog?.records ?? null;
+    if (this.recordFacts?.records !== records) {
+      this.recordFacts = {
+        records,
+        incomplete: records?.some(record => !record.identityKey || !record.rootIdentityKeys) ?? false,
+        locations: records ? {
+          data: records.flatMap(record => record.identityKey && record.rootIdentityKeys
+            ? [{ project: record.project, identityKey: record.identityKey, rootIdentityKeys: record.rootIdentityKeys }] : []),
+        } : null,
+      };
+    }
+    const { incomplete, locations } = this.recordFacts;
     return {
       revision: this.factRevision,
       phase: catalogue
@@ -426,10 +443,7 @@ export default class WorkbenchProjectCatalogController {
         : (this.refreshFailure ? "failed" as const : "pending" as const),
       failure: this.refreshFailure,
       catalogue,
-      locations: catalogue ? {
-        data: records.flatMap(record => record.identityKey && record.rootIdentityKeys
-          ? [{ project: record.project, identityKey: record.identityKey, rootIdentityKeys: record.rootIdentityKeys }] : []),
-      } : null,
+      locations: catalogue ? locations : null,
     };
   }
 
