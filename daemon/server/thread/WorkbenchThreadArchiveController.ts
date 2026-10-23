@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadArchiveController: query archival deadlines and own one expiry wake.
+ * - default WorkbenchThreadArchiveController: judge archival due-ness, query archival deadlines and own one expiry wake.
  */
 import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 
@@ -21,15 +21,16 @@ export default class WorkbenchThreadArchiveController {
     schedule?: (callback: () => Promise<void>, delayMs: number) => () => void;
   }) {}
 
-  private deadline(record: WorkbenchThreadStateRecord) {
+  private deadline(record: WorkbenchThreadStateRecord, settledAt: number | null) {
     return record.entryKind === "thread" && record.lifecycle.settled && !record.metadata.archived
       // Settling is not activity, but it restarts the archive clock.
-      ? Math.max(record.activityAt, record.settledAt ?? 0) + SETTLED_ARCHIVE_AGE_MS
+      ? Math.max(record.activityAt, settledAt ?? 0) + SETTLED_ARCHIVE_AGE_MS
       : null;
   }
 
-  isDue(record: WorkbenchThreadStateRecord) {
-    const deadline = this.deadline(record);
+  /** `settledAt` judges the record as if settled then, without copying it. */
+  isDue(record: WorkbenchThreadStateRecord, settledAt = record.settledAt) {
+    const deadline = this.deadline(record, settledAt);
     return deadline !== null && deadline <= this.options.now();
   }
 

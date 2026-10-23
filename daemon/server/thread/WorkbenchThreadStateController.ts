@@ -487,18 +487,19 @@ export default class WorkbenchThreadStateController {
   private synchronizeSettlementTimestamps(state: ProjectState, { loaded = false }: { loaded?: boolean } = {}) {
     const now = this.now();
     let changed = false;
+    // Runs over every entry on each commit, so unchanged entries are judged without being copied.
     for (const [key, entry] of state.entries) {
       if (entry.entryKind === "draft") continue;
       const settledAt = entry.lifecycle.settled ? entry.settledAt ?? now : null;
-      const resolutionAt = this.gitRetentionEpoch({ ...entry, settledAt });
+      const resolutionAt = this.gitRetentionEpoch(entry, settledAt);
       const gitHistoryCleanedAt = resolutionAt !== null
         && entry.gitHistoryCleanedAt !== null
         && entry.gitHistoryCleanedAt >= resolutionAt
         ? entry.gitHistoryCleanedAt
         : null;
-      const timed = { ...entry, gitHistoryCleanedAt, settledAt };
-      const archive = this.archives.isDue(loaded && entry.settledAt === null ? { ...timed, settledAt: null } : timed);
+      const archive = this.archives.isDue(entry, loaded && entry.settledAt === null ? null : settledAt);
       if (entry.settledAt === settledAt && entry.gitHistoryCleanedAt === gitHistoryCleanedAt && !archive) continue;
+      const timed = { ...entry, gitHistoryCleanedAt, settledAt };
       state.entries.set(key, archive && timed.entryKind === "thread"
         ? { ...timed, metadata: { archived: true, pinned: false, snoozed: false } }
         : timed);
@@ -507,12 +508,12 @@ export default class WorkbenchThreadStateController {
     return changed;
   }
 
-  private gitRetentionEpoch(entry: Exclude<WorkbenchThreadStateEntry, { entryKind: "draft" }>) {
+  private gitRetentionEpoch(entry: Exclude<WorkbenchThreadStateEntry, { entryKind: "draft" }>, settledAt = entry.settledAt) {
     if (entry.gitArc?.phase === "resolved") {
       const resolvedAt = Date.parse(entry.gitArc.updatedAt);
       return Number.isFinite(resolvedAt) ? resolvedAt : null;
     }
-    return entry.gitArc ? null : entry.lifecycle.settled ? entry.settledAt ?? null : null;
+    return entry.gitArc ? null : entry.lifecycle.settled ? settledAt ?? null : null;
   }
 
   /** Expired threads with the durable proposal ids each root's retention must see covered, read for just them. */
@@ -1276,6 +1277,9 @@ export default class WorkbenchThreadStateController {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     const entry = state.entries.get(key);
+    // Every lifecycle change lands here before it persists, so a resident entry is never behind storage. Claim checks run
+    // on each arc command, so only an entry missing here reads (and decodes) the whole stored project.
+    if (entry && entry.entryKind !== "draft") return { lifecycle: entry.lifecycle, title: entry.title };
     const stored = await this.loadProjectStorage(projectId);
     const storedEntry = stored.records.find((candidate) => candidate.identity.harness === harness && candidate.identity.threadId === threadId);
     const lifecycle = storedEntry?.lifecycle ?? (entry && entry.entryKind !== "draft" ? entry.lifecycle : null);
