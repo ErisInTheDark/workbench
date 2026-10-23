@@ -61,8 +61,11 @@ function buildScopeMatcher(scope: ReloadSourceWatchScope) {
   const paths = new Set(scope.paths.map(normalized));
   const everything = paths.has("");
   const holdsSources = new Set([...paths].flatMap(source => [...parentDirectories(source)]));
-  const covered = (relative: string) => everything || paths.has(relative)
-    || [...parentDirectories(relative)].some(directory => paths.has(directory));
+  const covered = (relative: string) => {
+    if (everything || paths.has(relative)) return true;
+    for (const directory of parentDirectories(relative)) if (paths.has(directory)) return true;
+    return false;
+  };
   const patterns = scope.patterns ?? [];
   const matcher = createGitignoreMatcher(patterns.join("\n"));
   const roots = patterns.flatMap((raw, index) => {
@@ -168,17 +171,17 @@ export default class ReloadSourceWatcher {
     let directoryChanged = source !== null && this.watchers.has(source);
     // Directory access/attribute notifications do not change source content.
     if (directoryChanged && event === "change") return;
-    if (source !== null && !fileChanged && !directoryChanged && event === "rename" && scopes.some(scope => scope.directory(source))) {
+    // A rename may be a new source-bearing directory, even one whose name a file pattern also matches. A missing,
+    // unwatched path held nothing to watch, and a renamed file leaves directory coverage as it was.
+    if (source !== null && !directoryChanged && event === "rename" && scopes.some(scope => scope.directory(source))) {
       try {
         directoryChanged = (await stat(path.join(this.options.root, source))).isDirectory();
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
-        // An absent source-bearing directory may have been removed before discovery.
-        directoryChanged = true;
       }
     }
     if (this.closed || (source !== null && !fileChanged && !directoryChanged)) return;
-    if (event === "rename" || source === null) {
+    if (source === null || (event === "rename" && directoryChanged)) {
       // Directory replacement invalidates the old handle even when the pathname survives.
       for (const [directory, handle] of this.watchers) {
         if (directory && (source === null ? directory.startsWith(relative ? `${relative}/` : "") : directory === source || directory.startsWith(`${source}/`))) {

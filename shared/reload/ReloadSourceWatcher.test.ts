@@ -79,6 +79,17 @@ test("source coverage excludes internal and generated trees while admitting new 
   assert.equal(target.changes, before + 2);
 });
 
+test("a renamed source file reports a change without rediscovering directories; a new directory does", async context => {
+  const target = await fixture(context);
+  await fs.mkdir(path.join(target.root, "src", "unannounced"));
+  await fs.writeFile(path.join(target.root, "src", "owner.ts"), "source");
+  await target.notify("src", "rename", "owner.ts");
+  assert.equal(target.handles.has("src/unannounced"), false, "a file rename must not walk the source tree again");
+
+  await target.notify("src", "rename", "unannounced");
+  assert.ok(target.handles.has("src/unannounced"));
+});
+
 test("ordered source patterns can reinclude a subtree beneath an excluded directory", async context => {
   const target = await fixture(context);
   await fs.mkdir(path.join(target.root, "src/generated/handwritten"), { recursive: true });
