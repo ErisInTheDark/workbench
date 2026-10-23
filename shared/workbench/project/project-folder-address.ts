@@ -20,6 +20,39 @@ export interface ProjectFolderOption {
 }
 
 type FolderAddressEntry = { folder: ProjectFolderOption; address: string[] };
+type FolderAddressIndex = {
+  entries: readonly Readonly<FolderAddressEntry>[];
+  byKey: ReadonlyMap<string, Readonly<FolderAddressEntry>>;
+};
+
+/**
+ * Every route read and link resolves folders against the same universe, and each derivation compares every folder's
+ * suffixes with every other's; the universe is replaced, never edited, so its addresses are derived once.
+ */
+const addressIndexes = new WeakMap<readonly ProjectFolderOption[], FolderAddressIndex>();
+
+function addressIndex(folders: readonly ProjectFolderOption[]): FolderAddressIndex {
+  const cached = addressIndexes.get(folders);
+  if (cached) return cached;
+  const bare = ProjectFolderAddress.suffixes(folders);
+  const bareCounts = new Map<string, number>();
+  for (const suffix of bare) {
+    const key = suffix.join("/").toLowerCase();
+    bareCounts.set(key, (bareCounts.get(key) ?? 0) + 1);
+  }
+  const entries = folders.map((folder, index) => {
+    const suffix = bare[index]!;
+    return {
+      folder,
+      address: (bareCounts.get(suffix.join("/").toLowerCase()) ?? 0) > 1 ? [folder.target.daemonId, ...suffix] : suffix,
+    };
+  });
+  const byKey = new Map<string, FolderAddressEntry>();
+  for (const entry of entries) if (!byKey.has(folderKey(entry.folder.target))) byKey.set(folderKey(entry.folder.target), entry);
+  const index = { entries, byKey };
+  addressIndexes.set(folders, index);
+  return index;
+}
 
 function folderKey(target: ProjectLocationReference) {
   return `${target.daemonId}/${target.projectId}`;
@@ -119,31 +152,17 @@ export namespace ProjectFolderAddress {
 
   /** Derive every folder's url address at once: shortest daemon-unique path suffix, daemon id prefix only on cross-daemon collisions. */
   export function forAll(folders: readonly ProjectFolderOption[]): FolderAddressEntry[] {
-    const bare = suffixes(folders);
-    const bareCounts = new Map<string, number>();
-    for (const suffix of bare) {
-      const key = suffix.join("/").toLowerCase();
-      bareCounts.set(key, (bareCounts.get(key) ?? 0) + 1);
-    }
-    return folders.map((folder, index) => {
-      const suffix = bare[index]!;
-      return {
-        folder,
-        address: (bareCounts.get(suffix.join("/").toLowerCase()) ?? 0) > 1
-          ? [folder.target.daemonId, ...suffix]
-          : [...suffix],
-      };
-    });
+    return addressIndex(folders).entries.map(entry => ({ folder: entry.folder, address: [...entry.address] }));
   }
 
   export function forFolder(folders: readonly ProjectFolderOption[], target: ProjectLocationReference): string[] {
-    return forAll(folders).find(entry => folderKey(entry.folder.target) === folderKey(target))?.address ?? [];
+    return [...addressIndex(folders).byKey.get(folderKey(target))?.address ?? []];
   }
 
   /** Resolve a url folder address to one folder. Ambiguous or unknown addresses select nothing, never the wrong folder. */
   export function resolve(folders: readonly ProjectFolderOption[], address: readonly string[]): ProjectFolderOption | null {
     if (!address.length) return null;
-    const entries = forAll(folders);
+    const { entries } = addressIndex(folders);
     const exact = entries.filter(entry =>
       addressMatches(address, entry.address)
       || (entry.folder.target.daemonId === address[0] && addressMatches(address.slice(1), entry.address.slice(1))));
