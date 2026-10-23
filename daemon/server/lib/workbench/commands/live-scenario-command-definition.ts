@@ -28,7 +28,18 @@ const threadScenario = z.object({ file: z.literal(THREAD_SCENARIO), providers: p
 const installScenario = z.object({ file: z.literal(INSTALL_SCENARIO) });
 const cwd = { cwd: z.string().trim().min(1) };
 
-const scenarioSchema = z.discriminatedUnion("file", [threadScenario.strict(), installScenario.strict()]);
+/** One flat object, since a union cannot list as an MCP tool input; per-scenario rules move into the refinement. */
+const scenarioSchema = z.object({
+  file: z.enum([THREAD_SCENARIO, INSTALL_SCENARIO]),
+  providers: providersSchema.optional().describe("Provider journeys only: mode per provider, e.g. { codex: \"fake\" }."),
+}).strict().superRefine((input, context) => {
+  if (input.file === THREAD_SCENARIO && !input.providers) {
+    context.addIssue({ code: "custom", path: ["providers"], message: "Provider journeys require provider modes." });
+  }
+  if (input.file === INSTALL_SCENARIO && input.providers) {
+    context.addIssue({ code: "custom", path: ["providers"], message: "The installer scenario takes no provider modes." });
+  }
+});
 
 export const WorkbenchLiveScenarioRequestSchema = z.discriminatedUnion("file", [
   threadScenario.extend(cwd).strict(),

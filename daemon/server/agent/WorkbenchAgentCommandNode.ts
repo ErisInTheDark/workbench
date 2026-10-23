@@ -212,7 +212,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
         });
       },
-      executeMcpSpy: async body => new Response(formatWorkbenchMcpSpy(build.get("mcpServers").traffic(WorkbenchMcpSpyRequestSchema.parse(body))), {
+      executeMcpSpy: async body => new Response(formatWorkbenchMcpSpy(build.get("mcpServers").traffic(WorkbenchMcpSpyRequestSchema.parse(body).query)), {
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       }),
       executeHeapSnapshot: async (body, signal) => {

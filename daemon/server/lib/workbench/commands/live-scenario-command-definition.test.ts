@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseWorkbenchAgentCliCommand } from "../cli/workbench-agent-cli-commands";
+import { WORKBENCH_LIVE_SCENARIO_COMMANDS } from "./live-scenario-command-definition";
 
 const context = {
   callerHarness: "codex",
@@ -60,6 +61,20 @@ test("the installer scenario takes no provider modes, and provider journeys stil
   ]) {
     assert.equal((await parseWorkbenchAgentCliCommand(args, context)).kind, "error");
   }
+});
+
+test("tool JSON input builds the same request as the CLI and keeps the per-scenario rules", async () => {
+  const live = WORKBENCH_LIVE_SCENARIO_COMMANDS.find(command => command.words.join(" ") === "test live")!;
+  const thread = "test/scenarios/thread.scenario.test.ts";
+  const install = "test/install/InstallSandbox.scenario.test.ts";
+  for (const [cli, json] of [
+    [["--codex=fake", "--claude=fake", "--", thread], { file: thread, providers: { codex: "fake", claude: "fake" } }],
+    [["--", install], { file: install }],
+  ] as const) {
+    assert.deepEqual((await live.buildRequestFromJson(json, context)).body, (await live.buildRequestFromCli([...cli], context)).body);
+  }
+  await assert.rejects(live.buildRequestFromJson({ file: thread }, context), /provider modes/u);
+  await assert.rejects(live.buildRequestFromJson({ file: install, providers: { codex: "fake" } }, context), /no provider modes/u);
 });
 
 test("live provider cancellation targets only the trusted runner", async () => {
