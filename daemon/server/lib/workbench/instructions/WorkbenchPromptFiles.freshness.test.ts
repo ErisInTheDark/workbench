@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
+import { gitProcesses } from "../git/GitProcessHost";
 
 test("public instruction use refreshes mirrored generated files and preserves active overrides", async () => {
   const originalCwd = process.cwd();
@@ -299,6 +300,8 @@ user-owned agent prompt
     process.chdir(originalCwd);
     if (originalLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
     else process.env.WORKBENCH_LIBRARY_ROOT = originalLibraryRoot;
+    // The library's git worker started inside the temporary cwd and holds it on Windows until retired.
+    await gitProcesses.dispose();
     await temporary.dispose();
   }
 });
