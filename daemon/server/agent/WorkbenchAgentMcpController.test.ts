@@ -1327,6 +1327,59 @@ test("MCP returns typed Git status without replacing its readable output", async
   }
 });
 
+for (const readsStructured of [false, true]) {
+  test(`${readsStructured ? "structured-reading" : "text-reading"} models get readable results from calls and detached waits while transcripts keep typed results`, async () => {
+    const status = {
+      pending: [], accepted: [], dirtyClaims: ["a.ts"], cleanClaims: [], stashedClaims: [],
+      unclaimedDirt: [], recovery: [], unavailableRecovery: [],
+    };
+    const threadId = WorkbenchThreadIdSchema.parse("thread");
+    const recorded: ProviderToolResult[] = [];
+    const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+    const tools: WorkbenchProviderTools = {
+      caller: async () => ({ harness: "claude", threadId, cwd: "C:/workspace" }),
+      describe: async () => ({
+        experimental: {}, shellDescription: "test", shellEscalation: true,
+        ...(readsStructured ? { modelReadsStructuredContent: true } : {}),
+      }),
+      patchClaims: async () => "",
+      transcript: {
+        start: async input => ({
+          threadId, turnId: "turn", itemId: input.tool, sourceId: "source", parentId: "source", tool: input.tool, arguments: {}, startedAt: 0,
+        }) as WorkbenchToolTranscriptReference,
+        finish: async (_reference, result) => { recorded.push(result); },
+      },
+    };
+    const controller = new WorkbenchAgentMcpController({
+      tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", requestRegistry,
+      executeCommand: async () => Response.json(status),
+    });
+    const scope = { clientScope: "client", projectLocal: true, provider: "claude", subagent: false };
+    try {
+      const step = await controller.call(scope, {
+        arguments: {}, detachableShell: true, meta: {}, name: "git_arc_status", requestId: 1, signal: new AbortController().signal,
+      });
+      assert.ok(step.kind === "result");
+      assert.match(responseText(step.result), /Dirty claims: a\.ts/u);
+      assert.equal("structuredContent" in step.result, !readsStructured);
+      assert.equal((recorded[0]?.structuredContent as { kind?: string } | undefined)?.kind, "success");
+
+      const wait = await controller.call(scope, {
+        arguments: { names: ["momo"] }, detachableShell: true, meta: {}, name: "subagent_wait", requestId: 2, signal: new AbortController().signal,
+      });
+      assert.ok(wait.kind === "detached");
+      requestRegistry.interruptThreadWaits(threadId);
+      const interrupted = await controller.finish(scope, wait.call, { error: wait.call.signal.reason });
+      wait.call.unregister();
+      assert.ok(responseText(interrupted).trim());
+      assert.equal("structuredContent" in interrupted, !readsStructured);
+      assert.deepEqual(recorded[1]?.structuredContent, { kind: "interruptedBySteer", version: 1 });
+    } finally {
+      requestRegistry.dispose();
+    }
+  });
+}
+
 test("keeps declared Code Mode waits alive with request-owned progress only", async () => {
   const executions = new Map<string, (response: Response) => void>();
   const started = deferred<void>();

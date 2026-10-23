@@ -58,6 +58,8 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
       toolUseIdMeta: CLAUDE_TOOL_USE_ID_META,
       // Claude summarises prose between tool calls, so commentary travels as this tool's input.
       hostsUserMessage: true,
+      // Claude Code shows the model structured content in place of text, hiding agent-facing result lines.
+      modelReadsStructuredContent: true,
     };
   }
 

@@ -115,6 +115,8 @@ export interface WorkbenchProviderTools {
      * adapter renders the call's streamed input as commentary under the call's own reference.
      */
     hostsUserMessage?: boolean;
+    /** The model sees a successful result's structured content instead of its text, so Workbench sends only the text. */
+    modelReadsStructuredContent?: boolean;
   }>;
   caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
   /** Prepare the provider-native shell, required only when `describe().shellEscalation` is false. */

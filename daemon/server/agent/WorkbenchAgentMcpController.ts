@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, caller audience, cancellation, hosted-shell approval, and command execution ports.
- * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, per-caller parent-only and root-only gates, the transcript-free user-message acknowledgement for providers that host it, plus the served tool specs for prompt-cost accounting.
+ * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, per-caller parent-only and root-only gates, the transcript-free user-message acknowledgement for providers that host it, text-only results for providers whose model reads structured content, plus the served tool specs for prompt-cost accounting.
  */
 import type http from "node:http";
 
@@ -364,6 +364,22 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   }
 
   async call(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall): Promise<WorkbenchMcpToolStep> {
+    const step = await this.step(scope, call);
+    return step.kind === "result" ? { ...step, result: await this.wireResult(scope, call.name, step.result) } : step;
+  }
+
+  /**
+   * Providers whose model reads structured content instead of text get only the text, which carries every agent-facing
+   * line; transcripts already recorded both. The shell declares an output schema, so its structured result stays.
+   */
+  private async wireResult(scope: WorkbenchMcpScope, toolName: string, result: CallToolResult): Promise<CallToolResult> {
+    if (toolName === WORKBENCH_SHELL_MCP_TOOL_NAME || result.structuredContent === undefined) return result;
+    if (!(await this.tools(scope.provider).describe()).modelReadsStructuredContent) return result;
+    const { structuredContent: _transcriptOnly, ...text } = result;
+    return text;
+  }
+
+  private async step(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall): Promise<WorkbenchMcpToolStep> {
     const tools = this.tools(scope.provider);
     try {
       if (call.name === WORKBENCH_SHELL_MCP_TOOL_NAME) {
@@ -543,7 +559,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         ? await this.commandResult(call.request, outcome.response)
         : this.commandFailure(definition, "error" in outcome ? outcome.error : new Error("The command finished without a response."), call.signal);
     }
-    return await this.finishTranscript(tools, call.transcript as WorkbenchToolTranscriptReference | null, result);
+    const finished = await this.finishTranscript(tools, call.transcript as WorkbenchToolTranscriptReference | null, result);
+    return call.shell ? finished : await this.wireResult(scope, call.toolName, finished);
   }
 
   /**
