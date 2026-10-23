@@ -511,7 +511,7 @@ test("transcript CLI accepts Workbench ids directly and restricts managed caller
   assert.equal(parsed.kind, "request");
   if (parsed.kind !== "request") return;
   assert.deepEqual(parsed.request.body?.threads, ["wb-thread"]);
-  assert.deepEqual(parsed.request.body?.queries, ["100%_literal"]);
+  assert.equal(parsed.request.body?.query, "100%_literal");
   assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "read", "--thread", "wb-thread"], context)).kind, "request");
   const providerRead = await parseWorkbenchAgentCliCommand([
     "transcript", "read", "--thread", "wb-thread", "--turn", "turn-id", "--provider",
@@ -789,17 +789,17 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
 
   const search = await parseWorkbenchAgentCliCommand([
     "thread", "recall", "search", "--thread", "thread/1", "--query", "normal commentary",
-    "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--before", "agent:item-9",
+    "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--cursor", "next-page",
   ], { callerThreadId: "ambient/thread" });
   const contextSearch = await parseWorkbenchAgentCliCommand([
-    "thread", "context", "search", "--thread", "thread/1", "--query", "normal commentary",
-    "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--before", "agent:item-9",
+    "thread", "context", "search", "--thread", "thread/1", "--query", "normal", "--query", "commentary",
+    "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--cursor", "next-page",
   ]);
   assert.equal(search.kind, "request");
   assert.equal(contextSearch.kind, "request");
   assert.deepEqual(contextSearch.request, search.request);
   assert.deepEqual(search.request, {
-    body: { action: "search", before: "agent:item-9", kinds: ["user-message", "commentary"], limit: 12, query: "normal commentary" },
+    body: { action: "search", cursor: "next-page", kinds: ["user-message", "commentary"], limit: 12, query: "normal commentary" },
     method: "POST",
     path: "/api/thread-context/thread%2F1",
     responseKind: "native",
@@ -808,30 +808,23 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     "thread", "recall", "search", "--thread", "thread/1", "--query", "needle", "--limit", "0",
   ])).kind, "error");
 
-  const expand = await parseWorkbenchAgentCliCommand([
-    "thread", "recall", "expand", "--thread", "thread/1", "--ref", "agent:item-2", "--cursor", "recall-v1:cursor",
+  const around = await parseWorkbenchAgentCliCommand([
+    "thread", "recall", "--thread", "thread/1", "--around", "item-2",
   ], { callerThreadId: "ambient/thread" });
-  assert.equal(expand.kind, "request");
-  assert.deepEqual(expand.request.body, {
-    action: "expand",
-    cursor: "recall-v1:cursor",
-    ref: "agent:item-2",
-  });
+  assert.equal(around.kind, "request");
+  assert.equal(around.request.path, "/api/thread-context/thread%2F1?around=item-2");
+  assert.equal((await parseWorkbenchAgentCliCommand(["thread", "recall", "expand", "--ref", "item-2"], { callerThreadId: "ambient/thread" })).kind, "error");
 
   const currentThreadOptions = { callerThreadId: "current/thread", cwd: "C:/workspace" };
   const currentRecall = await parseWorkbenchAgentCliCommand(["thread", "recall", "--kind", "user-message"], currentThreadOptions);
   const currentSearch = await parseWorkbenchAgentCliCommand(["thread", "recall", "search", "--query", "needle"], currentThreadOptions);
-  const currentExpand = await parseWorkbenchAgentCliCommand(["thread", "recall", "expand", "--ref", "agent:item-2"], currentThreadOptions);
   assert.equal(currentRecall.kind, "request");
   assert.equal(currentSearch.kind, "request");
-  assert.equal(currentExpand.kind, "request");
   assert.equal(currentRecall.request.path, "/api/thread-context/current%2Fthread?kind=user-message");
   assert.equal(currentSearch.request.path, "/api/thread-context/current%2Fthread");
-  assert.equal(currentExpand.request.path, "/api/thread-context/current%2Fthread");
   for (const command of [
     ["thread", "recall"],
     ["thread", "recall", "search", "--query", "needle"],
-    ["thread", "recall", "expand", "--ref", "agent:item-2"],
   ]) {
     assert.equal((await parseWorkbenchAgentCliCommand(command, { callerThreadId: null })).kind, "error");
   }

@@ -137,12 +137,9 @@
  * - WorkbenchQuestionnaireHistoryEntry: questionnaire history entry.
  * - WorkbenchSteerHistoryStatus: steer delivery lifecycle state.
  * - WorkbenchSteerHistoryEntry: correlated steer history entry.
- * - WorkbenchThreadContextBundle: thread context projection bundle.
  * - WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS: recall response size limit.
- * - WorkbenchThreadRecallKind: recall record kind.
+ * - WORKBENCH_THREAD_RECALL_KINDS/WorkbenchThreadRecallKind: user-visible narrative record kinds.
  * - WorkbenchThreadRecallSearchRequest: recall search request.
- * - WorkbenchThreadRecallExpandRequest: recall expansion request.
- * - WorkbenchThreadRecallRequest: recall request union.
  * - FileNode: project-tree file node.
  * - DirectoryNode: project-tree directory node.
  * - TreeNode: project-tree node union.
@@ -1214,39 +1211,21 @@ export interface WorkbenchThreadContextEntryScope {
   turnIds: string[];
 }
 
-export interface WorkbenchThreadContextBundle {
-  browseResultEntries: WorkbenchBrowseResultEntry[];
-  questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
-  steerEntries: WorkbenchSteerHistoryEntry[];
-  thread: ThreadPayload;
-}
-
 export const WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS = 20_000;
 
-export type WorkbenchThreadRecallKind =
-  | "agent-message"
-  | "commentary"
-  | "final-answer"
-  | "plan"
-  | "questionnaire"
-  | "user-message"
-  | "user-steer";
+export const WORKBENCH_THREAD_RECALL_KINDS = [
+  "user-message", "user-steer", "agent-message", "commentary", "final-answer", "plan", "questionnaire",
+] as const;
+
+export type WorkbenchThreadRecallKind = typeof WORKBENCH_THREAD_RECALL_KINDS[number];
 
 export interface WorkbenchThreadRecallSearchRequest {
   action: "search";
   query: string;
   kinds?: WorkbenchThreadRecallKind[];
   limit?: number;
-  before?: string;
-}
-
-export interface WorkbenchThreadRecallExpandRequest {
-  action: "expand";
-  ref: string;
   cursor?: string;
 }
-
-export type WorkbenchThreadRecallRequest = WorkbenchThreadRecallExpandRequest | WorkbenchThreadRecallSearchRequest;
 
 export interface FileNode {
   isIgnored?: boolean;

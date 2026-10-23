@@ -1,27 +1,27 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptCommandController: own admitted stored-history scans and CLI responses.
+ * - default WorkbenchTranscriptCommandController: answer `wb transcript` with one history query in the items view per request.
  */
 import path from "node:path";
 import { z } from "zod";
 import {
-  TranscriptCommandQuerySchema,
-  TranscriptQueryError,
-  type TranscriptQuery,
-  type TranscriptQueryPage,
-} from "../database/transcript/transcript-query-contract";
+  HistoryCommandQuerySchema,
+  HistoryQueryError,
+  type HistoryPage,
+  type HistoryQuery,
+} from "../database/history/history-query-contract";
 import { renderTranscriptPage, transcriptPageOutput } from "./transcript-command-markdown";
 
 interface Options {
   materializeTurn(threadId: string, turnId: string, signal: AbortSignal): Promise<void>;
   projectRoot: string;
-  read(query: TranscriptQuery): Promise<TranscriptQueryPage>;
+  read(query: HistoryQuery): Promise<HistoryPage>;
 }
 
 export default class WorkbenchTranscriptCommandController {
   constructor(private readonly options: Options) {}
   async execute(input: object, signal: AbortSignal) {
-    const parsed = TranscriptCommandQuerySchema.safeExtend({
+    const parsed = HistoryCommandQuerySchema.safeExtend({
       cwd: z.string().min(1).max(4096), callerThreadId: z.string().min(1).max(4096).nullable(),
     }).safeParse(input);
     if (!parsed.success) return new Response(parsed.error.issues.map(issue => issue.message).join("\n").slice(0, 2000), { status: 400 });
@@ -41,21 +41,13 @@ export default class WorkbenchTranscriptCommandController {
       }
       const page = await this.options.read(query);
       signal.throwIfAborted();
-      while (query.action === "search" && page.rows.length < query.limit && page.nextCursor) {
-        const next = await this.options.read({ ...query, cursor: page.nextCursor, limit: query.limit - page.rows.length });
-        signal.throwIfAborted();
-        if (next.nextCursor === page.nextCursor) throw new Error("Transcript query did not advance its cursor.");
-        page.rows.push(...next.rows);
-        page.scanned += next.scanned;
-        page.nextCursor = next.nextCursor;
-      }
       const headers = { "Cache-Control": "no-store" };
       return query.json
         ? Response.json(transcriptPageOutput(query, page), { headers })
         : new Response(renderTranscriptPage(query, page, cwd), { headers: { ...headers, "Content-Type": "text/markdown; charset=utf-8" } });
     } catch (error) {
       if (signal.aborted) throw signal.reason;
-      if (error instanceof TranscriptQueryError) return new Response(`${error.message.slice(0, 2000)}\n`, { status: 400 });
+      if (error instanceof HistoryQueryError) return new Response(`${error.message.slice(0, 2000)}\n`, { status: 400 });
       const detail = (error instanceof Error ? error.message : "non-error failure")
         .replace(/(["'`])[\s\S]*?\1/gu, "[value]")
         .replace(/\b[A-Za-z]:[\\/][^\r\n]*/gu, "[path]")

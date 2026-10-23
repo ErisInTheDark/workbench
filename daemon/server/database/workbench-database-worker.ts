@@ -25,6 +25,7 @@ import WorkbenchThreadIdentityRepository from "./thread-identity/WorkbenchThread
 import WorkbenchTranscriptIdentityRepository from "./transcript/WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchThreadStateRelationalRepository from "./thread-state/WorkbenchThreadStateRelationalRepository.ts";
 import WorkbenchThreadStateIntegrity from "./thread-state/WorkbenchThreadStateIntegrity.ts";
+import WorkbenchHistoryIndex from "./history/WorkbenchHistoryIndex.ts";
 import WorkbenchSearchRepository from "./search/WorkbenchSearchRepository.ts";
 import WorkbenchStatsRepository from "./stats/WorkbenchStatsRepository.ts";
 import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportRepository.ts";
@@ -52,6 +53,7 @@ let transcriptRepository: WorkbenchTranscriptRepository | null = null;
 let threadIdentityRepository: WorkbenchThreadIdentityRepository | null = null;
 let transcriptIdentityRepository: WorkbenchTranscriptIdentityRepository | null = null;
 let threadStateRepository: WorkbenchThreadStateRelationalRepository | null = null;
+let historyIndex: WorkbenchHistoryIndex | null = null;
 let searchRepository: WorkbenchSearchRepository | null = null;
 let statsRepository: WorkbenchStatsRepository | null = null;
 let statsImportRepository: WorkbenchStatsImportRepository | null = null;
@@ -71,8 +73,9 @@ function initializeRepositories(reader = false) {
   transcriptIdentityRepository = new WorkbenchTranscriptIdentityRepository(database);
   transcriptRepository = new WorkbenchTranscriptRepository(database, threadIdentityRepository);
   threadStateRepository = new WorkbenchThreadStateRelationalRepository(database, threadIdentityRepository);
-  searchRepository = reader ? null : new WorkbenchSearchRepository(database);
-  if (searchRepository) indexSearchNarrative(searchRepository);
+  historyIndex = reader ? null : new WorkbenchHistoryIndex(database);
+  searchRepository = historyIndex ? new WorkbenchSearchRepository(database, { history: historyIndex }) : null;
+  if (historyIndex) indexHistory(historyIndex);
   statsRepository = new WorkbenchStatsRepository(database);
   statsImportRepository = new WorkbenchStatsImportRepository(database);
   statsAttributionRepository = new WorkbenchStatsAttributionRepository(database);
@@ -80,14 +83,14 @@ function initializeRepositories(reader = false) {
   transcriptRetentionRepository = reader ? null : new WorkbenchTranscriptRetentionRepository(database);
 }
 
-/** Backfill the search narrative index between requests; a search arriving first finishes it inline. */
-function indexSearchNarrative(repository: WorkbenchSearchRepository) {
+/** Backfill the history index between requests; a search arriving first finishes it inline. */
+function indexHistory(index: WorkbenchHistoryIndex) {
   setImmediate(() => {
-    if (searchRepository !== repository) return;
+    if (historyIndex !== index) return;
     try {
-      if (repository.indexNarrative()) indexSearchNarrative(repository);
+      if (index.backfillStep()) indexHistory(index);
     } catch (error) {
-      postDiagnostic({ source: "database", operation: "search index", phase: "warning", level: "warn",
+      postDiagnostic({ source: "database", operation: "history index", phase: "warning", level: "warn",
         detail: boundedError(error), elapsedMs: null, progress: null });
     }
   });
@@ -134,6 +137,7 @@ const context: WorkbenchDatabaseWorkerContext = {
   get transcriptIdentities() { return required(transcriptIdentityRepository, "transcript identity repository"); },
   get transcripts() { return required(transcriptRepository, "transcript repository"); },
   get threadState() { return required(threadStateRepository, "thread state"); },
+  get history() { return required(historyIndex, "history index"); },
   get search() { return required(searchRepository, "search repository"); },
   get stats() { return required(statsRepository, "stats repository"); },
   get statsImports() { return required(statsImportRepository, "stats import repository"); },
@@ -162,6 +166,7 @@ function closeDatabase() {
   transcriptIdentityRepository = null;
   transcriptRepository = null;
   threadStateRepository = null;
+  historyIndex = null;
   searchRepository = null;
   statsRepository = null;
   statsImportRepository = null;

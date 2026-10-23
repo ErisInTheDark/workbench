@@ -7,6 +7,7 @@
 import type Database from "better-sqlite3";
 import type { WorkbenchDatabaseDiagnosticEvent } from "workbench-shared/database/workbench-database-diagnostic";
 import type GitArcProposalDiffRepository from "../git/GitArcProposalDiffRepository.ts";
+import type WorkbenchHistoryIndex from "../history/WorkbenchHistoryIndex.ts";
 import type WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 import type WorkbenchTranscriptRetentionRepository from "../retention/WorkbenchTranscriptRetentionRepository.ts";
 import type WorkbenchSearchRepository from "../search/WorkbenchSearchRepository.ts";
@@ -29,6 +30,7 @@ export interface WorkbenchDatabaseWorkerContext {
   readonly transcriptIdentities: WorkbenchTranscriptIdentityRepository;
   readonly transcripts: WorkbenchTranscriptRepository;
   readonly threadState: WorkbenchThreadStateRelationalRepository;
+  readonly history: WorkbenchHistoryIndex;
   readonly search: WorkbenchSearchRepository;
   readonly stats: WorkbenchStatsRepository;
   readonly statsImports: WorkbenchStatsImportRepository;

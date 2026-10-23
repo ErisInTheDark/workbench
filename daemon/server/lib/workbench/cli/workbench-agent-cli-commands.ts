@@ -10,7 +10,7 @@ import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbe
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { isSamePath } from "workbench-shared/same-path";
 import { WorkbenchCommandArgumentError } from "../commands/workbench-agent-command-arguments";
-import { TRANSCRIPT_QUERY_KINDS } from "../../../database/transcript/transcript-query-contract";
+import { HISTORY_ITEM_KINDS, HISTORY_NARRATIVE_KINDS } from "../../../database/history/history-query-contract";
 
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
@@ -97,7 +97,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "task set", "task get", "task completed", "task blocked",
   "todo", "todo remove",
   "mcp tools", "mcp request", "mcp call", "mcp authorize", "mcp download",
-  "thread recall", "thread recall search", "thread recall expand",
+  "thread recall", "thread recall search",
   "git add", "git unstage", "git commit", "git thread", "git repo", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
   "git arc status", "git arc edit start", "git arc edit view", "git arc edit apply", "git arc edit revert", "git arc edit end", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
   "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
@@ -112,24 +112,24 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "transcript", usage: "wb transcript <projects|threads|turns|search|read|show|stats> [options]", words: ["transcript"],
     commandOrder: ["transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats"],
     footer: [
-      "Start with a Workbench thread id: wb transcript search --thread <wb-id> --query <text>",
+      "Start with a Workbench thread id: wb transcript search --thread <wb-id> --query <words>",
+      "Query: words match in any order (also inside identifiers), \"quoted phrases\" match exactly, -word excludes; repeated --query values join.",
+      "Search ranks items holding more terms first, then relevance, then newest; it reports per-term hits and spelling corrections.",
       "Read directly: wb transcript read --thread <wb-id>. Inspect turns: wb transcript turns --thread <wb-id>.",
-      "Context: wb transcript read --thread <wb-id> --around <item-id> --context 5.",
+      "Walk: wb transcript read --thread <wb-id> --before|--after <item-id>, or --around <item-id> --context 5. Pages print exact older/newer commands.",
       "Read/search show canonical item data with trimmed text, headed by its --kind. Expand: wb transcript show --thread <wb-id> --item <item-id>.",
       "Show preserves full values across continuation pages. Text output omits empty preview fields; matching cwd displays as '.'.",
       "SQLite only by default. Add --provider with exactly one --thread and --turn to materialise that turn before read/search/show.",
       "Provider recovery reuses the thread's native execution; it does not import arbitrary native files or sweep whole histories.",
-      "Coverage describes stored thread bodies.",
+      "Coverage describes stored thread bodies. Search also finds retained narrative of retention-expired turns.",
       "All projects, archived and settled threads are included by default. --thread uses exact Workbench ids, not provider ids.",
       "Common: --project <id> --harness <provider-key> --archived <true|false> --settled <true|false>.",
       "Time: --since/--until <UTC-date|ISO-with-timezone|epoch-ms>, inclusive. Thread lists use activity time; items use creation time.",
       "Search/read/stats: --turn <id> --kind <kind>... --phase <commentary|finalAnswer|unknown> --tool <exact-name> --file <path-substring>.",
-      `Kinds: ${TRANSCRIPT_QUERY_KINDS.join(", ")}.`,
-      "Search/thread-title matching: --query <literal>... (all terms per item), --any (any term), --exclude <literal>..., --case-sensitive.",
+      `Kinds: ${HISTORY_ITEM_KINDS.join(", ")}.`,
       "Search/read/show: --opaque includes canonical opaque fields, never binary assets or provider-native evidence.",
-      "Read/turns/search: --direction <older|newer>. Read pages render chronologically; older starts at the end, newer at the start.",
-      "Pages: --limit <1-50>, --cursor <returned-cursor>, --json. Search scans bounded worker batches until a page fills or history ends.",
-      "Cursors exclude new insertions, not edits to live items. Changed expansion content invalidates its cursor.",
+      "Pages: --limit <1-50>, --cursor <returned-cursor>, --json.",
+      "Catalogue cursors exclude new insertions, not edits to live items. Changed expansion content invalidates its cursor.",
       "Managed agents must run at the Workbench repository root. Ordinary user CLI access is allowed. MCP callers reach them through mcp_call on server wb.",
     ].join("\n"),
   },
@@ -188,16 +188,17 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "task", usage: "wb task <command> [options]", words: ["task"],
   },
   {
-    commandOrder: ["thread recall", "thread recall search", "thread recall expand"],
+    commandOrder: ["thread recall", "thread recall search"],
     key: "thread", usage: "wb thread <command> [options]", words: ["thread"],
   },
   {
     aliases: [["thread", "context"]],
-    commandOrder: ["thread recall", "thread recall search", "thread recall expand"],
+    commandOrder: ["thread recall", "thread recall search"],
     footer: [
-      "Kinds: user-message, user-steer, questionnaire, commentary, final-answer, agent-message, plan.",
+      `Kinds: ${HISTORY_NARRATIVE_KINDS.join(", ")}.`,
       "Recall excludes reasoning, raw commands, tool output, Browse data, hooks, and compaction markers.",
-      "Run one recall command at a time and follow the exact continuation command emitted by the current page.",
+      "Search: words in any order, \"quoted phrases\" exactly, -word excludes. Every hit prints its --around command.",
+      "Walk: --before/--after/--around <ref>. Run one recall command at a time and follow the exact commands the current page emits.",
     ].join("\n"),
     key: "thread-recall", usage: "wb thread recall [command] [options]", words: ["thread", "recall"],
   },

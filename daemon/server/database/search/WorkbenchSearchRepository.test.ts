@@ -7,11 +7,20 @@ import { test } from "node:test";
 
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository";
 import type { WorkbenchTranscriptObservation } from "../transcript/workbench-transcript-types";
+import WorkbenchHistoryIndex from "../history/WorkbenchHistoryIndex";
 import WorkbenchSearchRepository from "./WorkbenchSearchRepository";
 import { createSearchTestDatabase, placeSearchThread, seedSearchThread } from "./search.test.fixtures";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { WORKBENCH_SEARCH_KIND_LIMITS, type WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import type Database from "better-sqlite3";
+
+/** The worker backfills in the background; tests finish it first so seeded history is searchable. */
+function backfilledSearch(database: Database.Database, options: { now?(): number } = {}) {
+  const history = new WorkbenchHistoryIndex(database);
+  while (history.backfillStep());
+  return new WorkbenchSearchRepository(database, { ...options, history });
+}
 
 test("search ranks covered, recent narrative with match-centred excerpts and never shows archived threads", () => {
   const database = createSearchTestDatabase();
@@ -50,7 +59,7 @@ test("search ranks covered, recent narrative with match-centred excerpts and nev
     database.prepare("UPDATE workbench_threads SET archived = 1 WHERE id = 'archived-loader'").run();
     placeSearchThread(database, "placed-archive", { archived: true });
 
-    const repository = new WorkbenchSearchRepository(database, { now: () => now });
+    const repository = backfilledSearch(database, { now: () => now });
     const results = repository.search({ projectId: testProjectIds.project, query: "loader loading animation" })
       .results.filter(result => result.kind === "thread");
     assert.deepEqual(results.map(({ title }) => title), ["Recent visual repair", "Old visual note"]);
@@ -69,7 +78,7 @@ test("squashed identifiers and typos still find narrative, while real words neve
     seedSearchThread(database, { id: "dialog", title: "Polish overlay", userText: "WorkbenchSearchDialog flickers", assistantText: "fixed the focus trap" });
     seedSearchThread(database, { id: "kitchen", title: "Cooking notes", userText: "add more starch to the sauce", assistantText: "done" });
     seedSearchThread(database, { id: "typo", title: "Notes", userText: "the serch box is slow", assistantText: "noted" });
-    const repository = new WorkbenchSearchRepository(database);
+    const repository = backfilledSearch(database);
     const threads = (query: string) => repository.search({ projectId: null, query }).results
       .flatMap(result => result.kind === "thread" ? [result.threadId] : []);
 
@@ -88,7 +97,7 @@ test("requested kinds and project-only scope narrow results, and one kind may fi
   try {
     seedSearchThread(database, { id: "here", title: "Widget here", userText: "widget", assistantText: "ok" });
     seedSearchThread(database, { id: "elsewhere", projectId: testProjectIds.other, title: "Widget elsewhere", userText: "widget", assistantText: "ok" });
-    const repository = new WorkbenchSearchRepository(database);
+    const repository = backfilledSearch(database);
     repository.replaceProjects([{ id: testProjectIds.project, name: "Project", rootPath: "C:/project" }]);
     repository.replaceProjectFiles(testProjectIds.project, Array.from({ length: 30 }, (_, index) => `src/widget-${index}.ts`));
     const search = (request: Partial<WorkbenchSearchRequest>) => repository.search({ projectId: testProjectIds.project, query: "widget", ...request }).results;
@@ -106,7 +115,7 @@ test("files match their basename before their folders, initials reach them, and 
   const database = createSearchTestDatabase();
   try {
     seedSearchThread(database, { activityAt: 5, id: "recent", title: "Recent thread", userText: "hello", assistantText: "hi" });
-    const repository = new WorkbenchSearchRepository(database);
+    const repository = backfilledSearch(database);
     repository.replaceProjects([{ id: testProjectIds.project, name: "Project", rootPath: "C:/project" }]);
     repository.replaceProjectFiles(testProjectIds.project, [
       "app/search/notes.ts", "app/client/WorkbenchSearchDialog.tsx", "app/client/search-dialog.css",
@@ -167,7 +176,7 @@ test("search stays below 500ms per query on a multi-megabyte relational corpus",
       });
     }
     transcript.settle(observations);
-    const repository = new WorkbenchSearchRepository(database);
+    const repository = backfilledSearch(database);
     repository.replaceProjects(Array.from({ length: 102 }, (_, index) => ({ id: `00000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`, name: `Project ${index}`, rootPath: `C:/project-${index}` })));
     repository.replaceProjectFiles(testProjectIds.project, Array.from({ length: 1200 }, (_, index) => `src/components/component-${index}.tsx`));
     assert.ok(corpusCharacters >= 2_373_411);

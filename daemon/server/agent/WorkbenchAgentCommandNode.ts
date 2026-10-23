@@ -28,7 +28,7 @@ import WorkbenchFeedbackCommandController from "./WorkbenchFeedbackCommandContro
 import WorkbenchFileRemovalController from "../project/WorkbenchFileRemovalController";
 import WorkbenchTranscriptCommandController from "../transcript/WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import { ThreadReferenceSchema, TurnReferenceSchema, ItemReferenceSchema } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import WorkbenchSkillController from "./WorkbenchSkillController";
 import { WorkbenchSkillExecutionRequestSchema } from "../lib/workbench/commands/skill-command-definition";
@@ -55,7 +55,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const projectStore = build.get("projectStore");
     const stats = build.get("stats");
     const threadIdentity = build.get("threadIdentity");
-    const transcriptIdentity = build.get("transcriptIdentity");
     const nativeTarget = async (threadId: string, cwd: string, harness?: string) => {
       const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench command" });
       const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, ...(harness ? { harness: WorkbenchHarnessSchema.parse(harness) } : {}) });
@@ -134,24 +133,14 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const transcriptCommands = new WorkbenchTranscriptCommandController({
       materializeTurn: async (threadId, turnId, signal) => await materializeTurn(threadId, turnId, signal),
       projectRoot: context.legacyMigrationProjectRoot,
-      read: async (query) => await database.queryTranscript(query),
+      read: async (query) => await database.queryHistory(query),
     });
     const threadRecall = new WorkbenchThreadRecallController({
       materializeTurn,
-      readTranscript: async (request) => await transcript.read(request),
-      resolveReference: async (threadId, locator, signal) => {
-        const identity = threadIdentity.knownThread(ThreadReferenceSchema.parse(threadId));
-        const turn = await threadIdentity.resolveTurn({ threadId: identity.threadId, turnId: TurnReferenceSchema.parse(locator.turnId) });
-        if (!turn) throw new Error("Thread Recall cursor has no matching turn.");
-        const snapshot = await transcript.read({ threadId, turnIds: [turn.turnId], turnLimit: 1 });
-        if (!snapshot) {
-          await materializeTurn(threadId, turn.turnId, signal);
-          await transcript.read({ threadId, turnIds: [turn.turnId], turnLimit: 1 });
-        }
-        signal.throwIfAborted();
-        const item = await transcriptIdentity.resolve({ threadId: identity.threadId, turnId: turn.turnId, itemId: ItemReferenceSchema.parse(locator.itemId) });
-        if (!item) throw new Error("Thread Recall cursor has no matching item.");
-        return { ...locator, turnId: turn.turnId, itemId: item.itemId };
+      queryHistory: async (query) => await database.queryHistory(query),
+      readThread: async (threadId) => {
+        const thread = (await transcript.read({ threadId, turnIds: [], turnLimit: 1 }))?.thread;
+        return thread ? { id: thread.id, projectRoot: thread.project_root } : null;
       },
       resolveProjectFromCwd: async (cwd) => {
         await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, {
@@ -388,7 +377,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "mcpServers", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "transcriptIdentity", "vis"],
+  requires: ["database", "gitArc", "harnesses", "mcpServers", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "vis"],
   safeAll: true,
   scope: "server:commands",
 });

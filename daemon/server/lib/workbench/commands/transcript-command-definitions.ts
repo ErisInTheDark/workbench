@@ -3,40 +3,39 @@
  * - WORKBENCH_TRANSCRIPT_COMMANDS: deferred stored-history discovery, search and reading; each action's CLI options and tool schema come from one field table.
  */
 import {
-  TRANSCRIPT_QUERY_ACTIONS,
-  TranscriptCommandFieldsSchema,
-  TranscriptCommandQuerySchema,
-  type TranscriptCommandField,
-  type TranscriptCommandQuery,
-} from "../../../database/transcript/transcript-query-contract";
+  HISTORY_QUERY_ACTIONS,
+  HistoryCommandFieldsSchema,
+  HistoryCommandQuerySchema,
+  type HistoryCommandField,
+  type HistoryCommandQuery,
+} from "../../../database/history/history-query-contract";
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
-type Action = TranscriptCommandQuery["action"];
+type Action = HistoryCommandQuery["action"];
 
 const DESCRIPTIONS: Record<Action, string> = {
   projects: "List stored transcript projects, roots and thread counts.",
-  threads: "Find stored threads by title and metadata. Returned ids are Workbench thread ids.",
+  threads: "Find stored threads by title words and metadata. Returned ids are Workbench thread ids.",
   turns: "List a Workbench thread's turns and stored-body coverage.",
-  search: "Search SQLite transcript fields across projects or exact --thread Workbench ids. No provider reads.",
-  read: "Read canonical item data chronologically with trimmed text, optionally around a matching item.",
+  search: "Rank indexed transcript items across projects or exact --thread ids: words in any order, \"quoted phrases\", -exclusions. No provider reads.",
+  read: "Read canonical item data chronologically with trimmed text, newest page or --before/--after/--around an item id.",
   show: "Expand complete item data through bounded pages. Follow the returned continuation.",
   stats: "Count stored threads, turns, materialised turns and item kinds.",
 };
 
-const common = ["threads", "project", "harness", "since", "until", "archived", "settled", "limit", "cursor", "json"] as const;
+const common = ["threads", "project", "harness", "since", "until", "archived", "settled", "json"] as const;
 const itemFilters = ["turn", "kinds", "phase", "tool", "file"] as const;
-const matching = ["queries", "excludes", "any", "caseSensitive"] as const;
 const recovery = ["opaque", "provider"] as const;
 
 /** The options each action accepts, over CLI flags and MCP input alike. */
-const ACTION_FIELDS: Record<Action, readonly TranscriptCommandField[]> = {
-  projects: common,
-  threads: [...common, ...matching],
-  turns: [...common, "turn", "direction"],
-  search: [...common, ...itemFilters, ...matching, ...recovery, "direction"],
-  read: [...common, ...itemFilters, ...recovery, "direction", "around", "context"],
-  show: [...common, "turn", "item", ...recovery],
+const ACTION_FIELDS: Record<Action, readonly HistoryCommandField[]> = {
+  projects: [...common, "limit", "cursor"],
+  threads: [...common, "query", "limit", "cursor"],
+  turns: [...common, "turn", "limit", "cursor"],
+  search: [...common, ...itemFilters, ...recovery, "query", "limit", "cursor"],
+  read: [...common, ...itemFilters, ...recovery, "before", "after", "around", "context", "limit"],
+  show: [...common, "turn", "item", ...recovery, "cursor"],
   stats: [...common, ...itemFilters],
 };
 
@@ -71,30 +70,34 @@ const text = (flag: string, read = (flags: WorkbenchAgentCommandFlags): FlagValu
 const integer = (flag: string) => text(flag, flags => flags.optionalNonNegativeInteger(flag) ?? undefined);
 const time = (flag: string) => text(flag, flags => timestamp(flags.optional(flag)));
 const toggle = (flag: string) => text(flag, flags => booleanValue(flags, flag));
-const repeated = (flag: string, leadingDash = false): FieldReader => ({ flag, kind: "repeated", leadingDash, read: flags => flags.repeated(flag) });
+const repeated = (flag: string): FieldReader => ({ flag, kind: "repeated", read: flags => flags.repeated(flag) });
 const presence = (flag: string): FieldReader => ({ flag, kind: "boolean", read: flags => flags.has(flag) });
+/** Repeated --query values join into one query, so `--query a --query -b` reads as `a -b`. */
+const joinedQuery: FieldReader = {
+  flag: "--query", kind: "repeated", leadingDash: true,
+  read: flags => flags.repeated("--query").join(" ") || undefined,
+};
 
-const FIELD_READERS: Record<TranscriptCommandField, FieldReader> = {
+const FIELD_READERS: Record<Exclude<HistoryCommandField, "view">, FieldReader> = {
   threads: repeated("--thread"), project: text("--project"), harness: text("--harness"), turn: text("--turn"),
   kinds: repeated("--kind"), phase: text("--phase"), tool: text("--tool"), file: text("--file"),
   since: time("--since"), until: time("--until"), archived: toggle("--archived"), settled: toggle("--settled"),
-  queries: repeated("--query", true), excludes: repeated("--exclude", true), any: presence("--any"),
-  caseSensitive: presence("--case-sensitive"), opaque: presence("--opaque"), item: text("--item"),
-  around: text("--around"), context: integer("--context"), limit: integer("--limit"), direction: text("--direction"),
-  cursor: text("--cursor"), json: presence("--json"), provider: presence("--provider"),
+  query: joinedQuery, opaque: presence("--opaque"), item: text("--item"),
+  before: text("--before"), after: text("--after"), around: text("--around"), context: integer("--context"),
+  limit: integer("--limit"), cursor: text("--cursor"), json: presence("--json"), provider: presence("--provider"),
 };
 
 /** Only the action's own fields, still checked against every query rule so mistakes fail before a request is sent. */
 function actionSchema(action: Action) {
-  const mask = Object.fromEntries(ACTION_FIELDS[action].map(field => [field, true])) as { [Field in TranscriptCommandField]?: true };
-  return TranscriptCommandFieldsSchema.pick(mask).superRefine((input, context) => {
-    const checked = TranscriptCommandQuerySchema.safeParse({ ...input, action });
+  const mask = Object.fromEntries(ACTION_FIELDS[action].map(field => [field, true])) as { [Field in HistoryCommandField]?: true };
+  return HistoryCommandFieldsSchema.pick(mask).superRefine((input, context) => {
+    const checked = HistoryCommandQuerySchema.safeParse({ ...input, action });
     if (!checked.success) for (const issue of checked.error.issues) context.addIssue({ code: "custom", message: issue.message });
   });
 }
 
 function readCliFields(action: Action, args: string[]) {
-  const readers = ACTION_FIELDS[action].map(field => [field, FIELD_READERS[field]] as const);
+  const readers = ACTION_FIELDS[action].map(field => [field, FIELD_READERS[field as Exclude<HistoryCommandField, "view">]] as const);
   const flagsOf = (kind: FieldReader["kind"]) => readers.flatMap(([, reader]) => reader.kind === kind ? [reader.flag] : []);
   const flags = new WorkbenchAgentCommandFlags(args, {
     values: flagsOf("value"),
@@ -105,7 +108,17 @@ function readCliFields(action: Action, args: string[]) {
   return Object.fromEntries(readers.map(([field, reader]) => [field, reader.read(flags)]));
 }
 
-export const WORKBENCH_TRANSCRIPT_COMMANDS = TRANSCRIPT_QUERY_ACTIONS.map(action => {
+const USAGE: Record<Action, string> = {
+  projects: "",
+  threads: " [--query <title words>]",
+  turns: " --thread <wb-id>",
+  search: " [--thread <wb-id>...] --query <words, \"phrases\", -exclusions>",
+  read: " --thread <wb-id> [--before|--after|--around <item-id>]",
+  show: " --thread <wb-id> --item <item-id>",
+  stats: "",
+};
+
+export const WORKBENCH_TRANSCRIPT_COMMANDS = HISTORY_QUERY_ACTIONS.map(action => {
   const inputSchema = actionSchema(action);
   return defineWorkbenchAgentCommand({
     description: DESCRIPTIONS[action],
@@ -114,7 +127,7 @@ export const WORKBENCH_TRANSCRIPT_COMMANDS = TRANSCRIPT_QUERY_ACTIONS.map(action
     mcpDeferred: true,
     managedThreadRootOnly: true,
     words: ["transcript", action],
-    usage: `wb transcript ${action}${["read", "show", "turns"].includes(action) ? " --thread <wb-id>" : " [--thread <wb-id>...]"}${action === "search" ? " --query <text>" : ""}${action === "show" ? " --item <id>" : ""} [options]`,
+    usage: `wb transcript ${action}${USAGE[action]} [options]`,
     inputSchema,
     parseCliArgs: args => inputSchema.parse(readCliFields(action, args)),
     buildRequest(input, { callerThreadId, cwd }) {

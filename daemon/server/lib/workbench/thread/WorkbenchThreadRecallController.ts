@@ -1,44 +1,22 @@
 /*
  * Exports:
- * - WorkbenchThreadRecallControllerRequest/WorkbenchThreadRecallControllerOptions: define platform-neutral Thread Recall request and incremental transcript ports. Keywords: thread recall, request, SQLite, materialisation.
- * - default WorkbenchThreadRecallController: validate, incrementally load, select, search, expand, and render bounded Thread Recall Markdown. Keywords: thread recall, history, search, expansion, markdown.
+ * - WorkbenchThreadRecallControllerRequest/WorkbenchThreadRecallControllerOptions: platform-neutral Thread Recall request and history ports.
+ * - default WorkbenchThreadRecallController: read or search one thread's narrative through the history engine, recovering
+ *   missing turns of the read window from the provider once per request, and render bounded Markdown.
  */
-import type {
-  WorkbenchThreadRecallKind,
-  WorkbenchThreadRecallRequest,
-} from "workbench-shared/types";
-import type {
-  WorkbenchTranscriptReadRequest,
-  WorkbenchTranscriptSnapshot,
-} from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import { z } from "zod";
+import { WORKBENCH_THREAD_RECALL_KINDS, type WorkbenchThreadRecallKind } from "workbench-shared/types";
 import {
-  renderWorkbenchThreadRecallExpansionMarkdown,
-  renderWorkbenchThreadRecallHistoryMarkdown,
-  renderWorkbenchThreadRecallHistoryPage,
-  renderWorkbenchThreadRecallSearchMarkdown,
-} from "./thread-context-recall-markdown";
-import {
-  buildSqliteWorkbenchThreadRecallRecords,
-  createSqliteWorkbenchThreadRecallRef,
-  createWorkbenchThreadRecallCursor,
-  expandWorkbenchThreadRecall,
-  readSqliteWorkbenchThreadRecallRef,
-  readWorkbenchThreadRecallCursor,
-  searchWorkbenchThreadRecall,
-  selectWorkbenchThreadRecallRecords,
-  type WorkbenchThreadRecallRecord,
-  type SqliteWorkbenchThreadRecallRef,
-} from "./thread-context-recall";
+  HistoryQuerySchema,
+  readHistoryAnchor,
+  type HistoryPage,
+  type HistoryQuery,
+} from "../../../database/history/history-query-contract.ts";
+import { renderThreadRecallHistory, renderThreadRecallSearch, type ThreadRecallWalk } from "./thread-context-recall-markdown.ts";
 
-const THREAD_RECALL_KINDS: readonly WorkbenchThreadRecallKind[] = [
-  "agent-message",
-  "commentary",
-  "final-answer",
-  "plan",
-  "questionnaire",
-  "user-message",
-  "user-steer",
-];
+/** Recovery reads providers turn by turn; a page recovers at most this many, newest first, and reports the rest. */
+const MAX_RECOVERED_TURNS = 2;
+const DEFAULT_SEARCH_LIMIT = 10;
 
 export interface WorkbenchThreadRecallControllerRequest {
   body?: unknown;
@@ -48,9 +26,11 @@ export interface WorkbenchThreadRecallControllerRequest {
 }
 
 export interface WorkbenchThreadRecallControllerOptions {
-  resolveReference?: (threadId: string, reference: SqliteWorkbenchThreadRecallRef, signal: AbortSignal) => Promise<SqliteWorkbenchThreadRecallRef>;
+  queryHistory(query: HistoryQuery): Promise<HistoryPage>;
+  /** A null turn bootstraps a thread with no stored history. */
   materializeTurn(threadId: string, turnId: string | null, signal: AbortSignal): Promise<void>;
-  readTranscript(request: WorkbenchTranscriptReadRequest): Promise<WorkbenchTranscriptSnapshot | null>;
+  /** The stored thread's canonical id and project root, or null when the thread has no stored history yet. */
+  readThread(threadId: string): Promise<{ id: string; projectRoot: string } | null>;
   resolveProjectFromCwd(cwd: string): Promise<void>;
 }
 
@@ -58,196 +38,114 @@ function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function asRecord(value: unknown) {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
 function markdownResponse(markdown: string) {
-  return new Response(markdown, {
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": "text/markdown; charset=utf-8",
-    },
-  });
+  return new Response(markdown, { headers: { "Cache-Control": "no-store", "Content-Type": "text/markdown; charset=utf-8" } });
 }
 
 function errorResponse(error: unknown) {
-  return Response.json({
-    error: error instanceof Error ? error.message : "Unable to read Thread Recall.",
-  }, {
+  return Response.json({ error: error instanceof Error ? error.message : "Unable to read Thread Recall." }, {
     headers: { "Cache-Control": "no-store" },
     status: 400,
   });
 }
 
-function readOptionalInteger(record: Record<string, unknown>, key: string, maximum: number) {
-  const value = record[key];
-  if (value === undefined) return undefined;
-  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > maximum) {
-    throw new Error(`${key} must be an integer between 0 and ${maximum}.`);
-  }
-  return value as number;
-}
-
-function readRecallKinds(value: unknown) {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || !value.length) throw new Error("kinds must contain at least one Thread Recall kind.");
-  const allowed = new Set<string>(THREAD_RECALL_KINDS);
-  const kinds = Array.from(new Set(value.map(readString)));
-  if (kinds.some((kind) => !allowed.has(kind))) {
-    throw new Error(`kinds must use only: ${THREAD_RECALL_KINDS.join(", ")}.`);
+function readKinds(values: readonly string[]) {
+  if (!values.length) return null;
+  const kinds = [...new Set(values.map(readString))];
+  if (kinds.some(kind => !(WORKBENCH_THREAD_RECALL_KINDS as readonly string[]).includes(kind))) {
+    throw new Error(`kinds must use only: ${WORKBENCH_THREAD_RECALL_KINDS.join(", ")}.`);
   }
   return kinds as WorkbenchThreadRecallKind[];
 }
 
-function parseRecallRequest(value: unknown): WorkbenchThreadRecallRequest {
-  const record = asRecord(value);
-  if (!record) throw new Error("A Thread Recall request object is required.");
-  const action = readString(record.action);
-  if (action === "search") {
-    const query = readString(record.query);
-    if (!query || query.length > 500) throw new Error("Thread Recall search query must contain 1 to 500 characters.");
-    const kinds = readRecallKinds(record.kinds);
-    const limit = readOptionalInteger(record, "limit", 50);
-    if (limit === 0) throw new Error("Thread Recall search limit must be between 1 and 50.");
-    const before = readString(record.before);
-    if (before.length > 1_000) throw new Error("Thread Recall search before ref must contain at most 1,000 characters.");
-    return {
-      action,
-      query,
-      ...(kinds ? { kinds } : {}),
-      ...(limit !== undefined ? { limit } : {}),
-      ...(before ? { before } : {}),
-    };
-  }
-  if (action === "expand") {
-    const ref = readString(record.ref);
-    if (!ref || ref.length > 1_000) throw new Error("Thread Recall expand ref must contain 1 to 1,000 characters.");
-    const cursor = readString(record.cursor);
-    if (cursor.length > 2_000) throw new Error("Thread Recall expansion cursor must contain at most 2,000 characters.");
-    return { action, ref, ...(cursor ? { cursor } : {}) };
-  }
-  throw new Error("Thread Recall action must be search or expand.");
+const SearchBodySchema = z.object({
+  action: z.literal("search"),
+  query: z.string().trim().min(1).max(500),
+  kinds: z.array(z.enum(WORKBENCH_THREAD_RECALL_KINDS)).min(1).optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+  cursor: z.string().min(1).max(16_000).optional(),
+}).strict();
+
+function issues(error: z.ZodError) {
+  return error.issues.map(issue => `${issue.path.join(".") || "request"}: ${issue.message}`).join("; ");
 }
 
 export default class WorkbenchThreadRecallController {
   constructor(private readonly options: WorkbenchThreadRecallControllerOptions) {}
 
-  async #resolveReference(threadId: string, value: string | null, signal: AbortSignal) {
-    if (!value || !this.options.resolveReference) return value;
-    const cursor = readWorkbenchThreadRecallCursor(value);
-    const reference = readSqliteWorkbenchThreadRecallRef(cursor?.ref ?? value);
-    if (!reference) throw new Error("Invalid Thread Recall reference.");
-    const resolved = createSqliteWorkbenchThreadRecallRef(await this.options.resolveReference(threadId, reference, signal));
-    return cursor ? createWorkbenchThreadRecallCursor(resolved, cursor.offset) : resolved;
-  }
-
-  async #readCatalog(threadId: string, signal: AbortSignal) {
-    signal.throwIfAborted();
-    let snapshot = await this.options.readTranscript({
-      threadId,
-      turnIds: [],
-      turnLimit: 1,
-    });
-    if (!snapshot) {
+  /** Bootstrap a thread with no stored history, resolve its project like any agent endpoint, and return its stored id. */
+  async #prepare(threadId: string, signal: AbortSignal) {
+    let stored = await this.options.readThread(threadId);
+    if (stored === null) {
       await this.options.materializeTurn(threadId, null, signal);
       signal.throwIfAborted();
-      snapshot = await this.options.readTranscript({
-        threadId,
-        turnIds: [],
-        turnLimit: 1,
-      });
+      stored = await this.options.readThread(threadId);
     }
-    if (!snapshot) throw new Error(`Thread Recall could not materialize thread ${threadId}.`);
-    await this.options.resolveProjectFromCwd(snapshot.thread.project_root);
+    if (stored === null) throw new Error(`Thread Recall could not materialize thread ${threadId}.`);
+    await this.options.resolveProjectFromCwd(stored.projectRoot);
     signal.throwIfAborted();
-    return snapshot;
+    return stored.id;
   }
 
-  async #readTurn(threadId: string, turnId: string, signal: AbortSignal) {
-    signal.throwIfAborted();
-    const request: WorkbenchTranscriptReadRequest = {
-      threadId,
-      turnIds: [turnId],
-      turnLimit: 1,
-    };
-    let snapshot = await this.options.readTranscript(request);
-    if (!snapshot) {
-      await this.options.materializeTurn(threadId, turnId, signal);
-      signal.throwIfAborted();
-      snapshot = await this.options.readTranscript(request);
+  /**
+   * Read once; when the window holds never-materialised turns, recover the newest few from the provider and read
+   * again. Retention-expired turns are never recovered here: provider recovery can load a whole native session.
+   */
+  async #readWindow(query: HistoryQuery, signal: AbortSignal) {
+    const page = await this.options.queryHistory(query);
+    const failures: string[] = [];
+    let current = page;
+    if (page.gaps.length) {
+      for (const turnId of page.gaps.slice(0, MAX_RECOVERED_TURNS)) {
+        try {
+          await this.options.materializeTurn(query.threads[0]!, turnId, signal);
+        } catch (error) {
+          if (signal.aborted) throw error;
+          failures.push(`turn ${turnId}: ${error instanceof Error ? error.message.slice(0, 200) : "recovery failed"}`);
+        }
+        signal.throwIfAborted();
+      }
+      current = await this.options.queryHistory(query);
     }
-    if (!snapshot) {
-      throw new Error(`Thread Recall could not materialize turn ${turnId}.`);
-    }
-    signal.throwIfAborted();
-    return snapshot;
+    const warnings = [
+      ...failures.map(failure => `Provider recovery failed for ${failure}.`),
+      ...(current.gaps.length ? [`${current.gaps.length} turn(s) in this window are not stored locally yet.`] : []),
+      ...(current.expired.length ? [`${current.expired.length} turn(s) in this window expired by retention; only their retained user and assistant text shows. \`wb transcript read --thread <id> --turn <turn> --provider\` recovers one explicitly.`] : []),
+    ];
+    return { page: current, warnings };
   }
 
-  async #readAllRecords(
-    snapshot: WorkbenchTranscriptSnapshot,
-    signal: AbortSignal,
-  ) {
-    let records: WorkbenchThreadRecallRecord[] = [];
-    for (let turnIndex = snapshot.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
-      const turn = snapshot.turns[turnIndex]!;
-      records = [
-        ...buildSqliteWorkbenchThreadRecallRecords(
-          await this.#readTurn(snapshot.thread.id, turn.id, signal),
-        ),
-        ...records,
-      ];
-    }
-    return records;
-  }
-
-  async #renderHistory(
-    snapshot: WorkbenchTranscriptSnapshot,
-    {
-      before,
-      kinds,
-      signal,
-    }: {
-      before: string | null;
-      kinds: readonly WorkbenchThreadRecallKind[];
-      signal: AbortSignal;
-    },
-  ) {
-    const beforeCursor = before ? readWorkbenchThreadRecallCursor(before) : null;
-    const beforeRef = beforeCursor?.ref ?? before;
-    const beforeLocator = beforeRef ? readSqliteWorkbenchThreadRecallRef(beforeRef) : null;
-    if (beforeRef && !beforeLocator) {
-      throw new Error(`Unknown Thread Recall history ref: ${beforeRef}`);
-    }
-    const startIndex = beforeLocator
-      ? snapshot.turns.findIndex(({ id }) => id === beforeLocator.turnId)
-      : snapshot.turns.length - 1;
-    if (beforeLocator && startIndex < 0) {
-      throw new Error(`Unknown Thread Recall history turn: ${beforeLocator.turnId}`);
-    }
-
-    let records: WorkbenchThreadRecallRecord[] = [];
-    for (let turnIndex = startIndex; turnIndex >= 0; turnIndex -= 1) {
-      const turn = snapshot.turns[turnIndex]!;
-      records = [
-        ...buildSqliteWorkbenchThreadRecallRecords(
-          await this.#readTurn(snapshot.thread.id, turn.id, signal),
-        ),
-        ...records,
-      ];
-      const page = renderWorkbenchThreadRecallHistoryPage(
-        selectWorkbenchThreadRecallRecords(records, kinds),
-        { before, kinds, threadId: snapshot.thread.id },
-      );
-      if (page.hasOlderContent || turnIndex === 0) return page.markdown;
-    }
-    return renderWorkbenchThreadRecallHistoryMarkdown([], {
-      before,
-      kinds,
-      threadId: snapshot.thread.id,
+  /** Validate the whole request before any history or provider work. */
+  #historyRequest(threadId: string, searchParams: URLSearchParams) {
+    const kinds = readKinds(searchParams.getAll("kind"));
+    const anchors = (["before", "after", "around"] as const).flatMap(direction => {
+      const value = readString(searchParams.get(direction));
+      return value ? [{ direction, value }] : [];
     });
+    if (anchors.length > 1) throw new Error("Pass at most one of before, after and around.");
+    const anchor = anchors[0];
+    let walk: ThreadRecallWalk = { direction: "latest" };
+    if (anchor) {
+      const parsed = readHistoryAnchor(anchor.value);
+      walk = { direction: anchor.direction, offset: parsed.offset, ref: parsed.part ? `${parsed.itemId}:${parsed.part}` : parsed.itemId };
+    }
+    const query = HistoryQuerySchema.parse({
+      action: "read", view: "narrative", threads: [threadId], kinds: kinds ?? [],
+      ...(anchor ? { [anchor.direction]: anchor.value } : {}),
+    });
+    return { kinds, query, walk };
+  }
+
+  #searchRequest(threadId: string, body: unknown) {
+    const parsed = SearchBodySchema.safeParse(body);
+    if (!parsed.success) throw new Error(`Invalid Thread Recall search: ${issues(parsed.error)}`);
+    const limit = parsed.data.limit ?? DEFAULT_SEARCH_LIMIT;
+    const kinds = parsed.data.kinds ?? null;
+    const query = HistoryQuerySchema.parse({
+      action: "search", view: "narrative", threads: [threadId], query: parsed.data.query, kinds: kinds ?? [], limit,
+      ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
+    });
+    return { kinds, limit, query, text: parsed.data.query };
   }
 
   async execute(request: WorkbenchThreadRecallControllerRequest, signal: AbortSignal) {
@@ -255,45 +153,16 @@ export default class WorkbenchThreadRecallController {
       const threadId = readString(request.threadId);
       if (!threadId) throw new Error("Thread Recall requires a threadId.");
       signal.throwIfAborted();
-      const recallRequest = request.method === "POST"
-        ? parseRecallRequest(await request.body)
-        : null;
-      const snapshot = await this.#readCatalog(threadId, signal);
       if (request.method === "GET") {
-        let before = readString(request.searchParams.get("before")) || null;
-        if (before && before.length > 1_000) throw new Error("Thread Recall history ref must contain at most 1,000 characters.");
-        before = await this.#resolveReference(snapshot.thread.id, before, signal);
-        const requestedKinds = request.searchParams.getAll("kind");
-        const kinds = (requestedKinds.length ? readRecallKinds(requestedKinds) : undefined) ?? THREAD_RECALL_KINDS;
-        return markdownResponse(await this.#renderHistory(snapshot, {
-          before,
-          kinds,
-          signal,
-        }));
+        const { kinds, query, walk } = this.#historyRequest(threadId, request.searchParams);
+        const storedId = await this.#prepare(threadId, signal);
+        const { page, warnings } = await this.#readWindow({ ...query, threads: [storedId] }, signal);
+        return markdownResponse(renderThreadRecallHistory({ kinds, page, threadId: storedId, walk, warnings }));
       }
-
-      if (!recallRequest) throw new Error("A Thread Recall POST request is required.");
-      if (recallRequest.action === "search") {
-        const records = await this.#readAllRecords(snapshot, signal);
-        const result = searchWorkbenchThreadRecall(records, {
-          before: await this.#resolveReference(snapshot.thread.id, recallRequest.before ?? null, signal),
-          kinds: recallRequest.kinds ?? THREAD_RECALL_KINDS,
-          limit: recallRequest.limit ?? 10,
-          query: recallRequest.query,
-        });
-        return markdownResponse(renderWorkbenchThreadRecallSearchMarkdown(result, snapshot.thread.id));
-      }
-      const ref = (await this.#resolveReference(snapshot.thread.id, recallRequest.ref, signal))!;
-      const locator = readSqliteWorkbenchThreadRecallRef(ref);
-      if (!locator) throw new Error(`Unknown Thread Recall ref: ${recallRequest.ref}`);
-      const records = buildSqliteWorkbenchThreadRecallRecords(
-        await this.#readTurn(snapshot.thread.id, locator.turnId, signal),
-      );
-      const expansion = expandWorkbenchThreadRecall(records, {
-        cursor: await this.#resolveReference(snapshot.thread.id, recallRequest.cursor ?? null, signal),
-        ref,
-      });
-      return markdownResponse(renderWorkbenchThreadRecallExpansionMarkdown(expansion, snapshot.thread.id));
+      const { kinds, limit, query, text } = this.#searchRequest(threadId, await request.body);
+      const storedId = await this.#prepare(threadId, signal);
+      const page = await this.options.queryHistory({ ...query, threads: [storedId] });
+      return markdownResponse(renderThreadRecallSearch({ kinds, limit, page, query: text, threadId: storedId }));
     } catch (error) {
       if (signal.aborted) throw error;
       return errorResponse(error);

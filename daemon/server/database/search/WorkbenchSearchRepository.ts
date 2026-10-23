@@ -1,10 +1,15 @@
 /*
  * Exports:
- * - default WorkbenchSearchRepository: own SQLite search projections, identity rekeying, and ranked workspace search over names and indexed thread narrative.
+ * - default WorkbenchSearchRepository: own SQLite search projections, identity rekeying, and ranked workspace search over names and the history index's thread narrative.
  */
 import type Database from "better-sqlite3";
 import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
-import WorkbenchSearchNarrativeIndex, { SEARCHABLE_THREADS, type NarrativeThreadMatch } from "./WorkbenchSearchNarrativeIndex.ts";
+import WorkbenchHistoryIndex, {
+  SEARCHABLE_THREADS,
+  historyAnyOf,
+  historyClauseExpression,
+  type NarrativeThreadMatch,
+} from "../history/WorkbenchHistoryIndex.ts";
 import {
   createSearchName,
   matchSearchName,
@@ -77,42 +82,16 @@ function documentNames(row: SearchDocumentRow): SearchName[] {
   }
 }
 
-function quote(text: string) {
-  return `"${text.replaceAll("\"", "\"\"")}"`;
-}
-
-function anyOf(terms: readonly string[]) {
-  return terms.map(quote).join(" OR ");
-}
-
-/**
- * FTS5 expression for one clause. Words also match as prefixes so results keep up with typing (whole words
- * match both arms, so bm25 ranks them above completions), and camel-cased words also match their parts as a
- * phrase ("SearchDialog" finds "search dialog").
- */
-function narrativeExpression(clause: SearchClause) {
-  // One or two typed letters prefix most of the vocabulary: names answer them, message bodies would only drown them.
-  if (!/[\p{L}\p{N}]/u.test(clause.value) || (clause.kind === "word" && clause.value.length < 2)) return null;
-  const quoted = quote(clause.value);
-  if (clause.kind === "phrase") return quoted;
-  if (clause.value.length < 3) return quoted;
-  const parts = clause.tokens.length > 1 ? ` OR ${quote(clause.tokens.join(" "))}*` : "";
-  return `${quoted} OR ${quoted}*${parts}`;
-}
-
 export default class WorkbenchSearchRepository {
-  private narrativeIndex: WorkbenchSearchNarrativeIndex | null = null;
+  private historyIndex: WorkbenchHistoryIndex | null;
 
   constructor(
     private readonly database: Database.Database,
-    private readonly options: { now?(): number } = {},
+    /** The worker shares its writer's history index; standalone repositories build their own on first use. */
+    private readonly options: { history?: WorkbenchHistoryIndex; now?(): number } = {},
   ) {
+    this.historyIndex = options.history ?? null;
     this.seedStaticDocuments();
-  }
-
-  /** Index one more chunk of existing narrative; false once the index is complete. */
-  indexNarrative() {
-    return this.narrative.backfillStep();
   }
 
   rekeyProject(previousId: string, projectId: string) {
@@ -183,8 +162,8 @@ export default class WorkbenchSearchRepository {
       arrangeWorkbenchSearchResults(results, result => result, request.kinds).slice(0, WORKBENCH_SEARCH_RESULT_LIMIT);
 
     const excludedThreads = new Set(negatives.flatMap(clause => {
-      const expression = narrativeExpression(clause);
-      return expression ? [...this.narrative.match(expression).keys()] : [];
+      const expression = historyClauseExpression(clause);
+      return expression ? [...this.narrative.matchThreads(expression).keys()] : [];
     }));
     const included = candidates.filter(candidate => !negatives.some(clause => matchSearchName(clause, candidate.names) > 0)
       && !(candidate.result.kind === "thread" && excludedThreads.has(candidate.result.threadId)));
@@ -242,20 +221,20 @@ export default class WorkbenchSearchRepository {
   private matchNarrative(positives: readonly SearchClause[], included: readonly Candidate[], nameEvidence: number[][]) {
     const needles = positives.flatMap(clause => [clause.value, ...clause.tokens]);
     const corrections: WorkbenchSearchCorrection[] = [];
-    const expressions = positives.map(narrativeExpression);
+    const expressions = positives.map(historyClauseExpression);
     const clauses = positives.map((clause, index) => {
-      let matches = expressions[index] ? this.narrative.match(expressions[index]) : new Map<string, NarrativeThreadMatch>();
+      let matches = expressions[index] ? this.narrative.matchThreads(expressions[index]) : new Map<string, NarrativeThreadMatch>();
       if (matches.size || clause.kind !== "word") return matches;
       const fragment = clause.tokens.join("");
-      const containing = fragment.length >= 4 ? this.narrative.vocabularyContaining(fragment) : [];
+      const containing = fragment.length >= 4 ? this.narrative.vocabularyContaining(fragment, { narrative: true }) : [];
       if (containing.length) {
-        expressions[index] = anyOf(containing);
+        expressions[index] = historyAnyOf(containing);
         needles.push(fragment);
-        return this.narrative.match(expressions[index]);
+        return this.narrative.matchThreads(expressions[index]);
       }
       if (nameEvidence.some(evidence => evidence[index]! > 0) || clause.tokens.length !== 1) return matches;
       const nearby = searchCorrections(clause.value, [
-        ...this.narrative.vocabularyNear(clause.value),
+        ...this.narrative.vocabularyNear(clause.value, { narrative: true }),
         ...included.flatMap(candidate => candidate.names.flatMap(name => name.tokens.map(term => ({ frequency: 1, term })))),
       ]);
       if (!nearby.length) return matches;
@@ -264,20 +243,20 @@ export default class WorkbenchSearchRepository {
         nameEvidence[candidateIndex]![index] = matchSearchName(clause, candidate.names, corrected);
       });
       needles.push(...nearby);
-      expressions[index] = anyOf(nearby);
+      expressions[index] = historyAnyOf(nearby);
       corrections.push({ from: clause.value, to: nearby[0]! });
-      matches = this.narrative.match(expressions[index]);
+      matches = this.narrative.matchThreads(expressions[index]);
       return matches;
     });
     const present = expressions.filter((expression): expression is string => expression !== null);
     const together = present.length > 1 && present.length === positives.length
-      ? this.narrative.match(present.map(expression => `(${expression})`).join(" AND "))
+      ? this.narrative.matchThreads(present.map(expression => `(${expression})`).join(" AND "))
       : new Map<string, NarrativeThreadMatch>();
     return { clauses, corrections, needles, together };
   }
 
   private get narrative() {
-    return this.narrativeIndex ??= new WorkbenchSearchNarrativeIndex(this.database);
+    return this.historyIndex ??= new WorkbenchHistoryIndex(this.database);
   }
 
   private toThreadCandidate(row: ThreadTitleRow, projectId: string | null): Candidate {

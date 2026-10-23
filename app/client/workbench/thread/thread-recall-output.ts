@@ -6,7 +6,7 @@
  * - summarizeWorkbenchThreadRecallOutput: count captured records and strict search-page metadata without inventing fallback semantics.
  */
 
-import type { WorkbenchThreadRecallKind } from "workbench-shared/types";
+import { WORKBENCH_THREAD_RECALL_KINDS, type WorkbenchThreadRecallKind } from "workbench-shared/types";
 
 export interface WorkbenchThreadRecallOutputRecord {
   kind: WorkbenchThreadRecallKind;
@@ -22,15 +22,16 @@ export type WorkbenchThreadRecallOutputSegment =
 export type WorkbenchThreadRecallRecordGroup = "agent" | "plan" | "questionnaire" | "user";
 
 export interface WorkbenchThreadRecallOutputSummary {
-  mode: "history" | "record" | "search";
+  mode: "context" | "history" | "record" | "search";
   recordCount: number;
   recordCounts: Record<WorkbenchThreadRecallRecordGroup, number>;
   searchMatches: { shown: number; total: number } | null;
 }
 
-const RECALL_TAG_PATTERN = "user-message|user-steer|questionnaire|commentary|final-answer|agent-message|plan";
-const OPEN_TAG_PATTERN = new RegExp(`^<(${RECALL_TAG_PATTERN})\\s+([^>]*)>$`, "u");
-const SEARCH_MATCHES_PATTERN = /^Matches:\s+([\d,]+)\s+total;\s+([\d,]+)\s+shown on this newest-first page\.$/mu;
+const OPEN_TAG_PATTERN = new RegExp(`^<(${WORKBENCH_THREAD_RECALL_KINDS.join("|")})\\s+([^>]*)>$`, "u");
+/** Stored transcripts keep older recall outputs, so the previous search format still summarises. */
+const LEGACY_SEARCH_MATCHES_PATTERN = /^Matches:\s+([\d,]+)\s+total;\s+([\d,]+)\s+shown on this newest-first page\.$/mu;
+const SEARCH_MATCHES_PATTERN = /^Matches:\s+([\d,]+)\s+with every term\s+·\s+([\d,]+)\s+with some; best first\.$/mu;
 
 function decodeAttribute(value: string) {
   return value
@@ -119,11 +120,13 @@ export function summarizeWorkbenchThreadRecallOutput(markdown: string): Workbenc
   const normalized = markdown.replace(/\r\n?/gu, "\n").trim();
   const mode = normalized.startsWith("# Thread Recall Search")
     ? "search"
-    : normalized.startsWith("# Thread Recall Record")
-      ? "record"
-      : normalized.startsWith("# Thread Recall History")
-        ? "history"
-        : null;
+    : normalized.startsWith("# Thread Recall Context")
+      ? "context"
+      : normalized.startsWith("# Thread Recall Record")
+        ? "record"
+        : normalized.startsWith("# Thread Recall History")
+          ? "history"
+          : null;
   if (!mode) return null;
 
   const records = parseWorkbenchThreadRecallOutput(normalized)
@@ -144,9 +147,12 @@ export function summarizeWorkbenchThreadRecallOutput(markdown: string): Workbenc
     recordCounts[getRecordGroup(record.kind)] += 1;
   }
 
-  const searchMatch = mode === "search" ? SEARCH_MATCHES_PATTERN.exec(normalized) : null;
-  const total = parseCount(searchMatch?.[1]);
-  const shown = parseCount(searchMatch?.[2]);
+  const current = mode === "search" ? SEARCH_MATCHES_PATTERN.exec(normalized) : null;
+  const legacy = mode === "search" && !current ? LEGACY_SEARCH_MATCHES_PATTERN.exec(normalized) : null;
+  const complete = parseCount(current?.[1]);
+  const partial = parseCount(current?.[2]);
+  const total = current ? (complete !== null && partial !== null ? complete + partial : null) : parseCount(legacy?.[1]);
+  const shown = current ? records.length : parseCount(legacy?.[2]);
   const searchMatches = total !== null && shown !== null && shown <= total
     ? { shown, total }
     : null;

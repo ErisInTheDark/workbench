@@ -6,7 +6,7 @@
  *   settles, or once old and superseded by a later meaningful turn.
  */
 import type Database from "better-sqlite3";
-import { purgeArchivedSearchNarrative, retainSearchNarrative } from "../search/WorkbenchSearchNarrativeIndex.ts";
+import { purgeArchivedSearchNarrative, retainSearchNarrative } from "../history/WorkbenchHistoryIndex.ts";
 import { WORKBENCH_TOOL_SERVERS } from "../stats/WorkbenchToolStatsRepository.ts";
 import {
   agentMessageInputSql,

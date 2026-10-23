@@ -92,7 +92,7 @@ export interface DaemonBrowseExecution {
 
 /** Every registered database request plus the lifecycle and hand-written reads the daemon uses. */
 export interface DaemonDatabaseRegistration extends WorkbenchDatabaseRequestMethods, Pick<WorkbenchDatabaseController,
-  "assertReady" | "close" | "failure" | "query" | "queryTranscript" | "readInitialProjectCatalog" | "readStats" | "start" | "state"> {}
+  "assertReady" | "close" | "failure" | "query" | "queryHistory" | "readInitialProjectCatalog" | "readStats" | "start" | "state"> {}
 
 export interface DaemonTranscriptRegistration {
   isThreadObserved(threadId: string): boolean;

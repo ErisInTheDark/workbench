@@ -29,7 +29,7 @@ import {
 import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { WorkbenchStatsResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
-import { TranscriptQuerySchema } from "./transcript/transcript-query-contract";
+import { HistoryQuerySchema } from "./history/history-query-contract";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
@@ -65,7 +65,7 @@ test("read classes rank live transcript over interactive state, and keep history
   };
   const live = rank("readTranscriptCompactionExecution");
   const state = rank("readThreadStateProject");
-  const history = rank("queryTranscriptPage");
+  const history = rank("readHistory");
   const aggregate = rank("readStatsSection");
   assert.ok(live.rank < state.rank, "live ingest reads run before interactive state reads");
   assert.deepEqual([live.background, state.background, history.background, aggregate.background], [false, false, true, true]);
@@ -99,9 +99,11 @@ async function checkProviderCursor(controller: WorkbenchDatabaseController) {
 }
 
 async function checkStoredQueries(controller: WorkbenchDatabaseController) {
-  const page = await controller.queryTranscript(TranscriptQuerySchema.parse({ action: "stats" }));
+  const page = await controller.queryHistory(HistoryQuerySchema.parse({ action: "stats" }));
   assert.equal(page.coverage.threads, 0);
-  await assert.rejects(controller.queryTranscript(TranscriptQuerySchema.parse({ action: "read", threads: ["missing-wb-id"] })), /Unknown Workbench thread/u);
+  await assert.rejects(controller.queryHistory(HistoryQuerySchema.parse({ action: "read", threads: ["missing-wb-id"] })), /Unknown Workbench thread/u);
+  // Search must reach the writer, the only connection holding the history index.
+  assert.equal((await controller.queryHistory(HistoryQuerySchema.parse({ action: "search", query: "anything" }))).search?.complete, 0);
 }
 
 test("fresh database is ready without a prepared project catalogue", async () => {
@@ -146,7 +148,7 @@ test("opening recovers a historical checkout before serving without backups or r
         const catalog = await controller.readRetainedProjectCatalog(["C:/"]);
         assert.equal(catalog.catalog[0]?.project.id, historical);
         assert.equal(catalog.catalog[0]?.project.rootPath, "C:/repo");
-        const history = await controller.queryTranscript(TranscriptQuerySchema.parse({ action: "threads", project: historical }));
+        const history = await controller.queryHistory(HistoryQuerySchema.parse({ action: "threads", project: historical }));
         assert.equal(history.rows[0]?.threadId, "retained");
       } finally { await controller.close(); }
       assert.ok(!(await readdir(temporary.path)).includes("backups"));

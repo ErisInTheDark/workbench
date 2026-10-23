@@ -5,10 +5,10 @@
  */
 import type { WorkbenchTranscriptItemCursor } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
-import { TranscriptQueryError, type TranscriptQuery, type TranscriptQueryPage } from "../transcript/transcript-query-contract.ts";
+import { HistoryQueryError, type HistoryPage, type HistoryQuery } from "../history/history-query-contract.ts";
+import WorkbenchHistoryQueryRepository from "../history/WorkbenchHistoryQueryRepository.ts";
 import WorkbenchApprovalOutcomeRepository from "../transcript/WorkbenchApprovalOutcomeRepository.ts";
 import WorkbenchTranscriptAssetStore, { type TranscriptAssetRead, type TranscriptAssetWrite } from "../transcript/WorkbenchTranscriptAssetStore.ts";
-import WorkbenchTranscriptQueryRepository from "../transcript/WorkbenchTranscriptQueryRepository.ts";
 import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
@@ -16,6 +16,15 @@ import type {
   WorkbenchTranscriptSettlementMode,
 } from "../transcript/workbench-transcript-types.ts";
 import { defineDatabaseRequest } from "./define-database-request.ts";
+
+function historyAnswer(read: () => HistoryPage): { ok: true; page: HistoryPage } | { ok: false; error: string } {
+  try {
+    return { ok: true, page: read() };
+  } catch (error) {
+    if (!(error instanceof HistoryQueryError)) throw error;
+    return { ok: false, error: error.message };
+  }
+}
 
 export const transcriptRequests = {
   settleTranscript: defineDatabaseRequest({
@@ -81,17 +90,13 @@ export const transcriptRequests = {
     read: "transcript",
     run: ({ transcripts }, threadId: string) => transcripts.readDeliveredAgentMessages(threadId),
   }),
-  /** Query errors are an expected answer, so they cross the worker boundary as a value. */
-  queryTranscriptPage: defineDatabaseRequest({
+  /** Query errors are an expected answer, so they cross the worker boundary as a value. Search needs the writer's index. */
+  readHistory: defineDatabaseRequest({
     read: "query",
-    run: ({ database }, request: TranscriptQuery): { ok: true; page: TranscriptQueryPage } | { ok: false; error: string } => {
-      try {
-        return { ok: true, page: new WorkbenchTranscriptQueryRepository(database).read(request) };
-      } catch (error) {
-        if (!(error instanceof TranscriptQueryError)) throw error;
-        return { ok: false, error: error.message };
-      }
-    },
+    run: ({ database }, request: HistoryQuery) => historyAnswer(() => new WorkbenchHistoryQueryRepository(database).read(request)),
+  }),
+  searchHistory: defineDatabaseRequest({
+    run: ({ database, history }, request: HistoryQuery) => historyAnswer(() => new WorkbenchHistoryQueryRepository(database, history).read(request)),
   }),
   writeTranscriptAsset: defineDatabaseRequest({
     run: ({ database }, input: TranscriptAssetWrite) => new WorkbenchTranscriptAssetStore(database).write(input),

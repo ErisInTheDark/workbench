@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
-import { expandTranscriptFields, previewTranscriptFields, transcriptItemFields } from "./transcript-item-data";
-import type { TranscriptField } from "./transcript-query-contract";
+import { expandTranscriptFields, previewTranscriptFields, transcriptItemFields } from "./history-item-fields";
+import type { HistoryField } from "./history-query-contract";
 
 function generic(safeValue: Extract<WorkbenchProjectedTranscriptItem, { type: "generic" }>["safeValue"]): WorkbenchProjectedTranscriptItem {
   return { type: "generic", id: "item", nativeType: "extension", safeValue };
@@ -40,7 +40,7 @@ test("previews mark long strings and expansion recovers every Unicode character 
   assert.equal(shortened.length, Array.from(original).length);
   assert.ok(typeof shortened.value === "string" && shortened.value.length < original.length);
   assert.equal(preview.find(field => field.path.at(-1) === "after")?.value, false);
-  const expanded: TranscriptField[] = [];
+  const expanded: HistoryField[] = [];
   let position = { index: 0, offset: 0 };
   for (;;) {
     const page = expandTranscriptFields(fields, position.index, position.offset);
@@ -62,7 +62,7 @@ test("previews mark long strings and expansion recovers every Unicode character 
 
 test("many small fields resume at the next field without loss", () => {
   const fields = transcriptItemFields(generic(Array.from({ length: 130 }, (_, index) => index)), true);
-  const result: TranscriptField[] = [];
+  const result: HistoryField[] = [];
   let next: { index: number; offset: number } | null = { index: 0, offset: 0 };
   while (next) {
     const page = expandTranscriptFields(fields, next.index, next.offset);

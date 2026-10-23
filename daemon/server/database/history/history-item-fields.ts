@@ -6,17 +6,17 @@
  * - TRANSCRIPT_PREVIEW_CHAR_LIMIT: shared preview limit, including deferred cwd rendering.
  */
 import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
-import type { TranscriptField } from "./transcript-query-contract";
+import type { HistoryField } from "./history-query-contract";
 
 type Data = object | string | number | boolean | null | undefined;
 export const TRANSCRIPT_PREVIEW_CHAR_LIMIT = 120;
 
-export function transcriptItemFields(item: WorkbenchProjectedTranscriptItem, opaque: boolean): TranscriptField[] {
-  const fields: TranscriptField[] = [];
+export function transcriptItemFields(item: WorkbenchProjectedTranscriptItem, opaque: boolean): HistoryField[] {
+  const fields: HistoryField[] = [];
   const secrets = item.type === "questionnaire" || item.type === "approval"
     ? new Set(item.request.questions.filter(question => question.isSecret).map(question => question.id))
     : new Set<string>();
-  const visit = (value: Data, path: TranscriptField["path"]) => {
+  const visit = (value: Data, path: HistoryField["path"]) => {
     if (value === undefined) return;
     if (path.length === 1 && (path[0] === "id" || path[0] === "type")) return;
     if (path[0] === "response" && path[1] === "answers" && typeof path[2] === "string"
@@ -55,7 +55,7 @@ export function transcriptItemFields(item: WorkbenchProjectedTranscriptItem, opa
   return fields;
 }
 
-export function previewTranscriptFields(fields: TranscriptField[]): TranscriptField[] {
+export function previewTranscriptFields(fields: HistoryField[]): HistoryField[] {
   return fields.flatMap(field => {
     if (field.value === null || typeof field.value === "object") return [];
     // Keep cwd intact until the renderer can compare it with the caller's cwd.
@@ -68,11 +68,11 @@ export function previewTranscriptFields(fields: TranscriptField[]): TranscriptFi
 }
 
 export function expandTranscriptFields(
-  fields: TranscriptField[],
+  fields: HistoryField[],
   index = 0,
   offset = 0,
-): { fields: TranscriptField[]; next: { index: number; offset: number } | null } {
-  const page: TranscriptField[] = [];
+): { fields: HistoryField[]; next: { index: number; offset: number } | null } {
+  const page: HistoryField[] = [];
   let budget = 12000;
   for (; index < fields.length; index++) {
     const field = fields[index]!;

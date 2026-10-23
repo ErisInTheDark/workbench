@@ -17,7 +17,7 @@ import type {
 import type { WorkbenchStoredStatsSection } from "./stats/WorkbenchStatsRepository.ts";
 import type { WorkbenchGitClaimRename } from "../stats/git-claim-observation";
 import type { WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
-import { TranscriptQueryError, type TranscriptQuery } from "./transcript/transcript-query-contract";
+import { HistoryQueryError, type HistoryQuery } from "./history/history-query-contract";
 import type { WorkbenchTranscriptRetentionCutoffs } from "./retention/WorkbenchTranscriptRetentionRepository.ts";
 import type {
     WorkbenchDatabaseControllerState,
@@ -268,9 +268,10 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
     return await this.readRows(statement) as Row[];
   }
 
-  async queryTranscript(request: TranscriptQuery) {
-    const result = await this.queryTranscriptPage(request);
-    if (result.ok === false) throw new TranscriptQueryError(result.error);
+  /** Search reads the writer's history index; every other history action runs on the reader pool. */
+  async queryHistory(request: HistoryQuery) {
+    const result = request.action === "search" ? await this.searchHistory(request) : await this.readHistory(request);
+    if (result.ok === false) throw new HistoryQueryError(result.error);
     return result.page;
   }
 

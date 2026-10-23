@@ -1,18 +1,18 @@
 /*
  * Exports:
  * - transcriptCommand: build native-shell commands from validated query selections.
- * - transcriptPageOutput: attach one continuation to bounded item data.
- * - renderTranscriptPage: render compact grouped item data and incomplete-storage warnings.
+ * - transcriptPageOutput: attach exact continuation commands to bounded item data.
+ * - renderTranscriptPage: render compact grouped item data, search evidence and incomplete-storage warnings.
  */
 import path from "node:path";
-import type { TranscriptField, TranscriptQuery, TranscriptQueryPage } from "../database/transcript/transcript-query-contract";
-import { TRANSCRIPT_PREVIEW_CHAR_LIMIT } from "../database/transcript/transcript-item-data";
+import type { HistoryField, HistoryPage, HistoryQuery } from "../database/history/history-query-contract";
+import { TRANSCRIPT_PREVIEW_CHAR_LIMIT } from "../database/history/history-item-fields";
 
 function quote(value: string) {
   return process.platform === "win32" ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function transcriptCommand(query: TranscriptQuery) {
+export function transcriptCommand(query: HistoryQuery) {
   const args = ["wb", "transcript", query.action];
   const value = (flag: string, input: string | number | boolean | null) => { if (input !== null) args.push(flag, quote(String(input))); };
   query.threads.forEach(id => value("--thread", id));
@@ -27,25 +27,28 @@ export function transcriptCommand(query: TranscriptQuery) {
   value("--until", query.until);
   value("--archived", query.archived);
   value("--settled", query.settled);
-  query.queries.forEach(text => value("--query", text));
-  query.excludes.forEach(text => value("--exclude", text));
-  if (query.any) args.push("--any");
-  if (query.caseSensitive) args.push("--case-sensitive");
+  value("--query", query.query);
   if (query.opaque) args.push("--opaque");
   value("--item", query.item);
+  value("--before", query.before);
+  value("--after", query.after);
   value("--around", query.around);
   if (query.around) value("--context", query.context);
   value("--limit", query.limit);
-  if (["read", "turns", "search"].includes(query.action)) value("--direction", query.direction);
   value("--cursor", query.cursor);
   if (query.json) args.push("--json");
   return args.join(" ");
 }
 
-export function transcriptPageOutput(query: TranscriptQuery, page: TranscriptQueryPage) {
+export function transcriptPageOutput(query: HistoryQuery, page: HistoryPage) {
+  const anchors = { before: null, after: null, around: null, cursor: null };
+  const first = page.rows[0]?.id;
+  const last = page.rows.at(-1)?.id;
   return {
     ...page,
     nextCommand: page.nextCursor ? transcriptCommand({ ...query, cursor: page.nextCursor }) : null,
+    olderCommand: query.action === "read" && page.older && first ? transcriptCommand({ ...query, ...anchors, before: first }) : null,
+    newerCommand: query.action === "read" && page.newer && last ? transcriptCommand({ ...query, ...anchors, after: last }) : null,
   };
 }
 
@@ -67,7 +70,7 @@ function sameDirectory(value: string, cwd: string) {
   return normalise(value) === normalise(cwd);
 }
 
-function fieldLines(field: TranscriptField, preview: boolean, cwd?: string) {
+function fieldLines(field: HistoryField, preview: boolean, cwd?: string) {
   let value = field.value;
   let trimmed = field.length !== undefined && (field.offset ?? 0) + Array.from(String(value)).length < field.length;
   if (typeof value === "string" && field.path.at(-1) === "cwd") {
@@ -88,9 +91,9 @@ function fieldLines(field: TranscriptField, preview: boolean, cwd?: string) {
   return [`${scalar}${suffix}`];
 }
 
-function renderFields(fields: TranscriptField[], preview: boolean, cwd?: string) {
+function renderFields(fields: HistoryField[], preview: boolean, cwd?: string) {
   const lines: string[] = [];
-  let previous: TranscriptField["path"] = [];
+  let previous: HistoryField["path"] = [];
   for (const field of fields) {
     if (preview && (field.value === null || typeof field.value === "object")) continue;
     const parents = field.path.slice(0, -1);
@@ -107,11 +110,24 @@ function renderFields(fields: TranscriptField[], preview: boolean, cwd?: string)
   return lines;
 }
 
-export function renderTranscriptPage(query: TranscriptQuery, page: TranscriptQueryPage, cwd?: string) {
+function searchLines(page: HistoryPage) {
+  const summary = page.search;
+  if (!summary) return [];
+  return [
+    `matches: ${summary.complete} with every term, ${summary.partial} with some; best first`,
+    `terms: ${summary.terms.map(term => `${term.term} ${term.hits}`).join(" · ")}`,
+    ...(summary.indexed < 1 ? [`index still building (${Math.floor(summary.indexed * 100)}%); some older items are not searchable yet`] : []),
+    ...summary.corrections.map(correction => `searched ${JSON.stringify(correction.to)} for ${JSON.stringify(correction.from)}, which matched nothing`),
+  ];
+}
+
+export function renderTranscriptPage(query: HistoryQuery, page: HistoryPage, cwd?: string) {
   const output = transcriptPageOutput(query, page);
   const lines: string[] = [];
   let thread: string | null = null;
   let turn: string | null = null;
+  // Ranked search results jump between threads and turns; only chronological pages group by them.
+  const grouped = query.action !== "search";
   const preview = query.action !== "show";
   if (page.coverage.materializedTurns < page.coverage.turns) {
     lines.push(`incomplete storage: ${page.coverage.materializedTurns}/${page.coverage.turns} turns materialised`);
@@ -120,10 +136,14 @@ export function renderTranscriptPage(query: TranscriptQuery, page: TranscriptQue
     lines.push(`expired storage: ${page.coverage.expiredTurns}/${page.coverage.turns} turn payloads removed by retention; `
       + "--provider with exactly one --thread and --turn recovers that turn until the next retention run");
   }
+  if (page.gaps.length) lines.push(`unmaterialised turns in this window: ${page.gaps.join(", ")}`);
+  if (page.expired.length) lines.push(`retention-expired turns in this window: ${page.expired.join(", ")}`);
+  lines.push(...searchLines(page));
+  if (output.olderCommand) lines.push("", `older: ${output.olderCommand}`);
   if (!page.rows.length) lines.push("no matches");
   for (const row of output.rows) {
     const item = row.turnId !== null && row.kind !== "turn";
-    if (item || row.kind === "turn") {
+    if (grouped && (item || row.kind === "turn")) {
       if (row.threadId !== thread) {
         lines.push(`thread ${row.threadId}`);
         thread = row.threadId;
@@ -135,11 +155,14 @@ export function renderTranscriptPage(query: TranscriptQuery, page: TranscriptQue
       }
     }
     lines.push("", `${row.kind} ${row.id}${!item && row.title ? ` ${JSON.stringify(row.title)}` : ""}`);
+    if (!grouped && item) lines.push(`  thread: ${row.threadId}`, `  turn: ${row.turnId}`);
     if (!item && row.projectId && row.kind !== "project") lines.push(`  project: ${row.projectId}`);
     if (!item && row.createdAt !== null) lines.push(`  time: ${new Date(row.createdAt).toISOString()}`);
     for (const [key, count] of Object.entries(row.counts)) lines.push(`  ${key}: ${count}`);
+    if (row.excerpt) lines.push(`  match: ${row.excerpt}`);
     lines.push(...renderFields(row.fields, preview, cwd));
   }
+  if (output.newerCommand) lines.push("", `newer: ${output.newerCommand}`);
   if (output.nextCommand) lines.push("", output.nextCommand);
   return `${lines.join("\n").trimStart()}\n`;
 }

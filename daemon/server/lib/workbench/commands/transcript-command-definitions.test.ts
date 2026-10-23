@@ -14,11 +14,12 @@ function command(action: string) {
 
 const equivalents: [action: string, cli: string[], json: object][] = [
   ["projects", ["--project", "p", "--limit", "5"], { project: "p", limit: 5 }],
-  ["threads", ["--query", "a", "--any", "--archived", "true"], { queries: ["a"], any: true, archived: true }],
-  ["turns", ["--thread", "t", "--direction", "newer"], { threads: ["t"], direction: "newer" }],
-  ["search", ["--query", "-x", "--kind", "tool", "--thread", "t", "--turn", "u", "--provider"],
-    { queries: ["-x"], kinds: ["tool"], threads: ["t"], turn: "u", provider: true }],
+  ["threads", ["--query", "a", "--archived", "true"], { query: "a", archived: true }],
+  ["turns", ["--thread", "t", "--limit", "3"], { threads: ["t"], limit: 3 }],
+  ["search", ["--query", "a", "--query", "-x", "--kind", "tool", "--thread", "t", "--turn", "u", "--provider"],
+    { query: "a -x", kinds: ["tool"], threads: ["t"], turn: "u", provider: true }],
   ["read", ["--thread", "t", "--around", "i", "--context", "2"], { threads: ["t"], around: "i", context: 2 }],
+  ["read", ["--thread", "t", "--before", "i"], { threads: ["t"], before: "i" }],
   ["show", ["--thread", "t", "--item", "i", "--opaque"], { threads: ["t"], item: "i", opaque: true }],
   ["stats", ["--since", "2026-01-01", "--phase", "commentary"], { since: Date.parse("2026-01-01"), phase: "commentary" }],
 ];
@@ -35,7 +36,8 @@ test("each transcript tool builds the same request from CLI options and from JSO
 test("JSON input rejects options the CLI does not accept for that action, including action itself", async () => {
   for (const [action, json] of [
     ["read", { threads: ["t"], item: "i" }],
-    ["search", { queries: ["a"], around: "i" }],
+    ["search", { query: "a", around: "i" }],
+    ["read", { threads: ["t"], before: "i", after: "j" }],
     ["projects", { kinds: ["tool"] }],
     ["threads", { provider: true }],
     ["read", { action: "stats", threads: ["t"] }],

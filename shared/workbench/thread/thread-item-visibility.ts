@@ -1,14 +1,17 @@
 /*
  * Exports:
- * - isThreadItemVisible: exclude accidental Claude prose/thinking from presentation, preserving internal evidence.
+ * - isThreadItemVisible: exclude accidental Claude and OpenCode prose (and Claude thinking) from presentation, preserving internal evidence.
  */
+
+/** Harnesses whose agents speak to the user only through commentary; their unlabelled assistant text is never shown. */
+const COMMENTARY_ONLY_HARNESSES = new Set(["claude", "opencode"]);
 
 export function isThreadItemVisible(
   harness: string,
   item: { type: string; phase?: string | null },
 ): boolean {
-  // ClaudeTranscriptAdapter assigns commentary only to exact mcp__wb__message_user input,
+  if (harness === "claude" && item.type === "reasoning") return false;
+  // ClaudeTranscriptAdapter and OpenCode adapters assign commentary only to the user-message channel,
   // never to ordinary assistant text, regardless of what channel or prose it represents.
-  return harness !== "claude"
-    || (item.type !== "reasoning" && (item.type !== "agentMessage" || item.phase === "commentary"));
+  return !COMMENTARY_ONLY_HARNESSES.has(harness) || item.type !== "agentMessage" || item.phase === "commentary";
 }

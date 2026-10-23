@@ -97,6 +97,21 @@ test("summarises search totals separately from records shown on the captured pag
   assert.equal(summary.recordCount, 1);
 });
 
+test("summarises ranked search pages from complete and partial match counts", () => {
+  const summary = summarizeWorkbenchThreadRecallOutput([
+    "# Thread Recall Search",
+    "",
+    "Matches: 3 with every term · 1,204 with some; best first.",
+    "",
+    '<commentary id="ref:item-1" turn="t">',
+    "Match",
+    "</commentary>",
+  ].join("\n"));
+  assert.ok(summary);
+  assert.deepEqual(summary.searchMatches, { shown: 1, total: 1_207 });
+  assert.equal(summarizeWorkbenchThreadRecallOutput("# Thread Recall Context\n\nNo records in this window.")?.mode, "context");
+});
+
 test("does not invent result semantics for malformed fallback output", () => {
   assert.equal(summarizeWorkbenchThreadRecallOutput("unstructured output"), null);
   assert.equal(summarizeWorkbenchThreadRecallOutput([

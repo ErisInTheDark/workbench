@@ -26,6 +26,7 @@
 | compaction queue | User messages sent while a thread compacts. Held as pending steers on the latest turn, delivered as one merged message when compaction ends |
 | virtual steer | Pending held steer on an ended turn while its thread holds a pending questionnaire. Never sent to the provider; delivered after the answer in the continuation's first user message |
 | transcripts | Actual thread data instead of just the visible narrative. `wb transcript --help` for looking through them |
+| history index | FTS index over transcript item text and retained narrative; serves Thread Recall, wb transcript and workspace search; `WorkbenchHistoryIndex` |
 | workbench item | A transcript item Workbench records itself (compaction, steers, user vis ends) via a `kind: "item"` observation with `source: "workbench"`. Non-core types store as generic payloads and render through `thread-generic-item-matchers.ts` |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
 | daemon | The Workbench harness, applied on top of existing harnesses. Server source lives in `daemon/server/`. |

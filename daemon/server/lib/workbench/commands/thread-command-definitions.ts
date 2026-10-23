@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 
+import { WORKBENCH_THREAD_RECALL_KINDS } from "workbench-shared/types";
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import {
   defineWorkbenchAgentCommand,
@@ -116,29 +117,33 @@ const compact = defineWorkbenchAgentCommand({
   },
 });
 
+const recallKinds = z.array(z.enum(WORKBENCH_THREAD_RECALL_KINDS)).optional();
+
 const recallSearch = defineWorkbenchAgentCommand({
   aliases: [["thread", "context", "search"]],
-  description: "Search visible narrative history and return stable result references.",
+  description: "Search visible narrative history: words in any order, \"quoted phrases\", -exclusions. Hits rank by terms matched and print their --around command.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread", "thread-recall"],
   mcpCodeModeEligible: true,
   words: ["thread", "recall", "search"],
-  usage: "wb thread recall search [--thread <id>] --query <text> [--kind <kind>...] [--limit <count>] [--before <ref>]",
+  usage: "wb thread recall search [--thread <id>] --query <words> [--kind <kind>...] [--limit <count>] [--cursor <cursor>]",
   inputSchema: z.object({
-    before: requiredText.optional(),
-    kinds: z.array(requiredText).optional(),
+    cursor: requiredText.optional(),
+    kinds: recallKinds,
     limit: z.number().int().min(1).max(50).optional(),
     query: requiredText,
     threadId: requiredText.optional(),
   }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--kind"], values: ["--thread", "--query", "--limit", "--before"] });
+    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--kind", "--query"], values: ["--thread", "--limit", "--cursor"], leadingDashValues: ["--query"] });
     const limit = flags.optionalNonNegativeInteger("--limit");
+    const query = flags.repeated("--query").join(" ");
+    if (!query) throw new Error("--query is required.");
     return {
-      before: flags.optional("--before") ?? undefined,
-      kinds: flags.repeated("--kind"),
+      cursor: flags.optional("--cursor") ?? undefined,
+      kinds: recallKinds.parse(flags.repeated("--kind")),
       limit: limit ?? undefined,
-      query: flags.required("--query"),
+      query,
       threadId: flags.optional("--thread") ?? undefined,
     };
   },
@@ -147,50 +152,42 @@ const recallSearch = defineWorkbenchAgentCommand({
       action: "search", query: input.query,
       ...(input.kinds?.length ? { kinds: input.kinds } : {}),
       ...(input.limit !== undefined ? { limit: input.limit } : {}),
-      ...(input.before ? { before: input.before } : {}),
-    });
-  },
-});
-
-const recallExpand = defineWorkbenchAgentCommand({
-  aliases: [["thread", "context", "expand"]],
-  description: "Read one referenced record through fixed-budget content pages.",
-  effects: { idempotent: true, readOnly: true },
-  helpGroups: ["thread", "thread-recall"],
-  mcpCodeModeEligible: true,
-  words: ["thread", "recall", "expand"],
-  usage: "wb thread recall expand [--thread <id>] --ref <ref> [--cursor <cursor>]",
-  inputSchema: z.object({ cursor: requiredText.optional(), ref: requiredText, threadId: requiredText.optional() }).strict(),
-  parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--thread", "--ref", "--cursor"] });
-    return { cursor: flags.optional("--cursor") ?? undefined, ref: flags.required("--ref"), threadId: flags.optional("--thread") ?? undefined };
-  },
-  buildRequest(input, { callerThreadId }) {
-    return postWorkbenchAgentCommand(`/api/thread-context/${encodeURIComponent(targetThreadId(input.threadId, callerThreadId))}`, {
-      action: "expand", ref: input.ref, ...(input.cursor ? { cursor: input.cursor } : {}),
+      ...(input.cursor ? { cursor: input.cursor } : {}),
     });
   },
 });
 
 const recall = defineWorkbenchAgentCommand({
   aliases: [["thread", "context"]],
-  description: "Read filtered history newest-first, or continue before an emitted cursor.",
+  description: "Read filtered history newest-first, or walk --before/--after/--around a ref.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread", "thread-recall"],
   mcpCodeModeEligible: true,
   words: ["thread", "recall"],
-  usage: "wb thread recall [--thread <id>] [--kind <kind>...] [--before <cursor>]",
-  inputSchema: z.object({ before: requiredText.optional(), kinds: z.array(requiredText).optional(), threadId: requiredText.optional() }).strict(),
+  usage: "wb thread recall [--thread <id>] [--kind <kind>...] [--before <ref> | --after <ref> | --around <ref>]",
+  inputSchema: z.object({
+    after: requiredText.optional(),
+    around: requiredText.optional(),
+    before: requiredText.optional(),
+    kinds: recallKinds,
+    threadId: requiredText.optional(),
+  }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--kind"], values: ["--thread", "--before"] });
-    return { before: flags.optional("--before") ?? undefined, kinds: flags.repeated("--kind"), threadId: flags.optional("--thread") ?? undefined };
+    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--kind"], values: ["--thread", "--before", "--after", "--around"] });
+    return {
+      after: flags.optional("--after") ?? undefined,
+      around: flags.optional("--around") ?? undefined,
+      before: flags.optional("--before") ?? undefined,
+      kinds: recallKinds.parse(flags.repeated("--kind")),
+      threadId: flags.optional("--thread") ?? undefined,
+    };
   },
   buildRequest(input, { callerThreadId }) {
     return getWorkbenchAgentCommand(queryWorkbenchAgentCommandPath(
       `/api/thread-context/${encodeURIComponent(targetThreadId(input.threadId, callerThreadId))}`,
-      { before: input.before ?? null, kind: input.kinds ?? [] },
+      { after: input.after ?? null, around: input.around ?? null, before: input.before ?? null, kind: input.kinds ?? [] },
     ));
   },
 });
 
-export const WORKBENCH_THREAD_COMMANDS = [taskGet, taskSet, taskCompleted, taskBlocked, refresh, compact, recallSearch, recallExpand, recall] as const;
+export const WORKBENCH_THREAD_COMMANDS = [taskGet, taskSet, taskCompleted, taskBlocked, refresh, compact, recallSearch, recall] as const;

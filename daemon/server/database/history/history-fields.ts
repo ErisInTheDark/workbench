@@ -1,25 +1,29 @@
 /*
  * Exports:
- * - transcriptQueryFields: canonical field registry shared by matching and expansion.
- * - transcriptQueryKindSql: map stored item discriminators and agent-message envelopes to CLI kinds.
- * - transcriptQueryFieldsSql: join registered fields to a bounded candidate CTE.
+ * - historyFields: canonical searchable field registry shared by the history index, phrase checks and expansion.
+ * - HISTORY_FIELD_TABLES: every table the registry reads, so index triggers cover exactly the indexed text.
+ * - historyKindSql: map stored item discriminators, assistant phases and agent-message envelopes to history kinds.
+ * - historyFieldsSql: join registered fields to a bounded candidate CTE, flagging narrative text.
  */
-import { agentMessageInputSql, agentMessageOutputSql } from "./transcript-agent-message-sql.ts";
+import { agentMessageInputSql, agentMessageOutputSql } from "../transcript/transcript-agent-message-sql.ts";
 
-interface QueryFieldSource {
+interface HistoryFieldSource {
   name: string;
   table: string;
   columns: readonly string[];
   index?: string;
   join?: string;
   where?: string;
+  /** Text a person wrote or read in the conversation; workspace search matches only this. */
+  narrative?: boolean;
   opaque?: boolean;
 }
 
-export const transcriptQueryFields: readonly QueryFieldSource[] = [
-  { name: "user", table: "thread_user_message_parts", columns: ["text", "path", "name"], index: "part_index" },
+export const historyFields: readonly HistoryFieldSource[] = [
+  { name: "user", table: "thread_user_message_parts", columns: ["text"], index: "part_index", narrative: true },
+  { name: "user", table: "thread_user_message_parts", columns: ["path", "name"], index: "part_index" },
   { name: "user", table: "thread_item_user_messages", columns: ["error_text"] },
-  { name: "assistant", table: "thread_item_assistant_messages", columns: ["text"] },
+  { name: "assistant", table: "thread_item_assistant_messages", columns: ["text"], narrative: true },
   { name: "reasoning", table: "thread_reasoning_sections", columns: ["text"], index: "section_index" },
   { name: "process", table: "thread_operation_process_sources", columns: ["command", "cwd", "output_text", "error_text"] },
   { name: "tool", table: "thread_operation_tool_sources", columns: ["tool_name"] },
@@ -39,23 +43,26 @@ export const transcriptQueryFields: readonly QueryFieldSource[] = [
   { name: "web", table: "thread_item_web_searches", columns: ["query", "action_query", "url", "pattern", "error_text"] },
   { name: "web-query", table: "thread_web_search_queries", columns: ["query"], index: "query_index" },
   { name: "web-result", table: "thread_web_search_results", columns: ["opaque_json"], index: "result_index", opaque: true },
-  { name: "interaction", table: "thread_item_interactions", columns: ["title", "summary", "error_text"] },
-  { name: "question", table: "thread_interaction_questions", columns: ["header", "question"], index: "question_index" },
-  { name: "option", table: "thread_interaction_options", columns: ["label", "description"], index: "printf('%08d.%08d', f.question_index, f.option_index)" },
+  { name: "interaction", table: "thread_item_interactions", columns: ["title", "summary"], narrative: true },
+  { name: "interaction", table: "thread_item_interactions", columns: ["error_text"] },
+  { name: "question", table: "thread_interaction_questions", columns: ["header", "question"], index: "question_index", narrative: true },
+  { name: "option", table: "thread_interaction_options", columns: ["label", "description"], index: "printf('%08d.%08d', f.question_index, f.option_index)", narrative: true },
   { name: "answer", table: "thread_interaction_answers", columns: ["CASE WHEN q.is_secret = 1 THEN '[redacted]' ELSE f.answer END"],
     index: "f.question_id || '.' || printf('%08d', f.answer_index)",
-    join: "JOIN thread_interaction_questions q ON q.item_id = f.item_id AND q.question_id = f.question_id" },
+    join: "JOIN thread_interaction_questions q ON q.item_id = f.item_id AND q.question_id = f.question_id", narrative: true },
   { name: "approval", table: "thread_approval_command_contexts", columns: ["command", "cwd"] },
   { name: "compaction", table: "thread_item_context_compactions", columns: ["state", "error_text"] },
   { name: "unknown", table: "thread_item_unknown", columns: ["native_type", "safe_json"], opaque: true },
 ];
 
+export const HISTORY_FIELD_TABLES: readonly string[] = [...new Set(historyFields.map(source => source.table))];
+
 /** Requires `registerTranscriptAgentMessageFunction` on the connection. */
-export const transcriptQueryKindSql = `CASE i.type
+export const historyKindSql = `CASE i.type
   WHEN 'userMessage' THEN CASE
     WHEN ${agentMessageInputSql("i")} THEN 'agent-message'
     WHEN u.input_kind = 'steer' THEN 'user-steer' ELSE 'user-message' END
-  WHEN 'assistantMessage' THEN 'assistant-message'
+  WHEN 'assistantMessage' THEN CASE a.phase WHEN 'finalAnswer' THEN 'final-answer' ELSE 'commentary' END
   WHEN 'operation' THEN CASE WHEN p.item_id IS NOT NULL THEN 'process' WHEN t.tool_kind = 'collaboration' THEN 'collaboration' ELSE 'tool' END
   WHEN 'functionCallOutput' THEN CASE
     WHEN ${agentMessageOutputSql("i")} THEN 'agent-message'
@@ -65,12 +72,14 @@ export const transcriptQueryKindSql = `CASE i.type
   WHEN 'contextCompaction' THEN 'compaction'
   ELSE i.type END`;
 
-export function transcriptQueryFieldsSql(opaque: boolean) {
-  return transcriptQueryFields.filter(source => opaque || !source.opaque).flatMap(source => source.columns.map(column => {
+/** Rows of `(item_id, name, text, narrative, opaque)` for every id in a `candidate(id)` CTE the caller defines. */
+export function historyFieldsSql(opaque: boolean) {
+  return historyFields.filter(source => opaque || !source.opaque).flatMap(source => source.columns.map(column => {
     const expression = column.startsWith("CASE ") ? column : `f.${column}`;
     const label = column.startsWith("CASE ") ? "text" : column;
     const index = source.index ? (/^\w+$/u.test(source.index) ? `printf('%08d', f.${source.index})` : source.index) : "''";
-    return `SELECT c.id AS item_id, '${source.name}.${label}.' || ${index} AS name, ${expression} AS text
+    return `SELECT c.id AS item_id, '${source.name}.${label}.' || ${index} AS name, ${expression} AS text,
+      ${source.narrative ? 1 : 0} AS narrative, ${source.opaque ? 1 : 0} AS opaque
       FROM candidate c JOIN ${source.table} f ON f.item_id = c.id ${source.join ?? ""}
       WHERE ${expression} IS NOT NULL AND ${expression} <> '' ${source.where ? `AND ${source.where}` : ""}`;
   })).join("\nUNION ALL\n");
