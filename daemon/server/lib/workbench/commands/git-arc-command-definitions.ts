@@ -18,7 +18,7 @@ import {
   defineWorkbenchAgentCommand,
   postWorkbenchAgentCommand,
 } from "./workbench-agent-command-definition";
-import { readGitClaimPathFile, readProjectJsonFile } from "./git-claim-path-file";
+import { readCwdJsonFile, readGitClaimPathFile } from "./git-claim-path-file";
 
 const requiredText = z.string().trim().min(1);
 const paths = z.array(requiredText);
@@ -26,7 +26,7 @@ const requiredPaths = paths.min(1);
 const rootPathsSchema = z.object({ paths: requiredPaths, rootId: requiredText }).strict();
 const memberRefSchema = z.object({ ref: requiredText, rootId: requiredText }).strict();
 const claimsCommandSchema = GitArcClaimsSchema.extend({
-  pathsFile: requiredText.optional().describe("Project-relative JSON file containing addPaths, removePaths, adoptPaths and roots."),
+  pathsFile: requiredText.optional().describe("JSON file relative to and inside the caller cwd, containing addPaths, removePaths, adoptPaths and roots."),
 }).strict().superRefine((input, context) => {
   if (input.pathsFile && (input.addPaths.length || input.removePaths.length || input.adoptPaths.length || input.roots.length)) {
     context.addIssue({ code: "custom", message: "pathsFile cannot be combined with inline claim arrays." });
@@ -43,7 +43,7 @@ function parseClaimsCommandArguments(args: readonly string[]) {
     }
     if (pathsFile !== undefined) throw new Error("--paths-file was supplied twice.");
     const value = args[++index];
-    if (!value?.trim()) throw new Error("--paths-file requires a project-relative JSON file.");
+    if (!value?.trim()) throw new Error("--paths-file requires a cwd-relative JSON file.");
     pathsFile = value;
   }
   const parsed = parseGitClaimArguments(remaining);
@@ -159,7 +159,7 @@ const editStart = defineWorkbenchAgentCommand({
     return { operations, operationsFile: flags.optional("--operations-json") ?? undefined, rootId: flags.optional("--root") ?? undefined };
   },
   async buildRequest(input, { callerHarness, callerThreadId, cwd }) {
-    const operations = input.operations ?? await readProjectJsonFile(cwd, input.operationsFile!, GitArcEditOperationsSchema, "edit operations");
+    const operations = input.operations ?? await readCwdJsonFile(cwd, input.operationsFile!, GitArcEditOperationsSchema, "edit operations");
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
       action: "arcEditStart", ...baseBody(callerHarness, callerThreadId, cwd), operations,
       ...(input.rootId ? { rootId: input.rootId } : {}),
@@ -361,7 +361,7 @@ const restore = defineWorkbenchAgentCommand({
 const claims = defineWorkbenchAgentCommand({
   description: "Edit active claims atomically, including continuation checks. Inheritance is required. Adopt only intentional dirty unclaimed work.",
   helpGroups: ["git-arc"], words: ["git", "arc", "claims"],
-  usage: "wb git arc claims --inherit [--paths-file <project-json> | -- <add-path> -<remove-path> '*<adopt-path>'...]",
+  usage: "wb git arc claims --inherit [--paths-file <cwd-json> | -- <add-path> -<remove-path> '*<adopt-path>'...]",
   inputSchema: claimsCommandSchema,
   parseCliArgs: parseClaimsCommandArguments,
   async buildRequest(input, { callerHarness, callerThreadId, cwd }) {
