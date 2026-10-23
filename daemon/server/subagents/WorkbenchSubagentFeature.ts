@@ -67,7 +67,7 @@ export default class WorkbenchSubagentFeature {
 
   beginRuntimeDrain() { this.controller.beginRuntimeDrain(); }
   dispose() { return this.controller.dispose(); }
-  handleRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> { return this.controller.handleRequest(request); }
+  handleRequest(request: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse> { return this.controller.handleRequest(request, signal); }
   listRelationships(projectId: ProjectId) { return this.store.list({ projectId }); }
   resolveGitArcPeer(input: { cwd: string; parentThreadId: WorkbenchThreadId; name: string }) {
     return this.controller.resolveGitArcPeer(input);

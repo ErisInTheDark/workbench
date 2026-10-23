@@ -367,14 +367,14 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         };
       },
       readReloadDirtSnapshot: () => reloadDirt.getSnapshot(),
-      requestManagedThread: async (request) => request.method?.startsWith("workbench/thread/")
+      requestManagedThread: async (request, signal) => request.method?.startsWith("workbench/thread/")
         ? await threadState.handleManagedThreadRequest(request)
         : request.method === "workbench/message"
           ? await messages.send(request.params).then(
             () => ({ id: request.id ?? null, result: {} }),
             error => ({ id: request.id ?? null, error: { code: -32000, message: error instanceof Error ? error.message : "Workbench message failed." } }),
           )
-          : await subagents.handleRequest(request),
+          : await subagents.handleRequest(request, signal),
       workbenchProjectRoot: context.legacyMigrationProjectRoot,
     }, undefined, undefined, commandLogger);
     return {

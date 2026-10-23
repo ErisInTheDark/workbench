@@ -854,27 +854,20 @@ test("dispatches thread refresh through the direct managed-thread transport", as
   }
 });
 
-test("cancels the exact direct subagent waiter when the native caller disconnects", async () => {
-  const waitStarted = deferred<string>();
-  const waitCancelled = deferred<string>();
-  const waitResponse = deferred<{ id: number | string | null; error: { code: number; message: string } }>();
+test("aborts the direct subagent wait when the native caller disconnects", async () => {
+  const waitStarted = deferred<AbortSignal>();
+  const waitAborted = deferred<void>();
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-      requestManagedThread: async (message) => {
-        const params = message.params && typeof message.params === "object" && !Array.isArray(message.params)
-          ? message.params as Record<string, unknown>
-          : {};
-        const waitId = String(params.waitId ?? "");
-        if (message.method === "workbench/subagent/wait") {
-          waitStarted.resolve(waitId);
-          return await waitResponse.promise;
-        }
-        assert.equal(message.method, "workbench/subagent/waitCancel");
-        waitCancelled.resolve(waitId);
-        waitResponse.resolve({ id: 0, error: { code: -32000, message: "Subagent wait cancelled." } });
-        return { id: 0, result: { cancelled: true } };
+      requestManagedThread: async (message, signal) => {
+        assert.equal(message.method, "workbench/subagent/wait");
+        assert.ok(signal);
+        waitStarted.resolve(signal);
+        await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+        waitAborted.resolve();
+        return { id: 0, error: { code: -32000, message: "Subagent wait cancelled." } };
       },
     },
     async () => { throw new Error("unexpected internal fetch"); },
@@ -892,10 +885,9 @@ test("cancels the exact direct subagent waiter when the native caller disconnect
     });
     request.on("error", () => undefined);
     request.end(body);
-    const waitId = await waitStarted.promise;
-    assert.ok(waitId);
+    assert.equal((await waitStarted.promise).aborted, false);
     request.destroy();
-    assert.equal(await waitCancelled.promise, waitId);
+    await waitAborted.promise;
   } finally {
     await server.close();
   }

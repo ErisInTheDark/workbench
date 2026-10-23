@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchSubagentControllerOptions: provider operations, durable store, message-wait observations, settle handover ports and validated project dependencies.
- * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, and wait cancellation.
+ * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, and waits that end on caller abort or runtime drain.
  */
 import { randomUUID } from "node:crypto";
 
@@ -117,6 +117,16 @@ function delay(ms: number, signal?: AbortSignal) {
   });
 }
 
+/** Settles with `operation`, or rejects as soon as `signal` aborts even while `operation` still awaits. */
+function untilAborted<T>(operation: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 export default class WorkbenchSubagentController {
   private readonly provider: WorkbenchSubagentControllerOptions["provider"];
   private readonly liveApprovals: WorkbenchSubagentControllerOptions["liveApprovals"];
@@ -134,7 +144,8 @@ export default class WorkbenchSubagentController {
   private readonly moveTodos: WorkbenchSubagentControllerOptions["moveTodos"];
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly messageWaits: WorkbenchSubagentControllerOptions["messageWaits"];
-  private readonly waiters = new Map<string, AbortController>();
+  /** Aborts every wait when the runtime drains, so long waits re-enter the next generation. */
+  private readonly lifetime = new AbortController();
   private active = true;
   // Creation ordering cannot account for admitted messages, stops and waits.
   private readonly requests = new Set<Promise<JsonRpcResponse>>();
@@ -175,8 +186,7 @@ export default class WorkbenchSubagentController {
 
   beginRuntimeDrain() {
     this.active = false;
-    for (const waiter of this.waiters.values()) waiter.abort(new Error("Subagent wait cancelled for runtime reload."));
-    this.waiters.clear();
+    if (!this.lifetime.signal.aborted) this.lifetime.abort(new Error("Subagent wait cancelled for runtime reload."));
   }
 
   async dispose() {
@@ -184,38 +194,27 @@ export default class WorkbenchSubagentController {
     await Promise.all(this.requests);
   }
 
-  handleRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
-    const operation = Promise.resolve().then(() => this.handleRequestOwned(message));
+  /** `signal` is the caller's: aborting it ends a wait at once, wherever the wait still awaits. */
+  handleRequest(message: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse> {
+    const operation = Promise.resolve().then(() => this.handleRequestOwned(message, signal));
     this.requests.add(operation);
     return operation.finally(() => this.requests.delete(operation));
   }
 
-  private async handleRequestOwned(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+  private async handleRequestOwned(message: JsonRpcRequest, callerSignal?: AbortSignal): Promise<JsonRpcResponse> {
     const id = message.id ?? null;
     try {
       if (!this.active) throw new Error("Subagent controller is draining for runtime reload.");
       const params = isRecord(message.params) ? { ...message.params } : {};
-      if (this.identities && message.method !== "workbench/subagent/waitCancel") {
-        const { project } = await this.resolveProjectFromCwd(requiredString(params, "cwd"), { endpointName: "Workbench subagent" });
-        const canonicalId = async (threadId: string) => {
-          const identity = await this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.id });
-          if (!identity) throw new Error("Subagent thread identity is unavailable in this project.");
-          return identity.threadId;
-        };
-        for (const key of ["callerThreadId", "parentThreadId", "threadId"] as const) {
-          if (typeof params[key] === "string") params[key] = await canonicalId(params[key]);
-        }
-        if (Array.isArray(params.threadIds)) params.threadIds = await Promise.all(params.threadIds.map((threadId) => {
-          if (typeof threadId !== "string") throw new Error("Subagent thread IDs must be strings.");
-          return canonicalId(threadId);
-        }));
+      if (message.method === "workbench/subagent/wait") {
+        const signal = callerSignal ? AbortSignal.any([callerSignal, this.lifetime.signal]) : this.lifetime.signal;
+        return { id, result: await untilAborted(this.canonicalParams(params).then(canonical => this.wait(canonical, signal)), signal) };
       }
+      await this.canonicalParams(params);
       switch (message.method) {
         case "workbench/subagent/list": return { id, result: await this.list(params) };
         case "workbench/subagent/profiles": return { id, result: await this.profiles(params) };
         case "workbench/subagent/create": return { id, result: await this.create(params) };
-        case "workbench/subagent/wait": return { id, result: await this.wait(params) };
-        case "workbench/subagent/waitCancel": return { id, result: this.cancelWait(params) };
         case "workbench/subagent/stop": return { id, result: await this.stop(params) };
         case "workbench/subagent/settle": return { id, result: await this.settle(params) };
         default: throw new Error(`Unsupported Workbench subagent method: ${message.method ?? "unknown"}`);
@@ -223,6 +222,25 @@ export default class WorkbenchSubagentController {
     } catch (error) {
       return { id, error: { code: -32000, message: error instanceof Error ? error.message : "Workbench subagent request failed." } };
     }
+  }
+
+  /** Replace caller-supplied thread references in `params` with canonical thread ids of the caller's project. */
+  private async canonicalParams(params: Record<string, unknown>) {
+    if (!this.identities) return params;
+    const { project } = await this.resolveProjectFromCwd(requiredString(params, "cwd"), { endpointName: "Workbench subagent" });
+    const canonicalId = async (threadId: string) => {
+      const identity = await this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.id });
+      if (!identity) throw new Error("Subagent thread identity is unavailable in this project.");
+      return identity.threadId;
+    };
+    for (const key of ["callerThreadId", "parentThreadId", "threadId"] as const) {
+      if (typeof params[key] === "string") params[key] = await canonicalId(params[key]);
+    }
+    if (Array.isArray(params.threadIds)) params.threadIds = await Promise.all(params.threadIds.map((threadId) => {
+      if (typeof threadId !== "string") throw new Error("Subagent thread IDs must be strings.");
+      return canonicalId(threadId);
+    }));
+    return params;
   }
 
   mutateProfile(value: unknown) {
@@ -439,130 +457,116 @@ export default class WorkbenchSubagentController {
     return (await this.pendingQuestionnaires(record.harness)).find((entry) => entry.threadId === record.threadId) ?? null;
   }
 
-  private async wait(params: Record<string, unknown>) {
+  private async wait(params: Record<string, unknown>, signal: AbortSignal) {
     const records = await this.ownedRecords(params);
     await this.assertUnlocked(records[0]!.projectId, records);
-    const waitId = requiredString(params, "waitId");
-    if (!this.active) throw new Error("Subagent wait cancelled for runtime reload.");
-    if (this.waiters.has(waitId)) throw new Error("That subagent wait id is already active.");
-    const controller = new AbortController(); this.waiters.set(waitId, controller);
+    signal.throwIfAborted();
     const waitingForParent = () => records.find(record => this.messageWaits?.isWaitingFor(record.threadId, record.parentThreadId));
     const messageWaitOutput = (record: WorkbenchSubagentRelationship) => ({ output: `${record.name} is waiting for a message from you.` });
-    try {
-      if (this.threadState) {
-        type Ready =
-          | { kind: "message"; record: WorkbenchSubagentRelationship }
-          | { kind: "lifecycle"; entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>; record: WorkbenchSubagentRelationship };
-        const recordKeys = new Set(records.map((record) => `${record.harness}:${record.threadId}`));
-        const selectReady = async (): Promise<Ready | null> => {
-          const waiting = waitingForParent();
-          if (waiting) return { kind: "message", record: waiting };
-          for (const record of records) {
-            const entry = await this.threadState!.getEntry(record.projectId, record.harness, record.threadId);
-            if (controller.signal.aborted) throw controller.signal.reason;
-            if (entry?.entryKind === "subagent" && (entry.pinned || entry.lifecycle.kind !== "working")) return { kind: "lifecycle", entry, record };
-          }
-          return null;
-        };
-        const selected = Promise.withResolvers<Ready>();
-        const onAbort = () => selected.reject(controller.signal.reason);
-        const unsubscribeMessages = this.messageWaits?.subscribePending(() => {
-          const record = waitingForParent();
-          if (record) selected.resolve({ kind: "message", record });
-        });
-        const unsubscribeState = this.threadState.subscribe((projectId, entry) => {
-          if (entry.entryKind !== "subagent" || projectId !== records[0]!.projectId || !recordKeys.has(`${entry.identity.harness}:${entry.identity.threadId}`)) return;
-          if (!entry.pinned && entry.lifecycle.kind === "working") return;
-          const record = records.find(candidate => candidate.threadId === entry.identity.threadId && candidate.harness === entry.identity.harness);
-          if (record) selected.resolve({ kind: "lifecycle", entry, record });
-        });
-        controller.signal.addEventListener("abort", onAbort, { once: true });
-        let ready: Ready;
-        try {
-          if (controller.signal.aborted) onAbort();
-          else void selectReady().then(value => { if (value) selected.resolve(value); }, selected.reject);
-          ready = await selected.promise;
-        } finally {
-          unsubscribeMessages?.();
-          unsubscribeState();
-          controller.signal.removeEventListener("abort", onAbort);
+    if (this.threadState) {
+      type Ready =
+        | { kind: "message"; record: WorkbenchSubagentRelationship }
+        | { kind: "lifecycle"; entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>; record: WorkbenchSubagentRelationship };
+      const recordKeys = new Set(records.map((record) => `${record.harness}:${record.threadId}`));
+      const selectReady = async (): Promise<Ready | null> => {
+        const waiting = waitingForParent();
+        if (waiting) return { kind: "message", record: waiting };
+        for (const record of records) {
+          const entry = await this.threadState!.getEntry(record.projectId, record.harness, record.threadId);
+          if (signal.aborted) throw signal.reason;
+          if (entry?.entryKind === "subagent" && (entry.pinned || entry.lifecycle.kind !== "working")) return { kind: "lifecycle", entry, record };
         }
-        if (ready.kind === "message") return messageWaitOutput(ready.record);
-        if (ready.entry.pinned) return { output: `Subagent ${ready.record.name} (${await this.publicThreadId(ready.record.threadId, ready.record.projectId)}) was locked by the user.` };
-        const thread = await this.provider(ready.record.harness).threads.readLatest(ready.record.threadId);
-        const pending = ready.entry.lifecycle.kind === "needsAttention" && ready.entry.lifecycle.reason === "pendingInput"
-          ? await this.pendingQuestionnaire(ready.record)
-          : null;
+        return null;
+      };
+      const selected = Promise.withResolvers<Ready>();
+      const onAbort = () => selected.reject(signal.reason);
+      const unsubscribeMessages = this.messageWaits?.subscribePending(() => {
+        const record = waitingForParent();
+        if (record) selected.resolve({ kind: "message", record });
+      });
+      const unsubscribeState = this.threadState.subscribe((projectId, entry) => {
+        if (entry.entryKind !== "subagent" || projectId !== records[0]!.projectId || !recordKeys.has(`${entry.identity.harness}:${entry.identity.threadId}`)) return;
+        if (!entry.pinned && entry.lifecycle.kind === "working") return;
+        const record = records.find(candidate => candidate.threadId === entry.identity.threadId && candidate.harness === entry.identity.harness);
+        if (record) selected.resolve({ kind: "lifecycle", entry, record });
+      });
+      signal.addEventListener("abort", onAbort, { once: true });
+      let ready: Ready;
+      try {
+        if (signal.aborted) onAbort();
+        else void selectReady().then(value => { if (value) selected.resolve(value); }, selected.reject);
+        ready = await selected.promise;
+      } finally {
+        unsubscribeMessages?.();
+        unsubscribeState();
+        signal.removeEventListener("abort", onAbort);
+      }
+      if (ready.kind === "message") return messageWaitOutput(ready.record);
+      if (ready.entry.pinned) return { output: `Subagent ${ready.record.name} (${await this.publicThreadId(ready.record.threadId, ready.record.projectId)}) was locked by the user.` };
+      const thread = await this.provider(ready.record.harness).threads.readLatest(ready.record.threadId);
+      const pending = ready.entry.lifecycle.kind === "needsAttention" && ready.entry.lifecycle.reason === "pendingInput"
+        ? await this.pendingQuestionnaire(ready.record)
+        : null;
+      return { output: renderSubagentWaitResultOutput({
+        multiplexed: records.length > 1,
+        name: ready.record.name,
+        outcome: pending ? "needs-interaction" : "finished",
+        output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : this.withQueueNote(ready.record.threadId, renderSubagentTurnOutput(thread, ready.entry.lifecycle)),
+        threadId: await this.publicThreadId(ready.record.threadId, ready.record.projectId),
+      }) };
+    }
+    while (true) {
+      const waiting = waitingForParent();
+      if (waiting) return messageWaitOutput(waiting);
+      const pendingByScope = new Map<string, Promise<PendingQuestionnaireList["data"]>>();
+      const states = await Promise.all(records.map(async (record) => {
+        const scopeKey = `${record.harness}\0${record.cwd}`;
+        let pendingPromise = pendingByScope.get(scopeKey);
+        if (!pendingPromise) {
+          pendingPromise = this.pendingQuestionnaires(record.harness);
+          pendingByScope.set(scopeKey, pendingPromise);
+        }
+        const [thread, pending] = await Promise.all([
+          this.provider(record.harness).threads.read(record.threadId, { background: true }),
+          pendingPromise,
+        ]);
+        return { pending: pending.find((entry) => entry.threadId === record.threadId) ?? null, record, thread };
+      }));
+      const nowWaiting = waitingForParent();
+      if (nowWaiting) return messageWaitOutput(nowWaiting);
+      const questionnaireState = states.find((state) => state.pending);
+      if (questionnaireState?.pending) {
+        const thread = await this.provider(questionnaireState.record.harness).threads.readLatest(questionnaireState.record.threadId);
         return { output: renderSubagentWaitResultOutput({
           multiplexed: records.length > 1,
-          name: ready.record.name,
-          outcome: pending ? "needs-interaction" : "finished",
-          output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : this.withQueueNote(ready.record.threadId, renderSubagentTurnOutput(thread, ready.entry.lifecycle)),
-          threadId: await this.publicThreadId(ready.record.threadId, ready.record.projectId),
+          name: questionnaireState.record.name,
+          outcome: "needs-interaction",
+          output: renderSubagentQuestionnaireOutput(thread, questionnaireState.pending.request),
+          threadId: await this.publicThreadId(questionnaireState.record.threadId, questionnaireState.record.projectId),
         }) };
       }
-      while (true) {
-        const waiting = waitingForParent();
-        if (waiting) return messageWaitOutput(waiting);
-        const pendingByScope = new Map<string, Promise<PendingQuestionnaireList["data"]>>();
-        const states = await Promise.all(records.map(async (record) => {
-          const scopeKey = `${record.harness}\0${record.cwd}`;
-          let pendingPromise = pendingByScope.get(scopeKey);
-          if (!pendingPromise) {
-            pendingPromise = this.pendingQuestionnaires(record.harness);
-            pendingByScope.set(scopeKey, pendingPromise);
-          }
-          const [thread, pending] = await Promise.all([
-            this.provider(record.harness).threads.read(record.threadId, { background: true }),
-            pendingPromise,
-          ]);
-          return { pending: pending.find((entry) => entry.threadId === record.threadId) ?? null, record, thread };
-        }));
-        const nowWaiting = waitingForParent();
-        if (nowWaiting) return messageWaitOutput(nowWaiting);
-        const questionnaireState = states.find((state) => state.pending);
-        if (questionnaireState?.pending) {
-          const thread = await this.provider(questionnaireState.record.harness).threads.readLatest(questionnaireState.record.threadId);
-          return { output: renderSubagentWaitResultOutput({
-            multiplexed: records.length > 1,
-            name: questionnaireState.record.name,
-            outcome: "needs-interaction",
-            output: renderSubagentQuestionnaireOutput(thread, questionnaireState.pending.request),
-            threadId: await this.publicThreadId(questionnaireState.record.threadId, questionnaireState.record.projectId),
-          }) };
+      const finishedState = states.find((state) => state.thread.status === "idle" || state.thread.status === "systemError");
+      if (finishedState) {
+        const thread = await this.provider(finishedState.record.harness).threads.readLatest(finishedState.record.threadId);
+        if (thread.status === "active" || thread.status === "notLoaded") {
+          await delay(POLL_INTERVAL_MS, signal);
+          continue;
         }
-        const finishedState = states.find((state) => state.thread.status === "idle" || state.thread.status === "systemError");
-        if (finishedState) {
-          const thread = await this.provider(finishedState.record.harness).threads.readLatest(finishedState.record.threadId);
-          if (thread.status === "active" || thread.status === "notLoaded") {
-            await delay(POLL_INTERVAL_MS, controller.signal);
-            continue;
-          }
-          return { output: renderSubagentWaitResultOutput({
-            multiplexed: records.length > 1,
-            name: finishedState.record.name,
-            outcome: "finished",
-            output: this.withQueueNote(finishedState.record.threadId, renderSubagentTurnOutput(thread, null)),
-            threadId: await this.publicThreadId(finishedState.record.threadId, finishedState.record.projectId),
-          }) };
-        }
-        await delay(POLL_INTERVAL_MS, controller.signal);
+        return { output: renderSubagentWaitResultOutput({
+          multiplexed: records.length > 1,
+          name: finishedState.record.name,
+          outcome: "finished",
+          output: this.withQueueNote(finishedState.record.threadId, renderSubagentTurnOutput(thread, null)),
+          threadId: await this.publicThreadId(finishedState.record.threadId, finishedState.record.projectId),
+        }) };
       }
-    } finally {
-      this.waiters.delete(waitId);
+      await delay(POLL_INTERVAL_MS, signal);
     }
   }
 
   private withQueueNote(threadId: WorkbenchThreadId, output: string) {
     const note = this.queueReleaseNote?.(threadId);
     return note ? `${output}\n\nQueue: ${note}` : output;
-  }
-
-  private cancelWait(params: Record<string, unknown>) {
-    const waitId = requiredString(params, "waitId");
-    const waiter = this.waiters.get(waitId);
-    waiter?.abort(new Error("Subagent wait cancelled."));
-    return { cancelled: Boolean(waiter) };
   }
 
   private async stop(params: Record<string, unknown>) {

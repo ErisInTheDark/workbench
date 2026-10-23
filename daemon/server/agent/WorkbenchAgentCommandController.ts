@@ -3,7 +3,6 @@
  * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute structured commands while preserving direct-port lifecycles.
  */
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
-import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
@@ -64,7 +63,8 @@ interface WorkbenchAgentDirectPort {
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   readReloadDirtSnapshot?: () => WorkbenchReloadDirtSnapshot;
-  requestManagedThread?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  /** `signal` is the caller's; a subagent wait ends as soon as it aborts. */
+  requestManagedThread?: (message: JsonRpcRequest, signal?: AbortSignal) => Promise<JsonRpcResponse>;
   workbenchProjectRoot?: string;
 }
 
@@ -546,36 +546,19 @@ export default class WorkbenchAgentCommandController {
       return Response.json(response.result ?? {});
     }
 
-    const waitId = randomUUID();
-    const cancel = () => {
-      void requestManagedThread({
-        id: 0,
-        method: "workbench/subagent/waitCancel",
-        params: { waitId },
-      }).catch(() => undefined);
-    };
-    signal.addEventListener("abort", cancel, { once: true });
-    try {
-      const response = await requestManagedThread({
-        id: 0,
-        method: "workbench/subagent/wait",
-        params: { ...body, waitId },
-      });
-      if (response.error) {
-        return Response.json({ error: response.error.message }, { status: 400 });
-      }
-      const result = response.result && typeof response.result === "object"
-        ? response.result as { output?: unknown }
-        : null;
-      if (typeof result?.output !== "string") {
-        return Response.json({ error: "Workbench subagent wait returned no output." }, { status: 400 });
-      }
-      return new Response(result.output, {
-        headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
-      });
-    } finally {
-      signal.removeEventListener("abort", cancel);
+    const response = await requestManagedThread({ id: 0, method: "workbench/subagent/wait", params: body }, signal);
+    if (response.error) {
+      return Response.json({ error: response.error.message }, { status: 400 });
     }
+    const result = response.result && typeof response.result === "object"
+      ? response.result as { output?: unknown }
+      : null;
+    if (typeof result?.output !== "string") {
+      return Response.json({ error: "Workbench subagent wait returned no output." }, { status: 400 });
+    }
+    return new Response(result.output, {
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
   }
 
   private resolveUrl(requestPath: string) {

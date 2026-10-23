@@ -87,14 +87,15 @@ for (const order of ["child-first", "parent-first", "during-read", "cancel", "re
       await controller.dispose();
     });
     if (order === "child-first" || order === "provider-only") startChild();
+    const parentAbort = new AbortController();
     const parentWait = controller.handleRequest({
       id: 1, method: "workbench/subagent/wait",
-      params: { callerThreadId, cwd, threadIds: [childId], waitId: "parent-wait" },
-    });
+      params: { callerThreadId, cwd, threadIds: [childId] },
+    }, parentAbort.signal);
     if (order === "cancel" || order === "reload") {
       await subscribed.promise;
       if (order === "reload") controller.beginRuntimeDrain();
-      else await controller.handleRequest({ id: 2, method: "workbench/subagent/waitCancel", params: { waitId: "parent-wait" } });
+      else parentAbort.abort(new Error("Caller cancelled."));
       assert.ok((await parentWait).error);
       assert.equal(stateListener, undefined);
       assert.equal(messageSubscriptions, 0);
@@ -131,12 +132,48 @@ for (const order of ["child-first", "parent-first", "during-read", "cancel", "re
     assert.equal(messageSubscriptions, 0);
     assert.deepEqual(await controller.handleRequest({
       id: 3, method: "workbench/subagent/wait",
-      params: { callerThreadId, cwd, threadIds: [childId], waitId: "parent-again" },
+      params: { callerThreadId, cwd, threadIds: [childId] },
     }), { id: 3, result: { output: "mira is waiting for a message from you." } });
     messages.receive(childId, { senderThreadId: callerThreadId, senderName: "parent", message: "continue" });
     assert.equal((await childWait)?.kind, "message");
   });
 }
+
+test("caller abort ends a wait still resolving its children", async context => {
+  const cwd = process.cwd();
+  const projectId = testProjectIds.independent;
+  const lookupStarted = Promise.withResolvers<void>();
+  const controller = new WorkbenchSubagentController({
+    identities: {
+      resolve: async ({ threadId }) => ({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), projectId, projectRoot: cwd, bindings: [] }),
+      knownThread: threadId => ({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), projectId, projectRoot: cwd, bindings: [] }),
+    },
+    publicThreadId: async threadId => fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    provider: () => { throw new Error("An aborted wait reads no child."); },
+    stopThread: async () => { throw new Error("Do not stop the child."); },
+    onRelationshipCommitted: async () => {},
+    resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
+    profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },
+    subagentStore: {
+      getOwnedMany: () => {
+        lookupStarted.resolve();
+        return new Promise(() => {});
+      },
+      list: async () => ({ subagents: [], nextCursor: null }),
+      remove: async () => {}, replace: async () => {},
+      reserve: async input => ({ ...input, directSubagentIndex: 0 }),
+    },
+  });
+  context.after(() => controller.beginRuntimeDrain());
+  const abort = new AbortController();
+  const wait = controller.handleRequest({
+    id: 1, method: "workbench/subagent/wait", params: { callerThreadId, cwd, threadIds: ["slow-child"] },
+  }, abort.signal);
+  await lookupStarted.promise;
+  abort.abort(new Error("Caller went away."));
+  const settled = await Promise.race([wait, new Promise<null>(resolve => setImmediate(() => resolve(null)))]);
+  assert.equal(settled?.error?.message, "Caller went away.");
+});
 
 const questionnaire: WorkbenchUserInputRequest = {
   id: "questionnaire-1",
@@ -270,7 +307,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   const questionnaireResult = await controller.handleRequest({
     id: 1,
     method: "workbench/subagent/wait",
-    params: { ...params, waitId: "wait-1" },
+    params,
   });
   assert.match(String((questionnaireResult.result as { output?: string } | undefined)?.output), /^Subagent Momo \(questionnaire-child\) needs interaction\./u);
   assert.equal(client.questionnaireListCalls, 1);
@@ -281,7 +318,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   const inactiveResult = await controller.handleRequest({
     id: 2,
     method: "workbench/subagent/wait",
-    params: { ...params, waitId: "wait-2" },
+    params,
   });
   assert.equal((inactiveResult.result as { output?: string } | undefined)?.output, "Subagent Yuzu (inactive-child) finished its current turn.\n\nFinished");
   assert.equal(client.questionnaireListCalls, 2);
@@ -296,7 +333,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   const approvalResult = await controller.handleRequest({
     id: 3,
     method: "workbench/subagent/wait",
-    params: { ...params, waitId: "wait-3" },
+    params,
   });
   assert.match(String((approvalResult.result as { output?: string } | undefined)?.output), /^Subagent Momo \(questionnaire-child\) needs interaction\./u);
 });
