@@ -12,6 +12,7 @@ const context = {
   callerThreadId: "thread-1",
   cwd: "C:/git/web/workbench",
   workbenchOrigin: "http://127.0.0.1:4500",
+  workbenchRoot: false,
 };
 
 test("live provider tests admit only explicit modes and the exact scenario", async () => {

@@ -636,7 +636,7 @@ test("the explicit provider owns MCP metadata and supplies WB command identity",
     const definition = listWorkbenchAgentCommands([], "agent").find(definition => definition.words.join("_") === "task_get")!;
     assert.deepEqual(executed, [await definition.buildRequestFromJson({}, {
       callerHarness: "another-provider", callerThreadId: "wb-caller", cwd: "/trusted",
-      workbenchOrigin: "http://127.0.0.1:4500",
+      workbenchOrigin: "http://127.0.0.1:4500", workbenchRoot: false,
     })]);
   } finally {
     await client.close();
@@ -764,7 +764,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const claims = eligible.find(({ words }) => words.join("_") === "git_arc_claims")!;
     const claimRequest = await claims.buildRequestFromJson({
       inherit: true, addPaths: ["-literal.ts"], removePaths: ["old.ts"], adoptPaths: ["dirty.ts"],
-    }, { callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", workbenchOrigin: null });
+    }, { callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", workbenchOrigin: null, workbenchRoot: false });
     assert.deepEqual(claimRequest.body, {
       action: "arcClaims", inherit: true, addPaths: ["-literal.ts"], removePaths: ["old.ts"], adoptPaths: ["dirty.ts"], roots: [],
       cwd: "C:/authoritative", harness: "codex", threadId: "thread-1",
@@ -816,6 +816,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
         callerThreadId: "thread-1",
         cwd: "C:/authoritative",
         workbenchOrigin: null,
+        workbenchRoot: false,
       }), {
         body: { action, cwd: "C:/authoritative", harness: "codex", threadId: "thread-1" },
         method: "POST",
@@ -833,6 +834,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
       workbenchOrigin: null,
+      workbenchRoot: false,
     }), {
       body: { action: "diff", cwd: "C:/authoritative", harness: "codex", page: 3, threadId: "thread-1" },
       method: "POST",
@@ -844,6 +846,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
       workbenchOrigin: null,
+      workbenchRoot: false,
     }), {
       body: {
         action: "diff", cwd: "C:/authoritative", harness: "codex", ref: "proposal-one",
@@ -861,6 +864,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
       workbenchOrigin: null,
+      workbenchRoot: false,
     }), {
       body: {
         action: "arcStatus", cwd: "C:/authoritative", full: [], harness: "codex",
@@ -882,6 +886,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
       workbenchOrigin: null,
+      workbenchRoot: false,
     }), {
       body: { action: "arcRelease", cwd: "C:/authoritative", disown: false, harness: "codex", threadId: "thread-1" },
       method: "POST",
@@ -891,7 +896,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.deepEqual((await releaseDefinition.buildRequestFromJson({
       toSubagent: "mira", paths: ["src/one.ts"],
     }, {
-      callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", workbenchOrigin: null,
+      callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", workbenchOrigin: null, workbenchRoot: false,
     })).body, {
       action: "arcTransferClaims", cwd: "C:/authoritative", harness: "codex", threadId: "thread-1",
       destination: { kind: "subagent", name: "mira" }, paths: ["src/one.ts"],
@@ -1989,6 +1994,57 @@ test("cwd-sensitive commands run from an MCP workdir as the CLI would after cd; 
     const unsupported = await callTool("task_get", { workdir: ".." });
     assert.ok(unsupported.kind === "result" && unsupported.result.isError);
     assert.equal(executed.length, 2);
+  } finally {
+    requestRegistry.dispose();
+  }
+});
+
+test("only Workbench-root callers read stats across projects", async () => {
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const executed: WorkbenchAgentCommandRequest[] = [];
+  const logged: string[] = [];
+  let root = false;
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => ({
+      caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/project" }),
+      describe: async () => ({ shellDescription: "test" }),
+      patchClaims: async () => "",
+    }),
+    daemonOrigin: "http://127.0.0.1:4500",
+    lifecycleLogError: (_name, message) => { logged.push(message); },
+    requestRegistry,
+    isWorkbenchRootCaller: () => root,
+    executeCommand: async request => {
+      executed.push(request);
+      return new Response("ok\n");
+    },
+  });
+  const scope = { clientScope: "client", projectLocal: false, provider: "claude", subagent: false };
+  let requestId = 0;
+  const stats = async (tool: string, args: Record<string, unknown>) => await controller.call(scope, {
+    arguments: { server: "wb", tool, arguments: args }, detachableShell: true, meta: {}, name: "mcp_call",
+    requestId: ++requestId, signal: new AbortController().signal,
+  });
+  const crossProject = { stats_feedback: { channel: "wb", allProjects: true }, stats_tools: { allProjects: true } };
+  try {
+    for (const [tool, args] of Object.entries(crossProject)) {
+      const refused = await stats(tool, args);
+      assert.ok(refused.kind === "result" && refused.result.isError, tool);
+      assert.match(responseText(refused.result), /Workbench repository root/u);
+    }
+    assert.equal(executed.length, 0, "refused cross-project reads never execute");
+    assert.equal(logged.length, 2);
+
+    const ownProject = await stats("stats_feedback", {});
+    assert.ok(ownProject.kind === "result" && !ownProject.result.isError);
+    assert.equal(executed[0]?.body?.allProjects, false);
+
+    root = true;
+    for (const [tool, args] of Object.entries(crossProject)) {
+      const allowed = await stats(tool, args);
+      assert.ok(allowed.kind === "result" && !allowed.result.isError, tool);
+    }
+    assert.deepEqual(executed.slice(1).map(request => request.body?.allProjects), [true, true]);
   } finally {
     requestRegistry.dispose();
   }

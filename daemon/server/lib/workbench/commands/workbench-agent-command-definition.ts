@@ -7,7 +7,7 @@
  * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: invocation context and registry definitions.
  * - WorkbenchCommandAudienceRule: declarative harness and root-only gates a definition places on its callers.
  * - WorkbenchLocalCapability: a local capability setting a command can require.
- * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary.
+ * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary and refuse root-only input from other callers.
  * - getWorkbenchAgentCommandToolName: canonical MCP command name.
  * - isWorkbenchAgentCommandOnMcp: whether the wb MCP server offers a command at all.
  * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request construction.
@@ -74,6 +74,8 @@ export interface WorkbenchAgentCommandContext {
   callerHarness: string;
   callerThreadId: string | null;
   cwd: string;
+  /** May use root-only commands and input: a managed thread at the Workbench repository root, or an unmanaged caller. */
+  workbenchRoot: boolean;
   workbenchOrigin: string | null;
 }
 
@@ -161,6 +163,8 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   mcpWorkdir?: true;
   parseCliArgs(args: string[]): z.input<TSchema>;
   requiresCapability?: WorkbenchLocalCapability;
+  /** Input fields only Workbench-root callers may set; anyone else setting one is refused. */
+  rootOnlyInput?: readonly (keyof z.output<TSchema> & string)[];
   usage: string;
   workbenchRootUsage?: string;
   words: readonly string[];
@@ -170,7 +174,10 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
   definition: TypedWorkbenchAgentCommandDefinition<TSchema>,
 ): WorkbenchAgentCommandDefinition {
   const buildValidatedRequest = async (input: unknown, context: WorkbenchAgentCommandContext) => {
-    const request = await definition.buildRequest(definition.inputSchema.parse(input), context);
+    const parsed = definition.inputSchema.parse(input);
+    const rootOnly = context.workbenchRoot ? undefined : definition.rootOnlyInput?.find(field => Boolean(parsed[field]));
+    if (rootOnly) throw new Error(`${rootOnly} is available only to threads at the Workbench repository root.`);
+    const request = await definition.buildRequest(parsed, context);
     Object.defineProperty(request, "commandName", {
       enumerable: false,
       value: definition.words.join(" "),

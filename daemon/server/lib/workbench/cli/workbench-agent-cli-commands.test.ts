@@ -55,7 +55,7 @@ function execFileWithInput(command: string, args: string[], input: string, optio
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
 
 test("message wait admits mixed sender targets through CLI and MCP with a stable invocation identity", async () => {
-  const context = { callerHarness: "codex", callerThreadId: "caller", cwd: "C:/workspace", workbenchOrigin: null };
+  const context = { callerHarness: "codex", callerThreadId: "caller", cwd: "C:/workspace", workbenchOrigin: null, workbenchRoot: false };
   const parsed = await parseWorkbenchAgentCliCommand([
     "message", "wait", "--thread", "first", "--name", "luna", "--thread", "second",
   ], context);
@@ -117,7 +117,7 @@ test("status selectors preserve equivalent CLI and MCP inputs", async () => {
   const definition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "git arc status");
   assert.ok(definition, "status must be registered for CLI and MCP");
   const mcp = await definition.buildRequestFromJson({ full: ["dirty", "unclaimed-dirt"], threadId: "target-thread" }, {
-    ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null,
+    ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null, workbenchRoot: false,
   });
   for (const flags of [["--full=dirty,unclaimed-dirt"], ["--full", "dirty,unclaimed-dirt"]]) {
     const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "status", "--thread", "target-thread", ...flags], gitArcOptions);
@@ -218,7 +218,7 @@ test("combined claim CLI preserves addition, removal and adoption as separate ar
 test("bulk claim files and explicit stash choices preserve typed request semantics", async () => {
   const claimsPath = "claims.json";
   const context = {
-    ...gitArcOptions, callerHarness: "codex" as const, cwd: temporaryDirectoryPath, workbenchOrigin: null,
+    ...gitArcOptions, callerHarness: "codex" as const, cwd: temporaryDirectoryPath, workbenchOrigin: null, workbenchRoot: false,
   };
   await writeFile(path.join(temporaryDirectoryPath, claimsPath), JSON.stringify({
     addPaths: ["new.ts"], adoptPaths: ["dirty.ts"], removePaths: ["old.ts"], roots: [],
@@ -277,7 +277,7 @@ test("plan claim revisions recover removal-only operands when PowerShell consume
 
 test("proposal targeting uses amend for pending or committed content and reword for messages", async () => {
   const propose = listWorkbenchAgentCommands().find(({ words }) => words.join("_") === "git_arc_propose")!;
-  const context = { cwd: "C:/workspace", callerThreadId: "thread-1", callerHarness: "codex" as const, workbenchOrigin: null };
+  const context = { cwd: "C:/workspace", callerThreadId: "thread-1", callerHarness: "codex" as const, workbenchOrigin: null, workbenchRoot: false };
   const pending = await propose.buildRequestFromJson({
     amend: "pending-id", paths: ["one.ts"],
   }, context);
@@ -406,19 +406,25 @@ test("managed Claude agents are sent to the wb MCP server for every command it o
   })).kind, "request", "CLI-only commands stay on the CLI");
 });
 
-test("cross-project feedback reads need the wb channel and are documented only at the Workbench root", async () => {
+test("cross-project feedback reads need the wb channel and a Workbench-root thread or a direct user", async () => {
   const outside = { callerThreadId: "thread", cwd: "C:/other", projectRoot: "C:/workbench" };
   const inside = { callerThreadId: "thread", cwd: "C:/workbench", projectRoot: "C:/workbench" };
+  const userOutside = { callerThreadId: null, cwd: "C:/other", projectRoot: "C:/workbench" };
   const help = async (context: typeof outside) => {
     const parsed = await parseWorkbenchAgentCliCommand(["stats", "--help"], context);
     return parsed.kind === "help" ? parsed.help : "";
   };
   assert.equal((await help(outside)).includes("--all-projects"), false);
   assert.equal((await help(inside)).includes("--all-projects"), true);
-  assert.equal((await parseWorkbenchAgentCliCommand(["stats", "feedback", "--all-projects"], outside)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["stats", "feedback", "--all-projects", "--channel", "project"], inside)).kind, "error");
-  const parsed = await parseWorkbenchAgentCliCommand(["stats", "feedback", "--all-projects", "--channel", "wb"], outside);
-  assert.equal(parsed.kind === "request" && parsed.request.body?.allProjects, true);
+  const crossProject = ["stats", "feedback", "--all-projects", "--channel", "wb"];
+  assert.equal((await parseWorkbenchAgentCliCommand(crossProject, outside)).kind, "error");
+  for (const allowed of [inside, userOutside]) {
+    const parsed = await parseWorkbenchAgentCliCommand(crossProject, allowed);
+    assert.equal(parsed.kind === "request" && parsed.request.body?.allProjects, true);
+  }
+  const ownProject = await parseWorkbenchAgentCliCommand(["stats", "feedback"], outside);
+  assert.equal(ownProject.kind === "request" && ownProject.request.body?.allProjects, false);
 });
 
 test("token commands restrict managed threads without restricting direct users", async () => {
@@ -1623,7 +1629,7 @@ test("stash commands are argument-free whole-arc operations with conflict guidan
     assert.equal(parsed.request.body?.action, action);
     assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", word, "one.ts"], gitArcOptions)).kind, "error");
     await assert.rejects(definition.buildRequestFromJson({ paths: ["one.ts"] }, {
-      ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null,
+      ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null, workbenchRoot: false,
     }));
   }
   const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "unstash"], gitArcOptions);

@@ -956,9 +956,11 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal, { clientScope });
       if (signal.aborted) throw signal.reason;
       registration.setWorkbenchThreadId(caller.threadId);
+      // Root status follows the thread's own cwd, never a `workdir`.
+      const workbenchRoot = this.isWorkbenchRootCaller(caller);
       const refusal = await refuseWorkbenchCommandCaller(
         definition,
-        { harness: caller.harness, workbenchRoot: this.isWorkbenchRootCaller(caller) },
+        { harness: caller.harness, workbenchRoot },
         async () => await this.isSubagentCaller(caller),
       );
       if (refusal) {
@@ -973,6 +975,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         callerHarness: caller.harness,
         callerThreadId: caller.threadId,
         cwd,
+        workbenchRoot,
         workbenchOrigin: this.daemonOrigin,
       });
       if (

@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchClaimStatsExecutionRequestSchema: validate cwd-owned claim analysis.
- * - WorkbenchFeedbackStatsExecutionRequestSchema: validate cwd-owned feedback reads; only wb-channel reads may span projects.
- * - WorkbenchToolStatsExecutionRequestSchema: validate cwd-owned tool value reads; --all-projects spans every project.
+ * - WorkbenchFeedbackStatsExecutionRequestSchema: validate cwd-owned feedback reads; only wb-channel reads from the Workbench root may span projects.
+ * - WorkbenchToolStatsExecutionRequestSchema: validate cwd-owned tool value reads; --all-projects from the Workbench root spans every project.
  * - WORKBENCH_STATS_COMMANDS: deferred claim ranking, file-thread reads, agent feedback reads, and tool value ranking.
  */
 import { z } from "zod";
@@ -19,6 +19,7 @@ import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbe
 const page = z.number().int().min(1).max(1_000_000).default(1);
 const range = WorkbenchClaimStatsRangeSchema.default("7d");
 const cwd = z.string().trim().min(1);
+const allProjects = z.boolean().default(false).describe("Read every project; only threads at the Workbench repository root.");
 
 const claimsInputSchema = z.object({
   file: z.string().trim().min(1).max(2_000).nullable().default(null),
@@ -28,7 +29,7 @@ const claimsInputSchema = z.object({
 export const WorkbenchClaimStatsExecutionRequestSchema = claimsInputSchema.extend({ cwd }).strict();
 
 const feedbackFields = z.object({
-  allProjects: z.boolean().default(false),
+  allProjects,
   category: WorkbenchFeedbackCategorySchema.nullable().default(null),
   channel: WorkbenchFeedbackChannelSchema.nullable().default(null),
   page,
@@ -42,7 +43,7 @@ export const WorkbenchFeedbackStatsExecutionRequestSchema = feedbackFields.exten
   .refine(wbOnlyAcrossProjects, ALL_PROJECTS_MESSAGE);
 
 const toolsInputSchema = z.object({
-  allProjects: z.boolean().default(false),
+  allProjects,
   descending: z.boolean().default(false),
   range: WorkbenchStatsRangeSchema.default("7d"),
   sort: z.enum(["value", "calls", "cost", "tool"]).default("value"),
@@ -75,6 +76,7 @@ export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
   words: ["stats", "feedback"],
   usage: FEEDBACK_USAGE,
   workbenchRootUsage: `${FEEDBACK_USAGE} [--channel wb --all-projects]`,
+  rootOnlyInput: ["allProjects"],
   description: "List agent feedback for this project, most important first, with each author's model and effort.",
   effects: { readOnly: true, idempotent: true },
   mcpDeferred: true,
@@ -100,8 +102,9 @@ export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
 }), defineWorkbenchAgentCommand({
   words: ["stats", "tools"],
   usage: TOOLS_USAGE,
-  // Tool prompt cost is a Workbench concern, so only the Workbench root advertises the cross-project view.
+  // Cross-project reads are Workbench maintenance, so only the Workbench root may make them.
   workbenchRootUsage: `${TOOLS_USAGE} [--all-projects]`,
+  rootOnlyInput: ["allProjects"],
   description: "Rank wb tools by calls per 100 always-on prompt tokens (spec plus docs), lowest value first, with tool waste per thread.",
   effects: { readOnly: true, idempotent: true },
   mcpDeferred: true,

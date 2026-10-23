@@ -408,7 +408,9 @@ export async function parseWorkbenchAgentCliCommand(
   try {
     return {
       kind: "request",
-      request: await matched.definition.buildRequestFromCli(argv.slice(matched.words.length), { callerHarness, callerThreadId, cwd, workbenchOrigin, allowStoreRead }),
+      request: await matched.definition.buildRequestFromCli(argv.slice(matched.words.length), {
+        callerHarness, callerThreadId, cwd, workbenchOrigin, allowStoreRead, workbenchRoot: audience.workbenchRoot,
+      }),
     };
   } catch (error) {
     if (matched.words[0] === "git" && (matched.words[1] === "arc" || matched.words[1] === "plan")) {
