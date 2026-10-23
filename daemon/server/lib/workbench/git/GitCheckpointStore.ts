@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitCheckpointStore: own canonical writes and WB-first/provider-fallback checkpoint (single or indexed), lineage, outcome, history, and proposal reads.
+ * - default GitCheckpointStore: own canonical writes and WB-first/provider-fallback checkpoint, lineage, outcome, history, and proposal reads.
  * - GitArcProposalSummary: normalized proposal identity, status, message, stored/live scope and recorded totals, read in bulk without diffs.
  * - GitArcProposalSummaryRequest: thread-qualified proposal summary selection.
  * - StoredCheckpoint: owned checkpoint identity, metadata, and nullable parent.
@@ -195,11 +195,6 @@ export default class GitCheckpointStore {
         return checkpoint;
       },
     };
-  }
-
-  /** `readCheckpoint` through the shared checkpoint index, for callers resolving many checkpoints in one operation. */
-  async readIndexedCheckpoint(harness: GitArcHarness, threadId: string, commit: string) {
-    return (await this.checkpointIndex(harness, threadId)).decode(commit) ?? await this.readCheckpoint(harness, threadId, commit);
   }
 
   /** Whether `required` is `start` or one of the checkpoints it amends, at most 100 steps back. */

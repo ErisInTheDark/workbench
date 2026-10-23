@@ -34,7 +34,7 @@ import GitCheckpointStore, {
 } from "./GitCheckpointStore";
 import freshCommitProposal from "./fresh-commit-proposal";
 import { formatGitRawDate } from "./GitObjectWriter";
-import WorkbenchGitHistoryRewriter, { type WorkbenchGitPreparedHead } from "./WorkbenchGitHistoryRewriter";
+import WorkbenchGitHistoryRewriter, { type WorkbenchGitCommitAmendability, type WorkbenchGitPreparedHead } from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import {
   type ArcOutcome,
@@ -459,6 +459,8 @@ async function buildProposalResult(
   metadata: ProposalMetadata,
   target: { tree: string } | { commit: string },
   options: {
+    /** Already known amendability, e.g. of a commit this acceptance just created; skips classification. */
+    amendability?: WorkbenchGitCommitAmendability;
     includeNewerAvailable?: boolean;
     preparedHead?: WorkbenchGitPreparedHead;
     refreshAmendability?: boolean;
@@ -467,12 +469,12 @@ async function buildProposalResult(
   } = {},
 ): Promise<GitCheckpointProposal> {
   const targetTree = "tree" in target ? target.tree : await repository.resolveTree(target.commit);
-  const classifiedAmendability = metadata.status === "committed" && metadata.committedSha
-    ? await new WorkbenchGitHistoryRewriter(repository).classifyAmendability(
+  const classifiedAmendability = metadata.status !== "committed" || !metadata.committedSha
+    ? null
+    : options.amendability ?? await new WorkbenchGitHistoryRewriter(repository).classifyAmendability(
       metadata.committedSha,
       { preparedHead: options.preparedHead, refresh: options.refreshAmendability ?? true },
-    )
-    : null;
+    );
   const amendability: GitCheckpointProposal["amendability"] = classifiedAmendability?.status === "available"
     ? { status: "available" }
     : classifiedAmendability;
@@ -1907,7 +1909,7 @@ export default class GitArcProposalController {
     if (!active || !lifecycle) {
       throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's Git arc.");
     }
-    const activeSource = await store.readIndexedCheckpoint(harness, threadId, lifecycle.checkpointCommit);
+    const activeSource = await store.readCheckpoint(harness, threadId, lifecycle.checkpointCommit);
     const head = await repository.headOrNull();
     return {
       accepted: [...await store.readAcceptedOutcomes(harness, threadId, activeSource)],
@@ -1942,7 +1944,7 @@ export default class GitArcProposalController {
       throw new GitArcRejectionError({ reason: "missingFreshCommitChoice" }, "This amend proposal does not include a fresh commit choice.");
     }
     const store = this.store(repository);
-    const proposalSource = await store.readIndexedCheckpoint(harness, threadId, proposal.metadata.sourceCheckpoint);
+    const proposalSource = await store.readCheckpoint(harness, threadId, proposal.metadata.sourceCheckpoint);
     requireArcMetadata(proposalSource.metadata);
     const sourceIsOwned = await store.lineageContains(harness, threadId, batch.activeSource, proposalSource.checkpointCommit)
       || Boolean(await this.stack(repository).sealingLayer(batch.active, proposalId));
@@ -2007,9 +2009,9 @@ export default class GitArcProposalController {
       version: 1,
     });
     const headRef = await repository.symbolicHead();
-    const results = await Promise.all(batch.landings.map(async ({ committedMetadata, targetTree }) => (
+    const results = await Promise.all(batch.landings.map(async ({ committedMetadata, committedSha, targetTree }) => (
       await buildProposalResult(this.proposalDiffs, repository, committedMetadata, { tree: targetTree }, {
-        preparedHead: { commit: last.committedSha, ref: headRef },
+        amendability: WorkbenchGitHistoryRewriter.freshCommitAmendability(committedSha, headRef),
       })
     )));
     try {

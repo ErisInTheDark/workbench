@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchGitHistoryRewriter: amend unpushed commits in a linear local stack without touching worktree files.
+ * - default WorkbenchGitHistoryRewriter: amend unpushed commits in a linear local stack without touching worktree files;
+ *   classify amendability, deriving it without Git reads for commits an acceptance just created.
  * - WorkbenchGitHistoryRewriteResult: target/tip replacements, selected commit replacements, committed paths and bounded warnings.
  * - WorkbenchGitIdentityOverride: canonical author/committer fields overlaid onto selected commits.
  * - WorkbenchGitCommitAmendability: whether one exact commit can use the history rewriter.
@@ -55,13 +56,23 @@ export interface WorkbenchGitHistoryAdditionalMutation {
   updates: GitRefUpdate[];
 }
 
+const DETACHED_HEAD_REASON = "Detached HEAD is unsafe for an amend.";
+
 export default class WorkbenchGitHistoryRewriter {
   constructor(private readonly repository: WorkbenchGitRepository) {}
+
+  /**
+   * Amendability of a commit just created on HEAD and published under `headRef`, without walking history: a new commit
+   * sits on no remote ref, and only this acceptance's unsigned single-parent commits lie between it and HEAD.
+   */
+  static freshCommitAmendability(commit: string, headRef: string | null): WorkbenchGitCommitAmendability {
+    return headRef ? { resolvedTarget: commit, status: "available" } : { reason: DETACHED_HEAD_REASON, status: "unavailable" };
+  }
 
   /** Resolves targets in input order; the range starts at the oldest target and ends at HEAD. */
   private async readAmendRange(targets: readonly string[], preparedHead?: WorkbenchGitPreparedHead) {
     const headRef = preparedHead ? preparedHead.ref : await this.repository.symbolicHead();
-    if (!headRef) throw new GitArcRejectionError({ reason: "detachedHead" }, "Detached HEAD is unsafe for an amend.");
+    if (!headRef) throw new GitArcRejectionError({ reason: "detachedHead" }, DETACHED_HEAD_REASON);
     const head = preparedHead ? preparedHead.commit : await this.repository.currentHead();
     const arcRewriter = new GitArcHistoryRewriter(this.repository);
     const resolvedTargets: string[] = [];

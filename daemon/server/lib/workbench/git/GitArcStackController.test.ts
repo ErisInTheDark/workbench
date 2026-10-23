@@ -14,6 +14,7 @@ import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
+import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { STACK_OPERATIONS_FIXTURE, type StackFixtureState } from "./GitArcControllerTestFixtures";
 
@@ -387,7 +388,7 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   assert.equal(await git("show", "HEAD:two.txt"), "child builds on two\n");
 });
 
-test("a stack accepted in one batch lands as one claim transition and outcome", async () => {
+test("a stack accepted in one batch lands as one claim transition and outcome", async (context) => {
   const cwd = batchRoot;
   const owner = { cwd, threadId: "owner" };
   const repository = await WorkbenchGitRepository.open(cwd);
@@ -406,9 +407,13 @@ test("a stack accepted in one batch lands as one claim transition and outcome", 
     outcomes: (await repository.listRefs(`${agentRefs}/arc-outcomes`)).length,
   });
   const before = await refCounts();
+  const classifications = context.mock.method(WorkbenchGitHistoryRewriter.prototype, "classifyAmendability");
   const batch = await controller.commitProposals({ ...owner, entries: [[lower, "first"], [middle.proposalId, "second"], [upper.proposalId, "third"]]
     .map(([proposalId, title]) => ({ proposalId: proposalId!, title: title!, description: "", includeNewer: false })) });
+  classifications.mock.restore();
   assert.equal(batch.failed, null);
+  assert.deepEqual([batch.landed.map(({ amendability }) => amendability?.status), classifications.mock.callCount()],
+    [["available", "available", "available"], 0], "freshly landed commits are amendable without walking history");
   assert.equal(await repository.run(["log", "-3", "--format=%s"]), "third\nsecond\nfirst\n");
   const after = await refCounts();
   assert.deepEqual({ checkpoints: after.checkpoints - before.checkpoints, outcomes: after.outcomes - before.outcomes },

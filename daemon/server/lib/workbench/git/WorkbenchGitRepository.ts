@@ -9,6 +9,7 @@
  * object writes, tree-to-tree path changes and writeTreeWithPathSources run in-process (GitObjectWriter/GitTreeObjects);
  * readCheckoutBytes materialises selected tree entries through Git's checkout filters in one disposable temporary index,
  * and checkoutInto writes them straight into a directory the same way;
+ * readCommitRef finds a commit's ref through GitCommitRefLocator, which every ref writer here keeps current;
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
  * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
  * buildFileChanges/buildChangeTotals/buildFileChangeSummaries list changed files in-process, then diff them in pathspec batches
@@ -25,6 +26,7 @@ import path from "node:path";
 
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
+import GitCommitRefLocator from "./GitCommitRefLocator";
 import GitIndexLock from "./GitIndexLock";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitObjectWriter from "./GitObjectWriter";
@@ -481,36 +483,16 @@ export default class WorkbenchGitRepository {
     return result;
   }
 
+  /** The smallest-named ref in `namespaces` naming a full commit id, with its commit; null when none does or the object is missing. */
   async readCommitRef(commit: string, ...namespaces: string[]): Promise<GitResolvedCommitRef | null> {
     const normalized = this.normalizeCommit(commit);
-    let output: Buffer;
-    try {
-      output = await this.runBufferWithInput([
-        "for-each-ref", "--count=1", "--points-at", normalized,
-        "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(raw)",
-        ...namespaces,
-      ], "");
-    } catch (error) {
-      // A dangling selected ref must retain the ordinary missing-object result.
-      if (error instanceof Error && /missing object [a-f0-9]+ for /iu.test(error.message)
-        && !(await this.readCommitAt(normalized))) return null;
-      throw error;
-    }
-    if (!output.length) return null;
-    let offset = 0;
-    const field = () => {
-      const end = output.indexOf(0, offset);
-      if (end < 0) throw new Error("Git returned invalid commit-ref metadata.");
-      const value = output.subarray(offset, end).toString("utf8");
-      offset = end + 1;
-      return value;
-    };
-    const ref = field();
-    const objectId = field();
-    const type = field();
-    if (type !== "commit") throw new Error(`Git object ${normalized} is not a commit.`);
-    if (output.at(-1) !== 0x0a) throw new Error("Git commit-ref output terminator is missing.");
-    return { commit: objectId, ref, identity: parseRawCommit(output.subarray(offset, -1)) };
+    const ref = await GitCommitRefLocator.for(this.root, namespaces).locate(normalized, {
+      scan: async () => await this.listRefsWithValues(...namespaces),
+      verify: async candidate => await this.readRef(candidate),
+    });
+    if (!ref) return null;
+    const resolved = await this.readCommitAt(normalized);
+    return resolved ? { commit: resolved.commit, identity: resolved.identity, ref } : null;
   }
 
   async readBlobs(refs: string[]): Promise<GitBlobBatch> {
@@ -574,6 +556,7 @@ export default class WorkbenchGitRepository {
     const expected = oldValue === null ? await this.zeroObjectId() : oldValue;
     try {
       await this.run(["update-ref", ref, newValue, ...(expected !== undefined ? [expected] : [])]);
+      GitCommitRefLocator.observe(this.root, [{ newValue, ref }], []);
     } finally {
       GitObjectReadSession.forget(this.refMemoPrefix());
     }
@@ -582,6 +565,7 @@ export default class WorkbenchGitRepository {
   async deleteRef(ref: string, oldValue?: string) {
     try {
       await this.run(["update-ref", "-d", ref, ...(oldValue !== undefined ? [oldValue] : [])]);
+      GitCommitRefLocator.observe(this.root, [], [{ ref }]);
     } finally {
       GitObjectReadSession.forget(this.refMemoPrefix());
     }
@@ -619,6 +603,7 @@ export default class WorkbenchGitRepository {
     lines.push("prepare", "commit", "");
     try {
       await this.runWithInput(["update-ref", "--stdin"], lines.join("\n"));
+      GitCommitRefLocator.observe(this.root, updates, deletes);
     } finally {
       // Even a rejected transaction may race other writers, so ref-derived memos never outlive a publication attempt.
       GitObjectReadSession.forget(this.refMemoPrefix());
