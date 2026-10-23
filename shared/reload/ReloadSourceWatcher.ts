@@ -32,8 +32,37 @@ function normalized(sourcePath: string) {
   return sourcePath.replaceAll("\\", "/").replace(/^\.\/|^\/+|\/+$/gu, "").replace(/^\.$/u, "");
 }
 
+type ScopeMatcher = ReturnType<typeof buildScopeMatcher>;
+
+/** Scope sources change rarely while events arrive constantly, so each source list's matcher is built once. */
+const scopeMatchers = new WeakMap<readonly string[], { patterns: string; matcher: ScopeMatcher }>();
+
 function scopeMatcher(scope: ReloadSourceWatchScope) {
-  const paths = scope.paths.map(normalized);
+  const patterns = (scope.patterns ?? []).join("\n");
+  const cached = scopeMatchers.get(scope.paths);
+  if (cached?.patterns === patterns) return cached.matcher;
+  const matcher = buildScopeMatcher(scope);
+  scopeMatchers.set(scope.paths, { patterns, matcher });
+  return matcher;
+}
+
+/** Each directory strictly above a path, nearest first. */
+function* parentDirectories(relative: string) {
+  for (let slash = relative.lastIndexOf("/"); slash > 0; slash = relative.lastIndexOf("/", slash - 1)) {
+    yield relative.slice(0, slash);
+  }
+}
+
+/**
+ * Literal sources answer through sets: a path is covered at or beneath a source, and a directory is source-bearing when it
+ * is covered or holds a source beneath it. Pattern roots stay a scan; scopes carry few patterns.
+ */
+function buildScopeMatcher(scope: ReloadSourceWatchScope) {
+  const paths = new Set(scope.paths.map(normalized));
+  const everything = paths.has("");
+  const holdsSources = new Set([...paths].flatMap(source => [...parentDirectories(source)]));
+  const covered = (relative: string) => everything || paths.has(relative)
+    || [...parentDirectories(relative)].some(directory => paths.has(directory));
   const patterns = scope.patterns ?? [];
   const matcher = createGitignoreMatcher(patterns.join("\n"));
   const roots = patterns.flatMap((raw, index) => {
@@ -49,12 +78,11 @@ function scopeMatcher(scope: ReloadSourceWatchScope) {
   });
   return {
     directory(relative: string) {
-      if (paths.some(source => related(source, relative))) return true;
+      if (paths.size && (!relative || covered(relative) || holdsSources.has(relative))) return true;
       return roots.some(root => related(root.path, relative) && !root.excluded.matches(`${relative}/__directory__`));
     },
     file(relative: string) {
-      return paths.some(source => !source || source === relative || relative.startsWith(`${source}/`))
-        || matcher.matches(relative);
+      return covered(relative) || matcher.matches(relative);
     },
   };
 }

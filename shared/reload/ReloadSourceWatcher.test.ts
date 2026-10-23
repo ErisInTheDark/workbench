@@ -1,5 +1,6 @@
 /*
- * No production exports. Tests protect source-only observation, directory recovery and subscription disposal.
+ * No production exports. Tests protect source-only observation, literal-source coverage, directory recovery and
+ * subscription disposal.
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -103,6 +104,23 @@ test("directory replacement and filename-less events restore coverage without lo
   await target.notify("src", "change", null);
   await target.notify("src/recovered", "change", "owner.ts");
   assert.deepEqual(target.errors, []);
+});
+
+test("literal sources cover their files and directories beneath them, and watch only the directories leading there", async context => {
+  const target = await fixture(context);
+  await fs.mkdir(path.join(target.root, "docs/guide"), { recursive: true });
+  target.setScopes([{ paths: ["src/nested/owner.ts", "docs"], patterns: [] }]);
+  await target.watcher.refresh();
+  for (const directory of ["", "src", "src/nested", "docs", "docs/guide"]) assert.ok(target.handles.has(directory), directory);
+  for (const directory of ["src/generated", "node_modules"]) assert.equal(target.handles.has(directory), false, directory);
+
+  const before = target.changes;
+  target.handles.get("src/nested")!.notify("change", "sibling.ts");
+  await target.watcher.refresh();
+  assert.equal(target.changes, before, "an unlisted sibling of a literal file is not a source");
+  await target.notify("src/nested", "change", "owner.ts");
+  await target.notify("docs/guide", "change", "page.md");
+  assert.equal(target.changes, before + 2);
 });
 
 test("dynamic source coverage and watcher failures remain lifecycle-owned", async context => {

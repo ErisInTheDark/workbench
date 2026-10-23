@@ -89,14 +89,17 @@ function sameSnapshot(left: ReloadDirtSnapshot, right: ReloadDirtSnapshot) {
     });
 }
 
+/** Keeps the previous source list when nothing was added, so its identity marks the watcher's coverage current. */
 function mergeDescriptorSources(
   previous: ReloadDirtSourceDescriptor | undefined,
   current: ReloadDirtSourceDescriptor,
 ) {
+  const paths = [...new Set([...previous?.paths ?? [], ...current.paths])].sort();
+  const unchanged = previous?.paths.length === paths.length && previous.paths.every((source, index) => source === paths[index]);
   return {
     ...current,
     boundaryPatterns: current.boundaryPatterns ?? previous?.boundaryPatterns,
-    paths: [...new Set([...previous?.paths ?? [], ...current.paths])].sort(),
+    paths: unchanged ? previous.paths : paths,
   };
 }
 
@@ -309,18 +312,22 @@ export default class ReloadDirtController {
       if (signal?.aborted) throw signal.reason;
       const sourceState = this.options.getSourceState();
       const currentScopes = new Set(sourceState.descriptors.map(({ scope }) => scope));
+      let coverageChanged = false;
       for (const scope of state.descriptors.keys()) {
         if (currentScopes.has(scope)) continue;
         state.descriptors.delete(scope);
         state.baselines.delete(scope);
+        coverageChanged = true;
       }
       for (const descriptor of sourceState.descriptors) {
-        state.descriptors.set(
-          descriptor.scope,
-          mergeDescriptorSources(state.descriptors.get(descriptor.scope), descriptor),
-        );
+        const previous = state.descriptors.get(descriptor.scope);
+        const merged = mergeDescriptorSources(previous, descriptor);
+        coverageChanged ||= merged.paths !== previous?.paths
+          || (merged.boundaryPatterns ?? []).join("\n") !== (previous?.boundaryPatterns ?? []).join("\n");
+        state.descriptors.set(descriptor.scope, merged);
       }
-      await this.watcher?.refresh();
+      // The watcher follows directory changes itself; it only needs reconciling when source coverage moved.
+      if (coverageChanged) await this.watcher?.refresh();
       if (signal?.aborted) throw signal.reason;
       const dirtyScopes = [] as ReloadDirtSnapshot["dirtyScopes"];
       const descriptors = [...state.descriptors.values()];
