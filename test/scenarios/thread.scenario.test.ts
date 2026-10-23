@@ -38,6 +38,7 @@ type ProviderScenario = {
   tools: ProviderBoundaryToolNames;
   verifyFirstTurn?: (thread: ThreadPayload, id: string, title: string) => Promise<() => Promise<void>>;
   verifySearch: (items: ProjectedItems) => void;
+  verifyTaskIdentity?: (items: ProjectedItems, title: string) => void;
   verifyBinding?: (database: Database.Database, projectId: string, id: string) => void;
   verifyCapabilities?: () => Promise<void>;
   verifySteerDelivery?: (threadId: string, proof: string, releasedAt: number) => Promise<void>;
@@ -656,6 +657,12 @@ test("selected providers complete the shared thread boundary journey in one clon
         assert.ok(items.some(item => item.type === "mcpToolCall"
           && item.tool === "rg" && item.status === "completed"), "Claude must complete WB search");
       },
+      verifyTaskIdentity: (items, title) => {
+        const taskGet = items.find(item => item.type === "mcpToolCall" && item.tool === "task_get");
+        assert.ok(taskGet?.type === "mcpToolCall" && taskGet.status === "completed", "Claude must complete WB task_get");
+        assert.ok(JSON.stringify(taskGet.result).includes(title),
+          "Claude's MCP task_get must resolve the managed WB thread identity");
+      },
       verifyCapabilities: async () => {
         assert.ok((await runtime.daemon.models.list("claude")).data.some(entry =>
           /^claude-(?:sonnet|opus|haiku)-\d/u.test(entry.id)),
@@ -756,7 +763,7 @@ test("selected providers complete the shared thread boundary journey in one clon
       database.close();
     }
 
-    const cli = await IsolatedWorkbench.command("bash", [
+    const cliTaskGet = IsolatedWorkbench.command("bash", [
       path.join(runtime.project, "wb"), "task", "get",
     ], runtime.project, {
       ...process.env,
@@ -766,7 +773,12 @@ test("selected providers complete the shared thread boundary journey in one clon
       WORKBENCH_THREAD_ID: threadId,
       ...(provider === "codex" ? { CODEX_THREAD_ID: nativeThreadId } : {}),
     }, t.signal);
-    assert.ok(cli.includes(title), "CLI must resolve the managed WB thread identity");
+    if (provider === "claude") {
+      await assert.rejects(cliTaskGet, /Managed claude agents use the wb MCP server/u,
+        "Managed Claude threads must be redirected from the CLI to the wb MCP server");
+    } else {
+      assert.ok((await cliTaskGet).includes(title), "CLI must resolve the managed WB thread identity");
+    }
     const verifyFirstTurnReopened = await providerRegistry[provider].verifyFirstTurn?.(thread, threadId, title);
     await providerRegistry[provider].verifyCapabilities?.();
 
@@ -957,6 +969,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     assert.ok(JSON.stringify(finalItems).includes(prefixProof));
     assert.ok(JSON.stringify(finalItems).includes(title));
     providerRegistry[provider].verifySearch(finalItems);
+    providerRegistry[provider].verifyTaskIdentity?.(finalItems, title);
     const finalPage = await runtime.daemon.threads.page({ threadId, cursor: null });
     assert.equal(finalPage.thread.model, profile.model);
     assert.equal(finalPage.thread.reasoningEffort, profile.reasoningEffort);
