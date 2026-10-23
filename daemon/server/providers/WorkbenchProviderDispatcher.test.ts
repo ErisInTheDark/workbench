@@ -97,6 +97,29 @@ test("accepted agent messages wake matching message waits and end others without
   }
 });
 
+test("only steered agent messages wait in undelivered mail; one that starts a turn is its prompt", async () => {
+  const threadId = WorkbenchThreadIdSchema.parse("mail-recipient");
+  let kind: "started" | "steered" = "started";
+  const provider = { threads: { messageAgent: async () => ({ kind, turnId: "turn" }) } } as unknown as WorkbenchProvider;
+  const owner = new WorkbenchMessageWaitController();
+  const handle = new WorkbenchProviderDispatcher(
+    async (_definition, operation) => operation(provider),
+    { interruptSteerWaits: () => undefined, onAgentMessageAdmitted: (target, message) => { owner.receive(target, message); } },
+  ).get("claude");
+  const send = () => handle.threads.messageAgent({
+    threadId, cwd: "C:/repo", message: { senderThreadId: "child", senderName: "iris", message: "done" },
+  });
+  try {
+    await send();
+    assert.deepEqual(owner.undeliveredSenders(threadId), []);
+    kind = "steered";
+    await send();
+    assert.deepEqual(owner.undeliveredSenders(threadId), ["child"]);
+  } finally {
+    owner.dispose();
+  }
+});
+
 test("user and agent messages on every provider share compact-before-start admission and steer safely after overlap", async () => {
   for (const harness of ["codex", "claude", "opencode"] as const) {
     for (const firstRoute of ["user", "agent"] as const) {

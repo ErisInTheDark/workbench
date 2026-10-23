@@ -36,6 +36,7 @@ export interface WorkbenchProviderHandleOptions {
   interruptSteerWaits: (threadId: string, senderThreadId?: string) => void;
   instructionSelection?: Pick<WorkbenchThreadInstructionSelectionController, "resolve" | "record">;
   messageAdmission?: WorkbenchThreadAutoCompactController["run"];
+  /** An agent message steered a live turn; its model sees it only at a later input boundary. */
   onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void;
   onMessageAdmitted?: (admission: WorkbenchProviderMessageAdmission) => Promise<void> | void;
 }
@@ -175,7 +176,8 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
       const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => (
         this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) }))
       )), `${this.key}: threads.messageAgent`);
-      await this.options.onAgentMessageAdmitted?.(input.threadId, input.message);
+      // A message that starts a turn is that turn's prompt, so the model already has it.
+      if (result.kind === "steered") await this.options.onAgentMessageAdmitted?.(input.threadId, input.message);
       const admitted = this.admitted(input.threadId, result, input.message.senderThreadId);
       await this.publishMessageAdmission(input.threadId, admitted);
       return admitted;
