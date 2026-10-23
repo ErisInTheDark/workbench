@@ -342,9 +342,9 @@ function compactionHarness() {
 test("an OpenCode compaction start adopts its synced message and its end settles before the echo", async () => {
   const { itemId, owner, reports, steps } = compactionHarness();
   await owner.accept(event({ type: "session.compaction.started", created: 10,
-    data: { sessionID: "session", reason: "manual", recent: "", inputID: "compaction-input" } }));
+    data: { sessionID: "session", reason: "manual", inputID: "compaction-input" } }));
   await owner.accept(event({ type: "session.compaction.ended", created: 40,
-    data: { sessionID: "session", reason: "manual", text: "summary", recent: "" } }));
+    data: { sessionID: "session", reason: "manual", text: "summary" } }));
   assert.deepEqual(steps, ["report:started", "sync", "report:completed", "sync"]);
   assert.deepEqual(reports, [
     { itemId, threadId, turnId, phase: "started", observedAt: 10, reference: "compaction-input" },

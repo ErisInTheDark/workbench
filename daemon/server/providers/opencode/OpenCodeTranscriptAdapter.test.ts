@@ -130,7 +130,6 @@ test("active manual compaction aliases its latest native echo and preserves usag
       status: "completed",
       reason: "manual",
       summary: "summary",
-      recent: "",
       time: { created: 2 },
     },
   ], { id: "project", rootPath: "C:/repo" }, {
@@ -550,7 +549,6 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
       status: "completed",
       reason: "manual",
       summary: "summary",
-      recent: "recent",
       time: { created: 8 },
     },
   ], { id: "00000000-0000-4000-8000-000000000010", rootPath: "C:/repo" }, { settleUsage: true });
