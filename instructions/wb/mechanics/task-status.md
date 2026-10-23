@@ -6,6 +6,8 @@
 
 Triggers: 
 - You believe the assigned work is done. MUST trigger BEFORE `task_completed` or final
+<!-- Failure: after a completed task gets a follow-up, agents answer and end without re-completing, since the bare status tag never said it voided their earlier completion. -->
+- `<wb:thread-status value="working" />` arrives: earlier completion no longer stands; trigger again before ending
 - The work cannot continue and user input is unavailable or would not help
 
 1. Reconcile current request and unresolved steers
