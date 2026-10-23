@@ -25,14 +25,14 @@ import WorkbenchTranscriptAssetStore from "../../database/transcript/WorkbenchTr
 import { OPENCODE_COMMENTARY_TOOL_NAME } from "./opencode-workbench-rpc";
 import { OPENCODE_COMMENTARY_HINT } from "./workbench-plugin/open-code-commentary-tool";
 
-test("converts cumulative OpenCode usage without losing cache or reasoning tokens", () => {
+test("converts cumulative OpenCode usage with cache inside input and reasoning inside output", () => {
   assert.deepEqual(openCodeTokenBreakdown({
     input: 100, output: 13, reasoning: 5, cache: { read: 11, write: 7 },
   }), {
     cacheWriteInputTokens: 7,
     cachedInputTokens: 11,
     inputTokens: 118,
-    outputTokens: 13,
+    outputTokens: 18,
     reasoningOutputTokens: 5,
     totalTokens: 136,
   });
@@ -68,7 +68,7 @@ test("live context usage preserves the latest model step beside cumulative accou
     last,
     total: {
       cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
-      outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,
+      outputTokens: 6, reasoningOutputTokens: 1, totalTokens: 27,
     },
     modelContextWindow: 200_000,
   });
@@ -138,6 +138,57 @@ test("active manual compaction aliases its latest native echo and preserves usag
   });
   assert.equal(admissions.at(-1)?.itemId, itemId);
   assert.equal(observations.some(entry => entry.kind === "threadContextUsage"), false);
+});
+
+test("settling a completed turn records cumulative usage past OpenCode's trailing idle message", async () => {
+  const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
+  const observations: WorkbenchTranscriptObservation[] = [];
+  const adapter = new OpenCodeTranscriptAdapter({
+    modelContext: async () => 200_000,
+    threads: {
+      observe: async () => ({ threadId }),
+      observeTurns: async () => [{
+        threadId, turnId, turnIndex: 0,
+        nativeTurnId: NativeTurnIdSchema.parse("root"),
+        nativeThreadId: NativeThreadIdSchema.parse("session"),
+        nativeLocation: "C:/repo",
+        harnessId: "opencode",
+      }],
+    } as never,
+    items: {
+      admit: async inputs => inputs.map((input, index) => ({
+        ...input,
+        itemId: input.itemId ?? WorkbenchItemIdSchema.parse(`00000000-0000-4000-8000-0000000000${10 + index}`),
+        sources: input.sources.map(source => ({ ...source, component: source.component ?? { kind: "item" as const, index: 0 } })),
+      })),
+      itemIdForSource: () => { throw new Error("not used"); },
+    },
+    transcript: {
+      record: async entries => {
+        observations.push(...entries);
+        return { changedThreadIds: [] };
+      },
+    },
+  });
+  await adapter.record({
+    id: "session", projectID: "project", title: "Thread", cost: 0,
+    tokens: { input: 100, output: 13, reasoning: 5, cache: { read: 11, write: 7 } },
+    time: { created: 1, updated: 4 }, location: { directory: "C:/repo" },
+  }, [
+    { id: "root", type: "user", text: "hello", time: { created: 1 } },
+    {
+      id: "assistant", type: "assistant", agent: "agent", model: { id: "m", providerID: "p" },
+      content: [{ type: "text", text: "done" }], time: { created: 2, completed: 3 },
+      tokens: { input: 100, output: 13, reasoning: 5, cache: { read: 11, write: 7 } },
+    },
+    { id: "idle", type: "idle", outcome: "succeeded", time: { created: 4 } },
+  ], { id: "project", rootPath: "C:/repo" }, { settleUsage: true });
+  const usage = observations.find(entry => entry.kind === "turnTokenUsage");
+  assert.equal(usage?.kind === "turnTokenUsage" ? usage.turnId : null, turnId);
+  assert.deepEqual(usage?.kind === "turnTokenUsage" ? usage.cumulative : null, openCodeTokenBreakdown({
+    input: 100, output: 13, reasoning: 5, cache: { read: 11, write: 7 },
+  }));
 });
 
 test("sent and native OpenCode user images survive transcript rereads without duplicates", async context => {
@@ -756,7 +807,7 @@ test("keeps the latest turn open while a WB steer awaits native delivery", async
     cacheWriteInputTokens: 7,
     cachedInputTokens: 11,
     inputTokens: 118,
-    outputTokens: 13,
+    outputTokens: 18,
     reasoningOutputTokens: 5,
     totalTokens: 136,
   });

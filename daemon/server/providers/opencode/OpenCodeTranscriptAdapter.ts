@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - OpenCodeTranscriptOwners: shared identity and recorder ports used by the provider edge.
- * - openCodeTokenBreakdown: translate native cumulative usage without losing cache categories.
+ * - openCodeTokenBreakdown: translate native usage into Workbench's shape (cache inside input, reasoning inside output).
  * - subtractOpenCodeTokenBreakdowns: derive one turn or baseline from cumulative usage.
  * - openCodeToolContentItems: preserve provider tool content or its bounded structured failure.
  * - isOpenCodeTurnRoot: distinguish a new user turn from an in-turn Workbench steer.
@@ -110,15 +110,21 @@ type TokenBreakdown = ThreadTokenUsage["total"];
 
 export function openCodeTokenBreakdown(tokens: OpenCodeTokenUsage): TokenBreakdown {
   const inputTokens = tokens.input + tokens.cache.read + tokens.cache.write;
+  const outputTokens = tokens.output + tokens.reasoning;
   return {
     cacheWriteInputTokens: tokens.cache.write,
     cachedInputTokens: tokens.cache.read,
     inputTokens,
-    outputTokens: tokens.output,
+    outputTokens,
     reasoningOutputTokens: tokens.reasoning,
-    totalTokens: inputTokens + tokens.output + tokens.reasoning,
+    totalTokens: inputTokens + outputTokens,
   };
 }
+
+/** Messages that advance a turn's execution; model, agent and location selections do not. */
+const EXECUTION_MESSAGE_TYPES: ReadonlySet<SessionMessageInfo["type"]> = new Set([
+  "idle", "user", "assistant", "synthetic", "shell", "compaction",
+]);
 
 export function subtractOpenCodeTokenBreakdowns(total: TokenBreakdown, baseline: TokenBreakdown): TokenBreakdown {
   const difference = (field: keyof TokenBreakdown) => Math.max(0, total[field] - baseline[field]);
@@ -497,8 +503,7 @@ export default class OpenCodeTranscriptAdapter {
       const assistant = [...group.messages].reverse().find(message => message.type === "assistant") as SessionMessageAssistant | undefined;
       const latestSteerIndex = group.messages.findLastIndex(message => workbenchMetadata(message)?.delivery === "steer");
       const latestAssistantIndex = group.messages.findLastIndex(message => message.type === "assistant");
-      const latestExecutionMessage = [...group.messages].reverse().find(message =>
-        ["idle", "user", "assistant", "synthetic", "shell", "compaction"].includes(message.type));
+      const latestExecutionMessage = group.messages.findLast(message => EXECUTION_MESSAGE_TYPES.has(message.type));
       const idle = latestExecutionMessage?.type === "idle" ? latestExecutionMessage : null;
       const keepOpen = index === groups.length - 1 && !idle
         && (options.keepLatestTurnOpen || latestSteerIndex > latestAssistantIndex);
@@ -578,7 +583,9 @@ export default class OpenCodeTranscriptAdapter {
     const usageObservations: WorkbenchTranscriptAtomicObservation[] = [];
     if (options.settleUsage && turns.length) {
       const latestTurn = turns.at(-1)!;
-      const latestMessage = messages.at(-1);
+      // Settled turns end with an idle marker; usage belongs to the step before it.
+      const latestMessage = groups[turns.length - 1]!.messages.findLast(message =>
+        message.type !== "idle" && EXECUTION_MESSAGE_TYPES.has(message.type));
       const latestAssistant = latestMessage?.type === "assistant" && latestMessage.tokens
         ? latestMessage as SessionMessageAssistant : null;
       if (latestAssistant?.tokens) {

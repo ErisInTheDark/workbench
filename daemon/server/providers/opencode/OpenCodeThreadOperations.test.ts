@@ -728,7 +728,7 @@ test("live usage reports each latest model step while preserving cumulative acco
   }> = [];
   const firstTotal = {
     cacheWriteInputTokens: 1, cachedInputTokens: 2, inputTokens: 13,
-    outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 17,
+    outputTokens: 4, reasoningOutputTokens: 1, totalTokens: 17,
   };
   const owner = operations({
     session: { get: async () => ({
@@ -744,7 +744,7 @@ test("live usage reports each latest model step while preserving cumulative acco
         last: input.last,
         total: {
           cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
-          outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,
+          outputTokens: 6, reasoningOutputTokens: 1, totalTokens: 27,
         },
         modelContextWindow: input.modelContextWindow,
       };
@@ -782,19 +782,19 @@ test("live usage reports each latest model step while preserving cumulative acco
   assert.equal(secondUsage?.contextTokens, 6);
   assert.deepEqual(secondUsage?.tokenUsage.last, {
     cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 6,
-    outputTokens: 2, reasoningOutputTokens: 1, totalTokens: 9,
+    outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 9,
   });
   assert.equal(recorded.length, 2);
   assert.deepEqual(recorded[1]?.last, {
     cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 6,
-    outputTokens: 2, reasoningOutputTokens: 1, totalTokens: 9,
+    outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 9,
   });
 });
 
 test("reconnected live usage continues from the persisted cumulative checkpoint", async () => {
   const total = {
     cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
-    outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,
+    outputTokens: 6, reasoningOutputTokens: 1, totalTokens: 27,
   };
   const last = {
     cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
