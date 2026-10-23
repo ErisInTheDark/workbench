@@ -96,6 +96,8 @@ import {
   type WorkbenchThreadStateRecord,
 } from "./workbench-thread-state-record";
 
+const BULK_REWRITE_THREADS = 50;
+
 // workbenchTitle is recorded only for workbench-owned relationships; provider inputs stay display labels.
 export type WorkbenchObservedThreadEntry = WorkbenchThreadSidebarEntry & { workbenchTitle?: string };
 
@@ -1448,7 +1450,11 @@ export default class WorkbenchThreadStateController {
       const originalEntries = new Map(state.entries);
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state, { loaded: true });
       this.projects.set(projectId, state);
-      if (repairedSettlementTimestamps) await this.persist(projectId, state, this.changedEntryKeys(originalEntries, state));
+      if (repairedSettlementTimestamps) {
+        const changed = [...this.changedEntryKeys(originalEntries, state)];
+        this.logBulkRewrite(projectId, "loaded settlement timestamps", originalEntries, state, changed);
+        await this.persist(projectId, state, changed);
+      }
       this.archives.reschedule();
       setTimeout(() => {
         if (this.active) void this.reconcile(projectId, state);
@@ -1742,7 +1748,9 @@ export default class WorkbenchThreadStateController {
           if (!this.active || generation !== state.generation) return;
           const previousEntries = new Map(state.entries);
           if (this.installProviderSnapshot(state, harness, entries, options, startEntries)) {
-            await this.persist(projectId, state, this.changedEntryKeys(previousEntries, state));
+            const changed = [...this.changedEntryKeys(previousEntries, state)];
+            this.logBulkRewrite(projectId, `${harness} provider`, previousEntries, state, changed);
+            await this.persist(projectId, state, changed);
           }
           if (!this.active || generation !== state.generation) return;
           state.error = null;
@@ -1752,7 +1760,9 @@ export default class WorkbenchThreadStateController {
           if (!this.active || generation !== state.generation) return;
           const previousEntries = new Map(state.entries);
           if (!this.installGitArcSnapshot(state, snapshot)) return;
-          await this.persist(projectId, state, this.changedEntryKeys(previousEntries, state));
+          const changed = [...this.changedEntryKeys(previousEntries, state)];
+          this.logBulkRewrite(projectId, "git arc", previousEntries, state, changed);
+          await this.persist(projectId, state, changed);
           if (!this.active || generation !== state.generation) return;
           this.publish(projectId, state);
         });
@@ -2061,6 +2071,19 @@ export default class WorkbenchThreadStateController {
     return request.method === "workbench/thread-state/settle"
       ? await this.options.runGitArcReadTransition(request.projectId, mutate)
       : await mutate();
+  }
+
+  /**
+   * Loading and reconciling normally change a few threads; rewriting most of a project holds the database writer, so a
+   * bulk rewrite names where the first rewritten thread differed.
+   */
+  private logBulkRewrite(projectId: ProjectId, source: string,
+    previous: ReadonlyMap<string, WorkbenchThreadStateEntry>, state: ProjectState, changed: readonly string[]) {
+    if (changed.length < BULK_REWRITE_THREADS) return;
+    const first = changed.find(key => previous.has(key));
+    const at = first ? firstDeepDifference(previous.get(first), state.entries.get(first)) : "new threads";
+    this.options.log?.(`Bulk thread rewrite of ${changed.length} threads project=${sanitizeLogValue(projectId)} source=${source}`
+      + ` first=${sanitizeLogValue(first ?? "none")} at=${sanitizeLogValue(at ?? "none")}`);
   }
 
   private changedEntryKeys(previous: ReadonlyMap<string, WorkbenchThreadStateEntry>, state: ProjectState) {

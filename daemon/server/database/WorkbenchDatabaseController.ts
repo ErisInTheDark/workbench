@@ -3,7 +3,7 @@
  * WorkbenchDatabaseRequestFailure: one rolled-back request that leaves the database lifecycle ready.
  * WorkbenchDatabaseFailure: stable controller failure carrying one bounded cause.
  * WorkbenchDatabaseController: owns the writer worker, the priority reader pool, their heap readings, the complete database lifecycle,
- *   step-sliced retention that stops waiting once aborted, slow writer-call reports, the running writer call, and one method
+ *   step-sliced retention that stops waiting once aborted, slow writer-call and read reports, the running writer call, and one method
  *   per registered request (./workbench-database-requests).
  */
 import { Worker } from "node:worker_threads";
@@ -50,6 +50,7 @@ const RECLAIMED_PAGES_PER_STEP = 1_024;
 /** Expired turns average ~240 items cascading through every item table (~20ms each on a real database), so ~0.3s a step. */
 const EXPIRED_TURNS_PER_STEP = 16;
 const SLOW_WRITER_CALL_MS = 1_000;
+const SLOW_READ_MS = 1_000;
 
 /** Settles with the abort reason as soon as `signal` fires; the abandoned call keeps running and its outcome is dropped. */
 function unlessAborted<T>(call: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
@@ -106,6 +107,8 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
   /** Writer calls in flight, in posting order; a slow one names the work queued ahead of it. */
   readonly #writerQueue = new Map<number, { ahead: string; describe: (() => string) | null; name: string; postedAt: number }>();
   #writerSettledAt = Number.NEGATIVE_INFINITY;
+  /** Pool reads in flight, so a slow one can be named when it settles. */
+  readonly #reads = new Map<number, { describe: (() => string) | null; name: string; postedAt: number; readClass: string }>();
   // Thread-state reads retain write-before-read ordering across the writer and reader pool.
   #threadStateWrite: Promise<void> = Promise.resolve();
   #nextRequestId = 1;
@@ -446,10 +449,14 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
       const message = { ...request, id } satisfies WorkbenchDatabaseRequest;
       if (target) target.postMessage(message);
       else if (readClass && this.#readers.ready) {
+        if (request.type === "call") this.#reads.set(id, {
+          describe: getWorkbenchDatabaseCallDescription(request), name: request.name, postedAt: performance.now(), readClass,
+        });
         this.#readers.run(message, readClass, {
           signal,
           abandon: (reason) => {
             this.#pending.delete(id);
+            this.#reads.delete(id);
             reject(reason instanceof Error ? reason : new Error("Database read was abandoned."));
           },
         });
@@ -479,6 +486,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
     }
     this.#pending.delete(response.id);
     this.#reportSlowWriterCall(response.id, response.type === "result" ? response.runMs : undefined);
+    this.#reportSlowRead(response.id, response.type === "result" ? response.runMs : undefined);
     if (response.type === "requestFailure") {
       pending.reject(new WorkbenchDatabaseRequestFailure(response.message));
       return;
@@ -532,6 +540,23 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
     });
   }
 
+  /**
+   * Reads run beside the writer, so a slow one names itself rather than what it queued behind. Its span includes waiting
+   * for a free reader and this event loop taking the reply; `sqlMs` separates the reader's own work from both.
+   */
+  #reportSlowRead(id: number, sqlMs: number | undefined) {
+    const read = this.#reads.get(id);
+    if (!read) return;
+    this.#reads.delete(id);
+    const elapsedMs = performance.now() - read.postedAt;
+    if (elapsedMs < SLOW_READ_MS) return;
+    const inside = [`${read.readClass} reader`, sqlMs === undefined ? null : `sql ${(sqlMs / 1_000).toFixed(1)}s`, read.describe?.() ?? null];
+    this.#report({
+      source: "database", operation: `reader ${read.name}`, phase: "completed", level: "warn",
+      detail: inside.filter(Boolean).join("; "), elapsedMs, progress: null,
+    });
+  }
+
   #receive(message: WorkbenchDatabaseWorkerMessage) {
     if (message.type !== "diagnostic") {
       this.#settle(message);
@@ -559,6 +584,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
     for (const pending of this.#pending.values()) pending.reject(this.#failure);
     this.#pending.clear();
     this.#writerQueue.clear();
+    this.#reads.clear();
   }
 }
 
