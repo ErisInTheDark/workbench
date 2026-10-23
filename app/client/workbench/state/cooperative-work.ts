@@ -2,7 +2,7 @@
  * Exports:
  * - CooperativeWorkBudget: browser work-slice budget that yields after the current slice expires. Keywords: scheduler, yield, background.
  * - CooperativeWorkBudgetOptions: optional slice timing for cooperative browser work. Keywords: scheduler, timing, budget.
- * - cooperativeYield: yield browser control using scheduler.yield when available. Keywords: scheduler, browser, yield.
+ * - cooperativeYield: yield browser control until every other queued task has run (background priority). Keywords: scheduler, browser, yield.
  * - createCooperativeWorkBudget: create a reusable elapsed-time work budget. Keywords: scheduler, yield, slices.
  */
 
@@ -16,7 +16,7 @@ export interface CooperativeWorkBudgetOptions {
 }
 
 interface BrowserScheduler {
-  yield?: () => Promise<void>;
+  postTask?: (callback: () => void, options: { priority: "background" }) => Promise<void>;
 }
 
 const DEFAULT_COOPERATIVE_WORK_SLICE_MS = 20;
@@ -25,10 +25,14 @@ function getNow() {
   return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
+/**
+ * Resumes at background priority, after every other queued task. `scheduler.yield()` resumes ahead of normal tasks
+ * instead, so a long rebuild yielding through it still holds socket messages (a transcript frame) until it finishes.
+ */
 export async function cooperativeYield() {
   const scheduler = (globalThis as { scheduler?: BrowserScheduler }).scheduler;
-  if (scheduler?.yield) {
-    await scheduler.yield();
+  if (scheduler?.postTask) {
+    await scheduler.postTask(() => {}, { priority: "background" });
     return;
   }
 
