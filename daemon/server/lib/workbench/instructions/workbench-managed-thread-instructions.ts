@@ -9,8 +9,8 @@
 import type { WorkbenchHarness, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import { filterWorkbenchInstructionContent, formatWorkbenchInstructionFilterWarning } from "./instruction-context-filter";
 import {
-  isWorkbenchInstructionToolEnabled,
   resolveWorkbenchInstructionToolReference,
+  selectWorkbenchInstructionTools,
   servesWorkbenchInstructionTool,
   type WorkbenchInstructionTool,
 } from "./instruction-tool-reference";
@@ -18,7 +18,6 @@ import type { InstructionSourceSpan } from "./instruction-file-generation";
 import { listWorkbenchInstructionMechanics, readWorkbenchInstructionCapabilities } from "./workbench-instruction-mechanics";
 import { loadWorkbenchPromptAssembly } from "./workbench-prompt-generation";
 import type { WorkbenchPromptContext } from "./workbench-prompt-types";
-import { isWorkbenchToolVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
 
 export interface ManagedThreadInstructionContext extends WorkbenchPromptContext {
   readonly harness: WorkbenchHarness;
@@ -39,9 +38,9 @@ export async function createManagedThreadFilter(
     context.readInstructionTools(),
     readWorkbenchInstructionCapabilities(readLocalCapabilities),
   ]);
-  const catalogue = tools.filter(tool => (
-    isWorkbenchToolVisibleTo(tool.id, Boolean(context.subagentName?.trim())) && isWorkbenchInstructionToolEnabled(tool, capabilities)
-  ));
+  const catalogue = selectWorkbenchInstructionTools(
+    tools, { harness: context.harness, subagent: Boolean(context.subagentName?.trim()) }, capabilities,
+  );
   const facts = listWorkbenchInstructionMechanics(context);
   return (value: string | null, field: string, sources: readonly InstructionSourceSpan[] = []) => (
     filterWorkbenchInstructionContent(value, {

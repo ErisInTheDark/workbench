@@ -117,6 +117,8 @@ export interface WorkbenchProviderTools {
     hostsUserMessage?: boolean;
     /** The model sees a successful result's structured content instead of its text, so Workbench sends only the text. */
     modelReadsStructuredContent?: boolean;
+    /** The provider lets the model leave a running long wait and return to it, so Workbench offers no wait `timeoutMs`. */
+    yieldsLongWaits?: boolean;
   }>;
   caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
   /** Prepare the provider-native shell, required only when `describe().shellEscalation` is false. */

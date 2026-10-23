@@ -98,7 +98,7 @@ const refresh = defineWorkbenchAgentCommand({
 
 const compact = defineWorkbenchAgentCommand({
   description: "Hand off the active OpenCode turn into a fresh native context.",
-  harnesses: ["opencode"],
+  audience: { harnesses: ["opencode"] },
   helpGroups: ["thread"],
   hideMcpTranscript: true,
   words: ["thread", "compact"],

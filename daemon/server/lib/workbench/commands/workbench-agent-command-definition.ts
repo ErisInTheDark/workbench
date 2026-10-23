@@ -5,6 +5,7 @@
  * - managedWorkbenchAgentCommandBody: validated managed identity for command requests.
  * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind/WorkbenchAgentMcpRuntimeDrainPolicy: transport and MCP lifecycle contracts.
  * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: invocation context and registry definitions.
+ * - WorkbenchCommandAudienceRule: declarative harness and root-only gates a definition places on its callers.
  * - WorkbenchLocalCapability: a local capability setting a command can require.
  * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary.
  * - getWorkbenchAgentCommandToolName: canonical MCP command name.
@@ -108,14 +109,21 @@ export function isWorkbenchAgentMcpRuntimeReloadInterruption(error: unknown) {
   return error instanceof Error && Reflect.get(error, MCP_RUNTIME_RELOAD_INTERRUPTION_KEY) === true;
 }
 
+/** Parent-only commands are listed by name in `WORKBENCH_PARENT_ONLY_TOOLS`, which provider permission edges also read. */
+export interface WorkbenchCommandAudienceRule {
+  /** Providers that may use this command; omitted means every provider. */
+  harnesses?: readonly ProviderKey[];
+  /** Usable only by managed threads at the Workbench repository root, and by unmanaged callers. */
+  rootOnly?: true;
+}
+
 export interface WorkbenchAgentCommandDefinition {
   aliases?: readonly (readonly string[])[];
+  audience?: WorkbenchCommandAudienceRule;
   buildRequestFromCli(args: string[], context: WorkbenchAgentCommandContext): Promise<WorkbenchAgentCommandRequest>;
   buildRequestFromJson(input: object, context: WorkbenchAgentCommandContext): Promise<WorkbenchAgentCommandRequest>;
   description: string;
   effects: WorkbenchAgentCommandEffects;
-  /** Providers that see this command in MCP registration and CLI help; omitted means every provider. */
-  harnesses?: readonly ProviderKey[];
   /** Not preloaded as an MCP tool; agents find it with `mcp_tools` and run it with `mcp_call` on server `wb`. */
   mcpDeferred?: boolean;
   /** Execute without recording MCP arguments or results in the conversation transcript. */
@@ -123,7 +131,6 @@ export interface WorkbenchAgentCommandDefinition {
   hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
-  managedThreadRootOnly?: boolean;
   mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
@@ -137,16 +144,15 @@ export interface WorkbenchAgentCommandDefinition {
 
 interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>> {
   aliases?: readonly (readonly string[])[];
+  audience?: WorkbenchCommandAudienceRule;
   buildRequest(input: z.output<TSchema>, context: WorkbenchAgentCommandContext): Promise<WorkbenchAgentCommandRequest> | WorkbenchAgentCommandRequest;
   description: string;
   effects?: WorkbenchAgentCommandEffects;
-  harnesses?: readonly ProviderKey[];
   mcpDeferred?: boolean;
   hideMcpTranscript?: boolean;
   hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
   inputSchema: TSchema;
-  managedThreadRootOnly?: boolean;
   mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
@@ -170,17 +176,16 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
   };
   return {
     aliases: definition.aliases,
+    audience: definition.audience,
     buildRequestFromCli: async (args, context) => await buildValidatedRequest(definition.parseCliArgs(args), context),
     buildRequestFromJson: buildValidatedRequest,
     description: definition.description,
     effects: definition.effects ?? {},
-    harnesses: definition.harnesses,
     mcpDeferred: definition.mcpDeferred,
     hideMcpTranscript: definition.hideMcpTranscript,
     hideFromRootHelp: definition.hideFromRootHelp,
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,
-    managedThreadRootOnly: definition.managedThreadRootOnly,
     mcpCodeModeEligible: definition.mcpCodeModeEligible,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,

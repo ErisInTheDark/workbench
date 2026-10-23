@@ -25,10 +25,8 @@ import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "../providers/codex/CodexShel
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import {
-  isWorkbenchCommandVisibleTo,
-  WORKBENCH_PARENT_ONLY_TOOLS,
-} from "workbench-shared/workbench/commands/workbench-tool-audience";
+import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import { refuseWorkbenchCommand } from "../lib/workbench/commands/workbench-command-audience";
 import type { WorkbenchAdmittedExecution, WorkbenchPreparedShell, WorkbenchProviderTools, ProviderToolResult, WorkbenchToolTranscriptReference } from "../providers/provider-execution";
 import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import type WorkbenchProvider from "../providers/WorkbenchProvider";
@@ -742,19 +740,10 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   try {
     const inventory = await client.listTools();
     const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter((definition) => (
-      !definition.mcpDeferred && !definition.managedThreadRootOnly
-      && isWorkbenchCommandVisibleTo(getWorkbenchAgentCommandToolName(definition), {
-        harness: "codex",
-        harnesses: definition.harnesses,
-        subagent: false,
-      })
+      !definition.mcpDeferred && !refuseWorkbenchCommand(definition, { harness: "codex", subagent: false, workbenchRoot: false })
     ));
     const hiddenFromCodex = new Set(listWorkbenchAgentCommands(reloadCatalog, "agent")
-      .filter((definition) => !isWorkbenchCommandVisibleTo(getWorkbenchAgentCommandToolName(definition), {
-        harness: "codex",
-        harnesses: definition.harnesses,
-        subagent: false,
-      }))
+      .filter((definition) => refuseWorkbenchCommand(definition, { harness: "codex", subagent: false, workbenchRoot: true }))
       .map((definition) => definition.words.join("_")));
     assert.equal(inventory.tools.length, eligible.length + 1);
     assert.ok(client.getServerCapabilities()?.experimental?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
@@ -1869,6 +1858,96 @@ test("a steer during detached wait transcript admission interrupts before comman
   assert.deepEqual(step.result.structuredContent, { kind: "interruptedBySteer", version: 1 });
   assert.deepEqual(recorded, [step.result]);
   requestRegistry.dispose();
+});
+
+function timedWaitController(yieldsLongWaits: boolean) {
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const recorded: ProviderToolResult[] = [];
+  const deadlines: Array<{ timeoutMs: number; controller: AbortController }> = [];
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "claude", threadId, cwd: "C:/workspace" }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true, ...(yieldsLongWaits ? { yieldsLongWaits } : {}) }),
+    patchClaims: async () => "",
+    transcript: {
+      start: async input => ({
+        threadId, turnId: "turn", itemId: input.tool, sourceId: "source", parentId: "source", tool: input.tool, arguments: {}, startedAt: 0,
+      }) as WorkbenchToolTranscriptReference,
+      finish: async (_reference, result) => { recorded.push(result); },
+    },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", requestRegistry,
+    executeCommand: async () => assert.fail("detached waits execute through the ingress"),
+    createWaitDeadline: timeoutMs => {
+      const deadline = { timeoutMs, controller: new AbortController() };
+      deadlines.push(deadline);
+      return deadline.controller.signal;
+    },
+  });
+  const scope = { clientScope: "client", projectLocal: true, provider: "claude", subagent: false };
+  let requestId = 0;
+  const callTool = async (name: string, args: Record<string, unknown>) => await controller.call(scope, {
+    arguments: args, detachableShell: true, meta: {}, name, requestId: ++requestId, signal: new AbortController().signal,
+  });
+  const listedProperties = async (name: string) => {
+    const tool = (await controller.describe(scope, new AbortController().signal, { batchTurns: true })).tools.find(tool => tool.name === name);
+    return Object.keys(tool?.inputSchema.properties ?? {});
+  };
+  const timeOut = (index: number) => deadlines[index]!.controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+  return { callTool, controller, deadlines, listedProperties, recorded, requestRegistry, scope, threadId, timeOut };
+}
+
+test("a timed wait ends with a non-error timed-out result, keeps timeoutMs out of the command, and yields to an earlier steer", async () => {
+  const { callTool, controller, deadlines, listedProperties, recorded, requestRegistry, scope, threadId, timeOut } = timedWaitController(false);
+  try {
+    assert.ok((await listedProperties("subagent_wait")).includes("timeoutMs"));
+    assert.ok((await listedProperties("subagent_queue")).includes("timeoutMs"));
+    assert.equal((await listedProperties("task_get")).includes("timeoutMs"), false);
+    assert.equal((await listedProperties("request_user_input")).includes("timeoutMs"), false);
+    const rejected = await callTool("task_get", { timeoutMs: 1_000 });
+    assert.ok(rejected.kind === "result" && rejected.result.isError);
+
+    const timed = await callTool("subagent_wait", { names: ["momo"], timeoutMs: 300_000 });
+    assert.ok(timed.kind === "detached");
+    assert.equal(deadlines[0]?.timeoutMs, 300_000);
+    assert.equal(timed.call.request.body?.timeoutMs, undefined);
+    assert.deepEqual(timed.call.request.body?.names, ["momo"]);
+    timeOut(0);
+    const timedOut = await controller.finish(scope, timed.call, { error: timed.call.signal.reason });
+    timed.call.unregister();
+    assert.equal(timedOut.isError, false);
+    assert.match(responseText(timedOut), /call subagent_wait again/u);
+    assert.deepEqual(recorded.at(-1)?.structuredContent, { kind: "timedOut", version: 1 });
+
+    const steered = await callTool("subagent_wait", { names: ["momo"], timeoutMs: 300_000 });
+    assert.ok(steered.kind === "detached");
+    requestRegistry.interruptThreadWaits(threadId);
+    timeOut(1);
+    const interrupted = await controller.finish(scope, steered.call, { error: steered.call.signal.reason });
+    steered.call.unregister();
+    assert.deepEqual(recorded.at(-1)?.structuredContent, { kind: "interruptedBySteer", version: 1 });
+    assert.equal(interrupted.isError, false);
+
+    const untimed = await callTool("subagent_wait", { names: ["momo"] });
+    assert.ok(untimed.kind === "detached");
+    assert.equal(deadlines.length, 2, "a wait without timeoutMs gets no deadline");
+    untimed.call.unregister();
+  } finally {
+    requestRegistry.dispose();
+  }
+});
+
+test("providers that yield long waits neither list nor accept wait timeoutMs", async () => {
+  const { callTool, deadlines, listedProperties, requestRegistry } = timedWaitController(true);
+  try {
+    assert.equal((await listedProperties("subagent_wait")).includes("timeoutMs"), false);
+    const rejected = await callTool("subagent_wait", { names: ["momo"], timeoutMs: 1_000 });
+    assert.ok(rejected.kind === "result" && rejected.result.isError);
+    assert.equal(deadlines.length, 0);
+  } finally {
+    requestRegistry.dispose();
+  }
 });
 
 setFlagsFromString("--expose-gc");

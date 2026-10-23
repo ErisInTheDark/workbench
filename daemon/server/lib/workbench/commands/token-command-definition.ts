@@ -47,7 +47,7 @@ const countInstructions = defineWorkbenchAgentCommand({
   description: "Count actual tokens provided to agents in Workbench instructions. Strips HTML comments. Use over `tokens` when applicable. Count -> patch -> count",
   effects: { idempotent: true, openWorld: false, readOnly: true },
   helpGroups: ["tokens"],
-  managedThreadRootOnly: true,
+  audience: { rootOnly: true },
   mcpCodeModeEligible: true,
   words: ["tokens", "instructions"],
   usage: "wb tokens instructions [--toc] [--model <model>]",

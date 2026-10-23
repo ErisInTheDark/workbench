@@ -66,6 +66,8 @@ export default class CodexToolsController implements WorkbenchProviderTools {
       experimental: { [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: {} },
       shellDescription: WORKBENCH_SHELL_TOOL_DESCRIPTION,
       shellEscalation: true,
+      // A code-mode cell yields after its `yield_time_ms` and resumes with `functions.wait`.
+      yieldsLongWaits: true,
     };
   }
 

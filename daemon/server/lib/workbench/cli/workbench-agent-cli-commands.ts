@@ -21,7 +21,8 @@ import {
   type WorkbenchAgentCommandRequest,
   type WorkbenchAgentCommandResponseKind,
 } from "../commands/workbench-agent-command-definition";
-import { isWorkbenchAgentCliOpenTo, isWorkbenchCommandVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import { isWorkbenchAgentCliOpenTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import { refuseWorkbenchCommand } from "../commands/workbench-command-audience";
 
 export type WorkbenchAgentCliRequest = WorkbenchAgentCommandRequest;
 export type WorkbenchAgentCliResponseKind = WorkbenchAgentCommandResponseKind;
@@ -368,14 +369,9 @@ export async function parseWorkbenchAgentCliCommand(
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
   const isWorkbenchRoot = projectRoot !== null && isSamePath(cwd, projectRoot);
-  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli", { virtualRepos }).filter((command) => (
-    (!command.managedThreadRootOnly || callerThreadId === null || isWorkbenchRoot)
-    && isWorkbenchCommandVisibleTo(getWorkbenchAgentCommandToolName(command), {
-      harness: callerHarness,
-      harnesses: command.harnesses,
-      subagent,
-    })
-  ));
+  const audience = { harness: callerHarness, subagent, workbenchRoot: callerThreadId === null || isWorkbenchRoot };
+  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli", { virtualRepos })
+    .filter((command) => refuseWorkbenchCommand(command, audience) === null);
   const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint";
   if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   const workbenchArgs = argsBeforeTrailingSeparator(argv);

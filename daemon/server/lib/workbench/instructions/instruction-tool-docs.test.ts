@@ -7,16 +7,21 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
-import { isWorkbenchToolVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
 import { filterWorkbenchInstructionContent, type WorkbenchInstructionFilterWarning } from "./instruction-context-filter";
 import { readWorkbenchInstructionSources } from "./instruction-source";
 import { collectWorkbenchInstructionToolDocs } from "./instruction-tool-docs";
-import { listWorkbenchInstructionTools, resolveWorkbenchInstructionToolReference, servesWorkbenchInstructionTool } from "./instruction-tool-reference";
+import {
+  listWorkbenchInstructionTools,
+  resolveWorkbenchInstructionToolReference,
+  selectWorkbenchInstructionTools,
+  servesWorkbenchInstructionTool,
+} from "./instruction-tool-reference";
 
 const instructionRoot = fileURLToPath(new URL("../../../../../instructions", import.meta.url));
 const catalogue = listWorkbenchInstructionTools(listWorkbenchAgentCommands([], "agent", { virtualRepos: true }));
 const mcpServed = new Set(catalogue.filter(({ deferred }) => !deferred).map(({ id }) => id));
+const allCapabilities = { browseRawCommandsEnabled: true };
 
 test("docs text groups by tools across sources and only counts what this caller would render", () => {
   const docs = collectWorkbenchInstructionToolDocs([
@@ -76,7 +81,7 @@ test("repository instructions render without selector warnings for root and suba
   const warnings: Array<Pick<WorkbenchInstructionFilterWarning, "field" | "line" | "message">> = [];
   for (const harness of installedProviderKeys) {
     for (const subagent of [false, true]) {
-      const visible = catalogue.filter(({ id }) => isWorkbenchToolVisibleTo(id, subagent));
+      const visible = selectWorkbenchInstructionTools(catalogue, { harness, subagent }, allCapabilities);
       for (const { content, relativePath } of sources) {
         filterWorkbenchInstructionContent(content, {
           facts: { workspace: new Set(["project", "multi-root"]) },
@@ -94,11 +99,30 @@ test("repository instructions render without selector warnings for root and suba
   assert.deepEqual(warnings, []);
 });
 
+test("harness-limited tools gate docs only for the harnesses that can use them", () => {
+  const content = "<docs tools=\"rm\">\ndelete claimed files\n</docs>";
+  const render = (harness: "claude" | "codex") => {
+    const visible = selectWorkbenchInstructionTools(catalogue, { harness, subagent: false }, allCapabilities);
+    return filterWorkbenchInstructionContent(content, {
+      facts: { workspace: new Set(["project"]) },
+      field: "rm.md",
+      harness,
+      model: null,
+      onWarning: () => {},
+      resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, harness, visible),
+      servesTool: (id) => servesWorkbenchInstructionTool(id, visible),
+      shell: "pwsh",
+    });
+  };
+  assert.equal(render("claude"), "delete claimed files");
+  assert.equal(render("codex"), "");
+});
+
 test("subagent instructions retain coordination without parent-only lifecycle guidance", async () => {
   const source = (await readWorkbenchInstructionSources(instructionRoot))
     .find(({ relativePath }) => relativePath === "wb/mechanics/subagents.md");
   assert.ok(source);
-  const visible = catalogue.filter(({ id }) => isWorkbenchToolVisibleTo(id, true));
+  const visible = selectWorkbenchInstructionTools(catalogue, { harness: "codex", subagent: true }, allCapabilities);
   const output = filterWorkbenchInstructionContent(source.content, {
     facts: { workspace: new Set(["project"]) },
     field: source.relativePath,

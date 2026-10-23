@@ -3,6 +3,7 @@
  * - WorkbenchInstructionTool: a Workbench tool an agent can use, with its MCP exposure and code-mode eligibility.
  * - listWorkbenchInstructionTools: the instruction catalogue for command definitions, including deferred and capability-gated commands.
  * - isWorkbenchInstructionToolEnabled: whether a tool's required local capability, if any, is enabled.
+ * - selectWorkbenchInstructionTools: the catalogue one caller's `<docs>` gates and tool references see.
  * - resolveWorkbenchInstructionToolReference: format a preloaded MCP tool for one provider's instruction payload.
  * - listWorkbenchInstructionToolFamily: catalogued ids a `<docs>` gate id covers, itself and its `id_*` subtools.
  * - servesWorkbenchInstructionTool: whether an agent can use a tool or any of its `id_*` subtools, through MCP or CLI, for `<docs>` gates.
@@ -12,16 +13,17 @@ import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/comman
 import {
   getWorkbenchAgentCommandToolName,
   type WorkbenchAgentCommandDefinition,
+  type WorkbenchCommandAudienceRule,
   type WorkbenchLocalCapability,
 } from "../commands/workbench-agent-command-definition";
+import { refuseWorkbenchTool, type WorkbenchCommandAudience } from "../commands/workbench-command-audience";
 
-export interface WorkbenchInstructionTool {
+/** Carries its command's audience rule, so catalogue readers apply the same visibility as MCP and CLI. */
+export interface WorkbenchInstructionTool extends WorkbenchCommandAudienceRule {
   readonly id: string;
   readonly codeModeEligible: boolean;
   /** Not preloaded: reached through the `wb` CLI or `mcp_call` on server `wb`, so no direct MCP name exists to reference. */
   readonly deferred?: boolean;
-  /** Usable only by threads at the Workbench repository root. */
-  readonly rootOnly?: boolean;
   /** Usable only while this local capability is enabled. */
   readonly requiresCapability?: WorkbenchLocalCapability;
 }
@@ -33,7 +35,8 @@ export function listWorkbenchInstructionTools(definitions: readonly WorkbenchAge
       id: getWorkbenchAgentCommandToolName(definition),
       codeModeEligible: definition.mcpCodeModeEligible === true,
       ...(definition.mcpDeferred ? { deferred: true } : {}),
-      ...(definition.managedThreadRootOnly ? { rootOnly: true } : {}),
+      ...(definition.audience?.harnesses ? { harnesses: definition.audience.harnesses } : {}),
+      ...(definition.audience?.rootOnly ? { rootOnly: true as const } : {}),
       ...(definition.requiresCapability ? { requiresCapability: definition.requiresCapability } : {}),
     })),
   ];
@@ -41,6 +44,16 @@ export function listWorkbenchInstructionTools(definitions: readonly WorkbenchAge
 
 export function isWorkbenchInstructionToolEnabled(tool: WorkbenchInstructionTool, capabilities: WorkbenchLocalCapabilitySettings) {
   return !tool.requiresCapability || capabilities[tool.requiresCapability];
+}
+
+/** Prompt context does not know the Workbench root, so root-only tools keep their docs. */
+export function selectWorkbenchInstructionTools(
+  catalogue: readonly WorkbenchInstructionTool[],
+  caller: Omit<WorkbenchCommandAudience, "workbenchRoot">,
+  capabilities: WorkbenchLocalCapabilitySettings,
+) {
+  const audience = { ...caller, workbenchRoot: true };
+  return catalogue.filter(tool => refuseWorkbenchTool(tool.id, tool, audience) === null && isWorkbenchInstructionToolEnabled(tool, capabilities));
 }
 
 export function resolveWorkbenchInstructionToolReference(

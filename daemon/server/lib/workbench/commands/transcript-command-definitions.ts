@@ -125,7 +125,7 @@ export const WORKBENCH_TRANSCRIPT_COMMANDS = HISTORY_QUERY_ACTIONS.map(action =>
     effects: { readOnly: true, idempotent: true, openWorld: false },
     helpGroups: ["transcript"],
     mcpDeferred: true,
-    managedThreadRootOnly: true,
+    audience: { rootOnly: true },
     words: ["transcript", action],
     usage: `wb transcript ${action}${USAGE[action]} [options]`,
     inputSchema,

@@ -30,7 +30,7 @@ export type WorkbenchFileRemovalExecutionRequest = z.output<typeof WorkbenchFile
 const rm = defineWorkbenchAgentCommand({
   description: "Delete claimed files, or claimed directories with recursive. Every path must be covered by this thread's active claims.",
   effects: { destructive: true, idempotent: false },
-  harnesses: ["claude"],
+  audience: { harnesses: ["claude"] },
   helpGroups: [],
   words: ["rm"],
   usage: "wb rm [--recursive] [--] <path>...",
