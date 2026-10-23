@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyObservationDelta, diffObservationValue } from "./observation-patch";
+import { observationDeltaCause } from "./observation-delta-cause";
 import {
   DaemonWorkspaceObservationSchema, DaemonWorkspaceQuerySchema, WorkspaceObservationSchema, WorkspaceQuerySchema,
   daemonObservationShape, workspaceObservationShape, type WorkspaceObservation,
@@ -81,6 +82,19 @@ test("a member's activity tick ships that member's changed field, not the member
   assert.equal(updates.length, 1);
   assert.deepEqual(updates[0]?.delta, { set: { activityAt: 20_000 } });
   assert.deepEqual(applyObservationDelta(membership(10_000), delta, shape), membership(20_000));
+});
+
+test("an unsettled thread's activity tick in project summaries ships only its timestamps, so logs read it as a heartbeat", () => {
+  const shape = workspaceObservationShape("projects");
+  const projects = (activityAt: number) => ({
+    kind: "projects", subscriptionId, generation: 1, revision: 1, phase: "current", failure: null,
+    data: { projects: [], summaries: { project: {
+      counts: {}, lastThreadUpdateAt: activityAt, pinnedThreads: [], unsettledThreads: [{ location, entry: entry(activityAt) }],
+    } } },
+  });
+  const delta = diffObservationValue(projects(10_000), projects(20_000), shape)!;
+  assert.ok(!JSON.stringify(delta).includes("\"title\""), "the rest of the entry stays home");
+  assert.deepEqual(observationDeltaCause(delta), { cause: "activity", heartbeat: true });
 });
 
 test("a git arc change on a summarised thread ships only the changed claims and proposals, and still validates the row", () => {

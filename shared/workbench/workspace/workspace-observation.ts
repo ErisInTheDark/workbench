@@ -715,8 +715,11 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
       schema: WorkspaceProjectsSchema,
       fields: {
         projects: observationShape.keyed((project: { id: string }) => project.id, logicalProject),
+        // A working thread's activity tick ships its timestamp, not its whole entry.
         summaries: observationShape.record(summary, { fields: {
-          unsettledThreads: observationShape.keyed(locatedSummaryKey, summary.shape.unsettledThreads.element),
+          unsettledThreads: observationShape.keyed(locatedSummaryKey, summary.shape.unsettledThreads.element, {
+            fields: { entry: observationShape.object({ fields: entryFields }) },
+          }),
           pinnedThreads: observationShape.keyed(locatedSummaryKey, summary.shape.pinnedThreads.element, {
             fields: { entry: observationShape.object({ fields: entryFields }) },
           }),
