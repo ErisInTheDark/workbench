@@ -208,7 +208,9 @@ export default class WorkbenchThreadStateFeature {
           // Vis snapshots share the settled-thread retention window and never defer.
           await context.pruneThreadVis?.(identities.map(({ threadId }) => threadId));
           if (!context.gitArcs.pruneThreadHistories) return [];
-          const project = await context.resolveProjectById(projectId);
+          // A vanished project's Git history went with its worktree.
+          const project = await this.resolveReconcilableProject(projectId);
+          if (!project) return [];
           const result = await context.gitArcs.pruneThreadHistories!(project.rootPath, identities);
           const deferred = new Set(result.deferredIdentities.map(({ harness, threadId }) => `${harness}:${threadId}`));
           return identities.filter(({ harness, threadId }) => deferred.has(`${harness}:${threadId}`));
@@ -499,6 +501,19 @@ export default class WorkbenchThreadStateFeature {
     return this.context.getProjectCatalog().data.some(project => project.id === projectId);
   }
 
+  /**
+   * The project's worktree, or null for a project gone from the catalogue whose roots no longer resolve: its threads stay
+   * as stored, with no providers or Git left to reconcile them against. Any other resolution failure still throws.
+   */
+  private async resolveReconcilableProject(projectId: ProjectId) {
+    try {
+      return await this.context.resolveProjectById(projectId);
+    } catch (error) {
+      if (this.projectCatalogued(projectId)) throw error;
+      return null;
+    }
+  }
+
   async installCreatedProfile(harness: WorkbenchHarness, thread: ThreadPayload, selection: WorkbenchComposerProfileTargetSelection) {
     const target = await this.providerProfileTarget(harness, thread);
     if (!await this.controller.setComposerProfileTarget(target.slot, selection)) {
@@ -556,7 +571,8 @@ export default class WorkbenchThreadStateFeature {
     acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchObservedThreadEntry[], options: { complete: boolean }) => Promise<void>,
     acceptGitArcSnapshot: (snapshot: WorkbenchThreadGitArcSnapshot) => Promise<void>,
   ) {
-    const project = await this.context.resolveProjectById(projectId);
+    const project = await this.resolveReconcilableProject(projectId);
+    if (!project) return [];
     const readGitArcSnapshot = async (): Promise<WorkbenchThreadGitArcSnapshot> => {
       if (!this.projectCatalogued(projectId)) return { arcs: [], plans: [] };
       const [gitArcs, gitArcPlans] = await Promise.all([

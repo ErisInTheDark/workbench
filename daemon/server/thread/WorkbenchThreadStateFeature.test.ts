@@ -1024,6 +1024,38 @@ test("a relationship committed during provider pagination remains a subagent aft
   await temporary.dispose();
 });
 
+test("a project gone from the catalogue reconciles quietly as stored, without asking providers or failing", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-feature-");
+  const providerCalls: string[] = [];
+  const logs: string[] = [];
+  const feature = createFeature({
+    database: createThreadStateDatabase(temporary.path, [["child", "codex"]]),
+    getProjectCatalog: () => ({ data: [], rootPath: temporary.path }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    harnesses: createHarnesses(async (harness, request) => {
+      providerCalls.push(`${harness}:${request.method}`);
+      return { id: request.id ?? null, result: { data: [], nextCursor: null } };
+    }),
+    listSubagents: async () => ({ subagents: [] }),
+    log: message => logs.push(message),
+    resolveProjectById: async () => { throw new Error("Unknown project."); },
+    resolveProjectFromCwd: async () => { throw new Error("Unknown project."); },
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  try {
+    await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
+    await waitFor(async () => (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).freshness === "fresh",
+      "Reconciliation of a vanished project did not finish fresh.");
+    const snapshot = await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"]);
+    assert.equal(snapshot.error, null);
+    assert.deepEqual(providerCalls.filter(call => call.endsWith("thread/list")), []);
+    assert.deepEqual(logs.filter(message => /Unknown project/u.test(message)), []);
+  } finally {
+    await feature.dispose();
+    await temporary.dispose();
+  }
+});
+
 test("provider reconciliation publishes its first page before deeper history and retains relationship and git state", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-feature-");
   const storageRoot = temporary.path;
