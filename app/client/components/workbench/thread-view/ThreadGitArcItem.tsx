@@ -112,7 +112,7 @@ export default function ThreadGitArcItem ({
     meta: [
       history?.failedAttempts ? <span key="attempts">{history.failedAttempts} failed {history.failedAttempts === 1 ? "attempt" : "attempts"}</span> : null,
       card.stackedProposalCount !== null ? <span key="proposals">{card.stackedProposalCount} {card.stackedProposalCount === 1 ? "proposal" : "proposals"}</span> : null,
-      editResult ? <ThreadFileChangeTotals additions={editResult.additions} deletions={editResult.deletions} key="totals" />
+      card.editTotals ? <ThreadFileChangeTotals additions={card.editTotals.additions} deletions={card.editTotals.deletions} key="totals" />
         : operationSummaryRows.length ? (
           <ThreadGitArcChangeTotals totals={summarizeGitArcChanges(operationSummaryRows.map(row => ({ path: row.change.path, ...(row.summaryTotals ?? row.diff ?? parseUnifiedDiff(row.change.diff)) })))} key="totals" />
         ) : null,

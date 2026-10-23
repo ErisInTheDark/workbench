@@ -63,6 +63,14 @@ test("code-mode wrappers stay inside the run: hidden behind their calls, or one 
   ]]]);
 });
 
+test("arc edit session calls are steps of the run around them, whether called directly, deferred or through the CLI", () => {
+  const deferred = (id: string, tool: string) => mcp(id, "mcp_call", { server: "wb", tool, arguments: {} });
+  assert.deepEqual(shape([
+    command("help"), mcp("start", "git_arc_edit_start", { operations: [] }), deferred("apply", "git_arc_edit_apply"),
+    command("end", "wb git arc edit end"), command("after"),
+  ]), [["run", [["commands", ["help", "start", "apply", "end", "after"]]]]]);
+});
+
 test("reasoning, plain commands, file edits and native reads share one run; adjacent commands share one group", () => {
   assert.deepEqual(shape([
     reasoning("think"), command("one"), command("two"), reasoning("again"),

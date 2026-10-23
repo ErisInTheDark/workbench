@@ -71,15 +71,25 @@ test("a claims update shows what changed rather than the whole inventory again",
   assert.deepEqual(updated.pathGroups.flatMap(group => group.paths), ["src/new.ts"]);
 });
 
-test("edit sessions preview their files from the CLI output", () => {
-  const output = formatGitArcEditText({
+function editOutput(phase: "applied" | "ended" | "preview" | "reverted", fileCount = 1) {
+  return formatGitArcEditText({
     additionalClaims: [], additions: 3, blockedDirtyPaths: [], blockedPendingPaths: [], collisions: [], conflictedPaths: [],
-    deletions: 1, diffs: [], fileCount: 1, files: [{ additions: 3, binary: false, deletions: 1, ignored: false, lines: [1], movedFrom: "src/old.ts", path: "src/new.ts" }],
-    ignoredFileCount: 0, page: 1, pageCount: 1, phase: "applied", releasedClaims: [], session: "abc12345", skippedFileCount: 0, warnings: [],
+    deletions: 1, diffs: [], fileCount, files: [{ additions: 3, binary: false, deletions: 1, ignored: false, lines: [1], movedFrom: "src/old.ts", path: "src/new.ts" }],
+    ignoredFileCount: 0, page: 1, pageCount: 1, phase, releasedClaims: [], session: "abc12345", skippedFileCount: 0, warnings: [],
   });
-  const edit = card("edit", { editResult: parseGitArcEditText(output), intent: intent("edit", { editStep: "apply" }) });
-  assert.equal(edit.subject, "edit session abc12345");
+}
+
+test("edit sessions name how many files they touch and preview them from the CLI output", () => {
+  const edit = card("edit", { editResult: parseGitArcEditText(editOutput("applied")), intent: intent("edit", { editStep: "apply" }) });
+  assert.equal(edit.subject, "1 file");
   assert.equal(edit.preview?.kind, "files");
+  assert.equal(card("edit", { editResult: parseGitArcEditText(editOutput("preview", 18)) }).subject, "18 files");
+});
+
+test("only an applied edit shows change totals; previews, views, ends and reverts change nothing themselves", () => {
+  const totals = (phase: Parameters<typeof editOutput>[0]) => card("edit", { editResult: parseGitArcEditText(editOutput(phase)) }).editTotals;
+  assert.deepEqual(totals("applied"), { additions: 3, deletions: 1 });
+  for (const phase of ["preview", "ended", "reverted"] as const) assert.equal(totals(phase), null, phase);
 });
 
 test("failures and interruptions read in their own tense", () => {

@@ -3,6 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { getActivityChips } from "./thread-activity-chips";
@@ -83,6 +84,47 @@ test("arc reads merged into a command group count as arc steps beside the comman
     wb("claims", "git_arc_claims", { inherit: true, addPaths: ["src/a.ts"] }),
     command("two", "node test.js"),
   ], kind: "commands" }]), [["arc", 2, null, null], ["exec", 2, null, null]]);
+});
+
+type EditPhase = "applied" | "ended" | "preview" | "reverted";
+
+function editResult(phase: EditPhase, session: string, files: Array<[string, number, number]>, fileCount = files.length) {
+  return {
+    additionalClaims: [], additions: files.reduce((total, [, additions]) => total + additions, 0), blockedDirtyPaths: [], blockedPendingPaths: [],
+    collisions: [], conflictedPaths: [], deletions: files.reduce((total, [, , deletions]) => total + deletions, 0), diffs: [], fileCount,
+    files: files.map(([path, additions, deletions]) => ({ additions, binary: false, deletions, ignored: false, lines: [], path })),
+    ignoredFileCount: 0, page: 1, pageCount: 1, phase, releasedClaims: [], session, skippedFileCount: 0, warnings: [],
+  };
+}
+
+const EDIT_TOOLS: Record<EditPhase, string> = { applied: "git_arc_edit_apply", ended: "git_arc_edit_end", preview: "git_arc_edit_start", reverted: "git_arc_edit_revert" };
+
+/** An edit session call through deferred `mcp_call`, its result in structured content. */
+function arcEdit(id: string, phase: EditPhase, session: string, files: Array<[string, number, number]>, fileCount?: number) {
+  const edit = editResult(phase, session, files, fileCount);
+  return { ...wb(id, "mcp_call", { server: "wb", tool: EDIT_TOOLS[phase], arguments: {} }),
+    result: { _meta: null, content: [], structuredContent: { kind: "success", version: 1, edit } } };
+}
+
+test("an applied arc edit adds its files and totals to the edited chip, once per session, merged with ordinary edits", () => {
+  const files: Array<[string, number, number]> = [["a.ts", 1, 1], ["moved.ts", 2, 2]];
+  assert.deepEqual(chips([
+    { items: [arcEdit("preview", "preview", "s1", files), arcEdit("apply", "applied", "s1", files), arcEdit("end", "ended", "s1", files)], kind: "commands" },
+    { items: [patch("patch", [["a.ts", "update", "@@ -1 +1 @@\n-a\n+b"]])], kind: "files" },
+  ]), [["update", 2, 4, 4], ["arc", 3, null, null]]);
+});
+
+test("an edit session the run reverts adds nothing, and files past the first page still count", () => {
+  assert.deepEqual(chips([{ items: [
+    arcEdit("apply", "applied", "s1", [["a.ts", 1, 1]]), arcEdit("revert", "reverted", "s1", [["a.ts", 1, 1]]),
+  ], kind: "commands" }]), [["arc", 2, null, null]]);
+  assert.deepEqual(chips([{ items: [arcEdit("apply", "applied", "s2", [["a.ts", 1, 1]], 150)], kind: "commands" }]),
+    [["update", 150, 1, 1], ["arc", 1, null, null]]);
+});
+
+test("a CLI edit apply counts from its printed result like an MCP one", () => {
+  const applied = { ...command("cli", "wb git arc edit apply"), aggregatedOutput: formatGitArcEditText(editResult("applied", "s3", [["b.ts", 3, 0]])) };
+  assert.deepEqual(chips([{ items: [applied], kind: "commands" }]), [["update", 1, 3, 0], ["arc", 1, null, null]]);
 });
 
 test("web searches count with matched web requests and a reasoning-only run has no chips", () => {

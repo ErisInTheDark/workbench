@@ -68,7 +68,7 @@ test("repo warming shares CLI and MCP presentation including refs and failure ou
       getThreadCommandOutcomeDisplay(mcp, "failed").summaryParts);
   }
   for (const command of [
-    "wb git repo --help", "wb git repo", "wb git repo https://host/team/repo@",
+    "wb git repo", "wb git repo https://host/team/repo@",
     "wb git repo https://host/team/repo --kind invalid", "wb git repo https://host/team/repo extra",
   ]) {
     assert.equal(getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT }).claimedBy, null);
@@ -249,7 +249,7 @@ test("wb skill CLI and MCP calls share the existing known-skill display", () => 
   assert.ok(stale);
   assert.equal(stale.summaryStats.skillLoads, 1);
   assert.equal(stale.summaryParts.some(part => part.type === "skill"), false);
-  for (const command of ["wb skill --help", "wb skill react extra", "wb skill Bad/Name"]) {
+  for (const command of ["wb skill react extra", "wb skill Bad/Name"]) {
     assert.equal(getThreadCommandDisplay({
       command, commandActions: [], cwd: PROJECT_ROOT, knownSkills,
     }).claimedBy, null);
@@ -1374,6 +1374,23 @@ test("unrecognised Git arc requests retain a bounded presentation without invent
     assert.deepEqual(route.operation.operation.paths, []);
   }
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "other", tool: "git_arc_unrecognised" }), null);
+});
+
+test("wb help requests read as help for the command they ask about, before any command's own matcher", () => {
+  for (const [command, subject] of [
+    ["wb git arc edit --help", "wb git arc edit"],
+    ["wb todo --help", "wb todo"],
+    ["wb.cmd rm --help", "wb.cmd rm"],
+    ["wb --help", "wb"],
+  ]) {
+    const display = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+    assert.equal(display.claimedBy, "workbench-cli.help", command);
+    assert.equal(display.summaryText, `Read help for ${subject}`, command);
+    assert.equal(display.summaryStats.readFiles, 1, command);
+  }
+  // A literal `--help` after the separator is an argument, not a help request.
+  const todo = getThreadCommandDisplay({ command: "wb todo -- explain --help flags", commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+  assert.notEqual(todo.claimedBy, "workbench-cli.help");
 });
 
 test("PowerShell-wrapped arc proposals preserve escaped titles, descriptions, and apostrophes", () => {

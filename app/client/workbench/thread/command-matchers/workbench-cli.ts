@@ -9,7 +9,8 @@
  * - parseWorkbenchVisCommand: parse `wb vis start|end|read|snapshot|screenshot <path>` for its vis item.
  * - parseWorkbenchTodoCommand: parse `wb todo` list, add and remove calls for their todo row.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, feedback, vis, todo, mcp, task, token, message, subagent, and reload commands.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb help requests (before any command's own matcher), toc, rm,
+ *   feedback, vis, todo, mcp, task, token, message, subagent, and reload commands.
  */
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
@@ -377,7 +378,33 @@ function renderSubagentCliFallback(command: WorkbenchSubagentCommand) {
   }
 }
 
+/** The command a `wb … --help` asks about (the words before its first flag), or null when it asks for no help. */
+function readWorkbenchHelpSubject(command: string) {
+  const tokens = tokenizeCommand(command.trim());
+  if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "")) return null;
+  const separator = tokens.indexOf("--");
+  const options = separator < 0 ? tokens : tokens.slice(0, separator);
+  if (!options.includes("--help")) return null;
+  const firstFlag = options.findIndex(token => token.startsWith("-"));
+  return options.slice(0, firstFlag).join(" ");
+}
+
 export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
+  // First, so no command's own matcher reads a help request as that command running.
+  CommandMatcher({
+    id: "workbench-cli.help",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const subject = readWorkbenchHelpSubject(stage.text);
+      return subject ? CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Reading help for "), CommandMatcher.Code(subject)],
+        remainingCommand: null,
+        stop: true,
+        summaryParts: [CommandMatcher.Text("Read help for "), CommandMatcher.Code(subject)],
+        summaryStats: { readFiles: 1 },
+      }) : null;
+    },
+  }),
   CommandMatcher({
     id: "workbench-cli.skill",
     match: ({ knownSkills, stage, summaryParts }) => {
@@ -396,9 +423,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const commandMatch = /^wb(?:\.cmd)?\s+toc(?:\s+|$)/iu.exec(normalized);
       if (!commandMatch) return null;
       const file = readValue(normalized, commandMatch[0].length).value;
-      return file && file !== "--help"
-        ? getWorkbenchCommandRendering("toc", { file })?.result ?? null
-        : null;
+      return file ? getWorkbenchCommandRendering("toc", { file })?.result ?? null : null;
     },
   }),
   CommandMatcher({
@@ -406,7 +431,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage, summaryParts }) => {
       if (summaryParts.length) return null;
       const tokens = tokenizeCommand(stage.text.trim());
-      if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "rm" || tokens.includes("--help")) return null;
+      if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "rm") return null;
       const separator = tokens.indexOf("--", 2);
       const paths = tokens.slice(2).filter((token, index) => (
         separator >= 0 && index + 2 > separator ? true : !token.startsWith("-")
@@ -451,7 +476,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (summaryParts.length) return null;
       const normalized = stage.text.trim();
       const action = /^wb(?:\.cmd)?\s+mcp\s+(tools|request|call|authorize|download)(?=\s|$)/iu.exec(normalized)?.[1]?.toLowerCase();
-      if (!action || hasBooleanFlag(normalized, "help")) return null;
+      if (!action) return null;
       if (action === "authorize") return getWorkbenchCommandRendering("mcp_authorize", {})?.result ?? null;
       if (action === "download") {
         const name = readFlagValue(normalized, "name");
@@ -530,10 +555,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: "workbench-cli.reload",
     match: ({ stage }) => {
       const normalized = stage.text.trim();
-      if (
-        !/^wb(?:\.cmd)?\s+reload(?:\s|$)/iu.test(normalized)
-        || /(?:^|\s)--help(?=\s|$)/iu.test(normalized)
-      ) return null;
+      if (!/^wb(?:\.cmd)?\s+reload(?:\s|$)/iu.test(normalized)) return null;
       const selections = [...normalized.matchAll(/(?:^|\s)--([a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*(?:\+[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*)*)(?=\s|$)/gu)]
         .map((match) => match[1]);
       const label = /(?:^|\s)--hard(?:\s|$)/u.test(normalized)
@@ -552,8 +574,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: "workbench-cli.message-wait",
     match: ({ stage, summaryParts }) => {
       const command = stage.text.trim();
-      if (summaryParts.length || !/^wb(?:\.cmd)?\s+message\s+wait(?:\s|$)/iu.test(command)
-        || hasBooleanFlag(command, "help")) return null;
+      if (summaryParts.length || !/^wb(?:\.cmd)?\s+message\s+wait(?:\s|$)/iu.test(command)) return null;
       const names = readFlagValues(command, "name");
       const threadIds = readFlagValues(command, "thread");
       if (!names.length && !threadIds.length) return null;

@@ -627,8 +627,11 @@ export type CommandSequenceRenderSegment =
   | { item: CommandItem; kind: "threadStatus"; status: "blocked" | "completed" }
   | { item: CommandItem; kind: "threadTitle"; title: string };
 
-/** Arc reads and plans that are steps of the work around them; proposals and other lifecycle changes stay their own cards. */
-const RUN_STEP_GIT_ARC_ACTIONS: ReadonlySet<string> = new Set(["claims", "compare", "continue", "diff", "plan"]);
+/**
+ * Arc reads, plans and edit sessions that are steps of the work around them; proposals and other lifecycle changes stay
+ * their own cards.
+ */
+const RUN_STEP_GIT_ARC_ACTIONS: ReadonlySet<string> = new Set(["claims", "compare", "continue", "diff", "edit", "plan"]);
 
 /** Dedicated rows that join the surrounding run as steps: arc reads, vis sessions, history recall and queue checks. */
 export function isRunStepSegment(segment: CommandSequenceRenderSegment): segment is Extract<

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - foldGitArcHistories: fold failed arc starts, waits or continues (with the work between) into the start that finally
- *   succeeded, then fold the arc-only steps leading into a completed proposal into it.
+ *   succeeded, then fold the arc-only review steps leading into a completed proposal into it.
  * - isGitArcCall: a block that is one Git arc call, drawn as one Git arc card.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -129,9 +129,12 @@ function foldRetries(blocks: readonly ThreadRenderableBlock[]): ThreadRenderable
   return folded;
 }
 
-/** A run of nothing but arc calls (compare, diff, claims...), the review that leads into a proposal. */
+/** A run of nothing but arc review calls (compare, diff, claims...) leading into a proposal; an edit session is work. */
 function isArcOnlyRun(block: ThreadRenderableBlock) {
-  return block.kind === "activityRun" && block.items.every(item => readArcItem(item) !== null);
+  return block.kind === "activityRun" && block.items.every(item => {
+    const action = readArcItem(item)?.action;
+    return action !== undefined && action !== "edit";
+  });
 }
 
 /** A completed proposal opens onto the arc-only run right before it; anything else in that run keeps both apart. */

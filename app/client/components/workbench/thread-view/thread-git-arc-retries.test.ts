@@ -1,7 +1,8 @@
 /*
  * No production exports. Tests protect when failed Git arc starts fold into their successful retry: only a completed
  * retry folds, only work and arc reads fold between, waits and continues open retries, and MCP and CLI starts fold alike;
- * arc-only steps fold into the completed proposal they lead into, and back-to-back arc cards stitch into one.
+ * arc-only review steps (never edit sessions) fold into the completed proposal they lead into, and back-to-back arc cards
+ * stitch into one.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -80,6 +81,8 @@ test("lead-in steps stay out when the run did other work or the proposal did not
   const kinds = (items: ThreadItem[]) => fold(items).map(block => block.kind);
   assert.deepEqual(kinds([thought("why"), mcp("diffed", "git_arc_diff"), mcp("proposed", "git_arc_propose")]), ["activityRun", "item"]);
   assert.deepEqual(kinds([mcp("diffed", "git_arc_diff"), mcp("proposed", "git_arc_propose", "failed")]), ["activityRun", "item"]);
+  // An edit session changed files: that is work, not review.
+  assert.deepEqual(kinds([mcp("edited", "git_arc_edit_apply"), mcp("diffed", "git_arc_diff"), mcp("proposed", "git_arc_propose")]), ["activityRun", "item"]);
   assert.deepEqual(kinds([mcp("proposed", "git_arc_propose"), commentary("done"), mcp("stacked", "git_arc_stack")]), ["item", "agentCommentarySequence", "item"]);
 });
 

@@ -4,13 +4,18 @@
  * - CommandChipContext: matcher context for summarising commands.
  * - getCommandIcon: one command step row's kind icon, from the same categories as the chips.
  * - getCommandItemDisplay: one command's matcher display.
- * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order) then every step in some command chip
- *   (unnamed steps as exec), with Browse screenshots beside browser steps.
+ * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order; applied arc edit sessions
+ *   count as edited) then every step in some command chip (unnamed steps as exec), with Browse screenshots beside browser
+ *   steps.
  */
 import type { ComponentType } from "react";
 
+import { parseGitArcEditText, type GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
+import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
 import { createEmptyCommandSummaryStats, mergeCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
+import { readMcpTextContent } from "../../../workbench/thread/command-matchers/workbench-mcp";
 import {
+  getGitArcMatcherAction,
   getNativeToolDisplay,
   getThreadCommandDisplay,
   getWorkbenchMcpCommandDisplay,
@@ -128,15 +133,46 @@ const FILE_CHIPS = [
   { Icon: FileDeleteIcon, key: "delete", verb: "deleted" },
 ] as const;
 
-function fileChips(segments: readonly ActivitySegment[]): ActivityChip[] {
+/** The arc edit session result a step reports: MCP structured content, else the text it printed (MCP or CLI). */
+function readArcEdit(item: CommandSequenceItem, context: CommandChipContext): GitArcEditResult | null {
+  if (item.type === "mcpToolCall") {
+    const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
+    if (route?.kind !== "specialized" || route.operation.kind !== "gitArc" || route.operation.operation.action !== "edit") return null;
+    const typed = readGitArcMcpResult(item.result?.structuredContent ?? null);
+    if (typed?.kind === "valid" && typed.result.kind === "success" && typed.result.edit) return typed.result.edit;
+    return parseGitArcEditText((item.result?.content ?? []).flatMap(part => readMcpTextContent(part) ?? []).join("\n"));
+  }
+  if (item.type !== "commandExecution" || getGitArcMatcherAction(getCommandItemDisplay(item, context)?.claimedBy) !== "edit") return null;
+  return parseGitArcEditText(item.aggregatedOutput ?? "");
+}
+
+/**
+ * The edit sessions a run applied and kept. Only applying changes files: previews, views and ends repeat the same totals,
+ * and a session the run reverts changed nothing in the end.
+ */
+function appliedArcEdits(commands: readonly CommandSequenceItem[], context: CommandChipContext) {
+  const sessions = new Map<string, GitArcEditResult>();
+  for (const item of commands) {
+    const edit = readArcEdit(item, context);
+    if (edit?.phase === "applied") sessions.set(edit.session, edit);
+    else if (edit?.phase === "reverted") sessions.delete(edit.session);
+  }
+  return [...sessions.values()];
+}
+
+/** Applied arc edits count as edited files beside ordinary edits; files past the first page are counted, not named. */
+function fileChips(segments: readonly ActivitySegment[], edits: readonly GitArcEditResult[]): ActivityChip[] {
   const entries = getThreadFileChangeEntries(segments.flatMap(segment => segment.kind === "files" ? segment.items : []));
   return FILE_CHIPS.flatMap(({ Icon, key, verb }) => {
     const matching = entries.filter(entry => entry.kind === key);
-    if (!matching.length) return [];
-    const additions = matching.reduce((total, entry) => total + entry.additions, 0);
-    const deletions = matching.reduce((total, entry) => total + entry.deletions, 0);
+    const edited = key === "update" ? edits : [];
+    if (!matching.length && !edited.length) return [];
+    const paths = new Set([...matching.map(entry => entry.path), ...edited.flatMap(edit => edit.files.map(file => file.path))]);
+    const unnamed = edited.reduce((total, edit) => total + edit.fileCount - edit.files.length, 0);
+    const additions = matching.reduce((total, entry) => total + entry.additions, 0) + edited.reduce((total, edit) => total + edit.additions, 0);
+    const deletions = matching.reduce((total, entry) => total + entry.deletions, 0) + edited.reduce((total, edit) => total + edit.deletions, 0);
     return [{
-      Icon, count: new Set(matching.map(entry => entry.path)).size, key, verb,
+      Icon, count: paths.size + unnamed, key, verb,
       ...(key !== "delete" ? { additions } : {}),
       ...(key !== "add" ? { deletions } : {}),
     }];
@@ -153,7 +189,7 @@ export function getActivityChips(segments: readonly ActivitySegment[], context: 
     const chip = count ? [{ Icon, count, key, verb }] : [];
     return key === "browse" ? [...chip, ...screenshotChip(commands, context)] : chip;
   });
-  return [...fileChips(segments), ...commandChips];
+  return [...fileChips(segments, appliedArcEdits(commands, context)), ...commandChips];
 }
 
 /** Screenshots Browse steps captured, next to the browser steps that took them. */

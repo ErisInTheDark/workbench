@@ -73,6 +73,8 @@ export interface GitArcCard {
   status: Partial<GitArcStatusPresentation> | null;
   /** Unstash conflicts the user resolves by editing markers in place. */
   conflictedPaths: readonly string[];
+  /** What an applied edit session changed; previews, views, ends and reverts change nothing themselves, so they have none. */
+  editTotals: { additions: number; deletions: number } | null;
 }
 
 const ACTION_LABELS: Record<GitArcCommandAction, StepLabels> = {
@@ -235,7 +237,7 @@ export function buildGitArcCard(input: {
   const plannedRef = failure?.code === "planDrift" ? failure.planRef : intent.ref;
   const startsCurrentPlan = action === "start" && Boolean(input.currentPlan && plannedRef && input.currentPlan.checkpointCommit.startsWith(plannedRef));
   const subjectName = input.name
-    ?? (editResult ? `edit session ${editResult.session}` : action === "edit" ? "edit session" : null)
+    ?? (editResult ? `${editResult.fileCount} ${editResult.fileCount === 1 ? "file" : "files"}` : action === "edit" ? "edit session" : null)
     ?? (stackAction ? receipt?.layer ?? intent.layerTitle : null)
     ?? receipt?.intentName ?? intent.intentName
     ?? (startsCurrentPlan ? input.currentPlan?.intentName : null)
@@ -324,5 +326,6 @@ export function buildGitArcCard(input: {
     stackedProposalCount: stackAction ? receipt?.stackedProposals?.length ?? receipt?.proposals?.length ?? null : null,
     status,
     conflictedPaths: action === "unstash" ? receipt?.conflictedPaths ?? [] : [],
+    editTotals: editResult?.phase === "applied" ? { additions: editResult.additions, deletions: editResult.deletions } : null,
   };
 }
