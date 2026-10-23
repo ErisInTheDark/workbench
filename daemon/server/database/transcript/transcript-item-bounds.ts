@@ -6,8 +6,12 @@
  */
 import type { WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptObservation } from "./workbench-transcript-types.ts";
 
-/** One provider can return hundreds of megabytes in a tool result; every replay would push it through the writer again. */
-export const MAX_TRANSCRIPT_ITEM_STRING_CHARS = 2 * 1024 * 1024;
+/**
+ * One provider can return hundreds of megabytes in a tool result; every replay would push it through the writer again.
+ * Workbench's own producers (shell, rg, exec) cap their output at 1 MiB, and models see far less, so nothing above this
+ * is useful to keep. Database release `boundedStoredToolText` applies this same bound and marker to older rows.
+ */
+export const MAX_TRANSCRIPT_ITEM_STRING_CHARS = 1024 * 1024;
 const KEPT_EDGE_CHARS = MAX_TRANSCRIPT_ITEM_STRING_CHARS / 2;
 
 function boundString(value: string) {

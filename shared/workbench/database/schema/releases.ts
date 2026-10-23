@@ -107,6 +107,7 @@ const databaseReleases = Object.freeze({
   retainedSearchNarrative: release(97, "ed6a50bcb3c982e61d448ecf101c29ac0573e48576b2d9a0d87dbb08cfa022fb"),
   proposalChangeTotals: release(98, "33a664f000ccbc483ef0825944acd542465da812a86f549600104cacd138036e"),
   projectPresence: release(99, "54f3a31da02235cdc7514bfee63b36d5cf38ecc52156b7cef92b3ca42b9664c2"),
+  boundedStoredToolText: release(100, "41d4975892797436164d97262707ad20377af8041c8cb227f98a3abde233a42a"),
 });
 
 export default databaseReleases;

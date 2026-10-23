@@ -7,7 +7,7 @@
  * - threadOperationCallableToolSources: callable arguments, grouping and provider metadata.
  * - threadCallableDynamicContent: ordered dynamic tool output.
  * - threadCallableMcpResults: MCP result owners.
- * - threadCallableMcpResultContent: ordered MCP output.
+ * - threadCallableMcpResultContent: ordered MCP output; its history carries the stored tool-text bound for every tool table.
  * - threadOperationCollaborationToolSources: collaboration tool evidence.
  * - threadCollaborationReceivers: ordered collaboration recipients.
  * - threadCollaborationAgentStates: collaboration agent states.
@@ -33,7 +33,7 @@ import {
   type SelectRow,
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
-import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "../../../database/schema/schema-history.ts";
+import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, sqlData, tableVersion } from "../../../database/schema/schema-history.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
@@ -268,7 +268,33 @@ const threadCallableMcpResultContentV1 = defineTable("thread_callable_mcp_result
     }),
   ],
 }));
-const threadCallableMcpResultContentHistory = initialHistory(threadCallableMcpResultContentV1);
+/**
+ * Settlement bounds each tool text to its first and last 512 KiB around an omission marker; this applies the same bound,
+ * character for character, to rows stored before it existed. Data only, so it rides on one owning table's history.
+ */
+const KEPT_EDGE_CHARS = 512 * 1024;
+const boundedToolText = (table: string, column: string) => `
+  UPDATE ${table} SET ${column} = substr(${column}, 1, ${KEPT_EDGE_CHARS})
+    || char(10) || '[Workbench omitted ' || printf('%,d', length(${column}) - ${2 * KEPT_EDGE_CHARS})
+    || ' characters to keep the thread responsive]' || char(10) || substr(${column}, -${KEPT_EDGE_CHARS})
+  WHERE length(${column}) > ${2 * KEPT_EDGE_CHARS} AND ${column} NOT LIKE 'data:%'`;
+const threadCallableMcpResultContentHistory = defineTableHistory({
+  current: threadCallableMcpResultContentV1,
+  versions: [
+    ...initialHistory(threadCallableMcpResultContentV1).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.boundedStoredToolText.version,
+      table: threadCallableMcpResultContentV1,
+      migration: sqlData([
+        boundedToolText("thread_callable_mcp_result_content", "text"),
+        boundedToolText("thread_callable_dynamic_content", "text"),
+        boundedToolText("thread_item_tool_outputs", "body_text"),
+        boundedToolText("thread_tool_output_parts", "text"),
+        boundedToolText("thread_operation_process_sources", "output_text"),
+      ]),
+    }),
+  ],
+});
 export const threadCallableMcpResultContent = threadCallableMcpResultContentHistory.current;
 
 const threadOperationCollaborationToolSourcesV1 = defineTable("thread_operation_collaboration_tool_sources", {
