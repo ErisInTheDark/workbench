@@ -7,6 +7,7 @@
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
+import ThreadDeferredBodyAlert from "./ThreadDeferredBodyAlert";
 import { useTranscript } from "../use-transcript";
 
 export default function ThreadToolCallDetails({
@@ -43,14 +44,7 @@ export function ThreadHydratedToolCallDetails<Item extends ThreadItem>({
         invocation={invocation}
         output={body.status === "ready" ? output(body.item) : body.status === "loading" ? "Loading output…" : null}
       />
-      {body.status === "failed" || body.status === "unavailable" ? (
-        <p role="alert" className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-danger">
-          {body.status === "failed" ? `Output failed to load: ${body.failure}` : "Output is not available in this view."}
-          {body.status === "failed" ? (
-            <button type="button" className="underline underline-offset-2" onClick={body.retry}>Retry</button>
-          ) : null}
-        </p>
-      ) : null}
+      <ThreadDeferredBodyAlert body={body} noun="Output" />
     </>
   );
 }

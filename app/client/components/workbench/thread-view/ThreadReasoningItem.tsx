@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadReasoningItem: render exact-field reasoning sections with compact Markdown presentation. Keywords: reasoning, text, presentation, leaf.
+ * - default ThreadReasoningItem: render exact-field reasoning sections with compact Markdown presentation, hydrating a
+ *   deferred item's full text on mount (so mount it only where it shows). Keywords: reasoning, text, presentation, leaf.
  * Local component binds one reasoning section to its exact presentation field. Keywords: reasoning, section, subscription.
  */
 "use client";
@@ -9,6 +10,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import MarkdownRender from "../../ui/MarkdownRender";
 import { useTranscript } from "../use-transcript";
+import ThreadDeferredBodyAlert from "./ThreadDeferredBodyAlert";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -68,9 +70,10 @@ export default function ThreadReasoningItem ({
   threadId?: string;
   turnId?: string;
 }) {
-  const visible = item.summary.length
-    ? { sections: item.summary, source: "summary" as const }
-    : { sections: item.content, source: "content" as const };
+  const body = useTranscript.item(item);
+  const visible = body.item.summary.length
+    ? { sections: body.item.summary, source: "summary" as const }
+    : { sections: body.item.content, source: "content" as const };
 
   return (
     <section className={joinClasses("space-y-2", className)}>
@@ -87,6 +90,7 @@ export default function ThreadReasoningItem ({
           turnId={turnId}
         />
       ))}
+      <ThreadDeferredBodyAlert body={body} noun="Reasoning" />
     </section>
   );
 }

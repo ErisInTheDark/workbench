@@ -617,10 +617,12 @@ export default class WorkbenchDaemonSource {
   private seedTranscriptReservoir(interest: TranscriptInterest, snapshot: WorkbenchTranscriptSnapshot) {
     if (interest.request.protocolVersion !== 5 || !this.options.transcriptReservoir) return;
     const partition = splitWorkbenchTranscriptSnapshot(snapshot);
+    // A row window may start inside its oldest turn; only turns it holds whole replace their cached items.
+    const partialTurnId = snapshot.hasPreviousTurns ? snapshot.loadedTurnIds[0] : undefined;
     this.options.transcriptReservoir.seed({
       daemonId: this.id,
       generation: this.socket.getSnapshot().generation,
-      replaceTurnIds: snapshot.loadedTurnIds,
+      replaceTurnIds: snapshot.loadedTurnIds.filter(turnId => turnId !== partialTurnId),
       result: {
         catalog: partition.catalog,
         envelopes: partition.envelopes,

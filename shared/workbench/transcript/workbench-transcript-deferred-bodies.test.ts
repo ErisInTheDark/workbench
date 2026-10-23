@@ -1,5 +1,5 @@
 /*
- * No exports. Protect which settled tool bodies may leave delivery and that projection marks them for hydration.
+ * No exports. Protect which settled tool and reasoning bodies may leave delivery and that projection marks them for hydration.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,7 +9,7 @@ import {
   type WorkbenchTranscriptSnapshot,
 } from "../database/transcript/workbench-transcript-contract.ts";
 import { WORKBENCH_QUESTIONNAIRE_TOOL_NAME } from "../thread/thread-questionnaire-history.ts";
-import { deferWorkbenchTranscriptEnvelopeBody } from "./workbench-transcript-deferred-bodies.ts";
+import { deferWorkbenchTranscriptEnvelopeBody, TRANSCRIPT_REASONING_PREVIEW_CHARS } from "./workbench-transcript-deferred-bodies.ts";
 import { composeWorkbenchTranscriptWindow, splitWorkbenchTranscriptSnapshot } from "./workbench-transcript-envelope.ts";
 import { projectWorkbenchTranscript } from "./workbench-transcript-projection.ts";
 
@@ -62,6 +62,22 @@ function toolSnapshot(callable: Callable, state: "completed" | "failed" | "inPro
   };
 }
 
+function reasoningSnapshot(
+  sections: string[],
+  { reasoning = "completed", turn = "completed" }: { reasoning?: "completed" | "streaming"; turn?: "completed" | "inProgress" } = {},
+): WorkbenchTranscriptSnapshot {
+  const snapshot = toolSnapshot({ kind: "dynamic", tool: "Read" });
+  const rows = emptyTranscriptSnapshotRows();
+  const publicId = "5e3a0551-1881-482b-9d6d-c783292d1a10";
+  rows.threadItems.push({
+    created_at: 1, id: 1, item_position: 0, public_id: publicId, thread_id: "thread", turn_id: "turn", type: "reasoning", updated_at: 1,
+  });
+  rows.itemIdentities.push({ id: publicId, thread_id: "thread" });
+  rows.threadItemReasoning.push({ item_id: 1, item_type: "reasoning", state: reasoning });
+  rows.threadReasoningSections.push(...sections.map((text, section_index) => ({ item_id: 1, section_index, text })));
+  return { ...snapshot, rows, turns: [{ ...snapshot.turns[0]!, ended_at: null, state: turn }] };
+}
+
 function envelope(snapshot: WorkbenchTranscriptSnapshot): WorkbenchTranscriptItemEnvelope {
   return splitWorkbenchTranscriptSnapshot(snapshot).envelopes[0]!;
 }
@@ -96,6 +112,35 @@ test("bodies that collapsed summaries read stay eager", () => {
   assert.equal(deferWorkbenchTranscriptEnvelopeBody(envelope(toolSnapshot({ kind: "mcp", server: "wb", tool: "git_arc_status" }))), null);
   assert.equal(deferWorkbenchTranscriptEnvelopeBody(envelope(toolSnapshot({ kind: "dynamic", tool: "Read" }, "failed"))), null);
   assert.equal(deferWorkbenchTranscriptEnvelopeBody(envelope(toolSnapshot({ kind: "dynamic", tool: "Read" }, "inProgress"))), null);
+});
+
+test("settled long reasoning ships previews that keep every step titled and openable until its full text returns", () => {
+  const long = `**Tracing the cache**\n${"the cache key differs between the writer and the reader. ".repeat(20)}`;
+  const longTitle = "x".repeat(TRANSCRIPT_REASONING_PREVIEW_CHARS * 2);
+  const source = reasoningSnapshot([long, "**Short step**\nshort body", longTitle]);
+  const full = envelope(source);
+  const deferred = deferWorkbenchTranscriptEnvelopeBody(full);
+  assert.ok(deferred);
+  assert.ok(deferred.retainedBytes < full.retainedBytes);
+  const summary = project(source, deferred);
+  assert.ok(summary.type === "reasoning");
+  assert.equal(summary.bodyDeferred, true);
+  assert.equal(summary.summary.length, 3, "every step stays a step");
+  assert.ok(summary.summary[0]!.startsWith("**Tracing the cache**\nthe cache key differs"), "a cut step keeps its title and opening");
+  assert.ok(summary.summary[0]!.length < long.length);
+  assert.equal(summary.summary[1], "**Short step**\nshort body", "short steps ship whole");
+  assert.ok(summary.summary[2]!.split("\n").filter(line => line.trim()).length > 1, "a cut title still leaves a body to open onto");
+  const hydrated = project(source, full);
+  assert.ok(hydrated.type === "reasoning");
+  assert.equal(hydrated.bodyDeferred, undefined);
+  assert.deepEqual(hydrated.summary, [long, "**Short step**\nshort body", longTitle]);
+});
+
+test("reasoning the live status may still read, or with nothing to cut, stays whole", () => {
+  const long = "thinking ".repeat(100);
+  assert.equal(deferWorkbenchTranscriptEnvelopeBody(envelope(reasoningSnapshot([long], { reasoning: "streaming", turn: "inProgress" }))), null);
+  assert.equal(deferWorkbenchTranscriptEnvelopeBody(envelope(reasoningSnapshot([long], { turn: "inProgress" }))), null);
+  assert.equal(deferWorkbenchTranscriptEnvelopeBody(envelope(reasoningSnapshot(["**Short**\nbody"]))), null);
 });
 
 test("generic and wb shell MCP output defers while structured results stay", () => {

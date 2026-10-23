@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTranscriptReservoirDiagnostics: reachable retention and lifecycle counts for leak diagnostics.
- * - WorkbenchTranscriptReservoirLease: one browser's constant-size contiguous transcript demand.
+ * - WorkbenchTranscriptReservoirLease: one browser's contiguous transcript demand, counted in visible rows.
  * - default WorkbenchTranscriptReservoir: own bounded transcript caching, invalidation, coalesced refill, live seeding, and source generations.
  */
 import type {
@@ -12,6 +12,11 @@ import type {
   WorkbenchTranscriptSnapshot,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { compareWorkbenchTranscriptItemCursors as cursorOrder } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
+import {
+  countTranscriptRows,
+  isTranscriptRunItemType,
+  selectNewestTranscriptRows,
+} from "workbench-shared/workbench/transcript/transcript-row-credit";
 
 const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
 /** One refill fetches several browser pages ahead without one huge daemon read delaying first paint or evicting the reservoir. */
@@ -21,6 +26,8 @@ interface SerializedEnvelope {
   bytes: number;
   cursor: WorkbenchTranscriptItemCursor;
   itemId: string;
+  /** Stored item type, so row credit is counted without parsing the envelope. */
+  itemType: string;
   json: string;
   turnId: string;
 }
@@ -249,8 +256,13 @@ export default class WorkbenchTranscriptReservoir {
       .flatMap(block => block.envelopes.map(envelope => ({ block, envelope })))
       .filter(({ envelope }) => !lease.before || cursorOrder(envelope.cursor, lease.before) < 0)
       .sort((left, right) => cursorOrder(left.envelope.cursor, right.envelope.cursor));
-    if (candidates.length < credit && !thread.exhausted) return null;
-    const selected = candidates.slice(-credit);
+    // Credit counts visible rows. Too few cached rows, or a stretch of work that may continue below the oldest cached
+    // item, waits for older items unless the cache already reaches the start of the thread.
+    const types = candidates.map(({ envelope }) => envelope.itemType);
+    const start = selectNewestTranscriptRows(types, credit);
+    const complete = start > 0 || (countTranscriptRows(types) >= credit && !isTranscriptRunItemType(types[0] ?? ""));
+    if (!complete && !thread.exhausted) return null;
+    const selected = candidates.slice(start);
     for (const { block } of selected) block.lastAccess = ++this.#clock;
     const envelopes = selected.map(({ envelope }) => JSON.parse(envelope.json) as WorkbenchTranscriptItemEnvelope);
     if (envelopes[0]) lease.before = envelopes[0].cursor;
@@ -341,9 +353,11 @@ export default class WorkbenchTranscriptReservoir {
       this.#threads.set(key, thread);
     }
     const replacedTurns = new Set(replaceTurnIds);
-    if (replacedTurns.size) {
+    // A seed can cover only part of a turn; the items it carries still replace their cached copies.
+    const replacedItems = new Set(result.envelopes.map(envelope => envelope.itemId));
+    if (replacedTurns.size || replacedItems.size) {
       for (const block of [...thread.blocks]) {
-        const retained = block.envelopes.filter(envelope => !replacedTurns.has(envelope.turnId));
+        const retained = block.envelopes.filter(envelope => !replacedTurns.has(envelope.turnId) && !replacedItems.has(envelope.itemId));
         if (retained.length === block.envelopes.length) continue;
         this.#residentBytes -= block.bytes;
         block.envelopes = retained;
@@ -365,9 +379,12 @@ export default class WorkbenchTranscriptReservoir {
     const envelopes = result.envelopes.map(envelope => {
       const json = JSON.stringify(envelope);
       const metadataBytes = (envelope.itemId.length + envelope.cursor.itemId.length) * 2 + 24;
-      const turnId = envelope.snapshot.rows.threadItems[0]?.turn_id;
-      if (!turnId) throw new Error(`Transcript envelope ${envelope.itemId} has no root turn.`);
-      return { bytes: json.length * 2 + metadataBytes, cursor: envelope.cursor, itemId: envelope.itemId, json, turnId };
+      const root = envelope.snapshot.rows.threadItems[0];
+      if (!root) throw new Error(`Transcript envelope ${envelope.itemId} has no root turn.`);
+      return {
+        bytes: json.length * 2 + metadataBytes, cursor: envelope.cursor, itemId: envelope.itemId, itemType: root.type, json,
+        turnId: root.turn_id,
+      };
     });
     const block: Block = {
       bytes: (catalogJson?.length ?? 0) * 2 + envelopes.reduce((sum, envelope) => sum + envelope.bytes, 0),

@@ -644,7 +644,8 @@ export function projectWorkbenchTranscriptItems(
           fail("invalidReference", "itemIdentities", root.public_id);
         }
         const base = projectItem(root, indexes);
-        const projected = deferredItemIds.has(root.id) && (base.type === "mcpToolCall" || base.type === "dynamicToolCall")
+        const projected = deferredItemIds.has(root.id)
+          && (base.type === "mcpToolCall" || base.type === "dynamicToolCall" || base.type === "reasoning")
           ? { ...base, bodyDeferred: true as const }
           : base;
         const expiredAt = expiredAtByItemId.get(root.id);

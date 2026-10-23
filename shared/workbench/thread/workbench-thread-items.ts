@@ -120,7 +120,11 @@ export type ThreadItem =
   }
   | ({ type: "functionCallOutput"; id: string; resultExpiredAt?: number } & TurnToolOutput)
   | { type: "plan"; id: string; text: string }
-  | { type: "reasoning"; id: string; summary: string[]; content: string[] }
+  | {
+    type: "reasoning"; id: string; summary: string[]; content: string[];
+    /** Transcript presentation only: each section is a short preview; the full text hydrates on demand. */
+    bodyDeferred?: true;
+  }
   | {
     type: "commandExecution"; id: string; pluginId: string | null; scriptPath: string | null;
     command: string; cwd: string; processId: string | null; source: CommandExecutionSource;

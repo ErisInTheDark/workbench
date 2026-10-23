@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - TranscriptBodiesContext: the nearest rendered transcript's deferred tool output owner; absent where bodies arrive eagerly.
+ * - TranscriptBodiesContext: the nearest rendered transcript's deferred item body owner; absent where bodies arrive eagerly.
  * - TranscriptScope/TranscriptScopeContext: the thread a rendered transcript shows, with its related threads and subagents.
  * - TranscriptTurnScope/TranscriptTurnContext: the turn a transcript renderer is inside.
  * - useTranscript: the nearest rendered transcript's scope. Members: `turn` its current turn;
  *   `turns/approvals` read a leased store's transcript slices; `presentedText` subscribes to one exact streaming text field;
- *   `item` hydrates one deferred tool item's output.
+ *   `item` hydrates one deferred item's body (tool output, full reasoning).
  */
 "use client";
 
@@ -108,12 +108,12 @@ useTranscript.presentedText = function useTranscriptPresentedText({
 };
 
 /**
- * One tool item with its output: deferred bodies load from the nearest transcript when this hook mounts, so call it
+ * One item with its whole body: deferred bodies load from the nearest transcript when this hook mounts, so call it
  * where the output renders (inside an opened disclosure). Items delivered whole come back unchanged.
  */
 useTranscript.item = function useTranscriptItem<Item extends ThreadItem>(item: Item) {
   const bodies = useContext(TranscriptBodiesContext);
-  const deferred = (item.type === "mcpToolCall" || item.type === "dynamicToolCall") && item.bodyDeferred === true;
+  const deferred = "bodyDeferred" in item && item.bodyDeferred === true;
   const owner = deferred ? bodies : null;
   const itemId = item.id;
   const subscribe = useCallback((listener: () => void) => owner?.subscribe(itemId, listener) ?? (() => {}), [owner, itemId]);

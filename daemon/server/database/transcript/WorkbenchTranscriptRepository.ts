@@ -94,6 +94,7 @@ import type {
   WorkbenchTranscriptSnapshotRows,
 } from "./workbench-transcript-types.ts";
 import type { WorkbenchTranscriptItemCursor } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import { selectNewestTranscriptRows } from "workbench-shared/workbench/transcript/transcript-row-credit";
 
 const SQLITE_ITEM_ID_BATCH_SIZE = 500;
 
@@ -184,20 +185,27 @@ export default class WorkbenchTranscriptRepository {
     ]));
   }
 
-  /** Uncounted turns hold nothing, so a miscount only keeps more turns than needed. */
-  #fewestLatestTurnsHolding<Turn extends { id: string }>(threadId: string, turns: Turn[], itemCredit: number) {
-    const counts = new Map((this.#database.prepare(`
-      SELECT turn_id, COUNT(*) AS items FROM thread_items
-      WHERE thread_id = ? AND turn_id IN (SELECT value FROM json_each(?))
-      GROUP BY turn_id
-    `).all(threadId, JSON.stringify(turns.map(turn => turn.id))) as Array<{ items: number; turn_id: string }>)
-      .map(row => [row.turn_id, row.items]));
-    let held = 0;
+  /**
+   * The turns holding the newest `rowCredit` visible rows, and the item position the oldest of them starts at when the
+   * window cuts into it (null when it holds that whole turn). Turns are scanned newest first and stop once enough rows
+   * are found, so a long history is never read for a short window.
+   */
+  #newestRowWindow<Turn extends { id: string }>(turns: Turn[], rowCredit: number) {
+    const read = this.#database.prepare("SELECT item_position, type FROM thread_items WHERE turn_id = ? ORDER BY item_position");
+    let types: string[] = [];
+    let positions: number[] = [];
     for (let start = turns.length - 1; start >= 0; start--) {
-      held += counts.get(turns[start]!.id) ?? 0;
-      if (held >= itemCredit) return turns.slice(start);
+      const items = read.all(turns[start]!.id) as Array<{ item_position: number; type: string }>;
+      types = [...items.map(item => item.type), ...types];
+      positions = [...items.map(item => item.item_position), ...positions];
+      const first = selectNewestTranscriptRows(types, rowCredit);
+      // A boundary at zero may still need older turns; one inside this turn's items is final.
+      if (first > 0 || (first === 0 && start === 0)) {
+        if (first >= items.length) return { turns: turns.slice(start + 1), firstPosition: null };
+        return { turns: turns.slice(start), firstPosition: first > 0 ? positions[first]! : null };
+      }
     }
-    return turns;
+    return { turns, firstPosition: null };
   }
 
   readStoredItems(threadId: string, itemIds: number[]) {
@@ -439,10 +447,11 @@ export default class WorkbenchTranscriptRepository {
           : turnId
       ))) : null;
       const latestTurns = eligibleTurns.slice(-request.turnLimit);
+      const rowWindow = !requestedTurnIds && request.itemCredit !== undefined
+        ? this.#newestRowWindow(latestTurns, request.itemCredit) : null;
       const loadedTurns = requestedTurnIds
         ? eligibleTurns.filter((turn) => requestedTurnIds.has(turn.id))
-        : request.itemCredit === undefined ? latestTurns
-        : this.#fewestLatestTurnsHolding(threadId, latestTurns, request.itemCredit);
+        : rowWindow?.turns ?? latestTurns;
       if (requestedTurnIds && loadedTurns.length !== requestedTurnIds.size) {
         const missingTurnIds = [...requestedTurnIds].filter((turnId) => !loadedTurns.some(({ id }) => id === turnId));
         const foreignTurn = missingTurnIds
@@ -474,6 +483,11 @@ export default class WorkbenchTranscriptRepository {
         whereIn: { turn_id: loadedTurnIds },
         orderBy: [{ column: "item_position" }],
       }));
+      // A row window may start inside its oldest turn; that turn's earlier items stay in older pages.
+      const partialTurnId = rowWindow?.firstPosition != null ? loadedTurnIds[0] : undefined;
+      if (partialTurnId !== undefined) {
+        threadItems = threadItems.filter(item => item.turn_id !== partialTurnId || item.item_position >= rowWindow!.firstPosition!);
+      }
       this.#promoteLegacyToolOutputs(threadItems);
       let contextItemOrder: WorkbenchTranscriptContextSnapshot["contextItemOrder"];
       if (contextOnly) {
@@ -512,8 +526,8 @@ export default class WorkbenchTranscriptRepository {
         expiredTurnPayloads: this.#all(selectRows(threadPayloadRetentionTables.turnPayloadRetention, {
           whereIn: { turn_id: requestedTurnIds?.size === 0 ? turns.map(turn => turn.id) : loadedTurnIds },
         })).map(({ expired_at, turn_id }) => ({ expiredAt: expired_at, turnId: turn_id })),
-        hasPreviousTurns: firstLoadedTurnIndex !== undefined
-          && turns.some((turn) => turn.turn_index < firstLoadedTurnIndex),
+        hasPreviousTurns: partialTurnId !== undefined || (firstLoadedTurnIndex !== undefined
+          && turns.some((turn) => turn.turn_index < firstLoadedTurnIndex)),
         rows,
         approvalOutcomes: this.#approvalOutcomes.read(threadId, loadedTurnIds),
         ...(contextItemOrder ? { contextItemOrder } : {}),

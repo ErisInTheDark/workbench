@@ -1,5 +1,6 @@
 /*
- * No production exports. Protect bounded transcript caching, invalidation fencing, shared refill, fairness, and disposal.
+ * No production exports. Protect bounded transcript caching, row-counted demand, invalidation fencing, shared refill,
+ * fairness, and disposal.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -113,6 +114,36 @@ function turnResult(itemId: string, turnIndex: number, hasMore: boolean): Workbe
     }],
   };
 }
+
+/** One page of items, oldest first, each in its own turn with the given stored type. */
+function typedResult(items: ReadonlyArray<readonly [string, string]>, firstTurn: number, hasMore: boolean): WorkbenchTranscriptPrefetchResult {
+  const pages = items.map(([itemId, type], index) => {
+    const page = turnResult(itemId, firstTurn + index, hasMore);
+    const envelope = page.envelopes[0]!;
+    const rows = { ...envelope.snapshot.rows, threadItems: envelope.snapshot.rows.threadItems.map(item => ({ ...item, type: type as never })) };
+    return { ...page, envelopes: [{ ...envelope, snapshot: { ...envelope.snapshot, rows } }] };
+  });
+  return { ...pages[0]!, envelopes: pages.flatMap(page => page.envelopes) };
+}
+
+test("demand credit counts visible rows: a stretch of work is one row, and a cache short of rows fetches older items", async context => {
+  const fills = [
+    typedResult([["note", "assistantMessage"], ["step-1", "operation"], ["step-2", "reasoning"], ["reply", "assistantMessage"]], 10, true),
+    typedResult([["ask", "userMessage"], ["step-0", "operation"]], 8, false),
+  ];
+  const requests: unknown[] = [];
+  const reservoir = new WorkbenchTranscriptReservoir({ maxBytes: 64 * 1024 });
+  context.after(() => reservoir.dispose());
+  reservoir.registerSource({ daemonId: "daemon", generation: 1, prefetch: async request => {
+    requests.push(request.before?.itemId ?? null);
+    return fills.shift()!;
+  } });
+  const lease = reservoir.open({ consumerId: "browser", daemonId: "daemon", generation: 1, threadId: "thread" });
+  assert.deepEqual((await lease.demand(2)).envelopes.map(envelope => envelope.itemId), ["step-1", "step-2", "reply"]);
+  // Only "note" is cached below the boundary, one row short, so it fetches older items.
+  assert.deepEqual((await lease.demand(2)).envelopes.map(envelope => envelope.itemId), ["step-0", "note"]);
+  assert.deepEqual(requests, [null, "note"]);
+});
 
 test("invalidation reopens exhausted history without losing each viewer's cursor or another thread's cache", async context => {
   const reservoir = new WorkbenchTranscriptReservoir();

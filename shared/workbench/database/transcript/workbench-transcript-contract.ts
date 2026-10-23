@@ -90,7 +90,10 @@ export type WorkbenchTranscriptSnapshotRows = {
 
 export interface WorkbenchTranscriptReadRequest {
   beforeTurnIndex?: number;
-  /** Within `turnLimit`, keep only the fewest latest turns holding at least this many items; ignored with `turnIds`. */
+  /**
+   * Within `turnLimit`, keep only the newest this-many visible rows (see transcript-row-credit), which may start inside
+   * the oldest loaded turn; ignored with `turnIds`. Named for the wire, it counts rows, not items.
+   */
   itemCredit?: number;
   protocolVersion?: 1 | 2 | 3 | 4 | 5;
   threadId: string;
@@ -459,6 +462,7 @@ interface TranscriptSubscriptionParams {
 
 export interface WorkbenchTranscriptSubscribeParams
   extends TranscriptSubscriptionParams, WorkbenchTranscriptReadRequest {
+  /** The first window's visible-row credit (protocol 5); named for the wire, it counts rows, not items. */
   initialItemCredit?: number;
   toolPatchPreviews?: boolean;
 }

@@ -2456,7 +2456,40 @@ test("hydration pages keep full turn metadata and load only the requested immuta
   }
 });
 
-test("an item credit trims the latest-turn window to the fewest turns holding that many items", () => {
+test("a row credit counts a long stretch of agent work as one row and may start inside its oldest turn", () => {
+  const { database, repository } = createRepository();
+  try {
+    const threadId = fixtureIdentityValues.WorkbenchThreadId["thread"];
+    const item = (turn: string, observedAt: number, value: ThreadItem): WorkbenchTranscriptAtomicObservation => ({
+      kind: "item", threadId, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turn), lifecycle: "completed", observedAt, item: value,
+    });
+    const message = (turn: string, observedAt: number, id: string) => item(turn, observedAt, {
+      type: "agentMessage", id, text: id, phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+    } as ThreadItem);
+    const thinking = (turn: string, observedAt: number, id: string) => item(turn, observedAt,
+      { type: "reasoning", id, summary: [id], content: [] } as ThreadItem);
+    // turn-0: one message; turn-1: two messages, then forty reasoning steps, then a closing message.
+    repository.settle([canonicalWindow([
+      threadObservation(), turnObservation("turn-0", 0), message("turn-0", 1, "opening"),
+      turnObservation("turn-1", 1), message("turn-1", 10, "early-a"), message("turn-1", 11, "early-b"),
+      ...Array.from({ length: 40 }, (_, index) => thinking("turn-1", 20 + index, `step-${index}`)),
+      message("turn-1", 100, "closing"),
+    ], ["turn-0", "turn-1"])]);
+
+    const window = repository.read({ threadId: "thread", turnLimit: 4, itemCredit: 3 })!;
+    assert.deepEqual(window.loadedTurnIds, ["turn-1"]);
+    const references = rootsWithReferences(window).map(({ reference }) => reference);
+    assert.deepEqual([references.length, references[0], references.at(-1)], [42, "early-b", "closing"],
+      "three rows: one message, the forty-step run, the closing message");
+    assert.equal(window.hasPreviousTurns, true, "the cut turn's earlier items stay in older pages");
+
+    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 4, itemCredit: 5 })!.loadedTurnIds, ["turn-0", "turn-1"]);
+  } finally {
+    database.close();
+  }
+});
+
+test("a row credit of standalone messages trims the latest-turn window to the turns holding those rows", () => {
   const { database, repository } = createRepository();
   try {
     const itemCounts = [1, 1, 2];

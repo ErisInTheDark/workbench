@@ -1,25 +1,56 @@
 /*
  * Exports:
  * - default ThreadReasoningSequence: consecutive reasoning as one step row: a single step reads as its title and streams its body,
- *   several steps open onto each item's reasoning; while live, the row reads as its latest sentence. Rows open only when clicked.
+ *   several steps open onto each item's reasoning; while live, the row reads as its latest sentence. Rows open only when clicked,
+ *   and opening a settled preview loads its full text.
  */
 "use client";
 
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import MarkdownRender from "../../../ui/MarkdownRender";
 import { CheckIcon, LoaderIcon } from "../../workbench-icons";
 import { useTranscript } from "../../use-transcript";
+import ThreadDeferredBodyAlert from "../ThreadDeferredBodyAlert";
 import ThreadInlineCode from "../ThreadInlineCode";
 import ThreadReasoningItem from "../ThreadReasoningItem";
 import ThreadStepRow from "../ThreadStepRow";
-import { getThreadReasoningSteps, projectThreadReasoningMarkdown } from "../thread-reasoning-display";
+import {
+  getThreadReasoningSteps, projectThreadReasoningMarkdown, type ThreadReasoningStepReference,
+} from "../thread-reasoning-display";
 import { hasReasoningSteps, type ThreadRenderableBlock } from "../thread-render-blocks";
 import useReasoningSentence from "../use-reasoning-sentence";
+
+type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 
 /** Inline code in the sentence keeps its code look; the rest is plain text. */
 function ReasoningSentence({ sentence }: { sentence: string }) {
   return sentence.split(/(`[^`]*`)/u).map((part, index) => part.length > 1 && part.startsWith("`") && part.endsWith("`")
     ? <ThreadInlineCode key={index}>{part.slice(1, -1)}</ThreadInlineCode>
     : part);
+}
+
+/** The opened body of a lone step; a deferred item swaps its preview for the full section once it hydrates. */
+function ReasoningStepBody({ body, item, live, step, streaming }: {
+  body: string | null;
+  item: ReasoningItem;
+  live: boolean;
+  step: ThreadReasoningStepReference;
+  streaming: boolean;
+}) {
+  const hydration = useTranscript.item(item);
+  const hydratedSection = hydration.item === item ? null
+    : (step.source === "summary" ? hydration.item.summary : hydration.item.content)[step.sectionIndex];
+  return (
+    <>
+      <MarkdownRender
+        className="text-[0.8em] text-fg/muted"
+        live={live}
+        markdown={(hydratedSection === undefined || hydratedSection === null ? body : projectThreadReasoningMarkdown(hydratedSection).body) ?? ""}
+        streaming={streaming}
+      />
+      <ThreadDeferredBodyAlert body={hydration} noun="Reasoning" />
+    </>
+  );
 }
 
 export default function ThreadReasoningSequence ({
@@ -84,10 +115,11 @@ export default function ThreadReasoningSequence ({
   return (
     <ThreadStepRow icon={icon} live={live} summary={summary}>
       {onlyStep ? (
-        <MarkdownRender
-          className="text-[0.8em] text-fg/muted"
+        <ReasoningStepBody
+          body={onlyStep.body}
+          item={visibleItems.find(item => item.id === onlyStep.itemId)!}
           live={Boolean(presentationSource)}
-          markdown={onlyStep.body ?? ""}
+          step={onlyStep}
           streaming={Boolean(presentationSource) && (isMostRecent || presentedOnlyStepMarkdown !== canonicalOnlyStep?.markdown)}
         />
       ) : (
