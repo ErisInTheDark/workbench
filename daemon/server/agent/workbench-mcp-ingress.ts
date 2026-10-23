@@ -105,7 +105,7 @@ export type WorkbenchMcpCallOutcome =
 export interface WorkbenchMcpToolGeneration {
   describe(
     scope: WorkbenchMcpScope, signal: AbortSignal, ingress?: WorkbenchMcpIngressCapabilities,
-  ): Promise<{ experimental: Record<string, object>; tools: Tool[] }>;
+  ): Promise<{ tools: Tool[] }>;
   call(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall): Promise<WorkbenchMcpToolStep>;
   finish(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome): Promise<CallToolResult>;
   /** The answer of a shell call whose command runs on as `shellId`. */
@@ -226,7 +226,7 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
       .describe(scope, requestAbort.signal, { batchTurns: true, shellYields: true });
     requestAbort.signal.throwIfAborted();
     server = new Server({ name: "wb", version: "1.0.0" }, {
-      capabilities: { experimental: description.experimental, tools: { listChanged: true } },
+      capabilities: { tools: { listChanged: true } },
     });
     server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
       registry.cancel(scope.clientScope, notification.params.requestId, notification.params.reason);

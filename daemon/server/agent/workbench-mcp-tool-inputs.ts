@@ -18,8 +18,6 @@ import {
 import { getWorkbenchAgentCommandToolName, type WorkbenchAgentCommandDefinition } from "../lib/workbench/commands/workbench-agent-command-definition";
 
 export interface WorkbenchMcpInputShape {
-  /** Shell calls may ask Workbench to approve running outside the sandbox. */
-  escalation: boolean;
   /** Shell calls may opt into running alongside the rest of their batch. */
   parallelShells: boolean;
   /** Steer-interruptible waits accept `timeoutMs`, for providers that cannot leave a running call. */
@@ -29,12 +27,11 @@ export interface WorkbenchMcpInputShape {
 }
 
 export function readWorkbenchMcpInputShape(
-  description: { shellEscalation: boolean; toolUseIdMeta?: string; yieldsLongWaits?: boolean },
+  description: { toolUseIdMeta?: string; yieldsLongWaits?: boolean },
   ingress: { batchTurns?: boolean; shellYields?: boolean },
 ): WorkbenchMcpInputShape {
   const waitTimeouts = description.yieldsLongWaits !== true;
   return {
-    escalation: description.shellEscalation,
     // Parallel shells need a provider that names its calls and an ingress that keeps unmarked ones in batch order.
     parallelShells: Boolean(description.toolUseIdMeta) && ingress.batchTurns === true,
     waitTimeouts,
@@ -43,7 +40,7 @@ export function readWorkbenchMcpInputShape(
 }
 
 export function getWorkbenchMcpShellInputSchema(shape: WorkbenchMcpInputShape) {
-  return getWorkbenchShellInputSchema({ escalation: shape.escalation, parallel: shape.parallelShells, yields: shape.shellYields });
+  return getWorkbenchShellInputSchema({ parallel: shape.parallelShells, yields: shape.shellYields });
 }
 
 /** Yielding shells may answer still running, so their declared output allows it. */

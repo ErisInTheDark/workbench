@@ -1,11 +1,11 @@
 /*
  * Exports:
  * - WorkbenchToolAdmissionOptions: bind authoritative identity, policy, approval and execution owners.
- * - default WorkbenchToolAdmissionController: admit one provider tool call without owning pending interactions; `prepareShell` prepares the Workbench-hosted shell for escalating providers.
+ * - default WorkbenchToolAdmissionController: admit one provider tool call without owning pending interactions; `prepareShell` prepares every shell tool call.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WorkbenchEscalatingShellInput } from "workbench-shared/workbench/commands/workbench-shell-command";
+import type { WorkbenchShellInput } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchItemId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
 import type {
@@ -56,14 +56,14 @@ export default class WorkbenchToolAdmissionController {
   }
 
   /**
-   * The shell tool for providers that escalate through Workbench approval: the provider only names the trusted
+   * The shell tool, escalating through Workbench approval: the provider only names the trusted
    * caller and prepares the admitted command for its sandbox; Workbench owns admission and the approval wait.
    */
   static async prepareShell(owners: {
     tools: Pick<WorkbenchProviderTools, "caller" | "prepareExecution">;
     approve: WorkbenchToolAdmissionOptions["approve"];
     canonicalize?: WorkbenchToolAdmissionOptions["canonicalize"];
-  }, input: WorkbenchEscalatingShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchPreparedShell> {
+  }, input: WorkbenchShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchPreparedShell> {
     const { tools } = owners;
     if (!tools.prepareExecution) throw new Error("This provider cannot run Workbench-admitted commands.");
     const prepare = tools.prepareExecution.bind(tools);

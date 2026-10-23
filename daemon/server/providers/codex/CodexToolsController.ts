@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, prepare native and approved shell calls, and expose command roots for reaping.
+ * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, prepare Workbench-admitted shell commands, and expose command roots for reaping.
  */
 import { NativeThreadIdSchema, type NativeThreadId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { ProviderToolMetadata, WorkbenchProviderTools } from "../provider-execution";
-import CodexShellController, { WORKBENCH_SHELL_SANDBOX_CAPABILITY, WORKBENCH_SHELL_TOOL_DESCRIPTION } from "./CodexShellController";
+import CodexShellController, { WORKBENCH_SHELL_TOOL_DESCRIPTION } from "./CodexShellController";
 import type CodexSandboxAclController from "./CodexSandboxAclController";
 import type CodexExecServer from "./CodexExecServer";
 import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook } from "../../lib/workbench/codex-apply-patch-claim-hook";
@@ -26,7 +26,7 @@ export default class CodexToolsController implements WorkbenchProviderTools {
     resolvePatchCaller(threadId: string, cwd: string): Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId }>;
     /** Repairs Windows sandbox write ACEs on patch targets so the sandboxed apply_patch can write them. */
     sandboxAcl?: Pick<CodexSandboxAclController, "ensureWritable">;
-    shell: Pick<CodexShellController, "prepare"> & Partial<Pick<CodexShellController, "prepareAdmitted" | "runSandboxed">>;
+    shell: Partial<Pick<CodexShellController, "prepareAdmitted" | "runSandboxed">>;
     executor?: Pick<CodexExecServer, "generation" | "onRoot">;
   }) {
     this.prepareExecution = options.shell.prepareAdmitted?.bind(options.shell);
@@ -63,9 +63,7 @@ export default class CodexToolsController implements WorkbenchProviderTools {
 
   async describe() {
     return {
-      experimental: { [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: {} },
       shellDescription: WORKBENCH_SHELL_TOOL_DESCRIPTION,
-      shellEscalation: true,
       // A code-mode cell yields after its `yield_time_ms` and resumes with `functions.wait`.
       yieldsLongWaits: true,
     };
@@ -83,13 +81,5 @@ export default class CodexToolsController implements WorkbenchProviderTools {
     signal.throwIfAborted();
     if (!thread.cwd.trim()) throw new Error("Codex thread/read returned no working directory.");
     return { harness: "codex", threadId: thread.id, cwd: thread.cwd };
-  }
-
-  async prepareShell(...[input, metadata, signal]: Parameters<NonNullable<WorkbenchProviderTools["prepareShell"]>>) {
-    const caller = await this.caller(metadata, signal);
-    return this.options.shell.prepare(input, metadata, signal, {
-      nativeThreadId: this.nativeThreadId(metadata),
-      workbenchThreadId: caller.threadId,
-    });
   }
 }

@@ -39,7 +39,7 @@ function patchClaimPort(
   const tools = new CodexToolsController({
     resolvePatchCaller,
     readCallerThread: async () => { throw new Error("Unexpected shell caller lookup"); },
-    shell: { prepare: async () => { throw new Error("Unexpected shell"); } },
+    shell: {},
   });
   return (harness: string, input: Parameters<CodexToolsController["patchClaims"]>[0], signal: AbortSignal) => {
     assert.equal(harness, "codex");

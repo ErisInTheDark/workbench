@@ -1,54 +1,20 @@
 /*
  * Exports:
- * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION: advertise the MCP-only sandbox metadata and behavior contract.
+ * - WORKBENCH_SHELL_TOOL_DESCRIPTION: the shell tool's behavior contract.
  * - CodexShellControllerOptions: inject Codex configuration, sandbox ACL repair, host environment and managed pwsh.
- * - default CodexShellController: prepare host-shell commands for the Codex thread's exact sandbox state; the exec node runs them.
+ * - default CodexShellController: prepare Workbench-admitted commands in the Codex sandbox; the exec node runs them.
  */
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
 
 import { z } from "zod";
 
-import { WorkbenchShellInputSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
-import { hostShellCommand } from "../../exec/host-shell-command";
-import type { WorkbenchAdmittedExecution, WorkbenchPreparedShell, WorkbenchShellRun } from "../provider-execution";
+import type { WorkbenchAdmittedExecution, WorkbenchShellRun } from "../provider-execution";
 import type CodexExecServer from "./CodexExecServer";
 import type CodexSandboxAclController from "./CodexSandboxAclController";
 import type { CodexSandboxAclCommandRunner } from "./CodexSandboxAclController";
-import { CodexExecPermissionSchema, type CodexExecPermission, type CodexExecRequest } from "./codex-exec-protocol";
+import type { CodexExecPermission, CodexExecRequest } from "./codex-exec-protocol";
 
-export const WORKBENCH_SHELL_SANDBOX_CAPABILITY = "codex/sandbox-state-meta";
-function normalizeSandboxPermissionProfile(value: unknown) {
-  if (typeof value !== "object" || value === null) return value;
-  const profile = { ...value } as Record<string, unknown>;
-  if (
-    (profile.type === "managed" || profile.type === "external")
-    && !("network" in profile)
-  ) profile.network = "restricted";
-  if (profile.type !== "managed" || typeof profile.file_system !== "object" || profile.file_system === null) return profile;
-  const fileSystem = profile.file_system as Record<string, unknown>;
-  if (fileSystem.type !== "restricted" || !Array.isArray(fileSystem.entries)) return profile;
-  profile.file_system = {
-    ...fileSystem,
-    entries: fileSystem.entries.map((entry: unknown) => {
-      if (typeof entry !== "object" || entry === null) return entry;
-      const candidate = entry as Record<string, unknown>;
-      if (typeof candidate.path !== "object" || candidate.path === null) return entry;
-      const permissionPath = candidate.path as Record<string, unknown>;
-      if (permissionPath.type !== "path" || typeof permissionPath.path !== "string" || !path.isAbsolute(permissionPath.path)) return entry;
-      return { ...candidate, path: { ...permissionPath, path: pathToFileURL(permissionPath.path).href } };
-    }),
-  };
-  return profile;
-}
-const SandboxPermissionProfileSchema = z.preprocess((value) => {
-  return normalizeSandboxPermissionProfile(value);
-}, CodexExecPermissionSchema);
-const SandboxStateSchema = z.object({
-  permissionProfile: SandboxPermissionProfileSchema,
-  sandboxCwd: z.string().url().refine((value) => new URL(value).protocol === "file:", "sandboxCwd must be a file URL"),
-  useLegacyLandlock: z.boolean().optional(),
-});
 const configurationSchema = z.object({
   config: z.object({
     windows: z.object({
@@ -78,31 +44,14 @@ export interface CodexShellControllerOptions {
   sandboxAcl?: Pick<CodexSandboxAclController, "checkInBackground">;
   readConfiguration(cwd: string): Promise<unknown>;
   platform?: NodeJS.Platform;
-  shellEnvironment?: NodeJS.ProcessEnv;
   powerShellExecutable?(): Promise<string>;
-}
-
-function readSandboxState(meta: Record<string, unknown> | undefined) {
-  const state = meta?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY];
-  const result = SandboxStateSchema.safeParse(state);
-  if (!result.success) {
-    const detail = state === undefined
-      ? "missing capability"
-      : result.error.issues.slice(0, 5).map(issue => (
-        `${issue.path.length ? issue.path.join(".") : "root"}: ${issue.code}`
-      )).join(", ");
-    throw new Error(`Codex did not provide valid MCP sandbox state (${detail}).`);
-  }
-  return result.data;
 }
 
 export default class CodexShellController {
   private readonly platform: NodeJS.Platform;
-  private readonly shellEnvironment: NodeJS.ProcessEnv;
 
   constructor(private readonly options: CodexShellControllerOptions) {
     this.platform = options.platform ?? process.platform;
-    this.shellEnvironment = options.shellEnvironment ?? process.env;
   }
 
   private async configuration(cwd: string) {
@@ -124,57 +73,6 @@ export default class CodexShellController {
         set: policy?.set ?? {},
       },
     } satisfies Pick<CodexExecRequest, "windowsSandboxLevel" | "windowsSandboxPrivateDesktop" | "envPolicy">;
-  }
-
-  async prepare(
-    input: object,
-    meta: Record<string, unknown> | undefined,
-    signal: AbortSignal,
-    caller: { nativeThreadId: string; workbenchThreadId: string },
-  ): Promise<WorkbenchPreparedShell> {
-    const request = WorkbenchShellInputSchema.parse(input);
-    const sandboxState = readSandboxState(meta);
-    const sandboxCwd = fileURLToPath(sandboxState.sandboxCwd);
-    const commandCwd = request.workdir ? path.resolve(sandboxCwd, request.workdir) : sandboxCwd;
-    const powerShellExecutable = this.platform === "win32"
-      ? await (this.options.powerShellExecutable ?? (async () => "pwsh"))()
-      : undefined;
-    const shellCommand = hostShellCommand(
-      request.command,
-      request.login ?? true,
-      this.platform,
-      this.shellEnvironment,
-      powerShellExecutable,
-    );
-    // An external profile describes someone else's sandbox, not this process.
-    const permissions: CodexExecPermission = sandboxState.permissionProfile.type === "external" ? {
-      type: "managed", network: "restricted",
-      file_system: { type: "restricted", entries: [{ access: "read", path: { type: "special", value: { kind: "root" } } }] },
-    } : sandboxState.permissionProfile;
-    this.options.sandboxAcl?.checkInBackground(sandboxCwd, this.runSandboxed);
-    const configuration = await this.configuration(commandCwd);
-    signal.throwIfAborted();
-    return {
-      run: {
-        kind: "sandboxed", label: request.command, expensive: request.expensive === true,
-        request: {
-          ...configuration,
-          command: shellCommand.command,
-          env: {
-            CODEX_THREAD_ID: caller.nativeThreadId,
-            WORKBENCH_THREAD_ID: caller.workbenchThreadId,
-            WORKBENCH_HARNESS: "codex",
-          },
-          cwd: commandCwd,
-          permissions,
-          workspaceRoots: [sandboxCwd],
-          useLegacyLandlock: sandboxState.useLegacyLandlock,
-          ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
-        },
-      },
-      cwd: commandCwd,
-      shell: shellCommand.shell,
-    };
   }
 
   /** Run argv as the Codex sandbox identity with only `root` writable; ACL repair needs the owner of sandbox-created objects. */

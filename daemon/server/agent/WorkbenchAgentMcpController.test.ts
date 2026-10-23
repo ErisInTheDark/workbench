@@ -21,7 +21,6 @@ import type CodexShellController from "../providers/codex/CodexShellController";
 import type { JsonRpcRequest, JsonRpcResponse } from "../bridge-types";
 import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
-import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "../providers/codex/CodexShellController";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -61,10 +60,10 @@ for (const name of ["task_get", "shell"]) {
     const reference = { threadId: "thread", turnId: "original-turn", itemId: "item",
       sourceId: "child", parentId: "parent", tool: name, arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
     const tools: WorkbenchProviderTools = {
-      caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
-      describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+      caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: process.cwd() }),
+      describe: async () => ({ shellDescription: "test" }),
       patchClaims: async () => "",
-      prepareShell: async () => preparedShell("C:/workspace"),
+      prepareExecution: async () => preparedShell(process.cwd()).run,
       transcript: {
         start: async () => { order.push("start"); return reference; },
         finish: async (pinned, result) => {
@@ -112,7 +111,7 @@ test("OpenCode context handoff executes without admitting MCP arguments or resul
   } as WorkbenchToolTranscriptReference;
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+    describe: async () => ({ shellDescription: "test" }),
     patchClaims: async () => "",
     transcript: {
       start: async input => {
@@ -161,7 +160,7 @@ for (const hosts of [true, false]) {
     const recorded: string[] = [];
     const tools: WorkbenchProviderTools = {
       caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
-      describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true, hostsUserMessage: hosts }),
+      describe: async () => ({ shellDescription: "test", hostsUserMessage: hosts }),
       patchClaims: async () => "",
       transcript: {
         start: async input => { recorded.push(input.tool); throw new Error("commentary must not be recorded as a wb call"); },
@@ -198,8 +197,8 @@ for (const phase of ["start", "finish", "operation"] as const) {
     const unused = async (): Promise<never> => { throw new Error("unexpected tool"); };
     const tools: WorkbenchProviderTools = {
       caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
-      describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
-      patchClaims: unused, prepareShell: unused,
+      describe: async () => ({ shellDescription: "test" }),
+      patchClaims: unused,
       transcript: {
         start: async () => { if (phase === "start") throw new Error("capture failed"); return reference; },
         finish: async (_reference, result) => {
@@ -259,7 +258,6 @@ function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tool
       };
     },
     shell: {
-      prepare: async () => { throw new Error("unexpected native shell execution"); },
       prepareAdmitted: options.shell?.prepareAdmitted ?? (async () => { throw new Error("unexpected shell execution"); }),
     },
   });
@@ -283,7 +281,6 @@ for (const harness of ["codex", "claude", "opencode"] as const) {
       const permissions: WorkbenchAdmittedExecution["permissions"][] = [];
       const approvals: Parameters<NonNullable<WorkbenchAgentMcpControllerOptions["approveHostedShell"]>>[0][] = [];
       const prepared = preparedShell(cwd);
-      let nativeCalls = 0;
       let executions = 0;
       const prepareExecution: NonNullable<WorkbenchProviderTools["prepareExecution"]> = async request => {
         permissions.push(request.permissions);
@@ -293,14 +290,11 @@ for (const harness of ["codex", "claude", "opencode"] as const) {
         ? new CodexToolsController({
           readCallerThread: async () => ({ id: threadId, cwd }),
           resolvePatchCaller: async () => { throw new Error("unexpected patch"); },
-          shell: {
-            prepare: async () => { nativeCalls++; return prepared; },
-            prepareAdmitted: prepareExecution,
-          },
+          shell: { prepareAdmitted: prepareExecution },
         })
         : {
           caller: async () => ({ harness, threadId, cwd }),
-          describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true }),
+          describe: async () => ({ shellDescription: "test" }),
           patchClaims: async () => { throw new Error("unexpected patch"); },
           prepareExecution,
         };
@@ -336,7 +330,6 @@ for (const harness of ["codex", "claude", "opencode"] as const) {
       const ordinary = await call(1);
       assert.ok(ordinary.kind === "result");
       assert.equal(ordinary.result.isError, false, responseText(ordinary.result));
-      assert.equal(nativeCalls, 0, "the provider handle must not divert ordinary commands to native preparation");
       assert.deepEqual(permissions, [{ mode: "restricted", writableRoots: [cwd], network: false }]);
       assert.equal(approvals.length, 0);
       assert.equal(executions, 1);
@@ -625,12 +618,11 @@ test("the explicit provider owns MCP metadata and supplies WB command identity",
     tools: provider => {
       assert.equal(provider, "another-provider");
       return {
-        describe: async () => ({ experimental: {}, shellDescription: "sandboxed execution", shellEscalation: false }),
+        describe: async () => ({ shellDescription: "sandboxed execution" }),
         caller: async metadata => {
           assert.deepEqual(metadata, { session: "provider-owned" });
           return { cwd: "/trusted", harness: provider, threadId: WorkbenchThreadIdSchema.parse("wb-caller") };
         },
-        shell: async () => { throw new Error("unexpected shell"); },
         patchClaims: async () => { throw new Error("unexpected patch"); },
       };
     },
@@ -657,9 +649,8 @@ test("provider-scoped commands register only for their providers", async () => {
     requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
     executeCommand: async () => { throw new Error("unexpected command"); },
     tools: () => ({
-      describe: async () => ({ experimental: {}, shellDescription: "sandboxed execution", shellEscalation: false }),
+      describe: async () => ({ shellDescription: "sandboxed execution" }),
       caller: async () => { throw new Error("unexpected caller"); },
-      shell: async () => { throw new Error("unexpected shell"); },
       patchClaims: async () => { throw new Error("unexpected patch"); },
     }),
   });
@@ -686,9 +677,8 @@ test("git_repo exists only while the virtual repository runtime is available", a
     virtualReposAvailable: () => available,
     executeCommand: async () => { throw new Error("unexpected command"); },
     tools: () => ({
-      describe: async () => ({ experimental: {}, shellDescription: "sandboxed execution", shellEscalation: false }),
+      describe: async () => ({ shellDescription: "sandboxed execution" }),
       caller: async () => { throw new Error("unexpected caller"); },
-      shell: async () => { throw new Error("unexpected shell"); },
       patchClaims: async () => { throw new Error("unexpected patch"); },
     }),
   });
@@ -746,7 +736,6 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       .filter((definition) => refuseWorkbenchCommand(definition, { harness: "codex", subagent: false, workbenchRoot: true }))
       .map((definition) => definition.words.join("_")));
     assert.equal(inventory.tools.length, eligible.length + 1);
-    assert.ok(client.getServerCapabilities()?.experimental?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_project"), true);
@@ -1113,7 +1102,7 @@ test("root-only tools follow the resolved caller, not the connection's flags", a
 test("a connection serving many threads preloads root-only tools for per-caller gating", async () => {
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true, connectionSpansThreads: true }),
+    describe: async () => ({ shellDescription: "test", connectionSpansThreads: true }),
     patchClaims: async () => { throw new Error("unexpected patch"); },
   };
   const controller = new WorkbenchAgentMcpController({
@@ -1328,7 +1317,7 @@ for (const readsStructured of [false, true]) {
     const tools: WorkbenchProviderTools = {
       caller: async () => ({ harness: "claude", threadId, cwd: "C:/workspace" }),
       describe: async () => ({
-        experimental: {}, shellDescription: "test", shellEscalation: true,
+        shellDescription: "test",
         ...(readsStructured ? { modelReadsStructuredContent: true } : {}),
       }),
       patchClaims: async () => "",
@@ -1455,9 +1444,8 @@ test("outside-sandbox shells keep their stream alive through approval and run wi
   } };
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true }),
+    describe: async () => ({ shellDescription: "test" }),
     patchClaims: async () => "",
-    prepareShell: async () => ({ run, cwd, shell: "pwsh" }),
     prepareExecution: async () => run,
   };
   const controller = new WorkbenchAgentMcpController({
@@ -1527,11 +1515,11 @@ test("outside-sandbox shells keep their stream alive through approval and run wi
   }
 });
 
-for (const hosted of [false, true]) test(`${hosted ? "hosted" : "native"} shells hold no reload while waiting or running`, { timeout: 5_000 }, async () => {
+for (const outside of [false, true]) test(`${outside ? "outside-sandbox" : "sandboxed"} shells hold no reload while waiting or running`, { timeout: 5_000 }, async () => {
   const approval = deferred<void>();
   const approvalRequested = deferred<void>();
   const running = deferred<void>();
-  // Hosted admission canonicalizes the caller's real working directory.
+  // Admission canonicalizes the caller's real working directory.
   const cwd = process.cwd();
   const run = { kind: "sandboxed" as const, label: "pnpm test", expensive: true, request: {
     command: ["pwsh", "-Command", "pnpm test"], cwd, permissions: { type: "disabled" as const },
@@ -1539,9 +1527,8 @@ for (const hosted of [false, true]) test(`${hosted ? "hosted" : "native"} shells
   } };
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: hosted }),
+    describe: async () => ({ shellDescription: "test" }),
     patchClaims: async () => "",
-    prepareShell: async () => ({ run, cwd, shell: "pwsh" }),
     prepareExecution: async () => run,
   };
   const controller = new WorkbenchAgentMcpController({
@@ -1557,10 +1544,10 @@ for (const hosted of [false, true]) test(`${hosted ? "hosted" : "native"} shells
   });
   const scope = { clientScope: "client", projectLocal: false, provider: "claude", subagent: false };
   const step = controller.call(scope, {
-    arguments: { command: "pnpm test", ...(hosted ? { outside_sandbox: true } : {}) },
+    arguments: { command: "pnpm test", ...(outside ? { outside_sandbox: true } : {}) },
     detachableShell: true, meta: {}, name: "shell", requestId: 1, signal: new AbortController().signal,
   });
-  if (hosted) {
+  if (outside) {
     await approvalRequested.promise;
     assert.deepEqual(controller.listRuntimeDrainPending(), [], "an approval wait holds no reload");
     approval.resolve();
@@ -1591,10 +1578,10 @@ test("a user-stopped shell answers only the stop sentence, found through its Cod
     sourceId: "source", parentId: "source", tool: "shell", arguments: {}, startedAt: 0,
   } as WorkbenchToolTranscriptReference;
   const tools: WorkbenchProviderTools = {
-    caller: async () => ({ harness: "codex", threadId: reference.threadId, cwd: "C:/workspace" }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+    caller: async () => ({ harness: "codex", threadId: reference.threadId, cwd: process.cwd() }),
+    describe: async () => ({ shellDescription: "test" }),
     patchClaims: async () => "",
-    prepareShell: async () => preparedShell("C:/workspace"),
+    prepareExecution: async () => preparedShell(process.cwd()).run,
     transcript: { start: async () => reference, finish: async (_reference, result) => { recorded.push(result); } },
   };
   const controller = new WorkbenchAgentMcpController({
@@ -1622,7 +1609,7 @@ test("parallel shells are offered only to a provider that names its calls and an
     tools: () => ({
       caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
       describe: async () => ({
-        experimental: {}, shellDescription: "test", shellEscalation: true, ...(namesCalls ? { toolUseIdMeta: "key" } : {}),
+        shellDescription: "test", ...(namesCalls ? { toolUseIdMeta: "key" } : {}),
       }),
       patchClaims: async () => "",
     }),
@@ -1645,10 +1632,10 @@ test("serial shells and mutating wb tools wait their batch turn before they are 
   const started: string[] = [];
   const executed: string[] = [];
   const tools: WorkbenchProviderTools = {
-    caller: async () => ({ harness: "claude", threadId, cwd: "C:/workspace" }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false, toolUseIdMeta: "key" }),
+    caller: async () => ({ harness: "claude", threadId, cwd: process.cwd() }),
+    describe: async () => ({ shellDescription: "test", toolUseIdMeta: "key" }),
     patchClaims: async () => "",
-    prepareShell: async () => preparedShell("C:/workspace"),
+    prepareExecution: async () => preparedShell(process.cwd()).run,
     transcript: {
       start: async input => {
         started.push(input.tool);
@@ -1703,10 +1690,10 @@ test("a steer interrupting a queued expensive shell answers only that the comman
     sourceId: "source", parentId: "source", tool: "shell", arguments: {}, startedAt: 0,
   } as WorkbenchToolTranscriptReference;
   const tools: WorkbenchProviderTools = {
-    caller: async () => ({ harness: "claude", threadId: reference.threadId, cwd: "C:/workspace" }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+    caller: async () => ({ harness: "claude", threadId: reference.threadId, cwd: process.cwd() }),
+    describe: async () => ({ shellDescription: "test" }),
     patchClaims: async () => "",
-    prepareShell: async () => preparedShell("C:/workspace"),
+    prepareExecution: async () => preparedShell(process.cwd()).run,
     transcript: { start: async () => reference, finish: async () => undefined },
   };
   const controller = new WorkbenchAgentMcpController({
@@ -1819,7 +1806,7 @@ test("a steer during detached wait transcript admission interrupts before comman
   } as WorkbenchToolTranscriptReference;
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "codex", threadId, cwd: "C:/workspace" }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+    describe: async () => ({ shellDescription: "test" }),
     patchClaims: async () => "",
     transcript: {
       start: async () => {
@@ -1867,7 +1854,7 @@ function timedWaitController(yieldsLongWaits: boolean) {
   const deadlines: Array<{ timeoutMs: number; controller: AbortController }> = [];
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "claude", threadId, cwd: "C:/workspace" }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true, ...(yieldsLongWaits ? { yieldsLongWaits } : {}) }),
+    describe: async () => ({ shellDescription: "test", ...(yieldsLongWaits ? { yieldsLongWaits } : {}) }),
     patchClaims: async () => "",
     transcript: {
       start: async input => ({
@@ -1958,10 +1945,10 @@ async function yieldingShellServer(yieldsLongWaits = false) {
   const deadlineCreated = { next: deferred<void>() };
   const runs: Array<(result: { exitCode: number; stdout: string; stderr: string }) => void> = [];
   const tools: WorkbenchProviderTools = {
-    caller: async () => ({ harness: "claude", threadId, cwd: "C:/workspace" }),
-    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false, ...(yieldsLongWaits ? { yieldsLongWaits } : {}) }),
+    caller: async () => ({ harness: "claude", threadId, cwd: process.cwd() }),
+    describe: async () => ({ shellDescription: "test", ...(yieldsLongWaits ? { yieldsLongWaits } : {}) }),
     patchClaims: async () => "",
-    prepareShell: async () => preparedShell("C:/workspace"),
+    prepareExecution: async () => preparedShell(process.cwd()).run,
     transcript: {
       start: async input => ({
         threadId, turnId: "turn", itemId: `${input.tool}-${finished.length}`, sourceId: "source", parentId: "source",
@@ -2007,7 +1994,7 @@ test("a yielded shell answers still running, keeps its row open, and shell_wait 
     await fireNextDeadline();
     const yielded = await call;
     assert.equal(yielded.isError, false);
-    const running = yielded.structuredContent as { exitCode: number | null; shellId?: string };
+    const running = yielded.structuredContent as { exitCode: number | null; shell: string; shellId?: string };
     assert.equal(running.exitCode, null);
     assert.ok(running.shellId);
     assert.match(responseText(yielded), /shell_wait/u);
@@ -2026,7 +2013,7 @@ test("a yielded shell answers still running, keeps its row open, and shell_wait 
     const collected = await wait;
     assert.match(responseText(collected), /Exit code: 0\nOutput:\nbuilt/u);
     assert.deepEqual(finished.find(entry => entry.tool === "shell")?.result.structuredContent,
-      { cwd: "C:/workspace", exitCode: 0, shell: "pwsh", stderr: "", stdout: "built" }, "the row gets the real result");
+      { cwd: process.cwd(), exitCode: 0, shell: running.shell, stderr: "", stdout: "built" }, "the row gets the real result");
     const again = await client.callTool({ name: "shell_wait", arguments: { shellId: running.shellId } });
     assert.equal(again.isError, true);
   } finally {

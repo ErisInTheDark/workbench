@@ -13,7 +13,7 @@
 import { z } from "zod";
 import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchThreadId, WorkbenchTurnId, WorkbenchItemId } from "workbench-shared/workbench/identity";
-import type { WorkbenchEscalatingShellInput, WorkbenchShellResult } from "workbench-shared/workbench/commands/workbench-shell-command";
+import type { WorkbenchShellResult } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { CodexExecRequest } from "./codex/codex-exec-protocol";
 import type { WorkbenchFileClaimCheckResult } from "../lib/workbench/file-claim-check";
 
@@ -98,10 +98,8 @@ export interface WorkbenchProviderTools {
   prepareExecution?(request: WorkbenchAdmittedExecution, signal: AbortSignal): Promise<WorkbenchShellRun>;
   patchClaims(input: { raw: string; callerThreadId: string | null }, check: WorkbenchPatchClaimCheck, signal: AbortSignal): Promise<string>;
   describe(): Promise<{
-    experimental: Record<string, Record<string, JsonValue>>;
+    /** Workbench hosts the shell tool and admits every command; the provider supplies `caller` and `prepareExecution`. */
     shellDescription: string;
-    /** Workbench hosts the shell tool, escalating through Workbench approval; the provider supplies `caller` and `prepareExecution`. */
-    shellEscalation: boolean;
     /**
      * The request `_meta` key under which the provider names each call, matching the ids its tool batches declare.
      * Naming calls orders them, so it also offers `parallel` shells: the shell is advertised read-only, the only way
@@ -121,6 +119,4 @@ export interface WorkbenchProviderTools {
     yieldsLongWaits?: boolean;
   }>;
   caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
-  /** Prepare the provider-native shell, required only when `describe().shellEscalation` is false. */
-  prepareShell?(input: WorkbenchEscalatingShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchPreparedShell>;
 }

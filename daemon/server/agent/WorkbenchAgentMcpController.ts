@@ -46,7 +46,7 @@ import {
   WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME,
   WorkbenchShellCallResultSchema,
   WorkbenchShellResultSchema,
-  type WorkbenchEscalatingShellInput,
+  type WorkbenchShellInput,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { logError } from "../process-helpers";
@@ -198,7 +198,7 @@ function toolJsonSchema(schema: AnySchema, pipeStrategy: "input" | "output") {
  */
 const listedJsonSchemas = new WeakMap<object, Map<string, ReturnType<typeof toolJsonSchema>>>();
 function listedJsonSchema(owner: object, shape: WorkbenchMcpInputShape, pipeStrategy: "input" | "output", build: () => AnySchema) {
-  const key = `${pipeStrategy}:${shape.escalation}:${shape.parallelShells}:${shape.waitTimeouts}:${shape.shellYields}`;
+  const key = `${pipeStrategy}:${shape.parallelShells}:${shape.waitTimeouts}:${shape.shellYields}`;
   let byShape = listedJsonSchemas.get(owner);
   if (!byShape) listedJsonSchemas.set(owner, byShape = new Map());
   let schema = byShape.get(key);
@@ -405,7 +405,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     for (const [name, definition] of this.visibleCommands(this.listingScope(scope, description)).direct) {
       tools.push(this.toolSpec(name, definition, shape));
     }
-    return { experimental: description.experimental, tools };
+    return { tools };
   }
 
   async call(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall): Promise<WorkbenchMcpToolStep> {
@@ -432,7 +432,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       if (call.name === WORKBENCH_SHELL_MCP_TOOL_NAME) {
         const toolUseKey = readToolUseKey(description, shape, call);
         const shellInputSchema = getWorkbenchMcpShellInputSchema(shape);
-        const input: WorkbenchEscalatingShellInput & { parallel?: boolean; yield_ms?: number } = shellInputSchema.parse(
+        const input: WorkbenchShellInput & { parallel?: boolean; yield_ms?: number } = shellInputSchema.parse(
           await validateToolInput(shellInputSchema, call.arguments, call.name),
         );
         // A serial shell waits for its batch's earlier calls before anything about it is recorded or approved.
@@ -440,7 +440,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
           const turn = await this.batchTurn(scope, call, tools, toolUseKey, call.name, input);
           if (turn) return turn;
         }
-        return await this.callShell(scope, call, input, tools, description.shellEscalation);
+        return await this.callShell(scope, call, input, tools);
       }
       if (call.name === WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME && shape.shellYields) return await this.callShellWait(scope, call, tools);
       if (call.name === WORKBENCH_USER_MESSAGE_TOOL_NAME && description.hostsUserMessage) {
@@ -711,8 +711,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
    * Preparation is kept alive too, since an approval wait can outlast client idle timeouts.
    */
   private async callShell(
-    scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchEscalatingShellInput & { yield_ms?: number },
-    tools: WorkbenchProviderTools, escalation: boolean,
+    scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchShellInput & { yield_ms?: number },
+    tools: WorkbenchProviderTools,
   ): Promise<WorkbenchMcpToolStep> {
     const started = await this.startTranscript("shell", input, call.meta, scope.clientScope, call.signal, tools);
     if (started.kind === "failed") return { kind: "result", result: started.result };
@@ -742,7 +742,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       prepared = await this.prepareShell(input, call.meta, {
         clientScope: scope.clientScope,
         ...(started.reference ? { itemId: started.reference.itemId, turnId: started.reference.turnId } : {}),
-      }, signal, tools, escalation);
+      }, signal, tools);
     } catch (error) {
       stopProgress?.();
       caller?.unlink();
@@ -779,18 +779,15 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return { kind: "result", result: await this.finish(scope, detached, outcome) };
   }
 
-  /** Escalating providers use Workbench admission for every shell call. */
+  /** Every shell call goes through Workbench admission; only leaving the sandbox needs the approval port. */
   private async prepareShell(
-    input: WorkbenchEscalatingShellInput, meta: Record<string, unknown> | undefined, context: ProviderToolRequestContext,
-    signal: AbortSignal, tools: WorkbenchProviderTools, escalation: boolean,
+    input: WorkbenchShellInput, meta: Record<string, unknown> | undefined, context: ProviderToolRequestContext,
+    signal: AbortSignal, tools: WorkbenchProviderTools,
   ) {
     const metadata = ProviderToolMetadataSchema.parse(meta ?? {});
-    if (!escalation) {
-      if (!tools.prepareShell) throw new Error("This provider has no native shell.");
-      return await tools.prepareShell(input, metadata, signal, context);
-    }
-    const approve = this.approveHostedShell;
-    if (!approve) throw new Error("Workbench approval is unavailable for the hosted shell.");
+    const approve = this.approveHostedShell ?? (async () => {
+      throw new Error("Workbench approval is unavailable for outside-sandbox commands.");
+    });
     return await WorkbenchToolAdmissionController.prepareShell({ tools, approve }, input, metadata, signal, context);
   }
 

@@ -51,9 +51,7 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
 
   async describe() {
     return {
-      experimental: {},
       shellDescription: "Run a shell command in the managed Workbench sandbox, or request Workbench approval for one outside-sandbox command.",
-      shellEscalation: true,
       // Claude names each MCP request's tool_use; the session host declares the same ids as its batches.
       toolUseIdMeta: CLAUDE_TOOL_USE_ID_META,
       // Claude summarises prose between tool calls, so commentary travels as this tool's input.
