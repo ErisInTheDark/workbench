@@ -52,6 +52,20 @@ test("subagents never list as sidebar rows; their parent carries only its direct
   assert.equal(projectSidebarRowSnapshot(snapshot), snapshot, "folded snapshots re-project by identity, keeping their claims");
 });
 
+test("re-projecting unchanged full entries keeps every row's identity, so keyed diffs skip them", () => {
+  const entries = [thread(), thread(id(6)), subagent(id(2), "Zed", parentId, arc("active", ["src/b.ts"]))];
+  const project = () => projectSidebarRowSnapshot({ projectId: "project", revision: 1, freshness: "fresh", error: null, entries } as never);
+  const first = project();
+  const second = project();
+  assert.equal(first.entries.length, 2);
+  first.entries.forEach((row, index) => assert.equal(second.entries[index], row));
+  const changed = projectSidebarRowSnapshot({
+    projectId: "project", revision: 2, freshness: "fresh", error: null, entries: [entries[0], { ...thread(id(6)), title: "renamed" }, entries[2]],
+  } as never);
+  assert.equal(changed.entries[0], first.entries[0]);
+  assert.notEqual(changed.entries[1], first.entries[1]);
+});
+
 test("a full thread entry projects to a row without per-thread detail that the strict row schema accepts", () => {
   const row = projectSidebarRow(thread());
   assert.deepEqual(["gitCommitHistory", "previousTitles", "profile"].filter(field => field in row), []);

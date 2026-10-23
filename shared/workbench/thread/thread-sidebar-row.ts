@@ -99,10 +99,22 @@ const isLean = (entry: Exclude<RowSource, { entryKind: "draft" }>) => entry.acti
   && nullableOptional.every(field => !(field in entry) || entry[field] !== null)
   && !("compacting" in entry);
 
+/**
+ * Entries are replaced, never mutated, so each one's lean row is built once; every publish re-projects whole sidebars,
+ * and a row that keeps its identity lets keyed observation diffs skip it without a deep compare.
+ */
+const leanRows = new WeakMap<object, WorkbenchThreadSidebarRow>();
+
 /** Idempotent and identity-preserving: an already-lean row is returned as-is, so keyed diffs short-circuit. */
 export function projectSidebarRow(entry: RowSource): WorkbenchThreadSidebarRow {
   if (entry.entryKind === "draft") return entry;
   if (isLean(entry)) return entry as WorkbenchThreadSidebarRow;
+  let row = leanRows.get(entry);
+  if (!row) leanRows.set(entry, row = leanRow(entry));
+  return row;
+}
+
+function leanRow(entry: Exclude<RowSource, { entryKind: "draft" }>): WorkbenchThreadSidebarRow {
   const {
     questionnaireHistory: _history, previousTitles: _titles, gitArc, gitArcPlan, gitCommitHistory: _commits, profile: _profile,
     pendingQuestionnaire, compacting: _compacting, ...rest
@@ -132,10 +144,18 @@ function subagentClaimsByParent(entries: readonly RowSource[]) {
   return claims;
 }
 
+/** The last claims folded onto each lean row, so unchanged claims keep returning the same folded row. */
+const claimedRows = new WeakMap<object, { claims: WorkbenchSidebarSubagentClaims; row: WorkbenchThreadSidebarRow }>();
+
 function withSubagentClaims(row: WorkbenchThreadSidebarRow, claims: WorkbenchSidebarSubagentClaims | undefined) {
   if (row.entryKind !== "thread" || areDeeplyEqual(row.subagentClaims, claims)) return row;
   const { subagentClaims: _previous, ...rest } = row;
-  return claims ? { ...rest, subagentClaims: claims } : rest;
+  if (!claims) return rest;
+  const held = claimedRows.get(row);
+  if (held && areDeeplyEqual(held.claims, claims)) return held.row;
+  const folded = { ...rest, subagentClaims: claims };
+  claimedRows.set(row, { claims, row: folded });
+  return folded;
 }
 
 export function projectSidebarRowSnapshot(
