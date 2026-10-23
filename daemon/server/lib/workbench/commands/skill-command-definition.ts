@@ -23,6 +23,7 @@ const skill = defineWorkbenchAgentCommand({
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["skill"],
   mcpCodeModeEligible: true,
+  mcpWorkdir: true,
   words: ["skill"],
   usage: "wb skill <name>",
   inputSchema: z.object({ name: skillName }).strict(),

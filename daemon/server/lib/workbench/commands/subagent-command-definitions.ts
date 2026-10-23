@@ -95,6 +95,7 @@ const profiles = defineWorkbenchAgentCommand({
 const create = defineWorkbenchAgentCommand({
   description: "Create and start a direct child, then print its thread ID.",
   helpGroups: ["subagent"],
+  mcpWorkdir: true,
   words: ["subagent", "create"],
   usage: "wb subagent create --profile <profile-id> --name <name> --title <title> --message <message> --user-visible-simple-version <text>",
   inputSchema: z.object({

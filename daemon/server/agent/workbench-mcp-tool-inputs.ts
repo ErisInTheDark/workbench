@@ -4,10 +4,13 @@
  * - readWorkbenchMcpInputShape: derive the shape from a provider's tool description and the ingress serving it.
  * - getWorkbenchMcpShellInputSchema/getWorkbenchMcpShellOutputSchema: the shell input one shape accepts, and the output it declares.
  * - getWorkbenchMcpShellWaitInputSchema: `shell_wait` input, a long wait with its own `timeoutMs`.
- * - getWorkbenchMcpCommandInputSchema: a command's input as one shape lists and validates it.
+ * - getWorkbenchMcpCommandInputSchema: a command's input as one shape lists and validates it, with MCP-layer `timeoutMs`/`workdir`.
  * - splitWorkbenchMcpWaitTimeout: separate the MCP-layer `timeoutMs` from the command's own input.
+ * - resolveWorkbenchMcpWorkdir: separate the MCP-layer `workdir` from the command's input and resolve the cwd it names.
  * - createWorkbenchMcpWaitDeadline/isWorkbenchMcpWaitTimeout: the deadline signal of a timed wait, and its abort reason.
  */
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
 import {
   getWorkbenchShellInputSchema,
@@ -58,16 +61,39 @@ const WaitTimeoutFields = {
 };
 const WaitTimeoutSchema = z.object(WaitTimeoutFields);
 
+const WorkdirFields = {
+  workdir: z.string().trim().min(1).optional()
+    .describe("Run as if invoked from this directory; relative to the thread cwd. Defaults to the thread cwd."),
+};
+const WorkdirSchema = z.object(WorkdirFields);
+
 function offersWaitTimeout(definition: WorkbenchAgentCommandDefinition, shape: WorkbenchMcpInputShape) {
   return shape.waitTimeouts && definition.mcpSteerInterruptible === true;
 }
 
 export function getWorkbenchMcpCommandInputSchema(definition: WorkbenchAgentCommandDefinition, shape: WorkbenchMcpInputShape): z.ZodType {
-  if (!offersWaitTimeout(definition, shape)) return definition.inputSchema;
+  const fields: z.ZodRawShape = {
+    ...(offersWaitTimeout(definition, shape) ? WaitTimeoutFields : {}),
+    ...(definition.mcpWorkdir ? WorkdirFields : {}),
+  };
+  if (!Object.keys(fields).length) return definition.inputSchema;
   if (!(definition.inputSchema instanceof z.ZodObject)) {
-    throw new Error(`Workbench long wait ${getWorkbenchAgentCommandToolName(definition)} needs an object input schema.`);
+    throw new Error(`Workbench MCP fields of ${getWorkbenchAgentCommandToolName(definition)} need an object input schema.`);
   }
-  return definition.inputSchema.safeExtend(WaitTimeoutFields);
+  return definition.inputSchema.safeExtend(fields);
+}
+
+/** Commands never see `workdir`: it stands in for the cwd a CLI caller would `cd` to, resolved from the thread's own cwd. */
+export async function resolveWorkbenchMcpWorkdir(
+  definition: WorkbenchAgentCommandDefinition, input: object, callerCwd: string,
+): Promise<{ input: object; cwd: string }> {
+  if (!definition.mcpWorkdir || !Object.hasOwn(input, "workdir")) return { input, cwd: callerCwd };
+  const { workdir } = WorkdirSchema.parse(input);
+  const commandInput = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "workdir"));
+  if (workdir === undefined) return { input: commandInput, cwd: callerCwd };
+  const cwd = path.resolve(callerCwd, workdir);
+  if (!(await stat(cwd).catch(() => null))?.isDirectory()) throw new Error(`workdir must be an existing directory: ${cwd}`);
+  return { input: commandInput, cwd };
 }
 
 /** Commands never see `timeoutMs`: their strict schemas re-validate the rest when building the request. */

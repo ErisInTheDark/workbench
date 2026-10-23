@@ -22,6 +22,7 @@ function selectionCommand(action: "add" | "unstage") {
       ? "Add currently changed files beneath the paths to this thread's commit selection."
       : "Remove exact files or descendants from this thread's commit selection.",
     helpGroups: ["git"],
+    mcpWorkdir: true,
     words: ["git", action],
     usage: `wb git ${action} [--worktree <absolute-path>] -- <path> [<path>...]`,
     inputSchema: z.object({ paths: pathsSchema, targetWorktree: requiredText.optional() }).strict(),
@@ -42,6 +43,7 @@ function selectionCommand(action: "add" | "unstage") {
 const commit = defineWorkbenchAgentCommand({
   description: "Commit selected files with a title and optional description, or amend them into one linear unpushed ancestor, then clear the selection on success.",
   helpGroups: ["git"],
+  mcpWorkdir: true,
   words: ["git", "commit"],
   usage: "wb git commit [--worktree <absolute-path>] [--amend <commit-sha>] --title <title> [--description <description>]",
   inputSchema: z.object({
@@ -79,6 +81,7 @@ const amend = defineWorkbenchAgentCommand({
   description: "Rewrite unpushed linear commits: fold selected files or a new message into one commit, or change author, committer, dates and co-authors across many.",
   helpGroups: ["git"],
   mcpDeferred: true,
+  mcpWorkdir: true,
   words: ["git", "amend"],
   usage: "wb git amend [--commit <commit>]... [--range <base>..<tip>]... [--worktree <absolute-path>] [--selected] [--title <title> [--description <description>]] [--author \"Name <email>\"] [--author-date <date>] [--committer \"Name <email>\"] [--committer-date <date>] [--co-author \"Name <email>\"]... [--no-co-authors]",
   inputSchema: z.object({
@@ -145,6 +148,7 @@ const thread = defineWorkbenchAgentCommand({
   effects: { readOnly: true },
   helpGroups: ["git"],
   mcpDeferred: true,
+  mcpWorkdir: true,
   words: ["git", "thread"],
   usage: "wb git thread <commit>",
   inputSchema: z.object({ commit: requiredText }).strict(),
@@ -163,6 +167,7 @@ const integrateStart = defineWorkbenchAgentCommand({
   description: "Start integrating incoming commits into the checked-out branch, from its upstream or a peer daemon's same-named branch. Replays local commits (or adds one merge commit with --merge) in memory; nothing in the worktree moves until apply.",
   helpGroups: ["git"],
   mcpDeferred: true,
+  mcpWorkdir: true,
   words: ["git", "integrate", "start"],
   usage: "wb git integrate start --from upstream|<host>[:<folder>] [--carry-own] [--merge]",
   inputSchema: z.object({ from: requiredText, carryOwn: z.boolean().default(false), merge: z.boolean().default(false) }).strict(),
@@ -184,6 +189,7 @@ function integrateStep(operation: "view" | "resolve" | "wait" | "apply" | "end",
     ...(operation === "view" ? { effects: { readOnly: true } } : {}),
     helpGroups: ["git"],
     mcpDeferred: true,
+    mcpWorkdir: true,
     words: ["git", "integrate", operation],
     usage: `wb git integrate ${operation}`,
     inputSchema: z.object({}).strict(),

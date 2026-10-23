@@ -79,6 +79,7 @@ import {
   getWorkbenchMcpShellWaitInputSchema,
   isWorkbenchMcpWaitTimeout,
   readWorkbenchMcpInputShape,
+  resolveWorkbenchMcpWorkdir,
   splitWorkbenchMcpWaitTimeout,
   type WorkbenchMcpInputShape,
 } from "./workbench-mcp-tool-inputs";
@@ -966,10 +967,12 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
           result: { isError: true, content: [{ type: "text" as const, text: REFUSAL_TEXT[refusal](toolName, caller.harness) }] },
         };
       }
-      const request = await definition.buildRequestFromJson(input, {
+      const { input: commandInput, cwd } = await resolveWorkbenchMcpWorkdir(definition, input, caller.cwd);
+      if (signal.aborted) throw signal.reason;
+      const request = await definition.buildRequestFromJson(commandInput, {
         callerHarness: caller.harness,
         callerThreadId: caller.threadId,
-        cwd: caller.cwd,
+        cwd,
         workbenchOrigin: this.daemonOrigin,
       });
       if (

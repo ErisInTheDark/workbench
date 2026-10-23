@@ -35,6 +35,7 @@ const run = defineWorkbenchAgentCommand({
   description: "Run inline BrowseMD commands or one project BrowseMD script.",
   effects: { openWorld: true },
   helpGroups: ["browse"],
+  mcpWorkdir: true,
   words: ["browse", "run"],
   usage: "wb browse run --thread <id> [--session <name>] (--command <line>... | --script-path <file>) [--var <key=value>...] [--summary <text>]",
   inputSchema: z.object({
@@ -79,6 +80,7 @@ const raw = defineWorkbenchAgentCommand({
   description: "Run the explicitly gated raw Browse CLI passthrough.",
   effects: { openWorld: true },
   mcpDeferred: true,
+  mcpWorkdir: true,
   helpGroups: ["browse"],
   requiresCapability: "browseRawCommandsEnabled",
   words: ["browse", "raw"],

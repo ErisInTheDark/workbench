@@ -1,4 +1,5 @@
 <!-- Daemon-project threads have no catalogue repository; machine Git arcs cover their file edits. Agents otherwise assume the cwd is a project, scatter files there, or refuse system-wide work; this block makes the scratch cwd, read-anywhere sandbox and approval-gated escalation explicit. -->
+<!-- MCP tool calls run from the thread cwd; agents that cannot `cd` select another root through `workdir` where a tool offers it (arc tools use rootId/root:path instead). -->
 <>
 <workspace:daemon>
 ## Workbench Daemon Workspace
@@ -20,7 +21,7 @@ Available roots:
 
 Assume the user may be working across the full workspace unless they narrow the scope.
 
-Use the cwd of the project root you are working in. If you work in a non-primary project, read that project's local guidance before editing.
+Use the project root you are working in as command cwd, or as `workdir` on tools that accept it. If you work in a non-primary project, read that project's local guidance before editing.
 
 Assume the user may be running watch tasks across the workspace and that interdependent projects can pick up each other's changes automatically.
 </else>

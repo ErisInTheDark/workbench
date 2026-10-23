@@ -75,6 +75,7 @@ const countProjectInstructions = defineWorkbenchAgentCommand({
   effects: { idempotent: true, openWorld: false, readOnly: true },
   helpGroups: ["tokens"],
   mcpCodeModeEligible: true,
+  mcpWorkdir: true,
   words: ["tokens", "project"],
   usage: "wb tokens project [--toc] [--model <model>]",
   inputSchema: z.object({ model, toc }).strict(),

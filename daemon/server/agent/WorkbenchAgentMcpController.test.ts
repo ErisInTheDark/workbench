@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import path from "node:path";
 import { test } from "node:test";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
@@ -770,7 +771,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     });
     const commit = inventory.tools.find(({ name }) => name === "git_commit");
     assert.ok(commit);
-    assert.deepEqual(Object.keys(commit.inputSchema.properties ?? {}).sort(), ["amendTarget", "description", "targetWorktree", "title"]);
+    assert.deepEqual(Object.keys(commit.inputSchema.properties ?? {}).sort(), ["amendTarget", "description", "targetWorktree", "title", "workdir"]);
     assert.equal(commit.inputSchema.required?.includes("title") ?? false, true);
     assert.equal(commit.inputSchema.required?.includes("description") ?? false, false);
     const proposal = inventory.tools.find(({ name }) => name === "git_arc_propose");
@@ -1932,6 +1933,62 @@ test("providers that yield long waits neither list nor accept wait timeoutMs", a
     const rejected = await callTool("subagent_wait", { names: ["momo"], timeoutMs: 1_000 });
     assert.ok(rejected.kind === "result" && rejected.result.isError);
     assert.equal(deadlines.length, 0);
+  } finally {
+    requestRegistry.dispose();
+  }
+});
+
+test("cwd-sensitive commands run from an MCP workdir as the CLI would after cd; other commands reject it", async () => {
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const executed: WorkbenchAgentCommandRequest[] = [];
+  const logged: string[] = [];
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => ({
+      caller: async () => ({ harness: "claude", threadId, cwd: process.cwd() }),
+      describe: async () => ({ shellDescription: "test" }),
+      patchClaims: async () => "",
+    }),
+    daemonOrigin: "http://127.0.0.1:4500",
+    lifecycleLogError: (_name, message) => { logged.push(message); },
+    requestRegistry,
+    executeCommand: async request => {
+      executed.push(request);
+      return new Response("ok\n");
+    },
+  });
+  const scope = { clientScope: "client", projectLocal: true, provider: "claude", subagent: false };
+  let requestId = 0;
+  const callTool = async (name: string, args: Record<string, unknown>) => await controller.call(scope, {
+    arguments: args, detachableShell: true, meta: {}, name, requestId: ++requestId, signal: new AbortController().signal,
+  });
+  const listedProperties = async (name: string) => {
+    const tool = (await controller.describe(scope, new AbortController().signal)).tools.find(tool => tool.name === name);
+    return Object.keys(tool?.inputSchema.properties ?? {});
+  };
+  const parent = path.resolve(process.cwd(), "..");
+  try {
+    assert.ok((await listedProperties("skill")).includes("workdir"));
+    assert.equal((await listedProperties("task_get")).includes("workdir"), false);
+
+    const direct = await callTool("skill", { name: "react", workdir: ".." });
+    assert.ok(direct.kind === "result" && !direct.result.isError, direct.kind === "result" ? responseText(direct.result) : direct.kind);
+    assert.equal(executed[0]?.body?.cwd, parent);
+    assert.equal(executed[0]?.body?.workdir, undefined);
+
+    const deferredCall = await callTool("mcp_call", { server: "wb", tool: "git_thread", arguments: { commit: "HEAD", workdir: parent } });
+    assert.ok(deferredCall.kind === "result" && !deferredCall.result.isError);
+    assert.equal(executed[1]?.body?.cwd, parent);
+
+    const missing = await callTool("skill", { name: "react", workdir: "no-such-workdir" });
+    assert.ok(missing.kind === "result" && missing.result.isError);
+    assert.match(responseText(missing.result), /workdir/u);
+    assert.equal(logged.length, 1);
+    assert.equal(executed.length, 2, "a missing workdir never reaches the command");
+
+    const unsupported = await callTool("task_get", { workdir: ".." });
+    assert.ok(unsupported.kind === "result" && unsupported.result.isError);
+    assert.equal(executed.length, 2);
   } finally {
     requestRegistry.dispose();
   }

@@ -134,6 +134,8 @@ export interface WorkbenchAgentCommandDefinition {
   mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
+  /** Its behaviour follows one cwd, so MCP callers, who cannot `cd`, may name it as `workdir`. */
+  mcpWorkdir?: true;
   /** Local capability that must be enabled before an agent can use this command. */
   requiresCapability?: WorkbenchLocalCapability;
   usage: string;
@@ -156,6 +158,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
+  mcpWorkdir?: true;
   parseCliArgs(args: string[]): z.input<TSchema>;
   requiresCapability?: WorkbenchLocalCapability;
   usage: string;
@@ -189,6 +192,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     mcpCodeModeEligible: definition.mcpCodeModeEligible,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,
+    mcpWorkdir: definition.mcpWorkdir,
     requiresCapability: definition.requiresCapability,
     usage: definition.usage,
     workbenchRootUsage: definition.workbenchRootUsage,

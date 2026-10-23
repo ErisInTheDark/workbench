@@ -3,7 +3,8 @@
 
 Subagents require **Feature Activation**. 
 
-Every subagent call must run in the intended project cwd; this is the directory subagents will have access to.
+<!-- MCP-only agents cannot `cd` before a call, so a cwd-only rule was impossible for them to follow; `workdir` is their equivalent of the CLI cwd. -->
+A subagent's directory is its creating call's cwd, or `workdir` when given; target the intended project directory.
 
 ### managing subagents
 
