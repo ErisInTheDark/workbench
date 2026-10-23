@@ -246,12 +246,13 @@ export default class WorkbenchTranscriptRepository {
         }
       }
 
+      // Items are indexed by turn, not thread, so thread-scoped reads start from the thread's turns.
       const candidates = this.#database.prepare(`
         SELECT i.*
-        FROM thread_items i
-        JOIN thread_turns tr ON tr.id = i.turn_id
-        JOIN thread_turn_materializations m ON m.thread_id = i.thread_id AND m.turn_id = i.turn_id
-        WHERE i.thread_id = @threadId
+        FROM thread_turns tr
+        JOIN thread_items i ON i.turn_id = tr.id
+        JOIN thread_turn_materializations m ON m.thread_id = tr.thread_id AND m.turn_id = tr.id
+        WHERE tr.thread_id = @threadId
           AND (@hasBefore = 0 OR (tr.turn_index, i.item_position, i.public_id)
             < (@turnIndex, @itemPosition, @itemId))
         ORDER BY tr.turn_index DESC, i.item_position DESC, i.public_id DESC
@@ -557,16 +558,19 @@ export default class WorkbenchTranscriptRepository {
 
   /** Cross-agent messages the thread's agent received: delivered input items and Workbench agent-message outputs. Held steers are not items yet. */
   readDeliveredAgentMessages(threadId: string) {
+    // Items are indexed by turn, not thread, so this starts from the thread's turns instead of scanning every item.
     const rows = this.#database.prepare(`
       SELECT mp.text AS text
-      FROM thread_user_message_parts mp
-      JOIN thread_items i ON i.id = mp.item_id
-      WHERE i.thread_id = @threadId AND mp.part_type = 'text' AND mp.text LIKE '%wb:agent-message%'
+      FROM thread_turns t
+      JOIN thread_items i ON i.turn_id = t.id
+      JOIN thread_user_message_parts mp ON mp.item_id = i.id
+      WHERE t.thread_id = @threadId AND mp.part_type = 'text' AND mp.text LIKE '%wb:agent-message%'
       UNION ALL
       SELECT o.body_text AS text
-      FROM thread_item_tool_outputs o
-      JOIN thread_items i ON i.id = o.item_id
-      WHERE i.thread_id = @threadId AND o.namespace = 'workbench' AND o.name = 'agent_message'
+      FROM thread_turns t
+      JOIN thread_items i ON i.turn_id = t.id
+      JOIN thread_item_tool_outputs o ON o.item_id = i.id
+      WHERE t.thread_id = @threadId AND o.namespace = 'workbench' AND o.name = 'agent_message'
     `).all({ threadId }) as Array<{ text: string | null }>;
     return rows.flatMap(({ text }) => {
       const message = text ? readWorkbenchAgentMessageText(text) : null;
