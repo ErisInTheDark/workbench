@@ -16,6 +16,7 @@ import type {
 
 import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 import ProjectFilePath from "../ProjectFilePath";
+import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import { ArrowRightIcon, ShieldCheckIcon, ShieldCogCornerIcon, ShieldMinusIcon, ShieldQuestionIcon, WeightIcon } from "../workbench-icons";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadSummaryText from "./ThreadSummaryText";
@@ -185,6 +186,12 @@ function ThreadCommandStageParts ({
           />
         ) : part.type === "pattern" ? (
           <ThreadCommandPattern key={`pattern:${part.pattern}:${index}`} pattern={part.pattern} syntax={part.syntax} />
+        ) : part.type === "thread" ? (
+          <WorkbenchThreadButton
+            key={`thread:${part.threadId}:${index}`}
+            fallback={<ThreadInlineCode>{part.threadId}</ThreadInlineCode>}
+            threadId={part.threadId}
+          />
         ) : (
           <span key={`text:${index}`} className="contents">
             {part.variant === "code" && plainCode ? (

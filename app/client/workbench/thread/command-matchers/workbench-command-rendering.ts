@@ -730,11 +730,15 @@ export function getWorkbenchCommandRoute(
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {
     case "message_wait": {
-      const senders = [...readStringArray(args.names), ...readStringArray(args.threadIds)];
+      const senders = [
+        ...readStringArray(args.names).map(primary),
+        ...readStringArray(args.threadIds).map(CommandMatcher.Thread),
+      ].flatMap((part, index) => index ? [CommandMatcher.Text(", "), part] : [part]);
+      const target = senders.length ? senders : [primary("selected senders")];
       return simple(
         "workbench-cli.message-wait",
-        actionTarget("Waiting for a message from ", senders.join(", ") || "selected senders"),
-        actionTarget("Waited for a message from ", senders.join(", ") || "selected senders"),
+        [CommandMatcher.Text("Waiting for a message from "), ...target],
+        [CommandMatcher.Text("Waited for a message from "), ...target],
       );
     }
     case "skill":

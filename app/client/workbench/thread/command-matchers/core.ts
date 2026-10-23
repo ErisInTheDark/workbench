@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - CommandMatcher: builder namespace for stage matchers, result objects, and summary parts. Keywords: thread, command, matcher, builder.
- * - runThreadCommandMatchers: run shell-specific stage matchers until a command is exhausted. Keywords: thread, command, matcher, runner.
+ * - CommandMatcher: builder namespace for stage matchers, result objects, and summary parts.
+ * - runThreadCommandMatchers: run shell-specific stage matchers until a command is exhausted.
  */
 
 import {
@@ -41,6 +41,7 @@ interface CommandMatcherBuilder {
   Separator: () => ThreadCommandDisplayPart;
   Skill: (input: { name: string; path: string }) => ThreadCommandDisplayPart;
   Text: (text: string, options?: TextPartInput) => ThreadCommandDisplayPart;
+  Thread: (threadId: string) => ThreadCommandDisplayPart;
 }
 
 export const CommandMatcher: CommandMatcherBuilder = Object.assign(
@@ -110,6 +111,9 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
     },
     Text(text: string, { clamp = false }: TextPartInput = {}) {
       return { clamp, text, type: "text", variant: "plain" } satisfies ThreadCommandDisplayPart;
+    },
+    Thread(threadId: string) {
+      return { threadId, type: "thread" } satisfies ThreadCommandDisplayPart;
     },
   },
 );

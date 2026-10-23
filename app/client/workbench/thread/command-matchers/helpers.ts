@@ -1,17 +1,17 @@
 /*
  * Exports:
- * - buildCommandPathPart: resolve a raw path into a project-relative path part for command summaries. Keywords: thread, command, path, relative.
- * - buildDisplayPathPart: turn a display path into a labeled command-summary path part. Keywords: thread, command, path, label.
- * - collapseWhitespace: normalize whitespace in command text for compact summaries. Keywords: thread, command, whitespace.
- * - createEmptyCommandSummaryStats: build a zeroed aggregate-summary counter object. Keywords: thread, command, summary, aggregate.
- * - mergeCommandSummaryStats: add aggregate command-summary counters together. Keywords: thread, command, summary, aggregate.
- * - countKnownCommandSummaryStats: total the categorized command-summary counters without the other bucket. Keywords: thread, command, summary, aggregate.
- * - buildReadCommandSummary: build paired completed and ongoing structured summaries for file and skill reads. Keywords: thread, command, read, tense.
- * - getCommandPathKnownSkill: resolve a command path to a known Workbench Skill when it targets SKILL.md. Keywords: command, skill, path.
- * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
- * - pathsEqual: compare normalized Workbench paths with platform-appropriate case semantics. Keywords: path, equality, windows, posix.
- * - summarizeDisplayParts: flatten structured command-summary parts into plain text. Keywords: thread, command, summary, text.
- * - tokenizeCommand: split a command line into shell-ish quoted argument tokens. Keywords: command, shell, quotes, arguments.
+ * - buildCommandPathPart: resolve a raw path into a project-relative path part for command summaries.
+ * - buildDisplayPathPart: turn a display path into a labeled command-summary path part.
+ * - collapseWhitespace: normalize whitespace in command text for compact summaries.
+ * - createEmptyCommandSummaryStats: build a zeroed aggregate-summary counter object.
+ * - mergeCommandSummaryStats: add aggregate command-summary counters together.
+ * - countKnownCommandSummaryStats: total the categorized command-summary counters without the other bucket.
+ * - buildReadCommandSummary: build paired completed and ongoing structured summaries for file and skill reads.
+ * - getCommandPathKnownSkill: resolve a command path to a known Workbench Skill when it targets SKILL.md.
+ * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text.
+ * - pathsEqual: compare normalized Workbench paths with platform-appropriate case semantics.
+ * - summarizeDisplayParts: flatten structured command-summary parts into plain text.
+ * - tokenizeCommand: split a command line into shell-ish quoted argument tokens.
  */
 
 import {
@@ -168,6 +168,10 @@ export function summarizeDisplayParts(parts: ThreadCommandDisplayPart[]) {
 
     if (part.type === "pattern") {
       return part.pattern;
+    }
+
+    if (part.type === "thread") {
+      return part.threadId;
     }
 
     return part.text;

@@ -545,6 +545,9 @@ test("message wait CLI and MCP presentation preserve the same mixed sender selec
   assert.equal(cli.claimedBy, mcp.claimedBy);
   assert.deepEqual(cli.summaryParts, mcp.summaryParts);
   assert.deepEqual(cli.ongoingSummaryParts, mcp.ongoingSummaryParts);
+  // Thread ids link to their threads; names are already readable.
+  assert.deepEqual(mcp.summaryParts.flatMap(part => part.type === "thread" ? [part.threadId] : []), ["first", "second"]);
+  assert.match(mcp.summaryText, /Lumi/u);
 });
 
 test("everyday read and list spellings count as reads and listings in their own shell", () => {
