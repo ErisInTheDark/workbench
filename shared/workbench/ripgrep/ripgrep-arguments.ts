@@ -3,7 +3,7 @@
  * - RipgrepOutputMode/RipgrepCaseMode: what a wb rg query prints and how it treats letter case.
  * - RipgrepQuery: typed, structured-clone-safe rg-compatible search request.
  * - RipgrepArgumentsResult: parsed query or user-facing rejection message.
- * - RIPGREP_DEFAULT_MAX_RESULTS/RIPGREP_DEFAULT_MAX_FILESIZE/RIPGREP_DEFAULT_MAX_FILES: Workbench guard defaults.
+ * - RIPGREP_DEFAULT_MAX_RESULTS/RIPGREP_DEFAULT_MAX_FILESIZE/RIPGREP_DEFAULT_MAX_FILES/RIPGREP_DEFAULT_MAX_COLUMNS: Workbench guard defaults.
  * - RIPGREP_HELP_TEXT: supported-flag summary printed by --help.
  * - parseRipgrepArguments: parse rg-style argument vectors, rejecting unsupported flags.
  */
@@ -53,6 +53,8 @@ export type RipgrepArgumentsResult = { kind: "query"; query: RipgrepQuery } | { 
 
 export const RIPGREP_DEFAULT_MAX_RESULTS = 500;
 export const RIPGREP_DEFAULT_MAX_FILESIZE = 4 * 1024 * 1024;
+/** Minified files make single lines megabytes long; longer matching lines print a window around the match. */
+export const RIPGREP_DEFAULT_MAX_COLUMNS = 500;
 /** Enumerating past this costs seconds of walking before any file is read; callers almost always meant a narrower root. */
 export const RIPGREP_DEFAULT_MAX_FILES = 100_000;
 
@@ -67,6 +69,8 @@ output: -n -N --column --heading --no-heading -H -I -l --files-without-match -c 
 filters: -g/--glob (! negates, later globs win, {a,b} braces) --iglob -t/--type -T/--type-not -d/--max-depth
   -a/--text --max-filesize (default 4M)
 guards: --max-results N caps printed result lines (default ${RIPGREP_DEFAULT_MAX_RESULTS}, 0 = unlimited)
+  -M/--max-columns N windows longer lines around their match (default ${RIPGREP_DEFAULT_MAX_COLUMNS}, 0 = unlimited)
+  total output is always capped at 1 MiB
   --max-files N stops before searching when more files would be searched (default ${RIPGREP_DEFAULT_MAX_FILES}, 0 = unlimited)
 no-ops: --color --no-config --no-messages --sort path -j/--threads -p/--pretty
 `;
@@ -225,7 +229,7 @@ function initialQuery(): RipgrepQuery {
     afterContext: 0,
     beforeContext: 0,
     maxCount: null,
-    maxColumns: null,
+    maxColumns: RIPGREP_DEFAULT_MAX_COLUMNS,
     maxDepth: null,
     globs: [],
     types: [],

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - RipgrepSearchInput/RipgrepSearchResult: worker request and response contracts.
+ * - RIPGREP_MAX_OUTPUT_CHARS: fixed total-output budget of one search.
  * - runRipgrepSearch: collect a query's candidates and search them, appending collection warnings to the output; an
  *   exceeded file budget or no searchable root is an invalid query.
  */
@@ -30,6 +31,9 @@ type FileContent =
   | { kind: "unreadable" };
 
 const READ_BATCH_SIZE = 32;
+/** Output lands in agent context and the transcript; no flag raises this, unlike result and filesize guards. */
+export const RIPGREP_MAX_OUTPUT_CHARS = 1024 * 1024;
+const OUTPUT_BUDGET_NOTICE = "[wb rg: output truncated at 1 MiB; narrow the search]";
 const BINARY_SNIFF_BYTES = 8192;
 // Tracked-but-deleted files and submodule directories are expected in git listings.
 const EXPECTED_MISSING_CODES = new Set(["ENOENT", "ENOTDIR", "EISDIR"]);
@@ -78,7 +82,13 @@ export async function runRipgrepSearch({ query, cwd, prefetchWarnings }: Ripgrep
 async function searchRipgrepFiles(query: RipgrepQuery, files: readonly RipgrepCandidate[]): Promise<RipgrepSearchResult> {
   const cap = query.maxResults || Number.POSITIVE_INFINITY;
   if (query.mode === "files") {
-    const lines = files.slice(0, Math.min(files.length, cap)).map(file => file.displayPath);
+    const lines: string[] = [];
+    let size = 0;
+    for (const file of files.slice(0, Math.min(files.length, cap))) {
+      size += file.displayPath.length + 1;
+      if (size > RIPGREP_MAX_OUTPUT_CHARS) return { kind: "output", output: joinLines([...lines, "", OUTPUT_BUDGET_NOTICE]) };
+      lines.push(file.displayPath);
+    }
     if (files.length > cap) lines.push(truncationNotice(query));
     return { kind: "output", output: joinLines(lines) };
   }
@@ -93,6 +103,8 @@ async function searchRipgrepFiles(query: RipgrepQuery, files: readonly RipgrepCa
 
   const lines: string[] = [];
   let results = 0;
+  let size = 0;
+  let overBudget = false;
   let truncated = false;
   let oversized = 0;
   let unreadable = 0;
@@ -112,6 +124,12 @@ async function searchRipgrepFiles(query: RipgrepQuery, files: readonly RipgrepCa
         }
         results += 1;
       }
+      size += entry.text.length + 1;
+      if (size > RIPGREP_MAX_OUTPUT_CHARS) {
+        overBudget = true;
+        truncated = true;
+        return;
+      }
       lines.push(entry.text);
     }
   };
@@ -124,13 +142,13 @@ async function searchRipgrepFiles(query: RipgrepQuery, files: readonly RipgrepCa
       if (content.kind === "oversized") oversized += 1;
       if (content.kind === "unreadable") unreadable += 1;
       if (content.kind !== "text") continue;
-      const entries = formatRipgrepFile(query, batch[index]!.displayPath, matcher.scan(content.text));
+      const entries = formatRipgrepFile(query, batch[index]!.displayPath, matcher.scan(content.text), matcher.firstIndex);
       if (entries.length) append(entries);
     }
   }
 
   const notices: string[] = [];
-  if (truncated) notices.push(truncationNotice(query));
+  if (truncated) notices.push(overBudget ? OUTPUT_BUDGET_NOTICE : truncationNotice(query));
   if (oversized) {
     notices.push(`[wb rg: skipped ${oversized} files over ${formatRipgrepSize(query.maxFilesize)}; raise --max-filesize to search them]`);
   }

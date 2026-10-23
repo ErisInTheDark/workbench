@@ -10,7 +10,7 @@ import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments"
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
 const ripgrepArguments = z.array(z.string().max(65_536)).min(1).max(256).describe(
-  "rg-style arguments, one per array item; regex is JavaScript syntax. Gitignored files are skipped even under explicit paths unless --no-ignore. Output stops at --max-results (default 500, 0 = unlimited); files over --max-filesize (default 4M) are skipped. --help lists supported flags. No matches return successful empty output.",
+  "rg-style arguments, one per array item; regex is JavaScript syntax. Gitignored files are skipped even under explicit paths unless --no-ignore. Output stops at --max-results (default 500, 0 = unlimited) and always at 1 MiB; lines over -M (default 500) show a window around the match; files over --max-filesize (default 4M) are skipped. --help lists supported flags. No matches return successful empty output.",
 );
 
 export const WorkbenchRipgrepExecutionRequestSchema = z.object({

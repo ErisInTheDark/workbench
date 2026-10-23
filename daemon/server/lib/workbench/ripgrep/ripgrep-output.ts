@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - RipgrepOutputEntry: one printed line, flagged when it counts toward --max-results.
- * - formatRipgrepFile: render one scanned file in rg-compatible heading or flat output.
+ * - formatRipgrepFile: render one scanned file in rg-compatible heading or flat output, windowing lines over --max-columns.
  * - formatRipgrepSize: render a byte size the way --max-filesize accepts it.
  */
 import type { RipgrepQuery } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
@@ -23,13 +23,26 @@ function result(text: string): RipgrepOutputEntry {
   return { text, result: true };
 }
 
-function displayLine(query: RipgrepQuery, content: string, match: RipgrepLineMatch | null) {
+/** A long matching line shows a window around its first match, so minified files still explain why they matched. */
+function displayLine(query: RipgrepQuery, content: string, match: RipgrepLineMatch | null, firstIndex: (line: string) => number) {
   const text = query.trim ? content.trimStart() : content;
-  if (query.maxColumns === null || text.length <= query.maxColumns) return text;
-  return match ? `[Omitted long line with ${match.count} matches]` : "[Omitted long context line]";
+  const width = query.maxColumns;
+  if (width === null || text.length <= width) return text;
+  if (!match) return `[Omitted long context line of ${text.length.toLocaleString("en-US")} chars]`;
+  const at = Math.max(0, firstIndex(text));
+  const start = Math.max(0, Math.min(at - Math.floor(width / 3), text.length - width));
+  const end = start + width;
+  const before = start ? `[… ${start.toLocaleString("en-US")} chars] ` : "";
+  const after = end < text.length ? ` [… ${(text.length - end).toLocaleString("en-US")} more chars on this line]` : "";
+  return `${before}${text.slice(start, end)}${after}`;
 }
 
-export function formatRipgrepFile(query: RipgrepQuery, displayPath: string, scan: RipgrepFileScan): RipgrepOutputEntry[] {
+export function formatRipgrepFile(
+  query: RipgrepQuery,
+  displayPath: string,
+  scan: RipgrepFileScan,
+  firstIndex: (line: string) => number,
+): RipgrepOutputEntry[] {
   const filePrefix = query.withFilename ? `${displayPath}:` : "";
   switch (query.mode) {
     case "files-with-matches":
@@ -75,7 +88,7 @@ export function formatRipgrepFile(query: RipgrepQuery, displayPath: string, scan
       if (line <= previous) continue;
       const lineMatch = matchByLine.get(line) ?? null;
       const separator = lineMatch ? ":" : "-";
-      entries.push(result(`${location(line, lineMatch?.column ?? null, separator)}${displayLine(query, scan.lines[line]!, lineMatch)}`));
+      entries.push(result(`${location(line, lineMatch?.column ?? null, separator)}${displayLine(query, scan.lines[line]!, lineMatch, firstIndex)}`));
       previous = line;
     }
   }

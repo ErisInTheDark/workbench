@@ -2,7 +2,7 @@
  * Exports:
  * - RipgrepPatternError: invalid pattern reported to the caller as a rejected search.
  * - RipgrepLineMatch/RipgrepFileScan: matched (or inverted) lines found in one file.
- * - RipgrepMatcher/compileRipgrepMatcher: compile rg-style patterns into JavaScript regex and scan file text.
+ * - RipgrepMatcher/compileRipgrepMatcher: compile rg-style patterns into JavaScript regex, scan file text and locate a line's first match.
  */
 import type { RipgrepQuery } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
 
@@ -28,6 +28,8 @@ export interface RipgrepFileScan {
 
 export interface RipgrepMatcher {
   scan(text: string): RipgrepFileScan;
+  /** Index of the first match in one line, or -1; lets long-line windows centre on the match. */
+  firstIndex(line: string): number;
 }
 
 function escapeRegExp(value: string) {
@@ -160,5 +162,9 @@ export function compileRipgrepMatcher(query: RipgrepQuery): RipgrepMatcher {
     return { lines, matches };
   };
 
-  return { scan: query.multiline ? scanMultiline : scanLines };
+  const firstIndex = (line: string) => {
+    expression.global.lastIndex = 0;
+    return expression.global.exec(line)?.index ?? -1;
+  };
+  return { scan: query.multiline ? scanMultiline : scanLines, firstIndex };
 }
