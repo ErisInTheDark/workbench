@@ -33,6 +33,7 @@ import {
 } from "../../../database/schema/schema-definition.ts";
 import {
   addColumns,
+  createIndexes,
   createTable,
   deleteRows,
   defineSubsystemHistory,
@@ -147,8 +148,27 @@ const threadItemsV5 = evolveTable(threadItemsV4, {
     ],
   }),
 });
+// Thread-scoped reads (settlement indexes, delivered messages, history, assets) would otherwise scan every item.
+const threadItemsV6 = evolveTable(threadItemsV5, {
+  extras: (table) => ({
+    constraints: [
+      unique([table.public_id]),
+      unique([table.turn_id, table.item_position]),
+      unique([table.id, table.type]),
+      unique([table.id, table.thread_id, table.type]),
+      unique([table.id, table.thread_id, table.turn_id]),
+      foreignKey([table.turn_id, table.thread_id], {
+        table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+      }),
+      foreignKey([table.public_id, table.thread_id], {
+        table: "workbench_transcript_item_identities", columns: ["id", "thread_id"], onDelete: "CASCADE",
+      }),
+    ],
+    indexes: [index("thread_items_thread_idx", [table.thread_id, table.turn_id])],
+  }),
+});
 const threadItemsHistory = defineTableHistory({
-  current: threadItemsV5,
+  current: threadItemsV6,
   versions: [
     tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadItemsV1, migration: createTable(threadItemsV1) }),
     tableVersion({ schemaVersion: databaseReleases.toolOutputParts.version, table: threadItemsV2, migration: rebuildTable({ from: threadItemsV1, to: threadItemsV2 }) }),
@@ -207,6 +227,11 @@ const threadItemsHistory = defineTableHistory({
       schemaVersion: databaseReleases.relationalTranscriptSources.version,
       table: threadItemsV5,
       migration: rebuildTable({ from: threadItemsV4, to: threadItemsV5 }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.threadItemThreadIndex.version,
+      table: threadItemsV6,
+      migration: createIndexes({ from: threadItemsV5, to: threadItemsV6, names: ["thread_items_thread_idx"] }),
     }),
   ],
 });

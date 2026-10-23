@@ -1,4 +1,4 @@
-/* No production exports. Tests protect project/provider ownership and lossless upgrades. */
+/* No production exports. Tests protect project/provider ownership, lossless upgrades and indexed thread-scoped item reads. */
 import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
@@ -21,6 +21,21 @@ test("an empty database installs exactly the schema a full history replay produc
   } finally {
     installed.close();
     replayed.close();
+  }
+});
+
+test("thread-scoped item reads search an index instead of scanning every item, fresh or upgraded", () => {
+  for (const targetVersion of [undefined, databaseReleases.threadItemThreadIndex.version - 1]) {
+    const database = new Database(":memory:");
+    try {
+      if (targetVersion) installWorkbenchDatabaseSchema(database, { targetVersion });
+      installWorkbenchDatabaseSchema(database);
+      const plan = database.prepare("EXPLAIN QUERY PLAN SELECT * FROM thread_items WHERE thread_id = ?").all("thread")
+        .map(row => (row as { detail: string }).detail).join("\n");
+      assert.match(plan, /SEARCH thread_items USING INDEX/u, `${targetVersion ?? "fresh"}: ${plan}`);
+    } finally {
+      database.close();
+    }
   }
 });
 
