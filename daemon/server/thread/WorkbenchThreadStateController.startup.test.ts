@@ -1,5 +1,6 @@
 /*
- * No exports. Tests protect provider-free cold serving of durable thread state.
+ * No exports. Tests protect provider-free cold serving of durable thread state, and reconciliation that rewrites nothing
+ * when providers report what is already stored.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,6 +10,7 @@ import { createThreadStateTestDatabase } from "./workbench-thread-state-test-dat
 import { parseWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 
 const fixtureIdentityValues = {
   ProjectId: {
@@ -22,7 +24,10 @@ function record(value: object) {
   return entry;
 }
 
-function controller(database: ReturnType<typeof createThreadStateTestDatabase>, log?: (message: string) => void) {
+type ReconcileProject = ConstructorParameters<typeof WorkbenchThreadStateController>[0]["reconcileProject"];
+
+function controller(database: ReturnType<typeof createThreadStateTestDatabase>, log?: (message: string) => void,
+  reconcileProject: ReconcileProject = async () => []) {
   return new WorkbenchThreadStateController({
     ...(log ? { log } : {}),
     resolveProjectId: id => {
@@ -39,7 +44,7 @@ function controller(database: ReturnType<typeof createThreadStateTestDatabase>, 
     resolveGitArc: async () => null,
     resolveGitArcPlan: async () => null,
     runGitArcReadTransition: async (_projectId, operation) => await operation(),
-    reconcileProject: async () => [],
+    reconcileProject,
     threadStateStore: database.persistence,
   });
 }
@@ -115,6 +120,44 @@ test("reopening an already canonical project never rewrites it, with or without 
     } finally {
       await reopened.dispose();
     }
+  }
+});
+
+test("a provider snapshot that matches stored threads rewrites none of them after reopen", async () => {
+  const sqlite = new Database(":memory:");
+  const threadId = "43596355-c379-497b-b1e0-2f2619c977a1";
+  createThreadStateTestDatabase(sqlite).admitThread(fixtureIdentityValues.ProjectId.project, threadId);
+  const provider: WorkbenchThreadSidebarEntry = {
+    activityAt: 2, entryKind: "thread", title: "Saved",
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+  };
+  const open = async (database: ReturnType<typeof createThreadStateTestDatabase>) => {
+    const reconciled = Promise.withResolvers<void>();
+    const current = controller(database, undefined, async (_projectId, _signal, accept) => {
+      await accept("codex", [provider], { complete: true });
+      reconciled.resolve();
+      return [];
+    });
+    await current.readProject(fixtureIdentityValues.ProjectId.project);
+    await reconciled.promise;
+    return current;
+  };
+  await (await open(createThreadStateTestDatabase(sqlite))).dispose();
+
+  const database = createThreadStateTestDatabase(sqlite);
+  const rewritten: string[] = [];
+  const writeChanges = database.persistence.writeChanges.bind(database.persistence);
+  database.persistence.writeChanges = async (projectId, changes) => {
+    rewritten.push(...(changes.records ?? []).map(record => record.identity.threadId));
+    await writeChanges(projectId, changes);
+  };
+  const reopened = await open(database);
+  try {
+    assert.deepEqual(rewritten, []);
+  } finally {
+    await reopened.dispose();
   }
 });
 

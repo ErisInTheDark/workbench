@@ -98,6 +98,17 @@ import {
 
 const BULK_REWRITE_THREADS = 50;
 
+/**
+ * Providers never report questionnaires, so a reconciled entry keeps the existing fields exactly as loaded: an absent value
+ * and a stored null must stay as they were, or every reconcile rewrites every thread.
+ */
+function preservedQuestionnaireFields(existing: Exclude<WorkbenchThreadStateEntry, { entryKind: "draft" }>) {
+  return {
+    ...(existing.pendingQuestionnaire !== undefined ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
+    ...(existing.questionnaireHistory !== undefined ? { questionnaireHistory: existing.questionnaireHistory } : {}),
+  };
+}
+
 // workbenchTitle is recorded only for workbench-owned relationships; provider inputs stay display labels.
 export type WorkbenchObservedThreadEntry = WorkbenchThreadSidebarEntry & { workbenchTitle?: string };
 
@@ -1857,11 +1868,10 @@ export default class WorkbenchThreadStateController {
             : lifecycle,
           mcpGeneration: existing.mcpGeneration,
           profile: existing.profile,
-          ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
+          ...preservedQuestionnaireFields(existing),
           pinned: existing.entryKind === "subagent" && existing.pinned,
           providerObserved: true,
           settledAt: adopted ? null : existing.settledAt,
-          ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), workbenchTitle);
         continue;
       }
@@ -1881,10 +1891,9 @@ export default class WorkbenchThreadStateController {
         profile: existing.profile,
         metadata,
         ...(existing.entryKind === "thread" && existing.orderAt !== undefined ? { orderAt: existing.orderAt } : {}),
-        ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
+        ...preservedQuestionnaireFields(existing),
         providerObserved: true,
         settledAt: existing.settledAt,
-        ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         title: providerEntry.title === "New thread" ? existing.title : providerEntry.title,
       } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), workbenchTitle);
     }
