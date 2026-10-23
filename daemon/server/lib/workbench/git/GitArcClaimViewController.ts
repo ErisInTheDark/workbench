@@ -3,7 +3,8 @@
  * - GitArcClaimViewInput: owner and hold-own choice for a build view.
  * - default GitArcClaimViewController: write the worktree as one owner builds it (every other live owner's dirty claims at
  *   their arc baselines, swapped through one index) and mirror selected paths of a view into an ignored directory,
- *   rewriting only files whose content differs and removing only files its own record says it wrote.
+ *   checking out only files whose content differs and removing only files its own record says it wrote. Both stop
+ *   once the caller's signal aborts.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -24,6 +25,8 @@ export interface GitArcClaimViewInput {
   cwd: string;
   harness: GitArcHarness;
   holdOwn: boolean;
+  /** Aborts once the caller is gone, so abandoned views stop composing. */
+  signal?: AbortSignal;
   threadId: string;
 }
 
@@ -42,6 +45,7 @@ const ManifestSchema = z.object({
   files: z.record(z.string(), z.object({ blob: z.string(), mtimeMs: z.number(), size: z.number() })),
 });
 type MirroredStat = z.infer<typeof ManifestSchema>["files"][string];
+const SYMLINK_MODE = "120000";
 
 /** One mirror at a time per directory; parallel builds of one owner must not interleave writes. */
 const mirrorTails = new Map<string, Promise<void>>();
@@ -130,11 +134,12 @@ export default class GitArcClaimViewController {
   /** Build the view from the live worktree and registry; callers hold the repository's read gate around this only. */
   async readClaimView(input: GitArcClaimViewInput): Promise<GitArcClaimView> {
     return await GitObjectReadSession.run(async () => {
+      input.signal?.throwIfAborted();
       const repository = await WorkbenchGitRepository.open(input.cwd);
       const store = new GitCheckpointStore(repository, this.resolveThreadIdentity);
       const caller = normalizeThreadId(input.threadId);
       const [snapshot, entries] = await Promise.all([
-        repository.writeWorktreeSnapshot(),
+        repository.writeWorktreeSnapshot(input.signal),
         new GitArcRegistry(repository, this.resolveThreadIdentity).list(),
       ]);
       const owners = (await Promise.all(entries.map(async (entry) => {
@@ -150,6 +155,7 @@ export default class GitArcClaimViewController {
         });
         return { baseline, claimed, threadId: entry.threadId };
       }))).filter(owner => owner !== null);
+      input.signal?.throwIfAborted();
       // Swapped paths are exactly the claimed paths that differ from each owner's baseline.
       const { changedPaths, tree } = await repository.writeTreeWithPathSources(
         snapshot.tree, owners.map(({ baseline, claimed }) => ({ paths: claimed, source: baseline })),
@@ -163,13 +169,14 @@ export default class GitArcClaimViewController {
    * Mirror a view tree's `paths` into an ignored directory. Trees are immutable and the directory is outside Git's
    * reach, so this runs after the read gate is released; mirrors into one directory still run one at a time.
    */
-  async mirrorClaimView(input: { into: string; paths: string[]; repoRoot: string; tree: string }) {
+  async mirrorClaimView(input: { into: string; paths: string[]; repoRoot: string; signal?: AbortSignal; tree: string }) {
     return await GitObjectReadSession.run(async () => {
+      input.signal?.throwIfAborted();
       const repository = await WorkbenchGitRepository.open(input.repoRoot);
       const mirror = await this.resolveMirror(repository, input.into);
       const scopes = input.paths.length ? repository.normalizePaths(input.paths) : [];
       const key = process.platform === "win32" ? mirror.toLowerCase() : mirror;
-      return await exclusive(key, async () => await this.mirror(repository, input.tree, mirror, scopes));
+      return await exclusive(key, async () => await this.mirror(repository, input.tree, mirror, scopes, input.signal));
     });
   }
 
@@ -196,12 +203,13 @@ export default class GitArcClaimViewController {
    * Make `directory` hold the tree's files under `scopes`, leaving matching files (and their mtimes) alone. Only files
    * the mirror recorded writing are ever removed; anything else there (build output, other scopes' files) stays.
    */
-  private async mirror(repository: WorkbenchGitRepository, tree: string, directory: string, scopes: string[]) {
+  private async mirror(repository: WorkbenchGitRepository, tree: string, directory: string, scopes: string[], signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const wanted = new Map<string, WantedFile>();
     const scope = new GitArcPathSet(scopes);
     const inScope = (relative: string) => !scopes.length || scope.covers(relative);
     // Scope sets past the command-line budget list the whole tree and filter here instead.
-    const listing = await repository.run(["ls-tree", "-r", "-z", "--full-tree", tree, ...repository.scopePathspecs(scopes)]);
+    const listing = await repository.run(["ls-tree", "-r", "-z", "--full-tree", tree, ...repository.scopePathspecs(scopes)], process.env, signal);
     for (const record of listing.split("\0")) {
       const tab = record.indexOf("\t");
       if (tab < 0) continue;
@@ -216,7 +224,10 @@ export default class GitArcClaimViewController {
     const manifestPath = path.join(directory, MANIFEST_NAME);
     const recorded = await readManifest(manifestPath);
     const inBatches = async <T>(items: readonly T[], work: (item: T) => Promise<void>) => {
-      for (let offset = 0; offset < items.length; offset += 64) await Promise.all(items.slice(offset, offset + 64).map(work));
+      for (let offset = 0; offset < items.length; offset += 64) {
+        signal?.throwIfAborted();
+        await Promise.all(items.slice(offset, offset + 64).map(work));
+      }
     };
 
     // Removals first, so a stale file never blocks a folder the view needs at its path.
@@ -248,21 +259,32 @@ export default class GitArcClaimViewController {
       outdated.push(relative);
     });
 
-    const byPath = await repository.readCheckoutBytes(tree, outdated);
+    // A symlink or folder in a file's place is replaced, never written through.
+    await inBatches(outdated, async (relative) => {
+      const file = path.join(directory, relative);
+      const existing = await lstatOrNull(file);
+      if (existing && !existing.isFile()) await fs.rm(file, { force: true, recursive: true });
+    });
+    const record = async (relative: string) => {
+      const written = await fs.lstat(path.join(directory, relative));
+      recorded.set(relative, { blob: wanted.get(relative)!.blob, mtimeMs: written.mtimeMs, size: written.size });
+    };
+    // Links mirror as plain files holding their target, so a mirror never points outside itself.
+    const links = outdated.filter(relative => wanted.get(relative)!.mode === SYMLINK_MODE);
+    const files = outdated.filter(relative => wanted.get(relative)!.mode !== SYMLINK_MODE);
     try {
-      for (const relative of outdated) {
-        const { blob, mode } = wanted.get(relative)!;
+      // Git writes regular files straight into the mirror; a partial write is re-adopted by content next time.
+      await repository.checkoutInto(tree, directory, files, signal);
+      await inBatches(files, record);
+      const byPath = await repository.readCheckoutBytes(tree, links);
+      for (const relative of links) {
+        signal?.throwIfAborted();
         const data = byPath.get(relative);
-        if (!data) throw new Error(`Git object ${blob} for ${relative} is missing.`);
+        if (!data) throw new Error(`Git object ${wanted.get(relative)!.blob} for ${relative} is missing.`);
         const file = path.join(directory, relative);
-        // A symlink or folder in the file's place is replaced, never written through.
-        const existing = await lstatOrNull(file);
-        if (existing && !existing.isFile()) await fs.rm(file, { force: true, recursive: true });
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, data);
-        if (mode === "100755" && process.platform !== "win32") await fs.chmod(file, 0o755);
-        const written = await fs.lstat(file);
-        recorded.set(relative, { blob, mtimeMs: written.mtimeMs, size: written.size });
+        await record(relative);
       }
     } finally {
       // A failed pass still records what it changed; unrecorded leftovers are re-adopted by content next time.

@@ -22,6 +22,7 @@ import type { ResolvedProjectRoot } from "../lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   GitArcClaimViewResult,
+  GitArcProposalCommitEntry,
   GitArcRootPaths,
   GitArcStackResult,
   GitCheckpointFileChange,
@@ -496,7 +497,7 @@ export default class WorkbenchWorkspaceGitArcController {
   async execute(
     project: AgentEndpointProjectResolution,
     request: GitCheckpointRequest,
-    options: { modifiedSince?: number } = {},
+    options: { modifiedSince?: number; signal?: AbortSignal } = {},
   ) {
     const members = await this.resolveRepoMembers(project);
     switch (request.action) {
@@ -543,7 +544,7 @@ export default class WorkbenchWorkspaceGitArcController {
           : await this.joinedMembers(members, request.harness, request.threadId);
         // Mirroring happens at ingress after these member read gates are released.
         const values = await this.runMembers(selected, async member => await this.local.readClaimView({
-          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, holdOwn: request.holdOwn,
+          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, holdOwn: request.holdOwn, signal: options.signal,
         }), undefined, "read");
         return { repositories: values.map(({ result }) => result) } satisfies GitArcClaimViewResult;
       }
@@ -1521,9 +1522,9 @@ export default class WorkbenchWorkspaceGitArcController {
   }
 
   /**
-   * Lands proposals in order, each through its own repository member. Each layer holds only its member's gate, so
-   * observers read between layers; each repository's worktree is captured once, when its first layer lands.
-   * The first failure stops the batch and is returned; `afterLanded` runs outside the gate after each landing.
+   * Lands proposals in order, each consecutive same-repository run under one hold of its member's gate, so observers
+   * read between runs; each repository's worktree is captured once, when its first run lands. The first failure stops
+   * the batch and is returned; `afterLanded` runs outside the gate for each landing, in order.
    */
   async commitProposals(
     project: AgentEndpointProjectResolution,
@@ -1534,11 +1535,17 @@ export default class WorkbenchWorkspaceGitArcController {
     const located = await Promise.all(request.entries.map(async entry => ({
       entry, member: await this.findProposalMember(members, { ...request, proposalId: entry.proposalId }),
     })));
+    const runs: Array<{ entries: GitArcProposalCommitEntry[]; member: RepoMember }> = [];
+    for (const { entry, member } of located) {
+      const last = runs.at(-1);
+      if (last?.member === member) last.entries.push(entry);
+      else runs.push({ entries: [entry], member });
+    }
     const identity = { harness: request.harness, threadId: request.threadId };
     const worktrees = new Map<RepoMember, GitWorktreeSnapshot>();
     const landed: GitCheckpointProposal[] = [];
-    const landLayer = async ({ entry, member }: (typeof located)[number]) => await this.transitions.runMany([member.repoRoot], async () => {
-      // Other writers may have run while the gate was yielded, so ref facts restart with every layer.
+    const landRun = async ({ entries, member }: (typeof runs)[number]) => await this.transitions.runMany([member.repoRoot], async () => {
+      // Other writers may have run while the gate was yielded, so ref facts restart with every run.
       WorkbenchGitRepository.forgetRefFacts(member.repoRoot);
       let worktree = worktrees.get(member);
       if (!worktree) {
@@ -1547,17 +1554,19 @@ export default class WorkbenchWorkspaceGitArcController {
         });
         worktrees.set(member, worktree);
       }
-      return await this.local.commitProposals({ ...identity, cwd: member.repoRoot, entries: [entry], worktree });
+      return await this.local.commitProposals({ ...identity, cwd: member.repoRoot, entries, worktree });
     });
-    // One operation scope keeps the object reader and identity facts across layers; observers run outside it.
+    // One operation scope keeps the object reader and identity facts across runs; observers run outside it.
     const batchScope = GitObjectReadSession.share();
     try {
-      for (const layer of located) {
-        const result = await GitObjectReadSession.run(() => landLayer(layer), batchScope);
+      for (const run of runs) {
+        const result = await GitObjectReadSession.run(() => landRun(run), batchScope);
+        for (const receipt of result.landed) {
+          const proposal = this.withProposalRoot(run.member, receipt);
+          landed.push(proposal);
+          await afterLanded?.(proposal);
+        }
         if (result.failed) return { failed: result.failed, landed };
-        const proposal = this.withProposalRoot(layer.member, result.landed[0]!);
-        landed.push(proposal);
-        await afterLanded?.(proposal);
       }
       return { failed: null, landed };
     } finally {

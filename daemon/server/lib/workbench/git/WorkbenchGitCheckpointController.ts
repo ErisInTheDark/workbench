@@ -265,7 +265,7 @@ export default class WorkbenchGitCheckpointController {
   }
 
   /** The worktree as one owner builds it; hold the repository read gate around this only. */
-  async readClaimView(input: ControllerInput & Pick<GitArcClaimViewInput, "holdOwn">) {
+  async readClaimView(input: ControllerInput & Pick<GitArcClaimViewInput, "holdOwn" | "signal">) {
     return await this.views.readClaimView({ ...input, harness: normalizeHarness(input.harness) });
   }
 

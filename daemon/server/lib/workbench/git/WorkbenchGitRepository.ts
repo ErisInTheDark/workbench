@@ -7,7 +7,8 @@
  * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`;
  * firstParentRange walks only from HEAD back to the amend target; currentHead and readCommitMessage read through the operation's object stream;
  * object writes, tree-to-tree path changes and writeTreeWithPathSources run in-process (GitObjectWriter/GitTreeObjects);
- * readCheckoutBytes materialises selected tree entries through Git's checkout filters in one disposable temporary index;
+ * readCheckoutBytes materialises selected tree entries through Git's checkout filters in one disposable temporary index,
+ * and checkoutInto writes them straight into a directory the same way;
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
  * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
  * buildFileChanges/buildChangeTotals/buildFileChangeSummaries list changed files in-process, then diff them in pathspec batches
@@ -647,22 +648,36 @@ export default class WorkbenchGitRepository {
     }
   }
 
+  /**
+   * Write selected tree files under `directory` exactly as Git would check them out, without touching the real index or
+   * worktree. Git replaces whatever stands in a file's place, including non-directory leading components, never writing through them.
+   */
+  async checkoutInto(treeish: string, directory: string, paths: readonly string[], signal?: AbortSignal) {
+    if (!paths.length) return;
+    const selected = this.normalizePaths([...paths]);
+    await this.withTemporaryIndex(async (indexPath) => await this.checkoutWithIndex(indexPath, treeish, directory, selected, signal));
+  }
+
+  private async checkoutWithIndex(indexPath: string, treeish: string, directory: string, selected: readonly string[], signal?: AbortSignal) {
+    const env = { ...process.env, GIT_INDEX_FILE: indexPath };
+    await fs.mkdir(directory, { recursive: true });
+    await this.run(["read-tree", await this.contentBase(treeish)], env, signal);
+    await this.runWithInput([
+      "checkout-index",
+      "--force",
+      `--prefix=${directory.replace(/\\/gu, "/")}/`,
+      "-z",
+      "--stdin",
+    ], `${selected.join("\0")}\0`, env, signal);
+  }
+
   /** Materialise selected tree files exactly as Git would check them out, without touching the real index or worktree. */
   async readCheckoutBytes(treeish: string, paths: readonly string[]) {
     if (!paths.length) return new Map<string, Buffer>();
     const selected = this.normalizePaths([...paths]);
     return await this.withTemporaryIndex(async (indexPath, directory) => {
       const checkoutDirectory = path.join(directory, "checkout");
-      const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await fs.mkdir(checkoutDirectory, { recursive: true });
-      await this.run(["read-tree", await this.contentBase(treeish)], env);
-      await this.runWithInput([
-        "checkout-index",
-        "--force",
-        `--prefix=${checkoutDirectory.replace(/\\/gu, "/")}/`,
-        "-z",
-        "--stdin",
-      ], `${selected.join("\0")}\0`, env);
+      await this.checkoutWithIndex(indexPath, treeish, checkoutDirectory, selected);
       return new Map(await Promise.all(selected.map(async (relative) => {
         const file = path.join(checkoutDirectory, relative);
         const stat = await fs.lstat(file);

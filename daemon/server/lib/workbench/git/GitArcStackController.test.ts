@@ -1,11 +1,13 @@
 /*
- * Exports: none. Protect stack layer waiting, sealing, reopening, history rewrites and subagent transfer on prepared branches.
+ * Exports: none. Protect stack layer waiting, sealing, reopening, batch landing, history rewrites, subagent transfer and
+ * arc tree cancellation on prepared branches.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import { checkpointNamespace } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry from "./GitArcRegistry";
 import GitArcStackController from "./GitArcStackController";
 import GitCheckpointStore from "./GitCheckpointStore";
@@ -18,7 +20,13 @@ import { STACK_OPERATIONS_FIXTURE, type StackFixtureState } from "./GitArcContro
 const fixtures = new GitTestFixtureCache();
 const controller = new WorkbenchGitCheckpointController();
 let fixture: GitTestFixtureCopy<StackFixtureState> | null = null;
-before(async () => { fixture = await fixtures.copy(STACK_OPERATIONS_FIXTURE); }, { timeout: 30_000 });
+let batchRoot = "";
+before(async () => {
+  fixture = await fixtures.copy(STACK_OPERATIONS_FIXTURE);
+  // Other tests reshape the sealed branch; the batch test stacks its own layers on a pristine copy.
+  batchRoot = path.join(fixture.bundleRoot, "r/batch");
+  await fs.cp(path.join(fixture.bundleRoot, fixture.state.sealed.root), batchRoot, { recursive: true });
+}, { timeout: 30_000 });
 after(async () => { await fixture?.dispose(); });
 
 function branch<Key extends keyof StackFixtureState>(key: Key) {
@@ -377,4 +385,48 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   await controller.editArcClaims({ cwd, threadId: "child", inherit: true });
   await commit("child", child.proposalId, "child");
   assert.equal(await git("show", "HEAD:two.txt"), "child builds on two\n");
+});
+
+test("a stack accepted in one batch lands as one claim transition and outcome", async () => {
+  const cwd = batchRoot;
+  const owner = { cwd, threadId: "owner" };
+  const repository = await WorkbenchGitRepository.open(cwd);
+  const lower = fixture!.state.sealed.lower;
+  await controller.editArcClaims({ ...owner, inherit: true, addPaths: ["three.txt", "four.txt"] });
+  await fs.writeFile(path.join(cwd, "one.txt"), "second\n");
+  const middle = await controller.createProposal({ ...owner, paths: ["one.txt"], title: "second", description: "" });
+  await controller.stackArc({ ...owner, title: "layer two" });
+  await fs.writeFile(path.join(cwd, "three.txt"), "third\n");
+  const upper = await controller.createProposal({ ...owner, paths: ["three.txt"], title: "third", description: "" });
+  await controller.stackArc({ ...owner, title: "layer three" });
+  await fs.writeFile(path.join(cwd, "four.txt"), "still dirty\n");
+  const agentRefs = path.posix.dirname(checkpointNamespace("codex", "owner"));
+  const refCounts = async () => ({
+    checkpoints: (await repository.listRefs(`${agentRefs}/checkpoints`)).length,
+    outcomes: (await repository.listRefs(`${agentRefs}/arc-outcomes`)).length,
+  });
+  const before = await refCounts();
+  const batch = await controller.commitProposals({ ...owner, entries: [[lower, "first"], [middle.proposalId, "second"], [upper.proposalId, "third"]]
+    .map(([proposalId, title]) => ({ proposalId: proposalId!, title: title!, description: "", includeNewer: false })) });
+  assert.equal(batch.failed, null);
+  assert.equal(await repository.run(["log", "-3", "--format=%s"]), "third\nsecond\nfirst\n");
+  const after = await refCounts();
+  assert.deepEqual({ checkpoints: after.checkpoints - before.checkpoints, outcomes: after.outcomes - before.outcomes },
+    { checkpoints: 1, outcomes: 1 }, "the batch publishes one successor checkpoint and one outcome, not one per proposal");
+  assert.deepEqual((await controller.readStatus(owner)).accepted.map(({ proposalId }) => proposalId).sort(),
+    [lower, middle.proposalId, upper.proposalId].sort());
+  assert.equal((await controller.findLifecycleState(owner))?.stackLayers, undefined, "the landed stack stops shaping the baseline");
+  const scope = await controller.readScope(owner);
+  assert.deepEqual([scope?.phase, scope?.claimedPaths], ["active", ["four.txt"]], "the dirty claim keeps the arc active");
+});
+
+test("arc tree composition and mirroring stop once their caller disconnects", async () => {
+  const { cwd, git } = branch("stacked");
+  await fs.appendFile(path.resolve(cwd, (await git("rev-parse", "--git-path", "info/exclude")).trim()), "\nabort-out/\n");
+  const aborted = AbortSignal.abort(new Error("caller left"));
+  await assert.rejects(controller.readClaimView({ cwd, threadId: "owner", holdOwn: false, signal: aborted }), /caller left/u);
+  const view = await controller.readClaimView({ cwd, threadId: "owner", holdOwn: false });
+  const out = path.join(cwd, "abort-out");
+  await assert.rejects(controller.mirrorClaimView({ into: out, paths: [], repoRoot: view.repoRoot, signal: aborted, tree: view.tree }), /caller left/u);
+  await assert.rejects(fs.access(out), "nothing is mirrored for a departed caller");
 });

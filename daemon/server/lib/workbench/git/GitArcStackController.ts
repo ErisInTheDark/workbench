@@ -134,8 +134,8 @@ export default class GitArcStackController {
     }));
   }
 
-  async chainHasPending(chain: readonly GitArcStackLayer[], excludedProposalId?: string) {
-    return (await this.storedPendingIds(chain)).some(({ pending }) => pending.some(id => id !== excludedProposalId));
+  async chainHasPending(chain: readonly GitArcStackLayer[], excludedProposalIds: ReadonlySet<string> = new Set()) {
+    return (await this.storedPendingIds(chain)).some(({ pending }) => pending.some(id => !excludedProposalIds.has(id)));
   }
 
   /** The tip that new work builds on, or null when no pending layer shapes the baseline. */
@@ -155,7 +155,7 @@ export default class GitArcStackController {
   }
 
   /** Paths represented by this owner's still-pending sealed proposals. */
-  async pendingOwnBaselinePaths(entry: GitArcRegistryEntry, excludedProposalId?: string) {
+  async pendingOwnBaselinePaths(entry: GitArcRegistryEntry, excludedProposalIds: ReadonlySet<string> = new Set()) {
     const ownLayers = await this.readOwnLayers(entry);
     const summaries = await this.store().readProposalSummaryGroups(ownLayers.map(({ layer }) => ({
       harness: layer.harness as GitArcHarness,
@@ -165,7 +165,7 @@ export default class GitArcStackController {
     const paths: string[] = [];
     ownLayers.forEach(({ layer }, index) => {
       for (const proposal of summaries[index] ?? []) {
-        if (proposal.proposalId !== excludedProposalId && proposal.status === "proposed") {
+        if (!excludedProposalIds.has(proposal.proposalId) && proposal.status === "proposed") {
           paths.push(...proposal.livePaths);
         }
       }

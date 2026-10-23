@@ -585,7 +585,9 @@ export default class WorkbenchGitArcFeature {
               : effectiveRequest.action === "readDiffArtifact"
               ? await this.dispatch(effectiveRequest)
               : usesWorkspaceController(project, effectiveRequest)
-                ? Response.json(await this.workspaceController.execute(project, effectiveRequest, { modifiedSince: modifiedSince ?? undefined }))
+                ? Response.json(await this.workspaceController.execute(project, effectiveRequest, {
+                  modifiedSince: modifiedSince ?? undefined, signal: this.lifecycleSignal(signal),
+                }))
                 : mutatesGitArcState(effectiveRequest)
                   ? await this.options.transitions.run(project.cwd, async () => {
                     try {
@@ -597,7 +599,7 @@ export default class WorkbenchGitArcFeature {
                   : effectiveRequest.action === "proposalState"
                     ? await this.readProposalInBatch(project.cwd, async () => await this.dispatch(effectiveRequest))
                     : await (this.options.transitions.read ?? this.options.transitions.run)
-                      .call(this.options.transitions, project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined));
+                      .call(this.options.transitions, project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined, this.lifecycleSignal(signal)));
             // Mirroring copies an immutable view tree into an ignored folder, so it runs after the Git gate is released.
             if (response.ok && effectiveRequest.action === "arcTree" && effectiveRequest.into) {
               const { into, paths } = effectiveRequest;
@@ -606,7 +608,9 @@ export default class WorkbenchGitArcFeature {
                 throw new Error("A mirror directory holds one repository's view; this workspace spans several repositories.");
               }
               response = Response.json({
-                repositories: [{ ...view, ...await this.controller.mirrorClaimView({ into, paths, repoRoot: view.repoRoot, tree: view.tree }) }],
+                repositories: [{ ...view, ...await this.controller.mirrorClaimView({
+                  into, paths, repoRoot: view.repoRoot, signal: this.lifecycleSignal(signal), tree: view.tree,
+                }) }],
               } satisfies GitArcClaimViewResult);
             }
             // Only an owner reading its own status has viewed its accepted rows; the stamp takes its own lease.
@@ -1158,7 +1162,7 @@ export default class WorkbenchGitArcFeature {
     };
   }
 
-  private async dispatch(input: GitCheckpointRequest, modifiedSince?: number) {
+  private async dispatch(input: GitCheckpointRequest, modifiedSince?: number, signal?: AbortSignal) {
     const common = { cwd: input.cwd, harness: input.harness, threadId: input.threadId };
     switch (input.action) {
       case "planClaims": return Response.json(await this.controller.editPlanClaims({ ...common, ...input }));
@@ -1169,7 +1173,7 @@ export default class WorkbenchGitArcFeature {
       case "arcScope": return Response.json(await this.controller.readScope(common));
       case "arcStatus": return Response.json(await this.controller.readStatus(common));
       case "arcTree": return Response.json({
-        repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn })],
+        repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn, signal })],
       } satisfies GitArcClaimViewResult);
       case "plan": return Response.json(await this.controller.createPlan({
         ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
