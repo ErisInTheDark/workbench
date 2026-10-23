@@ -1598,8 +1598,13 @@ export default class GitArcProposalController {
    * fresh commits land in memory and publish as one ref transaction with one claim transition; history amends and
    * message-only acceptances publish alone. One worktree capture serves the whole batch: edits made while it runs count as after it.
    */
-  async commitProposals({ cwd, entries, harness: rawHarness, threadId, worktree: captured }: ArcIdentityInput & {
+  async commitProposals({ cwd, entries, harness: rawHarness, onAdvance, threadId, worktree: captured }: ArcIdentityInput & {
     entries: GitArcProposalCommitEntry[];
+    /**
+     * Called synchronously once the acceptance moves past a proposal: its commit is built for the shared publish, or it
+     * landed alone. Runs inside the landing, so it must never wait on Git or repository gates.
+     */
+    onAdvance?: (proposalId: string) => void;
     /** A capture shared with earlier parts of the same acceptance; captured here when absent. */
     worktree?: GitWorktreeSnapshot;
   }) {
@@ -1624,6 +1629,7 @@ export default class GitArcProposalController {
         if (await this.landsInBatch(repository, harness, threadId, entry)) {
           batch ??= await this.openCommitBatch(repository, harness, threadId, worktree);
           await this.prepareCommitLanding(repository, harness, threadId, entry, batch);
+          onAdvance?.(entry.proposalId);
           continue;
         }
       } catch (error) {
@@ -1645,6 +1651,7 @@ export default class GitArcProposalController {
       } catch (error) {
         return { failed: { error, proposalId: entry.proposalId }, landed };
       }
+      onAdvance?.(entry.proposalId);
     }
     return await flush() ?? { failed: null, landed };
   }

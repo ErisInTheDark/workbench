@@ -1524,12 +1524,12 @@ export default class WorkbenchWorkspaceGitArcController {
   /**
    * Lands proposals in order, each consecutive same-repository run under one hold of its member's gate, so observers
    * read between runs; each repository's worktree is captured once, when its first run lands. The first failure stops
-   * the batch and is returned; `afterLanded` runs outside the gate for each landing, in order.
+   * the batch and is returned; `onAdvance` runs synchronously inside the gate as the acceptance moves past each proposal.
    */
   async commitProposals(
     project: AgentEndpointProjectResolution,
     request: Extract<GitCheckpointRequest, { action: "proposalCommitMany" }>,
-    afterLanded?: (proposal: GitCheckpointProposal) => Promise<void>,
+    onAdvance?: (proposalId: string) => void,
   ) {
     const members = await this.resolveRepoMembers(project);
     const located = await Promise.all(request.entries.map(async entry => ({
@@ -1554,18 +1554,14 @@ export default class WorkbenchWorkspaceGitArcController {
         });
         worktrees.set(member, worktree);
       }
-      return await this.local.commitProposals({ ...identity, cwd: member.repoRoot, entries, worktree });
+      return await this.local.commitProposals({ ...identity, cwd: member.repoRoot, entries, onAdvance, worktree });
     });
-    // One operation scope keeps the object reader and identity facts across runs; observers run outside it.
+    // One operation scope keeps the object reader and identity facts across runs.
     const batchScope = GitObjectReadSession.share();
     try {
       for (const run of runs) {
         const result = await GitObjectReadSession.run(() => landRun(run), batchScope);
-        for (const receipt of result.landed) {
-          const proposal = this.withProposalRoot(run.member, receipt);
-          landed.push(proposal);
-          await afterLanded?.(proposal);
-        }
+        landed.push(...result.landed.map(receipt => this.withProposalRoot(run.member, receipt)));
         if (result.failed) return { failed: result.failed, landed };
       }
       return { failed: null, landed };

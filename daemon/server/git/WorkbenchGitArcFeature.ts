@@ -15,6 +15,7 @@ import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
 import { isPathWithinRoot } from "../lib/project";
 import { isMachineGitWorktree } from "../lib/workbench/git/machine-git-worktrees";
 import { isMachineGitArcRoot, withMachineGitArcRoots } from "./machine-git-arc-roots";
+import GitArcAcceptanceProgress, { type GitArcAcceptance } from "./GitArcAcceptanceProgress";
 
 import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcDurableProposalReader } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import GitObjectReadSession from "../lib/workbench/git/GitObjectReadSession";
@@ -115,7 +116,6 @@ type PublicGitState<T extends { threadId: string; members: Array<{ threadId: str
 export type WorkbenchGitArcLifecycleState = PublicGitState<WorkspaceGitArcLifecycleState> & Pick<ObservedGitArcLifecycleState, "acceptance">;
 export type WorkbenchGitArcPlanState = PublicGitState<WorkspaceGitArcPlanState>;
 export type WorkbenchGitArcActiveClaim = PublicGitOwner<GitArcActiveClaim>;
-type GitArcAcceptance = NonNullable<ObservedGitArcLifecycleState["acceptance"]>;
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "arcAdoptSource",
@@ -233,7 +233,7 @@ export default class WorkbenchGitArcFeature {
     reject: (error: unknown) => void;
   }>>();
   /** Running batched acceptances by owner: process-local facts overlaid on the observed lifecycle. */
-  private readonly acceptances = new Map<string, GitArcAcceptance>();
+  private readonly acceptances = new GitArcAcceptanceProgress();
   private readonly claimMutations = new GitArcClaimMutations();
 
   constructor(private readonly options: WorkbenchGitArcFeatureOptions) {
@@ -421,8 +421,8 @@ export default class WorkbenchGitArcFeature {
     const owner = await this.gitThreadIdentity(project, harness, threadId);
     const state = await this.workspaceController.findLifecycleState(project, owner.harness, owner.threadId);
     if (!state) return null;
-    const acceptance = this.acceptances.get(acceptanceKey(owner));
-    return { ...this.publicState(state), ...(acceptance ? { acceptance: { ...acceptance, queuedIds: [...acceptance.queuedIds] } } : {}) };
+    const acceptance = this.acceptances.read(acceptanceKey(owner));
+    return { ...this.publicState(state), ...(acceptance ? { acceptance } : {}) };
   }
 
   async discoverClaimHistory(input: { projectId: string; rootId: string; workspaceRoot: string }) {
@@ -905,8 +905,8 @@ export default class WorkbenchGitArcFeature {
   }
 
   /**
-   * Publishes the running acceptance as an observed lifecycle fact after every landing, so every observer renders what is
-   * landing and queued. A batch's failed entry reports exactly as its own single commit would have.
+   * Publishes the running acceptance as an observed lifecycle fact as it passes each proposal, so every observer renders
+   * what is landing and queued. A batch's failed entry reports exactly as its own single commit would have.
    */
   private async commitProposals(
     project: AgentEndpointProjectResolution,
@@ -914,21 +914,16 @@ export default class WorkbenchGitArcFeature {
   ): Promise<GitArcProposalCommitManyResult> {
     const owner = await this.gitThreadIdentity(project, request.harness, request.threadId);
     const key = acceptanceKey(owner);
-    if (this.acceptances.has(key)) throw new Error("This thread is already committing proposals.");
-    const ids = request.entries.map(({ proposalId }) => proposalId);
-    this.acceptances.set(key, { landingId: ids[0]!, queuedIds: ids.slice(1) });
+    this.acceptances.start(key, request.entries.map(({ proposalId }) => proposalId), async acceptance => {
+      await this.publishGitArcAcceptance(project.project.id, owner.harness, owner.threadId, acceptance);
+    });
     let result: Awaited<ReturnType<WorkbenchWorkspaceGitArcController["commitProposals"]>>;
     try {
       await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
-      result = await this.workspaceController.commitProposals(project, request, async () => {
-        const [landingId = null, ...queuedIds] = this.acceptances.get(key)!.queuedIds;
-        const acceptance = { landingId, queuedIds };
-        this.acceptances.set(key, acceptance);
-        await this.publishGitArcAcceptance(project.project.id, owner.harness, owner.threadId, acceptance);
-      });
+      result = await this.workspaceController.commitProposals(project, request, proposalId => this.acceptances.advance(key, proposalId));
     } finally {
       // The request's own completion publishes the settled lifecycle without this fact.
-      this.acceptances.delete(key);
+      await this.acceptances.finish(key);
     }
     const { failed, landed } = result;
     if (!failed) return { failed: null, landed };
@@ -1080,7 +1075,7 @@ export default class WorkbenchGitArcFeature {
         await this.options.refreshThreadGitArcState(projectId, harness, threadId);
       }
     } catch (error) {
-      console.error(`Git arc acceptance progress publication failed after a proposal landed: ${sanitizeError(error)}`);
+      console.error(`Git arc acceptance progress publication failed: ${sanitizeError(error)}`);
     }
   }
 

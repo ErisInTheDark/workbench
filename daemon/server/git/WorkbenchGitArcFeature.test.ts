@@ -205,7 +205,7 @@ test("proposal dispatch preserves on-demand inspection and inspected selection",
   assert.equal(result.mode, "commit");
 });
 
-test("a batched acceptance durably refreshes only at its boundaries and publishes lightweight progress after every landing", async () => {
+test("a batched acceptance durably refreshes only at its boundaries and publishes lightweight progress as it passes each proposal", async () => {
   const durable: Array<object | null> = [];
   const progress: Array<{ landingId: string | null; queuedIds: string[] }> = [];
   let feature!: WorkbenchGitArcFeature;
@@ -223,7 +223,7 @@ test("a batched acceptance durably refreshes only at its boundaries and publishe
   });
   const internal = feature as unknown as {
     workspaceController: {
-      commitProposals: (project: object, request: { entries: Array<{ proposalId: string }> }, afterLanded: (proposal: object) => Promise<void>) => Promise<object>;
+      commitProposals: (project: object, request: { entries: Array<{ proposalId: string }> }, onAdvance: (proposalId: string) => void) => Promise<object>;
       findLifecycleState: () => Promise<object>;
     };
   };
@@ -231,8 +231,8 @@ test("a batched acceptance durably refreshes only at its boundaries and publishe
     checkpointCommit: "a".repeat(40), claimedPaths: [], harness: "codex", intentDescription: "", intentName: "work",
     members: [], phase: "resolved", proposals: [], threadId: wbThreadId("codex", "thread"), updatedAt: "now",
   });
-  internal.workspaceController.commitProposals = async (_project, request, afterLanded) => {
-    for (const { proposalId } of request.entries) await afterLanded({ proposalId });
+  internal.workspaceController.commitProposals = async (_project, request, onAdvance) => {
+    for (const { proposalId } of request.entries) onAdvance(proposalId);
     return { failed: null, landed: [] };
   };
   const response = await feature.executeRequest({
@@ -260,12 +260,12 @@ test("a failed lightweight acceptance publication never falsifies landed Git res
       commitProposals: (
         project: object,
         request: { entries: Array<{ proposalId: string }> },
-        afterLanded: (proposal: object) => Promise<void>,
+        onAdvance: (proposalId: string) => void,
       ) => Promise<object>;
     };
   };
-  internal.workspaceController.commitProposals = async (_project, request, afterLanded) => {
-    for (const { proposalId } of request.entries) await afterLanded({ proposalId });
+  internal.workspaceController.commitProposals = async (_project, request, onAdvance) => {
+    for (const { proposalId } of request.entries) onAdvance(proposalId);
     return { failed: null, landed: [] };
   };
 

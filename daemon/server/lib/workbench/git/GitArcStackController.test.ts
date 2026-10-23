@@ -408,10 +408,25 @@ test("a stack accepted in one batch lands as one claim transition and outcome", 
   });
   const before = await refCounts();
   const classifications = context.mock.method(WorkbenchGitHistoryRewriter.prototype, "classifyAmendability");
-  const batch = await controller.commitProposals({ ...owner, entries: [[lower, "first"], [middle.proposalId, "second"], [upper.proposalId, "third"]]
-    .map(([proposalId, title]) => ({ proposalId: proposalId!, title: title!, description: "", includeNewer: false })) });
+  const progress: string[] = [];
+  const publishRefs = WorkbenchGitRepository.prototype.publishRefsAfterIndexNormalization;
+  const publications = context.mock.method(WorkbenchGitRepository.prototype, "publishRefsAfterIndexNormalization", function (
+    this: WorkbenchGitRepository, ...args: Parameters<typeof publishRefs>
+  ) {
+    progress.push("publish");
+    return publishRefs.apply(this, args);
+  });
+  const batch = await controller.commitProposals({
+    ...owner,
+    entries: [[lower, "first"], [middle.proposalId, "second"], [upper.proposalId, "third"]]
+      .map(([proposalId, title]) => ({ proposalId: proposalId!, title: title!, description: "", includeNewer: false })),
+    onAdvance: proposalId => progress.push(proposalId),
+  });
   classifications.mock.restore();
+  publications.mock.restore();
   assert.equal(batch.failed, null);
+  assert.deepEqual(progress, [lower, middle.proposalId, upper.proposalId, "publish"],
+    "the acceptance advances past each proposal as its commit is built, before the shared publish");
   assert.deepEqual([batch.landed.map(({ amendability }) => amendability?.status), classifications.mock.callCount()],
     [["available", "available", "available"], 0], "freshly landed commits are amendable without walking history");
   assert.equal(await repository.run(["log", "-3", "--format=%s"]), "third\nsecond\nfirst\n");

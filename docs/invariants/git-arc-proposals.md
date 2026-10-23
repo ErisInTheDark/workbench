@@ -34,6 +34,7 @@
 - Content revision applies only worktree changes beyond represented proposals; later proposal content stays in its original layer.
 - Stacked proposals commit only after lower chain proposals resolve, replaying onto HEAD when their paths match the tip; otherwise unavailable.
 - Consecutive commit-mode acceptances in one repository land as one ref transaction with one claim transition and outcome; the first invalid entry publishes only the valid prefix.
+- Batched acceptance progress advances past each proposal once its commit is built or it lands alone; publishing progress never waits inside the landing.
 - Arc tree composition and mirroring stop once their caller disconnects.
 - Stacking rewrites pending content amends into fresh-commit proposals over their live base and paths, using their fresh message; message-only amends stay unsealed. Sealed proposals never rewrite history.
 - Stash creation and restoration reject while any pending stack layer shapes the thread baseline; stacking rejects while saved work exists. Saved work may transfer onto inherited pending layers, but not onto recipient-owned pending layers.

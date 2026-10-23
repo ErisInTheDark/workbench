@@ -1320,7 +1320,11 @@ export default class WorkbenchGitCheckpointController {
   }
 
   /** Lands proposals in order in one operation; the first failure stops the batch and is returned, not thrown. */
-  async commitProposals(input: ControllerInput & { entries: GitArcProposalCommitEntry[]; worktree?: GitWorktreeSnapshot }) {
+  async commitProposals(input: ControllerInput & {
+    entries: GitArcProposalCommitEntry[];
+    onAdvance?: (proposalId: string) => void;
+    worktree?: GitWorktreeSnapshot;
+  }) {
     return await GitObjectReadSession.run(() => this.proposals.commitProposals(input));
   }
 
