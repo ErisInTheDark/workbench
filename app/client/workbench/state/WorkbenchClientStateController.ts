@@ -27,6 +27,8 @@ import type { WorkbenchProjectAlias } from "workbench-shared/types";
 import type WorkbenchWorkspaceClient from "../app/WorkbenchWorkspaceClient";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
+const NO_PROJECT_ALIASES: readonly WorkbenchProjectAlias[] = Object.freeze([]);
+
 export interface WorkbenchClientStateSnapshot {
   attachmentsAsUrls: boolean;
   daemonRegistrationId: string;
@@ -74,6 +76,7 @@ export default class WorkbenchClientStateController {
   readonly #records = new Map<string, { record: WorkbenchClientStateRecord | null; revision: number }>();
   readonly #threadAliases = new Map<string, Map<string, Map<string, string>>>();
   readonly #projectAliases = new Map<string, Map<string, WorkbenchProjectAlias["projectId"]>>();
+  readonly #aliasLists = new WeakMap<ReadonlyMap<string, WorkbenchProjectAlias["projectId"]>, readonly WorkbenchProjectAlias[]>();
   #daemonRegistrationId = "memory";
   #disposed = false;
   #error = "";
@@ -222,8 +225,16 @@ export default class WorkbenchClientStateController {
     return this.#projectAliases.get(daemonRegistrationId)?.get(projectId) ?? projectId;
   }
 
+  /**
+   * Every rendered link reads this through a selector on each render and state write, so one list is built per alias
+   * map; maps are replaced, never mutated, when aliases change.
+   */
   getProjectAliases(daemonRegistrationId = this.#daemonRegistrationId): readonly WorkbenchProjectAlias[] {
-    return [...(this.#projectAliases.get(daemonRegistrationId) ?? [])].map(([alias, projectId]) => ({ alias, projectId }));
+    const aliases = this.#projectAliases.get(daemonRegistrationId);
+    if (!aliases) return NO_PROJECT_ALIASES;
+    let list = this.#aliasLists.get(aliases);
+    if (!list) this.#aliasLists.set(aliases, list = [...aliases].map(([alias, projectId]) => ({ alias, projectId })));
+    return list;
   }
 
   #canonicalProject<T extends WorkbenchClientStateIdentity | WorkbenchClientStateRecord>(identity: T): T {
@@ -367,7 +378,11 @@ export default class WorkbenchClientStateController {
     }
     if (response.revision >= this.#revision) {
       const mappings = (response.projectAliases ?? []).map(source => {
-        const projects = new Map(source.aliases.map(item => [item.alias, item.projectId]));
+        // Every write response repeats the aliases; keeping an unchanged map keeps every alias read's identity.
+        const previous = this.#projectAliases.get(source.daemonRegistrationId);
+        const unchanged = previous?.size === source.aliases.length
+          && source.aliases.every(item => previous.get(item.alias) === item.projectId);
+        const projects = unchanged ? previous : new Map(source.aliases.map(item => [item.alias, item.projectId]));
         return { daemonRegistrationId: source.daemonRegistrationId, projects,
           threads: this.#remappedThreadAliases(projects, source.daemonRegistrationId) };
       });
