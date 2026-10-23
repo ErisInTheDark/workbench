@@ -1,8 +1,12 @@
 /*
  * Exports:
- * - WorkbenchProjectSnapshotControllerOptions: injected project resolution, tree operations, clock, polling, logging, and cache bound for deterministic lifecycle tests.
- * - default WorkbenchProjectSnapshotController: own one reloadable snapshot loop per observed project (walking the tree only for tree observers and reads), file deletion, change-only publication, the HTTP tree read, and disposal.
+ * - WorkbenchProjectSnapshotControllerOptions: injected project resolution, tree operations, tree watching, clock, polling, logging, and cache bound for deterministic lifecycle tests.
+ * - ProjectTreeWatch: report that anything under a project's roots may have changed.
+ * - default WorkbenchProjectSnapshotController: own one reloadable snapshot loop per observed project (walking the tree only for tree
+ *   observers and reads, and for watched trees only after a change or a slow resync), file deletion, change-only publication, the
+ *   HTTP tree read, and disposal.
  */
+import { watch, type FSWatcher } from "node:fs";
 import type http from "node:http";
 
 import {
@@ -21,6 +25,33 @@ import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_PROJECT_SNAPSHOTS = 4;
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
+/** A watched tree is still walked this often, in case the platform dropped change events. */
+const DEFAULT_TREE_RESYNC_MS = 60_000;
+
+/** Calls `changed` when anything under the roots may have changed; returns a closer, or null when it cannot watch. */
+export type ProjectTreeWatch = (roots: readonly string[], changed: () => void) => (() => void) | null;
+
+/** Recursive platform watchers; Git's own files change on every status read, so they never mark the tree changed. */
+const watchProjectTree: ProjectTreeWatch = (roots, changed) => {
+  const watchers: FSWatcher[] = [];
+  const close = () => { for (const watcher of watchers.splice(0)) watcher.close(); };
+  try {
+    for (const root of roots) {
+      const watcher = watch(root, { recursive: true }, (_event, filename) => {
+        const name = filename === null ? null : String(filename).replaceAll("\\", "/");
+        if (name === ".git" || name?.startsWith(".git/")) return;
+        changed();
+      });
+      // A broken watcher can no longer vouch for the tree, so the poll walks again.
+      watcher.on("error", () => { close(); changed(); });
+      watchers.push(watcher);
+    }
+  } catch {
+    close();
+    return null;
+  }
+  return close;
+};
 
 type SnapshotCacheState = "coalesced" | "hit" | "miss";
 
@@ -40,6 +71,11 @@ interface ProjectSnapshotState {
   revision: number;
   serialized: string | null;
   snapshot: ProjectSnapshot | null;
+  /** Closes the tree watcher; null while unwatched, in which case every tree poll walks. */
+  closeWatcher: (() => void) | null;
+  /** Set by the watcher, explicit refreshes and invalidation; cleared as a walk starts. */
+  treeChanged: boolean;
+  walkedAt: number;
 }
 
 interface SnapshotResponse {
@@ -66,6 +102,9 @@ export interface WorkbenchProjectSnapshotControllerOptions {
   operations?: ProjectOperations;
   pollIntervalMs?: number;
   resolveProjectById: (projectId?: string | null) => Promise<ResolvedProject>;
+  /** Lets tree polls skip unchanged trees; without one, every tree poll walks. */
+  watchTree?: ProjectTreeWatch | null;
+  treeResyncMs?: number;
 }
 
 function sendSerializedJson(response: http.ServerResponse, statusCode: number, serialized: string, cacheState?: SnapshotCacheState) {
@@ -93,6 +132,8 @@ export default class WorkbenchProjectSnapshotController {
   private readonly projects = new Map<string, ProjectSnapshotState>();
   private readonly resolveProjectById: WorkbenchProjectSnapshotControllerOptions["resolveProjectById"];
   private readonly observeProject: (projectId: string) => void;
+  private readonly watchTree: ProjectTreeWatch | null;
+  private readonly treeResyncMs: number;
 
   constructor({
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
@@ -106,7 +147,11 @@ export default class WorkbenchProjectSnapshotController {
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     resolveProjectById,
     observeProject = () => undefined,
+    watchTree = watchProjectTree,
+    treeResyncMs = DEFAULT_TREE_RESYNC_MS,
   }: WorkbenchProjectSnapshotControllerOptions) {
+    this.watchTree = watchTree;
+    this.treeResyncMs = treeResyncMs;
     this.cacheTtlMs = cacheTtlMs;
     this.logError = logError;
     this.maxProjectSnapshots = Math.max(1, Math.trunc(maxProjectSnapshots));
@@ -158,6 +203,8 @@ export default class WorkbenchProjectSnapshotController {
     this.assertActive();
     if (request.projectId !== projectId) throw new Error("The project request does not belong to the observed project.");
     if (request.method === "workbench/thread-state/project/refresh") {
+      const state = this.projects.get(this.projectKey(projectId));
+      if (state) state.treeChanged = true;
       this.scheduleRefresh(this.projectKey(projectId), projectId, 0);
       return { accepted: true };
     }
@@ -183,6 +230,7 @@ export default class WorkbenchProjectSnapshotController {
     const state = this.projects.get(key);
     if (!state) return;
     state.expiresAt = 0;
+    state.treeChanged = true;
     this.scheduleRefresh(key, projectId, 0);
   }
 
@@ -229,6 +277,9 @@ export default class WorkbenchProjectSnapshotController {
       revision: 0,
       serialized: null,
       snapshot: null,
+      closeWatcher: null,
+      treeChanged: true,
+      walkedAt: 0,
     };
     this.projects.set(key, state);
     return state;
@@ -252,9 +303,29 @@ export default class WorkbenchProjectSnapshotController {
     return { cacheState, serialized: state.serialized ??= JSON.stringify(state.snapshot), snapshot: state.snapshot };
   }
 
-  /** Only observers that show the tree make a poll walk it; change-only observers (working-tree badges) read Git alone. */
+  /**
+   * Only observers that show the tree make a poll walk it; change-only observers (working-tree badges) read Git alone.
+   * A watched tree is walked only once something under it changed, or on the slow resync.
+   */
   private pollsTree(state: ProjectSnapshotState) {
-    return !state.snapshot || [...state.observers].some(observer => observer.tree);
+    if (!state.snapshot) return true;
+    if (![...state.observers].some(observer => observer.tree)) return false;
+    return !state.closeWatcher || state.treeChanged || this.now() - state.walkedAt >= this.treeResyncMs;
+  }
+
+  private ensureTreeWatcher(key: string, state: ProjectSnapshotState, project: ResolvedProject) {
+    if (state.closeWatcher || !this.watchTree || project.kind === "daemon" || !state.observers.size) return;
+    if (![...state.observers].some(observer => observer.tree)) return;
+    const roots = project.roots.length ? project.roots.map(root => root.root) : [project.root];
+    state.closeWatcher = this.watchTree(roots, () => {
+      if (this.projects.get(key) === state) state.treeChanged = true;
+    });
+  }
+
+  private closeTreeWatcher(state: ProjectSnapshotState) {
+    state.closeWatcher?.();
+    state.closeWatcher = null;
+    state.treeChanged = true;
   }
 
   private scheduleRefresh(key: string, projectId: string | null, delayMs: number) {
@@ -281,7 +352,10 @@ export default class WorkbenchProjectSnapshotController {
     state.refreshTimer = null;
     state.refreshRequested = false;
     const walk = tree || !state.snapshot;
+    // Changes seen while this walk runs belong to the next one.
+    if (walk) state.treeChanged = false;
     const promise = this.resolveProjectById(projectId).then(async (project): Promise<ProjectSnapshot> => {
+      if (!this.disposed) this.ensureTreeWatcher(key, state, project);
       if (walk || !state.snapshot) return await this.operations.getProjectSnapshot(project);
       const changes = await this.operations.getProjectChanges(project);
       return { ...state.snapshot, changes };
@@ -291,6 +365,8 @@ export default class WorkbenchProjectSnapshotController {
       return snapshot;
     }).catch((error: unknown) => {
       if (this.disposed) return null;
+      // A failed walk proved nothing about the tree.
+      if (walk) state.treeChanged = true;
       const failure = (error instanceof Error ? error.message : "Project snapshot refresh failed.")
         .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 512);
       if (state.failure !== failure) {
@@ -318,7 +394,10 @@ export default class WorkbenchProjectSnapshotController {
     const changed = !state.snapshot || !areDeeplyEqual(state.snapshot, snapshot);
     const recovered = state.failure !== null;
     state.failure = null;
-    if (walked) state.expiresAt = this.now() + this.cacheTtlMs;
+    if (walked) {
+      state.expiresAt = this.now() + this.cacheTtlMs;
+      state.walkedAt = this.now();
+    }
     state.lastAccessAt = this.now();
     if (changed) state.serialized = null;
     state.snapshot = snapshot;
@@ -339,6 +418,7 @@ export default class WorkbenchProjectSnapshotController {
 
   private stopObservation(state: ProjectSnapshotState) {
     state.observers.clear();
+    this.closeTreeWatcher(state);
     state.refreshRequested = false;
     if (state.refreshTimer) clearTimeout(state.refreshTimer);
     state.refreshTimer = null;

@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { deleteProjectFile } from "../lib/project";
 import type { ProjectSnapshot } from "workbench-shared/types";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import WorkbenchProjectSnapshotController, { type ProjectTreeWatch } from "./WorkbenchProjectSnapshotController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function deferred<TValue>() {
@@ -87,10 +87,12 @@ function createHarness({
   maxProjectSnapshots = 4,
   pollIntervalMs = 60_000,
   observeProject = (_projectId: string) => undefined,
+  watchTree = null,
 }: {
   maxProjectSnapshots?: number;
   pollIntervalMs?: number;
   observeProject?: (projectId: string) => void;
+  watchTree?: ProjectTreeWatch | null;
 } = {}) {
   const deletedPaths: string[] = [];
   const errors: string[] = [];
@@ -128,6 +130,8 @@ function createHarness({
       }),
     },
     pollIntervalMs,
+    treeResyncMs: 60_000,
+    watchTree,
     resolveProjectById: async (projectId) => {
       resolvedProjectIds.push(projectId);
       return {
@@ -326,6 +330,43 @@ test("change-only observers poll Git changes without rewalking the tree, which e
   assert.equal(harness.snapshotReads, 3);
   stop();
   stopTree();
+  harness.controller.dispose();
+});
+
+test("a watched tree is walked only after a change, an explicit refresh or the slow resync, and unwatched on stop", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let changed = () => {};
+  let watchedRoots: readonly string[] = [];
+  let closed = 0;
+  const harness = createHarness({
+    pollIntervalMs: 10_000,
+    watchTree: (roots, onChange) => { watchedRoots = roots; changed = onChange; return () => { closed += 1; }; },
+  });
+  const tick = async (ms: number, now: number) => {
+    harness.setNow(now);
+    context.mock.timers.tick(ms);
+    await flushPromises();
+  };
+  const stop = harness.controller.observe("alpha", () => undefined);
+  await tick(0, 1_000);
+  assert.deepEqual([harness.snapshotReads, watchedRoots], [1, ["C:/projects/alpha"]]);
+
+  await tick(10_000, 11_000);
+  assert.deepEqual([harness.snapshotReads, harness.changeReads], [1, 1], "an unchanged watched tree only re-reads Git");
+
+  changed();
+  await tick(10_000, 21_000);
+  assert.equal(harness.snapshotReads, 2, "a reported change walks the tree on the next poll");
+
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") });
+  await tick(0, 22_000);
+  assert.equal(harness.snapshotReads, 3, "an explicit refresh always walks");
+
+  await tick(10_000, 82_000);
+  assert.equal(harness.snapshotReads, 4, "the slow resync walks even without events");
+
+  stop();
+  assert.equal(closed, 1);
   harness.controller.dispose();
 });
 
