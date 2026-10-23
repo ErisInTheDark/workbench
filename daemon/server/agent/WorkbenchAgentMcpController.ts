@@ -192,6 +192,21 @@ function toolJsonSchema(schema: AnySchema, pipeStrategy: "input" | "output") {
   return object ? toJsonSchemaCompat(object, { strictUnions: true, pipeStrategy }) : EMPTY_OBJECT_JSON_SCHEMA;
 }
 
+/**
+ * Every listing converts every tool's schema, and input builders return fresh zod objects per call, so conversions are
+ * kept per owner (a command definition or a fixed tool) and input shape. Listed schemas are only serialized, never mutated.
+ */
+const listedJsonSchemas = new WeakMap<object, Map<string, ReturnType<typeof toolJsonSchema>>>();
+function listedJsonSchema(owner: object, shape: WorkbenchMcpInputShape, pipeStrategy: "input" | "output", build: () => AnySchema) {
+  const key = `${pipeStrategy}:${shape.escalation}:${shape.parallelShells}:${shape.waitTimeouts}:${shape.shellYields}`;
+  let byShape = listedJsonSchemas.get(owner);
+  if (!byShape) listedJsonSchemas.set(owner, byShape = new Map());
+  let schema = byShape.get(key);
+  if (!schema) byShape.set(key, schema = toolJsonSchema(build(), pipeStrategy));
+  return schema;
+}
+const SHELL_SCHEMA_OWNER = {};
+
 const UserMessageInputSchema = z.object({ text: z.string().describe(WORKBENCH_USER_MESSAGE_TEXT_DESCRIPTION) }).strict();
 const USER_MESSAGE_TOOL: Tool = {
   name: WORKBENCH_USER_MESSAGE_TOOL_NAME,
@@ -360,7 +375,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return {
       name,
       description: `${definition.description}\n\nCLI equivalent: ${definition.usage}`,
-      inputSchema: toolJsonSchema(getWorkbenchMcpCommandInputSchema(definition, shape), "input") as Tool["inputSchema"],
+      inputSchema: listedJsonSchema(definition, shape, "input",
+        () => getWorkbenchMcpCommandInputSchema(definition, shape)) as Tool["inputSchema"],
       annotations: {
         destructiveHint: definition.effects.destructive ?? false,
         idempotentHint: definition.effects.idempotent ?? false,
@@ -378,10 +394,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     const tools: Tool[] = [{
       name: WORKBENCH_SHELL_MCP_TOOL_NAME,
       description: description.shellDescription,
-      inputSchema: toolJsonSchema(getWorkbenchMcpShellInputSchema(shape), "input") as Tool["inputSchema"],
+      inputSchema: listedJsonSchema(SHELL_SCHEMA_OWNER, shape, "input", () => getWorkbenchMcpShellInputSchema(shape)) as Tool["inputSchema"],
       // Clients overlap only read-only tools; ordered shell turns keep unmarked shells serial regardless.
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: false, readOnlyHint: shape.parallelShells },
-      outputSchema: toolJsonSchema(getWorkbenchMcpShellOutputSchema(shape), "output") as Tool["outputSchema"],
+      outputSchema: listedJsonSchema(SHELL_SCHEMA_OWNER, shape, "output", () => getWorkbenchMcpShellOutputSchema(shape)) as Tool["outputSchema"],
       _meta: CODE_MODE_META,
     }];
     if (shape.shellYields) tools.push(SHELL_WAIT_TOOL);
