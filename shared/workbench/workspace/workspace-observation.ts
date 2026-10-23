@@ -562,7 +562,9 @@ export type WorkspaceObservationDelta = z.infer<typeof WorkspaceObservationDelta
 const pathList = observationShape.keyed((path: string) => path, z.string().min(1));
 const gitArcProposals = observationShape.keyed(
   (proposal: { proposalId: string; rootId?: string }) => `${proposal.rootId ?? ""}/${proposal.proposalId}`, z.json());
-const gitArcMemberKey = (member: { harness: string; threadId: string }) => `${member.harness}:${member.threadId}`;
+// One thread joins a multi-root arc once per root; a key without the root would repeat and resend every member whole.
+const gitArcMemberKey = (member: { harness: string; threadId: string; rootId: string }) =>
+  `${member.harness}:${member.threadId}:${member.rootId}`;
 const gitArcShape = observationShape.object({ fields: {
   claimedPaths: pathList, stashedPaths: pathList, proposals: gitArcProposals,
   members: observationShape.keyed(gitArcMemberKey, z.json(), {

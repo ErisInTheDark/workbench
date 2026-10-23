@@ -93,6 +93,21 @@ test("a git arc change on a summarised thread ships only the changed claims and 
   assert.deepEqual(applyObservationDelta(before, delta, shape), after);
 });
 
+test("one root's claim change in a multi-root arc ships only that member's claim, not every member", () => {
+  const shape = daemonObservationShape("thread");
+  const rootMember = (rootId: string, claimedPaths: string[]) => ({
+    ...gitArc(claimedPaths, []), harness: "codex", threadId, intentName: "work", intentDescription: "",
+    repoRoot: `C:/${rootId}`, rootId, rootIds: [rootId], updatedAt: "2026-10-23T00:00:00.000Z",
+  });
+  // Full thread entries carry every member; only the diff is under test, so the value skips the envelope.
+  const thread = (kitPaths: string[]) => ({ data: { entries: [entry(1, { gitArc: {
+    ...gitArc([...kitPaths, "v2.ts"], []), members: [rootMember("kit", kitPaths), rootMember("v2", ["v2.ts"])],
+  } })] } });
+  const delta = diffObservationValue(thread(["kit.ts"]), thread(["kit.ts", "more.ts"]), shape)!;
+  const shipped = JSON.stringify(delta);
+  assert.ok(shipped.includes("more.ts") && !shipped.includes("C:/v2") && !shipped.includes("C:/kit"), shipped.slice(0, 400));
+});
+
 test("a draft edit ships that draft's changed fields, not the whole presentation", () => {
   const shape = workspaceObservationShape("presentation");
   const draft = (id: string, prompt: string, revision: number) => ({
