@@ -732,6 +732,18 @@ test("machine worktrees snapshot tracked files only and list untracked files onl
   assert.ok(walks.length > 0 && walks.every(scoped), `unscoped untracked walk: ${JSON.stringify(walks.find(args => !scoped(args)))}`);
 });
 
+test("a fresh machine worktree with nothing tracked snapshots its empty baseline", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-empty-");
+  context.after(async () => await temporary.dispose());
+  const drive = path.join(temporary.path, "drive");
+  await fs.mkdir(drive, { recursive: true });
+  await fs.writeFile(path.join(drive, "untracked.txt"), "loose\n", "utf8");
+  await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
+  const repository = new WorkbenchGitRepository(drive);
+  const snapshot = await repository.writeWorktreeSnapshot();
+  assert.deepEqual(await repository.listTreePaths(snapshot.tree), []);
+});
+
 test("a repository rooted at a filesystem root accepts the paths beneath it", () => {
   const root = path.parse(process.cwd()).root;
   const repository = new WorkbenchGitRepository(root);

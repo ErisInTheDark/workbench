@@ -690,7 +690,8 @@ export default class WorkbenchGitRepository {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
-      await this.run(["add", this.machine ? "-u" : "-A", "--", "."], env, signal);
+      // Machine repositories stage tracked files only; with nothing tracked yet, Git rejects a `.` pathspec as unmatched.
+      await this.run(this.machine ? ["add", "-u"] : ["add", "-A", "--", "."], env, signal);
       return (await this.run(["write-tree"], env, signal)).trim();
     });
   }
