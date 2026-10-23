@@ -409,6 +409,15 @@ function createWorkbenchCoreFeature(
         ...await database.readTranscriptHasUndeliveredUserSteer(threadId) ? [{}] : [],
         ...messages.undeliveredSenders(threadId).map(senderThreadId => ({ senderThreadId })),
       ]);
+      // Mail carried across a reload can outlive a delivery an earlier generation missed; the transcript is the truth.
+      void (async () => {
+        for (const threadId of messages.undeliveredThreadIds()) {
+          for (const message of await database.readTranscriptDeliveredAgentMessages(threadId)) {
+            if (lease.isCurrent()) messages.delivered(threadId, message);
+          }
+        }
+      })().catch(error => logThreadStateWarning(
+        `Undelivered agent mail reconciliation failed: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));
       if (coldStart) void turnSettlement.startColdSweep();
       void compaction.retireStrandedBefore(generationStartedAt);
       void busyThreads.start();

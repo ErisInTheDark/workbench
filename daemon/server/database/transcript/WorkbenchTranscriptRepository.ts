@@ -555,6 +555,25 @@ export default class WorkbenchTranscriptRepository {
     return steers.some(({ id }) => !agentMessageIds.has(id));
   }
 
+  /** Cross-agent messages the thread's agent received: delivered input items and Workbench agent-message outputs. Held steers are not items yet. */
+  readDeliveredAgentMessages(threadId: string) {
+    const rows = this.#database.prepare(`
+      SELECT mp.text AS text
+      FROM thread_user_message_parts mp
+      JOIN thread_items i ON i.id = mp.item_id
+      WHERE i.thread_id = @threadId AND mp.part_type = 'text' AND mp.text LIKE '%wb:agent-message%'
+      UNION ALL
+      SELECT o.body_text AS text
+      FROM thread_item_tool_outputs o
+      JOIN thread_items i ON i.id = o.item_id
+      WHERE i.thread_id = @threadId AND o.namespace = 'workbench' AND o.name = 'agent_message'
+    `).all({ threadId }) as Array<{ text: string | null }>;
+    return rows.flatMap(({ text }) => {
+      const message = text ? readWorkbenchAgentMessageText(text) : null;
+      return message ? [message] : [];
+    });
+  }
+
   readMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {
     const requestedTurnIds = [...new Set(turnIds)];
     if (requestedTurnIds.length === 0) return [];

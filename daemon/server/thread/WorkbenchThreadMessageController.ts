@@ -84,6 +84,7 @@ export default class WorkbenchThreadMessageController {
   delivered(threadId: string, message: WorkbenchAgentMessage) { this.waits.delivered(threadId, message); }
 
   undeliveredSenders(threadId: string) { return this.waits.undeliveredSenders(threadId); }
+  undeliveredThreadIds() { return this.waits.undeliveredThreadIds(); }
 
   async wait(value: object, signal: AbortSignal, invocationSignal = signal) {
     const request = WorkbenchMessageWaitRequestSchema.parse(value);

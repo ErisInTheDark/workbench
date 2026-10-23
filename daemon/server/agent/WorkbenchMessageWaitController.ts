@@ -94,6 +94,11 @@ export default class WorkbenchMessageWaitController {
     else this.inbox.delete(threadId);
   }
 
+  /** Threads holding mail their model has not seen yet. */
+  undeliveredThreadIds() {
+    return [...this.inbox.keys()];
+  }
+
   /** Senders of mail admitted for `threadId` that its model has not seen yet. */
   undeliveredSenders(threadId: string) {
     return (this.inbox.get(threadId) ?? []).map(message => message.senderThreadId);

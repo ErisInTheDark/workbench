@@ -3242,6 +3242,25 @@ test("only a running turn's pending user steer is undelivered to the agent", () 
   }
 });
 
+test("delivered agent messages are those the thread's agent received, never ones still held", () => {
+  const { database, repository } = createRepository();
+  try {
+    const thread = fixtureIdentityValues.WorkbenchThreadId.thread;
+    const message = { message: "news", senderName: "luna", senderThreadId: "sibling" };
+    const steer: StoredSteerEntry = {
+      attemptedAt: 110, canonicalItemId: null, clientUserMessageId: null, entryKey: "agent", error: null,
+      input: [{ type: "text", text: createWorkbenchAgentMessageText(message), text_elements: [] }], requestId: null, resolvedAt: null,
+      status: "pending", threadId: thread, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("live"),
+    };
+    repository.settle([threadObservation(), liveTurn("live", 0), { kind: "steer", entry: steer, observedAt: 110 }]);
+    assert.deepEqual(repository.readDeliveredAgentMessages(thread), []);
+    repository.settle([{ kind: "steer", entry: { ...steer, status: "sent", canonicalItemId: "delivered", resolvedAt: 120 }, observedAt: 120 }]);
+    assert.deepEqual(repository.readDeliveredAgentMessages(thread), [message]);
+  } finally {
+    database.close();
+  }
+});
+
 test("capture gaps anchor stored turns, extend once into the next turn, and close only when every anchor is re-read", () => {
   const { database, repository } = createRepository();
   const turnIds = (...ids: string[]) => ids.map(id => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id));
