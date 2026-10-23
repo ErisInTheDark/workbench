@@ -3,6 +3,7 @@
 - Browser page cursors resolve through one Workbench SQLite reader, independent of provider bindings. History reads never wait on, fall back to, or route through provider import or recovery.
 - Store every permanent visible thread item as one row in `thread_items`.
 - Held steers live outside `thread_items`. A steer enters the transcript only at delivery, as a new item at the delivery point.
+- Bound oversized text in admitted items before settlement; keep head, tail and an omission marker.
 - Use turn indexes to order turns.
 - Use item positions to order items within one turn.
 - Workbench owns transcript order. Provider reconciliation may admit missing items or merge proven same-fact identities, never reorder admitted items or infer Workbench-owned identity from snapshot position.

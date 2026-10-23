@@ -1,7 +1,9 @@
 /*
- * WorkbenchTranscriptRecorder: forwards ordered semantic observations without turning one rolled-back batch into lifecycle state. Keywords: transcript, recorder, failure.
+ * Exports:
+ * - default WorkbenchTranscriptRecorder: forward ordered semantic observations, with oversized item text bounded, without turning one rolled-back batch into lifecycle state.
  */
 import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
+import { boundTranscriptObservations } from "./transcript-item-bounds.ts";
 import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptSettlement,
@@ -19,6 +21,7 @@ export default class WorkbenchTranscriptRecorder {
     observations: readonly WorkbenchTranscriptObservation[],
     mode: WorkbenchTranscriptSettlementMode = "live",
   ): Promise<WorkbenchTranscriptSettlement> {
-    return await this.#database.settleTranscript(observations, mode);
+    // Bounded before the worker boundary, so oversized text never crosses into, or replays through, the writer.
+    return await this.#database.settleTranscript(boundTranscriptObservations(observations), mode);
   }
 }
