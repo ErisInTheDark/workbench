@@ -51,6 +51,16 @@ test("normalizes one canonical worktree Git transition key before persistent coo
   await assert.rejects(transitions.run("  ", async () => undefined), /worktree path is required/u);
 });
 
+test("filesystem roots keep their own separator as transition keys", async () => {
+  for (const [platform, root, expected] of [["linux", "/", "git-worktree\0/"], ["win32", "C:\\", "git-worktree\0c:/"]] as const) {
+    const keys: string[] = [];
+    const record = async <T>(key: string, operation: () => Promise<T>) => { keys.push(key); return await operation(); };
+    const transitions = createWorktreeGitTransitions({ run: record, runMany: async (many, operation) => await record(many.join(","), operation) }, platform);
+    await transitions.run(root, async () => undefined);
+    assert.deepEqual(keys, [expected]);
+  }
+});
+
 test("falls back to exclusive reads until the process-stable coordinator restarts", async () => {
   const keys: string[] = [];
   const transitions = createWorktreeGitTransitions({

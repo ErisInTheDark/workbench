@@ -9,20 +9,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
+import { isPathInside } from "./comparable-path";
+
 export const DAEMON_PROJECT_ID = "daemon";
 
 // Providers and Workbench tools all require a cwd; daemon threads get a private scratch folder instead of a repo.
 export const daemonWorkspaceRoot = path.join(resolveWorkbenchDataRoot(), "daemon", "workspace");
 
-function comparable(filePath: string) {
-  const resolved = path.resolve(filePath).replace(/[\\/]+$/u, "");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
 export function isDaemonWorkspacePath(filePath: string) {
-  const candidate = comparable(filePath);
-  const root = comparable(daemonWorkspaceRoot);
-  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+  return isPathInside(filePath, daemonWorkspaceRoot);
 }
 
 export async function ensureDaemonWorkspace() {

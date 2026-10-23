@@ -2,6 +2,7 @@
  * Exports:
  * - createWorktreeGitTransitions: adapt resolved worktree paths into canonical transition keys. Keywords: git, worktree, transition.
  */
+import { normalizePathKey } from "../lib/comparable-path";
 import type WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
 
 export function createWorktreeGitTransitions(
@@ -10,9 +11,9 @@ export function createWorktreeGitTransitions(
   platform: NodeJS.Platform = process.platform,
 ) {
   const key = (worktreePath: string) => {
-    const normalized = worktreePath.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
+    const normalized = normalizePathKey(worktreePath.trim(), platform);
     if (!normalized) throw new Error("A worktree path is required for Git transition coordination.");
-    return `git-worktree\0${platform === "win32" ? normalized.toLowerCase() : normalized}`;
+    return `git-worktree\0${normalized}`;
   };
   const read = transitions.read?.bind(transitions) ?? transitions.run.bind(transitions);
   const readMany = transitions.readMany?.bind(transitions) ?? transitions.runMany.bind(transitions);

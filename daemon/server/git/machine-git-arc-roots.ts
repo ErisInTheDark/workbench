@@ -14,6 +14,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
+import { comparablePath as comparable } from "../lib/comparable-path";
 import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
 import { isPathWithinRoot, normalizeRelativePath, type ResolvedProjectRoot } from "../lib/project";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
@@ -36,11 +37,6 @@ function filesystemRoot(candidate: string) {
 
 function rootId(root: string) {
   return /^[a-z]:/iu.test(root) ? root[0]!.toLowerCase() : "machine";
-}
-
-function comparable(value: string) {
-  const normalized = path.resolve(value).replace(/\\/gu, "/");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 async function machineRoots(requestPaths: readonly string[], base: string) {

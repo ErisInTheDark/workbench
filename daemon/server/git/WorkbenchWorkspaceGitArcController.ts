@@ -49,6 +49,7 @@ import {
 import type { WorkbenchFileClaimCheckResult } from "../lib/workbench/file-claim-check";
 import { claimSnapshotsFor, isConfiguredMultiRoot, isNestedGitWorktreeRoot, qualifiesGitArcRoot } from "./nested-git-worktree-roots";
 import { isMachineGitArcRoot, machineArcDisplayPath, machineArcPathRejection } from "./machine-git-arc-roots";
+import { comparablePath as comparable, isPathInside as isInside } from "../lib/comparable-path";
 import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
 
 export class WorkspaceGitArcMemberError extends Error {
@@ -138,11 +139,6 @@ export interface WorkspaceGitArcPlanClaimCollisionResult extends GitArcPlanClaim
   }>;
 }
 
-function comparable(filePath: string) {
-  const normalized = path.resolve(filePath).replace(/\\/gu, "/").replace(/\/+$/u, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 function transferStashForMember(requested: boolean | undefined, memberHasStash: boolean) {
   return requested === true ? memberHasStash : requested;
 }
@@ -153,12 +149,6 @@ function stashChoiceForMember(input: Pick<GitArcAdoptionInput, "discardStash" | 
     discardStash: input.discardStash === true && memberHasStash ? true : undefined,
     transferStash: transferStashForMember(input.transferStash, memberHasStash),
   };
-}
-
-function isInside(candidate: string, root: string) {
-  const value = comparable(candidate);
-  const boundary = comparable(root);
-  return value === boundary || value.startsWith(`${boundary}/`);
 }
 
 function unique(values: readonly string[]) {
@@ -1285,7 +1275,7 @@ export default class WorkbenchWorkspaceGitArcController {
     const members = await this.resolveRepoMembers(project);
     const selectedPaths = input.paths.map(value => this.parseRootPath(project, value, project.root.id).absolute);
     if ((!selectedPaths.length && input.transferStash !== true)
-      || new Set(selectedPaths.map(comparable)).size !== selectedPaths.length) {
+      || new Set(selectedPaths.map(selected => comparable(selected))).size !== selectedPaths.length) {
       throw new Error("Release to a subagent requires distinct live claim paths or transferStash: true.");
     }
     const groups = this.groupRootPaths(project, members, input.paths, []);

@@ -14,6 +14,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
+import { comparablePath as comparable } from "../../comparable-path";
 import { gitProcesses } from "./GitProcessHost";
 
 const registered = new Map<string, string>();
@@ -23,11 +24,6 @@ const MACHINE_IDENTITY = {
   GIT_AUTHOR_NAME: "Workbench", GIT_AUTHOR_EMAIL: "workbench@localhost",
   GIT_COMMITTER_NAME: "Workbench", GIT_COMMITTER_EMAIL: "workbench@localhost",
 };
-
-function comparable(root: string) {
-  const resolved = path.resolve(root).replace(/\\/gu, "/").replace(/(?<=.)\/+$/u, "");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
 
 function isFilesystemRoot(root: string) {
   const resolved = path.resolve(root);

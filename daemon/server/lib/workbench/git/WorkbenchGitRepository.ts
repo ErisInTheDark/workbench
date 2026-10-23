@@ -35,6 +35,7 @@ import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
 import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
 import { listBoundaryFiles, nestedRepositoryScopes } from "./machine-git-boundaries";
 import { isMachineGitWorktree, machineGitEnvironment } from "./machine-git-worktrees";
+import { comparablePath, isPathInside as isWithinRoot } from "../../comparable-path";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -172,22 +173,6 @@ export interface GitTreeFile {
 export interface GitWorktreeSnapshot {
   head: string | null;
   tree: string;
-}
-
-function isWithinRoot(candidatePath: string, rootPath: string, platform: NodeJS.Platform) {
-  // Filesystem roots (machine worktrees) resolve with a trailing separator, which the `${root}/` test must not double.
-  const comparable = (value: string) => {
-    const normalized = path.resolve(value).replace(/\\/g, "/").replace(/\/+$/u, "");
-    return platform === "win32" ? normalized.toLowerCase() : normalized;
-  };
-  const candidate = comparable(candidatePath);
-  const root = comparable(rootPath);
-  return candidate === root || candidate.startsWith(`${root}/`);
-}
-
-function comparablePath(value: string) {
-  const normalized = path.resolve(value).replace(/\\/g, "/");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 async function gitDirectoryExists(root: string) {

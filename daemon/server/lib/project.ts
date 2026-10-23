@@ -21,6 +21,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectId } from "workbench-shared/workbench/identity";
+import { comparablePath, isPathInside } from "./comparable-path";
 import { DAEMON_PROJECT_ID, daemonWorkspaceRoot, ensureDaemonWorkspace } from "./daemon-workspace-paths";
 import type { WorkbenchProjectDiscovery } from "../database/project/workbench-project-persistence";
 
@@ -121,10 +122,7 @@ export function safeResolveProjectPath(rootDir: string, requestPath: string) {
   const normalized = String(requestPath ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
   const absoluteRoot = path.resolve(rootDir);
   const absolute = path.resolve(absoluteRoot, normalized);
-  const comparableRoot = normalizePathForComparison(absoluteRoot);
-  const comparableAbsolute = normalizePathForComparison(absolute);
-
-  if (comparableAbsolute !== comparableRoot && !comparableAbsolute.startsWith(`${comparableRoot}/`)) {
+  if (!isPathInside(absolute, absoluteRoot)) {
     throw new Error("Path is outside the project workspace.");
   }
 
@@ -154,22 +152,11 @@ export function parseWorkspaceQualifiedPath(requestPath: string) {
   };
 }
 
-function normalizePathForComparison(filePath: string) {
-  const normalized = path.resolve(String(filePath ?? "")).split(path.sep).join("/").replace(/\/+$/, "");
-  return process.platform === "win32"
-    ? normalized.toLowerCase()
-    : normalized;
-}
-
 export function isPathWithinRoot(candidatePath: string, rootPath = projectRoot) {
   if (!String(candidatePath ?? "").trim() || !String(rootPath ?? "").trim()) {
     return false;
   }
-
-  const normalizedCandidatePath = normalizePathForComparison(candidatePath);
-  const normalizedRootPath = normalizePathForComparison(rootPath);
-  return normalizedCandidatePath === normalizedRootPath
-    || normalizedCandidatePath.startsWith(`${normalizedRootPath}/`);
+  return isPathInside(candidatePath, rootPath);
 }
 
 async function hasGitMarker(rootDir: string) {
@@ -616,8 +603,8 @@ function filterIndirectGitProjectDuplicates(
     }
 
     const discoveryPath = path.resolve(canonicalProjectsRoot, project.relativePath);
-    const canonicalRootPath = normalizePathForComparison(project.rootPath);
-    if (normalizePathForComparison(discoveryPath) === canonicalRootPath) {
+    const canonicalRootPath = comparablePath(project.rootPath);
+    if (comparablePath(discoveryPath) === canonicalRootPath) {
       directGitRootPaths.add(canonicalRootPath);
     }
   }
@@ -627,9 +614,9 @@ function filterIndirectGitProjectDuplicates(
       return true;
     }
 
-    const canonicalRootPath = normalizePathForComparison(project.rootPath);
+    const canonicalRootPath = comparablePath(project.rootPath);
     const discoveryPath = path.resolve(canonicalProjectsRoot, project.relativePath);
-    return normalizePathForComparison(discoveryPath) === canonicalRootPath
+    return comparablePath(discoveryPath) === canonicalRootPath
       || !directGitRootPaths.has(canonicalRootPath);
   });
 }
@@ -661,12 +648,12 @@ async function discoverProjectOptions(discoveryFolders: readonly string[], signa
   for (const candidate of [...discoveredProjects]) {
     for (const root of candidate.roots) {
       const rootPath = path.resolve(root.rootPath);
-      const key = normalizePathForComparison(rootPath);
+      const key = comparablePath(rootPath);
       if (registeredRoots.has(key) || !await resolveGitDirectory(rootPath)) continue;
       registeredRoots.add(key);
       try {
         for (const registered of await readRegisteredGitWorktrees(rootPath, signal)) {
-          if (normalizePathForComparison(registered) === key) continue;
+          if (comparablePath(registered) === key) continue;
           if (!await isDirectory(registered) || !await resolveGitDirectory(registered)) continue;
           discoveredProjects.push(await createProjectOption(registered, discoveryFolders[0] ?? registered, ""));
         }
@@ -678,11 +665,11 @@ async function discoverProjectOptions(discoveryFolders: readonly string[], signa
     }
   }
   const seenLocations = new Set([
-    normalizePathForComparison(workbenchLibraryRoot), normalizePathForComparison(daemonWorkspaceRoot),
+    comparablePath(workbenchLibraryRoot), comparablePath(daemonWorkspaceRoot),
   ]);
   const uniqueProjects = discoveredProjects
     .filter(project => {
-      const location = normalizePathForComparison(project.workspacePath ?? project.rootPath);
+      const location = comparablePath(project.workspacePath ?? project.rootPath);
       if (seenLocations.has(location)) return false;
       seenLocations.add(location);
       return true;
@@ -711,7 +698,7 @@ export async function discoverProjectIdentities(
   const { data: candidates, addresses, complete: walkedCompletely } = await discoverProjectOptions(discoveryFolders, signal, pinnedRoots);
   let complete = walkedCompletely;
   const roots = new Map(candidates.filter(project => project.kind !== "workbench-library" && project.kind !== "daemon")
-    .flatMap(project => project.roots.map(root => [normalizePathForComparison(root.rootPath), root.rootPath] as const)));
+    .flatMap(project => project.roots.map(root => [comparablePath(root.rootPath), root.rootPath] as const)));
   const classifications = new Map<string, { identityKey: ProjectIdentityKey; excluded: boolean }>();
   const remaining = roots.entries();
   await Promise.all(Array.from({ length: Math.min(8, roots.size) }, async () => {
@@ -742,7 +729,7 @@ export async function discoverProjectIdentities(
       observedKeys.add(identityKey);
       continue;
     }
-    const members = candidate.roots.map(root => classifications.get(normalizePathForComparison(root.rootPath)));
+    const members = candidate.roots.map(root => classifications.get(comparablePath(root.rootPath)));
     if (members.some(member => !member)) continue;
     const excluded = members.some(member => member!.excluded);
     const identityKey = candidate.kind === "workspace"
@@ -758,7 +745,7 @@ export async function discoverProjectIdentities(
   for (const address of addresses) {
     if (address.kind !== "git" || candidates.includes(address)) continue;
     const retained = candidates.find(candidate => candidate.kind !== "workspace"
-      && normalizePathForComparison(candidate.rootPath) === normalizePathForComparison(address.rootPath));
+      && comparablePath(candidate.rootPath) === comparablePath(address.rootPath));
     if (!retained) continue;
     const identityKey = retained.kind === "workbench-library" || retained.kind === "daemon"
       ? ProjectIdentityKeySchema.parse(retained.kind) : candidateIdentities.get(retained);
@@ -778,7 +765,7 @@ export async function discoverProjectIdentities(
 
 function getDefaultProjectIdFromProjects(projects: readonly WorkbenchProjectOption[]) {
   const currentProjectOption = projects.find((project) => project.kind === "git"
-    && normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot));
+    && comparablePath(project.rootPath) === comparablePath(projectRoot));
   return currentProjectOption?.id ?? projects[0]?.id ?? "";
 }
 
@@ -801,9 +788,9 @@ export async function resolveProjectRootFromProjects(
 
 async function verifyRegisteredWorktree(rootPath: string) {
   if (!await isLinkedGitWorktree(rootPath)) return;
-  const canonical = normalizePathForComparison(await resolveCanonicalPath(rootPath));
+  const canonical = comparablePath(await resolveCanonicalPath(rootPath));
   const registered = await readRegisteredGitWorktrees(rootPath);
-  if (!registered.some(candidate => normalizePathForComparison(candidate) === canonical)) {
+  if (!registered.some(candidate => comparablePath(candidate) === canonical)) {
     throw new Error("Linked worktree is no longer registered.");
   }
 }

@@ -13,6 +13,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { WorkbenchGitClaimImportDiscovery } from "../../../database/stats/WorkbenchStatsImportRepository";
+import { comparablePath as comparable } from "../../comparable-path";
 import GitObjectReadSession from "./GitObjectReadSession";
 import { parseGitRawDate } from "./GitObjectWriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -39,11 +40,6 @@ function activeMetadata(message: string) {
     || metadata.scopePaths.some((candidate) => typeof candidate !== "string" || !candidate.trim())
   ) return null;
   return metadata;
-}
-
-function comparable(value: string) {
-  const normalized = path.resolve(value).replace(/\\/gu, "/").replace(/\/+$/u, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 /** Sorted by comparable form, computing each key once rather than per comparison. */
