@@ -3,7 +3,8 @@
  * - WorkbenchMcpScope: plain per-request client, provider and catalogue selection.
  * - WorkbenchMcpToolCall/WorkbenchMcpDetachedCall/WorkbenchMcpToolStep/WorkbenchMcpCallOutcome: step contracts between ingress and generation, for detached commands, shells and serial batch turns.
  * - WorkbenchMcpIngressCapabilities: what this ingress supports, passed to each generation's describe.
- * - WorkbenchMcpToolGeneration: the current MCP generation's short describe, call and finish steps.
+ * - WorkbenchMcpToolGeneration: the current MCP generation's short describe, call, finish and yielded-shell answer steps.
+ * - linkWorkbenchMcpCallSignal: follow a call's cancellation until a yielded shell detaches from it.
  * - scheduleWorkbenchMcpProgress: request-owned 60s progress keepalive.
  * - keepWorkbenchMcpCallAlive: pulse a call's request-owned progress until stopped, logging failed pulses.
  * - sanitizeWorkbenchMcpError: bounded error text without paths or secrets.
@@ -27,6 +28,7 @@ import type { WorkbenchAgentCommandRequest } from "../lib/workbench/commands/wor
 import type { WorkbenchAgentBatchTurn, WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import type { WorkbenchPreparedShell, WorkbenchShellRun, WorkbenchShellRunResult } from "../providers/provider-execution";
 import type { WorkbenchCommandQueueTicket } from "../exec/WorkbenchCommandCapacity";
+import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -43,6 +45,8 @@ export interface WorkbenchMcpToolCall {
   arguments: Record<string, unknown> | undefined;
   /** Set by ingress that runs detached shells; a generation newer than its ingress runs them inline otherwise. */
   detachableShell?: boolean;
+  /** Set by ingress that backgrounds a detached shell once its `yieldSignal` fires. */
+  shellYields?: boolean;
   /** Set by ingress that waits out `batchTurn` steps; without it a generation never orders calls. */
   batchTurns?: boolean;
   /** How this call's batch turn ended, on the call the ingress repeats after waiting it out. */
@@ -69,11 +73,19 @@ export type WorkbenchMcpDetachedCall = {
   scheduleProgress?: (pulse: () => Promise<void>, signal: AbortSignal) => () => void;
   /** The registry's record of this shell's expensive-queue wait. */
   shellQueue?: WorkbenchCommandQueueTicket;
+  /** Shells only: fires when the call should answer while the command runs on, which then stops following the call. */
+  yieldSignal?: AbortSignal;
+  unlinkCaller?: () => void;
   signal: AbortSignal;
   toolName: string;
   transcript: object | null;
   unregister: () => void;
-} & ({ request: WorkbenchAgentCommandRequest; shell?: undefined } | { request?: undefined; shell: WorkbenchPreparedShell });
+} & (
+  | { request: WorkbenchAgentCommandRequest; shell?: undefined; collect?: undefined }
+  | { request?: undefined; shell: WorkbenchPreparedShell; collect?: undefined }
+  /** `shell_wait`: hand over a yielded shell's result. */
+  | { request?: undefined; shell?: undefined; collect: { shellId: string; threadId: WorkbenchThreadId } }
+);
 
 export type WorkbenchMcpToolStep =
   | { kind: "result"; result: CallToolResult }
@@ -84,9 +96,11 @@ export type WorkbenchMcpToolStep =
 /** What this ingress can do, so a newer generation offers only behaviour its ingress supports. */
 export interface WorkbenchMcpIngressCapabilities {
   batchTurns?: boolean;
+  shellYields?: boolean;
 }
 
-export type WorkbenchMcpCallOutcome = { response: Response } | { shellResult: WorkbenchShellRunResult } | { error: unknown };
+export type WorkbenchMcpCallOutcome =
+  | { response: Response } | { shellResult: WorkbenchShellRunResult } | { collected: CallToolResult } | { error: unknown };
 
 export interface WorkbenchMcpToolGeneration {
   describe(
@@ -94,6 +108,17 @@ export interface WorkbenchMcpToolGeneration {
   ): Promise<{ experimental: Record<string, object>; tools: Tool[] }>;
   call(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall): Promise<WorkbenchMcpToolStep>;
   finish(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome): Promise<CallToolResult>;
+  /** The answer of a shell call whose command runs on as `shellId`. */
+  yielded(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, shellId: string, outputTail: string): Promise<CallToolResult>;
+}
+
+/** A signal following `caller` until unlinked, so a yielded shell outlives the call that started it. */
+export function linkWorkbenchMcpCallSignal(caller: AbortSignal) {
+  const link = new AbortController();
+  const follow = () => link.abort(caller.reason);
+  if (caller.aborted) follow();
+  else caller.addEventListener("abort", follow, { once: true });
+  return { signal: link.signal, unlink: () => caller.removeEventListener("abort", follow) };
 }
 
 export function scheduleWorkbenchMcpProgress(pulse: () => Promise<void>, signal: AbortSignal) {
@@ -197,7 +222,8 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
     close();
   });
   try {
-    const description = await (await registry.awaitToolGeneration(requestAbort.signal)).describe(scope, requestAbort.signal, { batchTurns: true });
+    const description = await (await registry.awaitToolGeneration(requestAbort.signal))
+      .describe(scope, requestAbort.signal, { batchTurns: true, shellYields: true });
     requestAbort.signal.throwIfAborted();
     server = new Server({ name: "wb", version: "1.0.0" }, {
       capabilities: { experimental: description.experimental, tools: { listChanged: true } },
@@ -212,6 +238,7 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
       return await callTool(options, {
         arguments: message.params.arguments,
         detachableShell: true,
+        shellYields: true,
         batchTurns: true,
         meta: extra._meta,
         name: message.params.name,
@@ -261,14 +288,24 @@ async function callTool(options: WorkbenchMcpIngressOptions, call: WorkbenchMcpT
   const stopProgress = detached.keepalive
     ? keepWorkbenchMcpCallAlive(call, detached.signal, logError, detached.scheduleProgress)
     : null;
-  let outcome: WorkbenchMcpCallOutcome;
+  let outcome: WorkbenchMcpCallOutcome | null = null;
+  let yielded: { running: Promise<WorkbenchMcpCallOutcome>; shellId: string } | null = null;
   try {
     if (detached.shell) {
       const { run } = detached.shell;
-      const shellResult = detached.executeShell
-        ? await detached.executeShell(run, detached.signal, detached.shellQueue)
-        : await registry.executeShell(run, detached.signal, detached.shellQueue);
-      outcome = detached.signal.aborted ? { error: detached.signal.reason } : { shellResult };
+      const running = settleShell(detached.executeShell
+        ? detached.executeShell(run, detached.signal, detached.shellQueue)
+        : registry.executeShell(run, detached.signal, detached.shellQueue), detached.signal);
+      outcome = await untilYield(running, detached.yieldSignal);
+      // A command stopped as it yielded has nothing to run on; its own outcome answers the call.
+      if (!outcome && detached.signal.aborted) outcome = await running;
+      if (!outcome) {
+        detached.unlinkCaller?.();
+        yielded = { running, shellId: registry.backgroundShell(scope.clientScope, call.requestId) };
+      }
+    } else if (detached.collect) {
+      const { shellId, threadId } = detached.collect;
+      outcome = { collected: await registry.awaitBackgroundShell(shellId, threadId, detached.signal) };
     } else {
       const response = detached.execute
         ? await detached.execute(detached.request, detached.signal)
@@ -281,6 +318,51 @@ async function callTool(options: WorkbenchMcpIngressOptions, call: WorkbenchMcpT
     stopProgress?.();
     detached.unregister();
   }
+  if (yielded) {
+    const { running, shellId } = yielded;
+    void finishYieldedShell(registry, scope, detached, running, shellId, logError);
+    return await (await registry.awaitToolGeneration()).yielded(scope, detached, shellId, registry.readBackgroundShellTail(shellId));
+  }
   // The generation that prepared this call may be long gone; whichever is current records and formats the outcome.
-  return await (await registry.awaitToolGeneration()).finish(scope, detached, outcome);
+  return await (await registry.awaitToolGeneration()).finish(scope, detached, outcome!);
+}
+
+async function settleShell(running: Promise<WorkbenchShellRunResult>, signal: AbortSignal): Promise<WorkbenchMcpCallOutcome> {
+  try {
+    const shellResult = await running;
+    return signal.aborted ? { error: signal.reason } : { shellResult };
+  } catch (error) {
+    return { error };
+  }
+}
+
+/** The outcome if it arrives first, or null once `yieldSignal` fires. */
+async function untilYield(running: Promise<WorkbenchMcpCallOutcome>, yieldSignal: AbortSignal | undefined) {
+  if (!yieldSignal) return await running;
+  if (yieldSignal.aborted) return null;
+  let stop = () => {};
+  const fired = new Promise<null>(resolve => {
+    const onYield = () => resolve(null);
+    yieldSignal.addEventListener("abort", onYield, { once: true });
+    stop = () => yieldSignal.removeEventListener("abort", onYield);
+  });
+  try {
+    return await Promise.race([running, fired]);
+  } finally {
+    stop();
+  }
+}
+
+/** The yielded command's row gets its real result, and `shell_wait` can collect it. */
+async function finishYieldedShell(
+  registry: WorkbenchAgentMcpRequestRegistry, scope: WorkbenchMcpScope, detached: WorkbenchMcpDetachedCall,
+  running: Promise<WorkbenchMcpCallOutcome>, shellId: string, logError: (name: string, message: string) => void,
+) {
+  const outcome = await running;
+  try {
+    registry.finishBackgroundShell(shellId, await (await registry.awaitToolGeneration()).finish(scope, detached, outcome));
+  } catch (error) {
+    logError("workbench-mcp", sanitizeWorkbenchMcpError(error) || "Yielded shell result was not recorded.");
+    registry.finishBackgroundShell(shellId, { content: [{ type: "text", text: "Yielded shell result was not recorded." }], isError: true });
+  }
 }

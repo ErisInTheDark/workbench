@@ -1950,6 +1950,119 @@ test("providers that yield long waits neither list nor accept wait timeoutMs", a
   }
 });
 
+async function yieldingShellServer(yieldsLongWaits = false) {
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const finished: Array<{ tool: string; result: ProviderToolResult }> = [];
+  const deadlines: AbortController[] = [];
+  const deadlineCreated = { next: deferred<void>() };
+  const runs: Array<(result: { exitCode: number; stdout: string; stderr: string }) => void> = [];
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "claude", threadId, cwd: "C:/workspace" }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false, ...(yieldsLongWaits ? { yieldsLongWaits } : {}) }),
+    patchClaims: async () => "",
+    prepareShell: async () => preparedShell("C:/workspace"),
+    transcript: {
+      start: async input => ({
+        threadId, turnId: "turn", itemId: `${input.tool}-${finished.length}`, sourceId: "source", parentId: "source",
+        tool: input.tool, arguments: {}, startedAt: 0,
+      }) as WorkbenchToolTranscriptReference,
+      finish: async (reference, result) => { finished.push({ tool: reference.tool, result }); },
+    },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", requestRegistry,
+    executeShell: async (_run, signal) => await new Promise((resolve, reject) => {
+      runs.push(resolve);
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+    createWaitDeadline: () => {
+      const deadline = new AbortController();
+      deadlines.push(deadline);
+      deadlineCreated.next.resolve();
+      return deadline.signal;
+    },
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  const fireNextDeadline = async () => {
+    await deadlineCreated.next.promise;
+    deadlineCreated.next = deferred<void>();
+    deadlines.at(-1)!.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+  };
+  return {
+    client, finished, fireNextDeadline, requestRegistry, runs, threadId,
+    close: async () => { requestRegistry.dispose(); await client.close(); await server.close(); },
+  };
+}
+
+test("a yielded shell answers still running, keeps its row open, and shell_wait collects its real result once", async () => {
+  const { client, close, finished, fireNextDeadline, runs } = await yieldingShellServer();
+  try {
+    const listed = (await client.listTools()).tools;
+    assert.ok(Object.keys(listed.find(tool => tool.name === "shell")?.inputSchema.properties ?? {}).includes("yield_ms"));
+    assert.ok(listed.some(tool => tool.name === "shell_wait"));
+
+    const call = client.callTool({ name: "shell", arguments: { command: "build", yield_ms: 30_000 } });
+    await fireNextDeadline();
+    const yielded = await call;
+    assert.equal(yielded.isError, false);
+    const running = yielded.structuredContent as { exitCode: number | null; shellId?: string };
+    assert.equal(running.exitCode, null);
+    assert.ok(running.shellId);
+    assert.match(responseText(yielded), /shell_wait/u);
+    assert.deepEqual(finished, [], "the shell's row stays running");
+
+    const timedOut = await (async () => {
+      const wait = client.callTool({ name: "shell_wait", arguments: { shellId: running.shellId, timeoutMs: 1_000 } });
+      await fireNextDeadline();
+      return await wait;
+    })();
+    assert.equal(timedOut.isError, false);
+    assert.deepEqual(timedOut.structuredContent, { kind: "timedOut", version: 1 });
+
+    const wait = client.callTool({ name: "shell_wait", arguments: { shellId: running.shellId } });
+    runs[0]!({ exitCode: 0, stdout: "built", stderr: "" });
+    const collected = await wait;
+    assert.match(responseText(collected), /Exit code: 0\nOutput:\nbuilt/u);
+    assert.deepEqual(finished.find(entry => entry.tool === "shell")?.result.structuredContent,
+      { cwd: "C:/workspace", exitCode: 0, shell: "pwsh", stderr: "", stdout: "built" }, "the row gets the real result");
+    const again = await client.callTool({ name: "shell_wait", arguments: { shellId: running.shellId } });
+    assert.equal(again.isError, true);
+  } finally {
+    await close();
+  }
+});
+
+test("a yielded shell stops and finishes its row when its turn ends", async () => {
+  const { client, close, finished, fireNextDeadline, requestRegistry, threadId } = await yieldingShellServer();
+  try {
+    const call = client.callTool({ name: "shell", arguments: { command: "serve", yield_ms: 1_000 } });
+    await fireNextDeadline();
+    const { shellId } = (await call).structuredContent as { shellId: string };
+    assert.equal(requestRegistry.stopBackgroundShells(threadId), 1);
+    for (let pass = 0; pass < 5 && !finished.length; pass++) await new Promise<void>(resolve => { setImmediate(resolve); });
+    assert.match(responseText(finished[0]?.result), /Stopped when its turn ended/u);
+    const collected = await client.callTool({ name: "shell_wait", arguments: { shellId } });
+    assert.equal(collected.isError, true, "a stopped turn's shell cannot be collected");
+  } finally {
+    await close();
+  }
+});
+
+test("providers that yield long waits see no yield_ms or shell_wait", async () => {
+  const { client, close } = await yieldingShellServer(true);
+  try {
+    const listed = (await client.listTools()).tools;
+    assert.equal(Object.keys(listed.find(tool => tool.name === "shell")?.inputSchema.properties ?? {}).includes("yield_ms"), false);
+    assert.equal(listed.some(tool => tool.name === "shell_wait"), false);
+    const rejected = await client.callTool({ name: "shell_wait", arguments: { shellId: "any" } });
+    assert.equal(rejected.isError, true);
+  } finally {
+    await close();
+  }
+});
+
 setFlagsFromString("--expose-gc");
 const collectGarbage = runInNewContext("gc") as () => void;
 

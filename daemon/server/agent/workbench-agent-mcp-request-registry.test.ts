@@ -1,4 +1,4 @@
-/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user shell stops and queue skips, shell queue steers, steer races, and reload-stable cancellation. */
+/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user shell stops and queue skips, shell queue steers, yielded shells, steer races, and reload-stable cancellation. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -8,7 +8,7 @@ import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
-  isWorkbenchAgentMcpUserStop,
+  isWorkbenchAgentMcpShellStop,
   WorkbenchAgentMcpRequestRegistry,
   type WorkbenchAgentMcpUndeliveredMessage,
 } from "./workbench-agent-mcp-request-registry";
@@ -63,14 +63,14 @@ test("user shell stops abort only the shell its thread's item names, once, with 
     now = 66_000;
     assert.equal(registry.stopShell(otherThreadId, ["item-1"]), false, "another thread's view cannot stop this shell");
     assert.equal(registry.stopShell(threadId, ["item-1"]), true);
-    assert.ok(isWorkbenchAgentMcpUserStop(recorded.signal.reason));
+    assert.ok(isWorkbenchAgentMcpShellStop(recorded.signal.reason));
     assert.equal((recorded.signal.reason as Error).message, "The user stopped this command after 1m 5s.");
     assert.equal(registry.stopShell(threadId, ["item-1"]), false, "an already stopped shell reports nothing left to stop");
     assert.equal(registry.stopShell(threadId, ["public-item", "call_native"]), true, "a shell without thread identity matches its references");
     assert.equal(native.signal.aborted, true);
     assert.equal(unrecorded.signal.aborted, false);
     assert.equal(ordinary.signal.aborted, false);
-    assert.equal(isWorkbenchAgentMcpUserStop(new Error("The user stopped this command after 1m 5s.")), false);
+    assert.equal(isWorkbenchAgentMcpShellStop(new Error("The user stopped this command after 1m 5s.")), false);
   } finally {
     for (const registration of [recorded, native, unrecorded, ordinary]) registration.unregister();
   }
@@ -200,6 +200,62 @@ function track<T>(promise: Promise<T>) {
   void promise.then(value => { state.value = value; });
   return state;
 }
+
+test("a yielded shell frees its call, never delays a steer, and stays stoppable from its row", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const yielded = registry.register("client-1", 1, { owner, toolName: "shell", shellItem: { threadId, references: ["item-1"] } });
+  yielded.shellQueue!.output("stdout", Buffer.from("building..."));
+  assert.throws(() => registry.backgroundShell("client-1", 99), /running shell call/u);
+  const shellId = registry.backgroundShell("client-1", 1);
+  assert.equal(registry.readBackgroundShellTail(shellId), "building...");
+  const reused = registry.register("client-1", 1, registrationOptions(owner));
+  reused.unregister();
+  yielded.unregister();
+  assert.equal(yielded.signal.aborted, false, "its call ending leaves the command running");
+
+  const queued = registry.register("client-1", 2, { owner, toolName: "shell", shellItem: { threadId, references: ["queued"] } });
+  queued.shellQueue!.queued(0);
+  assert.equal(registry.interruptThreadWaits(threadId), 1, "a yielded shell is no running call that holds a steer back");
+  queued.unregister();
+
+  assert.equal(registry.stopShell(threadId, ["item-1"]), true);
+  assert.ok(isWorkbenchAgentMcpShellStop(yielded.signal.reason));
+});
+
+test("a yielded shell's result goes once to its own thread, and its turn ending stops and discards it", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const otherThreadId = WorkbenchThreadIdSchema.parse("other-thread");
+  const result = { content: [{ type: "text" as const, text: "Exit code: 0" }] };
+  const start = (requestId: number) => {
+    const registration = registry.register("client-1", requestId, { owner, toolName: "shell", shellItem: { threadId, references: [`item-${requestId}`] } });
+    return { registration, shellId: registry.backgroundShell("client-1", requestId) };
+  };
+  const signal = new AbortController().signal;
+
+  const finished = start(1);
+  const waiting = track(registry.awaitBackgroundShell(finished.shellId, threadId, signal));
+  await settle();
+  assert.equal(waiting.value, undefined, "a running shell is waited for");
+  await assert.rejects(registry.awaitBackgroundShell(finished.shellId, otherThreadId, signal), /No yielded shell/u);
+  registry.finishBackgroundShell(finished.shellId, result);
+  await settle();
+  assert.deepEqual(waiting.value, result);
+  await assert.rejects(registry.awaitBackgroundShell(finished.shellId, threadId, signal), /already collected/u);
+
+  const running = start(2);
+  const uncollected = start(3);
+  registry.finishBackgroundShell(uncollected.shellId, result);
+  assert.equal(registry.stopBackgroundShells(threadId), 1);
+  assert.ok(isWorkbenchAgentMcpShellStop(running.registration.signal.reason));
+  assert.match((running.registration.signal.reason as Error).message, /turn ended/u);
+  registry.finishBackgroundShell(running.shellId, result);
+  await assert.rejects(registry.awaitBackgroundShell(running.shellId, threadId, signal), /No yielded shell/u);
+  await assert.rejects(registry.awaitBackgroundShell(uncollected.shellId, threadId, signal), /No yielded shell/u);
+});
 
 test("a serial call waits for every earlier call of its batch to report, then runs or is skipped after a failure", async () => {
   const registry = new WorkbenchAgentMcpRequestRegistry();

@@ -43,19 +43,23 @@ import type { WorkbenchProviderCaller } from "../providers/provider-execution";
 import {
   getWorkbenchShellAggregatedOutput,
   WORKBENCH_SHELL_MCP_TOOL_NAME,
+  WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME,
+  WorkbenchShellCallResultSchema,
   WorkbenchShellResultSchema,
   type WorkbenchEscalatingShellInput,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
+import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { logError } from "../process-helpers";
 import WorkbenchToolAdmissionController, { type WorkbenchToolAdmissionOptions } from "./WorkbenchToolAdmissionController";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
-  isWorkbenchAgentMcpUserStop,
+  isWorkbenchAgentMcpShellStop,
   type WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 import {
   keepWorkbenchMcpCallAlive,
+  linkWorkbenchMcpCallSignal,
   sanitizeWorkbenchMcpError as sanitizeError,
   sendWorkbenchMcpJsonRpcError as sendJsonRpcError,
   serveWorkbenchMcpHttpRequest,
@@ -71,6 +75,8 @@ import {
   createWorkbenchMcpWaitDeadline,
   getWorkbenchMcpCommandInputSchema,
   getWorkbenchMcpShellInputSchema,
+  getWorkbenchMcpShellOutputSchema,
+  getWorkbenchMcpShellWaitInputSchema,
   isWorkbenchMcpWaitTimeout,
   readWorkbenchMcpInputShape,
   splitWorkbenchMcpWaitTimeout,
@@ -194,6 +200,14 @@ const USER_MESSAGE_TOOL: Tool = {
   annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false, readOnlyHint: true },
 };
 
+const SHELL_WAIT_TOOL: Tool = {
+  name: WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME,
+  description: "Wait for a shell that yield_ms backgrounded, then return its result. Workbench Long Wait; steers interrupt it.",
+  inputSchema: toolJsonSchema(getWorkbenchMcpShellWaitInputSchema(), "input") as Tool["inputSchema"],
+  annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false, readOnlyHint: true },
+  _meta: CODE_MODE_META,
+};
+
 function readClientScope(value: string | null) {
   if (!value) return LEGACY_MCP_CLIENT_SCOPE;
   if (!MCP_CLIENT_SCOPE_PATTERN.test(value)) throw new Error("Workbench MCP client scope is invalid.");
@@ -312,7 +326,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
    * Duplicate names are a catalogue defect.
    */
   private visibleCommands(scope: WorkbenchMcpScope) {
-    const names = new Set<string>([WORKBENCH_SHELL_MCP_TOOL_NAME, WORKBENCH_USER_MESSAGE_TOOL_NAME]);
+    const names = new Set<string>([WORKBENCH_SHELL_MCP_TOOL_NAME, WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, WORKBENCH_USER_MESSAGE_TOOL_NAME]);
     const direct = new Map<string, WorkbenchAgentCommandDefinition>();
     const deferred = new Map<string, WorkbenchAgentCommandDefinition>();
     const audience = { harness: scope.provider, subagent: scope.subagent, workbenchRoot: scope.projectLocal };
@@ -360,16 +374,17 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   async describe(scope: WorkbenchMcpScope, signal: AbortSignal, ingress?: WorkbenchMcpIngressCapabilities) {
     const description = await this.tools(scope.provider).describe();
     signal.throwIfAborted();
-    const shape = readWorkbenchMcpInputShape(description, ingress?.batchTurns);
+    const shape = readWorkbenchMcpInputShape(description, ingress ?? {});
     const tools: Tool[] = [{
       name: WORKBENCH_SHELL_MCP_TOOL_NAME,
       description: description.shellDescription,
       inputSchema: toolJsonSchema(getWorkbenchMcpShellInputSchema(shape), "input") as Tool["inputSchema"],
       // Clients overlap only read-only tools; ordered shell turns keep unmarked shells serial regardless.
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: false, readOnlyHint: shape.parallelShells },
-      outputSchema: toolJsonSchema(WorkbenchShellResultSchema, "output") as Tool["outputSchema"],
+      outputSchema: toolJsonSchema(getWorkbenchMcpShellOutputSchema(shape), "output") as Tool["outputSchema"],
       _meta: CODE_MODE_META,
     }];
+    if (shape.shellYields) tools.push(SHELL_WAIT_TOOL);
     if (description.hostsUserMessage) tools.push(USER_MESSAGE_TOOL);
     for (const [name, definition] of this.visibleCommands(this.listingScope(scope, description)).direct) {
       tools.push(this.toolSpec(name, definition, shape));
@@ -397,11 +412,11 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     const tools = this.tools(scope.provider);
     try {
       const description = await tools.describe();
-      const shape = readWorkbenchMcpInputShape(description, call.batchTurns);
+      const shape = readWorkbenchMcpInputShape(description, call);
       if (call.name === WORKBENCH_SHELL_MCP_TOOL_NAME) {
         const toolUseKey = readToolUseKey(description, shape, call);
         const shellInputSchema = getWorkbenchMcpShellInputSchema(shape);
-        const input: WorkbenchEscalatingShellInput & { parallel?: boolean } = shellInputSchema.parse(
+        const input: WorkbenchEscalatingShellInput & { parallel?: boolean; yield_ms?: number } = shellInputSchema.parse(
           await validateToolInput(shellInputSchema, call.arguments, call.name),
         );
         // A serial shell waits for its batch's earlier calls before anything about it is recorded or approved.
@@ -411,6 +426,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         }
         return await this.callShell(scope, call, input, tools, description.shellEscalation);
       }
+      if (call.name === WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME && shape.shellYields) return await this.callShellWait(scope, call, tools);
       if (call.name === WORKBENCH_USER_MESSAGE_TOOL_NAME && description.hostsUserMessage) {
         await validateToolInput(UserMessageInputSchema, call.arguments, call.name);
         return { kind: "result", result: { content: [{ type: "text", text: WORKBENCH_USER_MESSAGE_DELIVERED }] } };
@@ -573,6 +589,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       result = "shellResult" in outcome
         ? await this.shellResult(call.shell, outcome.shellResult)
         : this.shellFailure("error" in outcome ? outcome.error : new Error("The shell finished without a result."), call.signal);
+    } else if (call.collect) {
+      result = "collected" in outcome
+        ? outcome.collected
+        : this.shellWaitFailure("error" in outcome ? outcome.error : new Error("The wait finished without a result."), call.signal);
     } else {
       const definition = this.listCommands().find(candidate => getWorkbenchAgentCommandToolName(candidate) === call.toolName);
       result = "response" in outcome
@@ -583,13 +603,99 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return call.shell ? finished : await this.wireResult(scope, call.toolName, finished);
   }
 
+  /** The row stays running; only the call answers, with the output so far and the id `shell_wait` collects. */
+  async yielded(_scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, shellId: string, outputTail: string): Promise<CallToolResult> {
+    if (!call.shell) throw new Error("Only a shell call can yield.");
+    const result: CallToolResult = {
+      content: [{
+        type: "text",
+        text: `Still running as shell ${shellId}. Output so far:\n${outputTail}\n`
+          + `Call ${WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME} with this shellId to collect the result. It stops when your turn ends.`,
+      }],
+      isError: false,
+      structuredContent: { cwd: call.shell.cwd, exitCode: null, shell: call.shell.shell, shellId, stderr: "", stdout: outputTail },
+    };
+    try {
+      await validateToolOutput(WorkbenchShellCallResultSchema, result, WORKBENCH_SHELL_MCP_TOOL_NAME);
+      return result;
+    } catch (error) {
+      return toolError(error);
+    }
+  }
+
+  /**
+   * `shell_wait` is a long wait: steers interrupt it, `timeoutMs` ends it, and it outlives reloads. Only the caller's
+   * own thread can collect a shell, so the caller resolves before the wait detaches.
+   */
+  private async callShellWait(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, tools: WorkbenchProviderTools): Promise<WorkbenchMcpToolStep> {
+    const input = getWorkbenchMcpShellWaitInputSchema().parse(
+      await validateToolInput(getWorkbenchMcpShellWaitInputSchema(), call.arguments, call.name),
+    );
+    const started = await this.startTranscript(call.name, input, call.meta, scope.clientScope, call.signal, tools);
+    if (started.kind === "failed") return { kind: "result", result: started.result };
+    let registration: ReturnType<WorkbenchAgentMcpRequestRegistry["register"]>;
+    try {
+      registration = this.requestRegistry.register(scope.clientScope, call.requestId, {
+        owner: this.runtimeOwner, policy: "preserve-across-reload", steerInterruptible: true, toolName: WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME,
+      });
+    } catch (error) {
+      return { kind: "result", result: await this.finishTranscript(tools, started.reference, this.shellWaitFailure(error, call.signal)) };
+    }
+    const deadline = input.timeoutMs === undefined ? [] : [this.createWaitDeadline(input.timeoutMs)];
+    const signal = AbortSignal.any([call.signal, registration.signal, ...deadline]);
+    let threadId: WorkbenchThreadId;
+    try {
+      threadId = (await tools.caller(ProviderToolMetadataSchema.parse(call.meta ?? {}), signal, { clientScope: scope.clientScope })).threadId;
+      registration.setWorkbenchThreadId(threadId);
+    } catch (error) {
+      registration.unregister();
+      return { kind: "result", result: await this.finishTranscript(tools, started.reference, this.shellWaitFailure(error, signal)) };
+    }
+    registration.markDrainIndependent();
+    return {
+      kind: "detached",
+      call: {
+        ...(this.injectedScheduleProgress ? { scheduleProgress: this.injectedScheduleProgress } : {}),
+        collect: { shellId: input.shellId, threadId },
+        keepalive: true, signal, toolName: WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, transcript: started.reference,
+        unregister: registration.unregister,
+      },
+    };
+  }
+
+  /** A missing or foreign shell id is the agent's mistake, not a Workbench failure, so it is not logged. */
+  private shellWaitFailure(error: unknown, signal: AbortSignal): CallToolResult {
+    return this.expectedWaitEnd(WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, error, signal)
+      ?? { content: [{ type: "text", text: sanitizeError(error) || "Workbench shell wait failed." }], isError: true };
+  }
+
+  /** A steer or the caller's own `timeoutMs` ending a wait is expected, not a failure. */
+  private expectedWaitEnd(toolName: string, error: unknown, signal: AbortSignal): CallToolResult | null {
+    if (isWorkbenchAgentMcpSteerInterruption(error)) {
+      // Expected, not a failure: an empty error result reaches agents as an opaque "Unknown error".
+      return {
+        content: [{ type: "text" as const, text: STEER_INTERRUPTION_TEXT }],
+        isError: false,
+        structuredContent: { kind: "interruptedBySteer", version: 1 },
+      };
+    }
+    if (signal.aborted && error === signal.reason && isWorkbenchMcpWaitTimeout(error)) {
+      return {
+        content: [{ type: "text" as const, text: waitTimeoutText(toolName) }],
+        isError: false,
+        structuredContent: { kind: "timedOut", version: 1 },
+      };
+    }
+    return null;
+  }
+
   /**
    * Shells only prepare here: the ingress runs the command through the exec node, so neither an approval wait nor a
    * running command holds this generation or any provider generation. An older ingress gets the same steps inline.
    * Preparation is kept alive too, since an approval wait can outlast client idle timeouts.
    */
   private async callShell(
-    scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchEscalatingShellInput,
+    scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchEscalatingShellInput & { yield_ms?: number },
     tools: WorkbenchProviderTools, escalation: boolean,
   ): Promise<WorkbenchMcpToolStep> {
     const started = await this.startTranscript("shell", input, call.meta, scope.clientScope, call.signal, tools);
@@ -610,7 +716,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       return await finishFailure(error, call.signal);
     }
     registration.markDrainIndependent();
-    const signal = AbortSignal.any([call.signal, registration.signal]);
+    // Only an ingress that backgrounds shells may let the command stop following its call.
+    const yields = call.shellYields === true && call.detachableShell === true && input.yield_ms !== undefined;
+    const caller = yields ? linkWorkbenchMcpCallSignal(call.signal) : null;
+    const signal = AbortSignal.any([caller?.signal ?? call.signal, registration.signal]);
     const stopProgress = keepWorkbenchMcpCallAlive(call, signal, this.lifecycleLogError, this.injectedScheduleProgress);
     let prepared: WorkbenchPreparedShell;
     try {
@@ -620,6 +729,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       }, signal, tools, escalation);
     } catch (error) {
       stopProgress?.();
+      caller?.unlink();
       registration.unregister();
       return await finishFailure(error, signal);
     }
@@ -629,6 +739,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       keepalive: true, shell: prepared, signal, toolName: "shell", transcript: started.reference,
       unregister: registration.unregister,
       ...(registration.shellQueue ? { shellQueue: registration.shellQueue } : {}),
+      // The yield clock starts once the command is admitted, so an approval wait never counts against it.
+      ...(caller && input.yield_ms !== undefined
+        ? { yieldSignal: this.createWaitDeadline(input.yield_ms), unlinkCaller: caller.unlink }
+        : {}),
     };
     if (call.detachableShell) {
       stopProgress?.();
@@ -680,8 +794,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   }
 
   private shellFailure(error: unknown, signal: AbortSignal): CallToolResult {
-    // Expected, not a failure: the user's stop already names what happened, so it is the whole result.
-    if (signal.aborted && isWorkbenchAgentMcpUserStop(signal.reason)) {
+    // Expected, not a failure: a stop by the user or by the turn ending already names what happened, so it is the whole result.
+    if (signal.aborted && isWorkbenchAgentMcpShellStop(signal.reason)) {
       return { content: [{ type: "text", text: (signal.reason as Error).message }], isError: true };
     }
     // Only a queued shell is steer-interruptible, so the command never ran; an error keeps it a readable failed command.
@@ -721,7 +835,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   /** The exact tool list a root Workbench-project thread on this provider is served, for prompt-cost accounting. */
   async listToolSpecs(provider: string, signal: AbortSignal = new AbortController().signal) {
     return (await this.describe(
-      { clientScope: LEGACY_MCP_CLIENT_SCOPE, projectLocal: true, provider, subagent: false }, signal, { batchTurns: true },
+      { clientScope: LEGACY_MCP_CLIENT_SCOPE, projectLocal: true, provider, subagent: false }, signal, { batchTurns: true, shellYields: true },
     )).tools;
   }
 
@@ -870,21 +984,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
 
   /** `definition` is absent only when a reload dropped the command between a wait's start and its end. */
   private commandFailure(definition: WorkbenchAgentCommandDefinition | undefined, error: unknown, signal: AbortSignal): CallToolResult {
-    if (isWorkbenchAgentMcpSteerInterruption(error)) {
-      // Expected, not a failure: an empty error result reaches agents as an opaque "Unknown error".
-      return {
-        content: [{ type: "text" as const, text: STEER_INTERRUPTION_TEXT }],
-        isError: false,
-        structuredContent: { kind: "interruptedBySteer", version: 1 },
-      };
-    }
-    if (definition && signal.aborted && error === signal.reason && isWorkbenchMcpWaitTimeout(error)) {
-      return {
-        content: [{ type: "text" as const, text: waitTimeoutText(getWorkbenchAgentCommandToolName(definition)) }],
-        isError: false,
-        structuredContent: { kind: "timedOut", version: 1 },
-      };
-    }
+    const ended = this.expectedWaitEnd(definition ? getWorkbenchAgentCommandToolName(definition) : "the same tool", error, signal);
+    if (ended) return ended;
     const message = sanitizeError(error) || "Workbench MCP tool call failed.";
     if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
     if (definition?.words[0] === "git" && (definition.words[1] === "arc" || definition.words[1] === "plan")) {

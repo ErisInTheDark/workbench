@@ -7,11 +7,12 @@
  * - WorkbenchAgentBatchTurn: how a serial call's turn in its provider tool batch ended.
  * - WorkbenchAgentMcpUndeliveredMessage: one message admitted for a thread that its agent has not received; a sender marks an agent message.
  * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, steer interruption of waits (including waits attaching while a message is
- *   undelivered), user shell stops and queue skips, provider tool batches and serial call turns, wait, shell-queue and windowed live shell
- *   output observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
+ *   undelivered), user shell stops and queue skips, yielded shells running on until collected or their turn ends, provider tool batches
+ *   and serial call turns, wait, shell-queue and windowed live shell output observation, reload-safe command re-entry, the current MCP
+ *   tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
- * - isWorkbenchAgentMcpUserStop: identify a user's stop of one shell command across module generations.
+ * - isWorkbenchAgentMcpShellStop: identify a deliberate stop of one shell command, by its user or its turn ending, across module generations.
  */
 import { formatDuration } from "workbench-shared/workbench/format-duration";
 import {
@@ -28,7 +29,9 @@ import {
 } from "../lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchMcpToolGeneration } from "./workbench-mcp-ingress";
 import type { WorkbenchShellRun, WorkbenchShellRunResult } from "../providers/provider-execution";
+import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { WorkbenchShellObserver } from "../exec/WorkbenchShellRunner";
 
 type WorkbenchAgentMcpRequestId = number | string;
@@ -59,8 +62,10 @@ interface WorkbenchAgentMcpRequestEntry {
   /** The newest output of the running shell, decoded across chunk boundaries; set once it prints. */
   shellOutput?: { decoders: Record<"stdout" | "stderr", StringDecoder>; tail: string };
   startedAt: number;
-  /** Fixed for long waits; a shell is interruptible only while it waits in the expensive queue. */
+  /** Fixed for long waits; a shell is interruptible only while a call still waits on it in the expensive queue. */
   steerInterruptible?: boolean;
+  /** Set once its call yielded: the shell runs on, keyed by `shellId`, until it ends or its turn does. */
+  background?: { shellId: string; discard: boolean };
   /** Pre-patch process state retained only until its live request unregisters. */
   threadId?: string;
   workbenchThreadId?: WorkbenchThreadId;
@@ -111,6 +116,9 @@ interface WorkbenchAgentMcpRequestRegistryState {
   heldSteers: Map<WorkbenchThreadId, WorkbenchAgentHeldSteer>;
   ownerStates: WeakMap<WorkbenchAgentMcpRuntimeOwner, WorkbenchAgentMcpRuntimeOwnerState>;
   requestsByClient: Map<WorkbenchAgentMcpClientScope, Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>>;
+  /** Finished yielded shells awaiting `shell_wait`, by shell id; their running entries live under the background scope. */
+  backgroundResults: Map<string, { threadId: WorkbenchThreadId | null; result: CallToolResult }>;
+  backgroundWaiters: Set<() => void>;
 }
 
 /** `skipped`: an earlier call in the batch failed. `interrupted`: a steer arrived first. */
@@ -191,6 +199,8 @@ const SHELL_OUTPUT_PUBLISH_MS = 250;
 /** A provider declares a batch as its message streams, which may trail the call's own request only briefly. */
 const UNDECLARED_BATCH_GRACE_MS = 5_000;
 const STEER_INTERRUPTION_KEY = Symbol.for("workbench.agentMcpSteerInterruption.v1");
+/** Yielded shells keep running under this client scope once their call has answered. */
+const BACKGROUND_CLIENT_SCOPE = "background-shells";
 
 function createWorkbenchAgentMcpSteerInterruption(reason: string) {
   const error = new Error(reason);
@@ -202,10 +212,16 @@ export function isWorkbenchAgentMcpSteerInterruption(error: unknown) {
   return error instanceof Error && Reflect.get(error, STEER_INTERRUPTION_KEY) === true;
 }
 
-const USER_STOP_KEY = Symbol.for("workbench.agentMcpUserStop.v1");
+const SHELL_STOP_KEY = Symbol.for("workbench.agentMcpUserStop.v1");
 
-export function isWorkbenchAgentMcpUserStop(error: unknown) {
-  return error instanceof Error && Reflect.get(error, USER_STOP_KEY) === true;
+function createShellStop(message: string) {
+  const error = new Error(message);
+  Reflect.set(error, SHELL_STOP_KEY, true);
+  return error;
+}
+
+export function isWorkbenchAgentMcpShellStop(error: unknown) {
+  return error instanceof Error && Reflect.get(error, SHELL_STOP_KEY) === true;
 }
 
 function createState(): WorkbenchAgentMcpRequestRegistryState {
@@ -227,6 +243,8 @@ function createState(): WorkbenchAgentMcpRequestRegistryState {
     heldSteers: new Map(),
     ownerStates: new WeakMap(),
     requestsByClient: new Map(),
+    backgroundResults: new Map(),
+    backgroundWaiters: new Set(),
   };
 }
 
@@ -254,6 +272,8 @@ function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: stri
   state.toolBatches.clear();
   state.heldSteers.clear();
   for (const waiter of [...state.batchTurnWaiters]) waiter.wake();
+  state.backgroundResults.clear();
+  for (const wake of [...state.backgroundWaiters]) wake();
   state.ownerStates = new WeakMap();
 }
 
@@ -277,6 +297,8 @@ function getProcessState() {
   state.toolBatches ??= new Map();
   state.batchTurnWaiters ??= new Set();
   state.heldSteers ??= new Map();
+  state.backgroundResults ??= new Map();
+  state.backgroundWaiters ??= new Set();
   if (!state.exitHookInstalled) {
     state.exitHookInstalled = true;
     process.once("exit", () => disposeState(state, "Workbench daemon is shutting down."));
@@ -347,19 +369,105 @@ export class WorkbenchAgentMcpRequestRegistry {
       },
       ...(options.shellItem ? { shellQueue: this.shellQueueTicket(entry) } : {}),
       signal: entry.controller.signal,
-      unregister: () => {
-        if (requests.get(requestId) !== entry) return;
-        requests.delete(requestId);
-        if (requests.size === 0 && this.state.requestsByClient.get(clientScope) === requests) {
-          this.state.requestsByClient.delete(clientScope);
-        }
-        if (entry.steerInterruptible && entry.workbenchThreadId) this.notifyThreadWaits(entry.workbenchThreadId);
-        if (entry.shellQueue && entry.workbenchThreadId) this.notifyShellQueue(entry.workbenchThreadId);
-        // The finished item carries the whole output; its live tail leaves now rather than one window later.
-        if (entry.shellOutput && entry.workbenchThreadId) this.publishShellOutput(entry.workbenchThreadId);
-        if (entry.workbenchThreadId) this.releaseHeldSteer(entry.workbenchThreadId);
-      },
+      // A yielded shell has moved to the background scope; its call's unregister then finds nothing.
+      unregister: () => this.removeEntry(clientScope, requestId, entry),
     };
+  }
+
+  private removeEntry(clientScope: WorkbenchAgentMcpClientScope, key: WorkbenchAgentMcpRequestId, entry: WorkbenchAgentMcpRequestEntry) {
+    const requests = this.state.requestsByClient.get(clientScope);
+    if (!requests || requests.get(key) !== entry) return;
+    requests.delete(key);
+    if (requests.size === 0) this.state.requestsByClient.delete(clientScope);
+    if (entry.steerInterruptible && entry.workbenchThreadId) this.notifyThreadWaits(entry.workbenchThreadId);
+    if (entry.shellQueue && entry.workbenchThreadId) this.notifyShellQueue(entry.workbenchThreadId);
+    // The finished item carries the whole output; its live tail leaves now rather than one window later.
+    if (entry.shellOutput && entry.workbenchThreadId) this.publishShellOutput(entry.workbenchThreadId);
+    if (entry.workbenchThreadId) this.releaseHeldSteer(entry.workbenchThreadId);
+  }
+
+  /**
+   * The shell call `requestId` answered before its command ended: the command runs on under a new shell id, keeping
+   * its row's stop and live output, freeing the request id, and no longer counting as a running call or a wait.
+   */
+  backgroundShell(clientScope: WorkbenchAgentMcpClientScope, requestId: WorkbenchAgentMcpRequestId) {
+    const requests = this.state.requestsByClient.get(clientScope);
+    const entry = requests?.get(requestId);
+    if (!requests || !entry?.shellItemReferences || entry.controller.signal.aborted) {
+      throw new Error("Only a running shell call can yield.");
+    }
+    const shellId = randomUUID();
+    requests.delete(requestId);
+    if (requests.size === 0) this.state.requestsByClient.delete(clientScope);
+    const wasWaiting = entry.steerInterruptible === true;
+    entry.background = { shellId, discard: false };
+    entry.steerInterruptible = false;
+    const background = this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE) ?? new Map();
+    background.set(shellId, entry);
+    this.state.requestsByClient.set(BACKGROUND_CLIENT_SCOPE, background);
+    if (entry.workbenchThreadId) {
+      if (wasWaiting) this.notifyThreadWaits(entry.workbenchThreadId);
+      this.releaseHeldSteer(entry.workbenchThreadId);
+    }
+    return shellId;
+  }
+
+  /** The newest output of a yielded shell, for the answer its call gives. */
+  readBackgroundShellTail(shellId: string) {
+    return this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.get(shellId)?.shellOutput?.tail ?? "";
+  }
+
+  /** A yielded shell ended: keep its row's result for `shell_wait`, unless its turn already ended. */
+  finishBackgroundShell(shellId: string, result: CallToolResult) {
+    const entry = this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.get(shellId);
+    if (!entry) return;
+    this.removeEntry(BACKGROUND_CLIENT_SCOPE, shellId, entry);
+    if (entry.background?.discard) return;
+    this.state.backgroundResults.set(shellId, { threadId: entry.workbenchThreadId ?? null, result });
+    for (const wake of [...this.state.backgroundWaiters]) wake();
+  }
+
+  /** Hand a yielded shell's result to its own thread once, waiting while it still runs. */
+  async awaitBackgroundShell(shellId: string, threadId: WorkbenchThreadId, signal: AbortSignal): Promise<CallToolResult> {
+    for (;;) {
+      signal.throwIfAborted();
+      if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
+      const finished = this.state.backgroundResults.get(shellId);
+      if (finished && finished.threadId === threadId) {
+        this.state.backgroundResults.delete(shellId);
+        return finished.result;
+      }
+      const running = this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.get(shellId);
+      if (!running || running.workbenchThreadId !== threadId) {
+        throw new Error(`No yielded shell ${shellId} is waiting for this thread: it was already collected, or its turn ended.`);
+      }
+      await new Promise<void>(resolve => {
+        const wake = () => {
+          this.state.backgroundWaiters.delete(wake);
+          signal.removeEventListener("abort", wake);
+          resolve();
+        };
+        this.state.backgroundWaiters.add(wake);
+        signal.addEventListener("abort", wake, { once: true });
+      });
+    }
+  }
+
+  /** A turn ended: its yielded shells stop, and nobody can collect them any more. */
+  stopBackgroundShells(threadId: WorkbenchThreadId) {
+    let stopped = 0;
+    for (const entry of this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.values() ?? []) {
+      if (entry.workbenchThreadId !== threadId || !entry.background) continue;
+      entry.background.discard = true;
+      if (entry.controller.signal.aborted) continue;
+      entry.controller.abort(createShellStop(`Stopped when its turn ended, after ${formatDuration(this.now() - entry.startedAt)}.`));
+      stopped += 1;
+    }
+    for (const [shellId, finished] of this.state.backgroundResults) {
+      if (finished.threadId === threadId) this.state.backgroundResults.delete(shellId);
+    }
+    for (const wake of [...this.state.backgroundWaiters]) wake();
+    return stopped;
   }
 
   /**
@@ -376,9 +484,10 @@ export class WorkbenchAgentMcpRequestRegistry {
     return {
       queued: at => {
         entry.shellQueue = { admittedAt: null, queuedAt: at, skip };
-        entry.steerInterruptible = true;
+        // Nobody waits on a yielded shell's queue, so no steer has a wait to interrupt.
+        entry.steerInterruptible = !entry.background;
         changed();
-        this.replayUndeliveredMessages(entry);
+        if (entry.steerInterruptible) this.replayUndeliveredMessages(entry);
       },
       admitted: at => {
         if (entry.shellQueue) entry.shellQueue.admittedAt = at;
@@ -776,9 +885,7 @@ export class WorkbenchAgentMcpRequestRegistry {
   stopShell(threadId: WorkbenchThreadId, references: readonly string[]) {
     const entry = this.findLiveShell(threadId, references);
     if (!entry) return false;
-    const error = new Error(`The user stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`);
-    Reflect.set(error, USER_STOP_KEY, true);
-    entry.controller.abort(error);
+    entry.controller.abort(createShellStop(`The user stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`));
     return true;
   }
 
@@ -884,7 +991,9 @@ export class WorkbenchAgentMcpRequestRegistry {
   private hasRunningCall(threadId: WorkbenchThreadId) {
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
-        if (entry.workbenchThreadId === threadId && !entry.steerInterruptible && !entry.controller.signal.aborted) return true;
+        if (entry.workbenchThreadId === threadId && !entry.steerInterruptible && !entry.background && !entry.controller.signal.aborted) {
+          return true;
+        }
       }
     }
     return false;

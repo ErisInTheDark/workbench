@@ -11,7 +11,7 @@ import OpenCodeToolsController from "../OpenCodeToolsController";
 import { WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { ProviderToolResult, WorkbenchToolTranscriptReference } from "../../provider-execution";
 import { listWorkbenchAgentCodeModeToolNames } from "../../../lib/workbench/commands/workbench-agent-command-registry";
-import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
+import { WORKBENCH_SHELL_MCP_TOOL_NAME, WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
 
 const catalogue = [{ name: "rg", inputSchema: { type: "object" as const, properties: { args: { type: "array", items: { type: "string" } } } } }];
 const context = (sessionID = "managed", id = "parent") => ({ sessionID, id, messageID: "assistant" }) as ToolContext;
@@ -235,7 +235,7 @@ test("companion catalogue and decoded calls cross real MCP transport with full c
       return { catalogue, tool };
     }));
     // Code-mode-eligible tools stay nested and always listed; every other wb tool is direct under `wbex`.
-    const codeMode = new Set([WORKBENCH_SHELL_MCP_TOOL_NAME, ...listWorkbenchAgentCodeModeToolNames()]);
+    const codeMode = new Set([WORKBENCH_SHELL_MCP_TOOL_NAME, WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, ...listWorkbenchAgentCodeModeToolNames()]);
     const { catalogue: served } = registered[0]!;
     assert.ok(served.some(tool => codeMode.has(tool.name)) && served.some(tool => !codeMode.has(tool.name)));
     for (const tool of served) {

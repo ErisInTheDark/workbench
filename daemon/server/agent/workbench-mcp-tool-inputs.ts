@@ -2,13 +2,19 @@
  * Exports:
  * - WorkbenchMcpInputShape: the provider facts that decide which input fields its agents see.
  * - readWorkbenchMcpInputShape: derive the shape from a provider's tool description and the ingress serving it.
- * - getWorkbenchMcpShellInputSchema: the shell input one shape accepts.
+ * - getWorkbenchMcpShellInputSchema/getWorkbenchMcpShellOutputSchema: the shell input one shape accepts, and the output it declares.
+ * - getWorkbenchMcpShellWaitInputSchema: `shell_wait` input, a long wait with its own `timeoutMs`.
  * - getWorkbenchMcpCommandInputSchema: a command's input as one shape lists and validates it.
  * - splitWorkbenchMcpWaitTimeout: separate the MCP-layer `timeoutMs` from the command's own input.
  * - createWorkbenchMcpWaitDeadline/isWorkbenchMcpWaitTimeout: the deadline signal of a timed wait, and its abort reason.
  */
 import { z } from "zod";
-import { getWorkbenchShellInputSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
+import {
+  getWorkbenchShellInputSchema,
+  WorkbenchShellCallResultSchema,
+  WorkbenchShellResultSchema,
+  WorkbenchShellWaitInputSchema,
+} from "workbench-shared/workbench/commands/workbench-shell-command";
 import { getWorkbenchAgentCommandToolName, type WorkbenchAgentCommandDefinition } from "../lib/workbench/commands/workbench-agent-command-definition";
 
 export interface WorkbenchMcpInputShape {
@@ -18,22 +24,35 @@ export interface WorkbenchMcpInputShape {
   parallelShells: boolean;
   /** Steer-interruptible waits accept `timeoutMs`, for providers that cannot leave a running call. */
   waitTimeouts: boolean;
+  /** Shell calls accept `yield_ms` and `shell_wait` collects them, for the same providers when the ingress backgrounds shells. */
+  shellYields: boolean;
 }
 
 export function readWorkbenchMcpInputShape(
   description: { shellEscalation: boolean; toolUseIdMeta?: string; yieldsLongWaits?: boolean },
-  batchTurns: boolean | undefined,
+  ingress: { batchTurns?: boolean; shellYields?: boolean },
 ): WorkbenchMcpInputShape {
+  const waitTimeouts = description.yieldsLongWaits !== true;
   return {
     escalation: description.shellEscalation,
     // Parallel shells need a provider that names its calls and an ingress that keeps unmarked ones in batch order.
-    parallelShells: Boolean(description.toolUseIdMeta) && batchTurns === true,
-    waitTimeouts: description.yieldsLongWaits !== true,
+    parallelShells: Boolean(description.toolUseIdMeta) && ingress.batchTurns === true,
+    waitTimeouts,
+    shellYields: waitTimeouts && ingress.shellYields === true,
   };
 }
 
 export function getWorkbenchMcpShellInputSchema(shape: WorkbenchMcpInputShape) {
-  return getWorkbenchShellInputSchema({ escalation: shape.escalation, parallel: shape.parallelShells });
+  return getWorkbenchShellInputSchema({ escalation: shape.escalation, parallel: shape.parallelShells, yields: shape.shellYields });
+}
+
+/** Yielding shells may answer still running, so their declared output allows it. */
+export function getWorkbenchMcpShellOutputSchema(shape: WorkbenchMcpInputShape) {
+  return shape.shellYields ? WorkbenchShellCallResultSchema : WorkbenchShellResultSchema;
+}
+
+export function getWorkbenchMcpShellWaitInputSchema() {
+  return WorkbenchShellWaitInputSchema.extend(WaitTimeoutFields);
 }
 
 const WaitTimeoutFields = {

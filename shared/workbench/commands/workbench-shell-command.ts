@@ -4,8 +4,10 @@
  * - WorkbenchShellSchema/WorkbenchShell: define the shell families selected by the sandboxed shell owner.
  * - WorkbenchShellInputSchema/WorkbenchShellInput: define the sandbox-only MCP shell request.
  * - WorkbenchEscalatingShellInputSchema/WorkbenchEscalatingShellInput: shell request for providers whose escalation goes through Workbench approval.
- * - WorkbenchParallelShellInputFields/getWorkbenchShellInputSchema: the opt-in `parallel` field, and one provider's accepted shell input.
+ * - WorkbenchParallelShellInputFields/WorkbenchYieldShellInputFields/getWorkbenchShellInputSchema: the opt-in `parallel` and `yield_ms` fields, and one provider's accepted shell input.
  * - WorkbenchShellResultSchema/WorkbenchShellResult: define resolved command output, queue wait and shell evidence shared by the daemon and transcript renderer.
+ * - WorkbenchShellCallResultSchema: what a yielding shell call answers: a resolved result, or a still-running one with its shell id and output so far.
+ * - WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME/WorkbenchShellWaitInputSchema: collect a yielded shell's result.
  * - getWorkbenchShellAggregatedOutput: combine stdout and stderr with one boundary rule. */
 import { z } from "zod";
 
@@ -35,11 +37,22 @@ export const WorkbenchParallelShellInputFields = {
   parallel: z.boolean().optional().describe("Start at once alongside other calls in this batch. Omit when this command depends on an earlier call: unmarked shells run in batch order after earlier shells finish, and are skipped if an earlier call failed."),
 };
 
-/** The shell input a provider accepts, from its escalation and parallel support. */
-export function getWorkbenchShellInputSchema({ escalation, parallel }: { escalation: boolean; parallel: boolean }) {
+/** Added to the shell input only for providers whose agents cannot leave a running call. */
+export const WorkbenchYieldShellInputFields = {
+  yield_ms: z.number().int().positive().optional().describe("Return after this many milliseconds if the command still runs; it keeps running until your turn ends. Collect it with shell_wait."),
+};
+
+/** The shell input a provider accepts, from its escalation, parallel and yield support. */
+export function getWorkbenchShellInputSchema({ escalation, parallel, yields }: { escalation: boolean; parallel: boolean; yields: boolean }) {
   const base = escalation ? WorkbenchEscalatingShellInputSchema : WorkbenchShellInputSchema;
-  return parallel ? base.extend(WorkbenchParallelShellInputFields) : base;
+  return base.extend({ ...(parallel ? WorkbenchParallelShellInputFields : {}), ...(yields ? WorkbenchYieldShellInputFields : {}) });
 }
+
+export const WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME = "shell_wait";
+
+export const WorkbenchShellWaitInputSchema = z.object({
+  shellId: z.string().min(1).describe("Shell id a yielded shell call returned."),
+}).strict();
 
 export const WorkbenchShellResultSchema = z.object({
   cwd: z.string().min(1),
@@ -52,6 +65,12 @@ export const WorkbenchShellResultSchema = z.object({
 });
 
 export type WorkbenchShellResult = z.infer<typeof WorkbenchShellResultSchema>;
+
+/** A null exit code means the command still runs: `stdout` holds its newest output and `shellId` collects it. */
+export const WorkbenchShellCallResultSchema = WorkbenchShellResultSchema.extend({
+  exitCode: z.number().int().nullable(),
+  shellId: z.string().min(1).optional(),
+});
 
 export function getWorkbenchShellAggregatedOutput(result: Pick<WorkbenchShellResult, "stderr" | "stdout">) {
   if (!result.stdout) return result.stderr;

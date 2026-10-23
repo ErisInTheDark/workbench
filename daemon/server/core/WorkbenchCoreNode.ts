@@ -386,6 +386,10 @@ function createWorkbenchCoreFeature(
         const observation = await threadStateFeature.observeProviderNotification(harness, observed);
         if (!lease.isCurrent()) return null;
         const lifecycle = observation?.lifecycle ?? null;
+        // Yielded shells belong to their turn.
+        if (observed.lifecycle?.event?.kind === "turnCompleted") {
+          getProcessWorkbenchAgentMcpRequestRegistry().stopBackgroundShells(observed.lifecycle.threadId);
+        }
         continuations.observe(harness, observed, lifecycle);
         return lifecycle;
       },

@@ -1,6 +1,6 @@
 <docs tools="request_user_input message_wait subagent_wait subagent_queue git_arc_wait">
 <!-- Prevent agents from restarting a lifecycle wait, polling it, or treating a Code cell yield as completion. -->
-<!-- Claude and OpenCode cannot leave a running call, so steer-interruptible waits offer an MCP-layer `timeoutMs`; Codex cells yield instead and never see it. Re-calling is safe: waits re-read state, undelivered messages persist, queue places survive. Polling with short timeouts burns turns, so it stays forbidden. -->
+<!-- Claude and OpenCode cannot leave a running call, so steer-interruptible waits offer an MCP-layer `timeoutMs`; Codex cells yield instead and never see it. Re-calling is safe: waits re-read state, undelivered messages persist, queue places survive. Polling with short timeouts burns turns, so it stays forbidden. Shell `yield_ms` answers while the command runs on; its turn ending stops it, so agents must collect it with `shell_wait` within the turn. -->
 ## Workbench Long Waits
 
 <harness:codex>
@@ -37,12 +37,12 @@ If a steer interrupts the wait, apply it before more work.
 <harness:opencode>
 Use one blocking Workbench wait in one `execute` call. Await the owning `tools.wb.*` tool directly and return its result. The same program may run independent finite WB calls concurrently. Do not restart, poll, add a script timeout, or start another wait. The call remains owned until the tool returns.
 
-To do other work meanwhile, pass the tool's `timeoutMs`. A timed-out result is not failure; call the same tool again to keep waiting.
+To do other work meanwhile, pass the tool's `timeoutMs`. A timed-out result is not failure; call the same tool again to keep waiting. Long shell commands take `yield_ms`: the command runs on until your turn ends; collect it with `shell_wait`.
 
 If a steer interrupts the wait, apply it before more work.
 </harness:opencode>
 <harness:claude>
-A wait blocks your turn until it returns. To do other work meanwhile, pass the tool's `timeoutMs`. A timed-out result is not failure; call the same tool again to keep waiting. Do not poll with short timeouts or start a parallel wait.
+A wait blocks your turn until it returns. To do other work meanwhile, pass the tool's `timeoutMs`. A timed-out result is not failure; call the same tool again to keep waiting. Long shell commands take `yield_ms`: the command runs on until your turn ends; collect it with `shell_wait`. Do not poll with short timeouts or start a parallel wait.
 
 If a steer interrupts the wait, apply it before more work.
 </harness:claude>
