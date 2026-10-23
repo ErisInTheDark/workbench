@@ -3,7 +3,7 @@
  * - WorkbenchAgentCliRequest/WorkbenchAgentCliResponseKind/WorkbenchAgentCliParseResult: normalised CLI contracts.
  * - WorkbenchAgentCliCommandDescriptor/listWorkbenchAgentCliCommandDescriptors: canonical command metadata.
  * - WORKBENCH_AGENT_CLI_HELP: agent-facing command reference.
- * - parseWorkbenchAgentCliCommand: adapt CLI arguments into the typed command registry, sending MCP-only agents to their tools.
+ * - parseWorkbenchAgentCliCommand: adapt CLI arguments into the typed command registry, explaining audience refusals and sending MCP-only agents to their tools.
  */
 import path from "node:path";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
@@ -22,7 +22,9 @@ import {
   type WorkbenchAgentCommandResponseKind,
 } from "../commands/workbench-agent-command-definition";
 import { isWorkbenchAgentCliOpenTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
-import { refuseWorkbenchCommand } from "../commands/workbench-command-audience";
+import { describeWorkbenchCommandRefusal, refuseWorkbenchCommand } from "../commands/workbench-command-audience";
+import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
+import { DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS } from "../settings/WorkbenchServerSettings";
 
 export type WorkbenchAgentCliRequest = WorkbenchAgentCommandRequest;
 export type WorkbenchAgentCliResponseKind = WorkbenchAgentCommandResponseKind;
@@ -352,7 +354,10 @@ export async function parseWorkbenchAgentCliCommand(
     virtualRepos = false,
     allowStoreRead = false,
     managedScript = false,
+    readCapabilities = async () => DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS,
   }: {
+    /** Live local capability settings, read only when help or the matched command depends on them. */
+    readCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>;
     /** Project tooling run by an agent declared itself with `THIS_IS_A_MANAGED_SCRIPT=1`; scripts cannot call MCP. */
     managedScript?: boolean;
     callerHarness?: string;
@@ -370,14 +375,16 @@ export async function parseWorkbenchAgentCliCommand(
 ): Promise<WorkbenchAgentCliParseResult> {
   const isWorkbenchRoot = projectRoot !== null && isSamePath(cwd, projectRoot);
   const audience = { harness: callerHarness, subagent, workbenchRoot: callerThreadId === null || isWorkbenchRoot };
-  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli", { virtualRepos })
-    .filter((command) => refuseWorkbenchCommand(command, audience) === null);
+  // Refused commands still match, so the caller learns why instead of seeing an unknown command.
+  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli", { virtualRepos });
   const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint";
   if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   const workbenchArgs = argsBeforeTrailingSeparator(argv);
   if (!argv.length || workbenchArgs.includes("--help") || argv[0] === "help") {
+    const helpAudience = { ...audience, capabilities: await readCapabilities() };
+    const visible = commands.filter((command) => refuseWorkbenchCommand(command, helpAudience) === null);
     const group = matchHelpGroup(helpPath(workbenchArgs));
-    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), commands, reloadCatalog, isWorkbenchRoot) : renderRootHelp(commands, isWorkbenchRoot), kind: "help" };
+    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), visible, reloadCatalog, isWorkbenchRoot) : renderRootHelp(visible, isWorkbenchRoot), kind: "help" };
   }
   const matched = commands.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))
@@ -392,6 +399,11 @@ export async function parseWorkbenchAgentCliCommand(
       return { error: formatGitArcFailureReceipt(failure), kind: "error" };
     }
     return { error: `Unsupported wb command: ${workbenchArgs.join(" ")}\nRun ${help} for available commands.`, kind: "error" };
+  }
+  const capabilities = matched.definition.audience?.requiresCapability ? await readCapabilities() : null;
+  const refusal = refuseWorkbenchCommand(matched.definition, { ...audience, capabilities });
+  if (refusal) {
+    return { error: describeWorkbenchCommandRefusal(refusal, `wb ${matched.definition.words.join(" ")}`, callerHarness), kind: "error" };
   }
   if (
     callerThreadId !== null && !managedScript

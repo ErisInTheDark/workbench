@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchMcpNode: own the wb MCP server, its caller-audience and hosted-shell approval ports, and HTTP router after core and topology parents are active.
+ * - default WorkbenchMcpNode: own the wb MCP server, its caller-audience, local-capability and hosted-shell approval ports, and HTTP router after core and topology parents are active.
  */
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../daemon-runtime-objects";
@@ -13,6 +13,7 @@ import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatche
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { isSamePath } from "workbench-shared/same-path";
+import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 
 const REQUIRED_REGISTRATIONS = [
   "agentCommand",
@@ -42,6 +43,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
     const approvals = build.get("approvals");
+    const settings = new WorkbenchServerSettings(build.get("database"));
     build.get("reloadController");
     const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
     const commandExecutorOwner = {};
@@ -74,6 +76,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         return (await threadState.controller.getCanonicalThreadEntry(project.project.id, caller.threadId))?.entryKind === "subagent";
       },
       isWorkbenchRootCaller: caller => isSamePath(caller.cwd, context.legacyMigrationProjectRoot),
+      readLocalCapabilities: () => settings.readLocalCapabilities(),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
       virtualReposAvailable: () => repo.isAvailable(),
       daemonOrigin: context.localDaemonOrigin,

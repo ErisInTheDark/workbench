@@ -1,4 +1,4 @@
-/* No production exports. Protect each command audience gate and the lazy subagent read during call admission. */
+/* No production exports. Protect each command audience gate and the lazy subagent and capability reads during call admission. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -7,8 +7,11 @@ import { refuseWorkbenchCommand, refuseWorkbenchCommandCaller } from "./workbenc
 const claudeOnly = { words: ["rm"], audience: { harnesses: ["claude"] as const } };
 const parentOnly = { words: ["subagent", "wait"] };
 const rootOnly = { words: ["tokens", "instructions"], audience: { rootOnly: true as const } };
+const gated = { words: ["browse", "raw"], audience: { requiresCapability: "browseRawCommandsEnabled" as const } };
 const open = { words: ["rg"] };
-const parentAtRoot = { harness: "claude", subagent: false, workbenchRoot: true };
+const enabled = { browseRawCommandsEnabled: true };
+const disabled = { browseRawCommandsEnabled: false };
+const parentAtRoot = { harness: "claude", subagent: false, workbenchRoot: true, capabilities: enabled };
 
 test("each audience gate withholds its command only from the callers it names", () => {
   assert.equal(refuseWorkbenchCommand(claudeOnly, parentAtRoot), null);
@@ -17,18 +20,29 @@ test("each audience gate withholds its command only from the callers it names", 
   assert.equal(refuseWorkbenchCommand(parentOnly, { ...parentAtRoot, subagent: true }), "parentOnly");
   assert.equal(refuseWorkbenchCommand(rootOnly, parentAtRoot), null);
   assert.equal(refuseWorkbenchCommand(rootOnly, { ...parentAtRoot, workbenchRoot: false }), "rootOnly");
-  assert.equal(refuseWorkbenchCommand(open, { harness: "opencode", subagent: true, workbenchRoot: false }), null);
+  assert.equal(refuseWorkbenchCommand(gated, parentAtRoot), null);
+  assert.equal(refuseWorkbenchCommand(gated, { ...parentAtRoot, capabilities: disabled }), "capability");
+  assert.equal(refuseWorkbenchCommand(gated, { ...parentAtRoot, capabilities: null }), null, "unknown capabilities defer to admission");
+  assert.equal(refuseWorkbenchCommand(open, { harness: "opencode", subagent: true, workbenchRoot: false, capabilities: disabled }), null);
 });
 
-test("call admission reads the subagent role only for parent-only commands", async () => {
-  let reads = 0;
-  const isSubagent = async () => { reads += 1; return true; };
+test("call admission reads the subagent role and capabilities only for commands they gate", async () => {
+  let subagentReads = 0;
+  let capabilityReads = 0;
+  const readers = (capabilities = disabled) => ({
+    isSubagent: async () => { subagentReads += 1; return true; },
+    readCapabilities: async () => { capabilityReads += 1; return capabilities; },
+  });
   const caller = { harness: "claude", workbenchRoot: true };
-  assert.equal(await refuseWorkbenchCommandCaller(open, caller, isSubagent), null);
-  assert.equal(await refuseWorkbenchCommandCaller(rootOnly, caller, isSubagent), null);
-  assert.equal(reads, 0);
-  assert.equal(await refuseWorkbenchCommandCaller(parentOnly, caller, isSubagent), "parentOnly");
-  assert.equal(await refuseWorkbenchCommandCaller(parentOnly, caller, async () => false), null);
-  assert.equal(await refuseWorkbenchCommandCaller(rootOnly, { ...caller, workbenchRoot: false }, isSubagent), "rootOnly");
-  assert.equal(reads, 1);
+  assert.equal(await refuseWorkbenchCommandCaller(open, caller, readers()), null);
+  assert.equal(await refuseWorkbenchCommandCaller(rootOnly, caller, readers()), null);
+  assert.equal(subagentReads + capabilityReads, 0);
+  assert.equal(await refuseWorkbenchCommandCaller(parentOnly, caller, readers()), "parentOnly");
+  assert.equal(await refuseWorkbenchCommandCaller(parentOnly, caller, { ...readers(), isSubagent: async () => false }), null);
+  assert.equal(await refuseWorkbenchCommandCaller(rootOnly, { ...caller, workbenchRoot: false }, readers()), "rootOnly");
+  assert.equal(subagentReads, 1);
+  assert.equal(capabilityReads, 0);
+  assert.equal(await refuseWorkbenchCommandCaller(gated, caller, readers()), "capability");
+  assert.equal(await refuseWorkbenchCommandCaller(gated, caller, readers(enabled)), null);
+  assert.equal(capabilityReads, 2);
 });

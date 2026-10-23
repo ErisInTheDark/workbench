@@ -358,7 +358,7 @@ test("CLI help and dispatch enforce every command audience", async () => {
     const definition = commands.get(tool)!;
     const direct = await parseWorkbenchAgentCliCommand([...definition.words, ...argumentsByTool.get(tool)!], childContext);
     assert.equal(direct.kind, "error", `${tool} should reject direct child invocation`);
-    if (direct.kind === "error") assert.match(direct.error, /Unsupported wb command/u);
+    if (direct.kind === "error") assert.match(direct.error, /parent thread/u);
     const help = await parseWorkbenchAgentCliCommand([...definition.words, "--help"], childContext);
     assert.equal(help.kind, "help");
     if (help.kind === "help") assert.doesNotMatch(help.help, new RegExp(definition.usage.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
@@ -381,11 +381,34 @@ test("CLI help and dispatch enforce every command audience", async () => {
   ];
   for (const parsed of wrongProvider) {
     assert.equal(parsed.kind, "error");
-    if (parsed.kind === "error") assert.match(parsed.error, /Unsupported wb command/u);
+    if (parsed.kind === "error") assert.match(parsed.error, /is not available to (codex|claude) agents/u);
   }
+  const offRoot = await parseWorkbenchAgentCliCommand(["tokens", "instructions"], {
+    callerThreadId: "thread", cwd: "C:/other", projectRoot: "C:/workbench",
+  });
+  assert.match(offRoot.kind === "error" ? offRoot.error : "", /Workbench repository root/u);
   assert.equal((await parseWorkbenchAgentCliCommand(
     ["thread", "compact", "--summary", "handoff"], { callerHarness: "opencode", callerThreadId: "thread", cwd: "C:/workspace" },
   )).kind, "request");
+});
+
+test("capability-gated commands are hidden and refused with a settings hint until enabled", async () => {
+  const context = (enabled: boolean) => ({
+    callerThreadId: "thread", cwd: "C:/workspace",
+    readCapabilities: async () => ({ browseRawCommandsEnabled: enabled }),
+  });
+  const raw = ["browse", "raw", "--thread", "thread", "--", "doctor"];
+  for (const argv of [["--help"], ["browse", "--help"]]) {
+    const hidden = await parseWorkbenchAgentCliCommand(argv, context(false));
+    assert.doesNotMatch(hidden.kind === "help" ? hidden.help : "", /wb browse raw/u);
+    const shown = await parseWorkbenchAgentCliCommand(argv, context(true));
+    assert.match(shown.kind === "help" ? shown.help : "", /wb browse raw/u);
+  }
+  const refused = await parseWorkbenchAgentCliCommand(raw, context(false));
+  assert.match(refused.kind === "error" ? refused.error : "", /turned off in Workbench Settings/u);
+  assert.equal((await parseWorkbenchAgentCliCommand(raw, context(true))).kind, "request");
+  const defaults = await parseWorkbenchAgentCliCommand(raw, { callerThreadId: "thread", cwd: "C:/workspace" });
+  assert.equal(defaults.kind, "error", "capabilities default to off");
 });
 
 test("managed Claude agents are sent to the wb MCP server for every command it offers", async () => {

@@ -731,10 +731,10 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   try {
     const inventory = await client.listTools();
     const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter((definition) => (
-      !definition.mcpDeferred && !refuseWorkbenchCommand(definition, { harness: "codex", subagent: false, workbenchRoot: false })
+      !definition.mcpDeferred && !refuseWorkbenchCommand(definition, { harness: "codex", subagent: false, workbenchRoot: false, capabilities: null })
     ));
     const hiddenFromCodex = new Set(listWorkbenchAgentCommands(reloadCatalog, "agent")
-      .filter((definition) => refuseWorkbenchCommand(definition, { harness: "codex", subagent: false, workbenchRoot: true }))
+      .filter((definition) => refuseWorkbenchCommand(definition, { harness: "codex", subagent: false, workbenchRoot: true, capabilities: null }))
       .map((definition) => definition.words.join("_")));
     assert.equal(inventory.tools.length, eligible.length + 1);
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
@@ -1994,6 +1994,52 @@ test("cwd-sensitive commands run from an MCP workdir as the CLI would after cd; 
     const unsupported = await callTool("task_get", { workdir: ".." });
     assert.ok(unsupported.kind === "result" && unsupported.result.isError);
     assert.equal(executed.length, 2);
+  } finally {
+    requestRegistry.dispose();
+  }
+});
+
+test("capability-gated deferred tools stay out of wb search and explain the setting until enabled", async () => {
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const executed: WorkbenchAgentCommandRequest[] = [];
+  let enabled = false;
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => ({
+      caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/project" }),
+      describe: async () => ({ shellDescription: "test" }),
+      patchClaims: async () => "",
+    }),
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry,
+    readLocalCapabilities: async () => ({ browseRawCommandsEnabled: enabled }),
+    executeCommand: async request => {
+      executed.push(request);
+      return new Response("ok\n");
+    },
+  });
+  const scope = { clientScope: "client", projectLocal: false, provider: "claude", subagent: false };
+  let requestId = 0;
+  const call = async (name: string, args: Record<string, unknown>) => await controller.call(scope, {
+    arguments: args, detachableShell: true, meta: {}, name, requestId: ++requestId, signal: new AbortController().signal,
+  });
+  const search = async () => {
+    const step = await call("mcp_tools", { server: "wb" });
+    assert.ok(step.kind === "result" && !step.result.isError);
+    return responseText(step.result);
+  };
+  const raw = { server: "wb", tool: "browse_raw", arguments: { args: ["doctor"] } };
+  try {
+    assert.doesNotMatch(await search(), /browse_raw/u);
+    const refused = await call("mcp_call", raw);
+    assert.ok(refused.kind === "result" && refused.result.isError);
+    assert.match(responseText(refused.result), /browse_raw is turned off in Workbench Settings/u);
+    assert.equal(executed.length, 0);
+
+    enabled = true;
+    assert.match(await search(), /browse_raw/u);
+    const allowed = await call("mcp_call", raw);
+    assert.ok(allowed.kind === "result" && !allowed.result.isError);
+    assert.equal(executed.length, 1);
   } finally {
     requestRegistry.dispose();
   }

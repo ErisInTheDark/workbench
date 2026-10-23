@@ -5,9 +5,9 @@
  * - managedWorkbenchAgentCommandBody: validated managed identity for command requests.
  * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind/WorkbenchAgentMcpRuntimeDrainPolicy: transport and MCP lifecycle contracts.
  * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: invocation context and registry definitions.
- * - WorkbenchCommandAudienceRule: declarative harness and root-only gates a definition places on its callers.
+ * - WorkbenchCommandAudienceRule: declarative harness, root-only and local-capability gates a definition places on its callers.
  * - WorkbenchLocalCapability: a local capability setting a command can require.
- * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary and refuse root-only input from other callers.
+ * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary, refuse root-only input from other callers, and keep capability-gated commands deferred.
  * - getWorkbenchAgentCommandToolName: canonical MCP command name.
  * - isWorkbenchAgentCommandOnMcp: whether the wb MCP server offers a command at all.
  * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request construction.
@@ -117,6 +117,8 @@ export interface WorkbenchCommandAudienceRule {
   harnesses?: readonly ProviderKey[];
   /** Usable only by managed threads at the Workbench repository root, and by unmanaged callers. */
   rootOnly?: true;
+  /** Usable only while this local capability is enabled; such commands must be MCP-deferred so preloaded lists never change. */
+  requiresCapability?: WorkbenchLocalCapability;
 }
 
 export interface WorkbenchAgentCommandDefinition {
@@ -138,8 +140,6 @@ export interface WorkbenchAgentCommandDefinition {
   mcpSteerInterruptible?: boolean;
   /** Its behaviour follows one cwd, so MCP callers, who cannot `cd`, may name it as `workdir`. */
   mcpWorkdir?: true;
-  /** Local capability that must be enabled before an agent can use this command. */
-  requiresCapability?: WorkbenchLocalCapability;
   usage: string;
   /** Usage shown instead of `usage` to callers at the Workbench repository root, documenting root-only options. */
   workbenchRootUsage?: string;
@@ -162,7 +162,6 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   mcpSteerInterruptible?: boolean;
   mcpWorkdir?: true;
   parseCliArgs(args: string[]): z.input<TSchema>;
-  requiresCapability?: WorkbenchLocalCapability;
   /** Input fields only Workbench-root callers may set; anyone else setting one is refused. */
   rootOnlyInput?: readonly (keyof z.output<TSchema> & string)[];
   usage: string;
@@ -173,6 +172,9 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
 export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
   definition: TypedWorkbenchAgentCommandDefinition<TSchema>,
 ): WorkbenchAgentCommandDefinition {
+  if (definition.audience?.requiresCapability && !definition.mcpDeferred) {
+    throw new Error(`Capability-gated command ${definition.words.join(" ")} must be MCP-deferred.`);
+  }
   const buildValidatedRequest = async (input: unknown, context: WorkbenchAgentCommandContext) => {
     const parsed = definition.inputSchema.parse(input);
     const rootOnly = context.workbenchRoot ? undefined : definition.rootOnlyInput?.find(field => Boolean(parsed[field]));
@@ -200,7 +202,6 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,
     mcpWorkdir: definition.mcpWorkdir,
-    requiresCapability: definition.requiresCapability,
     usage: definition.usage,
     workbenchRootUsage: definition.workbenchRootUsage,
     words: definition.words,

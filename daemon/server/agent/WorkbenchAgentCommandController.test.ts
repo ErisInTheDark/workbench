@@ -684,7 +684,7 @@ test("CLI audience follows canonical child identity before dispatch", async () =
     ]) {
       const response = await run("child", args);
       assert.equal(response.status, 400);
-      assert.match(await response.text(), /Unsupported wb command/u);
+      assert.match(await response.text(), /belongs to the parent thread/u);
     }
     assert.deepEqual(dispatched, []);
 

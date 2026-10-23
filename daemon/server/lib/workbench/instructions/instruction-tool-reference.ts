@@ -2,7 +2,6 @@
  * Exports:
  * - WorkbenchInstructionTool: a Workbench tool an agent can use, with its MCP exposure and code-mode eligibility.
  * - listWorkbenchInstructionTools: the instruction catalogue for command definitions, including deferred and capability-gated commands.
- * - isWorkbenchInstructionToolEnabled: whether a tool's required local capability, if any, is enabled.
  * - selectWorkbenchInstructionTools: the catalogue one caller's `<docs>` gates and tool references see.
  * - resolveWorkbenchInstructionToolReference: format a preloaded MCP tool for one provider's instruction payload.
  * - listWorkbenchInstructionToolFamily: catalogued ids a `<docs>` gate id covers, itself and its `id_*` subtools.
@@ -14,7 +13,6 @@ import {
   getWorkbenchAgentCommandToolName,
   type WorkbenchAgentCommandDefinition,
   type WorkbenchCommandAudienceRule,
-  type WorkbenchLocalCapability,
 } from "../commands/workbench-agent-command-definition";
 import { refuseWorkbenchTool, type WorkbenchCommandAudience } from "../commands/workbench-command-audience";
 
@@ -24,8 +22,6 @@ export interface WorkbenchInstructionTool extends WorkbenchCommandAudienceRule {
   readonly codeModeEligible: boolean;
   /** Not preloaded: reached through the `wb` CLI or `mcp_call` on server `wb`, so no direct MCP name exists to reference. */
   readonly deferred?: boolean;
-  /** Usable only while this local capability is enabled. */
-  readonly requiresCapability?: WorkbenchLocalCapability;
 }
 
 export function listWorkbenchInstructionTools(definitions: readonly WorkbenchAgentCommandDefinition[]): WorkbenchInstructionTool[] {
@@ -37,23 +33,19 @@ export function listWorkbenchInstructionTools(definitions: readonly WorkbenchAge
       ...(definition.mcpDeferred ? { deferred: true } : {}),
       ...(definition.audience?.harnesses ? { harnesses: definition.audience.harnesses } : {}),
       ...(definition.audience?.rootOnly ? { rootOnly: true as const } : {}),
-      ...(definition.requiresCapability ? { requiresCapability: definition.requiresCapability } : {}),
+      ...(definition.audience?.requiresCapability ? { requiresCapability: definition.audience.requiresCapability } : {}),
     })),
   ];
-}
-
-export function isWorkbenchInstructionToolEnabled(tool: WorkbenchInstructionTool, capabilities: WorkbenchLocalCapabilitySettings) {
-  return !tool.requiresCapability || capabilities[tool.requiresCapability];
 }
 
 /** Prompt context does not know the Workbench root, so root-only tools keep their docs. */
 export function selectWorkbenchInstructionTools(
   catalogue: readonly WorkbenchInstructionTool[],
-  caller: Omit<WorkbenchCommandAudience, "workbenchRoot">,
+  caller: Pick<WorkbenchCommandAudience, "harness" | "subagent">,
   capabilities: WorkbenchLocalCapabilitySettings,
 ) {
-  const audience = { ...caller, workbenchRoot: true };
-  return catalogue.filter(tool => refuseWorkbenchTool(tool.id, tool, audience) === null && isWorkbenchInstructionToolEnabled(tool, capabilities));
+  const audience = { ...caller, workbenchRoot: true, capabilities };
+  return catalogue.filter(tool => refuseWorkbenchTool(tool.id, tool, audience) === null);
 }
 
 export function resolveWorkbenchInstructionToolReference(

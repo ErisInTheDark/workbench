@@ -11,7 +11,7 @@ import {
   type WorkbenchAgentCliRequest,
 } from "../lib/workbench/cli/workbench-agent-cli-commands";
 import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-agent-cli-responses";
-import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchLocalCapabilitySettings, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "../bridge-types";
 import WorkbenchAgentCommandLogger, { type WorkbenchAgentCommandFailureReader } from "./WorkbenchAgentCommandLogger";
@@ -58,6 +58,8 @@ interface WorkbenchAgentDirectPort {
   /** Warms a virtual repository; the owner rejects calls from catalogues listed before the runtime disappeared. */
   executeRepoWarm?: (body: object, signal: AbortSignal) => Promise<Response>;
   virtualReposAvailable?: () => boolean;
+  /** Live local capability settings deciding which capability-gated commands the CLI offers. */
+  readLocalCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>;
   /** Bulk-fetches a virtual repository subtree before wb rg walks it; other paths are ignored. */
   hydrateRepoPath?: (absolutePath: string, signal: AbortSignal) => Promise<void>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
@@ -273,6 +275,7 @@ export default class WorkbenchAgentCommandController {
         projectRoot: this.direct.workbenchProjectRoot ?? null,
         subagent: caller?.subagent ?? false,
         virtualRepos: this.direct.virtualReposAvailable?.() ?? false,
+        ...(this.direct.readLocalCapabilities ? { readCapabilities: this.direct.readLocalCapabilities } : {}),
         workbenchOrigin,
       });
       if (parsed.kind === "help") {

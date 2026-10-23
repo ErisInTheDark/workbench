@@ -35,10 +35,12 @@ import {
 import { listWorkbenchInstructionTools, type WorkbenchInstructionTool } from "../lib/workbench/instructions/instruction-tool-reference";
 import { WORKBENCH_CODE_MODE_TOOL_META as CODE_MODE_META } from "workbench-shared/workbench/commands/workbench-tool-audience";
 import {
+  describeWorkbenchCommandRefusal,
   refuseWorkbenchCommand,
   refuseWorkbenchCommandCaller,
-  type WorkbenchCommandRefusal,
 } from "../lib/workbench/commands/workbench-command-audience";
+import { DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS } from "../lib/workbench/settings/WorkbenchServerSettings";
+import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchProviderCaller } from "../providers/provider-execution";
 import {
   getWorkbenchShellAggregatedOutput,
@@ -110,14 +112,10 @@ function waitTimeoutText(toolName: string) {
   return `Wait timed out with nothing ready. Do other work, then call ${toolName} again to keep waiting.`;
 }
 
-const REFUSAL_TEXT: Record<WorkbenchCommandRefusal, (toolName: string, harness: string) => string> = {
-  harness: (toolName, harness) => `${toolName} is not available to ${harness} agents.`,
-  parentOnly: () => "Subagents leave claims for parent adoption; the parent creates commit proposals.",
-  rootOnly: toolName => `${toolName} is available only to threads at the Workbench repository root.`,
-};
-
 export interface WorkbenchAgentMcpControllerOptions {
   isSubagentCaller?: (caller: WorkbenchProviderCaller) => Promise<boolean>;
+  /** Live local capability settings; capability-gated deferred tools are found and run only while enabled. */
+  readLocalCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>;
   /** Whether the caller works at the Workbench repository root, the only audience of root-only commands. */
   isWorkbenchRootCaller?: (caller: WorkbenchProviderCaller) => boolean;
   tools: (provider: string) => WorkbenchProviderTools;
@@ -247,6 +245,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   private readonly runtimeOwner = {};
   private readonly isSubagentCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isSubagentCaller"]>;
   private readonly isWorkbenchRootCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isWorkbenchRootCaller"]>;
+  private readonly readLocalCapabilities: NonNullable<WorkbenchAgentMcpControllerOptions["readLocalCapabilities"]>;
   private readonly createWaitDeadline: NonNullable<WorkbenchAgentMcpControllerOptions["createWaitDeadline"]>;
 
   constructor({
@@ -262,6 +261,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     scheduleProgress,
     isSubagentCaller = async () => false,
     isWorkbenchRootCaller = () => false,
+    readLocalCapabilities = async () => DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS,
     createWaitDeadline = createWorkbenchMcpWaitDeadline,
   }: WorkbenchAgentMcpControllerOptions) {
     this.createWaitDeadline = createWaitDeadline;
@@ -278,6 +278,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     this.injectedExecuteShell = executeShell;
     this.isSubagentCaller = isSubagentCaller;
     this.isWorkbenchRootCaller = isWorkbenchRootCaller;
+    this.readLocalCapabilities = readLocalCapabilities;
   }
 
   beginRuntimeDrain() {
@@ -339,13 +340,14 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   /**
    * Commands one audience may use, in catalogue order: preloaded tools, and deferred ones found and run through
    * `mcp_tools`/`mcp_call` on server `wb`. Deferred search mirrors CLI help, so root-help-hidden commands stay out.
-   * Duplicate names are a catalogue defect.
+   * Duplicate names are a catalogue defect. Null capabilities leave capability gates to call admission; only deferred
+   * commands carry them, so preloaded lists never depend on settings.
    */
-  private visibleCommands(scope: WorkbenchMcpScope) {
+  private visibleCommands(scope: WorkbenchMcpScope, capabilities: WorkbenchLocalCapabilitySettings | null = null) {
     const names = new Set<string>([WORKBENCH_SHELL_MCP_TOOL_NAME, WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, WORKBENCH_USER_MESSAGE_TOOL_NAME]);
     const direct = new Map<string, WorkbenchAgentCommandDefinition>();
     const deferred = new Map<string, WorkbenchAgentCommandDefinition>();
-    const audience = { harness: scope.provider, subagent: scope.subagent, workbenchRoot: scope.projectLocal };
+    const audience = { harness: scope.provider, subagent: scope.subagent, workbenchRoot: scope.projectLocal, capabilities };
     for (const definition of this.listCommands()) {
       const name = getWorkbenchAgentCommandToolName(definition);
       if (refuseWorkbenchCommand(definition, audience)) continue;
@@ -369,7 +371,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       ...scope,
       projectLocal: this.isWorkbenchRootCaller(caller),
       subagent: scope.subagent || await this.isSubagentCaller(caller),
-    }).deferred;
+    }, await this.readLocalCapabilities()).deferred;
   }
 
   private toolSpec(name: string, definition: WorkbenchAgentCommandDefinition, shape: WorkbenchMcpInputShape): Tool & { description: string } {
@@ -449,7 +451,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         return { kind: "result", result: { content: [{ type: "text", text: WORKBENCH_USER_MESSAGE_DELIVERED }] } };
       }
       const { direct } = this.visibleCommands(this.listingScope(scope, description));
-      // `mcp_call` reaches root-only commands from any connection; `prepareCommand` gates each caller.
+      // `mcp_call` reaches root-only and capability-gated commands from any connection; `prepareCommand` gates each caller.
       const { deferred } = this.visibleCommands({ ...scope, projectLocal: true });
       const definition = direct.get(call.name);
       if (!definition) throw new McpError(ErrorCode.InvalidParams, `Tool ${call.name} not found`);
@@ -961,12 +963,12 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       const refusal = await refuseWorkbenchCommandCaller(
         definition,
         { harness: caller.harness, workbenchRoot },
-        async () => await this.isSubagentCaller(caller),
+        { isSubagent: async () => await this.isSubagentCaller(caller), readCapabilities: this.readLocalCapabilities },
       );
       if (refusal) {
         return {
           kind: "result", unregister,
-          result: { isError: true, content: [{ type: "text" as const, text: REFUSAL_TEXT[refusal](toolName, caller.harness) }] },
+          result: { isError: true, content: [{ type: "text" as const, text: describeWorkbenchCommandRefusal(refusal, toolName, caller.harness) }] },
         };
       }
       const { input: commandInput, cwd } = await resolveWorkbenchMcpWorkdir(definition, input, caller.cwd);

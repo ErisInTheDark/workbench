@@ -82,7 +82,7 @@ const raw = defineWorkbenchAgentCommand({
   mcpDeferred: true,
   mcpWorkdir: true,
   helpGroups: ["browse"],
-  requiresCapability: "browseRawCommandsEnabled",
+  audience: { requiresCapability: "browseRawCommandsEnabled" },
   words: ["browse", "raw"],
   usage: "wb browse raw --thread <id> -- <Browse CLI args>",
   inputSchema: z.object({ args: z.array(z.string()).min(1), threadId: requiredText.optional() }).strict(),

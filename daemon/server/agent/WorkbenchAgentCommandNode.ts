@@ -324,6 +324,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       executeRepoWarm: async (body, signal) => await repo.warm(body, signal),
       virtualReposAvailable: () => repo.isAvailable(),
+      readLocalCapabilities: () => settings.readLocalCapabilities(),
       hydrateRepoPath: async (absolutePath, signal) => await repo.hydrate(absolutePath, signal),
       executeSkillRequest: async (body, signal) => {
         const request = WorkbenchSkillExecutionRequestSchema.parse(body);
