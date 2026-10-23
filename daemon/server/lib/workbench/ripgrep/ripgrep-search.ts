@@ -1,18 +1,21 @@
 /*
  * Exports:
  * - RipgrepSearchInput/RipgrepSearchResult: worker request and response contracts.
- * - searchRipgrepFiles: read, scan and format candidate files with result and filesize guards.
+ * - runRipgrepSearch: collect a query's candidates and search them, appending collection warnings to the output; an
+ *   exceeded file budget or no searchable root is an invalid query.
  */
 import fs from "node:fs/promises";
 
 import type { RipgrepQuery } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
-import type { RipgrepCandidate } from "./ripgrep-candidates";
+import { collectRipgrepCandidates, RipgrepFileBudgetExceeded, type RipgrepCandidate } from "./ripgrep-candidates";
 import { compileRipgrepMatcher, RipgrepPatternError } from "./ripgrep-matcher";
 import { formatRipgrepFile, formatRipgrepSize, type RipgrepOutputEntry } from "./ripgrep-output";
 
+/** Candidates are collected beside the search, so a huge enumeration never crosses into the caller's thread. */
 export interface RipgrepSearchInput {
   query: RipgrepQuery;
-  files: RipgrepCandidate[];
+  cwd: string;
+  prefetchWarnings: Record<string, string>;
 }
 
 export type RipgrepSearchResult =
@@ -57,7 +60,22 @@ function truncationNotice(query: RipgrepQuery) {
   return `[wb rg: output truncated at ${query.maxResults} results; narrow the search or raise --max-results (0 = unlimited)]`;
 }
 
-export async function searchRipgrepFiles({ query, files }: RipgrepSearchInput): Promise<RipgrepSearchResult> {
+export async function runRipgrepSearch({ query, cwd, prefetchWarnings }: RipgrepSearchInput): Promise<RipgrepSearchResult> {
+  let candidates;
+  try {
+    // The worker owning this search is terminated to cancel it, so collection needs no abort of its own.
+    candidates = await collectRipgrepCandidates(query, cwd, new AbortController().signal, prefetchWarnings);
+  } catch (error) {
+    if (error instanceof RipgrepFileBudgetExceeded) return { kind: "invalid", message: error.message };
+    throw error;
+  }
+  if (!candidates.searchedRoots) return { kind: "invalid", message: candidates.warnings.join("\n") };
+  const result = await searchRipgrepFiles(query, candidates.files);
+  if (result.kind !== "output" || !candidates.warnings.length) return result;
+  return { kind: "output", output: `${result.output}${candidates.warnings.join("\n")}\n` };
+}
+
+async function searchRipgrepFiles(query: RipgrepQuery, files: readonly RipgrepCandidate[]): Promise<RipgrepSearchResult> {
   const cap = query.maxResults || Number.POSITIVE_INFINITY;
   if (query.mode === "files") {
     const lines = files.slice(0, Math.min(files.length, cap)).map(file => file.displayPath);

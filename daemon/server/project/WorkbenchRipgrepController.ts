@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchRipgrepController: own wb rg requests; parse rg-style args, hydrate lazy roots, enumerate gitignore-aware candidates, and run one cancellable search worker.
+ * - default WorkbenchRipgrepController: own wb rg requests; parse rg-style args, hydrate lazy roots, then run one cancellable
+ *   search worker that enumerates gitignore-aware candidates and searches them off this event loop.
  */
 import { Worker } from "node:worker_threads";
 
@@ -8,7 +9,7 @@ import { parseRipgrepArguments, RIPGREP_HELP_TEXT } from "workbench-shared/workb
 import { formatRipgrepTypeList } from "workbench-shared/workbench/ripgrep/ripgrep-file-types";
 
 import { WorkbenchRipgrepExecutionRequestSchema } from "../lib/workbench/commands/ripgrep-command-definition";
-import { collectRipgrepCandidates, type RipgrepHydrate } from "../lib/workbench/ripgrep/ripgrep-candidates";
+import { prefetchRipgrepRoots, type RipgrepHydrate } from "../lib/workbench/ripgrep/ripgrep-candidates";
 import type { RipgrepSearchInput, RipgrepSearchResult } from "../lib/workbench/ripgrep/ripgrep-search";
 import { logError } from "../process-helpers";
 
@@ -49,13 +50,12 @@ export default class WorkbenchRipgrepController {
     if (query.mode === "type-list") return new Response(formatRipgrepTypeList());
 
     try {
-      const candidates = await collectRipgrepCandidates(query, request.data.cwd, signal, this.options.hydrate);
-      if (!candidates.searchedRoots) return rejected(candidates.warnings.join("\n"));
-      const result = await this.search({ query, files: candidates.files }, signal);
+      const { cwd } = request.data;
+      const prefetchWarnings = this.options.hydrate ? await prefetchRipgrepRoots(query, cwd, signal, this.options.hydrate) : {};
+      const result = await this.search({ query, cwd, prefetchWarnings }, signal);
       if (result.kind === "invalid") return rejected(result.message);
       if (result.kind === "failed") throw new Error(result.message);
-      const warnings = candidates.warnings.length ? `${candidates.warnings.join("\n")}\n` : "";
-      return new Response(`${result.output}${warnings}`);
+      return new Response(result.output);
     } catch (error) {
       if (signal.aborted) throw signal.reason;
       const message = errorMessage(error);

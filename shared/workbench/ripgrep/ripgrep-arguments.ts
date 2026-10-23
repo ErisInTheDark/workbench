@@ -3,7 +3,7 @@
  * - RipgrepOutputMode/RipgrepCaseMode: what a wb rg query prints and how it treats letter case.
  * - RipgrepQuery: typed, structured-clone-safe rg-compatible search request.
  * - RipgrepArgumentsResult: parsed query or user-facing rejection message.
- * - RIPGREP_DEFAULT_MAX_RESULTS/RIPGREP_DEFAULT_MAX_FILESIZE: Workbench guard defaults.
+ * - RIPGREP_DEFAULT_MAX_RESULTS/RIPGREP_DEFAULT_MAX_FILESIZE/RIPGREP_DEFAULT_MAX_FILES: Workbench guard defaults.
  * - RIPGREP_HELP_TEXT: supported-flag summary printed by --help.
  * - parseRipgrepArguments: parse rg-style argument vectors, rejecting unsupported flags.
  */
@@ -45,12 +45,16 @@ export interface RipgrepQuery {
   maxFilesize: number;
   /** 0 means unlimited. */
   maxResults: number;
+  /** Files a query may enumerate before it stops with advice; 0 means unlimited. */
+  maxFiles: number;
 }
 
 export type RipgrepArgumentsResult = { kind: "query"; query: RipgrepQuery } | { kind: "rejected"; message: string };
 
 export const RIPGREP_DEFAULT_MAX_RESULTS = 500;
 export const RIPGREP_DEFAULT_MAX_FILESIZE = 4 * 1024 * 1024;
+/** Enumerating past this costs seconds of walking before any file is read; callers almost always meant a narrower root. */
+export const RIPGREP_DEFAULT_MAX_FILES = 100_000;
 
 export const RIPGREP_HELP_TEXT = `wb rg: rg-compatible project search (JavaScript regex syntax).
 usage: wb rg -- [flags] <pattern> [path...]   |   wb rg -- [flags] -e <pattern>... [path...]   |   wb rg -- --files [path...]
@@ -63,6 +67,7 @@ output: -n -N --column --heading --no-heading -H -I -l --files-without-match -c 
 filters: -g/--glob (! negates, later globs win, {a,b} braces) --iglob -t/--type -T/--type-not -d/--max-depth
   -a/--text --max-filesize (default 4M)
 guards: --max-results N caps printed result lines (default ${RIPGREP_DEFAULT_MAX_RESULTS}, 0 = unlimited)
+  --max-files N stops before searching when more files would be searched (default ${RIPGREP_DEFAULT_MAX_FILES}, 0 = unlimited)
 no-ops: --color --no-config --no-messages --sort path -j/--threads -p/--pretty
 `;
 
@@ -169,6 +174,7 @@ const FLAG_ENTRIES: Array<[string[], Flag]> = [
   [["-M", "--max-columns"], countFlag("-M/--max-columns", (draft, value) => { draft.query.maxColumns = value || null; })],
   [["-d", "--max-depth", "--maxdepth"], countFlag("-d/--max-depth", (draft, value) => { draft.query.maxDepth = value; })],
   [["--max-results"], countFlag("--max-results", (draft, value) => { draft.query.maxResults = value; })],
+  [["--max-files"], countFlag("--max-files", (draft, value) => { draft.query.maxFiles = value; })],
   [["--max-filesize"], valueFlag((draft, value) => {
     const size = parseSize(value);
     if (typeof size === "string") return size;
@@ -229,6 +235,7 @@ function initialQuery(): RipgrepQuery {
     binary: false,
     maxFilesize: RIPGREP_DEFAULT_MAX_FILESIZE,
     maxResults: RIPGREP_DEFAULT_MAX_RESULTS,
+    maxFiles: RIPGREP_DEFAULT_MAX_FILES,
   };
 }
 

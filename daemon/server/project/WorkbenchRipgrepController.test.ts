@@ -1,4 +1,7 @@
-/* No production exports. Tests protect gitignore enforcement, lazy-root hydration, rg-compatible output, result guards, rejections, and worker cancellation. */
+/*
+ * No production exports. Tests protect gitignore enforcement, lazy-root hydration, rg-compatible output, result and file
+ * budget guards, rejections, and worker cancellation.
+ */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -95,6 +98,36 @@ test("skips binary and oversized files and stops at the result cap with notices"
     assert.match(capped.text, /skipped 1 files over 50/u);
 
     assert.deepEqual(await search(controller, root, ["-a", "-l", "needle", "bin.dat"]), { status: 200, text: "bin.dat\n" });
+  });
+});
+
+test("stops before searching once a walk or listing passes --max-files, naming the heaviest directory", async () => {
+  await withRepository({
+    ".gitignore": "target/\n",
+    ...Object.fromEntries(["a", "b", "c", "d", "e"].map(name => [`target/${name}.o`, "needle\n"])),
+    "src/a.ts": "needle\n",
+    "src/b.ts": "needle\n",
+  }, async (root) => {
+    const controller = new WorkbenchRipgrepController();
+    // Each directory is read whole, so target holds at least 3 of the counted files whichever order the walk takes.
+    const walked = await search(controller, root, ["--no-ignore", "--max-files", "4", "-l", "needle"]);
+    assert.equal(walked.status, 400);
+    assert.match(walked.text, /more than 4 files/u);
+    assert.match(walked.text, /-g '!target\/\*\*'/u);
+
+    const listed = await search(controller, root, ["--max-files", "2", "-l", "needle"]);
+    assert.equal(listed.status, 400);
+    assert.match(listed.text, /more than 2 files/u);
+
+    assert.deepEqual(await search(controller, root, ["--max-files", "3", "-l", "needle"]), {
+      status: 200, text: "src/a.ts\nsrc/b.ts\n",
+    }, "only files a Git listing would search count");
+    assert.deepEqual(await search(controller, root, ["--no-ignore", "--max-files", "0", "-l", "needle", "target"]), {
+      status: 200, text: "target/a.o\ntarget/b.o\ntarget/c.o\ntarget/d.o\ntarget/e.o\n",
+    });
+    assert.deepEqual(await search(controller, root, ["--no-ignore", "--max-files", "2", "-g", "!target/**", "-l", "needle"]), {
+      status: 200, text: "src/a.ts\nsrc/b.ts\n",
+    }, "a pruned directory is never walked, so it never counts");
   });
 });
 

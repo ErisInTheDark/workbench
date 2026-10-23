@@ -2,8 +2,10 @@
  * Exports:
  * - RipgrepGlobSpec: one -g/--iglob argument with its case behaviour.
  * - RipgrepPathFilter: decide whether a cwd-relative file path passes glob and type filters.
- * - compileRipgrepGlob: compile one rg-style glob (braces, classes, **, ! negation) into a path matcher.
+ * - RipgrepDirectoryPruner: decide whether a walk may skip a cwd-relative directory outright.
+ * - compileRipgrepGlob: compile one rg-style glob (braces, classes, **, ! negation) into file and directory matchers.
  * - createRipgrepPathFilter: combine ordered globs and file types with rg precedence.
+ * - createRipgrepDirectoryPruner: skip directories under which no file could pass the ordered globs.
  */
 import { RIPGREP_FILE_TYPES } from "./ripgrep-file-types";
 
@@ -13,10 +15,15 @@ export interface RipgrepGlobSpec {
 }
 
 export type RipgrepPathFilter = (relativePath: string) => boolean;
+export type RipgrepDirectoryPruner = (relativeDirectory: string) => boolean;
 
 interface CompiledGlob {
   negated: boolean;
   pattern: RegExp;
+  /** Matches a directory exactly when `pattern` matches every path beneath it. */
+  directory: RegExp;
+  /** False only when `pattern` provably matches nothing at or beneath a directory. */
+  reachesBeneath: (relativeDirectory: string) => boolean;
 }
 
 // Escapes only characters that are syntax in u-mode regex; escaping others (like "-") is a u-mode error.
@@ -102,7 +109,11 @@ function globBodyToSource(glob: string) {
   return parse(false);
 }
 
-/** Matches a cwd-relative file path, or any of its ancestor directories, against one glob. */
+/**
+ * Matches a cwd-relative file path, or any of its ancestor directories, against one glob. `directory` matches a directory
+ * only when it matches every path beneath it: the match ends at the directory's end or an earlier slash, so it is a prefix
+ * match of each descendant. A trailing `/**` covers everything beneath what precedes it.
+ */
 export function compileRipgrepGlob(rawGlob: string, caseInsensitive = false): CompiledGlob {
   let glob = rawGlob;
   const negated = glob.startsWith("!");
@@ -115,9 +126,80 @@ export function compileRipgrepGlob(rawGlob: string, caseInsensitive = false): Co
   if (!glob) throw new Error(`Empty glob: ${rawGlob}`);
   const prefix = anchored ? "^" : "(?:^|/)";
   const suffix = directoryOnly ? "/" : "(?:/|$)";
+  const flags = caseInsensitive ? "iu" : "u";
+  const directoryGlob = glob.endsWith("/**") ? glob.slice(0, -3) : glob;
   return {
     negated,
-    pattern: new RegExp(`${prefix}${globBodyToSource(glob)}${suffix}`, caseInsensitive ? "iu" : "u"),
+    pattern: new RegExp(`${prefix}${globBodyToSource(glob)}${suffix}`, flags),
+    directory: new RegExp(`${prefix}${globBodyToSource(directoryGlob)}(?:/|$)`, flags),
+    reachesBeneath: anchored ? segmentReach(glob, flags) : () => true,
+  };
+}
+
+/** Whether a `/` follows an escape or sits inside a brace group or class; such globs do not split into path segments. */
+function hasUnsplittableSlash(glob: string) {
+  let braces = 0;
+  let inClass = false;
+  for (let index = 0; index < glob.length; index += 1) {
+    const character = glob[index]!;
+    if (character === "\\") return glob.includes("/", index);
+    if (character === "[") inClass = true;
+    else if (character === "]") inClass = false;
+    else if (character === "{") braces += 1;
+    else if (character === "}") braces = Math.max(0, braces - 1);
+    else if (character === "/" && (braces || inClass)) return true;
+  }
+  return false;
+}
+
+/**
+ * For an anchored glob: whether it could match some path at or beneath a directory, by stepping its segments along the
+ * directory's (a `**` segment spans any number). It can when it completes within the directory (then it matches
+ * everything beneath) or is still alive at the directory's end (its remaining segments can name something beneath).
+ * Unanchored globs match a name at any depth, so they always can; so does any glob this cannot split.
+ */
+function segmentReach(glob: string, flags: string): (relativeDirectory: string) => boolean {
+  if (hasUnsplittableSlash(glob)) return () => true;
+  const segments = glob.split("/").map(segment => segment === "**" ? "**" as const : new RegExp(`^${globBodyToSource(segment)}$`, flags));
+  const close = (states: Set<number>) => {
+    for (const state of states) if (segments[state] === "**") states.add(state + 1);
+    return states;
+  };
+  return (relativeDirectory) => {
+    let states = close(new Set([0]));
+    for (const name of relativeDirectory.split("/")) {
+      if (states.has(segments.length)) return true;
+      const next = new Set<number>();
+      for (const state of states) {
+        const segment = segments[state]!;
+        if (segment === "**") next.add(state);
+        else if (segment.test(name)) next.add(state + 1);
+      }
+      states = close(next);
+      if (!states.size) return false;
+    }
+    return true;
+  };
+}
+
+/**
+ * Whether a walk can skip a cwd-relative directory because no file beneath it could pass the globs. Later globs win, so
+ * reading from the last: an include that could reach beneath keeps the directory, and an exclusion covering it skips it.
+ * When every include is unreachable, nothing beneath could be admitted at all.
+ */
+export function createRipgrepDirectoryPruner(globs: readonly RipgrepGlobSpec[]): RipgrepDirectoryPruner {
+  const compiled = globs.map(spec => compileRipgrepGlob(spec.glob, spec.caseInsensitive));
+  const hasPositiveGlob = compiled.some(glob => !glob.negated);
+  return (relativeDirectory) => {
+    for (let index = compiled.length - 1; index >= 0; index -= 1) {
+      const glob = compiled[index]!;
+      if (!glob.negated) {
+        if (glob.reachesBeneath(relativeDirectory)) return false;
+      } else if (glob.directory.test(relativeDirectory)) {
+        return true;
+      }
+    }
+    return hasPositiveGlob;
   };
 }
 
