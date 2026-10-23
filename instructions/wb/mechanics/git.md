@@ -65,10 +65,9 @@ publishing scope:
 - With `inherit: true`, reuse scope and intent, applying `addPaths`, exact `removePaths`, and explicit dirty unclaimed `adoptPaths` together.
 <!-- Failure: agents erase planning drift by repeating already-planned paths. -->
 - Publishing refreshes baselines and reports drift against the previous ref; repeating paths refreshes their baselines too.
-- A replacement plan must cover every dirty path retained from this thread's previous claim set.
 - Dirty active-claimed paths may remain ordinary plan paths. Dirty unclaimed paths require explicit adoption.
 <!-- Failure: agents release active work before revising scope. -->
-- Inherited planning can publish an inactive successor from an active arc: it retains covered dirty claims, releases clean claims, and leaves additions unclaimed. Removing dirty coverage rejects.
+- Inherited planning can publish an inactive successor from an active arc: it retains dirty claims, releases clean claims, and leaves additions unclaimed.
 </docs>
 
 <docs tools="git_arc_start">

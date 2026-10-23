@@ -1,4 +1,4 @@
-/* No production exports. Tests protect activation snapshot ownership, late edits and drift rejection. */
+/* No production exports. Tests protect activation snapshot ownership, late edits, drift rejection and retained dirty claims. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,7 +10,6 @@ import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
-import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { THREAD_GIT_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
 import { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
 
@@ -106,15 +105,15 @@ for (const start of [false, true]) {
       assert.deepEqual((await controller.readScope(owner))?.claimedPaths, ["nested/one.txt"]);
 
       await fs.writeFile(selected, "work beyond sealed content\n");
-      const before = await registry.read();
-      await assert.rejects(controller.editPlanClaims({ ...successor, inherit: false }), (error: Error) => {
-        assert.ok(error instanceof GitArcRejectionError);
-        assert.equal(error.rejection.reason, "uncoveredDirtyClaims");
-        assert.deepEqual("paths" in error.rejection ? error.rejection.paths : [], ["selected.txt"]);
-        return true;
-      });
-      assert.deepEqual(await registry.read(), before);
-      await controller.editPlanClaims({ ...successor, addPaths: ["nested/one.txt", "selected.txt"] });
+      const replaced = await controller.editPlanClaims({ ...successor, inherit: false });
+      assert.ok(replaced.kind !== "noop");
+      assert.deepEqual(replaced.retainedPaths, ["selected.txt"]);
+      assert.deepEqual(replaced.scopePaths, ["nested/one.txt", "selected.txt"]);
+      assert.ok(!replaced.removedClaims.includes("selected.txt"));
+      if (!start) await controller.startArc(owner);
+      const replacedOwnership = await registry.find(owner);
+      assert.ok(replacedOwnership);
+      assert.deepEqual((await ownership.project(replacedOwnership)).activeClaims, ["nested/one.txt", "selected.txt"]);
       assert.equal(await repository.writeIndexTree(), index);
       assert.equal(await fs.readFile(selected, "utf8"), "work beyond sealed content\n");
       assert.equal(await fs.readFile(path.join(fixture.root, "ordinary.txt"), "utf8"), "sibling content\n");

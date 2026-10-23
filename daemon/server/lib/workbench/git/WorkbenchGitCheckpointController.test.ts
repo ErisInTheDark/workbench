@@ -1412,7 +1412,7 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
   const replacement = await controller.createPlan({
     cwd: source, harness: "codex", intentName: "carry retained dirt", paths: ["one.txt", "two.txt"], threadId: "partial-thread",
   });
-  const revised = await controller.addToPlan({
+  await controller.addToPlan({
     cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
   });
   await fs.writeFile(path.join(source, "loose.txt"), "amended dirt\n");
@@ -1429,22 +1429,23 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
   assert.equal(amended.mode, "amend");
   assert.ok(amended.paths.includes("loose.txt"));
 
-  await assert.rejects(controller.createPlan({
+  const omitted = await controller.createPlan({
     cwd: source, harness: "codex", intentName: "omit retained dirt", paths: ["one.txt"], threadId: "partial-thread",
-  }), /must include every dirty claimed file: two\.txt/u);
-  await assert.rejects(controller.createAndStartPlan({
-    cwd: source, harness: "codex", intentName: "skip retained dirt", paths: ["one.txt"], threadId: "partial-thread",
-  }), /must include every dirty claimed file: two\.txt/u);
+  });
+  assert.ok("retainedPaths" in omitted);
+  assert.deepEqual(omitted.retainedPaths, ["two.txt"]);
+  assert.deepEqual(omitted.scopePaths, ["one.txt", "two.txt"]);
+  const removed = await controller.removeFromPlan({
+    cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
+  });
+  assert.ok(removed.kind !== "noop");
+  assert.deepEqual(removed.retainedPaths, ["two.txt"]);
+  assert.deepEqual(removed.scopePaths, ["one.txt", "two.txt"]);
+  assert.ok(!removed.removedClaims.includes("two.txt"));
 
   let registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(registryEntry?.phase, "plan");
-  const retainedPlan = await controller.findPlanState({ cwd: source, harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(retainedPlan?.scopePaths, revised.scopePaths);
-  assert.equal(registryEntry?.intentName, replacement.intentName);
-  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["one.txt", "two.txt"]);
-  await assert.rejects(controller.removeFromPlan({
-    cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
-  }), /must include every dirty claimed file: two\.txt/u);
+  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["two.txt"]);
 
   await fs.writeFile(path.join(source, "two.txt"), "two\n");
   await controller.createPlan({

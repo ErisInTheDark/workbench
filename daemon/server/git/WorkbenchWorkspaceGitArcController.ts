@@ -873,6 +873,7 @@ export default class WorkbenchWorkspaceGitArcController {
       ...(Array.isArray(value.addedClaims) ? { addedClaims: qualifyPaths(value.addedClaims) } : {}),
       ...(Array.isArray(value.removedClaims) ? { removedClaims: qualifyPaths(value.removedClaims) } : {}),
       ...(Array.isArray(value.skippedIgnoredPaths) ? { skippedIgnoredPaths: qualifyPaths(value.skippedIgnoredPaths) } : {}),
+      ...(Array.isArray(value.retainedPaths) ? { retainedPaths: qualifyPaths(value.retainedPaths) } : {}),
       ...(Array.isArray(value.restoredPaths) ? { restoredPaths: qualifyPaths(value.restoredPaths) } : {}),
       ...(Array.isArray(value.stashedPaths) ? { stashedPaths: qualifyPaths(value.stashedPaths) } : {}),
       ...(Array.isArray(value.conflictedPaths) ? { conflictedPaths: qualifyPaths(value.conflictedPaths) } : {}),
@@ -919,6 +920,7 @@ export default class WorkbenchWorkspaceGitArcController {
       addedClaims: arrays("addedClaims"),
       removedClaims: arrays("removedClaims"),
       skippedIgnoredPaths: arrays("skippedIgnoredPaths"),
+      retainedPaths: arrays("retainedPaths"),
       ...(members.some((member) => typeof member.diff === "string") ? {
         diff: members.map((member, index) => `${qualified[index] ? `### ${member.rootId}\n` : ""}${String(member.diff ?? "")}`).join("\n\n"),
       } : {}),

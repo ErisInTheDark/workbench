@@ -12,6 +12,7 @@ import { GitCheckpointFileChangeSchema } from "workbench-shared/workbench/git/gi
 import type { GitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
 
 type Payload = Record<string, unknown>;
+const RETAINED_NOTICE_LIMIT = 10;
 const record = (value: unknown): value is Payload => value !== null && typeof value === "object" && !Array.isArray(value);
 const string = (value: Payload | null | undefined, key: string) => typeof value?.[key] === "string" ? value[key] as string : "";
 const paths = (value: Payload | null | undefined, key: string) => Array.isArray(value?.[key]) ? (value[key] as unknown[]).filter((item): item is string => typeof item === "string") : [];
@@ -115,6 +116,14 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
   }
   const ignored = paths(payload, "skippedIgnoredPaths");
   if (ignored.length) lines.push(`skipped gitignored ${ignored.length}`, ...ignored.map(escapeGitArcValue));
+  const retained = paths(payload, "retainedPaths");
+  if (retained.length) {
+    lines.push(
+      payload.kind === "plan" ? "Starting this plan will retain claims to dirty or proposed files:" : "Retained claims to dirty or proposed files:",
+      ...retained.slice(0, RETAINED_NOTICE_LIMIT).map(escapeGitArcValue),
+      ...(retained.length > RETAINED_NOTICE_LIMIT ? [`+${retained.length - RETAINED_NOTICE_LIMIT} more`] : []),
+    );
+  }
   for (const drift of planningDrift) {
     lines.push("Baselines refreshed. Inspect before presenting the revised plan.",
       `git_arc_diff ${JSON.stringify({ ref: drift.previousRef, paths: drift.paths })}`);

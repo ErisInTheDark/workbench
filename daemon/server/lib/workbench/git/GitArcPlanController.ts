@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcPlanController: own inactive planning and atomic activation, turning planned folders into their current file claims.
+ * - default GitArcPlanController: own inactive planning and atomic activation, turning planned folders into their current file claims and retaining dirty claims replacement scope omits.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: rejected dirty or ignored paths.
  * - partitionIgnoredGitArcPaths/rejectIgnoredGitArcPaths: ignored ownership validation.
  * - createGitArcNoopResult/GitArcNoopResult: ignored requests that changed no refs.
@@ -43,6 +43,18 @@ interface PlanInput {
   threadId: string;
 }
 
+interface PlanRequest {
+  adoptPaths: string[];
+  intentDescription: string;
+  intentName: string;
+  paths: string[];
+}
+
+interface PlanOptions {
+  baselinePlan?: StoredCheckpoint | null;
+  skippedIgnoredPaths?: string[];
+}
+
 interface PlanIdentityInput {
   cwd: string;
   harness?: GitArcHarness;
@@ -59,6 +71,8 @@ export interface GitArcPlanResult {
   kind: "plan";
   planningDrift?: GitArcPlanningDrift;
   repoRoot: string;
+  /** Dirty or proposed claims kept in scope although the request omitted them. */
+  retainedPaths: string[];
   scopePaths: string[];
   skippedIgnoredPaths: string[];
 }
@@ -83,6 +97,8 @@ export interface GitArcStartResult {
   kind: "arc";
   releasedClaims: string[];
   repoRoot: string;
+  /** Dirty or proposed claims kept in scope although the request omitted them; absent when starting a published plan. */
+  retainedPaths?: string[];
   scopePaths: string[];
   skippedIgnoredPaths: string[];
 }
@@ -266,7 +282,6 @@ export default class GitArcPlanController {
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
-      retainedArc: current ? presentation(current) : null,
     }, { baselinePlan });
   }
 
@@ -305,21 +320,17 @@ export default class GitArcPlanController {
       intentDescription: input.intentDescription ?? (input.inherit ? current?.intentDescription ?? "" : ""),
       intentName,
       paths,
-      retainedArc: current ? presentation(current) : null,
     };
+    const result = input.start
+      ? await this.activatePreparedPlan(repository, registry, harness, input, current,
+        await this.preparePlan(repository, registry, harness, input.threadId, current, planInput, { baselinePlan, skippedIgnoredPaths }))
+      : await this.writePlan(repository, registry, harness, input.threadId, current, planInput, { baselinePlan, skippedIgnoredPaths });
     const existingPaths = new Set(existing);
-    const nextPaths = new Set(paths);
-    const delta = {
+    const nextPaths = new Set([...paths, ...(result.kind === "noop" ? [] : result.retainedPaths ?? [])]);
+    return {
+      ...result,
       addedClaims: paths.filter((candidate) => !existingPaths.has(candidate)),
       removedClaims: existing.filter((candidate) => !nextPaths.has(candidate)),
-    };
-    if (input.start) {
-      const prepared = await this.preparePlan(repository, registry, harness, input.threadId, planInput, current?.checkpointCommit, { baselinePlan, skippedIgnoredPaths });
-      return { ...await this.activatePreparedPlan(repository, registry, harness, input, current, prepared), ...delta };
-    }
-    return {
-      ...await this.writePlan(repository, registry, harness, input.threadId, current, planInput, { baselinePlan, skippedIgnoredPaths }),
-      ...delta,
     };
   }
 
@@ -341,13 +352,12 @@ export default class GitArcPlanController {
     const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
     const baselinePlan = await this.readPendingPlan(repository, harness, input.threadId, current);
-    const plan = await this.preparePlan(repository, registry, harness, input.threadId, {
+    const plan = await this.preparePlan(repository, registry, harness, input.threadId, current, {
       adoptPaths: input.adoptPaths ?? [],
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
-      retainedArc: current ? presentation(current) : null,
-    }, current?.checkpointCommit, { baselinePlan });
+    }, { baselinePlan });
     return await this.activatePreparedPlan(repository, registry, harness, input, current, plan);
   }
 
@@ -364,22 +374,8 @@ export default class GitArcPlanController {
     }
     if (!plan.paths.length) throw new GitArcRejectionError({ reason: "emptyPlan" }, "An empty Git arc plan cannot start. Add at least one path first.");
     const claimPaths = await expandGitArcClaimPaths(repository, plan.paths);
-    const currentOwnership = current
-      ? await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(current)
-      : null;
-    const currentPresentation = current ? presentation(current) : null;
-    const retainedArc = await this.prepareRetainedArc(
-      repository,
-      harness,
-      input.threadId,
-      currentPresentation
-        ? { ...currentPresentation, activeClaimedPaths: currentOwnership?.activeClaims ?? currentPresentation.activeClaimedPaths }
-        : null,
-      plan.paths,
-      currentOwnership?.baselineClaims ?? [],
-      current?.stackTip,
-    );
-    const guardPaths = [...new Set([...claimPaths, ...(currentOwnership?.baselineClaims ?? [])])]
+    const { retainedArc } = plan;
+    const guardPaths = [...new Set([...claimPaths, ...plan.baselineClaims])]
       .sort((left, right) => left.localeCompare(right));
 
     const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, guardPaths);
@@ -435,6 +431,7 @@ export default class GitArcPlanController {
       kind: "arc",
       releasedClaims: current ? liveClaims(current) : [],
       repoRoot: repository.root,
+      retainedPaths: plan.retainedPaths,
       scopePaths: claimPaths,
       skippedIgnoredPaths: plan.skippedIgnoredPaths,
     };
@@ -612,27 +609,14 @@ export default class GitArcPlanController {
     harness: GitArcHarness,
     threadId: string,
     current: GitArcRegistryEntry | null,
-    input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
-    options: { baselinePlan?: StoredCheckpoint | null; skippedIgnoredPaths?: string[] } = {},
+    input: PlanRequest,
+    options: PlanOptions = {},
   ): Promise<GitArcPlanResult | GitArcNoopResult> {
-    const plan = await this.preparePlan(repository, registry, harness, threadId, input, current?.checkpointCommit, options);
+    const plan = await this.preparePlan(repository, registry, harness, threadId, current, input, options);
     if (!plan.paths.length && plan.skippedIgnoredPaths.length) {
       return createGitArcNoopResult(repository, plan.skippedIgnoredPaths);
     }
-    const currentOwnership = current
-      ? await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(current)
-      : null;
-    const retainedArc = await this.prepareRetainedArc(
-      repository,
-      harness,
-      threadId,
-      input.retainedArc
-        ? { ...input.retainedArc, activeClaimedPaths: currentOwnership?.activeClaims ?? input.retainedArc.activeClaimedPaths }
-        : null,
-      plan.paths,
-      currentOwnership?.baselineClaims ?? [],
-      current?.stackTip,
-    );
+    const { retainedArc } = plan;
     const successor = await this.prepareStashedSuccessor(repository, harness, threadId, current);
     const registryMutation = await registry.prepareSet({
       checkpointCommit: plan.prepared.checkpointCommit,
@@ -662,6 +646,7 @@ export default class GitArcPlanController {
       adoptedPaths: plan.metadata.adoptedPaths ?? [],
       planningDrift: plan.planningDrift,
       repoRoot: repository.root,
+      retainedPaths: plan.retainedPaths,
       scopePaths: plan.paths,
       skippedIgnoredPaths: plan.skippedIgnoredPaths,
     };
@@ -711,10 +696,25 @@ export default class GitArcPlanController {
     registry: GitArcRegistry,
     harness: GitArcHarness,
     threadId: string,
-    input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
-    amendedFrom?: string,
-    options: { baselinePlan?: StoredCheckpoint | null; skippedIgnoredPaths?: string[] } = {},
+    current: GitArcRegistryEntry | null,
+    input: PlanRequest,
+    options: PlanOptions = {},
   ) {
+    const ownership = current
+      ? await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(current)
+      : null;
+    const currentPresentation = current ? presentation(current) : null;
+    const baselineClaims = ownership?.baselineClaims ?? [];
+    const retained = await this.prepareRetainedArc(
+      repository,
+      harness,
+      threadId,
+      currentPresentation
+        ? { ...currentPresentation, activeClaimedPaths: ownership?.activeClaims ?? currentPresentation.activeClaimedPaths }
+        : null,
+      baselineClaims,
+      current?.stackTip,
+    );
     const requested = await partitionIgnoredGitArcPaths(repository, input.paths);
     const adopted = await partitionIgnoredGitArcPaths(repository, input.adoptPaths);
     const requestedPaths = requested.paths;
@@ -726,7 +726,9 @@ export default class GitArcPlanController {
     ])].sort((left, right) => left.localeCompare(right));
     const exactAdoptedPaths = new Set(adoptPaths);
     const paths = requestedPaths.filter((candidate) => !exactAdoptedPaths.has(candidate));
-    const scopePaths = collapseScopePaths([...paths, ...adoptPaths]);
+    const requestedScope = new GitArcPathSet([...paths, ...adoptPaths]);
+    const retainedPaths = retained.dirtyPaths.filter((candidate) => !requestedScope.covers(candidate));
+    const scopePaths = collapseScopePaths([...paths, ...adoptPaths, ...retainedPaths]);
     const head = await repository.headOrNull();
     const worktreeTree = await repository.writeWorktreeTree(head);
     const dirtyPaths = scopePaths.length ? await repository.listChangedPaths(head, worktreeTree, scopePaths) : [];
@@ -747,7 +749,7 @@ export default class GitArcPlanController {
 
     const metadata: CheckpointMetadata = {
       adoptedPaths: adoptPaths,
-      amendedFrom: amendedFrom ?? null,
+      amendedFrom: current?.checkpointCommit ?? null,
       ...(input.intentDescription.trim() ? { intentDescription: input.intentDescription.trim() } : {}),
       intentName: input.intentName.trim(),
       kind: "plan",
@@ -776,12 +778,15 @@ export default class GitArcPlanController {
     );
     return {
       adoptPaths,
+      baselineClaims,
       dirtyPaths,
       head,
       metadata,
       paths: scopePaths,
       prepared,
       planningDrift,
+      retainedArc: retained.retainedArc,
+      retainedPaths,
       skippedIgnoredPaths,
       tree,
     };
@@ -792,11 +797,10 @@ export default class GitArcPlanController {
     harness: GitArcHarness,
     threadId: string,
     retainedArc: GitArcRegistryEntry["retainedArc"] | null,
-    planPaths: string[],
-    baselineClaims: string[] = [],
+    baselineClaims: string[],
     stackTip?: string | null,
-  ): Promise<GitArcRegistryEntry["retainedArc"] | null> {
-    if (!retainedArc || retainedArc.phase === "resolved" || !retainedArc.claimedPaths.length) return retainedArc;
+  ): Promise<{ dirtyPaths: string[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null }> {
+    if (!retainedArc || retainedArc.phase === "resolved" || !retainedArc.claimedPaths.length) return { dirtyPaths: [], retainedArc };
     const store = this.store(repository);
     const checkpoint = await store.readCheckpoint(harness, threadId, retainedArc.checkpointCommit);
     const outcome = await store.readOutcome(harness, threadId, checkpoint.checkpointCommit);
@@ -811,16 +815,14 @@ export default class GitArcPlanController {
         activeClaims,
       );
     }
-    const plan = new GitArcPathSet(planPaths);
-    const uncovered = dirtyPaths.filter((dirtyPath) => !plan.covers(dirtyPath));
-    if (uncovered.length) {
-      throw new GitArcRejectionError({ reason: "uncoveredDirtyClaims", paths: uncovered }, `A replacement plan must include every dirty claimed file: ${uncovered.join(", ")}`);
-    }
     return {
-      ...retainedArc,
-      activeClaimedPaths: dirtyPaths,
-      claimedPaths: [...new Set([...dirtyPaths, ...baselineClaims])].sort((left, right) => left.localeCompare(right)),
-      phase: dirtyPaths.length || baselineClaims.length ? "active" : "resolved",
+      dirtyPaths,
+      retainedArc: {
+        ...retainedArc,
+        activeClaimedPaths: dirtyPaths,
+        claimedPaths: [...new Set([...dirtyPaths, ...baselineClaims])].sort((left, right) => left.localeCompare(right)),
+        phase: dirtyPaths.length || baselineClaims.length ? "active" : "resolved",
+      },
     };
   }
 }
