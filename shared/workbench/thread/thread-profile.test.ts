@@ -26,6 +26,11 @@ test("a context floor below the default widens selectable windows; without one t
   const defaultFloor = { defaultTokens: 272_000, maximumTokens: 1_000_000 };
   assert.ok(isSelectableContextWindow(defaultFloor, 273_000));
   assert.ok(!isSelectableContextWindow(defaultFloor, 200_000));
+  const offGridNative = { defaultTokens: 262_144, minimumTokens: 51_000, maximumTokens: 262_144 };
+  assert.ok(isSelectableContextWindow(offGridNative, 262_144), "the native default and maximum stay selectable off the 1K grid");
+  assert.ok(isSelectableContextWindow(offGridNative, 262_000));
+  assert.ok(!isSelectableContextWindow(offGridNative, 262_100));
+  assert.ok(!isSelectableContextWindow(offGridNative, 262_145));
   assert.ok(!WorkbenchModelContextCapabilitySchema.safeParse({ model: "m", ...nativeDefault, minimumTokens: 1_001_000 }).success,
     "a floor above the default is not a capability");
 });

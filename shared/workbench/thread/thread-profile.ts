@@ -5,7 +5,7 @@
  * - WorkbenchThreadCreationProfileSchema: validate creation sources before provider forwarding.
  * - contextCompactionThreshold: reserve fixed or proportional context headroom.
  * - contextWindowFloor: smallest selectable window of a model context capability.
- * - isSelectableContextWindow: check a window against capability bounds in 1K steps from the floor.
+ * - isSelectableContextWindow: check a window against capability bounds in 1K steps from the floor, plus the default and maximum.
  * - WorkbenchModelContextCapabilitySchema: validated configurable model bounds.
  */
 import { z } from "zod";
@@ -61,6 +61,7 @@ export function contextWindowFloor(capability: Omit<ContextBounds, "maximumToken
 
 export function isSelectableContextWindow(capability: ContextBounds, tokens: number) {
   const floor = contextWindowFloor(capability);
+  if (tokens === capability.defaultTokens || tokens === capability.maximumTokens) return true;
   return tokens >= floor && tokens <= capability.maximumTokens && (tokens - floor) % 1000 === 0;
 }
 
