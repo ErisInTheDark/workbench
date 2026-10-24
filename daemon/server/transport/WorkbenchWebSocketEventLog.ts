@@ -2,7 +2,8 @@
  * Exports:
  * - WebSocketEventSubject: the threads one event is about, for subject-grouped lines.
  * - WorkbenchWebSocketEventLogOptions: clock, scheduler and log ports.
- * - default WorkbenchWebSocketEventLog: aggregate traffic logs per subject when events name one, else per event type, inner event detail and direction.
+ * - default WorkbenchWebSocketEventLog: aggregate traffic logs per subject (and cause, when known) when events name one,
+ *   else per event type, inner event detail and direction; heartbeats are never logged.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { WORKBENCH_EVENT_STREAM_ACK_METHOD } from "workbench-shared/workbench/websocket-stream";
@@ -18,6 +19,10 @@ export interface WebSocketEventSubject {
   kind?: string;
   /** Stable traffic class whose changing subjects share one bounded log window. */
   group?: string;
+  /** What the event meant (`observationDeltaCause`); a named cause gets its own line per subject set. */
+  cause?: string;
+  /** A routine tick that carries no news; never logged. */
+  heartbeat?: boolean;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -88,7 +93,7 @@ export default class WorkbenchWebSocketEventLog {
   ) {
     if (this.state !== "active") return;
     const methodLabel = webSocketMethodLabel(harness, method);
-    if (EXCLUDED_EVENTS.has(`${direction}:${methodLabel}`)) return;
+    if (EXCLUDED_EVENTS.has(`${direction}:${methodLabel}`) || subject?.heartbeat) return;
     if (subject?.subjects.length) {
       this.recordSubject(direction, subject.kind ?? methodLabel, subject, bytes);
       return;
@@ -118,10 +123,11 @@ export default class WorkbenchWebSocketEventLog {
 
   /** A subject window opens on its first event and logs once when its window ends. */
   private recordSubject(direction: "in" | "out", kind: string, subject: WebSocketEventSubject, bytes: number) {
-    const key = webSocketSubjectKey(direction, subject.subjects, subject.group);
+    const key = webSocketSubjectKey(direction, subject.subjects, subject.group, subject.cause);
     const window = this.subjectWindows.get(key) ?? {
       direction, subjects: new Set<string>(), kinds: new Set<string>(), fields: new Set<string>(),
       connections: new Set<string>(), count: 0, bytes: 0, deadline: this.now() + DEFAULT_WINDOW_MS,
+      ...subject.cause ? { cause: subject.cause } : {},
     };
     for (const named of subject.subjects) window.subjects.add(named);
     window.kinds.add(kind);

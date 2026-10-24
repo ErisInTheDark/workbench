@@ -155,7 +155,8 @@ test("an idle app socket closes on grant revocation and state mutations cannot s
   await closedAgain;
   assert.equal(listeners.size, 0);
   assert.ok(lines.some(line => line.includes("grant revoked")));
-  // Traffic lines name the request each RPC frame carries, not only its envelope.
-  assert.ok(lines.some(line => line.includes("WS in app:rpc app/state/mutate (count:")));
-  assert.ok(lines.some(line => line.includes("WS out app:rpc app/state/mutate (count:")));
+  // An app-state write logs as what it did, with its reply on the same line instead of two envelope lines.
+  const writes = lines.filter(line => line.includes("WS preference cleared x"));
+  assert.ok(writes.length > 0 && writes.every(line => /in: \d+B, reply: \d+B/u.test(line)), lines.join("\n"));
+  assert.ok(!lines.some(line => line.includes("app:rpc app/state/mutate")));
 });

@@ -5,7 +5,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { WORKBENCH_EVENT_STREAM_ACK_METHOD } from "workbench-shared/workbench/websocket-stream";
 import { z } from "zod";
-import { describeObservationDelta, diffObservationValue, observationDeltaSubjects, observationShape } from "workbench-shared/workbench/workspace/observation-patch";
+import {
+  describeObservationDelta, diffObservationValue, observationDeltaSubjects, observationShape, type ObservationDelta,
+} from "workbench-shared/workbench/workspace/observation-patch";
+import { observationDeltaCause } from "workbench-shared/workbench/workspace/observation-delta-cause";
 import WorkbenchWebSocketEventLog from "./WorkbenchWebSocketEventLog";
 
 function fixture() {
@@ -202,6 +205,32 @@ test("workspace observations group changing thread subjects into one bounded win
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /c6c7f1bd, 5f6e4475: threadSummaries \[set\]/);
   assert.match(lines[0]!, /count: 2, out: 700B/);
+  logger.dispose();
+});
+
+test("activity heartbeats never log, and a named cause reads as one line per thread across the views that heard it", () => {
+  const { logger, lines, timers, advance } = fixture();
+  const thread = "447d65f7-ee0b-4ce7-9f11-664931b0b55c";
+  const record = (kind: string, delta: ObservationDelta, bytes: number) => logger.record("out", "workbench", "workspace/delta",
+    bytes, `${kind} ${describeObservationDelta(delta)}`,
+    { ...observationDeltaSubjects(delta), kind, group: `workspace:${kind}`, ...observationDeltaCause(delta) });
+  const entries = (fields: NonNullable<ObservationDelta["set"]>): ObservationDelta => ({
+    collections: { entries: { update: [{ key: `claude:${thread}`, delta: { set: fields } }] } },
+  });
+  const drafts: ObservationDelta = { collections: { composerDrafts: { update: [{ key: thread, delta: { set: { text: "hi" } } }] } } };
+  record("thread", entries({ activityAt: 1 }), 350);
+  record("projectThreads", { objects: { sidebar: entries({ activityAt: 1, tokenUsage: {} }) } }, 460);
+  record("thread", entries({ tokenUsage: {} }), 200);
+  assert.equal(timers.size, 0, "a heartbeat schedules nothing");
+  record("appState", drafts, 600);
+  record("browserState", drafts, 400);
+  record("thread", entries({ title: 1 }), 300);
+  advance(2_000);
+  assert.deepEqual(lines.map(line => line.replace(/ \(.*$/u, "")), [
+    " WS out 447d65f7 draft saved -> appState, browserState",
+    " WS out 447d65f7: thread [title]",
+  ]);
+  assert.match(lines[0]!, /count: 2, out: 1000B/);
   logger.dispose();
 });
 

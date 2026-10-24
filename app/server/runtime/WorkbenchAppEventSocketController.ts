@@ -1,6 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery, bounded traffic logs grouped by the threads frames are about (else named by the event each frame carries), and socket spy recording.
+ * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery, bounded traffic logs
+ *   grouped by the threads frames are about and what they meant (heartbeats left out, app-state writes as one line with
+ *   their reply and echo; else named by the event each frame carries), and socket spy recording.
  */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -10,9 +12,11 @@ import { WORKBENCH_APP_NETWORK_SOCKET_PATH } from "workbench-shared/http/workben
 import { WorkbenchAppRpcRequestSchema, WorkbenchAppRuntimeResponseSchema } from "workbench-shared/http/workbench-app-rpc";
 import type { WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
 import { describeObservationDelta, observationDeltaSubjects } from "workbench-shared/workbench/workspace/observation-patch";
+import { observationDeltaCause } from "workbench-shared/workbench/workspace/observation-delta-cause";
+import type { WorkbenchClientStateMutation } from "workbench-shared/state/workbench-client-state";
 import {
-  formatWebSocketBytes, formatWebSocketEventSummary, formatWebSocketSubjectSummary, threadEventSubject, webSocketSubjectKey,
-  type WebSocketSubjectWindow,
+  formatWebSocketBytes, formatWebSocketEventSummary, formatWebSocketExchangeSummary, formatWebSocketSubjectSummary,
+  threadEventSubject, webSocketSubjectKey, type WebSocketExchangeWindow, type WebSocketSubjectWindow,
 } from "workbench-shared/process/websocket-traffic-format";
 import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 import WorkbenchWorkspaceRequestController from "../workspace/WorkbenchWorkspaceRequestController";
@@ -76,7 +80,9 @@ function describeFrame(frame: Frame): string {
   }
 }
 
-type FrameSubject = { subjects: readonly string[]; fields: readonly string[]; kind: string; group?: string };
+type FrameSubject = {
+  subjects: readonly string[]; fields: readonly string[]; kind: string; group?: string; cause?: string; heartbeat?: boolean;
+};
 
 /** The threads a frame is about, so traffic logs can say what each thread did instead of listing frames. */
 function frameSubject(frame: Frame, aboutThread: string | null): FrameSubject | null {
@@ -85,7 +91,7 @@ function frameSubject(frame: Frame, aboutThread: string | null): FrameSubject | 
     const about = found.subjects.length ? null : threadEventSubject({ threadId: aboutThread });
     return {
       subjects: about?.subjects ?? found.subjects, fields: found.fields, kind: frame.delta.kind,
-      group: `workspace:${frame.delta.kind}`,
+      group: `workspace:${frame.delta.kind}`, ...observationDeltaCause(frame.delta.delta),
     };
   }
   if (frame.kind === "threadEvent") {
@@ -97,6 +103,22 @@ function frameSubject(frame: Frame, aboutThread: string | null): FrameSubject | 
     return subject && { ...subject, kind: "transcript" };
   }
   return null;
+}
+
+const APP_STATE_CAUSES: Readonly<Record<string, Readonly<Record<WorkbenchClientStateMutation["action"], string>>>> = {
+  composerDraft: { put: "draft saved", delete: "draft cleared" },
+  lastProjectSelection: { put: "selection saved", delete: "selection cleared" },
+  globalPreference: { put: "preference saved", delete: "preference cleared" },
+};
+
+/** What one app-state write means, and the project it is about when it names one. */
+function appStateMutationCause(mutation: WorkbenchClientStateMutation) {
+  const target = mutation.action === "put" ? mutation.record : mutation.identity;
+  const subject = "projectId" in target && typeof target.projectId === "string" ? target.projectId.slice(0, 8) : null;
+  return {
+    cause: APP_STATE_CAUSES[target.kind]?.[mutation.action] ?? `${target.kind} ${mutation.action === "put" ? "saved" : "deleted"}`,
+    subject,
+  };
 }
 
 /** Workspace pushes past this name themselves in the log: the tripwire for snapshot resends. */
@@ -117,6 +139,8 @@ export default class WorkbenchAppEventSocketController {
   private readonly pendingRequests = new Set<Promise<void>>();
   private readonly traffic = new Map<string, { count: number; bytes: number }>();
   private readonly subjectTraffic = new Map<string, WebSocketSubjectWindow>();
+  /** App-state writes by cause; their replies and the echo on the writing tab fold into the same line. */
+  private readonly exchangeTraffic = new Map<string, WebSocketExchangeWindow>();
   private trafficTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private suspended = false;
@@ -163,6 +187,9 @@ export default class WorkbenchAppEventSocketController {
     let released = false;
     let stateOwner: string | null | undefined;
     const connectionName = `browser-${++this.nextConnection}`;
+    /** App-state writes this tab sent, by request id, so their replies log with them; the latest also owns its echo. */
+    const exchanges = new Map<number, string>();
+    let lastExchange: string | null = null;
     /** `method` names the request an RPC response answers. */
     const send = (
       frame: Frame | { id: number | null; result?: Json | object; error?: { code: number; message: string; data?: Json } },
@@ -201,7 +228,14 @@ export default class WorkbenchAppEventSocketController {
       if (kind === "workspaceDelta" && payloadBytes > WORKSPACE_PUSH_WARNING_BYTES) {
         this.options.logger.error("app", `WS oversized workspace push ${formatWebSocketBytes(payloadBytes)}: ${label}`);
       }
+      if (!("kind" in frame) && frame.id !== null && this.recordExchangeBytes(exchanges.get(frame.id), "replyBytes", payloadBytes)) {
+        exchanges.delete(frame.id);
+        return;
+      }
       const subject = "kind" in frame ? frameSubject(frame, aboutThread) : null;
+      if (subject?.heartbeat) return;
+      if ("kind" in frame && frame.kind === "workspaceDelta" && frame.delta.kind === "appState" && subject?.cause
+        && this.recordExchangeBytes(lastExchange, "echoBytes", payloadBytes)) return;
       if (subject?.subjects.length) this.recordSubjectTraffic("out", subject, connectionName, payloadBytes);
       else this.recordTraffic("out", label, payloadBytes);
     };
@@ -280,7 +314,10 @@ export default class WorkbenchAppEventSocketController {
         return;
       }
       const parsed = WorkbenchAppRpcRequestSchema.safeParse(value);
-      this.recordTraffic("in", parsed.success ? `rpc ${parsed.data.method}` : "rpc invalid", receivedBytes);
+      if (parsed.success && parsed.data.method === "app/state/mutate") {
+        lastExchange = this.recordExchange(appStateMutationCause(parsed.data.params.mutation), receivedBytes);
+        exchanges.set(parsed.data.id, lastExchange);
+      } else this.recordTraffic("in", parsed.success ? `rpc ${parsed.data.method}` : "rpc invalid", receivedBytes);
       this.options.traffic?.record({ direction: "in", connection: connectionName,
         label: `app:${parsed.success ? `rpc ${parsed.data.method} #${parsed.data.id}` : "rpc invalid"}`, payload: raw, bytes: receivedBytes });
       if (!parsed.success) {
@@ -411,12 +448,33 @@ export default class WorkbenchAppEventSocketController {
     this.scheduleTraffic();
   }
 
+  /** Returns the exchange key, so the request's reply and echo can join its line. */
+  private recordExchange({ cause, subject }: { cause: string; subject: string | null }, bytes: number) {
+    const key = `${cause}:${subject ?? ""}`;
+    const window = this.exchangeTraffic.get(key)
+      ?? { cause, subjects: new Set<string>(), count: 0, inBytes: 0, replyBytes: 0, echoBytes: 0 };
+    if (subject) window.subjects.add(subject);
+    window.count++;
+    window.inBytes += bytes;
+    this.exchangeTraffic.set(key, window);
+    this.scheduleTraffic();
+    return key;
+  }
+
+  /** False once the exchange's window has flushed: late replies and echoes then log on their own. */
+  private recordExchangeBytes(key: string | null | undefined, field: "replyBytes" | "echoBytes", bytes: number) {
+    const window = key === null || key === undefined ? undefined : this.exchangeTraffic.get(key);
+    if (!window) return false;
+    window[field] += bytes;
+    return true;
+  }
+
   /** Related subject frames roll into one line per window, whichever views and tabs they went to. */
   private recordSubjectTraffic(direction: "in" | "out", subject: FrameSubject, connection: string, bytes: number) {
-    const key = webSocketSubjectKey(direction, subject.subjects, subject.group);
+    const key = webSocketSubjectKey(direction, subject.subjects, subject.group, subject.cause);
     const window = this.subjectTraffic.get(key) ?? {
       direction, subjects: new Set<string>(), kinds: new Set<string>(), fields: new Set<string>(),
-      connections: new Set<string>(), count: 0, bytes: 0,
+      connections: new Set<string>(), count: 0, bytes: 0, ...subject.cause ? { cause: subject.cause } : {},
     };
     for (const named of subject.subjects) window.subjects.add(named);
     window.kinds.add(subject.kind);
@@ -444,6 +502,8 @@ export default class WorkbenchAppEventSocketController {
       this.options.logger.line("app", formatWebSocketEventSummary(direction === "in" ? "in" : "out", `app:${label}`, count, bytes));
     }
     this.traffic.clear();
+    for (const window of this.exchangeTraffic.values()) this.options.logger.line("app", formatWebSocketExchangeSummary(window));
+    this.exchangeTraffic.clear();
     for (const window of this.subjectTraffic.values()) this.options.logger.line("app", formatWebSocketSubjectSummary(window));
     this.subjectTraffic.clear();
   }

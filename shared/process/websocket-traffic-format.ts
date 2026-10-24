@@ -4,7 +4,9 @@
  * - dimWebSocketDetail: style secondary transport details grey.
  * - formatWebSocketBytes: use consistent B/KB/MB units for requests and event traffic.
  * - formatWebSocketEventSummary: render one bounded traffic window line without payloads.
- * - WebSocketSubjectWindow/webSocketSubjectKey/formatWebSocketSubjectSummary: roll related subject frames into one line.
+ * - WebSocketSubjectWindow/webSocketSubjectKey/formatWebSocketSubjectSummary: roll related subject frames into one line,
+ *   named by their cause when one is known.
+ * - WebSocketExchangeWindow/formatWebSocketExchangeSummary: one line per request cause with its reply and echoes.
  * - threadEventSubject: the thread a provider event names, as a log subject.
  */
 const ANSI_DIM = "\u001b[2m";
@@ -39,6 +41,27 @@ export interface WebSocketSubjectWindow {
   connections: Set<string>;
   count: number;
   bytes: number;
+  /** What the frames meant (`draft saved`), when a cause registry named it. */
+  cause?: string;
+}
+
+/** One request/reply exchange cause and the echoes it caused, e.g. a saved draft. */
+export interface WebSocketExchangeWindow {
+  cause: string;
+  subjects: Set<string>;
+  count: number;
+  inBytes: number;
+  replyBytes: number;
+  echoBytes: number;
+}
+
+/** `WS 5de07ba4 draft saved x3 (in: 1.7KB, reply: 5.1KB, echo: 2.5KB)`. Log lines stay ASCII: the host pipe mangles the rest. */
+export function formatWebSocketExchangeSummary(window: WebSocketExchangeWindow) {
+  const subjects = [...window.subjects];
+  const named = subjects.length > 3 ? `${subjects.slice(0, 3).join(", ")} +${subjects.length - 3} ` : subjects.length ? `${subjects.join(", ")} ` : "";
+  const sizes = [`in: ${formatWebSocketBytes(window.inBytes)}`, `reply: ${formatWebSocketBytes(window.replyBytes)}`,
+    ...window.echoBytes ? [`echo: ${formatWebSocketBytes(window.echoBytes)}`] : []];
+  return ` WS ${boundWebSocketLogText(`${named}${window.cause}`, 320)} x${window.count} ${dimWebSocketDetail(`(${sizes.join(", ")})`)}`;
 }
 
 const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -52,19 +75,26 @@ export function threadEventSubject(params: unknown): { subjects: string[]; field
   return threadId && THREAD_ID.test(threadId) ? { subjects: [threadId.slice(0, 8)], fields: [] } : null;
 }
 
-export function webSocketSubjectKey(direction: "in" | "out", subjects: readonly string[], group?: string) {
+/** A named cause keys its own window per subject set, so each line says one thing happened to those threads. */
+export function webSocketSubjectKey(direction: "in" | "out", subjects: readonly string[], group?: string, cause?: string) {
+  if (cause) return `${direction}:cause:${cause}:${subjects.join(",")}`;
   return group ? `${direction}:group:${group}` : `${direction}:subjects:${subjects.join(",")}`;
 }
 
-/** One line per subject window: `WS out c6c7f1bd: thread, summaries [-waitingFor, status] (count: 3, out: 1.3KB)`. */
+/**
+ * One line per subject window. A cause reads as what happened and which views heard it
+ * (`WS out 5de07ba4 draft saved -> appState (count: 1, out: 616B)`); otherwise the kinds and fields that changed
+ * (`WS out c6c7f1bd: thread, summaries [-waitingFor, status] (count: 3, out: 1.3KB)`).
+ */
 export function formatWebSocketSubjectSummary(window: WebSocketSubjectWindow) {
   const namedSubjects = [...window.subjects];
   const subjects = namedSubjects.length > 3
     ? `${namedSubjects.slice(0, 3).join(", ")} +${namedSubjects.length - 3}` : namedSubjects.join(", ");
   const kinds = [...window.kinds];
   const fields = [...window.fields];
-  const label = `${subjects}: ${kinds.slice(0, 6).join(", ")}${kinds.length > 6 ? ", ..." : ""}`
-    + (fields.length ? ` [${fields.slice(0, 8).join(", ")}${fields.length > 8 ? ", ..." : ""}]` : "");
+  const kindList = `${kinds.slice(0, 6).join(", ")}${kinds.length > 6 ? ", ..." : ""}`;
+  const label = window.cause ? `${subjects} ${window.cause} -> ${kindList}`
+    : `${subjects}: ${kindList}` + (fields.length ? ` [${fields.slice(0, 8).join(", ")}${fields.length > 8 ? ", ..." : ""}]` : "");
   const tabs = window.connections.size > 1 ? `, to: ${window.connections.size}` : "";
   return ` WS ${window.direction} ${boundWebSocketLogText(label, 320)} ${dimWebSocketDetail(
     `(count: ${window.count}${tabs}, ${window.direction}: ${formatWebSocketBytes(window.bytes)})`)}`;

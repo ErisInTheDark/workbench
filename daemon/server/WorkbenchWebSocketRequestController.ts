@@ -66,6 +66,7 @@ import {
   type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { describeObservationDelta, observationDeltaSubjects } from "workbench-shared/workbench/workspace/observation-patch";
+import { observationDeltaCause } from "workbench-shared/workbench/workspace/observation-delta-cause";
 import WebSocketTrafficBuffer, {
   WEBSOCKET_SPY_QUERY_METHOD, WEBSOCKET_SPY_RESULT_METHOD, WebSocketSpyResultNotificationSchema,
   type WebSocketTrafficQuery, type WebSocketTrafficResult,
@@ -353,8 +354,9 @@ export default class WorkbenchWebSocketRequestController {
       } }
       : { method: WORKSPACE_UPDATED_METHOD, params: value };
     const eventDetail = change ? `${value.kind} ${describeObservationDelta(change.delta)}` : `${value.kind} reset=restore`;
+    const cause = change ? observationDeltaCause(change.delta) : null;
     const eventSubject = change
-      ? { ...observationDeltaSubjects(change.delta), kind: value.kind, group: `workspace:${value.kind}` }
+      ? { ...observationDeltaSubjects(change.delta), kind: value.kind, group: `workspace:${value.kind}`, ...cause }
       : null;
     void this.sendJsonToClient(client, message, { eventDetail, eventSubject, warnAboveBytes: WORKSPACE_PUSH_WARNING_BYTES })
       .catch(error => this.reportSendFailure({ method: message.method }, error));
