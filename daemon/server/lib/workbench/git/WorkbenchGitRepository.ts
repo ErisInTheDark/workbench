@@ -13,7 +13,8 @@
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
  * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
  * buildFileChanges/buildChangeTotals/buildFileChangeSummaries list changed files in-process, then diff them in pathspec batches
- * that fit the command line, with at most four Git processes in flight. Git children never take optional index locks;
+ * that fit the command line, with at most four Git processes in flight. listIgnoredWorktreePaths walks wholly-ignored
+ * folders itself so oversized ignored scopes fail fast. Git children never take optional index locks;
  * real-index writers (resetMixedPaths, writeIndexTree, restorePaths, restoreWorktree, checkoutTreeTransition) first clear
  * provably orphaned locks; checkoutTreeTransition moves index and worktree between two commits' trees like a checkout.
  * Machine worktrees run Git against their internal Git dir; their whole-worktree reads cover tracked files only,
@@ -33,7 +34,7 @@ import GitObjectWriter from "./GitObjectWriter";
 import { gitProcesses, GitProcessError } from "./GitProcessHost";
 import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
 import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
-import { listBoundaryFiles, nestedRepositoryScopes } from "./machine-git-boundaries";
+import { BoundaryWalkLimitError, listBoundaryFiles, nestedRepositoryScopes } from "./machine-git-boundaries";
 import { isMachineGitWorktree, machineGitEnvironment } from "./machine-git-worktrees";
 import { comparablePath, isPathInside as isWithinRoot } from "../../comparable-path";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
@@ -50,6 +51,8 @@ const repositoryRoots = new Map<string, string>();
 const PATHSPEC_ARGUMENT_BUDGET = 16_000;
 /** Git processes one diff read keeps in flight; each spawn blocks the event loop briefly, so fan-out stays small. */
 const GIT_DIFF_CONCURRENCY = 4;
+/** More ignored files than this under edit scopes means dependency or build trees, which no edit means to rewrite. */
+const IGNORED_FILE_LIMIT = 50_000;
 
 type GitProcessLimit = <T>(work: () => Promise<T>) => Promise<T>;
 
@@ -876,14 +879,49 @@ export default class WorkbenchGitRepository {
     });
   }
 
-  /** Untracked files Git ignores beneath the scopes, file by file. */
-  async listIgnoredWorktreePaths(scopes: readonly string[]) {
-    const batches = this.scopeBatches(scopes).filter(pathspecs => this.walksUntracked(pathspecs));
-    const outputs = await Promise.all(batches.map(async (pathspecs) => await this.run([
-      "ls-files", "-z", "--others", "--ignored", "--exclude-standard", ...pathspecs,
-    ])));
-    const candidates = [...new Set(outputs.flatMap(parseNullPaths))].sort((left, right) => left.localeCompare(right));
+  /**
+   * Untracked files Git ignores beneath the scopes, file by file. Git lists wholly-ignored folders collapsed (`--directory`), and Workbench walks
+   * them and scopes already inside them (where Git's `--directory` fails), so the walk can stop past `limit`.
+   */
+  async listIgnoredWorktreePaths(scopes: readonly string[], options: { limit?: number; signal?: AbortSignal } = {}) {
+    const { limit = IGNORED_FILE_LIMIT, signal } = options;
+    const ignoredScopes = await this.listPatternIgnoredScopes(scopes, signal);
+    const ignored = new Set(ignoredScopes);
+    const gitScopes = scopes.filter(scope => !ignored.has(scope));
+    const batches = scopes.length && !gitScopes.length ? []
+      : this.scopeBatches(gitScopes).filter(pathspecs => this.walksUntracked(pathspecs));
+    const entries = (await Promise.all(batches.map(async (pathspecs) => await this.run([
+      "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", ...pathspecs,
+    ], process.env, signal)))).flatMap(parseNullPaths);
+    const files = entries.filter(entry => !entry.endsWith("/"));
+    const folders = filterPathsByScopes(entries.filter(entry => entry.endsWith("/")).map(entry => entry.slice(0, -1)), gitScopes);
+    const tooMany = (stoppedAt: string) => new Error(`includeIgnored roots hold more than ${limit} ignored files (stopped at ${stoppedAt}). `
+      + "Narrow roots to the ignored files or folders you mean.");
+    if (files.length > limit) throw tooMany(files[limit]!);
+    let walked;
+    try {
+      walked = await listBoundaryFiles(this.root, [...ignoredScopes, ...folders], { limit: limit - files.length, signal });
+    } catch (error) {
+      if (error instanceof BoundaryWalkLimitError) throw tooMany(error.path);
+      throw error;
+    }
+    // Force-added files inside ignored folders are tracked, never ignored.
+    const tracked = new Set(ignoredScopes.length
+      ? parseNullPaths(await this.run(["ls-files", "-z", "--cached", ...this.scopePathspecs(ignoredScopes)], process.env, signal))
+      : []);
+    const candidates = [...new Set([...files, ...walked.map(file => file.path).filter(filePath => !tracked.has(filePath))])]
+      .sort((left, right) => left.localeCompare(right));
     return filterPathsByScopes(candidates, scopes);
+  }
+
+  /** Scopes Git's ignore patterns exclude, regardless of the index; Git's own ignored walk cannot start inside them. */
+  private async listPatternIgnoredScopes(scopes: readonly string[], signal?: AbortSignal) {
+    const candidates = scopes.filter(scope => scope && scope !== ".");
+    if (!candidates.length) return [];
+    const result = await this.runWithInputResult(
+      ["check-ignore", "-z", "--no-index", "--stdin"], `${candidates.join("\0")}\0`, process.env, [0, 1], signal,
+    );
+    return result.exitCode === 1 ? [] : parseNullPaths(result.stdout);
   }
 
   /** Whether every commit is reachable from `descendant`, in one walk; unreadable commits are never proven reachable. */

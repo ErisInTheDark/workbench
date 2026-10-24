@@ -2,7 +2,9 @@
  * Exports:
  * - MachineBoundaryFile: one file Workbench found under a boundary scope, with the Git mode it stages as.
  * - nestedRepositoryScopes: scopes lying inside a nested repository below a machine worktree root.
- * - listBoundaryFiles: files under boundary scopes, walked without following symlinks or entering `.git` folders.
+ * - listBoundaryFiles: files under boundary scopes, walked without following symlinks or entering `.git` folders;
+ *   optionally cancellable and stopped past a file limit.
+ * - BoundaryWalkLimitError: a walk found more files than its limit; names the file it stopped at.
  * Git stops walking at a nested `.git`, so files another repository ignores stay invisible to a machine repository's
  * `ls-files`/`add` even though tracked entries there diff, restore and restage normally. Workbench owns discovery for
  * those scopes; staging stays with the repository.
@@ -56,9 +58,21 @@ function fileMode(stat: import("node:fs").Stats): MachineBoundaryFile["mode"] {
   return process.platform !== "win32" && (stat.mode & 0o111) !== 0 ? "100755" : "100644";
 }
 
-export async function listBoundaryFiles(root: string, scopes: readonly string[]) {
+export class BoundaryWalkLimitError extends Error {
+  constructor(readonly limit: number, readonly path: string) {
+    super(`More than ${limit} files; the walk stopped at ${path}.`);
+  }
+}
+
+export async function listBoundaryFiles(
+  root: string,
+  scopes: readonly string[],
+  options: { limit?: number; signal?: AbortSignal } = {},
+) {
+  const { limit = Number.POSITIVE_INFINITY, signal } = options;
   const files = new Map<string, MachineBoundaryFile>();
   const visit = async (relative: string): Promise<void> => {
+    signal?.throwIfAborted();
     const absolute = path.join(root, ...relative.split("/"));
     let stat;
     try {
@@ -69,6 +83,7 @@ export async function listBoundaryFiles(root: string, scopes: readonly string[])
     }
     if (stat.isFile() || stat.isSymbolicLink()) {
       files.set(relative, { mode: fileMode(stat), path: relative });
+      if (files.size > limit) throw new BoundaryWalkLimitError(limit, relative);
       return;
     }
     if (!stat.isDirectory()) return;

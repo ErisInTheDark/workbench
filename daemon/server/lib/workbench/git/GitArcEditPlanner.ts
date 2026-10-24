@@ -170,8 +170,8 @@ export default class GitArcEditPlanner {
   async plan(repository: WorkbenchGitRepository, operations: GitArcEditOperation[], signal?: AbortSignal): Promise<GitArcEditPlan> {
     const scopes = readScopes(operations);
     const [visible, ignored] = await Promise.all([
-      repository.listWorktreePaths(["."]),
-      scopes.ignoredScopes.length ? repository.listIgnoredWorktreePaths(scopes.ignoredScopes) : Promise.resolve([]),
+      repository.listWorktreePaths(["."], process.env, signal),
+      scopes.ignoredScopes.length ? repository.listIgnoredWorktreePaths(scopes.ignoredScopes, { signal }) : Promise.resolve([]),
     ]);
     const ignoredSet = new Set(ignored);
     let skippedFileCount = 0;

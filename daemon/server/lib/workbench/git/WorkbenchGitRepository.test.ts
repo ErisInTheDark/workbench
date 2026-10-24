@@ -397,6 +397,26 @@ test("file-change construction passes cancellation through listing, batch and si
   assert.deepEqual(signals, [signal, signal, signal]);
 });
 
+test("ignored worktree listing sees inside ignored folders, stops past its limit and honours cancellation", async (context) => {
+  const root = await initialiseRepository(context, "sha1", "files");
+  if (!root) return;
+  const write = async (relative: string, content = "x\n") => {
+    await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await fs.writeFile(path.join(root, relative), content, "utf8");
+  };
+  await write(".gitignore", "deps/\n*.log\n");
+  for (const file of ["deps/a/1.js", "deps/a/2.js", "deps/b/3.js", "deps/forced.txt", "notes/keep.md", "notes/debug.log"]) await write(file);
+  await git(root, ["add", "-f", "deps/forced.txt"]);
+  const repository = new WorkbenchGitRepository(root);
+
+  assert.deepEqual(await repository.listIgnoredWorktreePaths(["."]), ["deps/a/1.js", "deps/a/2.js", "deps/b/3.js", "notes/debug.log"]);
+  assert.deepEqual(await repository.listIgnoredWorktreePaths(["deps/a", "notes"]), ["deps/a/1.js", "deps/a/2.js", "notes/debug.log"]);
+  await assert.rejects(repository.listIgnoredWorktreePaths(["deps"], { limit: 2 }), /more than 2 ignored files.*Narrow roots/u);
+  const cancelled = new AbortController();
+  cancelled.abort(new Error("caller left"));
+  await assert.rejects(repository.listIgnoredWorktreePaths(["."], { signal: cancelled.signal }));
+});
+
 test("normalizes the index before atomic ref publication and keeps retries idempotent", async () => {
   const repository = new WorkbenchGitRepository("C:/Git/Project");
   const events: string[] = [];
