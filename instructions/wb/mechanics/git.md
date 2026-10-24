@@ -1,7 +1,8 @@
 <docs tools="git_repo">
 ## Remote Git Repo Inspection
-- <tool id="git_repo" /> warms a readonly copy of a public remote repository. Not a real clone.
+- <tool id="git_repo" /> warms a lazy, readonly copy of a public remote repository. Not a real clone!!
 - Favour it and normal shell calls over web searches and reads.
+- Avoid recursive searching, especially for text, as it requires the whole repo being downloaded for real.
 - Assume user does not want to contribute to remote repositories by default.
 </docs>
 <!-- Outer region: only policy that genuinely applies to every arc tool. Each line names the tools it is about, so prompt cost lands where it belongs. -->
