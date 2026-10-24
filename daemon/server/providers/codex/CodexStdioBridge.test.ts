@@ -4424,6 +4424,8 @@ test("managed admission steers a provider-confirmed active turn without changing
       id: 722, method: "turn/start", params: { input: [], threadId: "thread", toolOutput },
     });
     assert.equal(outputResponse.error, undefined);
+    // Folded into the live turn, so the caller must treat it as a steer the model has not seen yet.
+    assert.deepEqual(outputResponse.result, { turnId: activeTurn.id });
     assert.deepEqual(upstreamRequests.slice(outputOffset).map(({ method }) => method), ["thread/read", "turn/start"]);
     assert.deepEqual((upstreamRequests.at(-1)?.params as { toolOutput?: object }).toolOutput, toolOutput);
     assert.equal(prepared, false);
@@ -4473,6 +4475,7 @@ test("agent output for an active subagent turn carries the profile model in its 
     },
   });
   assert.equal(response.error, undefined);
+  assert.deepEqual(response.result, { turnId: activeTurn.id });
   const start = upstreamRequests.find((request) => request.method === "turn/start");
   const params = start?.params as { collaborationMode?: { settings?: { model?: string } } } | undefined;
   assert.equal(params?.collaborationMode?.settings?.model, "profile-model");

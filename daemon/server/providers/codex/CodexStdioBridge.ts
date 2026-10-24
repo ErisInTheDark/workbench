@@ -1769,10 +1769,9 @@ export default class CodexStdioBridge {
   private toNativeTurnStartResponse(admission: JsonRpcResponse, requestId: number | string | null): JsonRpcResponse {
     if (admission.error) return { id: requestId, error: admission.error };
     const result = asRecord(admission.result);
-    const turn = result?.kind === "started" ? result.turn : null;
-    return turn && typeof turn === "object"
-      ? { id: requestId, result: { turn } }
-      : { id: requestId, error: { code: -32000, message: "Codex turn start was not admitted as a new turn." } };
+    if (result?.kind === "started" && result.turn && typeof result.turn === "object") return { id: requestId, result: { turn: result.turn } };
+    if (result?.kind === "steered" && typeof result.turnId === "string") return { id: requestId, result: { turnId: result.turnId } };
+    return { id: requestId, error: { code: -32000, message: "Codex turn start was not admitted." } };
   }
 
   private async enqueueCommand<TValue>(task: () => TValue | Promise<TValue>) {
@@ -3167,7 +3166,7 @@ export default class CodexStdioBridge {
           ({ startRequest } = await this.prepareThreadConfiguration(readThread, { resumeRequest, startRequest }, signal));
           signal.throwIfAborted();
         }
-        return await this.dispatchAdmittedTurnStart(requestId, startRequest);
+        return await this.dispatchFoldedToolOutput(requestId, startRequest);
       }
       let activeTurnId = this.readTranscriptActiveTurnId(threadId);
       if (!activeTurnId) {
@@ -3311,7 +3310,7 @@ export default class CodexStdioBridge {
       const resumedActiveTurn = this.readManagedActiveTurn(resumedThread, resumedTurns);
       if (resumedActiveTurn) {
         if (asRecord(asRecord(startRequest.params)?.toolOutput)) {
-          return { accepted: false, result: await this.dispatchAdmittedTurnStart(requestId, startRequest) };
+          return { accepted: false, result: await this.dispatchFoldedToolOutput(requestId, startRequest) };
         }
         return { accepted: false, result: await this.dispatchManagedMessageSteer(requestId, threadId, resumedActiveTurn.id, startRequest, steerRequest) };
       }
@@ -3366,6 +3365,16 @@ export default class CodexStdioBridge {
     return turn && typeof turn === "object"
       ? { id: requestId, result: { kind: "started", turn } }
       : { id: requestId, error: { code: -32000, message: "Managed Codex turn start returned no turn." } };
+  }
+
+  /** Codex folds tool output into the live turn; its model sees it only at a later input boundary, like a steer. */
+  private async dispatchFoldedToolOutput(requestId: number | string | null, startRequest: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const response = await this.dispatchManagedProviderRequest(startRequest);
+    if (response.error) return { id: requestId, error: response.error };
+    const turnId = asString(asRecord(asRecord(response.result)?.turn)?.id)?.trim();
+    return turnId
+      ? { id: requestId, result: { kind: "steered", turnId } }
+      : { id: requestId, error: { code: -32000, message: "Codex returned no live turn for the folded tool output." } };
   }
 
   private async dispatchManagedProviderRequest(request: JsonRpcRequest, signal?: AbortSignal) {
