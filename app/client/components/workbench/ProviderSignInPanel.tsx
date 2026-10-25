@@ -8,12 +8,14 @@
 import { useState } from "react";
 import type { ProviderAccountIntegration, ProviderSignInAttempt } from "workbench-shared/workbench/provider/provider-account-sign-in";
 import type ProviderAccountController from "../../workbench/ProviderAccountController";
+import { AccountName } from "../../workbench/account-name";
 import Disclosure from "../ui/Disclosure";
 import PrimaryButton from "../ui/PrimaryButton";
 import { IconLabel } from "./settings-row-labels";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import WorkbenchTextField from "./WorkbenchTextField";
 import { ExternalLinkIcon } from "./workbench-icons";
+import WorkbenchAccountName from "./WorkbenchAccountName";
 
 export interface ProviderKeyTarget { integrationId: string; methodId: string; label: string }
 
@@ -77,7 +79,11 @@ function OtherIntegrations({ provider, controller, busy, integrations, onKey }: 
       {integrations.map(integration => <li key={integration.id} className="flex flex-wrap items-center gap-2 rounded-lg px-1 py-1">
         <span className="min-w-0 flex-1 text-text">
           {integration.label}
-          {integration.signedIn ? <span className="ml-2 text-success">{integration.accountLabel ?? "Connected"}</span> : null}
+          {integration.signedIn ? <span className="ml-2 text-success">
+            {integration.accountLabel
+              ? <WorkbenchAccountName name={AccountName.mask(integration.accountLabel)} />
+              : "Connected"}
+          </span> : null}
         </span>
         {integration.signedIn
           ? <PrimaryButton shape="compact" disabled={busy} onClick={() => { void controller.signOut(provider, integration.id); }}>Disconnect</PrimaryButton>

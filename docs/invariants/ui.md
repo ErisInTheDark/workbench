@@ -7,6 +7,7 @@
 - Support both light and dark color schemes in every visual change
 - Make desktop and mobile behavior deliberate, layouts and sticky controls
 - Browser use is activated for UI validation; prefer it unless user instructions override
+- Account labels are private: mask by default; reveal only on explicit user action. Never expose hidden full labels through tooltips or accessibility text.
 - Prefer workbench's extra tailwind features (they compose correctly)
   - nested variant grouping `motion-reduce:(transition-none stuck:(animate-none hover:bg-red-500))`
   - any whitespace within square brackets [] converts to standard tailwind `_`, allowing multiline `transition`/`transform`/gradients

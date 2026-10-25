@@ -5,14 +5,12 @@
  * - default WorkbenchStatsLimits: an even grid of limit cards, one per account, showing what is left per window against even
  *   rationing, with the longest window's use over time folded into a history sparkline.
  */
-import { useState } from "react";
 import { statsRangeShape, type WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { formatRateLimitIdentity, formatRateLimitWindowLabel } from "../../../../workbench/rate-limit-display";
 import useStats from "../use-stats";
-import IconButton from "../../../ui/IconButton";
 import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import Sparkline from "../../../ui/Sparkline";
-import { EyeIcon, EyeOffIcon } from "../../workbench-icons";
+import WorkbenchAccountName from "../../WorkbenchAccountName";
 import { formatPercent } from "../stats-formatters";
 import StatsLoading from "../StatsLoading";
 import {
@@ -51,30 +49,22 @@ function observedAgo(observedAt: number, now: number) {
 function LimitCard({ limit, name, now, resolution }: {
   limit: Limit; name: LimitAccountName | null; now: number; resolution: StatsLimitBuckets;
 }) {
-  const [revealed, setRevealed] = useState(false);
   const windows = currentWindows(limit);
   const latest = limit.samples.at(-1)!;
   const largest = largestLimitWindow(limit);
   const largestLabel = windows.find(({ kind }) => kind === largest?.kind)?.label;
   const used = largest ? limitUsageByBucket(limit.samples, largest.kind, resolution) : [];
   const peak = Math.max(0, ...used.map((value) => value ?? 0));
-  const masked = name !== null && name.short !== name.full;
   return (
     <div className="min-w-0 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <h3 className="m-0 flex min-w-0 items-center gap-1 text-[0.84rem] font-semibold text-text">
           <span className="truncate">
             {formatRateLimitIdentity(limit.harness, limit.limitId, limit.limitName)}
-            {name ? <span className="font-normal text-fg/muted"> · {revealed ? name.full : name.short}</span> : null}
           </span>
-          {masked ? (
-            <IconButton
-              aria-pressed={revealed} display="hover-border" label={revealed ? "Hide account" : "Show account"}
-              onClick={() => setRevealed(!revealed)} size="compact"
-            >
-              {revealed ? <EyeOffIcon size={14} /> : <EyeIcon size={14} />}
-            </IconButton>
-          ) : null}
+          {name ? <span className="inline-flex min-w-0 items-center gap-1 font-normal text-fg/muted">
+            · <WorkbenchAccountName name={name} />
+          </span> : null}
         </h3>
         <span className="shrink-0 text-[0.68rem] text-fg/muted">updated {observedAgo(latest.observedAt, now)}</span>
       </div>

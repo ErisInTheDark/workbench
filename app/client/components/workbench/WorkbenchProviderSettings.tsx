@@ -12,6 +12,7 @@ import {
   ProviderRuntimeKeySchema, type ProviderRuntimeKey, type ProviderRuntimeStatus, type ProviderRuntimesSnapshot,
 } from "workbench-shared/workbench/provider/provider-runtime";
 import ProviderAccountController, { type ProviderAccountState } from "../../workbench/ProviderAccountController";
+import { AccountName } from "../../workbench/account-name";
 import IconButton, { iconButtonClassName } from "../ui/IconButton";
 import PressDragMenu from "../ui/PressDragMenu";
 import PrimaryButton from "../ui/PrimaryButton";
@@ -19,6 +20,7 @@ import ProviderSignInPanel, { type ProviderKeyTarget } from "./ProviderSignInPan
 import { IconLabel, SettingsMenuItem } from "./settings-row-labels";
 import { KeyRoundIcon, KeyRoundOffIcon, MoreVerticalIcon, RefreshCwIcon } from "./workbench-icons";
 import WorkbenchSettingsStatusRow, { type WorkbenchSettingsStatusTone } from "./WorkbenchSettingsStatusRow";
+import WorkbenchAccountName from "./WorkbenchAccountName";
 
 const labels: Record<WorkbenchProviderKey, string> = { codex: "Codex", claude: "Claude Code", opencode: "OpenCode" };
 
@@ -66,7 +68,7 @@ function accountView(provider: WorkbenchProviderKey, account: ProviderAccountSta
       : { tone: "pending", status: "Checking", detail: `Checking ${label}'s sign-in...` };
   }
   if (primary?.signedIn) {
-    return { tone: "ready", status: `Signed in${build}`, detail: primary.accountLabel ? `Signed in as ${primary.accountLabel}.` : `Threads use this daemon's ${label} sign-in.` };
+    return { tone: "ready", status: `Signed in${build}`, detail: `Threads use this daemon's ${label} sign-in.` };
   }
   return { tone: "action", status: `Not signed in${build}`, detail: `Sign in to use ${label} in threads on this daemon.` };
 }
@@ -190,6 +192,9 @@ function ProviderRow({ provider, runtime, installing, checking, account, control
     body={<ProviderSignInPanel provider={provider} controller={controller} busy={busy} attempt={attempt}
       integrations={snapshot?.integrations.filter(integration => !integration.primary) ?? []}
       keyTarget={keyTarget} onKey={setKeyTarget} onKeyDone={() => setKeyTarget(null)} />}>
+    {primary?.signedIn && primary.accountLabel
+      ? <WorkbenchAccountName name={AccountName.mask(primary.accountLabel)} className="text-[0.78em] text-success" />
+      : null}
     {primary && signInMethod && !primary.signedIn && !pending ? <PrimaryButton shape="compact" disabled={busy}
       onClick={() => { void controller.start(provider, primary.id, signInMethod.id); }}>
       <IconLabel icon={<KeyRoundIcon size={14} />}>Sign in</IconLabel>

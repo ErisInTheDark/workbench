@@ -11,6 +11,7 @@
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { AccountName } from "../../../../workbench/account-name";
 
 type Limit = WorkbenchStatsSectionData<"limits">["rateLimits"][number];
 type Sample = Limit["samples"][number];
@@ -144,11 +145,7 @@ export function limitUsageByBucket(samples: readonly Sample[], kind: WindowKind,
   return values;
 }
 
-export interface LimitAccountName {
-  /** Masked: the shortest start that tells this provider's accounts apart. */
-  short: string;
-  full: string;
-}
+export type LimitAccountName = AccountName;
 
 /** Limits without a known account come from separate machines, so each counts as its own account. */
 const accountKey = (limit: Limit, index: number) => `${limit.harness}\0${limit.account?.key ?? `#${index}`}`;
@@ -171,9 +168,7 @@ export function limitAccountNames(limits: readonly Limit[]): (LimitAccountName |
     if (!limit.account?.label) return { short: name, full: name };
     const others = [...new Set(limits.filter((other) => other.harness === limit.harness && other.account?.label
       && other.account.key !== limit.account?.key).map((other) => other.account!.label!))];
-    let length = 1;
-    while (length < name.length && others.some((other) => other.startsWith(name.slice(0, length)))) length++;
-    return { short: `${name.slice(0, length)}***`, full: name };
+    return AccountName.mask(name, others);
   });
 }
 
