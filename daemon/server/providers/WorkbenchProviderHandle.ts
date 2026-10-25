@@ -286,7 +286,26 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     return this.run(providerRegistrations[this.key], provider => Boolean(provider.usage), `${this.key}: usage`);
   }
 
-  readonly account: NonNullable<WorkbenchProvider["account"]> = {
+  private accountSignIn<T>(
+    operation: (session: NonNullable<NonNullable<WorkbenchProvider["account"]>["signIn"]>) => Promise<T>,
+    label: string,
+  ) {
+    return this.run(providerRegistrations[this.key], provider => {
+      const session = provider.account?.signIn;
+      if (!session) throw new Error(`Provider ${this.key} does not support account sign-in.`);
+      return operation(session);
+    }, `${this.key}: account.signIn.${label}`);
+  }
+
+  readonly account: Required<NonNullable<WorkbenchProvider["account"]>> = {
+    signIn: {
+      read: () => this.accountSignIn(session => session.read(), "read"),
+      start: input => this.accountSignIn(session => session.start(input), "start"),
+      submitCode: (attemptId, code) => this.accountSignIn(session => session.submitCode(attemptId, code), "submitCode"),
+      wait: attemptId => this.accountSignIn(session => session.wait(attemptId), "wait"),
+      cancel: attemptId => this.accountSignIn(session => session.cancel(attemptId), "cancel"),
+      signOut: integrationId => this.accountSignIn(session => session.signOut(integrationId), "signOut"),
+    },
     limits: {
       read: () => this.run(providerRegistrations[this.key], provider => {
         if (!provider.account) throw new Error(`Provider ${this.key} does not report account limits.`);

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect provider handles across real graph replacement, shared message admission, instruction selection and hidden turns.
+ * No production exports. Tests protect provider handles across real graph replacement, account sign-in, shared message admission, instruction selection and hidden turns.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,6 +8,8 @@ import ReloadableNodeHost from "../../../shared/reload/ReloadableNodeHost";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
 import type WorkbenchProvider from "./WorkbenchProvider";
+import ProviderSignInSession from "./ProviderSignInSession";
+import providerRegistrations from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchToolTranscriptReference } from "./provider-execution";
 import WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCompactController";
@@ -547,6 +549,7 @@ function fixture() {
   let singleFile: WorkbenchProvider["singleFile"];
   let tools: WorkbenchProvider["tools"];
   let context: WorkbenchProvider["context"];
+  let account: WorkbenchProvider["account"];
   const disposed: number[] = [];
   const started = deferred();
   const releaseStart = deferred();
@@ -562,6 +565,7 @@ function fixture() {
         return {
           registrations: {
             codexProvider: {
+              account,
               context,
               singleFile,
               tools,
@@ -609,8 +613,107 @@ function fixture() {
     setSingleFile: (value: typeof singleFile) => { singleFile = value; },
     setTools: (value: typeof tools) => { tools = value; },
     setContext: (value: typeof context) => { context = value; },
+    setAccount: (value: typeof account) => { account = value; },
   };
 }
+
+test("provider handles connect native account operations for every installed provider", async () => {
+  for (const provider of ["codex", "claude", "opencode"] as const) {
+    const connected: string[] = [];
+    const codes: string[] = [];
+    const signedOut: string[] = [];
+    let cancelled = 0;
+    const session = new ProviderSignInSession({
+      provider,
+      schedule: () => () => {},
+      adapter: {
+        read: async () => [{
+          id: "account", label: "Account", primary: true, signedIn: connected.length > 0, accountLabel: null,
+          methods: [{ id: "browser", label: "Browser", kind: "browser" }, { id: "key", label: "Key", kind: "key" }],
+        }],
+        begin: async () => ({
+          url: "https://example.test", userCode: null, acceptsCode: true, expiresAt: null,
+          settled: new Promise<void>(() => {}),
+          submitCode: async code => { codes.push(code); },
+          cancel: async () => { cancelled++; },
+        }),
+        connectKey: async (_integration, _method, key) => { connected.push(key); },
+        signOut: async integration => { signedOut.push(integration); },
+      },
+    });
+    const f = fixture();
+    f.setAccount({ limits: { read: async () => { throw new Error("unexpected limits read"); } }, signIn: session });
+    await f.host.start();
+    try {
+      await f.host.reload(["server:codex/def"]);
+      const dispatcher = new WorkbenchProviderDispatcher(async (registration, operation) => {
+        assert.equal(registration, providerRegistrations[provider]);
+        return operation(f.host.get("codexProvider"));
+      });
+      const signIn = dispatcher.get(provider).account?.signIn;
+      assert.ok(signIn);
+      assert.equal((await signIn.read()).provider, provider);
+      const pending = await signIn.start({ integrationId: "account", methodId: "browser" });
+      assert.equal(pending.attempt?.state, "pending");
+      const id = pending.attempt!.id;
+      await signIn.submitCode(id, " code ");
+      assert.deepEqual(codes, ["code"]);
+      const waiting = signIn.wait(id);
+      assert.equal((await signIn.cancel(id)).attempt?.state, "cancelled");
+      assert.equal((await waiting).attempt?.state, "cancelled");
+      assert.equal(cancelled, 1);
+      assert.equal((await signIn.start({ integrationId: "account", methodId: "key", key: "secret" })).integrations[0]!.signedIn, true);
+      assert.deepEqual(connected, ["secret"]);
+      await signIn.signOut("account");
+      assert.deepEqual(signedOut, ["account"]);
+    } finally { await session.dispose(); await f.host.dispose(); }
+  }
+});
+
+test("saved account handles resolve replacement sessions and preserve failures and unsupported errors", async () => {
+  const f = fixture();
+  const failure = new Error("native account unavailable");
+  const session = (provider: string, fail = false) => new ProviderSignInSession({
+    provider,
+    adapter: {
+      read: async () => { if (fail) throw failure; return []; },
+      begin: async () => { throw failure; },
+      connectKey: async () => { throw failure; },
+      signOut: async () => { throw failure; },
+    },
+  });
+  const original = session("original");
+  const replacement = session("replacement");
+  const broken = session("broken", true);
+  const account = (signIn: ProviderSignInSession) => ({
+    limits: { read: async () => { throw new Error("unexpected limits read"); } }, signIn,
+  });
+  f.setAccount(account(original));
+  await f.host.start();
+  try {
+    await f.host.reload(["server:codex/def"]);
+    const signIn = f.providers.get("codex").account?.signIn;
+    assert.ok(signIn);
+    assert.equal((await signIn.read()).provider, "original");
+    f.setAccount(account(replacement));
+    await f.host.reload(["server:codex/def"]);
+    assert.equal((await signIn.read()).provider, "replacement");
+    f.setAccount(account(broken));
+    await f.host.reload(["server:codex/def"]);
+    await assert.rejects(signIn.read(), error => error === failure);
+    await assert.rejects(signIn.signOut("account"), error => error === failure);
+    f.setAccount(undefined);
+    await f.host.reload(["server:codex/def"]);
+    await assert.rejects(signIn.read(), /sign-in/);
+    await assert.rejects(signIn.start({ integrationId: "account", methodId: "browser" }), /sign-in/);
+    await assert.rejects(signIn.submitCode("attempt", "code"), /sign-in/);
+    await assert.rejects(signIn.wait("attempt"), /sign-in/);
+    await assert.rejects(signIn.cancel("attempt"), /sign-in/);
+    await assert.rejects(signIn.signOut("account"), /sign-in/);
+  } finally {
+    await Promise.all([original.dispose(), replacement.dispose(), broken.dispose(), f.host.dispose()]);
+  }
+});
 
 test("passive context follows replacement capabilities without falling back to turn submission", async () => {
   const f = fixture();

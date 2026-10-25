@@ -33,7 +33,7 @@ export default interface WorkbenchProvider {
   readonly account?: {
     limits: { read(): Promise<WorkbenchAccountLimits> };
     /** Sign the provider's own accounts in and out, writing the stores its native clients use. */
-    signIn?: ProviderSignInSession;
+    signIn?: Pick<ProviderSignInSession, "read" | "start" | "submitCode" | "wait" | "cancel" | "signOut">;
   };
   /** Re-derive a native thread's billing usage from provider-owned history, for stats backfill. */
   readonly usage?: { hydrate(nativeThreadId: string): Promise<WorkbenchStatsHydrationResult> };
