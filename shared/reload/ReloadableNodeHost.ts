@@ -1145,6 +1145,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       for (const node of nodes) {
         const id = node.definition.id;
         const handoff = handoffs.get(id);
+        node.disposalPhase = "retirement";
         try {
           if (handoff) await handoff.commit();
           else await node.instance.dispose((phase) => {
@@ -1159,6 +1160,16 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       if (errors.length) throw new AggregateError(errors, "Retired node cleanup failed.");
     })();
     this.retirements.add(retirement);
+    // Cleanup runs node by node, so one stuck disposal silently keeps every later retired node alive.
+    const stalled = this.createDeadline(this.runtimeDrainTimeoutMs);
+    let settled = false;
+    void stalled.expired.then(() => {
+      if (!settled) this.logError(this.describeNodes(nodes, `Retired node cleanup is still pending after ${this.runtimeDrainTimeoutMs}ms`).slice(0, 2_000));
+    });
+    void retirement.promise.finally(() => {
+      settled = true;
+      stalled.cancel();
+    }).catch(() => undefined);
     void retirement.promise.then(
       () => {
         this.retirements.delete(retirement);

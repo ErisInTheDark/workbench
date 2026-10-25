@@ -20,12 +20,14 @@ import {
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { ReloadDirtScope } from "workbench-shared/reload/reload-dirt-scope";
-import WorkbenchGitIntegration from "../lib/workbench/git/WorkbenchGitIntegration";
+import WorkbenchGitIntegration, { type WorkbenchGitIntegrationPlan } from "../lib/workbench/git/WorkbenchGitIntegration";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 import watchGitRefs from "../lib/workbench/git/git-ref-watch";
 import type { createWorktreeGitTransitions } from "../git/worktree-git-transitions";
 
 type GitResult = { code: number; stdout: string; stderr: string };
+/** The upstream integration a check read under the worktree lease; `null` when the checkout has no upstream. */
+type Inspection = { upstream: string; incoming: string; plan: WorkbenchGitIntegrationPlan } | null;
 const journalSource = z.record(z.string(), z.json());
 const journalView = InstallationRepairJournalSchema.omit({ failure: true }).partial();
 const journalControl = InstallationRepairJournalSchema.pick({ version: true, id: true, phase: true }).strip();
@@ -202,30 +204,17 @@ export default class WorkbenchInstallationUpdateController {
         this.fetchFailure = reason;
       }
     }
-    const inspect = async () => {
-      try {
-        const upstream = await this.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
-        if (upstream.code) {
-          // Missing upstream is expected; other Git failures must remain visible.
-          const branch = await this.git(["rev-parse", "--is-inside-work-tree"]);
-          if (branch.code) throw new Error("Running checkout is not a Git worktree.");
-          this.fetchFailure = null;
-          this.publish({ ...this.value, state: "unavailable", reason: "no upstream", upstream: null,
-            ahead: 0, behind: 0, conflicts: [], lockfileChanged: false, incomingPaths: null, predictedScopes: null,
-            checkedAt: Date.now(),
-            projectId: await this.options.projectId(), failure: (await this.readJournal())?.failure ?? null });
-          return this.value;
-        }
-        await this.recompute();
-      } catch (error) {
-        const reason = message(error);
-        if (reason !== this.fetchFailure) this.options.warn(`Installation update check failed: ${reason}`);
-        this.fetchFailure = reason;
-        this.publish({ ...this.value, state: "unavailable", reason, checkedAt: Date.now() });
-      }
-      return this.value;
-    };
-    return this.options.transitions.read(this.options.repoRoot, inspect);
+    try {
+      // The lease covers Git reads only: catalogue, prediction and journal reads await other owners' work.
+      await this.publishInspection(await this.options.transitions.read(this.options.repoRoot, () => this.inspect()));
+    } catch (error) {
+      if (this.closed) return this.value;
+      const reason = message(error);
+      if (reason !== this.fetchFailure) this.options.warn(`Installation update check failed: ${reason}`);
+      this.fetchFailure = reason;
+      this.publish({ ...this.value, state: "unavailable", reason, checkedAt: Date.now() });
+    }
+    return this.value;
   }
 
   private async required(args: string[]) {
@@ -234,25 +223,56 @@ export default class WorkbenchInstallationUpdateController {
     return result.stdout;
   }
 
-  /** Predict the upstream integration in memory and publish it; returns the plan a pull applies. */
-  private async recompute() {
-    const upstream = (await this.required(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])).trim().slice(0, 256);
+  /** Reads the running checkout's upstream integration; callers hold the worktree lease. */
+  private async inspect(): Promise<Inspection> {
+    const upstream = await this.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+    if (upstream.code) {
+      // Missing upstream is expected; other Git failures must remain visible.
+      const branch = await this.git(["rev-parse", "--is-inside-work-tree"]);
+      if (branch.code) throw new Error("Running checkout is not a Git worktree.");
+      return null;
+    }
     const incoming = (await this.required(["rev-parse", "@{u}"])).trim();
-    const plan = await this.integration.prepare(incoming);
-    const conflicts = plan.kind === "blocked" ? plan.conflicts : [];
-    const state = this.fetchFailure ? "unavailable"
+    return { upstream: upstream.stdout.trim().slice(0, 256), incoming, plan: await this.integration.prepare(incoming) };
+  }
+
+  private updateState(plan: WorkbenchGitIntegrationPlan) {
+    return this.fetchFailure ? "unavailable"
       : plan.kind === "current" ? "current" : plan.kind === "blocked" ? "conflict" : "available";
+  }
+
+  /** Publishes an inspection with its project, predicted reload impact and repair failure; runs outside the lease. */
+  private async publishInspection(inspection: Inspection) {
+    const projectId = await this.untilDisposed(this.options.projectId());
+    const failure = (await this.untilDisposed(this.readJournal()))?.failure ?? null;
+    if (!inspection) {
+      this.fetchFailure = null;
+      this.publish({ ...this.value, state: "unavailable", reason: "no upstream", upstream: null,
+        ahead: 0, behind: 0, conflicts: [], lockfileChanged: false, incomingPaths: null, predictedScopes: null,
+        checkedAt: Date.now(), projectId, failure });
+      return;
+    }
+    const { upstream, incoming, plan } = inspection;
     const incomingPaths = plan.incomingPaths.length <= INSTALLATION_UPDATE_MAX_INCOMING_PATHS ? plan.incomingPaths : null;
     this.publish({
-      state, reason: this.fetchFailure ?? (plan.kind === "blocked" ? plan.reason : null), upstream,
+      state: this.updateState(plan), reason: this.fetchFailure ?? (plan.kind === "blocked" ? plan.reason : null), upstream,
       ahead: plan.ahead, behind: plan.behind,
-      conflicts: conflicts.slice(0, INSTALLATION_UPDATE_MAX_CONFLICTS),
+      conflicts: (plan.kind === "blocked" ? plan.conflicts : []).slice(0, INSTALLATION_UPDATE_MAX_CONFLICTS),
       lockfileChanged: plan.incomingPaths.includes("pnpm-lock.yaml"),
-      incomingPaths, predictedScopes: await this.predict(incomingPaths, incoming),
-      checkedAt: Date.now(),
-      projectId: await this.options.projectId(), failure: (await this.readJournal())?.failure ?? null,
+      incomingPaths, predictedScopes: await this.untilDisposed(this.predict(incomingPaths, incoming)),
+      checkedAt: Date.now(), projectId, failure,
     });
-    return plan;
+  }
+
+  /** Disposal must not wait on other owners' work, so it abandons whatever is still pending. */
+  private untilDisposed<T>(work: Promise<T>) {
+    const signal = this.lifetime.signal;
+    if (signal.aborted) return Promise.reject(signal.reason);
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
   }
 
   /** A failed prediction degrades to unknown impact; it never blocks the update itself. */
@@ -269,15 +289,21 @@ export default class WorkbenchInstallationUpdateController {
   }
 
   async pull({ withoutInstall = false }: InstallationPullOptions = {}): Promise<InstallationPullResult> {
-    return this.options.transitions.run(this.options.repoRoot, async () => {
-      const plan = await this.recompute();
-      if (this.value.state !== "available") throw new Error("Installation update is not available for a clean pull.");
-      if (withoutInstall && this.value.lockfileChanged) throw new Error("Dependencies changed; update from that device.");
-      const { fromSha, toSha, warnings } = await this.integration.apply(plan);
+    const leased = await this.options.transitions.run(this.options.repoRoot, async () => {
+      const before = await this.inspect();
+      const refusal = !before || this.updateState(before.plan) !== "available"
+        ? "Installation update is not available for a clean pull."
+        : withoutInstall && before.plan.incomingPaths.includes("pnpm-lock.yaml")
+          ? "Dependencies changed; update from that device." : null;
+      if (!before || refusal) return { inspection: before, refusal, result: null };
+      const { fromSha, toSha, warnings } = await this.integration.apply(before.plan);
       for (const warning of warnings) this.options.warn(`Installation pull: ${message(warning)}`);
-      await this.recompute();
-      return { fromSha, toSha, lockfileChanged: plan.incomingPaths.includes("pnpm-lock.yaml") };
+      const result = { fromSha, toSha, lockfileChanged: before.plan.incomingPaths.includes("pnpm-lock.yaml") };
+      return { inspection: await this.inspect(), refusal: null, result };
     });
+    await this.publishInspection(leased.inspection);
+    if (!leased.result) throw new Error(leased.refusal ?? "Installation update is not available for a clean pull.");
+    return leased.result;
   }
 
   private async readJournal(): Promise<JournalRead | null> {

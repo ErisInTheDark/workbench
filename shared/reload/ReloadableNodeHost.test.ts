@@ -625,6 +625,41 @@ test("a stalled startup step names its node and phase once, then reports when it
   }
 });
 
+test("retired node cleanup that outlives the grace deadline is named", async () => {
+  const deadlines: Array<() => void> = [];
+  const errors: string[] = [];
+  const release = deferred();
+  let generation = 0;
+  const graph = () => defineReloadableNodeGraph([ReloadableNode.define<object, { value: number }, never>()({
+    access: "agent", children: [], requires: [], provides: ["value"], scope: "server:value",
+    lifecycle: "atomic", safeAll: true, description: "fixture",
+    create: () => {
+      const first = ++generation === 1;
+      return { registrations: { value: 1 }, start() {}, dispose: async () => { if (first) await release.promise; } };
+    },
+  })]);
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, {
+    topologyScope: "server:topology",
+    logError: message => errors.push(message),
+    createRuntimeDrainDeadline: () => {
+      const expired = deferred();
+      deadlines.push(expired.resolve);
+      return { cancel() {}, expired: expired.promise };
+    },
+  });
+  await host.start();
+  try {
+    deadlines.length = 0;
+    await host.reload(["server:value"]);
+    for (const expire of deadlines) expire();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(errors.join("\n"), /Retired node cleanup is still pending.*server:value: retirement/u);
+  } finally {
+    release.resolve();
+    await host.dispose();
+  }
+});
+
 test("the retention warning names operations still running on retired nodes", async () => {
   const errors: string[] = [];
   let lastMajorCollectionAt = 0;

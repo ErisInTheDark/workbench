@@ -171,6 +171,7 @@ function createWorkbenchCoreFeature(
   const git = new WorkbenchCoreGitFeature({
     database, transcript, identities: threadIdentity, projectCatalog, transitions: worktreeGitTransitions, agentContext,
     threadState: () => threadState,
+    publishThreadState: operation => run("threadState", operation, "Git arc publication"),
     subagents: () => collaboration.subagents,
     stats: () => coreStats?.stats ?? null,
     approvals: () => interactions.approvals,

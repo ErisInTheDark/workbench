@@ -42,6 +42,11 @@ export default class WorkbenchCoreGitFeature {
     agentContext: Pick<WorkbenchAgentContextController, "publish">;
     /** Built after this feature, read at call time. */
     threadState: () => WorkbenchThreadStateFeature | null;
+    /**
+     * Runs on the live generation's thread state, so a mutation that finishes during a reload publishes into the
+     * replacement instead of its retired database.
+     */
+    publishThreadState(operation: (state: WorkbenchThreadStateFeature) => Promise<void>): Promise<void>;
     subagents: () => Pick<WorkbenchSubagentFeature, "resolveGitArcPeer">;
     stats: () => Pick<WorkbenchStatsController, "observeClaimSnapshot"> | null;
     /** Built after this feature, read at call time; decides new machine claims through the thread's approval mode. */
@@ -85,10 +90,14 @@ export default class WorkbenchCoreGitFeature {
         await requireThreadState("ownership").getThreadClaimContext(projectId, harness, threadId)
       ),
       publishGitArcAcceptance: async (projectId, harness, threadId, acceptance) => {
-        await requireThreadState("publication").publishGitArcAcceptance(projectId, harness, threadId, acceptance);
+        await ports.publishThreadState(async state => {
+          await state.controller.publishGitArcAcceptance(projectId, harness, threadId, acceptance);
+        });
       },
       refreshThreadGitArcState: async (projectId, harness, threadId) => {
-        await requireThreadState("publication").refreshGitArcState(projectId, harness, threadId);
+        await ports.publishThreadState(async state => {
+          await state.controller.refreshGitArcState(projectId, harness, threadId);
+        });
       },
       publishAgentContext: (target, text) => ports.agentContext.publish(target, text),
       resolveSubagentPeer: input => ports.subagents().resolveGitArcPeer(input),

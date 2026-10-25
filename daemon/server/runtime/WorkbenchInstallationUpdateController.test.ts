@@ -359,6 +359,21 @@ test("disposal aborts a fetch that would never finish on its own", async t => {
   await controller.dispose();
 });
 
+test("a hung project lookup neither holds the worktree lease nor blocks disposal", async t => {
+  const f = await fixture(t);
+  const leases = new WorkbenchThreadTransitionCoordinator();
+  const lookingUp = Promise.withResolvers<void>();
+  const controller = new WorkbenchInstallationUpdateController({
+    repoRoot: f.local, dataRoot: path.join(f.temporary.path, "data"), transitions: createWorktreeGitTransitions(leases),
+    projectId: () => { lookingUp.resolve(); return new Promise<never>(() => {}); }, warn: () => undefined,
+    schedule: () => () => undefined, watch: () => () => undefined,
+  });
+  controller.start();
+  await lookingUp.promise;
+  assert.deepEqual(leases.snapshot().flatMap(({ holders }) => holders), []);
+  await controller.dispose();
+});
+
 test("bursts coalesce without losing a scheduled fetch behind an active check", async t => {
   const f = await fixture(t);
   let tick!: () => void, changed!: () => void, release!: () => void, entered!: () => void, readAgain!: () => void;
