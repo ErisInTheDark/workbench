@@ -717,6 +717,21 @@ test("active claims and Git ignore rules cover patch paths across workspace root
   const trackedIgnored = path.join(apiRoot, "tracked.log");
   await writeFile(trackedIgnored, "tracked\n", "utf8");
   await execFileAsync("git", ["add", "tracked.log"], { cwd: apiRoot });
+  const pair = path.join(apiRoot, "pair");
+  await mkdir(path.join(pair, "ignored"), { recursive: true });
+  await writeFile(path.join(pair, "gone.ts"), "export {};\n", "utf8");
+  await execFileAsync("git", ["add", "pair/gone.ts"], { cwd: apiRoot });
+  await rm(path.join(pair, "gone.ts"));
+  await writeFile(path.join(pair, "one.ts"), "export {};\n", "utf8");
+  await writeFile(path.join(pair, "ignored", "out.ts"), "export {};\n", "utf8");
+  const leftover = path.join(apiRoot, "leftover");
+  await mkdir(path.join(leftover, "ignored"), { recursive: true });
+  await writeFile(path.join(leftover, "ignored", "out.ts"), "export {};\n", "utf8");
+  await writeFile(path.join(leftover, "run.log"), "log\n", "utf8");
+  const mixed = path.join(apiRoot, "mixed");
+  await mkdir(path.join(mixed, "ignored"), { recursive: true });
+  await writeFile(path.join(mixed, "ignored", "out.ts"), "export {};\n", "utf8");
+  await writeFile(path.join(mixed, "visible.ts"), "export {};\n", "utf8");
   await writeFile(path.join(apiRoot, ".gitignore"), "ignored/\n*.log\n", "utf8");
   const project = createWorkspace(apiRoot, webRoot);
   const local = new FakeLocalGitArcController();
@@ -736,7 +751,7 @@ test("active claims and Git ignore rules cover patch paths across workspace root
     intentName: "claim coverage",
     paths: [],
     roots: [
-      { adoptPaths: [], paths: ["src", "future.ts", "pending"], rootId: "api" },
+      { adoptPaths: [], paths: ["src", "future.ts", "pending", "pair/one.ts"], rootId: "api" },
       { adoptPaths: [], paths: ["claimed.ts"], rootId: "web" },
     ],
     ...identity,
@@ -768,6 +783,21 @@ test("active claims and Git ignore rules cover patch paths across workspace root
   assert.deepEqual(await check([...ignored, trackedIgnored]), { allowed: false, pendingProposals: [], uncoveredPaths: [trackedIgnored] });
   assert.deepEqual(await check(ignored, "no-active-arc"), admitted);
   assert.deepEqual(await check(covered, "no-active-arc"), { allowed: false, pendingProposals: [], uncoveredPaths: covered });
+
+  // An unclaimed folder is covered by the present Git-visible files deleting it would destroy.
+  assert.deepEqual(await check([leftover]), admitted, "ignored-only folders need no claim");
+  assert.deepEqual(await check([leftover], "no-active-arc"), admitted);
+  assert.deepEqual(await check([pair]), admitted, "claimed files cover their folder; deleted tracked files are not destroyed");
+  assert.deepEqual(await check([mixed]), { allowed: false, pendingProposals: [], uncoveredPaths: [path.join(mixed, "visible.ts")] });
+  const nestedRoot = path.join(apiRoot, "ignored", "nest");
+  await mkdir(nestedRoot, { recursive: true });
+  await execFileAsync("git", ["init"], { cwd: nestedRoot });
+  const nestedHolder = path.join(apiRoot, "ignored");
+  assert.deepEqual(
+    await controller.checkActiveClaimPaths(createWorkspace(apiRoot, nestedRoot), identity.harness, "no-active-arc", [nestedHolder]),
+    { allowed: false, pendingProposals: [], uncoveredPaths: [nestedHolder] },
+    "ignore rules never waive deleting a folder holding another root",
+  );
 
   // Agents build on their own pending proposals only through stack layers: unsealed proposal files stay frozen.
   const proposal = await local.createProposal({ cwd: apiRoot, paths: ["src/nested.ts"] });

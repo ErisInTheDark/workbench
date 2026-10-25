@@ -28,7 +28,7 @@ export const WorkbenchFileRemovalExecutionRequestSchema = z.object({
 export type WorkbenchFileRemovalExecutionRequest = z.output<typeof WorkbenchFileRemovalExecutionRequestSchema>;
 
 const rm = defineWorkbenchAgentCommand({
-  description: "Delete claimed files, or claimed directories with recursive. Every path must be covered by this thread's active claims.",
+  description: "Delete claimed files, or directories with recursive. Every Git-visible path deleted must be covered by this thread's active claims; gitignored content needs none.",
   effects: { destructive: true, idempotent: false },
   audience: { harnesses: ["claude"] },
   helpGroups: [],

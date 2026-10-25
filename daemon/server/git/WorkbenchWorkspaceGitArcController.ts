@@ -8,9 +8,11 @@
  * - WorkspaceGitArcPlanState: workspace plan projection.
  * - WorkspaceGitArcPlanClaimCollisionResult: project-qualified inactive member collision results.
  * Local mechanics: observe mutation claims while the Git transition remains held; machine members reject unusable paths
- * before gates and absorb unowned requested paths into their baseline inside them; daemon scratch needs no claims.
+ * before gates and absorb unowned requested paths into their baseline inside them; daemon scratch needs no claims;
+ * unclaimed folders are admitted by their present Git-visible files, and folders holding other roots need real claims.
  */
 import { randomUUID } from "node:crypto";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
@@ -267,15 +269,31 @@ export default class WorkbenchWorkspaceGitArcController {
     // Same rule as arc ownership: an entry covers itself and anything beneath it, whether or not it exists yet.
     const claims = new GitArcPathSet(claimedPaths.map((claimedPath) => comparable(this.parseRootPath(project, claimedPath, project.root.id).absolute)));
     const daemonScratch = project.project.kind === "daemon" ? isDaemonWorkspacePath : () => false;
-    const uncoveredPaths = absolutePaths.filter((candidate) => {
-      if (daemonScratch(candidate)) return false;
+    // Deleting a folder destroys every root nested in it, so only a real claim admits one.
+    const holdsOtherRoot = (absolute: string) => roots.some(({ root }) => comparable(root) !== absolute && isInside(root, absolute));
+    const coverage = absolutePaths.map((candidate) => {
       const absolute = comparable(candidate);
-      const insideWorkspace = roots.some((root) => isInside(absolute, root.root));
-      if (!insideWorkspace) return true;
-      if (ignoredPaths.has(absolute)) return false;
-      return !claims.covers(absolute);
+      if (daemonScratch(candidate)) return { candidate, state: "free" } as const;
+      if (!roots.some((root) => isInside(absolute, root.root))) return { candidate, state: "uncovered" } as const;
+      const nests = holdsOtherRoot(absolute);
+      if (ignoredPaths.has(absolute) && !nests) return { candidate, state: "free" } as const;
+      if (claims.covers(absolute)) return { candidate, state: "covered" } as const;
+      return { candidate, state: nests ? "uncovered" : "expandable" } as const;
     });
-    const uncovered = new Set(uncoveredPaths);
+    const directoryFiles = await this.listVisibleDirectoryFiles(
+      project, members, coverage.flatMap(({ candidate, state }) => state === "expandable" ? [candidate] : []),
+    );
+    const uncoveredPaths: string[] = [];
+    const admittedPaths: string[] = [];
+    for (const { candidate, state } of coverage) {
+      if (state === "covered") admittedPaths.push(candidate);
+      if (state === "uncovered") uncoveredPaths.push(candidate);
+      if (state !== "expandable") continue;
+      // An unclaimed folder is covered by what deleting it destroys: its present Git-visible files.
+      const files = directoryFiles.get(candidate);
+      if (!files) uncoveredPaths.push(candidate);
+      else for (const file of files) (claims.covers(comparable(file)) ? admittedPaths : uncoveredPaths).push(file);
+    }
     // Agents build on their own pending proposals only through a stack layer, so unsealed proposal files stay frozen.
     const frozen = memberStates.flatMap(({ member, state }) => {
       if (state.phase !== "active") return [];
@@ -285,9 +303,7 @@ export default class WorkbenchWorkspaceGitArcController {
         .map(({ paths, proposalId }) => ({ proposalId, scopes: new GitArcPathSet(paths.map((filePath) => comparable(path.resolve(member.repoRoot, filePath)))) }));
     });
     const pendingProposals = frozen.flatMap(({ proposalId, scopes }) => {
-      const held = absolutePaths.filter((candidate) => !uncovered.has(candidate)
-        && !ignoredPaths.has(comparable(candidate))
-        && scopes.overlaps(comparable(candidate)));
+      const held = admittedPaths.filter((candidate) => scopes.overlaps(comparable(candidate)));
       return held.length ? [{ paths: held, proposalId }] : [];
     });
     return { allowed: !uncoveredPaths.length && !pendingProposals.length, pendingProposals, uncoveredPaths };
@@ -351,26 +367,52 @@ export default class WorkbenchWorkspaceGitArcController {
     }
   }
 
+  /** Non-machine repository owning a path strictly inside a project root; machine writes are approval-gated through claims, so Git ignore state never waives them. */
+  private findIgnorableMember(project: AgentEndpointProjectResolution, members: readonly RepoMember[]) {
+    const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
+    const memberByRootId = new Map(members.flatMap((member) => member.roots.map((root) => [root.id, member] as const)));
+    return (candidate: string) => {
+      const root = roots.find((projectRoot) => isInside(candidate, projectRoot.root));
+      const member = root ? memberByRootId.get(root.id) : null;
+      return root && member && !isMachineMember(member) && comparable(candidate) !== comparable(root.root) ? member : null;
+    };
+  }
+
   private async listIgnoredPatchPaths(
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
     absolutePaths: readonly string[],
   ) {
-    const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
-    const memberByRootId = new Map(members.flatMap((member) => member.roots.map((root) => [root.id, member] as const)));
+    const memberFor = this.findIgnorableMember(project, members);
     const candidatesByRepo = new Map<string, string[]>();
     for (const candidate of absolutePaths) {
-      const root = roots.find((projectRoot) => isInside(candidate, projectRoot.root));
-      const member = root ? memberByRootId.get(root.id) : null;
-      // Machine writes are approval-gated through claims, so ignore rules never waive them.
-      if (!root || !member || isMachineMember(member) || comparable(candidate) === comparable(root.root)) continue;
-      candidatesByRepo.set(member.repoRoot, [...candidatesByRepo.get(member.repoRoot) ?? [], candidate]);
+      const member = memberFor(candidate);
+      if (member) candidatesByRepo.set(member.repoRoot, [...candidatesByRepo.get(member.repoRoot) ?? [], candidate]);
     }
     const ignoredPaths = await Promise.all([...candidatesByRepo].map(async ([repoRoot, candidates]) => {
       const repository = new WorkbenchGitRepository(repoRoot);
       return (await repository.listIgnoredPaths(candidates)).map((ignoredPath) => comparable(repository.resolvePath(ignoredPath)));
     }));
     return new Set(ignoredPaths.flat());
+  }
+
+  /** Present Git-visible files beneath each existing directory candidate; non-directories and machine paths stay absent. */
+  private async listVisibleDirectoryFiles(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    candidates: readonly string[],
+  ) {
+    const memberFor = this.findIgnorableMember(project, members);
+    const isDirectory = async (target: string) => await lstat(target).then((stats) => stats.isDirectory(), () => false);
+    const listed = await Promise.all(candidates.map(async (candidate) => {
+      const member = memberFor(candidate);
+      if (!member || !await isDirectory(candidate)) return [];
+      const repository = new WorkbenchGitRepository(member.repoRoot);
+      const files = (await repository.listWorktreePaths(repository.normalizePaths([candidate]))).map((file) => repository.resolvePath(file));
+      const present = await Promise.all(files.map(async (file) => await lstat(file).then(() => [file], () => [])));
+      return [[candidate, present.flat()] as const];
+    }));
+    return new Map(listed.flat());
   }
 
   async releaseActiveClaim(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
