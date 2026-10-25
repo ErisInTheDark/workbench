@@ -263,10 +263,13 @@ export function readThreadSubagentCoordinationClaimAction(
           fallback: item.result?._meta,
         }))
       : null;
+  // A truncated receipt list would silently hide moved claims; the request's own paths stay complete.
+  const released = receipt?.action === "release" && receipt.removedClaimCount === undefined ? receipt.removedClaims : undefined;
+  const adopted = receipt?.action === "adopt" && receipt.additionalClaimCount === undefined ? receipt.additionalClaims : undefined;
   if (operation?.action === "release" && operation.toSubagent) {
     return {
       action: "release",
-      paths: receipt?.action === "release" ? receipt.removedClaims ?? operation.paths : operation.paths,
+      paths: released ?? operation.paths,
       target: { kind: "name", value: operation.toSubagent },
     };
   }
@@ -274,13 +277,13 @@ export function readThreadSubagentCoordinationClaimAction(
   if (operation.source?.threadId) {
     return {
       action: "adopt",
-      paths: receipt?.action === "adopt" ? receipt.additionalClaims ?? operation.paths : operation.paths,
+      paths: adopted ?? operation.paths,
       target: { kind: "id", value: operation.source.threadId },
     };
   }
   return operation.source?.name ? {
     action: "adopt",
-    paths: receipt?.action === "adopt" ? receipt.additionalClaims ?? operation.paths : operation.paths,
+    paths: adopted ?? operation.paths,
     target: { kind: "name", value: operation.source.name },
   } : null;
 }

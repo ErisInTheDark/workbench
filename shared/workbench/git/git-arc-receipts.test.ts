@@ -99,6 +99,23 @@ test("large stack receipts retain exact counts without serialising every changed
   assert.equal(receipt?.stackedProposals?.[0]?.changes, null);
 });
 
+test("large claim changes keep exact counts without serialising every path", () => {
+  const added = Array.from({ length: 1_300 }, (_, index) => `fixtures/${index}.ts`);
+  const output = formatGitArcTextReceipt({
+    action: "claims", additionalClaims: added, claimedPaths: [], claimedPathCount: 1_300,
+    intentName: "work", ref, removedClaims: ["old.ts"], version: 1,
+  });
+  const receipt = parseGitArcReceipt(output);
+
+  assert.ok(output.length < 2_000);
+  assert.equal(receipt?.additionalClaimCount, 1_300);
+  assert.deepEqual(receipt?.additionalClaims, added.slice(0, receipt?.additionalClaims?.length));
+  assert.ok((receipt?.additionalClaims?.length ?? 0) < added.length);
+  assert.deepEqual(receipt?.removedClaims, ["old.ts"]);
+  assert.equal(receipt?.removedClaimCount, undefined, "complete lists carry no separate count");
+  assert.deepEqual(parseGitArcReceipt(formatGitArcTextReceipt(receipt!)), receipt, "bounded receipts keep their exact count");
+});
+
 test("unstash receipts retain the complete stashed set and textual conflicts", () => {
   const receipt = {
     action: "unstash" as const,

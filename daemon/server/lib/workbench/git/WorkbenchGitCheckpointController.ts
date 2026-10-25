@@ -256,7 +256,7 @@ export default class WorkbenchGitCheckpointController {
     this.transfers = new GitArcOwnershipTransferController(resolveThreadIdentity);
     this.views = new GitArcClaimViewController(resolveThreadIdentity);
     this.editArcPort = {
-      activeClaimPaths: async identity => await this.findActiveArcClaimPaths(identity),
+      ownedClaimPaths: async identity => await this.findOwnedArcClaimPaths(identity),
       claimAndWrite: async input => await this.claimArcEditPaths(input),
       findClaimCollisions: async (identity, paths) => await this.findEditClaimCollisions(identity, paths),
       releaseClaims: async input => await this.removeFromArc(input),
@@ -1031,12 +1031,10 @@ export default class WorkbenchGitCheckpointController {
   }
 
   /** Live claims of the caller's active arc, or null when it has none. */
-  private async findActiveArcClaimPaths({ cwd, harness, threadId }: ControllerInput) {
+  private async findOwnedArcClaimPaths({ cwd, harness, threadId }: ControllerInput) {
     const repository = await WorkbenchGitRepository.open(cwd);
     const active = await this.registry(repository).find({ harness: normalizeHarness(harness), threadId });
-    return active?.phase === "active"
-      ? (await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(active)).activeClaims
-      : null;
+    return active?.phase === "active" ? getGitArcLiveClaimPaths(active) : null;
   }
 
   private async findEditClaimCollisions({ cwd, harness, threadId }: ControllerInput, paths: string[]) {

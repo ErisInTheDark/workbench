@@ -69,6 +69,7 @@ export default function ThreadGitArcCardBody({ card, editResult, operationDetail
           marker={group.marker}
           pathTotals={group.totals}
           paths={[...group.paths]}
+          totalCount={group.totalCount}
           tone={group.danger ? "danger" : "default"}
         />
       ))}

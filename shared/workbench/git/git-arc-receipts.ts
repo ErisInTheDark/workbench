@@ -41,13 +41,14 @@ export const GitArcStackedProposalReceiptSchema = z.object({
 }).strict();
 export type GitArcStackedProposalReceipt = z.infer<typeof GitArcStackedProposalReceiptSchema>;
 
-const STACK_RECEIPT_CHANGE_LIMIT = 20;
+/** Receipts list at most this many changed paths or totals per section; larger sections keep their exact count. */
+const RECEIPT_LIST_LIMIT = 20;
 
 export function projectGitArcStackedProposalReceipt(input: GitArcStackedProposal): GitArcStackedProposalReceipt {
   return {
     ...input,
     changeCount: input.changes.length,
-    changes: input.changes.length > STACK_RECEIPT_CHANGE_LIMIT ? null : input.changes,
+    changes: input.changes.length > RECEIPT_LIST_LIMIT ? null : input.changes,
   };
 }
 
@@ -60,6 +61,9 @@ export const GitArcReceiptSchema = z.object({
   /** Stack layer title sealed or reopened by stack/unstack. */
   layer: z.string().min(1).optional(),
   additionalClaims: z.array(z.string().min(1)).optional(),
+  /** Exact claim change totals, present only when the matching list is truncated. */
+  additionalClaimCount: z.number().int().nonnegative().optional(),
+  removedClaimCount: z.number().int().nonnegative().optional(),
   claimedPaths: z.array(z.string().min(1)),
   claimedPathCount: z.number().int().nonnegative().optional(),
   plannedPathCount: z.number().int().nonnegative().optional(),
@@ -97,6 +101,13 @@ export function projectGitArcReceipt(input: GitArcReceipt): GitArcReceipt {
   const visible = <T,>(values: T[] | undefined) => values?.length ? values : undefined;
   const plannedCount = receipt.plannedPathCount ?? receipt.plannedPaths?.length;
   const adoptedCount = receipt.adoptedPathCount ?? receipt.adoptedPaths?.length;
+  const bounded = (values: string[] | undefined, count: number | undefined, listKey: string, countKey: string) => {
+    if (!values?.length) return {};
+    const total = Math.max(count ?? 0, values.length);
+    return total > RECEIPT_LIST_LIMIT || values.length < total
+      ? { [listKey]: values.slice(0, RECEIPT_LIST_LIMIT), [countKey]: total }
+      : { [listKey]: values };
+  };
   return GitArcReceiptSchema.parse({
     action: receipt.action,
     phase: receipt.phase ?? (receipt.action === "plan" ? "plan" : "active"),
@@ -113,8 +124,8 @@ export function projectGitArcReceipt(input: GitArcReceipt): GitArcReceipt {
     intentName: receipt.intentName || null,
     ref: receipt.ref,
     version: 1,
-    ...(visible(receipt.additionalClaims) ? { additionalClaims: receipt.additionalClaims } : {}),
-    ...(visible(receipt.removedClaims) ? { removedClaims: receipt.removedClaims } : {}),
+    ...bounded(receipt.additionalClaims, receipt.additionalClaimCount, "additionalClaims", "additionalClaimCount"),
+    ...bounded(receipt.removedClaims, receipt.removedClaimCount, "removedClaims", "removedClaimCount"),
     ...(visible(receipt.stashedPaths) ? { stashedPaths: receipt.stashedPaths } : {}),
     ...(visible(receipt.conflictedPaths) ? { conflictedPaths: receipt.conflictedPaths } : {}),
     ...(visible(receipt.selectedPaths) ? { selectedPaths: receipt.selectedPaths } : {}),
@@ -169,7 +180,9 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
     if (plannedCount !== undefined) lines.push(`planned-count ${plannedCount}`);
     if (adoptedCount !== undefined) lines.push(`adopted-count ${adoptedCount}`);
   }
+  if (receipt.additionalClaimCount !== undefined) lines.push(`added-count ${receipt.additionalClaimCount}`);
   list("added", receipt.additionalClaims);
+  if (receipt.removedClaimCount !== undefined) lines.push(`removed-count ${receipt.removedClaimCount}`);
   list("removed", receipt.removedClaims);
   list("stashed", receipt.stashedPaths);
   list("conflicts", receipt.conflictedPaths);
@@ -256,10 +269,11 @@ function parseTextReceipt(output: string) {
     } else if (lists[key]) {
       result[lists[key]!] = take(count(value)).map(readGitArcValue);
       if (key === "claimed") result.fullScope = true;
-    } else if (key === "claimed-count" || key === "planned-count" || key === "adopted-count") {
+    } else if (key === "claimed-count" || key === "planned-count" || key === "adopted-count" || key === "added-count" || key === "removed-count") {
       if (!/^\d+$/u.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("Invalid arc count.");
       const counts = {
         "claimed-count": "claimedPathCount", "planned-count": "plannedPathCount", "adopted-count": "adoptedPathCount",
+        "added-count": "additionalClaimCount", "removed-count": "removedClaimCount",
       };
       result[counts[key]] = Number(value);
     } else if (key === "ref" || key === "intent" || key === "root" || key === "proposal" || key === "layer") {

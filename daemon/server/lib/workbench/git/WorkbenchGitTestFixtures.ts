@@ -351,7 +351,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(SRC_BASE_FIXTURE, 1),
   ], nested: false }],
   ["GitArcEditSessionController.test.ts", { fixtures: [
-    demand(EDIT_SESSION_ARC_READY_FIXTURE, 5),
+    demand(EDIT_SESSION_ARC_READY_FIXTURE, 6),
   ], nested: false }],
   ["GitArcPlanController.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, 7),

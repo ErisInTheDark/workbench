@@ -42,7 +42,7 @@ async function setup(context: TestContext, arcPort?: (port: GitArcEditArcPort) =
   const sessions = new GitArcEditSessionController(port, undefined, new GitArcEditPlanner(async input => runGitArcEditOperations(input)));
   const owner = { cwd: root, harness: "codex" as const, threadId: "edit-thread" };
   const read = async (file: string) => await fs.readFile(path.join(root, file), "utf8");
-  return { owner, read, registry: new GitArcRegistry(await WorkbenchGitRepository.open(root)), root, sessions };
+  return { checkpoints, owner, read, registry: new GitArcRegistry(await WorkbenchGitRepository.open(root)), root, sessions };
 }
 
 editTest("previews write nothing, apply moves and rewrites references under claims, and end keeps the result", async (context) => {
@@ -109,6 +109,21 @@ editTest("sibling claims block apply while unclaimed dirt and pending proposal p
   assert.deepEqual((await sessions.start({ checkPending: pending, operations: widgetOnly, owner })).blockedPendingPaths, ["src/components/Widget.tsx"]);
   await assert.rejects(sessions.tryApply({ checkPending: pending, owner }), /pending proposals/u);
   assert.match(await read("src/components/Widget.tsx"), /function Widget/u);
+});
+
+editTest("owned stacked paths are not unclaimed dirt, and editing them beyond the tip reactivates them", async (context) => {
+  const { checkpoints, owner, read, root, sessions } = await setup(context);
+  await checkpoints.editArcClaims({ ...owner, inherit: true, addPaths: ["src/app.tsx"] });
+  await fs.writeFile(path.join(root, "src/app.tsx"), `${await read("src/app.tsx")}// sealed\n`);
+  await checkpoints.createProposal({ ...owner, title: "seal app", description: "" });
+  await checkpoints.stackArc({ ...owner, title: "app layer" });
+  assert.ok(!(await checkpoints.readScope(owner))?.claimedPaths.includes("src/app.tsx"), "stacking leaves only a baseline guard");
+
+  const appOnly = operations([{ globs: ["app.tsx"], kind: "replace", pattern: String.raw`\bWidget\b`, replacement: "Gadget", roots: ["src"] }]);
+  assert.deepEqual((await sessions.start({ checkPending: noPending, operations: appOnly, owner })).blockedDirtyPaths, []);
+  assert.equal((await sessions.tryApply({ checkPending: noPending, owner })).kind, "applied");
+  assert.match(await read("src/app.tsx"), /Gadget[\s\S]*\/\/ sealed/u);
+  assert.ok((await checkpoints.readScope(owner))?.claimedPaths.includes("src/app.tsx"));
 });
 
 editTest("a failed publication restores every written file and keeps the session in preview", async (context) => {

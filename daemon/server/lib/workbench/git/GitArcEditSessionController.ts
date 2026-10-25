@@ -37,7 +37,8 @@ export interface GitArcEditOwner {
 type Identity = Pick<GitArcEditOwner, "harness" | "threadId"> & { cwd: string };
 
 export interface GitArcEditArcPort {
-  activeClaimPaths(identity: Identity): Promise<string[] | null>;
+  /** Every path the caller's active arc guards, active or baseline; null without an active arc. */
+  ownedClaimPaths(identity: Identity): Promise<string[] | null>;
   findClaimCollisions(identity: Identity, paths: string[]): Promise<GitArcEditCollision[]>;
   /** Claim the paths into the caller's active arc; `write` changes the worktree and must call `publish`. */
   claimAndWrite(input: Identity & {
@@ -167,7 +168,7 @@ export default class GitArcEditSessionController {
     if (!plan.visiblePaths.length) return { collisions: [], dirty: [], pending: [] };
     const [collisions, claimed, changed, pending] = await Promise.all([
       this.arc.findClaimCollisions(identity, plan.visiblePaths),
-      this.arc.activeClaimPaths(identity),
+      this.arc.ownedClaimPaths(identity),
       repository.listWorktreeChangedPaths(await repository.headOrNull(), plan.visiblePaths),
       checkPending(plan.visiblePaths.map(filePath => repository.resolvePath(filePath))),
     ]);
@@ -362,7 +363,7 @@ export default class GitArcEditSessionController {
       await writeWorktreeFiles(repository, current, await repository.readTreeFiles(merged.tree, touched));
       const sessionClaims = session.metadata.additionalClaims;
       let releasedClaims: string[] = [];
-      if (sessionClaims.length && await this.arc.activeClaimPaths(identity)) {
+      if (sessionClaims.length && await this.arc.ownedClaimPaths(identity)) {
         const dirty = new Set(await repository.listWorktreeChangedPaths(await repository.headOrNull(), sessionClaims));
         releasedClaims = sessionClaims.filter(filePath => !dirty.has(filePath));
         if (releasedClaims.length) await this.arc.releaseClaims({ ...identity, paths: releasedClaims });
@@ -374,7 +375,7 @@ export default class GitArcEditSessionController {
 
   private async assertClaimedOnly(owner: GitArcEditOwner, identity: Identity, touchedPaths: readonly string[]) {
     if (!owner.claimedOnly || !touchedPaths.length) return;
-    const claims = new GitArcPathSet(await this.arc.activeClaimPaths(identity) ?? []);
+    const claims = new GitArcPathSet(await this.arc.ownedClaimPaths(identity) ?? []);
     const unclaimed = touchedPaths.filter(filePath => !claims.covers(filePath));
     if (unclaimed.length) throw new Error(`Machine edit sessions only change claimed files; claim these first: ${unclaimed.join(", ")}`);
   }

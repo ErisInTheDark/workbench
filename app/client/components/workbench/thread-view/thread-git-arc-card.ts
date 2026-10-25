@@ -39,6 +39,8 @@ export interface GitArcPathGroup {
   marker: ThreadClaimMarker;
   paths: readonly string[];
   danger: boolean;
+  /** Exact path total when the receipt listed only some of them. */
+  totalCount?: number;
   /** Per-path change totals, where the failure measured them. */
   totals?: ReadonlyMap<string, { additions: number; deletions: number }>;
 }
@@ -258,8 +260,10 @@ export function buildGitArcCard(input: {
   const group = (key: string, label: string, marker: ThreadClaimMarker, paths: readonly string[], extra: Partial<GitArcPathGroup> = {}): GitArcPathGroup =>
     ({ danger: false, key, label, marker, paths, ...extra });
   const updates = showsUpdate ? [
-    group("added", action === "plan" ? "Added to plan" : "Claimed", primaryMarker, receipt.additionalClaims ?? []),
-    group("removed", action === "plan" ? "Removed from plan" : "Released", "unclaimed", receipt.removedClaims ?? []),
+    group("added", action === "plan" ? "Added to plan" : "Claimed", primaryMarker, receipt.additionalClaims ?? [],
+      receipt.additionalClaimCount === undefined ? {} : { totalCount: receipt.additionalClaimCount }),
+    group("removed", action === "plan" ? "Removed from plan" : "Released", "unclaimed", receipt.removedClaims ?? [],
+      receipt.removedClaimCount === undefined ? {} : { totalCount: receipt.removedClaimCount }),
   ] : [];
   const inventory = fullInventory && receipt ? [
     group("planned", "Planned", "planned", receipt.plannedPaths ?? []),
@@ -299,12 +303,13 @@ export function buildGitArcCard(input: {
   const first = pathGroups[0];
   const preview: ThreadGitArcCollapsedSummaryContent | null = style !== "cardPreview" ? null
     : editRows.length ? { changes: editRows, kind: "files" }
-      : first ? { kind: "claims", label: first.label, marker: first.marker, paths: [...first.paths], totalCount: first.paths.length }
+      : first ? { kind: "claims", label: first.label, marker: first.marker, paths: [...first.paths], totalCount: first.totalCount ?? first.paths.length }
         : counts.length ? { kind: "counts", rows: counts } : null;
 
   const transfer = action === "release" && intent.toSubagent ? intent.toSubagent : null;
   // A plain release or disown is about how many claims it let go, not which plan they belonged to.
-  const releasedCount = action === "release" && !transfer && state === "completed" && primary.length ? primary.length : null;
+  const releasedCount = action === "release" && !transfer && state === "completed" && primary.length
+    ? receipt?.removedClaimCount ?? primary.length : null;
   const adoptFromSubagent = action === "adopt" && Boolean(intent.source?.name || intent.source?.threadId);
   return {
     action,

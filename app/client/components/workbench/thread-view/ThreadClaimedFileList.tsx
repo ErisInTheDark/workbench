@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadClaimedFileList: render static Git arc path rows with optional failure tone and change totals.
+ * - default ThreadClaimedFileList: render static Git arc path rows with optional failure tone, change totals and an unlisted-path count.
  * - ThreadClaimMarker/ThreadClaimMarkerIcon: select the semantic glyph for a claim-state row.
  */
 import { isProjectDirectoryPath } from "../../../workbench/project/project-file-path";
@@ -33,6 +33,7 @@ export default function ThreadClaimedFileList({
   pathTotals,
   paths,
   tone = "default",
+  totalCount = paths.length,
 }: {
   inset?: boolean;
   label?: string;
@@ -40,9 +41,12 @@ export default function ThreadClaimedFileList({
   pathTotals?: ReadonlyMap<string, { additions: number; deletions: number }>;
   paths: readonly string[];
   tone?: "danger" | "default";
+  /** Exact total when `paths` lists only some of them. */
+  totalCount?: number;
 }) {
   const project = useProject.contextual();
   if (!paths.length) return null;
+  const remainingCount = totalCount - paths.length;
   return (
     <div className="space-y-1 py-2">
       {paths.map((filePath) => {
@@ -64,6 +68,9 @@ export default function ThreadClaimedFileList({
           </div>
         );
       })}
+      {remainingCount > 0 ? (
+        <div className={`text-[0.78em] leading-[1.6] text-fg/muted ${inset ? "pl-6" : ""}`}>...and {remainingCount} more</div>
+      ) : null}
     </div>
   );
 }
