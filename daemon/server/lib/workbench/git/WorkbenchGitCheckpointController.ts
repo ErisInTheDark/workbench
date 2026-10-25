@@ -1386,14 +1386,18 @@ export default class WorkbenchGitCheckpointController {
             threadId,
           });
         }
-        const currentTree = await repository.writeWorktreeTree();
-        const changedPaths = await repository.listAllChangedPaths(checkpoint.checkpointCommit, currentTree);
+        // A machine checkpoint holds every file any arc absorbed, so only the arc's own scope goes back.
+        const scope = repository.machine ? new GitArcPathSet(metadata.scopePaths) : null;
+        const currentTree = scope ? await repository.writeScopedWorktreeTree([...metadata.scopePaths]) : await repository.writeWorktreeTree();
+        const changedPaths = (await repository.listAllChangedPaths(checkpoint.checkpointCommit, currentTree))
+          .filter((filePath) => !scope || scope.covers(filePath));
         const checkpointPaths = new Set(await repository.listTreePaths(checkpoint.checkpointCommit));
         const addedPaths = changedPaths.filter((filePath) => !checkpointPaths.has(filePath));
         await Promise.all(addedPaths.map(async (filePath) => {
           await fs.rm(repository.resolvePath(filePath), { force: true, recursive: true });
         }));
-        await repository.restoreWorktree(checkpoint.checkpointCommit);
+        if (scope) await repository.restorePaths(checkpoint.checkpointCommit, changedPaths.filter((filePath) => checkpointPaths.has(filePath)));
+        else await repository.restoreWorktree(checkpoint.checkpointCommit);
         const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
           committedSha: null,
           proposalId: null,

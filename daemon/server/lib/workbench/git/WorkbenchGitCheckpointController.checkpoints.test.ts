@@ -16,6 +16,8 @@ import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
+import { ensureMachineGitWorktree } from "./machine-git-worktrees";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import {
   CHECKPOINT_OPERATIONS_FIXTURE,
   type CheckpointFixtureState,
@@ -1084,4 +1086,32 @@ test("discard drops frozen work without changing the worktree and keeps an inact
     assert.equal((await controller.readScope(identity))?.phase, "stashed");
     assert.equal(await controller.blocksThreadSettlementAtRepoRoot(identity), true);
   }
+});
+
+test("historical full restores on machine worktrees touch only the arc's own scope", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-restore-");
+  context.after(async () => await temporary.dispose());
+  const drive = path.join(temporary.path, "drive");
+  await fs.mkdir(path.join(drive, "a-dir"), { recursive: true });
+  const write = async (filePath: string, text: string) => await fs.writeFile(path.join(drive, filePath), text, "utf8");
+  await write("a.txt", "a checkpoint\n");
+  await write("b.txt", "b checkpoint\n");
+  await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
+  await controller.absorbMachineBaseline({ cwd: drive, paths: ["a.txt", "a-dir", "b.txt"], adoptPaths: [] });
+  const identity = { cwd: drive, threadId: "machine-thread" };
+  const plan = await createGitPlan({ ...identity, intentName: "Machine plan", paths: ["a.txt", "a-dir"] });
+  assert.ok("checkpointCommit" in plan);
+  await startGitArc({ ...identity, checkpointCommit: plan.checkpointCommit });
+  const arc = await controller.findActiveClaim(identity);
+  assert.ok(arc);
+  await releaseGitArc(identity);
+
+  await write("a.txt", "a later\n");
+  await write("a-dir/new.txt", "made later\n");
+  await write("b.txt", "b outside edit\n");
+  await controller.restore({ ...identity, checkpointCommit: arc.checkpointCommit, confirmRestore: true });
+
+  assert.equal(await fs.readFile(path.join(drive, "a.txt"), "utf8"), "a checkpoint\n");
+  await assert.rejects(fs.stat(path.join(drive, "a-dir", "new.txt")), { code: "ENOENT" });
+  assert.equal(await fs.readFile(path.join(drive, "b.txt"), "utf8"), "b outside edit\n");
 });

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - absorbMachineBaseline: fast-forward a machine worktree's HEAD over the disk content of requested paths no arc scopes.
+ * - absorbMachineBaseline: record requested paths as known, then fast-forward a machine worktree's HEAD over the disk
+ *   content of requested paths no arc scopes.
  * A machine repository only knows files arcs have touched, so its HEAD is "the machine as last seen". Before scope is
  * published or acquired, unowned requested paths take their current disk content as baseline: claiming an existing
  * file then diffs only the agent's edit, and outside changes never masquerade as unclaimed dirt. Paths any arc scopes
@@ -10,6 +11,7 @@
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 
 import type { GitArcRegistryEntry } from "./GitArcRegistry";
+import { recordMachineKnownPaths } from "./machine-git-worktrees";
 import type WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 const BASELINE_MESSAGE = "machine baseline";
@@ -28,6 +30,7 @@ export async function absorbMachineBaseline(
   request: { paths: readonly string[]; adoptPaths: readonly string[] },
 ) {
   if (!repository.machine || !request.paths.length) return [];
+  await recordMachineKnownPaths(repository.root, [...request.paths, ...request.adoptPaths]);
   const head = await repository.headOrNull();
   const owned = new GitArcPathSet(entries.flatMap(scopedPaths));
   const adopted = new GitArcPathSet(request.adoptPaths);

@@ -15,7 +15,7 @@ import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGitRepository";
 import parseGitFileChangeOutput from "./git-file-change-output";
-import { ensureMachineGitWorktree } from "./machine-git-worktrees";
+import { ensureMachineGitWorktree, recordMachineKnownPaths } from "./machine-git-worktrees";
 import { THREAD_GIT_BASE_FIXTURE, UNBORN_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 const execFileAsync = promisify(execFile);
@@ -762,6 +762,22 @@ test("a fresh machine worktree with nothing tracked snapshots its empty baseline
   const repository = new WorkbenchGitRepository(drive);
   const snapshot = await repository.writeWorktreeSnapshot();
   assert.deepEqual(await repository.listTreePaths(snapshot.tree), []);
+});
+
+test("machine snapshots include untracked files at paths an arc requested, and no other untracked files", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-known-");
+  context.after(async () => await temporary.dispose());
+  const drive = path.join(temporary.path, "drive");
+  await fs.mkdir(path.join(drive, "notes"), { recursive: true });
+  await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
+  await recordMachineKnownPaths(drive, ["notes/fresh.txt", "made"]);
+  await fs.mkdir(path.join(drive, "made"), { recursive: true });
+  await fs.writeFile(path.join(drive, "notes", "fresh.txt"), "new\n", "utf8");
+  await fs.writeFile(path.join(drive, "made", "inner.txt"), "inner\n", "utf8");
+  await fs.writeFile(path.join(drive, "notes", "stray.txt"), "stray\n", "utf8");
+  const repository = new WorkbenchGitRepository(drive);
+  const snapshot = await repository.writeWorktreeSnapshot();
+  assert.deepEqual(await repository.listTreePaths(snapshot.tree), ["made/inner.txt", "notes/fresh.txt"]);
 });
 
 test("a repository rooted at a filesystem root accepts the paths beneath it", () => {

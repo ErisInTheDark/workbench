@@ -39,6 +39,20 @@ test("machine Git env reaches only the exact machine root", async context => {
   await assert.rejects(fs.stat(path.join(drive, ".git")), { code: "ENOENT" });
 });
 
+test("machine files round-trip byte-exact even when Git config asks for line ending conversion", async context => {
+  const { base, drive } = await machine(context);
+  const gitDir = await ensureMachineGitWorktree(drive, base);
+  await execFileAsync("git", ["--git-dir", gitDir, "config", "core.autocrlf", "true"], { windowsHide: true });
+  const file = path.join(drive, "settings.ini");
+  await fs.writeFile(file, "a = 1\nb = 2\n", "utf8");
+  const repository = new WorkbenchGitRepository(drive);
+  const head = await repository.headOrNull();
+  const commit = await repository.createCommitFromTree(await repository.writeScopedWorktreeTree(["settings.ini"], head), head, "absorb\n");
+  await fs.writeFile(file, "changed\n", "utf8");
+  await repository.restorePaths(commit, ["settings.ini"]);
+  assert.equal(await fs.readFile(file, "utf8"), "a = 1\nb = 2\n");
+});
+
 test("a root that is already a repository cannot back machine arcs", async context => {
   const { base, drive } = await machine(context);
   await execFileAsync("git", ["init", "-q", drive], { windowsHide: true });

@@ -35,7 +35,7 @@ import { gitProcesses, GitProcessError } from "./GitProcessHost";
 import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
 import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
 import { BoundaryWalkLimitError, listBoundaryFiles, nestedRepositoryScopes } from "./machine-git-boundaries";
-import { isMachineGitWorktree, machineGitEnvironment } from "./machine-git-worktrees";
+import { isMachineGitWorktree, machineGitEnvironment, readMachineKnownPaths } from "./machine-git-worktrees";
 import { comparablePath, isPathInside as isWithinRoot } from "../../comparable-path";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
@@ -693,8 +693,14 @@ export default class WorkbenchGitRepository {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
-      // Machine repositories stage tracked files only; with nothing tracked yet, Git rejects a `.` pathspec as unmatched.
-      await this.run(this.machine ? ["add", "-u"] : ["add", "-A", "--", "."], env, signal);
+      if (this.machine) {
+        // Tracked files plus paths arcs requested, which may be new and untracked; an empty index rejects a `.` pathspec.
+        await this.run(["add", "-u"], env, signal);
+        const known = await readMachineKnownPaths(this.root);
+        if (known.length) await this.stageScopedPaths(known, env, signal);
+      } else {
+        await this.run(["add", "-A", "--", "."], env, signal);
+      }
       return (await this.run(["write-tree"], env, signal)).trim();
     });
   }
@@ -815,17 +821,22 @@ export default class WorkbenchGitRepository {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
-      const matchedPaths = await this.listWorktreePaths(paths, env, signal);
-      const boundary = new Set(this.machine ? await nestedRepositoryScopes(this.root, matchedPaths) : []);
-      const added = matchedPaths.filter(filePath => !boundary.has(filePath));
-      if (added.length) {
-        await this.runWithInput([
-          "add", "-A", "-f", "--pathspec-from-file=-", "--pathspec-file-nul",
-        ], pathspecInput(added), env, signal);
-      }
-      if (boundary.size) await this.stageBoundaryFiles([...boundary], env, signal);
+      await this.stageScopedPaths(paths, env, signal);
       return (await this.run(["write-tree"], env, signal)).trim();
     });
+  }
+
+  /** Stages current content beneath scopes into the index `env` names, walking untracked files only inside them. */
+  private async stageScopedPaths(paths: readonly string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) {
+    const matchedPaths = await this.listWorktreePaths(paths, env, signal);
+    const boundary = new Set(this.machine ? await nestedRepositoryScopes(this.root, matchedPaths) : []);
+    const added = matchedPaths.filter(filePath => !boundary.has(filePath));
+    if (added.length) {
+      await this.runWithInput([
+        "add", "-A", "-f", "--pathspec-from-file=-", "--pathspec-file-nul",
+      ], pathspecInput(added), env, signal);
+    }
+    if (boundary.size) await this.stageBoundaryFiles([...boundary], env, signal);
   }
 
   async writeTreeWithPathsFromSource(baseTreeish: string | null, sourceTreeish: string, paths: string[]) {

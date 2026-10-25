@@ -1661,6 +1661,7 @@ test("machine roots claim existing files by absolute path, admit scratch edits, 
   await writeFile(cached, "cached\n", "utf8");
   const config = path.join(drive, "notes", "config.txt");
   await writeFile(config, "original\n", "utf8");
+  const fresh = path.join(drive, "notes", "fresh.txt");
   await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
   const scratchRoot = { id: "daemon", name: "daemon", root: daemonWorkspaceRoot, rootPath: daemonWorkspaceRoot };
   const machineRoot = { id: "m", machine: true as const, name: "m", root: drive, rootPath: drive };
@@ -1682,11 +1683,12 @@ test("machine roots claim existing files by absolute path, admit scratch edits, 
   const display = (absolute: string) => path.resolve(absolute).replace(/\\/gu, "/");
 
   await controller.execute(project, {
-    action: "planStart", adoptPaths: [], intentDescription: "", intentName: "Machine", paths: [config, cached], roots: [], ...identity,
+    action: "planStart", adoptPaths: [], intentDescription: "", intentName: "Machine", paths: [config, cached, fresh], roots: [], ...identity,
   });
   await writeFile(config, "changed\n", "utf8");
   await writeFile(cached, "recached\n", "utf8");
-  assert.deepEqual((await controller.findLifecycleState(project, "codex", "machine-thread"))?.claimedPaths, [display(config), display(cached)].sort());
+  await writeFile(fresh, "created after claiming\n", "utf8");
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "machine-thread"))?.claimedPaths, [display(config), display(fresh), display(cached)].sort());
   const machine = new WorkbenchGitRepository(drive);
   const baseline = await machine.readTreeFiles("HEAD", ["notes/config.txt", "repo/cache/data.txt"]);
   assert.equal(baseline.get("notes/config.txt")?.bytes.toString("utf8"), "original\n");
@@ -1703,9 +1705,12 @@ test("machine roots claim existing files by absolute path, admit scratch edits, 
   await assert.rejects(controller.execute(project, {
     action: "arcClaims", addPaths: [path.join(daemonWorkspaceRoot, "tmp.txt")], adoptPaths: [], removePaths: [], roots: [], inherit: true, ...identity,
   }), /daemon scratch/u);
+  // Files created after claiming are untracked; arc reads must still see them.
+  const comparison = await controller.execute(project, { action: "compare", refs: [], roots: [], ...identity }, { modifiedSince: 1 }) as { changes: Array<{ path: string }> };
+  assert.deepEqual(comparison.changes.map(({ path: filePath }) => filePath).sort(), [display(config), display(fresh), display(cached)].sort());
   // Unnamed requests resolve to the machine repository the thread works in, never to scratch.
   const proposal = await controller.execute(project, {
     action: "proposalCreate", amend: false, description: "", title: "machine change", ...identity,
   }) as { paths: string[] };
-  assert.deepEqual([...proposal.paths].sort(), ["notes/config.txt", "repo/cache/data.txt"]);
+  assert.deepEqual([...proposal.paths].sort(), ["notes/config.txt", "notes/fresh.txt", "repo/cache/data.txt"]);
 });

@@ -1,9 +1,11 @@
 /*
  * Exports:
  * - defaultMachineGitBase: data-root folder holding machine Git dirs.
- * - machineGitEnvironment: GIT_DIR/GIT_WORK_TREE for an exact registered machine worktree root, else none.
+ * - machineGitEnvironment: GIT_DIR/GIT_WORK_TREE plus no line ending conversion for an exact registered machine worktree root, else none.
  * - isMachineGitWorktree: whether a root is a registered machine worktree.
  * - ensureMachineGitWorktree: create (once) and register a machine worktree's internal Git dir with an empty root commit.
+ * - readMachineKnownPaths: repository paths any arc has requested on a machine worktree.
+ * - recordMachineKnownPaths: remember requested paths so snapshots include them once they exist, though untracked.
  * - listMachineGitWorktreeRoots: filesystem roots that already have machine Git dirs under a base.
  * Machine worktrees are filesystem roots whose Git state lives under the data root, never on the machine itself.
  * Registration is per daemon generation: arc project resolution re-ensures roots before any Git work reaches them,
@@ -17,6 +19,7 @@ import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import { comparablePath as comparable } from "../../comparable-path";
 import { gitProcesses } from "./GitProcessHost";
 
+const KNOWN_PATHS_FILE = "workbench-known-paths";
 const registered = new Map<string, string>();
 const pending = new Map<string, Promise<string>>();
 
@@ -58,7 +61,11 @@ export function defaultMachineGitBase() {
 
 export function machineGitEnvironment(root: string): Record<string, string> {
   const gitDir = registered.get(comparable(root));
-  return gitDir ? { GIT_DIR: gitDir, GIT_WORK_TREE: path.resolve(root) } : {};
+  // Machine files are stored byte-exact; Git for Windows' system-wide autocrlf would otherwise rewrite them on restore.
+  return gitDir ? {
+    GIT_DIR: gitDir, GIT_WORK_TREE: path.resolve(root),
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.autocrlf", GIT_CONFIG_VALUE_0: "false",
+  } : {};
 }
 
 export function isMachineGitWorktree(root: string) {
@@ -112,6 +119,36 @@ export async function ensureMachineGitWorktree(root: string, base = defaultMachi
     pending.set(key, ensured);
   }
   return await ensured;
+}
+
+function knownPathsFile(root: string) {
+  const gitDir = registered.get(comparable(root));
+  return gitDir ? path.join(gitDir, "info", KNOWN_PATHS_FILE) : null;
+}
+
+/** Repository paths any arc has requested on a machine worktree; untracked ones still belong in snapshots. */
+export async function readMachineKnownPaths(root: string) {
+  const file = knownPathsFile(root);
+  if (!file) return [];
+  try {
+    return (await fs.readFile(file, "utf8")).split("\0").filter(Boolean);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+export async function recordMachineKnownPaths(root: string, paths: readonly string[]) {
+  const file = knownPathsFile(root);
+  if (!file || !paths.length) return;
+  const known = new Set(await readMachineKnownPaths(root));
+  const before = known.size;
+  for (const candidate of paths) known.add(candidate);
+  if (known.size === before) return;
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const staging = `${file}.${randomUUID()}`;
+  await fs.writeFile(staging, [...known].sort((left, right) => left.localeCompare(right)).join("\0"), "utf8");
+  await fs.rename(staging, file);
 }
 
 export async function listMachineGitWorktreeRoots(base = defaultMachineGitBase()) {
