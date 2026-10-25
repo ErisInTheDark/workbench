@@ -1,12 +1,15 @@
 /*
  * Exports:
  * - InlineMark / InlineLeaf: the flat inline model of one run: text, breaks, selection markers and comment thread atoms,
- *   each carrying its full mark set. * - getInlineMarkForElement / createInlineMarkElement: map mark elements to marks and back.
+ *   each carrying its full mark set.
+ * - getInlineMarkForElement / createInlineMarkElement: map mark elements to marks and back.
  * - areInlineMarksEqual / areInlineMarkListsEqual / normalizeInlineMarks: compare and canonically order mark sets.
  * - flattenInlineContent: read DOM inline content into leaves.
  * - normalizeInlineLeaves / normalizeInlineLeavesForCanonicalRuns / normalizeInlineLeavesForSerialization: merge leaves,
  *   moving boundary whitespace out of marks where the target form needs it.
- * - rebuildInlineRunContainer: write leaves back as canonical DOM, one nested mark chain per run.
+ * - rebuildInlineRunContainer: write leaves back as canonical DOM, one nested mark chain per run; already-canonical
+ *   runs stay untouched.
+ * - isInlineRunContainerCanonical: whether a run's DOM already is the canonical form of its leaves.
  * - createInlineSelectionMarker / restoreSelectionToMarkers / restoreCaretToMarker: carry a selection through rebuilds.
  * - serializeInlineRunContainerForMarkupSignature: canonical structure of a run for save-guard comparison.
  */
@@ -251,7 +254,7 @@ export function createInlineSelectionMarker(role: "caret" | "selection-start" | 
   return marker;
 }
 
-function appendCanonicalInlineLeaf(container: HTMLElement, leaf: InlineLeaf) {
+function appendCanonicalInlineLeaf(container: HTMLElement, leaf: InlineLeaf, atomNode: Node | null) {
   const marks = leafMarks(leaf);
   let contentNode: Node;
 
@@ -260,7 +263,7 @@ function appendCanonicalInlineLeaf(container: HTMLElement, leaf: InlineLeaf) {
   } else if (leaf.type === "break") {
     contentNode = document.createElement("br");
   } else if (leaf.type === "atom") {
-    contentNode = leaf.element;
+    contentNode = atomNode ?? leaf.element;
   } else {
     contentNode = document.createTextNode(leaf.text);
   }
@@ -321,20 +324,59 @@ function getDeepestMatchingMarkedRun(node: Node | null, marks: InlineMark[]) {
   return null;
 }
 
-export function rebuildInlineRunContainer(container: HTMLElement, leaves: InlineLeaf[]) {
-  container.replaceChildren();
+function hasEqualChildNodes(left: Node, right: Node) {
+  const leftChildren = left.childNodes;
+  const rightChildren = right.childNodes;
+  if (leftChildren.length !== rightChildren.length) return false;
+  for (let index = 0; index < leftChildren.length; index += 1) {
+    if (!leftChildren[index]!.isEqualNode(rightChildren[index]!)) return false;
+  }
+  return true;
+}
+
+/** Thread atoms are live elements of a run, so the detached build holds stand-ins until it is committed. */
+function buildCanonicalInlineRun(leaves: readonly InlineLeaf[]) {
+  const canonical = document.createElement("div");
+  const atomStandIns = new Map<Node, HTMLElement>();
 
   for (const leaf of leaves) {
     if (leaf.type === "text" && leaf.text.length === 0) {
       continue;
     }
 
-    appendCanonicalInlineLeaf(container, leaf);
+    let standIn: Node | null = null;
+    if (leaf.type === "atom") {
+      standIn = leaf.element.cloneNode(true);
+      atomStandIns.set(standIn, leaf.element);
+    }
+    appendCanonicalInlineLeaf(canonical, leaf, standIn);
   }
 
-  if (!container.childNodes.length) {
-    container.append(document.createElement("br"));
+  if (!canonical.childNodes.length) {
+    canonical.append(document.createElement("br"));
   }
+
+  return { atomStandIns, canonical };
+}
+
+/** Whether the run's DOM is already exactly what rebuilding it from these leaves would write. */
+export function isInlineRunContainerCanonical(container: HTMLElement, leaves: readonly InlineLeaf[]) {
+  return hasEqualChildNodes(container, buildCanonicalInlineRun(leaves).canonical);
+}
+
+/**
+ * Write leaves as canonical DOM. A run already in that form is left untouched, so its text nodes, the selection inside
+ * it and the page layout survive every canonicalising pass. Returns whether the run was rewritten.
+ */
+export function rebuildInlineRunContainer(container: HTMLElement, leaves: readonly InlineLeaf[]) {
+  const { atomStandIns, canonical } = buildCanonicalInlineRun(leaves);
+  if (hasEqualChildNodes(container, canonical)) {
+    return false;
+  }
+
+  for (const [standIn, atom] of atomStandIns) standIn.parentNode?.replaceChild(atom, standIn);
+  container.replaceChildren(...canonical.childNodes);
+  return true;
 }
 
 export function restoreSelectionToMarkers(startMarker: HTMLElement, endMarker: HTMLElement | null) {

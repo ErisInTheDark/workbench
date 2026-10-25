@@ -1,6 +1,7 @@
 /*
  * No exports. Interaction wards for the mounted rich editor: typed shortcuts, key commands, structural keys and
- * selection-leave canonicalisation must leave every intermediate state savable with the expected markdown.
+ * selection-leave canonicalisation must leave every intermediate state savable with the expected markdown, and
+ * canonicalising passes must leave already-canonical runs' DOM in place.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -29,6 +30,21 @@ test("a selection dragged up from a block's end keeps that end as it reaches the
   const selection = window.getSelection()!;
   assert.equal(selection.anchorNode?.textContent, "second line");
   assert.equal(selection.anchorOffset, "second line".length);
+}));
+
+test("typing and moving the caret leave runs already in canonical form untouched", () => withPanel("first **bold** para\n\nsecond para\n", async panel => {
+  const [first, second] = Array.from(panel.editor.children);
+  const keeps = (block: Element, nodes: readonly ChildNode[]) =>
+    block.childNodes.length === nodes.length && nodes.every((node, index) => block.childNodes[index] === node);
+  const secondRun = Array.from(second!.childNodes);
+  await panel.caret("fir|st");
+  await panel.type("x");
+  assert.ok(keeps(second!, secondRun), "an edit rewrites only its own block");
+
+  const firstRun = Array.from(first!.childNodes);
+  await panel.caret("seco|nd");
+  assert.ok(keeps(first!, firstRun), "leaving a canonical block rewrites nothing");
+  assert.equal(await panel.save(), "firxst **bold** para\n\nsecond para\n");
 }));
 
 test("typing into an empty document saves the typed paragraph", () => withPanel("", async panel => {

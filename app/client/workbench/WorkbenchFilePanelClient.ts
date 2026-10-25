@@ -381,8 +381,8 @@ function WorkbenchFilePanelClient(
       recordEditHistory: (previousContent, nextContent, selection) => {
         editHistoryManager.recordEditHistory(previousContent, nextContent, selection);
       },
-      syncCurrentDraftBuffer: () => {
-        fileClient.syncCurrentDraftBuffer();
+      storeInspectedDraftBuffer: () => {
+        fileClient.storeInspectedDraftBuffer();
       },
       updateHistorySelection: (selection) => {
         editHistoryManager.updateHistorySelection(selection);

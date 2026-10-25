@@ -2,7 +2,7 @@
  * Exports:
  * - DraftBuffer/FileSessionState: file draft and editing state contracts.
  * - WorkbenchFileClientOptions: one observed document and its editor collaborators.
- * - WorkbenchFileClient: observed updates, draft persistence, guarded mutations and rich/source mode switches.
+ * - WorkbenchFileClient: observed updates, draft inspection and persistence, guarded mutations and rich/source mode switches.
  * - default WorkbenchFileClient: reconcile one file's disk facts with its local editable draft, or edit an unsaved new
  *   file that exists only as a draft.
  */
@@ -65,6 +65,8 @@ interface WorkbenchFileClient {
   resetCurrentFileToHead: () => Promise<void>;
   saveCurrentFile: (options?: { force?: boolean }) => Promise<void>;
   scheduleSelectionPersistence: () => void;
+  /** Store the draft as the last inspection read it; for callers that inspected after their final DOM change. */
+  storeInspectedDraftBuffer: () => void;
   /** Show a markdown file as rich text or as its markdown source. */
   switchMode: (mode: EditorMode) => void;
   syncCurrentDraftBuffer: () => void;
@@ -226,13 +228,17 @@ function WorkbenchFileClient(
   }
 
   function syncCurrentDraftBuffer() {
+    storeDraftBuffer({ inspect: true });
+  }
+
+  function storeDraftBuffer({ inspect }: { inspect: boolean }) {
     releaseNewFileClearedElsewhere();
     if (!sessionState.currentPath || (state.expectedMtimeMs === null && !isNewFile)) {
       return;
     }
 
     const filePath = sessionState.currentPath;
-    inspectCurrentDraft();
+    if (inspect) inspectCurrentDraft();
 
     const nextBuffer: DraftBuffer = {
       baselineContent: state.baselineContent,
@@ -562,6 +568,7 @@ function WorkbenchFileClient(
     resetCurrentFileToHead,
     saveCurrentFile,
     scheduleSelectionPersistence,
+    storeInspectedDraftBuffer: () => storeDraftBuffer({ inspect: false }),
     switchMode,
     syncCurrentDraftBuffer,
   };

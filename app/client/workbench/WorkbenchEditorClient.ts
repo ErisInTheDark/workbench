@@ -208,7 +208,8 @@ export interface EditOperationHooks {
 export interface WorkbenchEditorMutationRuntimeOptions {
   inspectCurrentDraft: () => void;
   recordEditHistory: (previousContent: string, nextContent: string, selection: EditHistorySelection | null) => void;
-  syncCurrentDraftBuffer: () => void;
+  /** Store the draft `inspectCurrentDraft` just read; a mutation inspects once, after its last DOM change. */
+  storeInspectedDraftBuffer: () => void;
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
 }
 
@@ -1133,7 +1134,8 @@ function WorkbenchEditorClient(
   function renderDiffGutter() {
     diffGutter.replaceChildren();
 
-    if (!options.sessionState.currentPath || options.fileSessionState.mode !== "rich") {
+    // Diffing the document against HEAD is quadratic in its rows; a hidden gutter skips it until shown.
+    if (diffGutter.hidden || !options.sessionState.currentPath || options.fileSessionState.mode !== "rich") {
       return;
     }
 
@@ -1425,6 +1427,7 @@ function WorkbenchEditorClient(
 
   function setShowGitMarkers(show: boolean) {
     diffGutter.hidden = !show;
+    if (show) scheduleDiffGutterRefresh();
     refreshToolbarState();
   }
 
@@ -1671,7 +1674,7 @@ function WorkbenchEditorClient(
         options.mutationRuntime.updateHistorySelection(currentSelection);
       }
 
-      options.mutationRuntime.syncCurrentDraftBuffer();
+      options.mutationRuntime.storeInspectedDraftBuffer();
       scheduleDiffGutterRefresh();
       scheduleReviewRefresh();
       refreshStatusMessage();

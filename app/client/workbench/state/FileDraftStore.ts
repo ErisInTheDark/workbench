@@ -2,7 +2,8 @@
  * Exports:
  * - FileDraftStoreSnapshot: readonly projection of shared draft buffers keyed by file path.
  * - FileDraftStoreListener: subscriber signature for shared draft-store updates.
- * - default FileDraftStore: create the shared project-scoped draft buffer persistence owner, including unsaved new files.
+ * - default FileDraftStore: create the shared project-scoped draft buffer persistence owner, including unsaved new files;
+ *   queued writes for a path coalesce to its latest buffer.
  */
 
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
@@ -72,6 +73,11 @@ function fromStoredHistory(history: WorkbenchFileDraftHistory | undefined, conte
   } : null, content);
 }
 
+interface QueuedDraftWrite {
+  buffer: DraftBuffer | null;
+  written: Promise<void>;
+}
+
 function buildPersistedDraftRecord(
   daemonRegistrationId: string,
   projectId: string,
@@ -118,6 +124,8 @@ function FileDraftStore(
   /** Paths whose draft this session set or cleared; persisted records only speak for the others. */
   const ownedPaths = new Set<string>();
   let draftPersistenceQueue = Promise.resolve();
+  /** Writes waiting in the persistence queue, by path; each is replaced by the latest buffer until it starts. */
+  const queuedWrites = new Map<string, QueuedDraftWrite>();
 
   function bufferFromRecord(record: FileDraftRecord): DraftBuffer {
     return {
@@ -191,30 +199,47 @@ function FileDraftStore(
     return result;
   }
 
-  function persistDraftBuffer(filePath: string, buffer: DraftBuffer | null) {
+  async function writeDraftRecord(controller: WorkbenchClientStateController, filePath: string, buffer: DraftBuffer | null) {
     const projectId = getProjectId();
     const daemonRegistrationId = getDaemonRegistrationId();
-    if (!clientStateController) {
+    if (!buffer || !buffer.dirty) {
+      await controller.delete({
+        daemonRegistrationId,
+        kind: "fileDraft",
+        path: filePath,
+        projectId,
+      });
+      return;
+    }
+
+    await controller.put(buildPersistedDraftRecord(
+      daemonRegistrationId,
+      projectId,
+      filePath,
+      buffer,
+    ));
+  }
+
+  /** A path's queued write takes the latest buffer when it runs, so typing persists once per write, not per keystroke. */
+  function persistDraftBuffer(filePath: string, buffer: DraftBuffer | null) {
+    const controller = clientStateController;
+    if (!controller) {
       return Promise.resolve();
     }
-    return enqueueDraftPersistence(async () => {
-      if (!buffer || !buffer.dirty) {
-        await clientStateController.delete({
-          daemonRegistrationId,
-          kind: "fileDraft",
-          path: filePath,
-          projectId,
-        });
-        return;
-      }
 
-      await clientStateController.put(buildPersistedDraftRecord(
-        daemonRegistrationId,
-        projectId,
-        filePath,
-        buffer,
-      ));
+    const queued = queuedWrites.get(filePath);
+    if (queued) {
+      queued.buffer = buffer;
+      return queued.written;
+    }
+
+    const write: QueuedDraftWrite = { buffer, written: Promise.resolve() };
+    queuedWrites.set(filePath, write);
+    write.written = enqueueDraftPersistence(async () => {
+      queuedWrites.delete(filePath);
+      await writeDraftRecord(controller, filePath, write.buffer);
     });
+    return write.written;
   }
 
   function getBuffer(filePath: string) {

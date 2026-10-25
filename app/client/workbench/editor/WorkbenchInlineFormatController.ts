@@ -18,6 +18,7 @@ import {
     createInlineSelectionMarker,
     flattenInlineContent,
     getInlineMarkForElement,
+    isInlineRunContainerCanonical,
     normalizeInlineLeaves,
     normalizeInlineLeavesForCanonicalRuns,
     normalizeInlineMarks,
@@ -557,10 +558,16 @@ function WorkbenchInlineFormatController(
       return;
     }
 
+    // A run left already canonical changes nothing, so moving the caret must not cost an edit.
+    const leaves = getCanonicalInlineRunLeaves(previousContainer);
+    if (isInlineRunContainerCanonical(previousContainer, leaves)) {
+      return;
+    }
+
     selectionLeaveCanonicalizationIsRunning = true;
     try {
       options.syncEditorAfterStructuralChange(() => {
-        canonicalizeInlineRunContainer(previousContainer);
+        rebuildInlineRunContainer(previousContainer, leaves);
       });
     } finally {
       selectionLeaveCanonicalizationIsRunning = false;
@@ -573,14 +580,21 @@ function WorkbenchInlineFormatController(
     }
   }
 
-  function canonicalizeInlineRunContainer(
+  /** The selection's own run keeps its edge whitespace in its marks while it is being typed in. */
+  function getCanonicalInlineRunLeaves(
     container: HTMLElement,
     { preserveBoundaryWhitespace = false }: { preserveBoundaryWhitespace?: boolean } = {},
   ) {
-    const leaves = preserveBoundaryWhitespace
+    return preserveBoundaryWhitespace
       ? normalizeInlineLeaves(flattenInlineContent(container.childNodes))
       : normalizeInlineLeavesForCanonicalRuns(flattenInlineContent(container.childNodes));
-    rebuildInlineRunContainer(container, leaves);
+  }
+
+  function canonicalizeInlineRunContainer(
+    container: HTMLElement,
+    canonicalOptions: { preserveBoundaryWhitespace?: boolean } = {},
+  ) {
+    rebuildInlineRunContainer(container, getCanonicalInlineRunLeaves(container, canonicalOptions));
   }
 
   function canonicalizeInlineRunsForSelectionContainer(container?: HTMLElement | null) {
@@ -596,6 +610,11 @@ function WorkbenchInlineFormatController(
 
     const range = selection.getRangeAt(0);
     if (!targetContainer.contains(range.startContainer) || !targetContainer.contains(range.endContainer)) {
+      return;
+    }
+
+    // Carrying the selection through a rebuild splits its text; a canonical run needs neither.
+    if (isInlineRunContainerCanonical(targetContainer, getCanonicalInlineRunLeaves(targetContainer, { preserveBoundaryWhitespace: true }))) {
       return;
     }
 

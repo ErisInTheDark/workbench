@@ -1,6 +1,7 @@
 /*
  * No production exports. Protect draft and undo-history recovery (and its announcement) when app state arrives after the
- * store, without resurrecting drafts cleared this session.
+ * store, without resurrecting drafts cleared this session, and writes queued behind an in-flight one coalescing to the
+ * latest draft.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -54,6 +55,58 @@ test("an unsaved new file persists even while empty, and reloads as a new, modif
   await reader.clearBuffer("docs/untitled.md");
   assert.deepEqual(reader.getNewFilePaths(), []);
   assert.equal(FileDraftStore(() => "alpha", undefined, state).getBuffer("docs/untitled.md"), null, "a discarded new file is gone");
+});
+
+/** Holds the first draft write in flight until released, recording every write that reaches app state. */
+class HeldFirstWriteState extends WorkbenchClientStateController {
+  readonly writes: Array<string | null> = [];
+  release = () => {};
+  readonly #held = new Promise<void>((resolve) => { this.release = resolve; });
+
+  override async put(record: Parameters<WorkbenchClientStateController["put"]>[0]) {
+    this.writes.push(record.kind === "fileDraft" ? record.value.content : null);
+    if (this.writes.length === 1) await this.#held;
+    return super.put(record);
+  }
+
+  override async delete(identity: Parameters<WorkbenchClientStateController["delete"]>[0]) {
+    this.writes.push(null);
+    return super.delete(identity);
+  }
+}
+
+const typed = (content: string) => ({
+  baselineContent: "a", content, dirty: true, editorState: content, expectedMtimeMs: 7, headContent: null,
+  history: { currentIndex: 0, frames: [] }, mode: "plain" as const, pendingWriteConflict: null, saveIssue: null,
+});
+
+test("drafts typed while a write is in flight persist once, as their latest content", async () => {
+  const state = new HeldFirstWriteState({ mode: "memory" });
+  const store = FileDraftStore(() => "alpha", undefined, state);
+  store.setBuffer("notes.md", typed("ab"));
+  await setImmediate();
+  store.setBuffer("notes.md", typed("abc"));
+  store.setBuffer("notes.md", typed("abcd"));
+  assert.equal(store.getBuffer("notes.md")?.content, "abcd", "the session sees every keystroke at once");
+
+  state.release();
+  await setImmediate();
+  assert.deepEqual(state.writes, ["ab", "abcd"]);
+  assert.equal(FileDraftStore(() => "alpha", undefined, state).getBuffer("notes.md")?.content, "abcd");
+});
+
+test("clearing a draft while its write is in flight persists the clear, not the typing queued before it", async () => {
+  const state = new HeldFirstWriteState({ mode: "memory" });
+  const store = FileDraftStore(() => "alpha", undefined, state);
+  store.setBuffer("notes.md", typed("ab"));
+  await setImmediate();
+  store.setBuffer("notes.md", typed("abc"));
+  const cleared = store.clearBuffer("notes.md");
+
+  state.release();
+  await cleared;
+  assert.deepEqual(state.writes, ["ab", null]);
+  assert.equal(FileDraftStore(() => "alpha", undefined, state).getBuffer("notes.md"), null);
 });
 
 test("undo history persists with its draft and restores without stored cursor positions", async () => {
