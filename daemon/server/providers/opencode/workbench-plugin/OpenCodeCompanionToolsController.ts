@@ -51,7 +51,7 @@ export async function connectLifecycleOwnedCompanionTools(transport: CompanionTo
   transport.onclose = () => fail(new Error("Workbench companion MCP transport closed."));
   transport.onerror = error => fail(error);
   transport.onmessage = message => {
-    if (!("id" in message) || "method" in message) return;
+    if (!("id" in message) || "method" in message || message.id === undefined) return;
     const request = pending.get(message.id);
     if (!request) return;
     pending.delete(message.id);

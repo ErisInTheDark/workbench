@@ -8,7 +8,7 @@ import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 
 test("logs repeated pending warnings and one successful completion", async () => {
   let now = 0;
-  let callback: (() => void) | null = null;
+  let callback = null as (() => void) | null;
   const lines: string[] = [];
   const logger = new WorkbenchAgentCommandLogger({
     cancel: () => { callback = null; },
@@ -19,7 +19,7 @@ test("logs repeated pending warnings and one successful completion", async () =>
     },
     writeLine: (line) => { lines.push(line.replace(/\u001b\[[0-9;]*m/gu, "")); },
   });
-  let finish = (_value: string) => undefined;
+  let finish: (value: string) => void = () => {};
   const operation = new Promise<string>((resolve) => { finish = resolve; });
   const completion = logger.run("wb git arc compare", new AbortController().signal, async () => await operation);
 

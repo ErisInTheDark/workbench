@@ -301,7 +301,7 @@ export default class WorkbenchBrowseController {
     if (!this.acceptingCommands) throw new Error("Browse controller is draining for reload.");
     const signal = callerSignal ? AbortSignal.any([callerSignal, this.generation.signal]) : this.generation.signal;
     signal.throwIfAborted();
-    let release = () => undefined;
+    let release: () => void = () => {};
     const active = new Promise<void>((resolve) => { release = resolve; });
     this.activeCommands.add(active);
     let onAbort!: () => void;

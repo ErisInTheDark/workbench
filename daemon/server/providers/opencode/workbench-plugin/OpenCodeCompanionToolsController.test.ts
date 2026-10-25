@@ -103,7 +103,7 @@ test("MCP requests remain pending until a response or lifecycle closure", async 
       }
     },
     setProtocolVersion: () => undefined, start: async () => undefined, terminateSession: async () => undefined,
-    set onmessage(listener) { onmessage = listener; },
+    set onmessage(listener: (message: JSONRPCMessage) => void) { onmessage = listener; },
   });
   const pending = client.callTool({ name: "request_user_input", arguments: {} });
   let settled = false;
@@ -111,7 +111,7 @@ test("MCP requests remain pending until a response or lifecycle closure", async 
   await Promise.resolve();
   assert.equal(settled, false);
   const call = sent.find(message => "method" in message && message.method === "tools/call");
-  assert.ok(call && "id" in call);
+  assert.ok(call && "id" in call && call.id !== undefined);
   onmessage?.({ jsonrpc: "2.0", id: call.id, result: { content: [{ type: "text", text: "answered" }] } });
   assert.equal((await pending).content[0]?.type, "text");
   const interrupted = client.callTool({ name: "request_user_input", arguments: {} });
@@ -134,7 +134,7 @@ test("companion tool calls request progress so long waits stay alive", async () 
       }
     },
     setProtocolVersion: () => undefined, start: async () => undefined, terminateSession: async () => undefined,
-    set onmessage(listener) { onmessage = listener; },
+    set onmessage(listener: (message: JSONRPCMessage) => void) { onmessage = listener; },
   });
   const calls = [
     client.callTool({ name: "request_user_input", arguments: {} }),
@@ -157,8 +157,8 @@ test("a send failure and transport error reject the same owned request", async (
   const client = await connectLifecycleOwnedCompanionTools({
     close: async () => undefined, start: async () => undefined,
     terminateSession: async () => undefined, setProtocolVersion: () => undefined,
-    set onmessage(listener) { onmessage = listener; },
-    set onerror(listener) { onerror = listener; },
+    set onmessage(listener: (message: JSONRPCMessage) => void) { onmessage = listener; },
+    set onerror(listener: (error: Error) => void) { onerror = listener; },
     send: async message => {
       if (!("method" in message) || !("id" in message)) return;
       if (message.method === "initialize") {

@@ -397,7 +397,6 @@ test("proposal contracts keep paths explicit and terminal metadata complete", ()
     unavailableReason: null,
   });
   assert.equal(compatibleProposal.success, true);
-  if (!compatibleProposal.success) throw compatibleProposal.error;
   assert.equal(compatibleProposal.data.amendTargetMessage, null);
   assert.equal(compatibleProposal.data.freshChanges, null);
   assert.equal(compatibleProposal.data.freshCommitMessage, null);

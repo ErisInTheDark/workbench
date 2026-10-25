@@ -666,7 +666,7 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  await temporaryDirectoryOwner.dispose();
+  await temporaryDirectoryOwner?.dispose();
 });
 
 test("questionnaire CLI accepts descriptive headers without a fixed character cap", async () => {

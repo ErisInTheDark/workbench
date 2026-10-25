@@ -53,11 +53,12 @@ export default class WorkbenchThreadContextRolloverController {
     if (this.active.has(input.threadId)) return;
     const existing = this.directives.get(input.threadId);
     if (existing?.turnId === input.turnId) return await existing.request;
-    const request = (async () => {
+    const directive = { turnId: input.turnId, request: Promise.resolve() };
+    directive.request = (async () => {
       const selectedCap = await this.ports.readSelectedCap(input.threadId);
       this.lifetime.signal.throwIfAborted();
       if (!shouldRequestContextRollover(input.contextTokens, selectedCap)) {
-        if (this.directives.get(input.threadId)?.request === request) this.directives.delete(input.threadId);
+        if (this.directives.get(input.threadId) === directive) this.directives.delete(input.threadId);
         return;
       }
       await this.ports.requestDirective(
@@ -67,11 +68,11 @@ export default class WorkbenchThreadContextRolloverController {
         WORKBENCH_CONTEXT_ROLLOVER_INSTRUCTION_KEY,
       );
     })();
-    this.directives.set(input.threadId, { turnId: input.turnId, request });
+    this.directives.set(input.threadId, directive);
     try {
-      await request;
+      await directive.request;
     } catch (error) {
-      if (this.directives.get(input.threadId)?.request === request) this.directives.delete(input.threadId);
+      if (this.directives.get(input.threadId) === directive) this.directives.delete(input.threadId);
       const message = error instanceof Error ? error.message : String(error);
       this.ports.warn(`Context rollover directive admission failed: ${message.slice(0, 300)}`);
     }

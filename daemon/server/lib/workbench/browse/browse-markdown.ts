@@ -83,7 +83,7 @@ export function compileWorkbenchBrowseMarkdown(
   options: WorkbenchBrowseMarkdownCompileOptions,
 ): WorkbenchBrowseAgentSequenceRequest {
   const actions: WorkbenchBrowseAgentAction[] = [];
-  let activeFence: ParsedFence | null = null;
+  let activeFence = null as ParsedFence | null;
   const lines = normalizeLineEndings(script).split("\n");
   const lineNumberOffset = options.lineNumberOffset ?? 0;
 

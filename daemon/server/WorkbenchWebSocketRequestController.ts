@@ -574,7 +574,7 @@ export default class WorkbenchWebSocketRequestController {
         const request = this.identities && parsed.success ? await mapWorkbenchThreadStateRequest(this.identities, parsed.data) : input;
         signal.throwIfAborted();
         const result = await this.threadState.handleRequest(connectionId, request);
-        if ("error" in result) {
+        if (result.error) {
           await this.sendJsonToClient(client, { id: requestId, error: {
             code: -32000, message: result.error.message, data: { reason: result.error.code },
           } });
@@ -640,7 +640,7 @@ export default class WorkbenchWebSocketRequestController {
     if (!clients.length) throw new Error("No Workbench app is connected to this daemon. Open Workbench in a tab or run `wb view`, then retry.");
     const outcomes = await new Promise<string[] | Extract<GitPeerFetchOutcome, { kind: "fetched" }>>((resolve, reject) => {
       const failures: string[] = [];
-      const requests = new Map<string, { timer: ReturnType<typeof this.schedule> | null }>();
+      const requests = new Map<string, { timer: ReturnType<NonNullable<WorkbenchWebSocketRequestControllerOptions["setTimeout"]>> | null }>();
       const settle = (requestId: string, failure: string | null) => {
         const request = requests.get(requestId);
         if (!request || !this.peerFetches.delete(requestId)) return;

@@ -366,7 +366,7 @@ test("read and subscription replies honour each client's transcript protocol", a
 
 test("stats import observers receive pushed progress and disconnect cleanly", async () => {
   const sent: Array<{ method?: string }> = [];
-  let publish = (_progress: WorkbenchStatsImportProgress) => undefined;
+  let publish: (progress: WorkbenchStatsImportProgress) => void = () => {};
   const { controller } = createController({
     clock: new FakeClock(),
     daemonRequests: {
@@ -376,7 +376,7 @@ test("stats import observers receive pushed progress and disconnect cleanly", as
     stats: {
       subscribeImportProgress: (listener) => {
         publish = listener;
-        return () => undefined;
+        return () => true;
       },
     },
   });

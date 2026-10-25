@@ -302,12 +302,12 @@ function inspectionCommand(action: "compare" | "diff") {
     buildRequest(input, { callerHarness, callerThreadId, cwd }) {
       return postWorkbenchAgentCommand("/api/git-checkpoint", {
         action, ...baseBody(callerHarness, callerThreadId, cwd),
-        ...("page" in input && input.page !== undefined ? { page: input.page } : {}),
+        ...("page" in input && typeof input.page === "number" ? { page: input.page } : {}),
         ...(input.ref ? { ref: input.ref } : {}),
         ...(input.paths.length ? { paths: input.paths } : {}),
         ...(input.refs.length ? { refs: input.refs } : {}),
         ...(input.roots.length ? { roots: input.roots } : {}),
-        ...("threadId" in input && input.threadId ? { targetThreadId: input.threadId } : {}),
+        ...("threadId" in input && typeof input.threadId === "string" ? { targetThreadId: input.threadId } : {}),
       }, action === "compare" ? "git-arc-compare" : "git-arc-diff");
     },
   });

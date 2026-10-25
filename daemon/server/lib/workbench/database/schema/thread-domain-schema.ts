@@ -325,7 +325,8 @@ export function defineThreadDomainSchema(schemaVersion: number) {
   };
   // Drafts live in app presentation state now; legacy daemon drafts can never belong to a daemon project.
   const profileHistories = new Set<unknown>([profiles, projectProfiles]);
-  const finalHistories = new Map(Object.entries(histories).map(([name, history]) => {
+  type FinalHistory = Parameters<typeof defineSubsystemHistory>[0][number];
+  const finalHistories = new Map(Object.entries(histories).map(([name, history]): [string, FinalHistory] => {
     if (history === importReceipt) return [name, retireTableHistory(history, databaseReleases.retireLegacyImportReceipts.version)];
     if (history === snoozeDependencies) return [name, retireTableHistory(history, databaseReleases.appOwnedSnooze.version)];
     if (history === relationships) return [name, releaseSettledNames(ownProjectReferences(relationships))];

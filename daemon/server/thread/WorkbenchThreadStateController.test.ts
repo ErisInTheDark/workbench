@@ -1778,7 +1778,7 @@ test("provider omission retains saved threads through partial, complete, and reo
 test("concurrent first reads share one project initialization and reconciliation", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-concurrent-open-");
   const root = temporary.path;
-  let releaseRead = () => undefined;
+  let releaseRead: () => void = () => {};
   const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
   const persistence = testPersistence(root);
   const readProject = persistence.readProject.bind(persistence);
@@ -2528,7 +2528,7 @@ test("disposal fences late reconciliation without awaiting its provider request"
   const root = temporary.path;
   const publications: WorkbenchThreadSidebarSnapshot[] = [];
   let reconciliationStarted = false;
-  let releaseReconciliation = () => undefined;
+  let releaseReconciliation: () => void = () => {};
   const reconciliationGate = new Promise<void>((resolve) => { releaseReconciliation = resolve; });
   const lateEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 1,
@@ -2565,8 +2565,8 @@ test("background reconciliation survives UI disconnect and a warm reopen", async
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-warm-reopen-");
   const root = temporary.path;
   let reconciliationCount = 0;
-  let staleAccept: ((harness: "codex", entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void) | null = null;
-  let releaseStale = () => undefined;
+  let staleAccept = null as ((harness: "codex", entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void) | null;
+  let releaseStale: () => void = () => {};
   const known = {
     activityAt: 1,
     entryKind: "thread" as const,
@@ -4056,7 +4056,7 @@ test("only an observed thread's untimed commits learn their times from Git, afte
     const snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
     assert.ok(snapshot.entries.every((entry) => entry.entryKind === "draft" || entry.gitCommitHistory === undefined));
     await settle();
-    assert.deepEqual(persistence.gitCommitRefReads, []);
+    assert.equal(persistence.gitCommitRefReads.length, 0);
     assert.equal(requests.length, 0);
 
     // The observation reads only its own thread's refs from SQL, never commit messages, and is served before Git answers.

@@ -133,6 +133,7 @@ test("subagent instructions retain coordination without parent-only lifecycle gu
     servesTool: (id) => servesWorkbenchInstructionTool(id, visible),
     shell: "pwsh",
   });
+  assert.ok(output);
   assert.match(output, /subagent queues/iu);
   assert.match(output, /subagent_queue/u);
   assert.match(output, /subagent_dequeue/u);

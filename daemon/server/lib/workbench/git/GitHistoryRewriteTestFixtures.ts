@@ -12,12 +12,14 @@ import type { GitTestFixtureSpec } from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
+const HISTORY_LINEAR_COMMITS: GitTestFixtureSpec["commits"] = [
+  { files: { "later.txt": "base\n", "selected.txt": "base\n" }, message: "base" },
+  { files: { "selected.txt": "target\n" }, message: "target" },
+  { files: { "later.txt": "descendant\n" }, message: "descendant" },
+];
+
 export const HISTORY_LINEAR_FIXTURE = {
-  commits: [
-    { files: { "later.txt": "base\n", "selected.txt": "base\n" }, message: "base" },
-    { files: { "selected.txt": "target\n" }, message: "target" },
-    { files: { "later.txt": "descendant\n" }, message: "descendant" },
-  ],
+  commits: HISTORY_LINEAR_COMMITS,
   name: "history-linear",
 } satisfies GitTestFixtureSpec;
 

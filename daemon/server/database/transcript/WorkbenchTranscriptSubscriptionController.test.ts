@@ -17,9 +17,11 @@ function deferred<Value>() {
   return { promise, reject, resolve };
 }
 
+const unexpectedError = (error: unknown) => assert.fail(error instanceof Error ? error : String(error));
+
 test("observation protection spans opening, multiple views, replacement, failure and disposal", async () => {
   const pending = deferred<WorkbenchTranscriptSnapshot | null>();
-  const owner = new WorkbenchTranscriptSubscriptionController(() => pending.promise, assert.fail);
+  const owner = new WorkbenchTranscriptSubscriptionController(() => pending.promise, unexpectedError);
   const subscribe = (id: string, threadId = "thread") => owner.subscribe({
     id, request: { threadId, turnLimit: 1 }, publish: () => undefined,
   });
@@ -36,7 +38,7 @@ test("observation protection spans opening, multiple views, replacement, failure
   owner.dispose();
   assert.deepEqual(owner.observedThreadIds, []);
 
-  const failed = new WorkbenchTranscriptSubscriptionController(async () => { throw new Error("read failed"); }, assert.fail);
+  const failed = new WorkbenchTranscriptSubscriptionController(async () => { throw new Error("read failed"); }, unexpectedError);
   await assert.rejects(failed.subscribe({
     id: "failed", request: { threadId: "thread", turnLimit: 1 }, publish: () => undefined,
   }), /read failed/);

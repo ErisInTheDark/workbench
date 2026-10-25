@@ -169,9 +169,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           return Response.json({ error: error instanceof Error ? error.message : "Workbench subagent queue request failed." }, { status: 400 });
         }
       },
-      patchClaims: (harness, input, signal) => provider(harness).tools.patchClaims(
-        input, ({ cwd, harness, paths, threadId }) => gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths), signal,
-      ),
+      patchClaims: async (harness, input, signal) => {
+        const tools = provider(harness).tools;
+        if (!tools) throw new Error(`Provider ${harness} has no Workbench tools.`);
+        return await tools.patchClaims(
+          input, ({ cwd, harness, paths, threadId }) => gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths), signal,
+        );
+      },
       executeBrowseRequest: context.executeBrowseRequest,
       executeGitArcRequest: async (body, signal) => await gitArc.executeRequest(body, signal),
       executeQuestionnaireRequest: async (body, signal) => {

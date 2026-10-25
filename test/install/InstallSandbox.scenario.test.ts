@@ -93,7 +93,7 @@ for (const toolchain of ["existing", "missing"] as const) test(`a sandboxed inst
   let nodeVersion = "";
   const selected = new Toolchain({
     environment: freshEnvironment, home: sandbox.home,
-    commands: new WorkbenchBootstrapCommand({ environment: freshEnvironment, output: { write: bytes => { nodeVersion += String(bytes); } } }),
+    commands: new WorkbenchBootstrapCommand({ environment: freshEnvironment, output: { write: (bytes: string | Uint8Array) => { nodeVersion += String(bytes); } } }),
   });
   await selected.runNode(sandbox.defaultCheckout, "process.versions.node", [], { cwd: sandbox.home, nodeOptions: ["-p"] });
   const manifest = JSON.parse(await fs.readFile(path.join(sandbox.defaultCheckout, "package.json"), "utf8"));

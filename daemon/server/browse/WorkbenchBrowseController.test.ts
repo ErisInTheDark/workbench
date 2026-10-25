@@ -37,7 +37,7 @@ const unusedProjectResolvers = {
 };
 
 function deferred() {
-  let resolve = () => undefined;
+  let resolve: () => void = () => {};
   const promise = new Promise<void>((nextResolve) => {
     resolve = nextResolve;
   });
@@ -178,7 +178,7 @@ test("automatic screenshots retain the pre-action origin without injecting agent
 });
 
 test("direct Browse request execution uses the same handler and cancellation signal as HTTP ingress", async () => {
-  let receivedSignal: AbortSignal | null = null;
+  let receivedSignal = null as AbortSignal | null;
   const controller = createController(() => undefined, (signal) => { receivedSignal = signal; });
   const abortController = new AbortController();
   const response = await controller.executeBrowseRequest(Buffer.from("{}"), abortController.signal);
@@ -234,7 +234,7 @@ test("Browse translates only declared targets and returns public session identit
 });
 
 test("direct session request execution preserves query adaptation", async () => {
-  let receivedRequest: WorkbenchBrowseSessionListRequest | null = null;
+  let receivedRequest = null as WorkbenchBrowseSessionListRequest | null;
   const controller = createController((request) => { receivedRequest = request; });
   const response = await controller.executeSessionRequest({
     body: Buffer.alloc(0),
@@ -283,7 +283,7 @@ test("Browse reload waits for admitted identity lookups and rejects later comman
 test("HTTP admission releases the graph handler and reload drain cancels its request owner", async () => {
   const requestStarted = deferred();
   const requestCancelled = deferred();
-  let receivedSignal: AbortSignal | null = null;
+  let receivedSignal = null as AbortSignal | null;
   const controller = createController(() => undefined, async (signal) => {
     receivedSignal = signal;
     requestStarted.resolve();

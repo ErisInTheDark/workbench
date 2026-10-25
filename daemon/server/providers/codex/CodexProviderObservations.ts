@@ -55,7 +55,8 @@ export function mapProviderLifecycleNotification(
   notification: JsonRpcNotification, identities: AdmittedIdentities,
 ): WorkbenchProviderObservation["lifecycle"] {
   const params = record(notification.params);
-  const threadId = typeof params?.threadId === "string" && params.threadId.trim()
+  if (!params) return null;
+  const threadId = typeof params.threadId === "string" && params.threadId.trim()
     ? identities.knownThread(ThreadReferenceSchema.parse(params.threadId)).threadId : null;
   if (!threadId) return null;
   if (notification.method === "item/started" || notification.method === "item/completed") {
@@ -102,7 +103,8 @@ export function mapProviderTurnStartedNotification(
 ): WorkbenchProviderObservation["turnStarted"] {
   if (notification.method !== "turn/started") return null;
   const params = record(notification.params);
-  const threadId = typeof params?.threadId === "string" && params.threadId.trim()
+  if (!params) return null;
+  const threadId = typeof params.threadId === "string" && params.threadId.trim()
     ? identities.knownThread(ThreadReferenceSchema.parse(params.threadId)).threadId : null;
   return threadId ? { startedAt: timestamp(record(params.turn)?.startedAt), threadId } : null;
 }

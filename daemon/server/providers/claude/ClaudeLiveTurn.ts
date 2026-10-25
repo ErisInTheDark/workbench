@@ -176,6 +176,8 @@ export default class ClaudeLiveTurn {
    * The returned task settles exactly once.
    */
   async start(content: ClaudePromptContent) {
+    const deferred = this.beforePrompt;
+    if (!deferred) throw new Error("This Claude turn already sent its first prompt.");
     let warning: string | null = null;
     try {
       await this.options.observe({
@@ -192,7 +194,6 @@ export default class ClaudeLiveTurn {
         error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`;
       console.warn("[claude]", warning);
     }
-    const deferred = this.beforePrompt;
     this.beforePrompt = null;
     this.options.session.push(claudePrompt(deferred.context.length
       ? prefixClaudePrompt(deferred.context.join("\n\n"), content) : content));

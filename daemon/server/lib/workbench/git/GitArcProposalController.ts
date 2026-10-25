@@ -1796,15 +1796,17 @@ export default class GitArcProposalController {
     }
     const previousAcceptedProposals = await store.readAcceptedOutcomes(harness, threadId, activeSource);
     if (selectedMode === "amend") {
+      const amendTargetSha = proposal.metadata.amendTargetSha;
+      if (!amendTargetSha) throw new Error("This amend proposal has no target commit.");
       const message = commitMessage(title, description);
       const targetTree = includeNewer && resolved.includeNewerAvailable ? resolved.currentTree! : proposal.tree;
       const oldOutcomeRef = outcomeRef(harness, threadId, activeSource.checkpointCommit);
       const supersededProposalId = previousAcceptedProposals.slice().reverse().find((receipt) => (
-        receipt.commitSha === proposal.metadata.amendTargetSha && receipt.proposalId !== proposalId
+        receipt.commitSha === amendTargetSha && receipt.proposalId !== proposalId
       ))?.proposalId ?? null;
       const supersededPrior = supersededProposalId
         ? await store.readProposal(harness, threadId, supersededProposalId)
-        : await store.findCommittedProposalBySha(harness, threadId, proposal.metadata.amendTargetSha, proposalId);
+        : await store.findCommittedProposalBySha(harness, threadId, amendTargetSha, proposalId);
       let committedMetadata: ProposalMetadata | null = null;
       let committedResult: GitCheckpointProposal | null = null;
       try {
@@ -1818,7 +1820,7 @@ export default class GitArcProposalController {
           expectedHead: proposal.metadata.liveBaseCommit ?? undefined,
           message,
           paths: proposal.metadata.livePaths,
-          target: proposal.metadata.amendTargetSha,
+          target: amendTargetSha,
           targetTree,
           mutatePlan: async ({ amendedCommit, arcPlan, headRef, newHead }) => {
           const remappedSource = arcPlan.commits.get(activeSource.checkpointCommit) ?? activeSource.checkpointCommit;

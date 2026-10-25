@@ -535,7 +535,7 @@ test("renders complete help without an internal capability request", async () =>
 });
 
 test("dispatches rg arguments with the caller's cwd to the search owner", async () => {
-  let received: { request: object; signal: AbortSignal } | null = null;
+  let received = null as { request: object; signal: AbortSignal } | null;
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -607,7 +607,7 @@ test("dispatches Markdown toc directly with exact heading ranges", async () => {
 });
 
 test("dispatches native subagent commands directly without waiting on Next fetch headers", async () => {
-  let receivedRequest: { method?: string; params?: unknown } | null = null;
+  let receivedRequest = null as { method?: string; params?: unknown } | null;
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:4500",
     {

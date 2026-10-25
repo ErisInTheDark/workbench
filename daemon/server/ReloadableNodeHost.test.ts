@@ -612,7 +612,7 @@ test("an issued durability barrier survives grace expiry without cancelling the 
     children: [child("live child")],
     create: () => ({
       dispose: async (reportPhase) => {
-        reportPhase("thread-state disposal");
+        reportPhase?.("thread-state disposal");
         reportLiveDisposal();
         await liveDisposalFinished;
       },

@@ -209,13 +209,15 @@ test("sent and native OpenCode user images survive transcript rereads without du
   };
   const png = Buffer.from("image bytes");
   const dataUrl = `data:image/png;base64,${png.toString("base64")}`;
+  const textInput = { type: "text" as const, text: "look", text_elements: [] };
+  const imageInput = { type: "image" as const, url: dataUrl };
   const metadata = { workbench: {
     version: 1 as const, delivery: "queue" as const,
     itemId: WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000020"),
     clientMessageId: "sent-image",
-    input: [{ type: "text" as const, text: "look", text_elements: [] }, { type: "image" as const, url: dataUrl }],
+    input: [textInput, imageInput],
   } };
-  const root: SessionMessageInfo = { id: "root", type: "user", text: "look", time: { created: 1 }, metadata };
+  const root: Extract<SessionMessageInfo, { type: "user" }> = { id: "root", type: "user", text: "look", time: { created: 1 }, metadata };
   const project = { id: testProjectIds.project, rootPath: "C:/repo" };
   const read = () => {
     const projected = projectWorkbenchTranscript(repository.read({ threadId: "wb-thread", turnLimit: 3 })!);

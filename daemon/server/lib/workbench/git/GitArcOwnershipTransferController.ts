@@ -191,13 +191,13 @@ export default class GitArcOwnershipTransferController {
     }
     const updates: GitRefUpdate[] = [];
     const deletes: Array<{ oldValue?: string; ref: string }> = [];
-    if (discardStash) {
-      deletes.push(...sourceStash!.legacy
-        ? (await stashes.prepareDeleteFrozen(source, sourceStash!.paths)).deletions
-        : await stashes.prepareDeleteAdopted(source, sourceStash!.paths));
+    if (discardStash && sourceStash) {
+      deletes.push(...sourceStash.legacy
+        ? (await stashes.prepareDeleteFrozen(source, sourceStash.paths)).deletions
+        : await stashes.prepareDeleteAdopted(source, sourceStash.paths));
     }
     let stashCheckpoint: Awaited<ReturnType<GitCheckpointStore["prepareCheckpoint"]>> | null = null;
-    if (moveStash) {
+    if (moveStash && sourceStash) {
       const baseline = await store.readCheckpoint(source.harness, source.threadId, sourceStash.checkpointCommit);
       if (!baseline.metadata || !["arc", "implement"].includes(baseline.metadata.kind)) {
         throw new Error("The source stash has no valid implementation checkpoint.");
@@ -241,8 +241,8 @@ export default class GitArcOwnershipTransferController {
       claimedPaths, intentName, intentDescription, phase: claimedPaths.length ? "active" as const : "resolved" as const,
       proposalIds: callerArc?.proposalIds ?? target?.proposalIds ?? [],
     };
-    const savedStash = moveStash ? {
-      checkpointCommit: stashCheckpoint!.checkpointCommit, paths: sourceStash.paths,
+    const savedStash = sourceStash && stashCheckpoint ? {
+      checkpointCommit: stashCheckpoint.checkpointCommit, paths: sourceStash.paths,
       intentName: sourceStash.intentName, intentDescription: sourceStash.intentDescription,
       proposalIds: [],
     } : callerStash ? {

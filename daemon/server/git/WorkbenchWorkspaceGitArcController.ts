@@ -1528,7 +1528,7 @@ export default class WorkbenchWorkspaceGitArcController {
   ) {
     const targetedAmend = Boolean(request.amendProposalId);
     const messageOnlyAmend = Boolean(targetedAmend && !request.amend && !request.paths?.length);
-    const inferredMember = targetedAmend && !request.rootId
+    const inferredMember = request.amendProposalId && !request.rootId
       ? await this.findProposalMember(members, { harness: request.harness, proposalId: request.amendProposalId, threadId: request.threadId })
       : null;
     const configuredMultiRoot = isConfiguredMultiRoot(project);

@@ -159,7 +159,7 @@ test("conflicted unstash passively informs the owner without changing the succes
   });
   const request = { action: "arcUnstash", cwd: "C:/Git/Project", harness: "codex", threadId: "thread" };
   assert.equal((await feature.executeRequest(request)).ok, true);
-  assert.deepEqual(admitted, []);
+  assert.equal(admitted.length, 0);
 
   conflictedPaths = ["selected.txt"];
   const response = await feature.executeRequest(request);

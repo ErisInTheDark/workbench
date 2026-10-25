@@ -114,7 +114,7 @@ test("cache failures warn and fall back while Git failures still reject", async 
 test("disposal rejects queued work and aborts active builds", async () => {
   const fixture = storeFixture();
   const controller = new GitArcProposalDiffController({ maxConcurrentBuilds: 1, store: fixture.store });
-  let activeSignal: AbortSignal | null = null;
+  let activeSignal = null as AbortSignal | null;
   const active = controller.readOrBuild(input("6".repeat(40), async signal => {
     activeSignal = signal;
     await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));

@@ -283,7 +283,7 @@ function operations(
           turnIndex: 0,
         }],
       }),
-      resolveTurn: lifecycle.resolveTurn ?? (async ({ turnId: requestedTurnId }) => ({
+      resolveTurn: lifecycle.resolveTurn ?? (async ({ turnId: requestedTurnId }: { turnId: string }) => ({
         threadId,
         turnId: WorkbenchTurnIdSchema.parse(requestedTurnId),
         native: { nativeThreadId, nativeTurnId },

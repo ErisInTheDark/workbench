@@ -60,7 +60,7 @@ test("tool references expand in ordinary text without disturbing selectors or ex
     "<tool id=\"rg\" />",
     "```",
   ].join("\n"));
-  assert.equal(filter(value, "opencode").output.includes("`tools.opencode.rg`"), true);
+  assert.equal(filter(value, "opencode").output?.includes("`tools.opencode.rg`"), true);
 });
 
 test("invalid tool references stay visible and report their source", () => {

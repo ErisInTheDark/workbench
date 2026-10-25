@@ -7,6 +7,8 @@ import test from "node:test";
 
 import CodexBridgeTransitionController from "./CodexBridgeTransitionController";
 
+const unexpectedError = (error: unknown) => assert.fail(error instanceof Error ? error : String(error));
+
 test("pre-transition messages drain before replacement and during-transition messages wait", async () => {
   const controller = new CodexBridgeTransitionController();
   const events: string[] = [];
@@ -19,14 +21,14 @@ test("pre-transition messages drain before replacement and during-transition mes
     resolveFirstStarted();
     await firstGate;
     events.push("old:end");
-  }, assert.fail);
+  }, unexpectedError);
 
   const transition = controller.runTransition(async () => {
     events.push("replace");
   });
   controller.enqueueUpstreamMessage(controller.currentGeneration, () => {
     events.push("new");
-  }, assert.fail);
+  }, unexpectedError);
   await firstStarted;
   assert.deepEqual(events, ["old:start"]);
   releaseFirst();
@@ -38,7 +40,7 @@ test("pre-transition messages drain before replacement and during-transition mes
 test("hard transition invalidates queued old-generation messages", async () => {
   const controller = new CodexBridgeTransitionController();
   const events: string[] = [];
-  controller.enqueueUpstreamMessage(controller.currentGeneration, () => { events.push("stale"); }, assert.fail);
+  controller.enqueueUpstreamMessage(controller.currentGeneration, () => { events.push("stale"); }, unexpectedError);
   await controller.runTransition(() => { events.push("replace"); }, { drain: false, invalidateGeneration: true });
   await controller.waitForIdle();
   assert.deepEqual(events, ["replace"]);

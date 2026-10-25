@@ -1104,7 +1104,7 @@ test("historical full restores on machine worktrees touch only the arc's own sco
   await startGitArc({ ...identity, checkpointCommit: plan.checkpointCommit });
   const arc = await controller.findActiveClaim(identity);
   assert.ok(arc);
-  await releaseGitArc(identity);
+  await releaseGitArc({ ...identity, disown: false });
 
   await write("a.txt", "a later\n");
   await write("a-dir/new.txt", "made later\n");

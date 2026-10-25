@@ -196,8 +196,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
   }
 
   async suspend() {
-    if (this.#suspension) return await this.#suspension.closed;
-    await this.start();
+    if (!this.#suspension) await this.start();
     if (this.#suspension) return await this.#suspension.closed;
     let release!: () => void;
     let rejectAdmission!: (error: Error) => void;

@@ -156,6 +156,7 @@ test("installation changes publish typed deltas only to update observers and rel
   assert.equal(f.updates.length, 1);
   const pushed = f.updates[0]!;
   assert.equal(pushed.value.kind, "update");
+  assert.ok(pushed.change);
   assert.deepEqual(applyObservationDelta(initial, pushed.change.delta, daemonObservationShape("update")), {
     ...pushed.value, revision: initial.revision,
   });

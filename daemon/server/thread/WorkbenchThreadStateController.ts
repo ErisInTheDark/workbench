@@ -1295,7 +1295,7 @@ export default class WorkbenchThreadStateController {
     if (entry && entry.entryKind !== "draft") return { lifecycle: entry.lifecycle, title: entry.title };
     const stored = await this.loadProjectStorage(projectId);
     const storedEntry = stored.records.find((candidate) => candidate.identity.harness === harness && candidate.identity.threadId === threadId);
-    const lifecycle = storedEntry?.lifecycle ?? (entry && entry.entryKind !== "draft" ? entry.lifecycle : null);
+    const lifecycle = storedEntry?.lifecycle ?? null;
     if (!lifecycle) return null;
     return {
       lifecycle,
@@ -1692,7 +1692,7 @@ export default class WorkbenchThreadStateController {
   private naturalOrder(state: ProjectState): NaturalOrder {
     const cached = this.naturalOrders.get(state);
     if (cached?.entriesVersion === state.entriesVersion && cached.waitingVersion === this.waitingVersion) return cached;
-    const entries = [...state.entries.values()].flatMap((entry) => {
+    const entries = [...state.entries.values()].flatMap((entry): WorkbenchThreadSidebarEntry[] => {
       const projected = projectWorkbenchThreadStateEntry(entry);
       if (!projected || projected.entryKind === "draft") return projected ? [projected] : [];
       const waitingFor = this.waitingByThreadKey.get(entryKey(projected));

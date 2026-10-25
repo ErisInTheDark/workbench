@@ -277,7 +277,7 @@ test("a steer stays pending until Claude acknowledges folding it in", async () =
   const { task } = await turn.start("hi");
   turn.steer(steer(), "change course");
   await tick();
-  assert.deepEqual(steers, []);
+  assert.equal(steers.length, 0);
   push(ack(steerId));
   await tick();
   assert.deepEqual(steers.map(entry => [entry.status, entry.canonicalItemId]), [["sent", steerId]]);
@@ -330,7 +330,7 @@ test("a bridge reload pauses the turn without settling it and its restored succe
   await turn.pause();
   push(ack(steerId));
   await tick();
-  assert.deepEqual(steers, [], "a paused turn must leave output for its successor");
+  assert.equal(steers.length, 0, "a paused turn must leave output for its successor");
   const snapshot = turn.snapshot();
   assert.ok(snapshot);
   const restored = ClaudeLiveTurn.restore(snapshot, collaborators);

@@ -78,7 +78,7 @@ export default class WorkbenchInteractionsFeature {
       database: ports.database,
       readDeviceIdentity,
       readOpenCodeApiKey: () => readOpenCodeApiKey(),
-      codexReviewer: () => installedProviderKeys.includes("codex") ? lookup.provider("codex").approvalReview : null,
+      codexReviewer: () => installedProviderKeys.includes("codex") ? lookup.provider("codex").approvalReview ?? null : null,
     });
     const approvals = this.approvals = new WorkbenchApprovalController({
       broadcast: (harness, notification) => ports.context.broadcastProviderNotification(harness, notification),
@@ -87,7 +87,7 @@ export default class WorkbenchInteractionsFeature {
         if (key) await agentContext.collect({ harness: key, threadId }, "answer", signal);
       },
       commandApprovals: ports.commandApprovals,
-      deliver: async (harness, input) => await lookup.provider(harness).interactions?.deliverApproval(input) ?? false,
+      deliver: async (harness, input) => await lookup.provider(harness).interactions?.deliverApproval?.(input) ?? false,
       logError: message => { console.error("[approval]", message.slice(0, 500)); },
       observeLifecycle: async (harness, threadId, event) => {
         await threadState.controller.observeLifecycle(harness, threadId, event);

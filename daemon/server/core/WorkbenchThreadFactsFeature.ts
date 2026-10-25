@@ -186,7 +186,7 @@ export default class WorkbenchThreadFactsFeature {
         ports.publishRuntime(threadId, { addressedFeedback });
       },
     });
-    const agentContext = this.agentContext = new WorkbenchAgentContextController({
+    const agentContext: WorkbenchAgentContextController = this.agentContext = new WorkbenchAgentContextController({
       sources: [skills.contextSource, goals.contextSource],
       inject: async (thread, text, signal) => {
         if (!lease.isCurrent()) throw new Error("Agent context generation has retired.");

@@ -193,7 +193,7 @@ export default class WorkbenchGitRefs {
   async objectFiles(object: GitObjectRef): Promise<Array<{ file: GitObjectFile; sides: GitObjectSides }>> {
     const { parents } = await this.readMessage(object.sha);
     const base = parents[0] ?? null;
-    const sides = { head: base, tree: await this.repository.resolveTree(object.sha) };
+    const sides: GitObjectSides = { head: base, tree: await this.repository.resolveTree(object.sha) };
     const files = (await listTreeFileChanges(this.repository, await this.repository.resolveTree(base), sides.tree))
       .map(file => ({ file, sides }));
     const untracked = object.kind === "stash" ? parents[2] : undefined;

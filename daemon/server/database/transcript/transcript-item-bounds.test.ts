@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
@@ -25,7 +26,7 @@ function toolResult(text: string, id = "call"): ThreadItem {
   } as unknown as ThreadItem;
 }
 
-function resultText(item: ThreadItem | undefined) {
+function resultText(item: WorkbenchProjectedTranscriptItem | undefined) {
   return item?.type === "mcpToolCall" ? (item.result!.content[0] as { text: string }).text : "";
 }
 

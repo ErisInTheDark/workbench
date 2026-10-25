@@ -341,7 +341,7 @@ test("selected release returns dirty claims to a resolved child without exposing
     cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: true,
   }), /pending stack|stack/i);
   assert.equal((await controller.listLifecycleStates({ cwd }))
-    .find(state => state.threadId === "parent")?.stackLayers.length, 1);
+    .find(state => state.threadId === "parent")?.stackLayers?.length, 1);
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, ["one.txt"]);
 });
 

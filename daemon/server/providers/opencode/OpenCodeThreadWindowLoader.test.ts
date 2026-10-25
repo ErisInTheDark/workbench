@@ -26,7 +26,7 @@ function fixture(pages: Array<{ data: SessionMessageInfo[]; next?: string }>) {
     await Promise.resolve();
     active--;
     return { data: page.data, cursor: { next: page.next } };
-  } } } as WorkbenchOpenCodeClient;
+  } } } as Pick<WorkbenchOpenCodeClient, "message">;
   return { loader: new OpenCodeThreadWindowLoader(client), calls, get maximum() { return maximum; } };
 }
 
@@ -46,11 +46,11 @@ test("latest keeps cross-page steers within one complete turn and resumes its pr
 });
 
 test("retained first-page boundary remains usable after newer messages push it onto another page", async () => {
-  const pages = [{ data: [message("root", "user"), message("older", "user")], next: "1" }];
+  const pages: Array<{ data: SessionMessageInfo[]; next?: string }> = [{ data: [message("root", "user"), message("older", "user")], next: "1" }];
   const f = fixture(pages);
   const signal = new AbortController().signal;
   const latest = await f.loader.load("session", { mode: "latest" }, undefined, signal);
-  pages[0] = { data: [message("new-answer"), message("new-root", "user")], next: "1" };
+  pages[0] ={ data: [message("new-answer"), message("new-root", "user")], next: "1" };
   pages[1] = { data: [message("root", "user"), message("older", "user")], next: undefined };
   const previous = await f.loader.load("session", { mode: "previous", beforeTurnId: "root" }, latest.previousCursor, signal);
   assert.deepEqual(previous.messages.map(value => value.id), ["older"]);

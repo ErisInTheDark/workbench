@@ -1063,7 +1063,7 @@ test("provider reconciliation publishes its first page before deeper history and
   const starts: string[] = [];
   const codexCursors: Array<string | null> = [];
   const codexRequests: Array<Record<string, unknown>> = [];
-  let releaseCodexNext = () => undefined;
+  let releaseCodexNext: () => void = () => {};
   const codexNextGate = new Promise<void>((resolve) => { releaseCodexNext = resolve; });
   const activeClaim = {
     checkpointCommit: "a".repeat(40),
@@ -1284,7 +1284,7 @@ test("managed title commands use the workbench-recorded title as the mutation pr
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
     harnesses: createHarnesses(async (harness, request) => {
-      requests.push({ harness, method: request.method, params: request.params });
+      requests.push({ harness, method: request.method ?? "<no method>", params: request.params });
       if (harness !== "codex") return { id: request.id ?? null, error: { code: -32000, message: "Not found" } };
       if (request.method === "thread/name/set") {
         providerName = String((request.params as { name?: unknown }).name ?? "");

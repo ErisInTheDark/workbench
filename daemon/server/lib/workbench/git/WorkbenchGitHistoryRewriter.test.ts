@@ -97,6 +97,7 @@ async function checkContentAmend({ repositoryOwner, root, selectionStore, target
   assert.deepEqual(await fs.readFile(path.join(root, "selected.txt")), beforeSelected);
   assert.deepEqual(await fs.readFile(path.join(root, "later.txt")), beforeLater);
   assert.equal((await git(root, ["diff", "--cached", "--name-only"])).trim(), "later.txt");
+  assert.ok(result.amendedCommit);
   return result.amendedCommit;
 }
 
@@ -402,6 +403,7 @@ async function checkIndexLock(context: TestContext, { repositoryOwner: gitReposi
   });
   assert.notEqual(committed.commit, headBefore);
   assert.equal(await git(root, ["status", "--short", "--", "selected.txt"]), "");
+  assert.ok(committed.amendedCommit);
   return committed.amendedCommit;
 }
 

@@ -9,6 +9,7 @@ import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDire
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
+import { z } from "zod";
 
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type WorkbenchGitCheckpointController from "../lib/workbench/git/WorkbenchGitCheckpointController";
@@ -30,6 +31,7 @@ import { ensureMachineGitWorktree } from "../lib/workbench/git/machine-git-workt
 import { daemonWorkspaceRoot } from "../lib/daemon-workspace-paths";
 
 const execFileAsync = promisify(execFile);
+const ScopeMembersSchema = z.object({ members: z.array(z.object({ phase: z.string() })) });
 
 test("workspace status qualifies recovery facts and keeps roots with no lifecycle", async () => {
   const local = new FakeLocalGitArcController();
@@ -1288,7 +1290,8 @@ test("workspace stash and unstash compensate completed members when a later repo
   await assert.rejects(controller.execute(project, { ...identity, action: "arcUnstash" }), /unstash failed/u);
   assert.deepEqual(local.restashCalls.map(path.normalize), [path.resolve("C:/repo/api")].map(path.normalize));
   assert.equal((await controller.findLifecycleState(project, "codex", identity.threadId))?.phase, "stashed");
-  assert.equal((await controller.execute(project, { ...identity, action: "arcScope" }) as { members: Array<{ phase: string }> }).members[0]?.phase, "stashed");
+  const scopePhase = async () => ScopeMembersSchema.parse(await controller.execute(project, { ...identity, action: "arcScope" })).members[0]?.phase;
+  assert.equal(await scopePhase(), "stashed");
   assert.equal(await controller.hasLiveClaims(project, "codex", identity.threadId), false);
   assert.equal(await controller.blocksThreadSettlement(project, "codex", identity.threadId), true);
   local.discardFailureRoots.add("C:/repo/web");
@@ -1301,7 +1304,7 @@ test("workspace stash and unstash compensate completed members when a later repo
   assert.match(renderGitArcOutput({
     method: "POST", path: "/api/git/arc/unstash", responseKind: "git-arc-unstash",
   }, restored as Record<string, unknown>), /^arc unstash plan$/mu);
-  assert.equal((await controller.execute(project, { ...identity, action: "arcScope" }) as { members: Array<{ phase: string }> }).members[0]?.phase, "plan");
+  assert.equal(await scopePhase(), "plan");
 });
 
 test("workspace adoption restores an earlier source member when a later member fails", async () => {

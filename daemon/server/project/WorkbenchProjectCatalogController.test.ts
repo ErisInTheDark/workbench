@@ -573,7 +573,7 @@ test("changed exclusion evidence retires cached CWD authority even when selectab
 
 class FakeWatcher {
   closed = false;
-  private errorListener = () => undefined;
+  private errorListener: () => void = () => {};
 
   constructor(
     readonly rootPath: string,

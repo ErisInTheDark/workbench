@@ -116,7 +116,7 @@ test("records one thread's deferred results in emission order", async () => {
   const origin = await controller.captureOrigin("thread-1");
   controller.record(createEvent("first"), origin);
   controller.record(createEvent("second"), origin);
-  assert.deepEqual(recorded, []);
+  assert.equal(recorded.length, 0);
   writeGate.resolve();
   await controller.waitForIdle();
 

@@ -671,7 +671,7 @@ export default class GitArcPlanController {
   ): Promise<{
     deletions: Array<{ oldValue: string; ref: string }>;
     savedStash: GitArcSavedStash;
-    updates: Array<{ newValue: string; oldValue: string; ref: string }>;
+    updates: Array<{ newValue: string; oldValue: string | null; ref: string }>;
   } | null> {
     if (current?.phase !== "stashed") return null;
     const stashes = new GitArcClaimLossStore(repository, this.resolveThreadIdentity);

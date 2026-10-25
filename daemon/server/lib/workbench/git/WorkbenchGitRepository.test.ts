@@ -384,11 +384,11 @@ test("file-change construction passes cancellation through listing, batch and si
   const signal = new AbortController().signal;
   const repository = new WorkbenchGitRepository(process.cwd());
   const signals: Array<AbortSignal | undefined> = [];
-  context.mock.method(repository, "listChangedPaths", async (_from, _to, _paths, receivedSignal) => {
+  context.mock.method(repository, "listChangedPaths", async (...[, , , receivedSignal]: Parameters<typeof repository.listChangedPaths>) => {
     signals.push(receivedSignal);
     return ["selected"];
   });
-  context.mock.method(repository, "run", async (args, _env, receivedSignal) => {
+  context.mock.method(repository, "run", async (...[args, , receivedSignal]: Parameters<typeof repository.run>) => {
     signals.push(receivedSignal);
     if (args.includes("-z")) throw stdoutOverflow();
     return `:100644 100644 aaaaaaa bbbbbbb M\tselected\n1\t0\tselected\n${patchOf("selected")}`;

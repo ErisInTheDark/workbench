@@ -190,10 +190,10 @@ function createController(options: {
       readSkills: async () => ({ data: [], instructionPacks: [], instructions: "" }),
     },
     files: {
-      read: async ({ path, projectId }) => ({ content: "", headContent: null, mtimeMs: 1, path, projectId: projectId == null ? undefined : ProjectIdSchema.parse(projectId), updatedAt: "" }),
+      read: async ({ path, projectId }) => ({ content: "", headContent: null, mtimeMs: 1, path, projectId: ProjectIdSchema.parse(projectId), updatedAt: "" }),
       write: async (request) => {
         fileWrites.push(request);
-        return { changes: {}, mtimeMs: 2, path: request.path, projectId: request.projectId == null ? undefined : ProjectIdSchema.parse(request.projectId), updatedAt: "" };
+        return { changes: {}, mtimeMs: 2, path: request.path, projectId: ProjectIdSchema.parse(request.projectId), updatedAt: "" };
       },
     },
     gitArc: {
@@ -205,7 +205,7 @@ function createController(options: {
     nativeFiles: {
       linkRoots: async () => ({ roots: [] }),
       open: async (request) => ({ ok: true, path: request.path, projectId: request.projectId == null ? null : ProjectIdSchema.parse(request.projectId), target: request.path }),
-      reveal: async (request) => ({ ok: true, path: request.path, projectId: request.projectId == null ? undefined : ProjectIdSchema.parse(request.projectId) }),
+      reveal: async (request) => ({ ok: true, path: request.path, projectId: ProjectIdSchema.parse(request.projectId) }),
     },
     profiles: options.profiles ?? {
       mutate: async () => ({ profiles: [] }),
@@ -231,7 +231,7 @@ function createController(options: {
       updateDiscoverySettings: async paths => ({ accepted: true, paths: [...paths] }),
       resolveProjectById: async (projectId) => {
         if (projectId === options.rejectProjectId) throw new Error("Unknown project.");
-        return { id: projectId == null ? undefined : ProjectIdSchema.parse(options.canonicalProjectId ?? projectId), kind: "git", root: "", rootPath: "", roots: [] };
+        return { id: ProjectIdSchema.parse(options.canonicalProjectId ?? projectId), kind: "git", root: "", rootPath: "", roots: [] };
       },
     },
     projectSnapshot: options.projectSnapshot ?? {

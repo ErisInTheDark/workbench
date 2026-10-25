@@ -46,7 +46,7 @@ import {
   type ProposalMetadata,
 } from "workbench-shared/workbench/git/git-arc-storage";
 
-const LINEAR_COMMITS = [
+const LINEAR_COMMITS: GitTestFixtureSpec["commits"] = [
   {
     files: {
       "later.txt": "later base\n",

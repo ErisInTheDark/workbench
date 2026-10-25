@@ -52,7 +52,7 @@ import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-ser
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchThreadHydrationRequest } from "../../lib/codex/thread-hydration";
 import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
-import type { AgentEndpointProjectResolver } from "../../lib/workbench/project/agent-endpoint-project";
+import type { AgentEndpointProjectResolution, AgentEndpointProjectResolver } from "../../lib/workbench/project/agent-endpoint-project";
 import {
   readWorkbenchFileChangeFailureMarker,
   type WorkbenchFileChangeFailureMarker,
@@ -201,7 +201,8 @@ export type CodexStdioBridgeOptions = {
   ) => Promise<readonly string[]>;
   readSqliteContextUsage?: (threadId: string) => Promise<ThreadContextUsageSnapshot | null>;
   restartingAppServer?: boolean;
-  resolveProjectFromCwd: AgentEndpointProjectResolver;
+  /** Null when the cwd belongs to no catalogued project; callers then work without project roots. */
+  resolveProjectFromCwd: (...args: Parameters<AgentEndpointProjectResolver>) => Promise<AgentEndpointProjectResolution | null>;
   transcriptAssets?: Pick<import("../../database/WorkbenchDatabaseController").default, "writeTranscriptAsset" | "readTranscriptAsset">;
   sqliteReader?: CodexStoredTranscriptAdapter;
   readSqliteProviderCursor?: (threadId: string, turnId: string) => Promise<string | null | undefined>;
@@ -3186,7 +3187,9 @@ export default class CodexStdioBridge {
         if (!Array.isArray(activeTurns)) {
           return { id: requestId, error: { code: -32000, message: "Codex admission could not read the active turn." } };
         }
-        activeTurnId = this.readManagedActiveTurn(readThread, activeTurns as Turn[]).id;
+        const activeTurn = getCurrentInProgressTurn({ turns: activeTurns as Turn[] });
+        if (!activeTurn) throw new Error(`Active Codex thread ${threadId} has no current in-progress turn.`);
+        activeTurnId = activeTurn.id;
       }
       const steerResponse = await this.dispatchManagedMessageSteer(
         requestId,

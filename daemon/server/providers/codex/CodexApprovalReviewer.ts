@@ -144,7 +144,8 @@ export default class CodexApprovalReviewer {
     const { method, params } = parsed.data;
     if (method === "item/completed") {
       const item = itemCompleted.safeParse(params);
-      const waiter = item.success ? this.waiters.get(item.data.threadId) : undefined;
+      if (!item.success) return;
+      const waiter = this.waiters.get(item.data.threadId);
       if (waiter && item.data.item.type === "agentMessage" && item.data.item.text) waiter.text = item.data.item.text;
     } else if (method === "turn/completed") {
       const turn = turnCompleted.safeParse(params);

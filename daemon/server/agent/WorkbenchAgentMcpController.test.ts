@@ -303,7 +303,11 @@ for (const harness of ["codex", "claude", "opencode"] as const) {
         async (_registration, operation) => operation({ tools } as WorkbenchProvider),
       );
       const controller = new WorkbenchAgentMcpController({
-        tools: () => dispatcher.get(harness).tools,
+        tools: () => {
+          const dispatched = dispatcher.get(harness).tools;
+          assert.ok(dispatched);
+          return dispatched;
+        },
         daemonOrigin: "http://127.0.0.1:4500",
         requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
         lifecycleLogError: () => {},
@@ -1904,6 +1908,7 @@ test("a timed wait ends with a non-error timed-out result, keeps timeoutMs out o
     const timed = await callTool("subagent_wait", { names: ["momo"], timeoutMs: 300_000 });
     assert.ok(timed.kind === "detached");
     assert.equal(deadlines[0]?.timeoutMs, 300_000);
+    assert.ok(timed.call.request);
     assert.equal(timed.call.request.body?.timeoutMs, undefined);
     assert.deepEqual(timed.call.request.body?.names, ["momo"]);
     timeOut(0);
@@ -2157,7 +2162,7 @@ test("a yielded shell answers still running, keeps its row open, and shell_wait 
     assert.equal(running.exitCode, null);
     assert.ok(running.shellId);
     assert.match(responseText(yielded), /shell_wait/u);
-    assert.deepEqual(finished, [], "the shell's row stays running");
+    assert.equal(finished.length, 0, "the shell's row stays running");
 
     const timedOut = await (async () => {
       const wait = client.callTool({ name: "shell_wait", arguments: { shellId: running.shellId, timeoutMs: 1_000 } });

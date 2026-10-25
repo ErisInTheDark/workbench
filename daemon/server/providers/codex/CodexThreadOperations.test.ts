@@ -329,7 +329,7 @@ for (const rejected of [false, true]) {
     const bridge = new CodexStdioBridge({
       appServer: {
         send(request: JsonRpcRequest) {
-          methods.push(request.method);
+          methods.push(request.method ?? "<no method>");
           if (request.method === "initialize") {
             finishInitialize = () => {
               void bridge.handleUpstreamMessage({

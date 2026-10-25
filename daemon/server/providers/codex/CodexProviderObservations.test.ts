@@ -69,16 +69,17 @@ test("one provider ingress publishes admitted references without rewriting conte
       item: { ...item, id: itemId, workbenchIdentityKind: "provisional" },
     });
     assert.equal(publication.observation.projectId, thread.projectId);
+    const unsupportedItems: Array<Record<string, unknown>> = [
+      { type: "userMessage", id: item.id, clientId: null, content: [{ type: "image", fileId: "private-reference" }] },
+      { type: "functionCallOutput", id: item.id, callId: "call", output: [{ type: "input_image", file_id: "private-reference" }] },
+    ];
     for (const method of ["item/started", "item/completed"]) {
-      for (const unsupported of [
-        { type: "userMessage", id: item.id, clientId: null, content: [{ type: "image", fileId: "private-reference" }] },
-        { type: "functionCallOutput", id: item.id, callId: "call", output: [{ type: "input_image", file_id: "private-reference" }] },
-      ]) {
+      for (const unsupported of unsupportedItems) {
         const event = { method, params: { threadId: native.nativeThreadId, turnId: nativeTurnId, item: unsupported } };
         const before = structuredClone(event);
         assert.throws(() => edge.native(event), error => error instanceof UnsupportedCodexImageReferenceError
           && !error.message.includes("private-reference"));
-        assert.deepEqual(event, before);
+        assert.deepEqual(before, event, "a rejected event is never mutated");
       }
     }
     const delta = edge.native({

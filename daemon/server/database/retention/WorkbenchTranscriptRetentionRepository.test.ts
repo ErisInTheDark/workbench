@@ -289,7 +289,7 @@ test("result expiry removes every supported result family while preserving invoc
         type: "dynamicToolCall", id: "dynamic", namespace: "test", tool: "lookup",
         arguments: { query: "needle" }, status: "completed", contentItems: [
           { type: "inputText", text: "dynamic body" },
-        ], success: true, durationMs: 4, toolCallGroupId: null, metadata: null,
+        ], success: true, durationMs: 4, metadata: null,
       }),
       item({
         type: "functionCallOutput", id: "function", name: "lookup", namespace: "test",

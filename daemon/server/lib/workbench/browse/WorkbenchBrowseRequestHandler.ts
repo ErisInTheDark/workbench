@@ -285,14 +285,14 @@ async function readBrowseMarkdownSource(
   request: WorkbenchBrowseAgentScriptRequest,
   projectExecution: WorkbenchBrowseProjectExecution,
 ) {
-  if ("commands" in request) {
+  if (request.commands !== undefined) {
     return {
       baseDirectoryPath: projectExecution.cwd,
       commandScripts: request.commands,
       workspaceRootPaths: projectExecution.workspaceRootPaths,
     };
   }
-  if (!("scriptPath" in request)) {
+  if (request.scriptPath === undefined) {
     return {
       baseDirectoryPath: projectExecution.cwd,
       commandScripts: [request.script],

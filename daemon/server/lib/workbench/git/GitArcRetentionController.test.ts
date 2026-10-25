@@ -64,7 +64,7 @@ test("expired plan-only thread cleanup removes its refs without touching another
     claimedPaths: [],
     phase: "plan",
     proposalId,
-    proposalIds: [...active.proposalIds, proposalId],
+    proposalIds: [...active.proposalIds ?? [], proposalId],
     retainedArc: null,
   }, active.checkpointCommit);
   const planOnly = await registry.find({ harness: "codex", threadId: nativeThreadId });

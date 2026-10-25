@@ -204,7 +204,8 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("projectFile"), data: ProjectFileSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("projectSelection") }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: DaemonReloadDirtEnvelopeSchema.shape.snapshot }).strict(),
-  z.object({ ...envelope, kind: z.literal("update"), data: PredictedInstallationUpdateSchema }).strict(),
+  // Null until a daemon owns installation updates; the observation then stays pending.
+  z.object({ ...envelope, kind: z.literal("update"), data: PredictedInstallationUpdateSchema.nullable() }).strict(),
   z.object({
     ...envelope, kind: z.literal("catalogue"),
     catalogue: WorkbenchProjectsPayloadSchema.nullable(),

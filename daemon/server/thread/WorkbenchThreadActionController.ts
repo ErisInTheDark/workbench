@@ -4,7 +4,7 @@
  * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops and queue skips, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire hold, virtual-steer routing, compaction-queue adoption and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
-import type { ThreadPayload, WorkbenchHarness, WorkbenchSkillSummary } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchHarness, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
@@ -137,7 +137,7 @@ export default class WorkbenchThreadActionController {
       const providerPending = (await Promise.all(installedProviderKeys.map(
         key => this.owners.providers.get(key).interactions?.pending() ?? [],
       ))).flat();
-      const data = [...this.owners.state.listPendingQuestionnaires()];
+      const data: WorkbenchPendingUserInputRequest[] = [...this.owners.state.listPendingQuestionnaires()];
       for (const request of [...this.owners.approvals.list(), ...providerPending]) {
         if (!data.some(candidate =>
           candidate.harness === request.harness
@@ -192,7 +192,7 @@ export default class WorkbenchThreadActionController {
         identity: { harness: target.harness, threadId: target.identity.threadId },
         title: input.title,
       });
-      if ("error" in response) throw new Error(response.error.message);
+      if (response.error) throw new Error(response.error.message);
       return { ok: true };
     },
     "thread/compact": async input => {
@@ -406,7 +406,7 @@ export default class WorkbenchThreadActionController {
 
   private async mutateState(connectionId: string, outcome: string, request: Parameters<WorkbenchThreadActionOwners["state"]["handleRequest"]>[1]) {
     const response = await this.owners.state.handleRequest(connectionId, request);
-    if ("error" in response) throw new Error(response.error.message);
+    if (response.error) throw new Error(response.error.message);
     if (typeof response.result === "object" && response.result !== null && "accepted" in response.result && !response.result.accepted) {
       throw new Error(`The pending questionnaire changed before it could be ${outcome}.`);
     }

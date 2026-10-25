@@ -263,10 +263,14 @@ for (const outcome of ["reload", "failed", "resolved-before-delivery"] as const)
       } } as unknown as CodexAppServer,
       handleWorkbenchRequest: rejectWorkbenchRequest,
       onNotification: () => {},
-      resolveProjectFromCwd: async cwd => ({
-        cwd, project: { id: testProjectIds.project, kind: "git", root: cwd, rootPath: cwd, roots: [] },
-        root: { id: "root", name: "repo", root: cwd, rootPath: cwd },
-      }),
+      resolveProjectFromCwd: async rawCwd => {
+        assert.ok(rawCwd);
+        const cwd = rawCwd;
+        return {
+          cwd, project: { id: testProjectIds.project, kind: "git", root: cwd, rootPath: cwd, roots: [] },
+          root: { id: "root", name: "repo", root: cwd, rootPath: cwd },
+        };
+      },
       approvals: {
         open: async () => ({ kind: "decided", decision: { kind: "decline", feedback: "Confirm the saved [\"pnpm\",\"test\"] prefix." } }),
         close: () => undefined,
@@ -3758,7 +3762,7 @@ test("fresh first turn prepares its stored profile across reload and failed admi
       events.push("prepare:profile");
       return {
         ...requests,
-        startRequest: { ...requests.startRequest, params: { ...requests.startRequest.params as object, model: "saved-model", effort: "low" } },
+        startRequest: { ...requests.startRequest, params: { ...requests.startRequest?.params as object, model: "saved-model", effort: "low" } },
       };
     },
     prepareTurnStart: async () => { events.push("prepare:mcp"); },
@@ -4241,7 +4245,7 @@ test("admission of an existing thread rebuilds the current instruction prefix an
   const appServer = {
     send(request: JsonRpcRequest) {
       requests.push(request);
-      order.push(request.method);
+      order.push(request.method ?? "<no method>");
       const result = request.method === "thread/read" ? { thread }
         : request.method === "thread/resume" ? { thread, initialTurnsPage: { backwardsCursor: null, data: [], nextCursor: null } }
           : request.method === "turn/start" ? { turn: { id: "replacement", items: [], status: "inProgress", error: null } }
@@ -4263,6 +4267,7 @@ test("admission of an existing thread rebuilds the current instruction prefix an
         startRequest: { method: "turn/start", params: { cwd: root, threadId: "thread", input: [] } },
       },
     });
+    assert.ok(response);
     assert.equal(response.error, undefined);
     const resume = requests.find(request => request.method === "thread/resume");
     assert.ok(resume);
@@ -4413,6 +4418,7 @@ test("managed admission steers a provider-confirmed active turn without changing
         threadId: "thread",
       },
     });
+    assert.ok(startOnly);
     assert.match(startOnly.error?.message ?? "", /cannot start a new turn while the provider reports an active turn/u);
     assert.deepEqual(
       upstreamRequests.slice(startOnlyOffset).map(({ method }) => method),
@@ -4540,6 +4546,7 @@ test("managed continuation starts the unchanged input when its active turn ends 
         threadId: "thread",
       },
     });
+    assert.ok(ambiguousFailure);
     assert.equal(ambiguousFailure.error?.message, "transport failed");
     assert.deepEqual(upstreamRequests.map(({ method }) => method), [
       "thread/read",
@@ -4564,6 +4571,7 @@ test("managed continuation starts the unchanged input when its active turn ends 
       },
     });
 
+    assert.ok(response);
     assert.deepEqual(response.result, { kind: "started", turn: startedTurn });
     assert.deepEqual(upstreamRequests.map(({ method }) => method), [
       "thread/read",

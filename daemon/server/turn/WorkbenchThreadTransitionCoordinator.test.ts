@@ -85,7 +85,7 @@ test("falls back to exclusive reads until the process-stable coordinator restart
 test("shares reads, queues writers fairly, and allows unrelated keys to proceed", async () => {
   const coordinator = new WorkbenchThreadTransitionCoordinator();
   const events: string[] = [];
-  let releaseReaders = () => undefined;
+  let releaseReaders: () => void = () => {};
   const readerGate = new Promise<void>((resolve) => { releaseReaders = resolve; });
 
   const first = coordinator.read("repo", async () => {
@@ -150,7 +150,7 @@ test("continues a transition queue after a failed operation", async () => {
 test("readMany and runMany deduplicate and acquire transition keys in stable order", async () => {
   const coordinator = new WorkbenchThreadTransitionCoordinator();
   const events: string[] = [];
-  let releaseA = () => undefined;
+  let releaseA: () => void = () => {};
   const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
   const heldA = coordinator.run("a", async () => {
     events.push("a:held");

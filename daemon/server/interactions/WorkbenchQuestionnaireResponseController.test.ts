@@ -337,7 +337,6 @@ test("missing live history placement leaves the ordinary questionnaire pending",
     reason: "pendingInput",
     requestKey: questionnaire.requestKey,
     settled: false,
-    turnId: null,
   }, { latestTurnId: null, pendingTurnId: null });
 
   await assert.rejects(

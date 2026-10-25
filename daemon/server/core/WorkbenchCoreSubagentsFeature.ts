@@ -74,8 +74,8 @@ export default class WorkbenchCoreSubagentsFeature {
         getEntry: async (projectId, harness, threadId) => threadState.controller.getThreadEntry(projectId, harness, threadId),
         mutate: async (request: WorkbenchThreadStateRequest) => {
           const response = await threadState.controller.handleRequest("subagent-controller", request);
-          if ("error" in response) throw new Error(response.error.message);
-          if (!("accepted" in response.result)) throw new Error("The subagent settle mutation returned no acceptance decision.");
+          if (response.error) throw new Error(response.error.message);
+          if (!response.result || !("accepted" in response.result)) throw new Error("The subagent settle mutation returned no acceptance decision.");
           return { accepted: response.result.accepted };
         },
         subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => threadState.controller.subscribe(listener),

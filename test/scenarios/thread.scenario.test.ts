@@ -978,7 +978,9 @@ test("selected providers complete the shared thread boundary journey in one clon
       assert.equal(await fs.readFile(path.join(runtime.project, `${shellProofFile}-approved`), "utf8"), finalProof);
     }
     // The transcript settles the turn before the provider's completion observation reaches thread state.
-    await waitForFact(() => runtime.threadSummary(threadId, scenarioSignal),
+    const settledThreadId = threadId;
+    assert.ok(settledThreadId);
+    await waitForFact(() => runtime.threadSummary(settledThreadId, scenarioSignal),
       summary => summary?.summary.row.lifecycle.kind !== "working");
     const lifecycle = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), {
       readonly: true,
@@ -1057,7 +1059,7 @@ test("selected providers complete the shared thread boundary journey in one clon
       assert.ok(after.success);
       assert.equal(after.data.thread.id, before.data.thread.id);
       for (const turn of before.data.turns) {
-        const preserved = after.data.turns.find(candidate => candidate.id === turn.id);
+        const preserved: (typeof after.data.turns)[number] | undefined = after.data.turns.find(candidate => candidate.id === turn.id);
         assert.ok(preserved, "Provider deletion must retain each earlier WB turn");
         assert.equal(preserved.status, turn.status);
         assert.deepEqual(preserved.items, turn.items);

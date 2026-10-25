@@ -235,7 +235,7 @@ export default class WorkbenchTranscriptIdentityRepository {
       turnId: string;
       kind: WorkbenchTranscriptItemSource["kind"];
       reference: string;
-      componentKind: WorkbenchTranscriptItemSource["component"]["kind"];
+      componentKind: NonNullable<WorkbenchTranscriptItemSource["component"]>["kind"];
       componentIndex: number;
     }>;
     return {

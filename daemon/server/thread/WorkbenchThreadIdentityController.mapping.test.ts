@@ -318,7 +318,7 @@ test("cold native thread lookup admits exact metadata before public request rout
     return { id: request.id ?? null, result: { thread: {
       id: "unobserved", cwd: "C:/repo", createdAt: 1, updatedAt: 1,
       name: "Cold", source: "cli", parentThreadId: null, turns: [], status: { type: "idle" },
-    } as Thread } };
+    } } };
   };
   const operations = new CodexThreadOperations({
     reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },

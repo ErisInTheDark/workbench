@@ -703,7 +703,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   }
 
   private canonicalProject(projectId: ProjectId) {
-    return this.owners.catalogue.getFacts().catalogue?.aliases.find(alias => alias.alias === projectId)?.projectId
+    return this.owners.catalogue.getFacts().catalogue?.aliases?.find(alias => alias.alias === projectId)?.projectId
       ?? projectId;
   }
 

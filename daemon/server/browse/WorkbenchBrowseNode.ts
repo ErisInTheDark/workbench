@@ -148,7 +148,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         await recorder.record({ ...entry, threadId: await identity.publicThreadId(entry.threadId) }, harness);
       },
       screenshot: async (harness, input) => {
-        return provider(harness).browse.screenshot({ ...input, threadId: await identity.publicThreadId(input.threadId) });
+        const browse = provider(harness).browse;
+        if (!browse) throw new Error(`Provider ${harness} cannot take Browse screenshots.`);
+        return browse.screenshot({ ...input, threadId: await identity.publicThreadId(input.threadId) });
       },
     };
     const execution = new BrowseExecution(context, callbacks, identity, new WorkbenchServerSettings(build.get("database")), build.get("database"));

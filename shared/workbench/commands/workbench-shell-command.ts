@@ -37,10 +37,13 @@ export const WorkbenchYieldShellInputFields = {
 };
 
 /** The shell input a provider accepts, from its parallel and yield support. */
-export function getWorkbenchShellInputSchema({ parallel, yields }: { parallel: boolean; yields: boolean }) {
-  return WorkbenchShellInputSchema.extend({
-    ...(parallel ? WorkbenchParallelShellInputFields : {}), ...(yields ? WorkbenchYieldShellInputFields : {}),
-  });
+export function getWorkbenchShellInputSchema({ parallel, yields }: { parallel: boolean; yields: boolean }): z.ZodType<
+  WorkbenchShellInput & { parallel?: boolean; yield_ms?: number }
+> {
+  if (parallel && yields) return WorkbenchShellInputSchema.extend({ ...WorkbenchParallelShellInputFields, ...WorkbenchYieldShellInputFields });
+  if (parallel) return WorkbenchShellInputSchema.extend(WorkbenchParallelShellInputFields);
+  if (yields) return WorkbenchShellInputSchema.extend(WorkbenchYieldShellInputFields);
+  return WorkbenchShellInputSchema;
 }
 
 export const WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME = "shell_wait";

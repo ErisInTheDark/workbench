@@ -198,10 +198,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
 
   readonly context: WorkbenchProviderContext = {
     inject: async (input, signal) => {
-      signal.throwIfAborted();
+      signal?.throwIfAborted();
       const { binding } = await this.native(input.threadId);
       const client = await this.options.acquire();
-      signal.throwIfAborted();
+      signal?.throwIfAborted();
       await client.session.instructions.entry.put({
         sessionID: binding.nativeThreadId,
         key: `workbench-context:${randomUUID()}`,
@@ -574,9 +574,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         await providerRequest;
         resolvePromptOwner({
           threadId: identity.threadId,
-          turnId: activeTurn.turnId,
+          turnId: admittedSteer.turnId,
         });
-        return { kind: "steered", turnId: activeTurn.turnId };
+        return { kind: "steered", turnId: admittedSteer.turnId };
       }
       const message: SessionMessageUser = {
         id: messageId,
@@ -737,7 +737,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       const [session, window, active] = await Promise.all([
         client.session.get({ sessionID: native.nativeThreadId }, { signal }),
         new OpenCodeThreadWindowLoader(client).load(native.nativeThreadId, nativeTarget, cursor, signal),
-        target.mode === "latest" ? client.session.active({ signal }) : Promise.resolve({}),
+        target.mode === "latest" ? client.session.active({ signal }) : null,
       ]);
       signal.throwIfAborted();
       if (target.mode === "previous" && !window.messages.length) {
@@ -753,7 +753,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       } : undefined;
       const recorded = await this.syncSession(session, window.messages, {
         canCommit: () => execution.intentVersion === intentVersion && execution.eventSequence === eventSequence,
-        keepLatestTurnOpen: target.mode === "latest" && Boolean(active[native.nativeThreadId]),
+        keepLatestTurnOpen: Boolean(active?.[native.nativeThreadId]),
         window: { ...window, latest: target.mode === "latest", gapIds: input.gapIds, successor, ...(input.explicit ? { explicit: true as const } : {}) },
       });
       return { turnIds: recorded.latestTurnId ? [recorded.latestTurnId] : [], exhausted: window.previousCursor === null };

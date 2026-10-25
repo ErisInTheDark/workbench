@@ -16,7 +16,7 @@ import WorkbenchProjectSnapshotController, { type ProjectTreeWatch } from "./Wor
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function deferred<TValue>() {
-  let resolve = (_value: TValue) => undefined;
+  let resolve: (value: TValue) => void = () => {};
   const promise = new Promise<TValue>((nextResolve) => { resolve = nextResolve; });
   return { promise, resolve };
 }

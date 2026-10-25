@@ -229,6 +229,7 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
       capabilities: { tools: { listChanged: true } },
     });
     server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
+      if (notification.params.requestId === undefined) return;
       registry.cancel(scope.clientScope, notification.params.requestId, notification.params.reason);
     });
     server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: description.tools }));

@@ -149,9 +149,9 @@ class GeminiTracker implements OpenCodeStreamCutTracker {
 
   get reasoningOpen() { return !this.finished && this.current === "reasoning"; }
 
-  private parts(frame: Record<string, unknown>) {
+  private parts(frame: Record<string, unknown>): Array<Record<string, unknown>> {
     const parts = Array.isArray(frame.candidates) ? record(record(frame.candidates[0])?.content)?.parts : undefined;
-    return Array.isArray(parts) ? parts.flatMap(part => record(part) ?? []) : [];
+    return Array.isArray(parts) ? parts.flatMap<Record<string, unknown>>((part: unknown) => record(part) ?? []) : [];
   }
 
   text(frame: Record<string, unknown>) {

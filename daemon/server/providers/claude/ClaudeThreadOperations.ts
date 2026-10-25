@@ -250,7 +250,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
 
   readonly context: WorkbenchProviderContext = {
     inject: async (input, signal) => {
-      signal.throwIfAborted();
+      signal?.throwIfAborted();
       const identity = await this.identity(input.threadId);
       const runtime = this.live.get(identity.threadId);
       if (runtime) {

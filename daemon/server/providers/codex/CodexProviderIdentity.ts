@@ -65,8 +65,8 @@ export async function admitProviderNotifications(
     await owners.threads.observeTurns(turns.map((turn) => ({
       kind: "turn", threadId, turnId: NativeTurnIdSchema.parse(turn.id), nativeTurnId: NativeTurnIdSchema.parse(turn.id),
       harnessId: native.harness, nativeLocation: native.nativeLocation, nativeThreadId: native.nativeThreadId,
-      state: turn.status, createdAt: Math.round(turn.startedAt * 1_000),
-      startedAt: Math.round(turn.startedAt * 1_000),
+      state: turn.status, createdAt: Math.round((turn.startedAt ?? 0) * 1_000),
+      startedAt: Math.round((turn.startedAt ?? 0) * 1_000),
       endedAt: turn.completedAt === null ? null : Math.round(turn.completedAt * 1_000),
       durationMs: turn.durationMs,
     })));

@@ -50,7 +50,7 @@ test("routes fixtures and test children through the acquired temp root before di
   const temporaryRootPath = path.join(projectRoot, "test", "runner-temp-root");
   const disposed: string[] = [];
   let childCwd = "";
-  let childEnvironment: NodeJS.ProcessEnv | null = null;
+  let childEnvironment = null as NodeJS.ProcessEnv | null;
   let fixtureRootPath = "";
   const runner = new ProjectTestRunner(projectRoot, {
     report: () => {},

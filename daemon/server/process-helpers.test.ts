@@ -45,7 +45,7 @@ test("lowering an agent's priority after it already exited is quiet; other failu
     throw Object.assign(new Error(`set failed ${code}`), { code: "ERR_SYSTEM_ERROR", info: { code } });
   };
   lowerAgentProcessPriority({ pid: 4242 } as ChildProcess, message => warnings.push(message), fake("ESRCH"));
-  assert.deepEqual(warnings, []);
+  assert.equal(warnings.length, 0);
   lowerAgentProcessPriority({ pid: 4242 } as ChildProcess, message => warnings.push(message), fake("EACCES"));
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /pid 4242.*set failed EACCES/u);

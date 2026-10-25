@@ -387,7 +387,7 @@ export default class WorkbenchBrowseRuntime {
     signal?: AbortSignal,
   ) {
     const previous = this.sessionTails.get(session) ?? IDLE_GATE;
-    let release = () => undefined;
+    let release: () => void = () => {};
     const ownCompletion = new Promise<void>((resolve) => { release = resolve; });
     const current = previous.then(async () => await ownCompletion);
     this.sessionTails.set(session, current);

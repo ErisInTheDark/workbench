@@ -153,7 +153,7 @@ test("changing parity evidence groups by mismatch while retaining the latest use
     assert.equal(groups.length, 1);
     assert.equal(groups[0]?.count, 2);
     assert.equal(groups[0]?.lastAt, 2);
-    assert.deepEqual(groups[0]?.record.fields.jsonContext, [{ id: "latest" }]);
+    assert.deepEqual(groups[0]?.record.fields?.jsonContext, [{ id: "latest" }]);
   } finally {
     await temporary.dispose();
   }

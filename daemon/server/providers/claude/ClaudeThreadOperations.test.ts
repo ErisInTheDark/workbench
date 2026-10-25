@@ -10,7 +10,7 @@ import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench
 import WorkbenchThreadIdentityController from "../../thread/WorkbenchThreadIdentityController";
 import { ProviderRuntimeMissingError } from "../provider-runtimes";
 import ClaudeSessionHost, { ENDED_CLAUDE_SESSION } from "./ClaudeSessionHost";
-import ClaudeThreadOperations, { type ClaudeThreadOperationsOptions } from "./ClaudeThreadOperations";
+import ClaudeThreadOperations, { type ClaudeInstructionInput, type ClaudeThreadOperationsOptions } from "./ClaudeThreadOperations";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
@@ -128,7 +128,7 @@ function fixture({
       defaults.push(model);
       return 1_000_000;
     },
-    buildInstructions: async input => {
+    buildInstructions: async (input: ClaudeInstructionInput) => {
       captured?.instructionNames?.push(Reflect.get(input, "subagentName") ?? null);
       return "instructions";
     },

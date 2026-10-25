@@ -591,7 +591,7 @@ export default class WorkbenchGitCheckpointController {
     }, { expectedCheckpointCommit: active.checkpointCommit });
     const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
       committedSha: null,
-      proposalId: active.proposalId,
+      proposalId: active.proposalId ?? null,
       sourceCheckpoint: active.checkpointCommit,
       status: "continued",
       successorCheckpoint: checkpointCommit,
@@ -973,7 +973,8 @@ export default class WorkbenchGitCheckpointController {
         }
         if (evidence) {
           const restoredPaths = evidence.paths;
-          if (restoredPaths.length) {
+          // An unborn checkpoint has no baseline commit to measure conflict drift from.
+          if (restoredPaths.length && checkpoint.parent) {
             const drift = await collectGitArcDrift({
               repository,
               baseline: checkpoint.parent,
@@ -1147,7 +1148,7 @@ export default class WorkbenchGitCheckpointController {
           if (current?.phase === "resolved" || current?.retainedArc?.phase === "resolved") {
             throw new Error("The claim-loss baseline is unavailable. Inspect affected files or select an explicit arc ref.");
           }
-          if (!current && input.paths?.length) {
+          if (!current && input.paths?.length && inspection.head) {
             const paths = repository.normalizePaths(input.paths);
             return {
               checkpointCommit: inspection.head, checkpointRef: inspection.head, phase: "workspace",
@@ -1347,7 +1348,15 @@ export default class WorkbenchGitCheckpointController {
     harness: rawHarness,
     paths: rawPaths,
     threadId,
-  }: CheckpointInput & { confirmRestore?: boolean; paths?: string[] }) {
+  }: CheckpointInput & { confirmRestore?: boolean; paths?: string[] }): Promise<{
+    checkpointCommit: string;
+    checkpointRef: string;
+    intentName: string | null;
+    repoRoot: string;
+    restored: true;
+    restoredPaths?: string[];
+    scopePaths: string[];
+  }> {
     return await GitObjectReadSession.run(async () => {
       if (!rawPaths?.length && !confirmRestore) throw new Error("Checkpoint restore requires confirmation or selected paths.");
       const repoRoot = await resolveRepoRoot(cwd);

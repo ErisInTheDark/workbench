@@ -32,7 +32,9 @@ export const transcriptRequests = {
     run: ({ transcripts }, observations: readonly WorkbenchTranscriptObservation[], mode: WorkbenchTranscriptSettlementMode = "live"): WorkbenchTranscriptSettlement => (
       transcripts.settle(observations, mode)
     ),
-    local: observations => observations.length ? undefined : { value: { changedThreadIds: [], compactionCompletions: [] } },
+    local: (...[observations]): { value: WorkbenchTranscriptSettlement } | undefined => (
+      observations.length ? undefined : { value: { changedThreadIds: [], compactionCompletions: [] } }
+    ),
     describe: (observations, mode = "live") => {
       const kinds = new Map<string, number>();
       const threads = new Set<string>();

@@ -126,8 +126,8 @@ test("amend requests forward identity rewrites and reject contradictory co-autho
 test("serializes sibling thread Git operations per worktree while unrelated worktrees proceed", async () => {
   const transitions = new WorkbenchThreadTransitionCoordinator();
   const events: string[] = [];
-  let releaseFirst = () => undefined;
-  let announceFirst = () => undefined;
+  let releaseFirst: () => void = () => {};
+  let announceFirst: () => void = () => {};
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const firstStarted = new Promise<void>((resolve) => { announceFirst = resolve; });
   const feature = new WorkbenchThreadGitFeature({

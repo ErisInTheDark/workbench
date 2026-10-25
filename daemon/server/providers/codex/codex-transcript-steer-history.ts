@@ -97,6 +97,10 @@ function cloneUserInput(input: UserInput): UserInput {
       return { type: input.type, url: input.url };
     case "localImage":
       return { path: input.path, type: input.type };
+    case "audio":
+      return { type: input.type, url: input.url };
+    case "localAudio":
+      return { path: input.path, type: input.type };
     case "skill":
     case "mention":
       return { name: input.name, path: input.path, type: input.type };

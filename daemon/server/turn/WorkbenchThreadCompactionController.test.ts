@@ -81,7 +81,7 @@ test("messages sent during compaction are held, then delivered once as one merge
   assert.equal(await f.owner.enqueue(threadId, message("first", "one", { activatedSkillPaths: ["a"], workflowIds: ["default"] }), deliver), true);
   assert.equal(await f.owner.enqueue(threadId, message("second", "two", { activatedSkillPaths: ["b", "a"] }), deliver), true);
   assert.deepEqual(f.steers.map(steer => [steer.entryKey, steer.status]), [["compaction:first", "pending"], ["compaction:second", "pending"]]);
-  assert.deepEqual(delivered, [], "nothing reaches the agent while compaction runs");
+  assert.equal(delivered.length, 0, "nothing reaches the agent while compaction runs");
 
   held.release();
   await operation;

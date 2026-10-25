@@ -131,7 +131,7 @@ test("a running shell's output publishes as one windowed tail per thread, intact
     output("stdout", Buffer.concat([heart.subarray(1), Buffer.from("\n")]));
     output("stderr", Buffer.from("warn\n"));
     assert.equal(pending.length, 1, "a burst arms one publication for the thread");
-    assert.deepEqual(published, []);
+    assert.equal(published.length, 0);
     pending[0]!.publish();
     assert.deepEqual(published, ["Selected 3 tests\n♡\nwarn\n"]);
     output("stdout", Buffer.from("x".repeat(20_000)));
@@ -206,7 +206,7 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
   const owner = {};
   const threadId = WorkbenchThreadIdSchema.parse("thread");
   const yielded = registry.register("client-1", 1, { owner, toolName: "shell", shellItem: { threadId, references: ["item-1"] } });
-  yielded.shellQueue!.output("stdout", Buffer.from("building..."));
+  yielded.shellQueue!.output!("stdout", Buffer.from("building..."));
   assert.throws(() => registry.backgroundShell("client-1", 99), /running shell call/u);
   const shellId = registry.backgroundShell("client-1", 1);
   assert.equal(registry.readBackgroundShellTail(shellId), "building...");
@@ -483,7 +483,7 @@ test("command executor replacement retries one built request without surfacing r
     path: "/api/subagents",
     responseKind: "native",
   } satisfies WorkbenchAgentCommandRequest;
-  let oldSignal: AbortSignal | null = null;
+  let oldSignal = null as AbortSignal | null;
   registry.activateCommandExecutor(oldOwner, async (_request, signal) => {
     oldSignal = signal;
     return await new Promise<Response>((_resolve, reject) => {

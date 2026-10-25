@@ -103,7 +103,7 @@ for (const invalid of ["first<caret />\nsecond<caret />", "first\nsecond"]) {
     const h = await harness(true);
     await h.patch(invalid);
     await h.wait(0);
-    assert.deepEqual(h.events, []);
+    assert.equal(h.events.length, 0);
     assert.equal(h.responses.length, 1);
     const response = h.responses[0] as { result: { contentItems: Array<{ text: string }> } };
     const feedback = response.result.contentItems[0]!.text;
@@ -149,7 +149,7 @@ test("unchanged invalid final draft parks recovery without cancelling or reporti
   await h.complete();
   await h.complete();
   assert.equal(h.requests.filter(request => request.method === "turn/start").length, 2);
-  assert.deepEqual(h.events, []);
+  assert.equal(h.events.length, 0);
   await h.controller.cancel("session");
   assert.equal(h.events.at(-1)?.type, "cancelled");
 });
@@ -169,7 +169,7 @@ test("new speech arriving during repair reads is delivered without replaying the
   const response = h.responses[0] as { result: { contentItems: Array<{ text: string }> } };
   assert.ok(response.result.contentItems[0]!.text.includes("continuation"));
   assert.equal(h.journal.find(event => event.tag === "vtt")?.text, response.result.contentItems[0]?.text);
-  assert.deepEqual(h.events, []);
+  assert.equal(h.events.length, 0);
   await h.controller.cancel("session");
 });
 
@@ -180,7 +180,7 @@ test("invalid patch wakes an already pending transcript wait without another pac
   assert.equal(h.responses.length, 0);
   await h.patch("two<caret /> markers<caret />");
   await h.responseReceived;
-  assert.deepEqual(h.events, []);
+  assert.equal(h.events.length, 0);
   const response = h.responses[0] as { result: { contentItems: Array<{ text: string }> } };
   assert.ok(response.result.contentItems[0]!.text.includes("two<caret /> markers<caret />"));
   await h.controller.cancel("session");
@@ -261,7 +261,7 @@ test("final completion waits for the actual edited file before publishing finish
   } });
   const finishing = h.controller.finish("session");
   const completion = h.complete();
-  assert.deepEqual(h.events, []);
+  assert.equal(h.events.length, 0);
   release("replacement");
   await completion;
   await finishing;
@@ -292,7 +292,7 @@ test("first premature completion restarts silently, repeated no-progress complet
   assert.equal(h.requests.filter(r => r.method === "turn/start").length, 2);
   await h.controller.input("session", { transcript: "continue", final: false });
   assert.equal(h.requests.filter(r => r.method === "turn/start").length, 3);
-  assert.deepEqual(h.events, []);
+  assert.equal(h.events.length, 0);
   await h.controller.cancel("session");
 });
 

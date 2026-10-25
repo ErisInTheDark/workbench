@@ -1125,7 +1125,7 @@ export interface WorkbenchUserInputApprovalContext {
 export interface WorkbenchUserInputMcpToolContext {
   server: string;
   tool: string;
-  title?: string | null | undefined;
+  title: string | null;
   description: string;
 }
 
@@ -1153,7 +1153,7 @@ export interface WorkbenchUserInputAnswer {
 }
 
 export interface WorkbenchUserInputResponse {
-  answers: Record<string, WorkbenchUserInputAnswer | undefined>;
+  answers: Record<string, WorkbenchUserInputAnswer>;
 }
 
 export interface WorkbenchSubmitUserInputRequestOptions {

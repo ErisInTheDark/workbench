@@ -226,11 +226,14 @@ export function mapNativeTranscriptObservation(
       },
     }),
     nativeEvidence: (input) => {
+      const owner = input.threadId;
+      // Unowned evidence returned before any owner mapping ran.
+      if (owner === null) throw new Error("Transcript evidence references require an owning thread.");
       if (input.itemId !== null && input.turnId === null) throw new Error("Transcript item evidence requires an owning turn.");
       return {
-        ...input, threadId: threadId(input.threadId),
-        turnId: input.turnId === null ? null : turnId(input.threadId, input.turnId),
-        itemId: input.itemId === null ? null : itemId(input.threadId, input.turnId!, input.itemId),
+        ...input, threadId: threadId(owner),
+        turnId: input.turnId === null ? null : turnId(owner, input.turnId),
+        itemId: input.itemId === null ? null : itemId(owner, input.turnId!, input.itemId),
       };
     },
     captureGap: (input) => ({

@@ -260,8 +260,9 @@ export default class WorkbenchThreadStateFeature {
       runGitArcReadTransition: async (projectId, operation) => {
         if (!this.projectCatalogued(projectId)) return await operation();
         const project = await context.resolveProjectById(projectId);
-        const read = context.transitions.read ?? context.transitions.run;
-        return await read.call(context.transitions, project.rootPath, operation);
+        return context.transitions.read
+          ? await context.transitions.read(project.rootPath, operation)
+          : await context.transitions.run(project.rootPath, operation);
       },
       threadStateStore: new WorkbenchThreadStateStore(context.database),
     });
@@ -305,12 +306,10 @@ export default class WorkbenchThreadStateFeature {
   }
 
   private async interruptQuestionnaire(projectId: ProjectId, harness: WorkbenchHarness, threadId: string, questionnaire: WorkbenchDurableQuestionnaire) {
-    const isCurrent = async (observedTurnId?: ReturnType<typeof getWorkbenchLifecycleTurnId>) => {
+    // A pending question only exists beside needs-attention, so work accepted meanwhile clears it and fails this check.
+    const isCurrent = async () => {
       const current = await this.findPendingQuestionnaire(harness, threadId);
       if (!current || current.projectId !== projectId) return false;
-      // Fence work accepted during this interruption, not the question's history.
-      if (observedTurnId !== undefined && current.entry.lifecycle.kind === "working"
-        && getWorkbenchLifecycleTurnId(current.entry.lifecycle) !== observedTurnId) return false;
       return current.questionnaire.requestKey === questionnaire.requestKey
         && current.questionnaire.itemId === questionnaire.itemId;
     };
@@ -319,12 +318,10 @@ export default class WorkbenchThreadStateFeature {
       const provider = this.provider(harness);
       const turn = await provider.threads.latestTurn(threadId);
       if (!await isCurrent()) return false;
-      const observed = await this.findPendingQuestionnaire(harness, threadId);
-      const observedTurnId = getWorkbenchLifecycleTurnId(observed?.entry.lifecycle ?? null);
       if (!provider.interactions) throw new Error("Questionnaire interruption is unavailable.");
       return await provider.interactions.interruptRetaining(
         { threadId, turnId: turn?.status === "inProgress" ? turn.id : null, requestKey: questionnaire.requestKey },
-        () => isCurrent(observedTurnId),
+        isCurrent,
       );
     } catch (error) {
       this.context.log?.("Questionnaire interruption failed; the saved question was retained.");

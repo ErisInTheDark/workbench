@@ -241,11 +241,13 @@ export default class WorkbenchGitArcFeature {
     this.controller = new WorkbenchGitCheckpointController(
       this.proposalDiffs, async input => await this.resolveThreadIdentity(input), options.legacyDiffStore, options.readDurableProposalIds,
     );
-    const readMany = options.transitions.readMany ?? options.transitions.runMany;
+    const { transitions } = options;
     this.workspaceController = new WorkbenchWorkspaceGitArcController(this.controller, {
-      readMany: async (paths, operation) => readMany
-        ? await readMany.call(options.transitions, paths, operation)
-        : await options.transitions.run(paths[0] ?? "git-arc", operation),
+      readMany: async (paths, operation) => transitions.readMany
+        ? await transitions.readMany(paths, operation)
+        : transitions.runMany
+          ? await transitions.runMany(paths, operation)
+          : await transitions.run(paths[0] ?? "git-arc", operation),
       runMany: async (paths, operation) => options.transitions.runMany
         ? await options.transitions.runMany(paths, operation)
         : await options.transitions.run(paths[0] ?? "git-arc", operation),
@@ -598,8 +600,7 @@ export default class WorkbenchGitArcFeature {
                   })
                   : effectiveRequest.action === "proposalState"
                     ? await this.readProposalInBatch(project.cwd, async () => await this.dispatch(effectiveRequest))
-                    : await (this.options.transitions.read ?? this.options.transitions.run)
-                      .call(this.options.transitions, project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined, this.lifecycleSignal(signal)));
+                    : await this.readUnderGate(project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined, this.lifecycleSignal(signal)));
             // Mirroring copies an immutable view tree into an ignored folder, so it runs after the Git gate is released.
             if (response.ok && effectiveRequest.action === "arcTree" && effectiveRequest.into) {
               const { into, paths } = effectiveRequest;
@@ -1146,7 +1147,15 @@ export default class WorkbenchGitArcFeature {
     return { ...identity, harness: ProviderKeySchema.parse(identity.harness) };
   }
 
-  private publicState<T extends WorkspaceGitArcLifecycleState | WorkspaceGitArcPlanState>(state: T): PublicGitState<T> {
+  /** Reads take the repository's read gate when the transition owner offers one, else its exclusive gate. */
+  private async readUnderGate<TValue>(cwd: string, operation: () => Promise<TValue>) {
+    const { transitions } = this.options;
+    return transitions.read ? await transitions.read(cwd, operation) : await transitions.run(cwd, operation);
+  }
+
+  private publicState(state: WorkspaceGitArcLifecycleState): PublicGitState<WorkspaceGitArcLifecycleState>;
+  private publicState(state: WorkspaceGitArcPlanState): PublicGitState<WorkspaceGitArcPlanState>;
+  private publicState(state: WorkspaceGitArcLifecycleState | WorkspaceGitArcPlanState) {
     return {
       ...state,
       threadId: WorkbenchThreadIdSchema.parse(state.threadId),
@@ -1242,11 +1251,14 @@ export default class WorkbenchGitArcFeature {
       case "readDiffArtifact": return new Response(await this.controller.readLegacyDiffArtifact({
         artifactId: input.diffArtifactId, threadId: input.threadId,
       }), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
-      case "restore": return Response.json(await this.controller.restore({
-        ...common, checkpointCommit: input.checkpointCommit,
-        ...(input.confirmRestore !== undefined ? { confirmRestore: input.confirmRestore } : {}),
-        ...(input.paths ? { paths: input.paths } : {}),
-      }));
+      case "restore": {
+        if (!input.checkpointCommit) throw new Error("Checkpoint restore requires a checkpoint ref.");
+        return Response.json(await this.controller.restore({
+          ...common, checkpointCommit: input.checkpointCommit,
+          ...(input.confirmRestore !== undefined ? { confirmRestore: input.confirmRestore } : {}),
+          ...(input.paths ? { paths: input.paths } : {}),
+        }));
+      }
       case "arcEditStart":
       case "arcEditView":
       case "arcEditApply":

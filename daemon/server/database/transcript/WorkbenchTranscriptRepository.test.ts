@@ -70,8 +70,9 @@ const fixtureIdentityValues = {
 };
 
 function createRepository(options: { onStatement?: (sql: string) => void } = {}) {
-  const database = options.onStatement
-    ? new Database(":memory:", { verbose: options.onStatement })
+  const { onStatement } = options;
+  const database = onStatement
+    ? new Database(":memory:", { verbose: (sql) => onStatement(String(sql)) })
     : new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
@@ -2927,6 +2928,7 @@ test("item ranges page within one turn by stable cursor without reading the whol
     ], ["turn-0"])]);
 
     const latest = repository.readItemRange({ threadId: "thread", limit: 2 });
+    assert.ok(latest);
     assert.deepEqual(
       rootsWithReferences(latest.snapshot).map(({ reference }) => reference),
       ["message-3", "message-4"],
@@ -2938,6 +2940,7 @@ test("item ranges page within one turn by stable cursor without reading the whol
       before: latest.firstCursor,
       limit: 2,
     });
+    assert.ok(older);
     assert.deepEqual(
       rootsWithReferences(older.snapshot).map(({ reference }) => reference),
       ["message-1", "message-2"],

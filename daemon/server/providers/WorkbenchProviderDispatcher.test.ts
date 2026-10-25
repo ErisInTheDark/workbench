@@ -511,7 +511,8 @@ test("tool capture finishes through the replacement owner with the original pinn
   await f.host.start();
   await f.host.reload(["server:codex/def"]);
   try {
-    const capture = f.providers.get("codex").tools.transcript!;
+    const capture = f.providers.get("codex").tools?.transcript;
+    assert.ok(capture);
     const pinned = await capture.start({ tool: "task_get", arguments: {}, metadata: {} }, new AbortController().signal);
     assert.equal(pinned, reference);
     let finished = false;
@@ -720,6 +721,7 @@ test("passive context follows replacement capabilities without falling back to t
   await f.host.start();
   try {
     const capability = f.providers.get("codex").context;
+    assert.ok(capability, "handles always expose a context port");
     const input = { threadId: WorkbenchThreadIdSchema.parse("thread"), text: "event" };
     assert.equal(await capability.inject(input), "unsupported");
     let calls = 0;
@@ -742,6 +744,7 @@ test("optional single-file calls reject unsupported owners and follow replacemen
   await f.host.start();
   try {
     const capability = f.providers.get("codex").singleFile;
+    assert.ok(capability, "handles always expose a single-file port");
     await assert.rejects(capability.prepare(), /does not support single-file/);
     let prepared = 0;
     f.setSingleFile({
@@ -783,7 +786,8 @@ test("admitted preparation retains its provider lease and later calls use replac
     command: ["echo"], cwd: "/project", permissions: { mode: "restricted" as const, writableRoots: ["/project"], network: false },
   };
   try {
-    const execute = f.providers.get("codex").tools.prepareExecution!;
+    const execute = f.providers.get("codex").tools?.prepareExecution;
+    assert.ok(execute);
     const active = execute(request, new AbortController().signal);
     await entered.promise;
     f.setTools({ ...tools, prepareExecution: undefined });
