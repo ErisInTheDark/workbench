@@ -18,6 +18,7 @@ import {
   ArrowDownIcon, BotIcon, ComputerIcon, DatabaseArrowUpIcon, RefreshCwIcon, ReloadIcon, ResetIcon,
 } from "../workbench-icons";
 import ReloadImpactChips from "./ReloadImpactChips";
+import { restartSummary } from "./reload-device";
 import { useReloadRequest, type ReloadDeviceState } from "./use-reload-devices";
 import { UpdateImpactTip } from "./WorkbenchReloadDevice";
 
@@ -99,7 +100,7 @@ function ReloadWords({ reload }: { reload: NonNullable<ReloadDeviceState["plan"]
   return (
     <span className="flex min-w-0 items-center whitespace-nowrap">
       {reload.danger ? <ResetIcon className="mr-1 shrink-0" size={14} /> : <ReloadIcon className="mr-1 shrink-0" size={14} />}
-      <span className="truncate">{reload.danger ? `Restart ${reload.restarts.join(", ")}` : "Reload"}</span>
+      <span className="truncate">{reload.danger ? `Restart ${restartSummary(reload.restarts)}` : "Reload"}</span>
       {reload.migrates ? <DatabaseArrowUpIcon className="ml-1 shrink-0" size={12} /> : null}
     </span>
   );

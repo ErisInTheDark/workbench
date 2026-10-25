@@ -6,7 +6,8 @@
  * - ReloadDeviceFacts/ReloadDevicePlan: one device's dirt and update, and what its controls offer.
  * - mergeReloadDirt: this device's app and daemon dirt as one snapshot.
  * - restartLabel: the short process name a destructive scope restarts.
- * - reloadImpact: restarts and migrations across dirty scopes.
+ * - reloadImpact: restarts and migrations across dirty scopes, naming only the outermost restarted process.
+ * - restartSummary: restarted processes as words, "all" when the app and host both restart.
  * - planReloadDevice: derive one device's dirt tree, reload impact and update action.
  */
 import { buildReloadDirtTree, type ReloadDirtNode } from "workbench-shared/reload/reload-dirt-tree";
@@ -74,11 +75,24 @@ export function restartLabel(scope: string) {
   return path.split("/")[0] || scope;
 }
 
+const PROCESSES = new Set(["app", "host", "daemon"]);
+
+/** Restarting the host restarts the daemon, which restarts everything running inside it. */
+function outermostRestarts(names: ReadonlySet<string>) {
+  if (names.has("host")) return [...names].filter(name => name === "app" || name === "host");
+  if (names.has("daemon")) return [...names].filter(name => PROCESSES.has(name));
+  return [...names];
+}
+
 export function reloadImpact(scopes: readonly WorkbenchReloadDirtScope[]): ReloadImpact {
   return {
-    restarts: [...new Set(scopes.filter(scope => scope.destructive).map(scope => restartLabel(scope.scope)))],
+    restarts: outermostRestarts(new Set(scopes.filter(scope => scope.destructive).map(scope => restartLabel(scope.scope)))),
     migrates: scopes.some(scope => scope.migration),
   };
+}
+
+export function restartSummary(restarts: readonly string[]) {
+  return restarts.includes("app") && restarts.includes("host") ? "all" : restarts.join(", ");
 }
 
 const INSTALL_SCOPE: WorkbenchReloadDirtScope = {

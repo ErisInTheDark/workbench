@@ -13,7 +13,7 @@ import Tooltip from "../../ui/Tooltip";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import { ArrowDownIcon, BotIcon, ChevronDownIcon, ReloadIcon } from "../workbench-icons";
 import ReloadImpactChips from "./ReloadImpactChips";
-import type { ReloadDevicePlan } from "./reload-device";
+import { restartSummary, type ReloadDevicePlan } from "./reload-device";
 import { useReloadRequest, type ReloadDevicePorts, type ReloadDeviceState } from "./use-reload-devices";
 import WorkbenchReloadTree from "./WorkbenchReloadTree";
 
@@ -56,7 +56,7 @@ function DeviceActions({ local, plan, disabled, running, ports, onResolve, onReq
       onClick={() => onRequest(ports.reloadAll)}
       segment={update ? "start" : undefined}
       shape="compact"
-      title={reload.danger ? `Reload all, restarting ${reload.restarts.join(", ")}` : "Reload all"}
+      title={reload.danger ? `Reload all, restarting ${restartSummary(reload.restarts)}` : "Reload all"}
       tone={reload.danger ? "danger" : "default"}
     >
       <ReloadIcon className="mr-1" size={14} />Reload

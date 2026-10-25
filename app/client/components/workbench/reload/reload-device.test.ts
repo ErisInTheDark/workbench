@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkbenchReloadDirtScope } from "workbench-shared/types";
 import type { PredictedInstallationUpdate as InstallationUpdate } from "workbench-shared/workbench/installation-update-prediction";
-import { DANGER_HOLD_MS, UPDATE_HOLD_MS, mergeReloadDirt, planReloadDevice } from "./reload-device";
+import { DANGER_HOLD_MS, UPDATE_HOLD_MS, mergeReloadDirt, planReloadDevice, reloadImpact, restartSummary } from "./reload-device";
 
 const scope = (name: string, extra: Partial<WorkbenchReloadDirtScope> = {}): WorkbenchReloadDirtScope => ({
   scope: name, description: name, destructive: false, dependantScopes: [], ...extra,
@@ -62,6 +62,15 @@ test("this device's app and daemon dirt merge into one device", () => {
   assert.deepEqual(merged?.dirtyScopes.map(item => item.scope), ["client:http", "server:core"]);
   assert.equal(merged?.error, "daemon warning");
   assert.deepEqual(merged?.pendingScopes, ["server:core"]);
+});
+
+test("a restart names only the outermost process it restarts", () => {
+  const restarts = (...names: string[]) => reloadImpact(names.map(name => scope(name, { destructive: true }))).restarts;
+  assert.deepEqual(restarts("host:process", "server:process", "server:codex"), ["host"]);
+  assert.deepEqual(restarts("server:process", "server:codex"), ["daemon"]);
+  assert.deepEqual(restarts("client:process", "server:codex"), ["app", "codex"]);
+  assert.equal(restartSummary(restarts("client:process", "host:process", "server:process")), "all");
+  assert.equal(restartSummary(restarts("client:process", "server:process")), "app, daemon");
 });
 
 test("migrations surface on reloads and on updates that bring them", () => {
