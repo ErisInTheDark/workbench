@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadViewComposer: the shown thread's composer: profile slot and selection, send/stop/compact/model actions, approval mode, rate limits and context status.
+ * - default ThreadViewComposer: the shown thread's composer: profile slot and selection, send/stop/compact/model actions, approval mode, rate limits and context status; a compact-first hold scrolls the compact control into view.
  */
 "use client";
 
@@ -24,6 +24,7 @@ import type DraftSessionController from "./DraftSessionController";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadRateLimits from "./ThreadRateLimits";
+import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import type { ThreadReferenceSelection } from "./use-thread-reference-selection";
 import { readActiveTranscript } from "./ThreadViewTranscript";
 
@@ -85,6 +86,12 @@ export default function ThreadViewComposer ({
   const threads = useThreads(undefined, rootThreadId);
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [isCompactSendHolding, setIsCompactSendHolding] = useState(false);
+  const { revealEnd } = useThreadScrollViewportContext();
+  // The compact control docks at the thread's end; bring it into view so the hold's progress is visible.
+  const handleCompactSendHoldChange = useCallback((holding: boolean) => {
+    setIsCompactSendHolding(holding);
+    if (holding) revealEnd();
+  }, [revealEnd]);
   const rateLimits = active.rateLimits;
   const activeThreadSnoozed = activeSidebarEntry?.entryKind === "thread" && activeSidebarEntry.metadata.snoozed;
   const { projection } = readActiveTranscript(activeThread, turns.transcript);
@@ -201,7 +208,7 @@ export default function ThreadViewComposer ({
       subscribeModelUpdates={threads.subscribeModelUpdates}
       highlightSources={highlightSources}
       onSubmitRejected={onSubmitRejected}
-      onCompactSendHoldChange={setIsCompactSendHolding}
+      onCompactSendHoldChange={handleCompactSendHoldChange}
       onSendMessage={handleSendMessage}
       onStopThread={handleStopThread}
       onThreadSettled={onThreadSettled}

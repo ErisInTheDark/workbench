@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, content visibility, progressive-window, reader-movement and end controls, entry motion, and activity-run open state.
+ * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, content visibility, progressive-window, reader-movement and end controls (including revealing the end), entry motion, and activity-run open state.
  * - useThreadScrollViewportContext: read the nearest viewport boundary without host prop drilling.
  * - ThreadEntryMotion: apply one admitted entry's motion state to caller-owned markup.
  */
@@ -28,6 +28,8 @@ export interface ThreadScrollViewportContextValue {
     range?: ThreadContentVisibilityRange,
   ) => () => void;
   readonly setEndTarget: (target: HTMLElement | null) => void;
+  /** Glide the reader to the end and follow it, docking end chrome such as the compact control. */
+  readonly revealEnd: () => void;
   readonly onBottomReattached: (listener: () => void) => () => void;
   /** Notified after every scroll and every corrected layout change, so reach checks never wait on a threshold crossing. */
   readonly onReaderMoved: (listener: () => void) => () => void;
@@ -42,6 +44,7 @@ const DEFAULT_THREAD_SCROLL_VIEWPORT_CONTEXT: ThreadScrollViewportContextValue =
   reconcileLayout: () => {},
   observeContent: () => () => {},
   setEndTarget: () => {},
+  revealEnd: () => {},
   onBottomReattached: () => () => {},
   onReaderMoved: () => () => {},
 };

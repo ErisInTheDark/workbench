@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadUserInputRequest: render full or compact questionnaires, including loading, live answers, previews, and history.
+ * - default ThreadUserInputRequest: render full or compact questionnaires, including loading, live answers, previews, and history;
+ *   a compact-first answer needs Enter held, or on touch a choice from the submit menu.
  * Local components bind a keyed editing session and render approval command context through the contextual project.
  */
 "use client";
@@ -35,7 +36,7 @@ import { FeatherIcon, SendHorizontalIcon } from "../workbench-icons";
 import { OptionCard } from "../../ui/OptionCards";
 import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";
 import ComposerAttachments from "./ComposerAttachments";
-import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
+import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import { formatQuestionDisplay, shouldUseCompactSingleQuestionDisplay } from "./thread-user-input-request-preview";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import ThreadCommandDisplay from "./ThreadCommandDisplay";
@@ -44,6 +45,9 @@ import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
+import AutoCompactSendMenu from "./AutoCompactSendMenu";
+import { getQuestionnaireEnterAction } from "./thread-composer-controls";
+import useCompactSendHold, { COMPACT_SEND_HOLD_MS } from "./use-compact-send-hold";
 import { useProject } from "../use-projects";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -100,6 +104,8 @@ type InteractiveThreadUserInputRequestProps = {
   submitTarget?: HTMLElement | null;
   /** The thread compacts before an answer that starts a turn; shift-submitting skips it. */
   willAutoCompact?: boolean;
+  /** Enter is being held to confirm a compact-first answer; a host taking this shows the progress, otherwise submit does. */
+  onCompactSendHoldChange?: (holding: boolean) => void;
 };
 
 type HistoryThreadUserInputRequestProps = {
@@ -259,6 +265,9 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
   const { isSubmitting, isAttaching } = editing;
   const isShiftPressed = useNonTextInputShiftKey({ allowWhileTextInputFocused: true });
   const willAutoCompactOnSubmit = Boolean(interactiveProps?.willAutoCompact) && !isShiftPressed;
+  const compactSubmitHold = useCompactSendHold(
+    willAutoCompactOnSubmit && !isSubmitting && !isAttaching, interactiveProps?.onCompactSendHoldChange);
+  const isMobileTextInput = useMobileTextInputEnvironment();
   const hasCustomResponseContent = Object.values(customValues).some((value) => value.trim())
     || attachments.length > 0;
   const useQuickResponseLayout = Boolean(
@@ -276,6 +285,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
     response: WorkbenchUserInputResponse,
     responseAttachments: WorkbenchThreadComposerAttachmentDraft[],
     responseCustomValues: Record<string, string>,
+    skipAutoCompact = isShiftPressed,
   ) => {
     if (!interactiveProps || isSubmitting || isAttaching) {
       return;
@@ -298,12 +308,12 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
         ...(supplementalInput.length ? { supplementalInput } : {}),
         // Always claimed, even when empty, so the daemon can check them against its own skill catalog.
         activatedSkillPaths,
-        ...(isShiftPressed ? { skipAutoCompact: true } : {}),
+        ...(skipAutoCompact ? { skipAutoCompact: true } : {}),
       });
     }, interactiveProps.onDraftClear);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (skipAutoCompact = isShiftPressed) => {
     const answers: WorkbenchUserInputResponse["answers"] = {};
     for (const question of request.questions) {
       const selectedQuestionValues = selectedValues[question.id] ?? [];
@@ -317,7 +327,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       };
     }
 
-    await submitResponse({ answers }, attachments, customValues);
+    await submitResponse({ answers }, attachments, customValues, skipAutoCompact);
   };
 
   const handleQuickResponse = async (
@@ -349,20 +359,34 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
   };
 
   const handleLastQuestionKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!interactiveProps || isSubmitting || isAttaching || event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) {
-      return;
-    }
-
-    if (isMobileTextInputEnvironment()) {
-      return;
-    }
-
+    if (event.key === "Escape") compactSubmitHold.cancel();
+    if (!interactiveProps || isSubmitting || isAttaching) return;
+    const action = getQuestionnaireEnterAction({
+      key: event.key,
+      modified: event.shiftKey || event.altKey || event.ctrlKey || event.metaKey,
+      isComposing: event.nativeEvent.isComposing,
+      isMobile: isMobileTextInputEnvironment(),
+      holdsToCompact: willAutoCompactOnSubmit,
+    });
+    if (!action) return;
     event.preventDefault();
+    if (action === "compactHold") {
+      if (!event.repeat) compactSubmitHold.begin(event.timeStamp);
+      return;
+    }
     void handleSubmit();
+  };
+  const handleLastQuestionKeyUp = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" && compactSubmitHold.release(event.timeStamp)) void handleSubmit(false);
   };
   const submitLabel = isSubmitting ? "Submitting..." : isAttaching ? "Attaching..."
     : autoCompactSendLabel("Submit", willAutoCompactOnSubmit);
-  const renderSubmitButton = () => (
+  const showsCompactSubmitMenu = willAutoCompactOnSubmit && isMobileTextInput && !isSubmitting && !isAttaching;
+  const renderSubmitButton = () => showsCompactSubmitMenu ? (
+    <span className="justify-self-end" data-thread-questionnaire-submit="true">
+      <AutoCompactSendMenu label="Submit" onSend={skipAutoCompact => { void handleSubmit(skipAutoCompact); }} />
+    </span>
+  ) : (
     <PrimaryButton
       type="button"
       data-thread-questionnaire-submit="true"
@@ -375,11 +399,18 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       aria-label={submitLabel}
       title={submitLabel}
       pendingHalo={isSubmitting || isAttaching}
+      externalHold={interactiveProps?.onCompactSendHoldChange
+        ? undefined : { holding: compactSubmitHold.holding, durationMs: COMPACT_SEND_HOLD_MS }}
     >
       <SendHorizontalIcon size={20} />
       {willAutoCompactOnSubmit && !isSubmitting && !isAttaching ? <AutoCompactSendBadge /> : null}
     </PrimaryButton>
   );
+  const lastAnswerKeyProps = {
+    onBlur: compactSubmitHold.cancel,
+    onKeyDown: handleLastQuestionKeyDown,
+    onKeyUp: handleLastQuestionKeyUp,
+  };
 
   return (
     <ThreadUserInputRequestFrame compact={compact}>
@@ -605,7 +636,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                                 setError("");
                               }
                             }}
-                            onKeyDown={handleLastQuestionKeyDown}
+                            {...lastAnswerKeyProps}
                             onPaste={handlePaste}
                           />
                           {renderSubmitButton()}
@@ -638,7 +669,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                               setError("");
                             }
                           }}
-                          onKeyDown={isLastQuestion ? handleLastQuestionKeyDown : undefined}
+                          {...(isLastQuestion ? lastAnswerKeyProps : {})}
                           onPaste={handlePaste}
                         />
                       )}

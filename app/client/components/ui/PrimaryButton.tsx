@@ -1,6 +1,8 @@
 /*
  * Exports:
- * - default PrimaryButton: high-emphasis actions with optional pending halos, hold confirmation and joined segments.
+ * - default PrimaryButton: high-emphasis actions with optional pending halos, hold confirmation (its own press, or a hold
+ *   held elsewhere) and joined segments.
+ * - PrimaryButton.className/PrimaryButton.Face: the same look for a button another control owns, such as a menu trigger.
  */
 "use client";
 
@@ -8,7 +10,7 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 import WorkbenchSpinningBorder from "../workbench/WorkbenchSpinningBorder";
 import HoldConfirmationRail from "./HoldConfirmationRail";
-import useHoldToConfirm from "./use-hold-to-confirm";
+import useHoldToConfirm, { holdProgressStyle } from "./use-hold-to-confirm";
 
 type PrimaryButtonShape = "pill" | "circle" | "compact";
 type PrimaryButtonTone = "attention" | "danger" | "default";
@@ -17,6 +19,8 @@ type PrimaryButtonSegment = "start" | "end";
 
 type PrimaryButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
+  /** A hold confirming this action from elsewhere, such as a held Enter key; its fill shows on this button. */
+  externalHold?: { holding: boolean; durationMs: number };
   holdToConfirmMs?: number;
   pendingHalo?: boolean;
   /** Joins two buttons into one pill: the joined edges go square and flush, with a hairline before the end segment. */
@@ -81,10 +85,44 @@ const segmentClassNames: Record<PrimaryButtonSegment, string> = {
   `,
 };
 
-export default function PrimaryButton ({
+function primaryButtonClassName (shape: PrimaryButtonShape = "pill", tone: PrimaryButtonTone = "default", pendingHalo = false) {
+  return joinClasses(
+    baseClassName,
+    shapeClassNames[shape],
+    toneClassNames[tone],
+    pendingHalo ? "disabled:text-fg/32" : "disabled:text-fg/10",
+  );
+}
+
+function PrimaryButtonFace ({ children, disabled = false, pendingHalo = false, rail }: {
+  children: ReactNode;
+  disabled?: boolean;
+  pendingHalo?: boolean;
+  rail?: ReactNode;
+}) {
+  return <>
+    {pendingHalo ? <WorkbenchSpinningBorder radius="50cqb" /> : null}
+    <span
+      aria-hidden="true"
+      className={joinClasses(
+        "pointer-events-none absolute z-10 rounded-full transition-[inset,background-color] duration-150",
+        disabled
+          ? "bg-transparent ring-1 ring-inset ring-[color:color-mix(in_srgb,var(--text)_10%,transparent)]"
+          : "bg-[color:var(--primary-button-bg)]",
+        pendingHalo ? "inset-[3px]" : "inset-0",
+      )}
+    >
+      {rail}
+    </span>
+    <span className="relative z-20 inline-flex items-center justify-center">{children}</span>
+  </>;
+}
+
+function PrimaryButton ({
   children,
   className,
   disabled,
+  externalHold,
   holdToConfirmMs,
   onBlur,
   onClick,
@@ -102,6 +140,11 @@ export default function PrimaryButton ({
 }: PrimaryButtonProps) {
   const isDisabled = Boolean(disabled);
   const hold = useHoldToConfirm(holdToConfirmMs, isDisabled);
+  const rail = hold.enabled
+    ? <HoldConfirmationRail holding={hold.holding !== null} progress={hold.progressProps} />
+    : externalHold
+      ? <HoldConfirmationRail holding={externalHold.holding} progress={{ style: holdProgressStyle(externalHold.holding, externalHold.durationMs) }} />
+      : null;
 
   return (
     <button
@@ -113,34 +156,22 @@ export default function PrimaryButton ({
       data-tone={tone}
       disabled={disabled}
       className={joinClasses(
-        baseClassName,
-        shapeClassNames[shape],
-        toneClassNames[tone],
-        hold.enabled && `
-          touch-none select-none [-webkit-touch-callout:none]
-          hold-filled:![color:var(--app-bg-solid)] hold-filled:duration-200 hold-filled:ease-hold
-        `,
-        pendingHalo
-          ? "disabled:text-fg/32"
-          : "disabled:text-fg/10",
+        primaryButtonClassName(shape, tone, pendingHalo),
+        hold.enabled && "touch-none select-none [-webkit-touch-callout:none]",
+        rail && "hold-filled:![color:var(--app-bg-solid)] hold-filled:duration-200 hold-filled:ease-hold",
         className,
         segment && segmentClassNames[segment],
       )}
     >
-      {pendingHalo ? <WorkbenchSpinningBorder radius="50cqb" /> : null}
-      <span
-        aria-hidden="true"
-        className={joinClasses(
-          "pointer-events-none absolute z-10 rounded-full transition-[inset,background-color] duration-150",
-          isDisabled
-            ? "bg-transparent ring-1 ring-inset ring-[color:color-mix(in_srgb,var(--text)_10%,transparent)]"
-            : "bg-[color:var(--primary-button-bg)]",
-          pendingHalo ? "inset-[3px]" : "inset-0",
-        )}
-      >
-        {hold.enabled ? <HoldConfirmationRail holding={hold.holding !== null} progress={hold.progressProps} /> : null}
-      </span>
-      <span className="relative z-20 inline-flex items-center justify-center">{children}</span>
+      <PrimaryButtonFace disabled={isDisabled} pendingHalo={pendingHalo} rail={rail}>{children}</PrimaryButtonFace>
     </button>
   );
 }
+
+namespace PrimaryButton {
+  /** Classes giving another control's `<button>` this look; pair with `Face` as its content. */
+  export const className = primaryButtonClassName;
+  export const Face = PrimaryButtonFace;
+}
+
+export default PrimaryButton;

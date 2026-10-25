@@ -2,6 +2,8 @@
  * Exports:
  * - getThreadComposerEnterAction: distinguish send, held compact-first send and alt-send (shift-mode) shortcuts from newline
  *   and composition input.
+ * - getQuestionnaireEnterAction: distinguish a questionnaire's last-answer submit and held compact-first submit from other
+ *   Enter input.
  * - getThreadComposerStopControlState: derive settle/snooze/stop action, visibility, and availability.
  */
 
@@ -17,6 +19,18 @@ export function getThreadComposerEnterAction(input: {
   if (input.key !== "Enter" || input.isComposing || input.isMobile) return null;
   if (!input.shiftKey) return input.holdsToCompact ? "compactHold" : "send";
   return input.ctrlKey ? "alt" : null;
+}
+
+/** Modified Enter keeps its editing meaning; `holdsToCompact` as for the composer. */
+export function getQuestionnaireEnterAction(input: {
+  key: string;
+  modified: boolean;
+  isComposing: boolean;
+  isMobile: boolean;
+  holdsToCompact: boolean;
+}): "submit" | "compactHold" | null {
+  if (input.key !== "Enter" || input.modified || input.isComposing || input.isMobile) return null;
+  return input.holdsToCompact ? "compactHold" : "submit";
 }
 
 export function getThreadComposerStopControlState ({

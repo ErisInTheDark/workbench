@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getThreadComposerEnterAction, getThreadComposerStopControlState } from "./thread-composer-controls";
+import { getQuestionnaireEnterAction, getThreadComposerEnterAction, getThreadComposerStopControlState } from "./thread-composer-controls";
 
 test("enter shortcuts distinguish sending, alt-sending and inserting a newline", () => {
   const input = { key: "Enter", shiftKey: false, ctrlKey: false, isComposing: false, isMobile: false };
@@ -26,6 +26,16 @@ test("a compact-first send must be held, while newline and the compaction-skippi
   assert.equal(getThreadComposerEnterAction({ ...input, ctrlKey: true }), "compactHold");
   assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true }), null);
   assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true, ctrlKey: true }), "alt");
+});
+
+test("a compact-first questionnaire answer must be held like a compact-first send", () => {
+  const input = { key: "Enter", modified: false, isComposing: false, isMobile: false, holdsToCompact: false };
+  assert.equal(getQuestionnaireEnterAction(input), "submit");
+  assert.equal(getQuestionnaireEnterAction({ ...input, holdsToCompact: true }), "compactHold");
+  for (const blocked of [{ modified: true }, { isComposing: true }, { isMobile: true }, { key: "a" }]) {
+    assert.equal(getQuestionnaireEnterAction({ ...input, ...blocked }), null);
+    assert.equal(getQuestionnaireEnterAction({ ...input, ...blocked, holdsToCompact: true }), null);
+  }
 });
 
 test("snoozed questionnaires offer stop or dismissal instead of snoozing again", () => {

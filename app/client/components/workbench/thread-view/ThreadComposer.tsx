@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadComposer: render thread composer controls, message input, attachments, composer reference pills, and questionnaire handoff;
- *   Enter must be held to confirm a send that compacts context first.
+ *   a send that compacts context first needs Enter held, or on touch a choice from the send menu.
  */
 "use client";
 
@@ -50,6 +50,7 @@ import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, Settl
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { useThread } from "../use-thread";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
+import AutoCompactSendMenu from "./AutoCompactSendMenu";
 import SendActionBadge from "./SendActionBadge";
 import useComposer from "../use-composer";
 import { DraftIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -171,7 +172,7 @@ export default function ThreadComposer ({
   onThreadSettled?: (target: WorkbenchThreadTarget, ownerProjectId: string) => void;
   /** A message or answer the daemon rejected; the owner of stale facts (such as known skills) refreshes them. */
   onSubmitRejected?: (error: unknown) => void;
-  /** Enter is being held to confirm a compact-first send; the compact control shows its progress. */
+  /** Enter is being held to confirm a compact-first send or answer; the compact control shows its progress. */
   onCompactSendHoldChange?: (holding: boolean) => void;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
@@ -755,6 +756,7 @@ export default function ThreadComposer ({
                   request={visiblePendingUserInputRequest.request}
                   mode="live"
                   willAutoCompact={Boolean(thread.willAutoCompact)}
+                  onCompactSendHoldChange={onCompactSendHoldChange}
                   onSubmit={async (response, options) => {
                     try {
                       await questionnaire.submit(response, {
@@ -921,7 +923,9 @@ export default function ThreadComposer ({
                     )}
                   <div className="flex shrink-0 items-center gap-2">
                     {leadingActions}
-                    <PrimaryButton
+                    {willAutoCompactOnSend && isMobileTextInput ? (
+                      <AutoCompactSendMenu label={sendLabel} onSend={skipAutoCompact => { void submit(skipAutoCompact); }} />
+                    ) : <PrimaryButton
                       type="submit"
                       onClick={event => {
                         event.preventDefault();
@@ -936,7 +940,7 @@ export default function ThreadComposer ({
                       <SendHorizontalIcon size={20} />
                       {willAutoCompactOnSend ? <AutoCompactSendBadge /> : null}
                       {willStayInCreate ? <SendActionBadge><ListEndIcon size={12} /></SendActionBadge> : null}
-                    </PrimaryButton>
+                    </PrimaryButton>}
                     {trailingActions}
                     {resumeButton}
                   </div>

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change (controls activated above the end stay put, end following paused, until the reader moves), the `data-thread-scroll-following` flag end snapping and docked chrome share, gesture-safe correction, and clipping content above unrevealed history.
+ * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change (controls activated above the end stay put, end following paused, until the reader moves), the `data-thread-scroll-following` flag end snapping and docked chrome share, gliding back to the end on request, gesture-safe correction, and clipping content above unrevealed history.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -269,7 +269,17 @@ function ActiveThreadScrollViewport ({
       endTargetRef.current = target;
       placeInitialViewportAtEnd();
     },
-  }), [anchor, placeInitialViewportAtEnd]);
+    // Follow intent is set up front so end chrome docks once the glide comes near, and an already-ended reader follows.
+    revealEnd: () => {
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      heldRef.current = false;
+      directionRef.current = "down";
+      syncFollowing(viewport);
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      viewport.scrollTo({ top: viewport.scrollHeight - viewport.clientHeight, behavior: reduceMotion ? "instant" : "smooth" });
+    },
+  }), [anchor, placeInitialViewportAtEnd, syncFollowing]);
 
   // Every layout change is reconciled before it paints: size changes through the resize observer (later ticks of
   // settling content included), and mounts that move the anchor without changing total height through mutations.
