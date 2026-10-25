@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceObservationController: own named daemon observations, explicit selected-project demand and keyed deltas.
+ * - default WorkbenchWorkspaceObservationController: own named daemon observations, the selected-project and upstream
+ *   fetch demand they imply, and keyed deltas.
  * - DaemonObservationChange: first-value or revision-relative delta publication.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -29,6 +30,7 @@ import type WorkbenchStatsController from "../stats/WorkbenchStatsController";
 import type WorkbenchWorkingTreeController from "../git/WorkbenchWorkingTreeController";
 import type WorkbenchAccountLimitsController from "../providers/WorkbenchAccountLimitsController";
 import type WorkbenchBranchPositionController from "../git/WorkbenchBranchPositionController";
+import type { UpstreamFetchFocus } from "../git/upstream-fetch-schedule";
 import type WorkbenchVisController from "../vis/WorkbenchVisController";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import type { WorkbenchStatsInvalidation } from "../stats/WorkbenchStatsObservation";
@@ -60,6 +62,12 @@ interface Observation<Client extends object> {
   /** Summary ids changed during this task; one flush projects their latest canonical values. */
   pendingSummaries: Set<string>;
 }
+
+/** A thread or branch position keeps its folder's upstream loosely fresh; the git panel's reads keep it close. */
+const UPSTREAM_FETCH_FOCUS: Partial<Record<DaemonWorkspaceQuery["kind"], UpstreamFetchFocus>> = {
+  thread: "ambient", branchPosition: "ambient",
+  branchCommits: "focused", branchHistory: "focused", branchList: "focused", stashList: "focused",
+};
 
 type ProjectListKind = "summaries" | "projectPlacement" | "projectThreads" | "archivedThreads";
 const projectListKinds = new Set<string>(["summaries", "projectPlacement", "projectThreads", "archivedThreads"]);
@@ -95,6 +103,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   private closed = false;
   private summaryFlushQueued = false;
   private readonly updateDemand: ReturnType<import("../runtime/WorkbenchInstallationUpdateController").default["trackProjectDemand"]> | undefined;
+  private readonly fetchDemand: ReturnType<WorkbenchBranchPositionController["trackFetchDemand"]> | undefined;
 
   constructor(private readonly owners: {
     installationUpdate?: Pick<import("../runtime/WorkbenchInstallationUpdateController").default, "read" | "subscribe" | "trackProjectDemand">;
@@ -110,7 +119,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     files?: Pick<WorkbenchProjectFileController, "observe">;
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
-    branchPositions?: Pick<WorkbenchBranchPositionController, "observe" | "observeCommits" | "observeHistory" | "observeBranches" | "observeStashes">;
+    branchPositions?: Pick<WorkbenchBranchPositionController,
+      "observe" | "observeCommits" | "observeHistory" | "observeBranches" | "observeStashes" | "trackFetchDemand">;
     accountLimits?: Pick<WorkbenchAccountLimitsController, "observe">;
     vis?: Pick<WorkbenchVisController, "observe" | "readSnapshot">;
     /** Live per-thread provider facts; `subscribe` names threads whose runtime changed. */
@@ -126,6 +136,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     this.updateDemand = owners.installationUpdate?.trackProjectDemand(projectId =>
       [...this.observations.values()].some(({ request: { query } }) =>
         query.kind === "projectSelection" && query.projectIds.includes(projectId)));
+    this.fetchDemand = owners.branchPositions?.trackFetchDemand(() => this.upstreamFetchDemand());
     this.unsubscribe = [
       ...(owners.installationUpdate ? [owners.installationUpdate.subscribe(() => {
         for (const observation of this.observations.values()) {
@@ -171,9 +182,26 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     try { this.start(observation); }
     finally {
       observation.opening = false;
-      this.updateDemand?.refresh();
+      this.demandChanged();
     }
     return observation.value;
+  }
+
+  private demandChanged() {
+    this.updateDemand?.refresh();
+    this.fetchDemand?.refresh();
+  }
+
+  /** Observed projects, each at the closest focus any of its observations asks for. */
+  private upstreamFetchDemand() {
+    const demand = new Map<string, UpstreamFetchFocus>();
+    for (const { request: { query } } of this.observations.values()) {
+      const focus = UPSTREAM_FETCH_FOCUS[query.kind];
+      if (!focus || !("projectId" in query)) continue;
+      const projectId = this.canonicalProject(query.projectId);
+      if (demand.get(projectId) !== "focused") demand.set(projectId, focus);
+    }
+    return demand;
   }
 
   private start(observation: Observation<Client>) {
@@ -411,6 +439,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   dispose() {
     this.closed = true;
     this.updateDemand?.release();
+    this.fetchDemand?.release();
     for (const unsubscribe of this.unsubscribe) unsubscribe();
     for (const observation of this.observations.values()) this.retire(observation);
   }
@@ -1014,7 +1043,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     observation.stats?.release();
     observation.dirty.clear();
     this.observations.delete(this.key(observation.connectionId, observation.request.subscriptionId));
-    this.updateDemand?.refresh();
+    this.demandChanged();
   }
 
   private key(connectionId: string, subscriptionId: string) {

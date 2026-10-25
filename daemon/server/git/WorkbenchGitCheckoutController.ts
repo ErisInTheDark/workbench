@@ -1,18 +1,21 @@
 /*
  * Exports:
  * - default WorkbenchGitCheckoutController: own a folder's commit and stash reads and its user ref moves (stash restore
- *   and drop, branch switch and creation, linked worktree creation, undoing HEAD) under the worktree Git transition,
- *   reporting threads a move would disturb instead of stranding their claims or proposals.
+ *   and drop, branch switch and creation, linked worktree creation, undoing HEAD, pulling its upstream) under the worktree
+ *   Git transition, reporting threads a move would disturb instead of stranding their claims or proposals.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GitPullRequest } from "workbench-shared/workbench/git/git-history-contracts";
 import type {
   GitCheckoutOwner, GitObjectDetail, GitObjectRef, GitRefMutation, GitRefMutationResult,
 } from "workbench-shared/workbench/git/git-object-contracts";
+import type { GitPeerIntegrationResult } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { WorkingTreeDiff, WorkingTreePreview } from "workbench-shared/workbench/git/working-tree-contracts";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "../lib/workbench/git/GitArcRegistry";
 import type { GitArcThreadIdentityResolver } from "../lib/workbench/git/git-arc-thread-identity";
+import WorkbenchGitIntegration from "../lib/workbench/git/WorkbenchGitIntegration";
 import WorkbenchGitRefs from "../lib/workbench/git/WorkbenchGitRefs";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 import WorkbenchWorkingTreeRepository from "../lib/workbench/git/WorkbenchWorkingTreeRepository";
@@ -28,6 +31,8 @@ interface Options {
   transitions: Pick<ReturnType<typeof createWorktreeGitTransitions>, "read" | "run">;
   /** Catalogue a just-created worktree folder, returning its project. */
   discoverProject(rootPath: string): Promise<string | null>;
+  /** Fetch the project's upstream now, sharing the background fetcher's per-repository fetch. */
+  fetchUpstream(projectId: string): Promise<void>;
   /** Threads whose accepted proposals became this commit. */
   commitThreads?(projectId: string, sha: string): Promise<GitCheckoutOwner[]>;
   listClaims?(git: WorkbenchGitRepository): Promise<GitArcRegistryEntry[]>;
@@ -105,6 +110,32 @@ export default class WorkbenchGitCheckoutController {
     const git = await this.open(request.projectId);
     try {
       return await this.options.transitions.run(git.root, async () => await this.apply(git, request));
+    } finally {
+      WorkbenchGitRepository.forgetRefFacts(git.root);
+    }
+  }
+
+  /** Fetches outside the worktree lease, then integrates the upstream tip it read inside it. */
+  async pull(request: GitPullRequest): Promise<GitPeerIntegrationResult> {
+    const git = await this.open(request.projectId);
+    const refs = new WorkbenchGitRefs(git);
+    const fetched = await refs.upstreamTarget();
+    if (!fetched) throw new Error("This branch has no upstream to pull from.");
+    await this.options.fetchUpstream(request.projectId);
+    try {
+      return await this.options.transitions.run(git.root, async () => {
+        const target = await refs.upstreamTarget();
+        if (!target || target.branch !== fetched.branch || target.name !== fetched.name) {
+          return { kind: "blocked", reason: "The checked-out branch changed; refresh and try again.", conflicts: [] };
+        }
+        const integration = new WorkbenchGitIntegration(git);
+        const plan = await integration.prepare(target.tip, request.mode === "rebase" ? "replay" : request.mode);
+        if (plan.kind === "current") return { kind: "current" };
+        if (plan.kind === "blocked") return { kind: "blocked", reason: plan.reason, conflicts: plan.conflicts.slice(0, 50) };
+        const applied = await integration.apply(plan);
+        return { kind: "applied", mode: plan.kind, fromSha: applied.fromSha, toSha: applied.toSha,
+          warnings: applied.warnings.map(warning => String(warning).slice(0, 512)) };
+      });
     } finally {
       WorkbenchGitRepository.forgetRefFacts(git.root);
     }

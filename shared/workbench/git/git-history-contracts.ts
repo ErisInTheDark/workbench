@@ -5,10 +5,11 @@
  * - GitHistoryCommitSchema/GitHistoryCommit: one commit with its origin and peer delivery marks.
  * - GitHistorySchema/GitHistory: newest-first HEAD history; callers grow `limit` to scroll further.
  * - GitPushRequestSchema/GitPushResultSchema/GitPushResult: push the checked-out branch to its upstream.
+ * - GitPullRequestSchema/GitPullRequest: fetch the checked-out branch's upstream and integrate it in a chosen mode.
  */
 import { z } from "zod";
 import { ProjectIdSchema } from "../identity";
-import { GitBranchNameSchema, GitPeerAddressSchema } from "./git-peer-contracts";
+import { GitBranchNameSchema, GitPeerAddressSchema, GitPeerTransferSchema } from "./git-peer-contracts";
 
 const sha = z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u);
 export const GIT_HISTORY_MAX_LIMIT = 2_000;
@@ -46,3 +47,7 @@ export type GitHistory = z.infer<typeof GitHistorySchema>;
 export const GitPushRequestSchema = z.object({ projectId: ProjectIdSchema }).strict();
 export const GitPushResultSchema = z.object({ branch: GitBranchNameSchema, upstream: z.string().max(512), pushed: z.number().int().nonnegative() }).strict();
 export type GitPushResult = z.infer<typeof GitPushResultSchema>;
+
+/** `rebase` replays unpublished local commits onto the upstream; `fastForward` refuses once the branch has diverged. */
+export const GitPullRequestSchema = z.object({ projectId: ProjectIdSchema, mode: GitPeerTransferSchema.shape.mode }).strict();
+export type GitPullRequest = z.infer<typeof GitPullRequestSchema>;

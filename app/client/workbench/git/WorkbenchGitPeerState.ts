@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchGitPeerState: one folder's upstream position, peer rows, upstream pushes, captured transfer intent and
- *   device-aware outcomes, shared by every view of that folder.
+ * - default WorkbenchGitPeerState: one folder's upstream position, peer rows, upstream pushes and pulls, captured transfer
+ *   intent and device-aware outcomes, shared by every view of that folder.
  * - useGitPeerState: acquire the shared state for a folder and read its snapshot.
- * - WorkbenchGitPeerSnapshot/WorkbenchGitPeerOutcome: what views render.
+ * - WorkbenchGitPeerSnapshot/WorkbenchGitPeerOutcome/WorkbenchGitUpstreamOutcome: what views render.
  */
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -27,16 +27,26 @@ export interface WorkbenchGitPeerOutcome {
   conflicts: readonly string[];
 }
 
+/** A push or pull against the folder's upstream that needs reporting; it stays until the next upstream action. */
+export interface WorkbenchGitUpstreamOutcome {
+  action: "push" | "pull";
+  mode: GitPeerTransfer["mode"] | null;
+  /** `blocked`: the pull stopped short and an agent can finish it with `wb git integrate`. `warning`: it landed with notes. */
+  kind: "failed" | "blocked" | "warning";
+  reason: string;
+  conflicts: readonly string[];
+}
+
 export interface WorkbenchGitPeerSnapshot {
   data: WorkspaceGitPeers | null;
   busy: { peerKey: string; action: "pull" | "send"; mode: GitPeerTransfer["mode"] } | null;
   outcome: WorkbenchGitPeerOutcome | null;
-  /** True while pushing to the upstream; the failure stays until the next push. */
-  pushing: boolean;
-  pushFailure: string | null;
+  /** One push or pull against the upstream runs at a time. */
+  upstreamBusy: { action: "push" | "pull"; mode: GitPeerTransfer["mode"] | null } | null;
+  upstreamOutcome: WorkbenchGitUpstreamOutcome | null;
 }
 
-const EMPTY: WorkbenchGitPeerSnapshot = { data: null, busy: null, outcome: null, pushing: false, pushFailure: null };
+const EMPTY: WorkbenchGitPeerSnapshot = { data: null, busy: null, outcome: null, upstreamBusy: null, upstreamOutcome: null };
 const peerKey = (peer: GitPeerAddress) => `${peer.daemonId}/${peer.projectId}`;
 const shared = new WeakMap<WorkbenchWorkspaceClient, Map<string, WorkbenchGitPeerState>>();
 
@@ -73,7 +83,7 @@ export default class WorkbenchGitPeerState {
   }
 
   private retire() {
-    if (this.holders || this.snapshot.busy || this.snapshot.pushing) return;
+    if (this.holders || this.snapshot.busy || this.snapshot.upstreamBusy) return;
     this.observation?.release();
     this.observation = null;
     if (!this.snapshot.outcome || this.snapshot.outcome.progress === "none") this.forget(this);
@@ -120,16 +130,37 @@ export default class WorkbenchGitPeerState {
 
   /** Push the folder's branch to its upstream; the upstream counts update from the ref watcher, not this response. */
   async push() {
-    if (this.snapshot.pushing) return;
-    this.publish({ ...this.snapshot, pushing: true, pushFailure: null });
-    let pushFailure: string | null = null;
+    await this.upstream("push", null, async daemon => {
+      await daemon.request("git/push", { projectId: this.location.projectId });
+      return null;
+    });
+  }
+
+  /** Fetch the upstream, then integrate it; counts update from the ref watcher, only problems are reported. */
+  async pull(mode: GitPeerTransfer["mode"]) {
+    await this.upstream("pull", mode, async daemon => {
+      const result = await daemon.request("git/pull", { projectId: this.location.projectId, mode });
+      if (result.kind === "blocked") {
+        return { kind: "blocked", reason: result.reason ?? "The pull needs attention.", conflicts: result.conflicts };
+      }
+      return result.kind === "applied" && result.warnings.length
+        ? { kind: "warning", reason: `Pulled. ${result.warnings.join(" ")}`, conflicts: [] } : null;
+    });
+  }
+
+  private async upstream(action: "push" | "pull", mode: GitPeerTransfer["mode"] | null,
+    run: (daemon: ReturnType<WorkbenchWorkspaceClient["daemon"]>) => Promise<Omit<WorkbenchGitUpstreamOutcome, "action" | "mode"> | null>) {
+    if (this.snapshot.upstreamBusy) return;
+    this.publish({ ...this.snapshot, upstreamBusy: { action, mode }, upstreamOutcome: null });
+    let outcome: WorkbenchGitUpstreamOutcome | null = null;
     try {
-      await this.workspace.daemon({ kind: "folder", location: this.location })
-        .request("git/push", { projectId: this.location.projectId });
+      const reported = await run(this.workspace.daemon({ kind: "folder", location: this.location }));
+      outcome = reported && { action, mode, ...reported };
     } catch (error) {
-      pushFailure = (error instanceof Error ? error.message : "Push failed.").slice(0, 512);
+      const reason = (error instanceof Error ? error.message : `${action === "push" ? "Push" : "Pull"} failed.`).slice(0, 512);
+      outcome = { action, mode, kind: "failed", reason, conflicts: [] };
     }
-    this.publish({ ...this.snapshot, pushing: false, pushFailure });
+    this.publish({ ...this.snapshot, upstreamBusy: null, upstreamOutcome: outcome });
     this.retire();
   }
 

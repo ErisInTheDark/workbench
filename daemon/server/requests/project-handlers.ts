@@ -1,12 +1,12 @@
 /*
  * Exports:
  * - projectRequestHandlers: daemon handlers for project trees, files, stores, discovery, creation, file indexes, working trees,
- *   commit and stash reads, ref moves, pushes, search,
+ *   commit and stash reads, ref moves, upstream pushes and pulls, search,
  *   native file actions, and the agent and skill catalogues.
  */
 import type { OpenFileInEditorRequest, ResolveExternalFileLinkRootsRequest, RevealProjectEntryRequest } from "workbench-shared/types";
 import { WorkingTreeFileRequestSchema, WorkingTreeMutationSchema, WorkingTreeReadRequestSchema } from "workbench-shared/workbench/git/working-tree-contracts";
-import { GitPushRequestSchema } from "workbench-shared/workbench/git/git-history-contracts";
+import { GitPullRequestSchema, GitPushRequestSchema } from "workbench-shared/workbench/git/git-history-contracts";
 import { GitObjectFileRequestSchema, GitObjectRequestSchema, GitRefMutationSchema } from "workbench-shared/workbench/git/git-object-contracts";
 import { ProjectCreateRequestSchema, ProjectFolderListRequestSchema } from "workbench-shared/workbench/project/project-creation";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
@@ -183,6 +183,9 @@ export const projectRequestHandlers = defineDaemonRequestHandlers({
     const request = GitPushRequestSchema.safeParse(params);
     if (!request.success) throw new InvalidParamsError("A project ID is required to push.");
     return await owners.branchPositions.push(request.data.projectId);
+  },
+  "git/pull": async (params, context) => {
+    return await gitCheckout(context).pull(parsed(GitPullRequestSchema.safeParse(params), "A project ID and pull mode are required."));
   },
   "search/query": async (params, { owners }) => {
     // A newer app may send fields this daemon does not know; they drop instead of failing the search.

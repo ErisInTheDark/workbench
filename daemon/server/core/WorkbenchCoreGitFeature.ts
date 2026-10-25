@@ -1,13 +1,14 @@
 /*
  * Exports:
  * - default WorkbenchCoreGitFeature: build Git arcs (machine claims approved through the thread's approval mode), thread Git
- *   selections, working-tree reads, Git peers, branch positions and checkout object reads and ref moves over shared
- *   worktree transitions.
+ *   selections, working-tree reads, Git peers, branch positions with upstream fetches, and checkout object reads, ref
+ *   moves and upstream pulls over shared worktree transitions.
  */
 import { ProjectIdSchema, ThreadReferenceSchema, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
+import { projectRoot } from "../lib/project-root";
 import GitArcRegistry, { getGitArcLiveClaimPaths } from "../lib/workbench/git/GitArcRegistry";
 import type { GitArcThreadIdentityResolver } from "../lib/workbench/git/git-arc-thread-identity";
 import type WorkbenchStatsController from "../stats/WorkbenchStatsController";
@@ -135,9 +136,14 @@ export default class WorkbenchCoreGitFeature {
     });
     const resolveCheckoutRoot = async (projectId: string) => (await projectCatalog.resolveProjectById(projectId)).rootPath;
     this.gitPeer = new WorkbenchGitPeerController({ resolveRoot: resolveCheckoutRoot, transitions, warn });
-    this.branchPositions = new WorkbenchBranchPositionController({ resolveRoot: resolveCheckoutRoot, warn });
+    // The installation updater already fetches the running checkout on its own schedule.
+    const branchPositions = new WorkbenchBranchPositionController({
+      resolveRoot: resolveCheckoutRoot, backgroundFetchedElsewhere: [projectRoot], warn,
+    });
+    this.branchPositions = branchPositions;
     this.gitCheckout = new WorkbenchGitCheckoutController({
       resolveRoot: resolveCheckoutRoot,
+      fetchUpstream: async projectId => await branchPositions.fetch(projectId),
       resolveIdentity: resolveGitArcIdentity,
       readOwner,
       transitions,

@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default WorkbenchGitRefs: one checkout's ref facts and object reads: branch position against its upstream and peers,
- *   marked HEAD history, local branches, stashes, commit and stash details with their file sides, and upstream pushes.
+ *   marked HEAD history, local branches, stashes, commit and stash details with their file sides, and the checked-out
+ *   branch's upstream target, non-interactive fetch and push.
  * - GitObjectSides: the base commit and changed tree one object's file diffs and previews compare.
  */
 import type { GitBranchList, GitObjectDetail, GitObjectFile, GitObjectRef, GitStashList } from "workbench-shared/workbench/git/git-object-contracts";
@@ -13,6 +14,8 @@ import WorkbenchGitPeerTransport from "./WorkbenchGitPeerTransport";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
+/** Git Credential Manager would otherwise open a sign-in window for a fetch nobody is watching. */
+const FETCH_ENV = { ...GIT_ENV, GCM_INTERACTIVE: "never" };
 const FIELD = "\u001f";
 
 export interface GitObjectSides {
@@ -230,15 +233,46 @@ export default class WorkbenchGitRefs {
     };
   }
 
+  /** The checked-out branch's upstream with the remote and remote branch it is configured from; null without one. */
+  async upstreamTarget() {
+    const branch = await this.branch();
+    const upstream = await this.upstream(branch);
+    if (!branch || !upstream) return null;
+    const config = async (key: string) => {
+      try { return (await this.repository.run(["config", "--get", key])).trim(); }
+      catch { return ""; }
+    };
+    const remote = await config(`branch.${branch}.remote`);
+    const merge = await config(`branch.${branch}.merge`);
+    return remote && remote !== "." && merge.startsWith("refs/heads/") ? { branch, ...upstream, remote, merge } : null;
+  }
+
+  /**
+   * Fetches the checked-out branch's upstream remote without prompting, since background fetches have nobody to answer.
+   * Returns false when the branch has no fetchable upstream.
+   */
+  async fetchUpstream(signal?: AbortSignal) {
+    const target = await this.upstreamTarget();
+    if (!target) return false;
+    try {
+      // No --prune: a remote-tracking ref is what marks its commits published, so a background fetch must not drop one.
+      await this.repository.run(["fetch", "--quiet", target.remote], FETCH_ENV, signal);
+    } catch {
+      // Git stderr can echo remote URLs with embedded credentials, so only the remote name survives.
+      throw new Error(`Could not fetch from ${target.remote}.`);
+    } finally {
+      WorkbenchGitRepository.forgetRefFacts(this.repository.root);
+    }
+    return true;
+  }
+
   /** Pushes the checked-out branch to its upstream without force, so a diverged upstream rejects instead of losing work. */
   async push(signal?: AbortSignal): Promise<GitPushResult> {
     const branch = await this.branch();
     if (!branch) throw new Error("Pushing needs a checked-out branch.");
-    const upstream = await this.upstream(branch);
-    if (!upstream) throw new Error(`Branch ${branch} has no upstream to push to.`);
-    const remote = (await this.repository.run(["config", "--get", `branch.${branch}.remote`])).trim();
-    const merge = (await this.repository.run(["config", "--get", `branch.${branch}.merge`])).trim();
-    if (!remote || !merge.startsWith("refs/heads/")) throw new Error(`Branch ${branch} has no pushable upstream.`);
+    const target = await this.upstreamTarget();
+    if (!target) throw new Error(`Branch ${branch} has no upstream to push to.`);
+    const { remote, merge, ...upstream } = target;
     const { ahead } = await this.counts(await this.head(), upstream.tip);
     try {
       await this.repository.run(["push", "--porcelain", remote, `refs/heads/${branch}:${merge}`], GIT_ENV, signal);

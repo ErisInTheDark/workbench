@@ -86,11 +86,11 @@ export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = Workbench
 
 export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: WorkbenchSettingDefinition<K> } = {
   gitPeerSyncMode: {
-    description: "Default for cross-device Pull and Send. Hold Shift to use the other mode for one transfer.",
-    key: "gitPeerSyncMode", label: "Cross-device sync", type: "select",
+    description: "Default for Pull and Send, across devices and from upstream. Hold Shift to use the other mode once.",
+    key: "gitPeerSyncMode", label: "Git sync", type: "select",
     options: [
-      { label: "Merge", value: "merge", description: "Preserve both histories. Divergent work adds a merge commit on the receiving device." },
-      { label: "Rebase", value: "rebase", description: "Rebase unpublished incoming work on its owning device, then fast-forward the receiver. Published work is never rewritten." },
+      { label: "Merge", value: "merge", description: "Preserve both histories. Divergent work adds a merge commit on the receiving side." },
+      { label: "Rebase", value: "rebase", description: "Replay unpublished work onto incoming commits (on its owning device for cross-device sync). Published work is never rewritten." },
     ],
   },
   composerSpellCheck: { description: "Controls spellcheck in thread composers and questionnaire text answers.", key: "composerSpellCheck", label: "Composer spellcheck", type: "boolean" },

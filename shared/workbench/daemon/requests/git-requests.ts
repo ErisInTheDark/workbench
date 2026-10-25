@@ -3,7 +3,7 @@
  * - WORKBENCH_GIT_ARC_ACTION_BY_METHOD/WorkbenchDaemonGitArcMethod: map browser Git arc methods to existing Git actions.
  * - WorkbenchGitArcSuccess: exact acknowledgement for browser Git arc mutations.
  * - gitDaemonRequests: daemon requests for working-tree reads and edits, commit and stash reads, ref moves, upstream pushes
- *   and browser Git arc actions.
+ *   and pulls, and browser Git arc actions.
  */
 import { z } from "zod";
 import {
@@ -22,7 +22,8 @@ import {
   type WorkingTreeDiff, type WorkingTreeFileRequest, type WorkingTreeMutation, type WorkingTreePreview, type WorkingTreeRead,
   type WorkingTreeResult,
 } from "../../git/working-tree-contracts.ts";
-import { GitPushResultSchema, type GitPushResult } from "../../git/git-history-contracts.ts";
+import { GitPushResultSchema, type GitPullRequest, type GitPushResult } from "../../git/git-history-contracts.ts";
+import { GitPeerIntegrationResultSchema, type GitPeerIntegrationResult } from "../../git/git-peer-contracts.ts";
 import {
   GitObjectDetailSchema, GitRefMutationResultSchema,
   type GitObjectDetail, type GitObjectRef, type GitRefMutation, type GitRefMutationResult,
@@ -67,6 +68,7 @@ export const gitDaemonRequests = {
   "git/working-tree/preview": defineDaemonRequest<WorkingTreeFileRequest, WorkingTreePreview>()({ route: "folder", result: WorkingTreePreviewSchema }),
   "git/working-tree/mutate": defineDaemonRequest<WorkingTreeMutation, WorkingTreeResult>()({ route: "folder", result: WorkingTreeResultSchema }),
   "git/push": defineDaemonRequest<{ projectId: string }, GitPushResult>()({ route: "folder", result: GitPushResultSchema }),
+  "git/pull": defineDaemonRequest<GitPullRequest, GitPeerIntegrationResult>()({ route: "folder", result: GitPeerIntegrationResultSchema }),
   "git/object/read": defineDaemonRequest<{ projectId: string; object: GitObjectRef }, GitObjectDetail>()({
     route: "folder", result: GitObjectDetailSchema,
   }),
