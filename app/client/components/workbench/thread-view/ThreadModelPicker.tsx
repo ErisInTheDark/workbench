@@ -154,7 +154,7 @@ export default function ThreadModelPicker ({
 						type="button"
 						aria-label={group.label}
 						title={group.label}
-						className="enabled:cursor-pointer flex size-9 shrink-0 items-center justify-center rounded-lg text-fg/muted hover:bg-button-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+						className="enabled:cursor-pointer flex size-9 shrink-0 items-center justify-center rounded-lg text-fg/muted hover:bg-fg/6 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
 						onClick={() => scrollToGroup(group.id)}
 					>
 						{group.kind === "favourites" ? <StarIcon size={20} />

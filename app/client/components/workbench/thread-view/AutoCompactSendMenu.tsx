@@ -39,7 +39,7 @@ export default function AutoCompactSendMenu ({ label, onSend }: {
     triggerClassName={`
       ${PrimaryButton.className("circle")}
       [-webkit-touch-callout:none]
-      aria-expanded:[--primary-button-bg:var(--color-button-hover)]
+      aria-expanded:[--primary-button-bg:var(--primary-button-hover)]
     `}
     onSelect={id => onSend(id === "direct")}
   >

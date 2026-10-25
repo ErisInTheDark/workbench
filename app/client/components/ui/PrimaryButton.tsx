@@ -15,7 +15,7 @@ import useHoldToConfirm, { holdProgressStyle } from "./use-hold-to-confirm";
 type PrimaryButtonShape = "pill" | "circle" | "compact";
 type PrimaryButtonTone = "attention" | "danger" | "default";
 
-type PrimaryButtonSegment = "start" | "end";
+type PrimaryButtonSegment = "start" | "middle" | "end";
 
 type PrimaryButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
@@ -23,7 +23,7 @@ type PrimaryButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   externalHold?: { holding: boolean; durationMs: number };
   holdToConfirmMs?: number;
   pendingHalo?: boolean;
-  /** Joins two buttons into one pill: the joined edges go square and flush, with a hairline before the end segment. */
+  /** Joins buttons into one pill: joined edges go square and flush, with a hairline before each middle or end segment. */
   segment?: PrimaryButtonSegment;
   shape?: PrimaryButtonShape;
   tone?: PrimaryButtonTone;
@@ -39,7 +39,9 @@ const baseClassName = `
   transition duration-150 ease-out
   focus-visible:(outline-none ring-2 ring-[color: color-mix(in srgb, var(--text) 22%, transparent)])
   disabled:cursor-not-allowed
-  [--primary-button-bg: color-mix(in srgb, white 14%, var(--app-bg-solid) 86%)]
+  [--primary-button-rest: color-mix(in srgb, white 14%, var(--app-bg-solid) 86%)]
+  [--primary-button-hover: color-mix(in srgb, var(--text) 8%, var(--primary-button-rest))]
+  [--primary-button-bg: var(--primary-button-rest)]
   disabled:[--primary-button-bg: color-mix(in srgb, white 7%, var(--app-bg-solid) 93%)]
   [--fg-bg: var(--primary-button-bg)]
 `;
@@ -57,7 +59,7 @@ const toneClassNames: Record<PrimaryButtonTone, string> = {
     [--primary-button-bg: color-mix(in srgb, var(--color-amber-500) 16%, var(--app-bg-solid) 84%)]
     enabled:hover:[--primary-button-bg: color-mix(in srgb, var(--color-amber-500) 28%, var(--app-bg-solid) 72%)]
   `,
-  default: "enabled:hover:[--primary-button-bg:var(--color-button-hover)]",
+  default: "enabled:hover:[--primary-button-bg:var(--primary-button-hover)]",
   danger: `
     enabled:hover:(
       [--primary-button-bg: color-mix(in srgb, var(--danger) 48%, var(--app-bg-solid) 52%)]
@@ -76,13 +78,14 @@ const toneClassNames: Record<PrimaryButtonTone, string> = {
 };
 
 // The fill's flush side uses the same selector callers inset the fill with, so it wins and the halves meet without a gap.
+const segmentHairline = `
+  after:(pointer-events-none absolute inset-y-[9px] left-0 z-20 w-px content-[''])
+  after:bg-[color-mix(in_srgb,var(--text)_16%,transparent)]
+`;
 const segmentClassNames: Record<PrimaryButtonSegment, string> = {
   start: "!rounded-r-none !pr-2 [&>span:first-of-type]:(!rounded-r-none !right-0)",
-  end: `
-    !rounded-l-none !pl-2 [&>span:first-of-type]:(!rounded-l-none !left-0)
-    after:(pointer-events-none absolute inset-y-[9px] left-0 z-20 w-px content-[''])
-    after:bg-[color-mix(in_srgb,var(--text)_16%,transparent)]
-  `,
+  middle: `!rounded-none !px-2 [&>span:first-of-type]:(!rounded-none !left-0 !right-0) ${segmentHairline}`,
+  end: `!rounded-l-none !pl-2 [&>span:first-of-type]:(!rounded-l-none !left-0) ${segmentHairline}`,
 };
 
 function primaryButtonClassName (shape: PrimaryButtonShape = "pill", tone: PrimaryButtonTone = "default", pendingHalo = false) {

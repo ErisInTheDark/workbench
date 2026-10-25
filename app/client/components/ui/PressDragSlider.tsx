@@ -196,7 +196,7 @@ export default function PressDragSlider ({
       aria-valuetext={shownText}
       aria-orientation="vertical"
       disabled={disabled}
-      className={icon ? "touch-auto select-none" : "relative isolate shrink-0 touch-auto select-none whitespace-nowrap bg-transparent px-2.5 py-2 text-text transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-40"}
+      className={icon ? "touch-auto select-none" : "relative isolate shrink-0 touch-auto select-none whitespace-nowrap bg-transparent px-2.5 py-2 text-text transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-fg/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-40"}
       onPointerDown={(event) => {
         if (event.pointerType === "touch" || event.button !== 0 || pointer.current !== null) return;
         event.preventDefault();

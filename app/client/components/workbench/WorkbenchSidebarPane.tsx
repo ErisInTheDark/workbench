@@ -229,6 +229,7 @@ export default function WorkbenchSidebarPane({
           appRuntime={appRuntime}
           daemonRuntime={daemonRuntime}
           location={browseLocation}
+          onAskAgent={askAgentWithReferences}
           onPanel={setPanel}
           panel={panel}
           projectIds={selection.selectionProjectIds}

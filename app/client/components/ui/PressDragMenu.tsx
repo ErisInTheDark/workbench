@@ -245,7 +245,7 @@ export default function PressDragMenu ({
         enabled:cursor-pointer relative isolate inline-flex min-w-0 items-center touch-none select-none outline-none transition
         ${triggerAppearance === "default" ? `
           justify-center gap-2 rounded-lg bg-transparent px-2.5 py-2 hover:text-text
-          before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover
+          before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-fg/6
         ` : ""}
         ${triggerClassName ?? "text-fg/muted"}
         ${menu.interaction.kind === "dragging" ? "" : "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"}
@@ -346,7 +346,7 @@ export default function PressDragMenu ({
             tabIndex={-1}
             aria-label={group.label}
             title={group.label}
-            className="enabled:cursor-pointer flex size-9 shrink-0 items-center justify-center rounded-lg text-fg/muted hover:bg-button-hover hover:text-text"
+            className="enabled:cursor-pointer flex size-9 shrink-0 items-center justify-center rounded-lg text-fg/muted hover:bg-fg/6 hover:text-text"
             onPointerDown={event => event.preventDefault()}
             onPointerMove={() => { if (menu.interaction.kind === "open") scrollToGroup(group.id); }}
             onClick={() => scrollToGroup(group.id)}

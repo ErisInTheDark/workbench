@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchReloadDevicePorts: the reload and update intents one device's controls send.
+ * - UpdateImpactTip: what pulling an update then reloading does, for the update button's tooltip.
  * - default WorkbenchReloadDevice: one device as a disclosure: its name with tiny impact chips, a joined Reload | update pill
  *   (or one plain "Update & reload" for update-only devices), and its dirt tree when open.
  */
@@ -8,24 +8,18 @@
 
 import { useState } from "react";
 
-import type { WorkbenchReloadDirtScope } from "workbench-shared/types";
 import PrimaryButton from "../../ui/PrimaryButton";
 import Tooltip from "../../ui/Tooltip";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import { ArrowDownIcon, BotIcon, ChevronDownIcon, ReloadIcon } from "../workbench-icons";
 import ReloadImpactChips from "./ReloadImpactChips";
 import type { ReloadDevicePlan } from "./reload-device";
+import { useReloadRequest, type ReloadDevicePorts, type ReloadDeviceState } from "./use-reload-devices";
 import WorkbenchReloadTree from "./WorkbenchReloadTree";
 
 const SIDEBAR_BUTTON = "!shrink-0 [&>span:first-of-type]:!inset-[3px]";
 
-export interface WorkbenchReloadDevicePorts {
-  reloadScope(scope: WorkbenchReloadDirtScope): Promise<unknown>;
-  reloadAll(): Promise<unknown>;
-  pull(reload: boolean): Promise<unknown>;
-}
-
-function UpdateImpactTip({ plan }: { plan: NonNullable<ReloadDevicePlan["update"]> }) {
+export function UpdateImpactTip({ plan }: { plan: NonNullable<ReloadDevicePlan["update"]> }) {
   return (
     <span className="flex max-w-60 flex-wrap items-center gap-1.5">
       <span>
@@ -42,7 +36,7 @@ function DeviceActions({ local, plan, disabled, running, ports, onResolve, onReq
   plan: ReloadDevicePlan;
   disabled: boolean;
   running: string | null;
-  ports: WorkbenchReloadDevicePorts;
+  ports: ReloadDevicePorts;
   onResolve: (() => void) | null;
   onRequest(request: () => Promise<unknown>): void;
 }) {
@@ -107,26 +101,13 @@ function DeviceActions({ local, plan, disabled, running, ports, onResolve, onReq
   );
 }
 
-export default function WorkbenchReloadDevice({
-  name, local, plan, startOpen = false, pendingScopes, running, disabled, error, unavailable, ports, onResolve,
-}: {
-  name: string;
-  local: boolean;
-  plan: ReloadDevicePlan;
+export default function WorkbenchReloadDevice({ device, startOpen = false }: {
+  device: ReloadDeviceState;
   startOpen?: boolean;
-  pendingScopes: readonly string[];
-  /** The running operation's label when it targets this device. */
-  running: string | null;
-  disabled: boolean;
-  error: string | null;
-  /** Why this device cannot be reached; it shows instead of controls. */
-  unavailable: string | null;
-  ports: WorkbenchReloadDevicePorts;
-  onResolve: (() => void) | null;
 }) {
+  const { name, local, plan, pendingScopes, running, disabled, error, unavailable, ports, resolve: onResolve } = device;
   const [open, setOpen] = useState(startOpen);
-  const [requestError, setRequestError] = useState("");
-  const [requesting, setRequesting] = useState(false);
+  const { request, requesting, error: requestError } = useReloadRequest();
   const pending = new Set(pendingScopes);
   const hasTree = plan.tree.length > 0;
   const expanded = open && hasTree;
@@ -134,13 +115,6 @@ export default function WorkbenchReloadDevice({
   const impact = plan.reload ?? plan.update?.impact ?? null;
   const chips = !expanded && impact && (impact.restarts.length || impact.migrates) ? <ReloadImpactChips impact={impact} /> : null;
   const quiet = unavailable ?? (!plan.reload && !plan.update && !plan.issue && !running ? "up to date" : null);
-  const request = (send: () => Promise<unknown>) => {
-    setRequestError("");
-    setRequesting(true);
-    void send().catch((failure: unknown) => {
-      setRequestError(failure instanceof Error ? failure.message : "The reload request failed.");
-    }).finally(() => setRequesting(false));
-  };
   const blocked = disabled || requesting || pending.size > 0;
   const shownError = requestError || error;
   return (

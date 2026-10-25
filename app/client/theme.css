@@ -3,7 +3,6 @@
   --animate-delayed-fade-in: fade-in 200ms ease-out 600ms both;
   --animate-shimmer: shimmer 1.45s linear infinite;
   --animate-tick: tick 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  --color-button-hover: color-mix(in srgb, white 20%, var(--app-bg-solid) 80%);
   --container-content: 56rem;
   /* Composer and status row surfaces open, close and switch on one rhythm; leaving content uses the short exit. */
   --ease-surface: cubic-bezier(0.16, 1, 0.3, 1);
