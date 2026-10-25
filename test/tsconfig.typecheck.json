@@ -6,7 +6,8 @@
   },
   "include": [
     "./**/*.ts",
-    "./arc-overlay/arc-overlay-preload.mjs",
+    "../package/arc-tree-manifest.mjs",
+    "../package/arc-tree-preload.mjs",
     "../*.test.ts",
     "../app/client/workbench/thread/thread-command-matchers.test.ts",
     "../shared/workbench/git/checkpoint-contracts.test.ts",

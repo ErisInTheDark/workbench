@@ -1,51 +1,26 @@
 // @ts-check
 /*
- * No exports. Test-process preload, plain JavaScript so it loads before any TypeScript loader exists: answer reads of
- * other threads' held paths from the arc overlay manifest, and make paths the caller's arc tree lacks look absent.
+ * No exports. Node `--import` preload, plain JavaScript so it loads before any TypeScript loader exists: answer reads of
+ * other threads' held paths from the arc tree manifest, and make paths the caller's arc tree lacks look absent.
  * Node's module resolver stats files internally, so it still finds hidden files; reading them then fails as missing.
- * Manifest contract shared with writeArcOverlayManifest in ./arc-overlay-manifest.ts.
  */
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-const MANIFEST_ENV = "WORKBENCH_ARC_OVERLAY_MANIFEST";
-const MANIFEST_VERSION = 1;
+import { ARC_TREE_MANIFEST_ENV, arcTreePathKey, readArcTreeManifest } from "./arc-tree-manifest.mjs";
 
 /** @typedef {(error: NodeJS.ErrnoException | null, value?: unknown) => void} Callback */
 /** @typedef {(...values: unknown[]) => unknown} LooseFunction */
-
-/** @param {string} target */
-function pathKey(target) {
-  const resolved = path.resolve(target);
-  return process.platform === "win32" || process.platform === "darwin" ? resolved.toLowerCase() : resolved;
-}
-
-/**
- * @param {string} file
- * @returns {Map<string, Buffer | null>} held path keys mapped to arc tree bytes, or null where that tree lacks them
- */
-function readManifest(file) {
-  /** @type {{ files?: unknown; version?: unknown }} */
-  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (parsed.version !== MANIFEST_VERSION || !parsed.files || typeof parsed.files !== "object") {
-    throw new Error(`Arc overlay manifest ${file} is invalid.`);
-  }
-  return new Map(Object.entries(parsed.files).map(([target, content]) => {
-    if (content !== null && typeof content !== "string") throw new Error(`Arc overlay manifest ${file} is invalid.`);
-    return [pathKey(target), content === null ? null : Buffer.from(content, "base64")];
-  }));
-}
 
 /** @param {Map<string, Buffer | null>} overlay */
 function install(overlay) {
   /** @param {unknown} target */
   const keyOf = (target) => {
-    if (typeof target === "string") return pathKey(target);
-    if (target instanceof URL) return target.protocol === "file:" ? pathKey(fileURLToPath(target)) : null;
-    if (Buffer.isBuffer(target)) return pathKey(target.toString());
+    if (typeof target === "string") return arcTreePathKey(target);
+    if (target instanceof URL) return target.protocol === "file:" ? arcTreePathKey(fileURLToPath(target)) : null;
+    if (Buffer.isBuffer(target)) return arcTreePathKey(target.toString());
     return null;
   };
   /**
@@ -74,7 +49,7 @@ function install(overlay) {
     const name = dirent ? dirent.name : entry;
     if (typeof name !== "string") return true;
     const parent = dirent ? dirent.parentPath : directory instanceof URL ? fileURLToPath(directory) : String(directory);
-    return overlay.get(pathKey(path.join(parent, name))) !== null;
+    return overlay.get(arcTreePathKey(path.join(parent, name))) !== null;
   });
   /** @param {unknown[]} args */
   const callbackOf = (args) => /** @type {Callback} */ (args.at(-1));
@@ -181,5 +156,5 @@ function install(overlay) {
   syncBuiltinESMExports();
 }
 
-const manifest = process.env[MANIFEST_ENV];
-if (manifest) install(readManifest(manifest));
+const manifest = process.env[ARC_TREE_MANIFEST_ENV];
+if (manifest) install(readArcTreeManifest(manifest));

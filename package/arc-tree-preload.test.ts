@@ -1,12 +1,12 @@
-/* No exports. Protect the test-process preload: held reads, hidden paths and Node descendants all see the arc overlay. */
+/* No exports. Protect the Node preload: held reads, hidden paths and Node descendants all see the arc tree. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
-import { arcOverlayProcessEnvironment, writeArcOverlayManifest } from "./arc-overlay-manifest";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
+import WorkbenchArcTree from "./WorkbenchArcTree.mjs";
 
 const PROBE = `
 import { spawnSync } from "node:child_process";
@@ -31,24 +31,22 @@ console.log(JSON.stringify({
 }));
 `;
 
-test("node processes and their node children read held paths from the overlay", async t => {
-  const temporary = await WorkbenchTemporaryDirectory.create("arc-overlay-preload-");
+test("node processes and their node children read held paths from the arc tree", async t => {
+  const temporary = await WorkbenchTemporaryDirectory.create("arc-tree-preload-");
   t.after(() => temporary.dispose());
-  const root = temporary.path;
+  const root = path.join(temporary.path, "repo");
+  await fs.mkdir(root);
   await fs.writeFile(path.join(root, "held.txt"), "live edit");
   await fs.writeFile(path.join(root, "hidden.txt"), "another thread's new file");
   await fs.writeFile(path.join(root, "plain.txt"), "plain");
   await fs.writeFile(path.join(root, "probe.mjs"), PROBE);
-  const manifest = path.join(root, "manifest.json");
-  await writeArcOverlayManifest(manifest, new Map([
-    [path.join(root, "held.txt"), Buffer.from("baseline")],
-    [path.join(root, "hidden.txt"), null],
-  ]));
+  await using tree = WorkbenchArcTree.fromFiles(root, new Map([["held.txt", Buffer.from("baseline")], ["hidden.txt", null]]));
+  const environment = await tree.nodeEnvironment({ directory: path.join(temporary.path, "manifests") });
 
   const { stderr, stdout } = await promisify(execFile)(process.execPath, [path.join(root, "probe.mjs"), root], {
-    env: { ...process.env, ...arcOverlayProcessEnvironment(manifest, process.env) },
+    env: { ...process.env, ...environment },
   });
-  assert.equal(stderr, "", "the preload adds no warnings to processes tests watch");
+  assert.equal(stderr, "", "the preload adds no warnings to processes callers watch");
   assert.deepEqual(JSON.parse(stdout), {
     held: "baseline",
     heldPromise: "baseline",
@@ -56,7 +54,7 @@ test("node processes and their node children read held paths from the overlay", 
     hiddenExists: false,
     hiddenStat: null,
     hiddenRead: "ENOENT",
-    listing: ["held.txt", "manifest.json", "plain.txt", "probe.mjs"],
+    listing: ["held.txt", "plain.txt", "probe.mjs"],
     child: { held: "baseline", stderr: "" },
   });
 });

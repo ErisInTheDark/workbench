@@ -37,6 +37,12 @@
     "index.d.ts",
     "store-definitions.mjs",
     "StoreCommandRunner.mjs",
+    "WorkbenchArcTree.mjs",
+    "WorkbenchArcTree.d.mts",
+    "arc-tree-manifest.mjs",
+    "arc-tree-preload.mjs",
+    "workbench-daemon.mjs",
+    "workbench-daemon.d.mts",
     "wb.schema.json",
     "README.md"
   ],

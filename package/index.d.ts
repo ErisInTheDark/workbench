@@ -3,7 +3,16 @@
  * - WorkbenchConfigOptions: dotenv mapping, missing-value policies, cancellation and warning hooks.
  * - WorkbenchConfigOutput: mapped values after store replacement and policy checks, with the first file read error.
  * - config: load and map dotenv values; resolve stores and check required names before environment writes.
+ * - WorkbenchArcTree/WorkbenchArcTreeOptions/WorkbenchArcTreeRepository/WorkbenchArcTreeNodeEnvironmentOptions: arc tree types.
+ * - arcTree: the worktree as the calling agent thread builds it, or the plain filesystem outside agent threads.
  */
+import type WorkbenchArcTree from "./WorkbenchArcTree.mjs";
+import type { WorkbenchArcTreeOptions } from "./WorkbenchArcTree.mjs";
+
+export type { WorkbenchArcTree };
+export type {
+  WorkbenchArcTreeNodeEnvironmentOptions, WorkbenchArcTreeOptions, WorkbenchArcTreeRepository,
+} from "./WorkbenchArcTree.mjs";
 export type WorkbenchConfigOptions = {
   /** One file or several; earlier files win unless `override` is set. Defaults to `.env`. */
   path?: string | readonly string[];
@@ -38,3 +47,9 @@ export interface WorkbenchConfigOutput {
  * before any environment writes. Existing environment values win unless override is set.
  */
 export function config(options?: WorkbenchConfigOptions): Promise<WorkbenchConfigOutput>;
+
+/**
+ * Other threads' held paths read at the caller's arc baseline; everything else reads from disk. Outside agent
+ * threads, or when the daemon view fails (reported through `warn`), the plain filesystem. Only `signal` aborts reject.
+ */
+export function arcTree(options?: WorkbenchArcTreeOptions): Promise<WorkbenchArcTree>;

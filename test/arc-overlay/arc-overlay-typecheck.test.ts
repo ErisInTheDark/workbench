@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
-import ArcTreeOverlay from "./ArcTreeOverlay";
+import WorkbenchArcTree from "../../package/WorkbenchArcTree.mjs";
 import { typecheckWithArcOverlay } from "./arc-overlay-typecheck";
 
 test("typecheck reads held paths from the overlay and everything else from disk", async t => {
@@ -23,12 +23,12 @@ test("typecheck reads held paths from the overlay and everything else from disk"
   await write("held.ts", ["export const value = 1;"]);
   await write("hidden.ts", ["export const hidden = 1;"]);
   await write("stray.ts", ["export const stray: number = \"another thread's new file\";"]);
-  const overlay = ArcTreeOverlay.fromFiles(root, new Map([
+  const overlay = WorkbenchArcTree.fromFiles(root, new Map([
     ["held.ts", Buffer.from("export const value: string = \"baseline\";\n")],
     ["restored.ts", Buffer.from("export const restored = 1;\n")],
     ["hidden.ts", null],
     ["stray.ts", null],
-  ]), 1);
+  ]));
 
   const { code, output } = typecheckWithArcOverlay(root, "tsconfig.json", overlay);
   const reported = [...output.matchAll(/^(\S+)\((\d+),(\d+)\): error TS(\d+)/gmu)]

@@ -1,11 +1,13 @@
 /*
  * Exports:
  * - config: load and map dotenv values, resolve store references, and enforce an optional missing-variable policy.
+ * - arcTree: load the worktree as the calling agent thread builds it, or the plain filesystem without one.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import dotenv from "dotenv";
 import StoreCommandRunner from "./StoreCommandRunner.mjs";
+import WorkbenchArcTree from "./WorkbenchArcTree.mjs";
 import {
   DEFAULT_STORE_DEFINITIONS,
   expandStoreCommand,
@@ -124,4 +126,8 @@ export async function config({
     : parsed;
   dotenv.populate(processEnv, values, { override: policy ? true : override });
   return error ? { parsed, error } : { parsed };
+}
+
+export async function arcTree(options) {
+  return await WorkbenchArcTree.load(options);
 }

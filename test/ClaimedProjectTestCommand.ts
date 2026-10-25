@@ -2,14 +2,15 @@
  * Exports:
  * - ClaimedProjectTestCommandOptions: inject claim transport, selection and execution boundaries.
  * - default ClaimedProjectTestCommand: execute local tests selected by live claims or explicit inputs, reading other
- *   threads' held paths through the caller's arc tree overlay.
+ *   threads' held paths through the caller's arc tree.
  */
 import { realpath } from "node:fs/promises";
 import path from "node:path";
+import WorkbenchArcTree from "../package/WorkbenchArcTree.mjs";
+import { requestDaemonGitArc } from "../package/workbench-daemon.mjs";
 import { GitArcScopeClaimsResponseSchema } from "../shared/workbench/git/git-arc-scope-response";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import ClaimedTestSelector, { type ClaimedTestSelection } from "../daemon/server/lib/workbench/testing/ClaimedTestSelector";
-import ArcTreeOverlay from "./arc-overlay/ArcTreeOverlay";
-import { requestDaemonGitArc } from "./daemon-git-arc-request";
 import ProjectTestCatalog from "./ProjectTestCatalog";
 import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
 
@@ -72,11 +73,10 @@ export default class ClaimedProjectTestCommand {
 
   private async execute(root: string, env: NodeJS.ProcessEnv, output: (message: string) => void, files: string[]) {
     if (this.options.run) return await this.options.run(files);
-    const overlay = await ArcTreeOverlay.load({ env, fetch: this.options.fetch, output, root });
-    try {
-      return await new ProjectTestRunner(root, { environment: await overlay?.prepareTestEnvironment(env) ?? {} }).run(files);
-    } finally {
-      await overlay?.dispose();
-    }
+    await using tree = await WorkbenchArcTree.load({ cwd: root, env, fetch: this.options.fetch, warn: output });
+    const deleted = tree.deletedOnDisk.map(target => path.relative(root, target).replaceAll("\\", "/"));
+    if (deleted.length) output(`arc tree: other threads deleted these files on disk, so tests can't see your baseline copies: ${deleted.join(", ")}`);
+    const environment = await tree.nodeEnvironment({ env, directory: WorkbenchTemporaryDirectory.rootPath });
+    return await new ProjectTestRunner(root, { environment }).run(files);
   }
 }

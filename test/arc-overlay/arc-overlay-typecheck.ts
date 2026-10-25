@@ -1,14 +1,14 @@
 /*
  * Exports:
- * - typecheckWithArcOverlay: type-check one TypeScript project through the TypeScript API, layering an arc tree
- *   overlay over the disk; output matches the compiler's plain diagnostic format.
+ * - typecheckWithArcOverlay: type-check one TypeScript project through the TypeScript API, layering an arc tree's
+ *   held paths over the disk; output matches the compiler's plain diagnostic format.
  */
 import path from "node:path";
 import { createFileSystemLayer } from "typescript/fs";
 import { API, DiagnosticCategory, formatDiagnostics } from "typescript/sync";
-import type ArcTreeOverlay from "./ArcTreeOverlay";
+import type WorkbenchArcTree from "../../package/WorkbenchArcTree.mjs";
 
-export function typecheckWithArcOverlay(root: string, configPath: string, overlay: ArcTreeOverlay) {
+export function typecheckWithArcOverlay(root: string, configPath: string, overlay: WorkbenchArcTree) {
   const files = [...overlay.files];
   const layer = createFileSystemLayer(
     files.flatMap(([target, content]) => content === null ? [] : [[target, content.toString("utf8")] as const]),

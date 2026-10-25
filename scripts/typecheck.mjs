@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import WorkbenchArcTree from "../package/WorkbenchArcTree.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(scriptPath), "..");
@@ -106,10 +107,9 @@ export async function runProjectTypechecks(configPaths, overlay = null) {
   return failed ? 1 : 0;
 }
 
-/** Agent runs check other threads' held paths as the caller's arc tree has them; other runs get null. */
+/** Agent runs check other threads' held paths as the caller's arc tree has them; other runs read the filesystem. */
 async function loadArcOverlay() {
-  const { default: ArcTreeOverlay } = await import("../test/arc-overlay/ArcTreeOverlay.ts");
-  return await ArcTreeOverlay.load({ env: process.env, output: (line) => process.stdout.write(`${line}\n`), root: projectRoot });
+  return await WorkbenchArcTree.load({ cwd: projectRoot, warn: (line) => process.stdout.write(`${line}\n`) });
 }
 
 function selectCliConfigs() {
