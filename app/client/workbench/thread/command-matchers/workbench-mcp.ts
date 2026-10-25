@@ -3,7 +3,9 @@
  * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route wb calls, including deferred tools run through `mcp_call`, and retain dedicated Git, title, and status failure presentation.
  * - getWorkbenchMcpCommandDisplay: match simple wb calls to shared summary presentation.
  * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive ordinary command presentation from wb shell evidence,
- *   including failures whose reason is only result text, the expensive mark and its recorded queue wait.
+ *   including failures whose reason is only result text, the expensive mark, its recorded queue wait and its yield.
+ * - WorkbenchShellWaitLink/WorkbenchMcpShellWaitCommandItem/getWorkbenchMcpShellWaitCommandItem/readWorkbenchShellWaitShellId:
+ *   draw a `shell_wait` as the yielded command it collects, with the wait's own timing and outcome.
  * - readMcpTextContent: one MCP result content part's text.
  * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes.
  */
@@ -12,7 +14,8 @@ import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-se
 import type { NativeFileChange } from "./native-file-changes";
 import {
   getWorkbenchShellAggregatedOutput,
-  WorkbenchShellInputSchema,
+  getWorkbenchShellInputSchema,
+  WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME,
   WorkbenchShellResultSchema,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 
@@ -41,7 +44,23 @@ export type WorkbenchMcpShellCommandItem = CommandExecutionItem & {
   queuedMs?: number;
   shell: CommandShell;
   workbenchShell: true;
+  /** The call answers once the command has run this long, and the command runs on in the background. */
+  yieldMs?: number;
 };
+
+/**
+ * The yielded shell a `shell_wait` collects, and how that wait ended: with the shell's result, at its own `timeoutMs`
+ * while the shell still runs, or cut short by a steer; null while it waits or when it failed.
+ */
+export interface WorkbenchShellWaitLink {
+  ended: "collected" | "interrupted" | "timedOut" | null;
+  shellItemId: string;
+}
+
+/** A `shell_wait` drawn as the command it collects, with the wait's own timing and outcome. */
+export type WorkbenchMcpShellWaitCommandItem = CommandExecutionItem & { shell: CommandShell; shellWait: WorkbenchShellWaitLink };
+
+const ShellCallInputSchema = getWorkbenchShellInputSchema({ parallel: false, yields: true });
 
 function isWorkbenchMcpServer(server: string) {
   return server === "wb" || server === "wbex";
@@ -69,7 +88,7 @@ export function getWorkbenchMcpShellCommandItem(
   fallbackCwd = ".",
 ): WorkbenchMcpShellCommandItem | null {
   if (!isWorkbenchMcpServer(item.server) || item.tool !== "shell") return null;
-  const input = WorkbenchShellInputSchema.safeParse(item.arguments);
+  const input = ShellCallInputSchema.safeParse(item.arguments);
   if (!input.success) return null;
   const result = WorkbenchShellResultSchema.safeParse(item.result?.structuredContent);
   // A failure says why in its error, or (when the user stopped it) as plain result text.
@@ -106,6 +125,51 @@ export function getWorkbenchMcpShellCommandItem(
     workbenchShell: true,
     ...(input.data.expensive ? { expensive: true as const } : {}),
     ...(result.success && result.data.queuedMs !== undefined ? { queuedMs: result.data.queuedMs } : {}),
+    ...(input.data.yield_ms !== undefined ? { yieldMs: input.data.yield_ms } : {}),
+  };
+}
+
+/** The shell id a wb `shell_wait` call collects; a yielded shell's id is its row's item id. */
+export function readWorkbenchShellWaitShellId(item: ThreadItem) {
+  if (item.type !== "mcpToolCall" || !isWorkbenchMcpServer(item.server) || item.tool !== WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME) return null;
+  const args = item.arguments;
+  const shellId = args !== null && typeof args === "object" && !Array.isArray(args) ? args.shellId : null;
+  return typeof shellId === "string" && shellId ? shellId : null;
+}
+
+function readShellWaitEnd(item: McpToolCallItem): WorkbenchShellWaitLink["ended"] {
+  if (item.status === "inProgress") return null;
+  const structured = item.result?.structuredContent;
+  const kind = structured !== null && typeof structured === "object" && !Array.isArray(structured) ? structured.kind : null;
+  if (kind === "timedOut") return "timedOut";
+  if (kind === "interruptedBySteer") return "interrupted";
+  return WorkbenchShellResultSchema.safeParse(structured).success ? "collected" : null;
+}
+
+export function getWorkbenchMcpShellWaitCommandItem(
+  wait: McpToolCallItem,
+  shell: WorkbenchMcpShellCommandItem,
+): WorkbenchMcpShellWaitCommandItem {
+  const result = WorkbenchShellResultSchema.safeParse(wait.result?.structuredContent);
+  const failureText = wait.status === "failed" && !result.success
+    ? wait.error?.message || wait.result?.content.flatMap(part => readMcpTextContent(part) ?? []).join("\n") || null
+    : null;
+  return {
+    aggregatedOutput: result.success ? getWorkbenchShellAggregatedOutput(result.data) : failureText ?? "",
+    command: shell.command,
+    commandActions: [],
+    cwd: shell.cwd,
+    durationMs: wait.durationMs,
+    exitCode: result.success ? result.data.exitCode : null,
+    id: wait.id,
+    pluginId: wait.pluginId,
+    processId: null,
+    scriptPath: null,
+    shell: shell.shell,
+    shellWait: { ended: readShellWaitEnd(wait), shellItemId: shell.id },
+    source: "agent",
+    status: wait.status,
+    type: "commandExecution",
   };
 }
 

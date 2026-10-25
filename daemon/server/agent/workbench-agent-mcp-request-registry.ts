@@ -387,8 +387,9 @@ export class WorkbenchAgentMcpRequestRegistry {
   }
 
   /**
-   * The shell call `requestId` answered before its command ended: the command runs on under a new shell id, keeping
-   * its row's stop and live output, freeing the request id, and no longer counting as a running call or a wait.
+   * The shell call `requestId` answered before its command ended: the command runs on, keeping its row's stop and live
+   * output, freeing the request id, and no longer counting as a running call or a wait. Its shell id is its row's item
+   * id, so the transcript can show the `shell_wait` that collects it as that row's command.
    */
   backgroundShell(clientScope: WorkbenchAgentMcpClientScope, requestId: WorkbenchAgentMcpRequestId) {
     const requests = this.state.requestsByClient.get(clientScope);
@@ -396,7 +397,7 @@ export class WorkbenchAgentMcpRequestRegistry {
     if (!requests || !entry?.shellItemReferences || entry.controller.signal.aborted) {
       throw new Error("Only a running shell call can yield.");
     }
-    const shellId = randomUUID();
+    const shellId = entry.shellItemReferences[0] ?? randomUUID();
     requests.delete(requestId);
     if (requests.size === 0) this.state.requestsByClient.delete(clientScope);
     const wasWaiting = entry.steerInterruptible === true;

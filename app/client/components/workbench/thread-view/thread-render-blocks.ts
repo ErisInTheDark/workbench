@@ -4,7 +4,7 @@
  *   including the card histories and stitched cards that thread-card-folds builds.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
  * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
- * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context and calls a batch never started), preserve wait folds, then give qualifying subagent coordination one outer render block.
+ * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context and calls a batch never started, and drawing each shell wait as the command it collects), preserve wait folds, then give qualifying subagent coordination one outer render block.
  * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
  * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
@@ -44,6 +44,9 @@ import {
   type WorkbenchThreadRecallOperation,
 } from "../../../workbench/thread/thread-command-matchers";
 import { parseSleepCommandMs } from "../../../workbench/thread/command-matchers/sleep-command";
+import {
+  getWorkbenchMcpShellWaitCommandItem, readWorkbenchShellWaitShellId, type WorkbenchShellWaitLink,
+} from "../../../workbench/thread/command-matchers/workbench-mcp";
 import type { WorkbenchSubagentCommandTarget } from "../../../workbench/thread/command-matchers/workbench-cli";
 import { countKnownCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
@@ -69,13 +72,16 @@ const TASK_TITLE_ALREADY_MATCHES_OUTPUT = "Task title already matches";
 
 /**
  * `workbenchShell` marks a command derived from a wb shell call, which Workbench owns and the user can stop; such a call
- * may also be `expensive`, recording its slot wait as `queuedMs`.
+ * may also be `expensive`, recording its slot wait as `queuedMs`, or yield after `yieldMs`. `shellWait` marks a
+ * `shell_wait` drawn as the yielded command it collects.
  */
 export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & {
   expensive?: true;
   queuedMs?: number;
   shell?: CommandShell;
+  shellWait?: WorkbenchShellWaitLink;
   workbenchShell?: true;
+  yieldMs?: number;
 };
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" | "dynamicToolCall" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
@@ -481,6 +487,9 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
   const rolloverGroups = new Set(items.flatMap(item =>
     item.type === "mcpToolCall" && item.server === "wb" && item.tool === "thread_compact" && item.toolCallGroupId
       ? [item.toolCallGroupId] : []));
+  // A `shell_wait` names the yielded shell it collects by that shell's item id.
+  const shellCalls = new Map(items.flatMap(item =>
+    item.type === "mcpToolCall" && item.tool === "shell" ? [[item.id, item] as const] : []));
   let pending: Extract<ThreadRenderableBlock, { kind: "commandSequence" | "fileChangeSequence" | "reasoningSequence" | "webSearchSequence" }> | null = null;
   const flush = () => { if (pending) blocks.push(pending); pending = null; };
   const commands = (item: CommandSequenceItem) => {
@@ -548,6 +557,12 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (item.type === "mcpToolCall" && !isNativeFileOperation(item)) {
       const shell = getWorkbenchMcpShellCommandItem(item, fallbackCwd);
       if (shell) { if (!isHiddenCommandExecution(shell.command)) commands(shell); continue; }
+      const waitedShell = shellCalls.get(readWorkbenchShellWaitShellId(item) ?? "");
+      const waitedCommand = waitedShell ? getWorkbenchMcpShellCommandItem(waitedShell, fallbackCwd) : null;
+      if (waitedCommand) {
+        if (!isHiddenCommandExecution(waitedCommand.command)) commands(getWorkbenchMcpShellWaitCommandItem(item, waitedCommand));
+        continue;
+      }
       const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
       if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) continue;
       if (route?.kind === "simple") { commands(item); continue; }

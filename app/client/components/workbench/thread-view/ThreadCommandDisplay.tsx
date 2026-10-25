@@ -13,8 +13,10 @@ import { getCommandIcon } from "./thread-activity-chips";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 
-export default function ThreadCommandDisplay({ approval = null, command, display, expensive = false, failed = false, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, live = false, output, previewHeight }: {
+export default function ThreadCommandDisplay({ approval = null, command, display, expensive = false, failed = false, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, browse = false, live = false, output, previewHeight, waits = false }: {
   approval?: ThreadItemApprovalState | null;
+  /** A wb shell command that yields to the background, or a wait that collects one. */
+  waits?: boolean;
   /** The command failed, so its icon and own text read red. */
   failed?: boolean;
   /** The command is actually running (not queued), so its line shimmers. */
@@ -38,7 +40,7 @@ export default function ThreadCommandDisplay({ approval = null, command, display
       iconClassName={failed ? "text-danger" : undefined}
       live={live}
       meta={meta}
-      summary={<ThreadCommandSummary approval={approval} danger={failed} display={summaryDisplay} expensive={expensive} line />}
+      summary={<ThreadCommandSummary approval={approval} danger={failed} display={summaryDisplay} expensive={expensive} line waits={waits} />}
     >
       {display.cwdDisplay && !display.hideCommandCwd ? (
         <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">

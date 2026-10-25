@@ -470,6 +470,32 @@ test("already-matching task title sets stay in canonical items but leave no rend
   ]);
 });
 
+test("a shell wait renders as a copy of the yielded shell it collects, with the wait's own outcome", () => {
+  const shell = { ...mcp("shell-1", "shell", { command: "pnpm build", yield_ms: 5_000 }), status: "inProgress" as const };
+  const collected = {
+    ...mcp("wait-1", "shell_wait", { shellId: "shell-1" }),
+    result: { _meta: null, content: [], structuredContent: { cwd: "C:/repo", exitCode: 2, shell: "pwsh", stderr: "", stdout: "boom" } },
+  };
+  const timedOut = {
+    ...mcp("wait-2", "shell_wait", { shellId: "shell-1", timeoutMs: 1_000 }),
+    result: { _meta: null, content: [], structuredContent: { kind: "timedOut", version: 1 } },
+  };
+  const [block, ...rest] = buildRenderableBlocks([shell, timedOut, collected]);
+  assert.equal(rest.length, 0);
+  const [yielded, stillRunning, finished] = block ? getRenderableBlockItems(block) as CommandItem[] : [];
+  assert.equal(yielded?.yieldMs, 5_000);
+  assert.deepEqual(
+    [stillRunning, finished].map(item => item && [item.id, item.type, item.command, item.exitCode, item.aggregatedOutput, item.shellWait]),
+    [
+      ["wait-2", "commandExecution", "pnpm build", null, "", { ended: "timedOut", shellItemId: "shell-1" }],
+      ["wait-1", "commandExecution", "pnpm build", 2, "boom", { ended: "collected", shellItemId: "shell-1" }],
+    ],
+  );
+  // A wait whose shell is not in view stays an ordinary wb step.
+  const [orphan] = buildRenderableBlocks([mcp("wait-3", "shell_wait", { shellId: "elsewhere" })]);
+  assert.deepEqual(orphan ? getRenderableBlockItems(orphan).map(item => item.type) : null, ["mcpToolCall"]);
+});
+
 test("consecutive non-final agent messages share one commentary block until another row intervenes", () => {
   const reply = (id: string, phase: Extract<ThreadItem, { type: "agentMessage" }>["phase"]): ThreadItem => ({
     type: "agentMessage", id, text: id, phase, memoryCitation: null, delivery: null, questions: null,

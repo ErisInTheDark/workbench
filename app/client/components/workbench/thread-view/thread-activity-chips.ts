@@ -118,6 +118,8 @@ export function getCommandItemDisplay(item: CommandSequenceItem, context: Comman
  * every step lands in some chip.
  */
 function getCommandItemStats(item: CommandSequenceItem, context: CommandChipContext): ThreadCommandSummaryStats {
+  // A shell wait repeats its command's line; what that command did is already counted once on its own row.
+  if (item.type === "commandExecution" && "shellWait" in item) return { ...createEmptyCommandSummaryStats(), otherCommands: 1 };
   const route = item.type === "mcpToolCall"
     ? getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool }) : null;
   const stats = mergeCommandSummaryStats(createEmptyCommandSummaryStats(), route?.kind === "specialized"
@@ -142,7 +144,7 @@ function readArcEdit(item: CommandSequenceItem, context: CommandChipContext): Gi
     if (typed?.kind === "valid" && typed.result.kind === "success" && typed.result.edit) return typed.result.edit;
     return parseGitArcEditText((item.result?.content ?? []).flatMap(part => readMcpTextContent(part) ?? []).join("\n"));
   }
-  if (item.type !== "commandExecution" || getGitArcMatcherAction(getCommandItemDisplay(item, context)?.claimedBy) !== "edit") return null;
+  if (item.type !== "commandExecution" || "shellWait" in item || getGitArcMatcherAction(getCommandItemDisplay(item, context)?.claimedBy) !== "edit") return null;
   return parseGitArcEditText(item.aggregatedOutput ?? "");
 }
 

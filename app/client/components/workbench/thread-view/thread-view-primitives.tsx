@@ -3,7 +3,7 @@
  * - ThreadTextBlock: render wrapped plain thread text with optional monospace styling.
  * - ThreadApprovalGlyph: shield marking a tool's approval request or outcome.
  * - ThreadExpensiveGlyph: weight marking a wb shell command that queues for a machine-wide expensive slot.
- * - ThreadCommandSummary: render the compact command summary label used in thread turns, led by any approval and expensive glyphs; `line` fits one step-row line.
+ * - ThreadCommandSummary: render the compact command summary label used in thread turns, led by any approval, expensive and background-shell glyphs; `line` fits one step-row line.
  */
 "use client";
 
@@ -17,7 +17,7 @@ import type {
 import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
-import { ArrowRightIcon, ShieldCheckIcon, ShieldCogCornerIcon, ShieldMinusIcon, ShieldQuestionIcon, WeightIcon } from "../workbench-icons";
+import { ArrowRightIcon, HourglassIcon, ShieldCheckIcon, ShieldCogCornerIcon, ShieldMinusIcon, ShieldQuestionIcon, WeightIcon } from "../workbench-icons";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadSummaryText from "./ThreadSummaryText";
 
@@ -240,6 +240,10 @@ export function ThreadExpensiveGlyph () {
   return <ThreadSummaryGlyph Icon={WeightIcon} label="Expensive: queued for a machine-wide slot" />;
 }
 
+function ThreadWaitsGlyph () {
+  return <ThreadSummaryGlyph Icon={HourglassIcon} label="Yields or waits for a background shell" />;
+}
+
 /** `line` fits the summary on one clipped step-row line: no shell label, and an unmatched command reads as its own text. */
 export function ThreadCommandSummary ({
   approval = null,
@@ -247,6 +251,7 @@ export function ThreadCommandSummary ({
   display,
   expensive = false,
   line = false,
+  waits = false,
 }: {
   approval?: ThreadItemApprovalState | null;
   /** The command failed: an unmatched command's own text reads red, standing in for a failure label. */
@@ -254,6 +259,8 @@ export function ThreadCommandSummary ({
   display: ThreadCommandSummaryDisplay;
   expensive?: boolean;
   line?: boolean;
+  /** A shell that yields to the background, or a wait that collects one. */
+  waits?: boolean;
 }) {
   const stages = splitCommandSummaryStages(display.summaryParts);
   const plainCode = line && display.summaryKind === "raw";
@@ -268,6 +275,7 @@ export function ThreadCommandSummary ({
     >
       {approval ? <ThreadApprovalGlyph state={approval} /> : null}
       {expensive ? <ThreadExpensiveGlyph /> : null}
+      {waits ? <ThreadWaitsGlyph /> : null}
       {!line && display.showShell && display.shell ? (
         <span className="shrink-0 font-mono text-[0.78em] leading-[1.6] text-fg/muted">
           {display.shell}:

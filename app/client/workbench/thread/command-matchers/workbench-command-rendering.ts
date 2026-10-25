@@ -69,6 +69,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   // Former name of `message_agent`; keeps earlier calls rendering.
   "message",
   "message_wait",
+  "shell_wait",
   "subagent_list",
   "subagent_profiles",
   "subagent_create",
@@ -741,6 +742,9 @@ export function getWorkbenchCommandRoute(
         [CommandMatcher.Text("Waited for a message from "), ...target],
       );
     }
+    // Shown only when the yielded shell is not in view; otherwise the wait draws as that shell's command.
+    case "shell_wait":
+      return simple("workbench-cli.shell-wait", actionTarget("Waiting for ", "a shell"), actionTarget("Waited for ", "a shell"));
     case "skill":
       return renderSkillLoad(readString(args.name), context);
     case "git_arc_wait":

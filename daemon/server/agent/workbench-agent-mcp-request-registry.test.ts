@@ -209,6 +209,7 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
   yielded.shellQueue!.output!("stdout", Buffer.from("building..."));
   assert.throws(() => registry.backgroundShell("client-1", 99), /running shell call/u);
   const shellId = registry.backgroundShell("client-1", 1);
+  assert.equal(shellId, "item-1", "a yielded shell is named after its transcript row, so its waits can find it");
   assert.equal(registry.readBackgroundShellTail(shellId), "building...");
   const reused = registry.register("client-1", 1, registrationOptions(owner));
   reused.unregister();

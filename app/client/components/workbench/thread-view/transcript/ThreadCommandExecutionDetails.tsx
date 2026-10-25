@@ -99,6 +99,16 @@ function readGitCheckpointPresentation(item: CommandItem, claimedBy: ThreadComma
   return presentation;
 }
 
+/**
+ * What became of a shell that yields or a wait that collects one. A shell yields once it has run (queue included) for
+ * `yieldMs`, the same clock its call answers on; a wait can end before its shell does.
+ */
+function readBackgroundShellLabel(item: CommandItem, elapsedMs: number) {
+  if (item.shellWait?.ended === "timedOut") return "still running";
+  if (item.shellWait?.ended === "interrupted") return "interrupted";
+  return item.yieldMs !== undefined && elapsedMs >= item.yieldMs ? "yielded" : null;
+}
+
 export default function ThreadCommandExecutionDetails ({
   activeStartedAtMs,
   item,
@@ -119,14 +129,16 @@ export default function ThreadCommandExecutionDetails ({
   const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
   const shellQueue = useThreadItemShellQueue(item.id);
   const liveShellQueue = item.status === "inProgress" ? shellQueue : null;
-  // A running wb shell shows its newest output until its finished item brings all of it.
-  const shellOutput = useThreadItemShellOutput(item.id);
+  // A running wb shell shows its newest output until its finished item brings all of it; a wait shows its shell's.
+  const shellOutput = useThreadItemShellOutput(item.shellWait?.shellItemId ?? item.id);
   const shownOutput = item.aggregatedOutput || (item.status === "inProgress" ? shellOutput : null);
   const queueTiming = getShellQueueTiming({
     activeStartedAtMs, durationMs: item.durationMs, live: liveShellQueue, queuedMs: item.queuedMs,
   });
   const queuedDurationMs = useThreadItemLiveDuration(queueTiming.queued?.durationMs, queueTiming.queued?.activeStartedAtMs);
   const visibleDurationMs = useThreadItemLiveDuration(queueTiming.run?.durationMs, queueTiming.run?.activeStartedAtMs);
+  const waits = item.yieldMs !== undefined || Boolean(item.shellWait);
+  const backgroundShellLabel = readBackgroundShellLabel(item, (queuedDurationMs ?? 0) + (visibleDurationMs ?? 0));
   const outcomeCommandDisplay = useMemo(() => {
     const display = commandDisplay.summaryParts.length || !item.resultExpiredAt ? commandDisplay : {
       ...commandDisplay,
@@ -149,7 +161,7 @@ export default function ThreadCommandExecutionDetails ({
       <ThreadStepRow
         icon={<TerminalIcon size={16} />}
         meta={["Result expired."]}
-        summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} expensive={Boolean(item.expensive)} line />}
+        summary={<ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} expensive={Boolean(item.expensive)} line waits={waits} />}
       />
     );
   }
@@ -381,8 +393,10 @@ export default function ThreadCommandExecutionDetails ({
       expensive={Boolean(item.expensive)}
       failed={commandOutcome === "failed"}
       live={running}
+      waits={waits}
       meta={[
         commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0 ? <ThreadSummaryText text={`exit ${item.exitCode}`} /> : null,
+        backgroundShellLabel ? <ThreadSummaryText text={backgroundShellLabel} /> : null,
         queuedDurationMs !== null && queuedDurationMs !== undefined
           ? <span>queued <ThreadDurationText className="inline" durationMs={queuedDurationMs} /></span>
           : null,

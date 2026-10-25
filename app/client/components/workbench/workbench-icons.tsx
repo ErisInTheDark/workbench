@@ -90,6 +90,7 @@
  * - ShieldQuestionIcon/ShieldCheckIcon/ShieldCogCornerIcon/ShieldMinusIcon: tool approval requested, approved, auto-approved and denied glyphs.
  * - ShieldAlertIcon: skip-approvals mode glyph.
  * - WeightIcon: expensive wb shell command glyph.
+ * - HourglassIcon: yielding wb shell command and shell wait glyph.
  * - ComputerIcon: daemon project glyph.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -120,6 +121,14 @@ export function WeightIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <circle cx="12" cy="5" r="3" />
     <path d="M6.5 8a2 2 0 0 0-1.905 1.46L2.1 18.5A2 2 0 0 0 4 21h16a2 2 0 0 0 1.925-2.54L19.4 9.5A2 2 0 0 0 17.48 8Z" />
+  </OutlinedIcon>;
+}
+
+export function HourglassIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M5 22h14" /><path d="M5 2h14" />
+    <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" />
+    <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" />
   </OutlinedIcon>;
 }
 
