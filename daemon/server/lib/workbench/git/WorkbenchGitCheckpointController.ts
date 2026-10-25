@@ -254,7 +254,7 @@ export default class WorkbenchGitCheckpointController {
     this.lifecycle = new GitArcLifecycleController(resolveThreadIdentity);
     this.stashes = new GitArcStashController(resolveThreadIdentity);
     this.transfers = new GitArcOwnershipTransferController(resolveThreadIdentity);
-    this.views = new GitArcClaimViewController(this.proposals, resolveThreadIdentity);
+    this.views = new GitArcClaimViewController(resolveThreadIdentity);
     this.editArcPort = {
       activeClaimPaths: async identity => await this.findActiveArcClaimPaths(identity),
       claimAndWrite: async input => await this.claimArcEditPaths(input),

@@ -36,6 +36,7 @@
 - Consecutive commit-mode acceptances in one repository land as one ref transaction with one claim transition and outcome; the first invalid entry publishes only the valid prefix.
 - Batched acceptance progress advances past each proposal once its commit is built or it lands alone; publishing progress never waits inside the landing.
 - Arc tree composition and mirroring stop once their caller disconnects.
+- Arc trees hold other threads' live claims at HEAD plus the caller's own or inherited sealed layers, never those threads' unrelated sealed layers.
 - Stacking rewrites pending content amends into fresh-commit proposals over their live base and paths, using their fresh message; message-only amends stay unsealed. Sealed proposals never rewrite history.
 - Stash creation and restoration reject while any pending stack layer shapes the thread baseline; stacking rejects while saved work exists. Saved work may transfer onto inherited pending layers, but not onto recipient-owned pending layers.
 - Agent file edits and removals reject paths in the owner's unsealed pending proposals; stacking or rescinding unblocks them. Amend on a rescinded proposal revives it over current work and supersedes the original.

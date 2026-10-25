@@ -2,7 +2,7 @@
  * Exports:
  * - GitArcClaimViewInput: owner and hold-own choice for a build view.
  * - default GitArcClaimViewController: write the worktree as one owner builds it (every other live owner's dirty claims at
- *   their arc baselines, swapped through one index) and mirror selected paths of a view into an ignored directory,
+ *   HEAD plus the caller's own or inherited sealed layers, written through one index) and mirror selected paths of a view into an ignored directory,
  *   checking out only files whose content differs and removing only files its own record says it wrote. Both stop
  *   once the caller's signal aborts.
  */
@@ -14,8 +14,8 @@ import { z } from "zod";
 import type { GitArcClaimView } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { type GitArcHarness, normalizeThreadId } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
-import GitArcProposalController from "./GitArcProposalController";
-import GitArcRegistry, { getGitArcLiveClaimPaths } from "./GitArcRegistry";
+import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcStackController from "./GitArcStackController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -126,43 +126,48 @@ async function writeManifest(file: string, files: ReadonlyMap<string, MirroredSt
 }
 
 export default class GitArcClaimViewController {
-  constructor(
-    private readonly proposals: GitArcProposalController,
-    private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
-  ) {}
+  constructor(private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver) {}
 
   /** Build the view from the live worktree and registry; callers hold the repository's read gate around this only. */
   async readClaimView(input: GitArcClaimViewInput): Promise<GitArcClaimView> {
     return await GitObjectReadSession.run(async () => {
       input.signal?.throwIfAborted();
       const repository = await WorkbenchGitRepository.open(input.cwd);
-      const store = new GitCheckpointStore(repository, this.resolveThreadIdentity);
       const caller = normalizeThreadId(input.threadId);
       const [snapshot, entries] = await Promise.all([
         repository.writeWorktreeSnapshot(input.signal),
         new GitArcRegistry(repository, this.resolveThreadIdentity).list(),
       ]);
-      const owners = (await Promise.all(entries.map(async (entry) => {
-        if (!input.holdOwn && entry.harness === input.harness && entry.threadId === caller) return null;
+      const isCaller = (entry: GitArcRegistryEntry) => entry.harness === input.harness && entry.threadId === caller;
+      const baseline = await this.callerBaseline(repository, entries.find(isCaller), snapshot.head);
+      const owners = entries.flatMap((entry) => {
+        // Inactive plans with no retained arc own nothing yet; their listed paths are only planned scope.
+        if (entry.phase === "plan" && !entry.retainedArc) return [];
         const claimed = getGitArcLiveClaimPaths(entry);
-        const arc = entry.phase === "plan" ? entry.retainedArc : entry;
-        if (!claimed.length || !arc) return null;
-        const checkpoint = await store.readCheckpoint(entry.harness as GitArcHarness, entry.threadId, arc.checkpointCommit);
-        // The same stack-aware baseline `arc diff` measures this owner's work from.
-        const baseline = await this.proposals.logicalBaseline({
-          checkpointCommit: checkpoint.checkpointCommit, checkpointParent: checkpoint.parent,
-          cwd: repository.root, entry, harness: entry.harness, repository, threadId: entry.threadId,
-        });
-        return { baseline, claimed, threadId: entry.threadId };
-      }))).filter(owner => owner !== null);
+        return claimed.length && (input.holdOwn || !isCaller(entry)) ? [{ claimed, threadId: entry.threadId }] : [];
+      });
       input.signal?.throwIfAborted();
-      // Swapped paths are exactly the claimed paths that differ from each owner's baseline.
+      // Held paths are exactly the claimed paths that differ from the caller's baseline.
       const { changedPaths, tree } = await repository.writeTreeWithPathSources(
-        snapshot.tree, owners.map(({ baseline, claimed }) => ({ paths: claimed, source: baseline })),
+        snapshot.tree, owners.map(({ claimed }) => ({ paths: claimed, source: baseline })),
       );
       const held = owners.flatMap(({ threadId }, index) => changedPaths[index]!.length ? [{ paths: changedPaths[index]!, threadId }] : []);
       return { head: snapshot.head, held, repoRoot: repository.root, tree };
     });
+  }
+
+  /**
+   * HEAD with the sealed layers the caller's own arc builds on (its own, or a parent's it inherited), else plain HEAD.
+   * Other owners' layers never shape it: their sealed work is theirs until the caller's stack contains it.
+   */
+  private async callerBaseline(repository: WorkbenchGitRepository, entry: GitArcRegistryEntry | undefined, head: string | null) {
+    const arc = entry?.phase === "plan" ? entry.retainedArc : entry;
+    if (!entry?.stackTip || !arc || arc.phase === "resolved") return head;
+    const checkpoint = await new GitCheckpointStore(repository, this.resolveThreadIdentity)
+      .readCheckpoint(entry.harness as GitArcHarness, entry.threadId, arc.checkpointCommit);
+    const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
+    const tip = await stack.baselineTip(entry, { parent: checkpoint.parent });
+    return tip ? await stack.sealedTree(head, tip.commit) : head;
   }
 
   /**
