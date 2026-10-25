@@ -34,7 +34,7 @@
  * - OpenThreadIcon/ArchiveIcon: thread navigation and archive glyphs.
  * - WrapTextIcon/PreviewIcon: code display controls.
  * - CopyIcon/MoreVerticalIcon/CheckIcon: copy, overflow and confirmation glyphs.
- * - UnlinkIcon: detach glyph.
+ * - LinkIcon/UnlinkIcon: link and detach glyphs.
  * - AsteriskIcon/AsteriskOffIcon/PlusIcon: amend, disabled-amend and fresh-commit choices.
  * - SparkleIcon: creation glyph.
  * - SquareSparkleIcon/SquareDashedXIcon/SquareArrowRightIcon, with FileAddIcon/FileDeleteIcon/FileMoveIcon aliases: file-change glyphs.
@@ -730,6 +730,15 @@ export function MoreVerticalIcon(props: IconProps) {
 export function CheckIcon(props: IconProps) {
   return (
     <OutlinedIcon {...props}><path d="M20 6 9 17l-5-5" /></OutlinedIcon>
+  );
+}
+
+export function LinkIcon(props: IconProps) {
+  return (
+    <OutlinedIcon {...props}>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </OutlinedIcon>
   );
 }
 

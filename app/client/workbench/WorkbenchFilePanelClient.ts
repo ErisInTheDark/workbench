@@ -4,7 +4,7 @@
  * - WorkbenchFilePanelListener: subscriber for mounted file panel changes.
  * - WorkbenchFilePanelClientOptions: panel-controller collaborators.
  * - WorkbenchFilePanelClient: imperative mounted file panel API, including the toolbar, review mode, mark tags, comment
- *   margin, code block headers, the markdown source toggle and save-as hand-off.
+ *   margin, link chrome, code block headers, the markdown source toggle and save-as hand-off.
  * - default WorkbenchFilePanelClient: own panel DOM, history, drafts, conflicts, editor commands and cleanup.
  */
 
@@ -31,6 +31,7 @@ import {
 } from "./editor/inline-run-containers";
 import type { WorkbenchCodeBlockController } from "./editor/WorkbenchCodeBlockController";
 import type { WorkbenchCommentController } from "./editor/WorkbenchCommentController";
+import type { WorkbenchLinkController } from "./editor/WorkbenchLinkController";
 import type { TableStructureCommand, WorkbenchTableController } from "./editor/WorkbenchTableController";
 import { isFormatCommand } from "./editor/WorkbenchFormatCommandController";
 import type { ReviewMode, SuggestionLayout } from "./editor/WorkbenchSuggestionController";
@@ -81,6 +82,7 @@ export interface WorkbenchFilePanelClient {
   beginToolbarInteraction: (event: Event) => void;
   codeBlocks: WorkbenchCodeBlockController;
   comments: WorkbenchCommentController;
+  links: WorkbenchLinkController;
   tables: WorkbenchTableController;
   /** Discard the unsaved draft and reload the file from disk. */
   deleteDraft: () => Promise<void>;
@@ -180,6 +182,9 @@ function WorkbenchFilePanelClient(
     } else if (command === "comment") {
       if (source) editorClient.applySourceCommand(command);
       else editorClient.startCommentDraft();
+    } else if (command === "link") {
+      if (source) editorClient.applySourceCommand(command);
+      else editorClient.startLinkDraft();
     } else if (isFormatCommand(command)) {
       if (source) editorClient.applySourceCommand(command);
       else editorClient.applyFormatCommand(command);
@@ -327,6 +332,7 @@ function WorkbenchFilePanelClient(
     handlePointerMove: (event) => {
       if (event.target instanceof Node && editor.contains(event.target)) {
         editorClient.comments.syncHoverFromPointer(event.target);
+        editorClient.links.syncHoverFromPointer(event.target, event.clientY);
       }
       const revisionNode = event.target instanceof Element ? event.target.closest<HTMLElement>("del, ins") : null;
       if (revisionNode && editor.contains(revisionNode)) {
@@ -563,6 +569,7 @@ function WorkbenchFilePanelClient(
     getSnapshot,
     getToolbarState: editorClient.getToolbarState,
     codeBlocks: editorClient.codeBlocks,
+    links: editorClient.links,
     runCommand,
     tables: editorClient.tables,
     setCommentAuthor: (author) => {

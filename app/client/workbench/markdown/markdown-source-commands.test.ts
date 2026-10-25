@@ -67,6 +67,15 @@ test("code blocks fence the touched lines, tables open below them and comments s
   assert.equal(run("x|", "comment", null), "x<!-- | -->");
 });
 
+test("links wrap selected text with the caret in the address, take a selected url, and unwrap again", () => {
+  const link = (text: string, start: number, end: number) =>
+    show(applySourceCommand({ end, start, text }, "link", { author: null, style: DEFAULT_MARKDOWN_STYLE }));
+  assert.equal(link("see docs now", 4, 8), "see [docs](|) now");
+  assert.equal(link("go https://x.dev ok", 3, 16), "go [|](https://x.dev) ok");
+  assert.equal(link("a [docs](d.md) b", 2, 14), "a [docs] b", "the unwrapped text stays selected");
+  assert.equal(link("ab", 1, 1), "a[](|)b");
+});
+
 test("toolbar state reads the caret's line and open delimiters", () => {
   const formats = readSourceFormats(marked("## a **b|** c"), DEFAULT_MARKDOWN_STYLE);
   assert.equal(formats.block, "h2");

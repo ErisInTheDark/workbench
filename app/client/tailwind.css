@@ -74,6 +74,11 @@
     background-color: color-mix(in srgb, var(--attention) 12%, transparent);
   }
 
+  /* The text a link draft will link, standing in for the selection while focus is in the link field. */
+  ::highlight(link-draft) {
+    background-color: var(--selection);
+  }
+
   /* Mark tag palette; each tag's colour is chosen in settings and applied per editor by `mark-tag-styles`. */
   :root {
     --mark-tag-red: light-dark(#dc2626, #f87171);

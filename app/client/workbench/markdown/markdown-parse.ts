@@ -32,6 +32,7 @@ import {
 import { readInlineHtmlTag } from "./inline-html-tags";
 import { findHeldInlineFrontierStart, isHeldFrontierLine } from "./markdown-frontier";
 import { isIntrawordUnderscore } from "./markdown-escape";
+import { EXECUTABLE_HREF_SCHEME } from "./markdown-link-destination";
 import { readSuggestionBlock } from "./markdown-suggestion";
 import {
     parsePlaintextProjectFileLink,
@@ -318,9 +319,7 @@ export function formatThreadStateChangeMode(mode: string) {
     .join(" ");
 }
 
-/** Schemes that run code when followed; the editor keeps every other href verbatim so relative links round-trip. */
-const EXECUTABLE_HREF_SCHEME = /^\s*(?:javascript|vbscript|data):/i;
-
+/** The editor keeps every href verbatim except ones that run code, so relative links round-trip. */
 function sanitizeMarkdownHref(value: string, options: MarkdownParseOptions) {
   const trimmed = normalizeMarkdownHref(value);
   if (!trimmed) {

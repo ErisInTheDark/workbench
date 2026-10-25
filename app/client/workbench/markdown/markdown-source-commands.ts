@@ -3,7 +3,8 @@
  * - SourceText: markdown source text with a selection inside it.
  * - SourceFormats: the block and inline formats the toolbar shows as active at a source selection.
  * - SourceCommandContext: the file's writing habits and the comment author source commands write with.
- * - applySourceCommand: run a toolbar format, clear formatting or comment command on markdown source text.
+ * - SourceCommand: the toolbar commands source mode runs as text edits.
+ * - applySourceCommand: run a toolbar format, link, clear formatting or comment command on markdown source text.
  * - readSourceFormats: the formats a source selection sits in.
  * - continueSourceBlock: Enter inside a list item or quote line starts the next one, or ends an empty one.
  * - indentSourceLines: Tab and Shift+Tab: indent or outdent the touched lines, or indent at a collapsed caret.
@@ -35,7 +36,7 @@ export interface SourceCommandContext {
 }
 
 export type SourceCommand =
-  | "bold" | "italic" | "inline-code" | "del" | "ins" | "clear-format"
+  | "bold" | "italic" | "inline-code" | "link" | "del" | "ins" | "clear-format"
   | "h1" | "h2" | "h3" | "quote" | "unordered-list" | "ordered-list"
   | "code-block" | "table" | "comment";
 
@@ -192,6 +193,26 @@ function insertTable(source: SourceText): SourceText {
   return { end: caret, start: caret, text: `${before}${lead}${table}${trail}${after}` };
 }
 
+const SOURCE_LINK = /^\[([^\]\n]*)\]\([^)\n]*\)$/u;
+const SOURCE_URL = /^(?:[a-z][a-z\d+.-]*:\/\/|www\.|mailto:)\S+$/iu;
+
+/** A selected link unwraps to its text; a selected url becomes the destination; other text becomes the link's text. */
+function toggleLink(source: SourceText): SourceText {
+  const { end, start, text } = source;
+  const selected = text.slice(start, end);
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  const link = SOURCE_LINK.exec(selected);
+  if (link) {
+    return { end: start + link[1]!.length, start, text: `${before}${link[1]}${after}` };
+  }
+  if (SOURCE_URL.test(selected)) {
+    return { end: start + 1, start: start + 1, text: `${before}[](${selected})${after}` };
+  }
+  const caret = start + selected.length + 3;
+  return { end: caret, start: caret, text: `${before}[${selected}]()${after}` };
+}
+
 function insertComment(source: SourceText, author: string | null): SourceText {
   const name = normalizeCommentAuthor(author);
   const open = `<!-- ${name ? `[${name}]: ` : ""}`;
@@ -210,6 +231,8 @@ export function applySourceCommand(source: SourceText, command: SourceCommand, c
       return toggleWrap(source, context.style.emphasis, context.style.emphasis);
     case "inline-code":
       return toggleWrap(source, "`", "`");
+    case "link":
+      return toggleLink(source);
     case "del":
       return toggleWrap(source, "<del>", "</del>");
     case "ins":

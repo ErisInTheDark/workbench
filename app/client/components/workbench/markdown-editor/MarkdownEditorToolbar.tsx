@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default MarkdownEditorToolbar: the markdown editor's persistent toolbar: edit/suggest mode, formatting, code blocks,
+ * - default MarkdownEditorToolbar: the markdown editor's persistent toolbar: edit/suggest mode, formatting, links, code blocks,
  *   tables, comments, suggest-mode mark tags, the markdown source toggle and history, acting on the editor selection
  *   without taking it.
  * - CommandTooltip: an editor command's label and this platform's keybind chip, for buttons outside the toolbar too.
@@ -28,6 +28,7 @@ import {
   Heading2Icon,
   Heading3Icon,
   ItalicIcon,
+  LinkIcon,
   ListIcon,
   ListOrderedIcon,
   FeatherIcon,
@@ -47,6 +48,7 @@ const DISABLED_STATE: EditorToolbarState = {
   canEditSource: false,
   editable: false,
   inline: { bold: false, code: false, del: false, ins: false, italic: false },
+  link: false,
   markTag: null,
   reviewMode: "edit",
   showGitMarkers: false,
@@ -67,6 +69,7 @@ const GROUPS: ReadonlyArray<readonly ToolbarItem[]> = [
     { command: "bold", icon: <BoldIcon size={16} />, isActive: (state) => state.inline.bold },
     { command: "italic", icon: <ItalicIcon size={16} />, isActive: (state) => state.inline.italic },
     { command: "inline-code", icon: <CodeIcon size={16} />, isActive: (state) => state.inline.code },
+    { command: "link", icon: <LinkIcon size={16} />, isActive: (state) => state.link },
     { command: "clear-format", icon: <RemoveFormattingIcon size={16} /> },
   ],
   [

@@ -20,10 +20,10 @@ import type { EditorCommand } from "./editor-commands";
 import type { TableStructureCommand } from "./WorkbenchTableController";
 import type { PendingInlineFormatKey } from "./WorkbenchInlineFormatController";
 
-export type FormatCommand = Exclude<EditorCommand, "comment" | "source" | "undo" | "redo" | "save" | "save-as" | TableStructureCommand>;
+export type FormatCommand = Exclude<EditorCommand, "comment" | "link" | "source" | "undo" | "redo" | "save" | "save-as" | TableStructureCommand>;
 
 const NON_FORMAT_COMMANDS = new Set<EditorCommand>([
-  "comment", "source", "undo", "redo", "save", "save-as", "row-above", "row-below", "column-left", "column-right", "delete-row", "delete-column",
+  "comment", "link", "source", "undo", "redo", "save", "save-as", "row-above", "row-below", "column-left", "column-right", "delete-row", "delete-column",
 ]);
 
 export function isFormatCommand(command: EditorCommand): command is FormatCommand {

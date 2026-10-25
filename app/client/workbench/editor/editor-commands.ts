@@ -15,6 +15,7 @@ export type EditorCommand =
   | "bold"
   | "italic"
   | "inline-code"
+  | "link"
   | "del"
   | "ins"
   | "clear-format"
@@ -60,6 +61,7 @@ export const EDITOR_COMMANDS: Record<EditorCommand, EditorCommandInfo> = {
   bold: { label: "Bold", keybinds: [{ mod: true, key: "b" }] },
   italic: { label: "Italic", keybinds: [{ mod: true, key: "i" }] },
   "inline-code": { label: "Inline code", keybinds: [{ mod: true, code: "Backquote" }] },
+  link: { label: "Link", keybinds: [{ mod: true, key: "k" }] },
   del: { label: "Mark as deleted", keybinds: [{ mod: true, shift: true, key: "x" }] },
   ins: { label: "Mark as inserted", keybinds: [{ mod: true, shift: true, key: "a" }] },
   "clear-format": { label: "Clear formatting", keybinds: [{ mod: true, code: "Backslash" }] },

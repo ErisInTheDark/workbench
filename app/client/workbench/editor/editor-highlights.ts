@@ -6,7 +6,7 @@
  */
 import { createHighlightScope, type HighlightScope } from "../dom/css-highlights";
 
-export type EditorHighlightName = "comment-active" | "comment-draft" | "suggest-del" | "suggest-ins";
+export type EditorHighlightName = "comment-active" | "comment-draft" | "link-draft" | "suggest-del" | "suggest-ins";
 
 export type EditorHighlightScope = HighlightScope<EditorHighlightName>;
 

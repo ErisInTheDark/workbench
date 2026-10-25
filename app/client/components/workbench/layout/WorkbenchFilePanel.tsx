@@ -3,7 +3,7 @@
  * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces: a persistent
  *   markdown toolbar ending in the folder index, save (Save as with Shift, or for a new file, opening the path row
  *   above it) and hold-to-confirm reset, and the editor (or its markdown source)
- *   with its comment margin, suggestion originals and code block and table controls, followed by a row stepping between
+ *   with its comment margin, suggestion originals and code block, table and link controls, followed by a row stepping between
  *   the folder's documents.
  */
 "use client";
@@ -27,6 +27,7 @@ import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import DraftResetButton from "../markdown-editor/DraftResetButton";
 import MarkdownCodeBlockChrome from "../markdown-editor/MarkdownCodeBlockChrome";
 import MarkdownCommentMargin from "../markdown-editor/MarkdownCommentMargin";
+import MarkdownLinkChrome from "../markdown-editor/MarkdownLinkChrome";
 import MarkdownTableChrome from "../markdown-editor/MarkdownTableChrome";
 import MarkdownEditorToolbar from "../markdown-editor/MarkdownEditorToolbar";
 import WorkbenchSaveAsRow from "../file-actions/WorkbenchSaveAsRow";
@@ -60,7 +61,7 @@ const markdownProseClassName = `
   [& ol]:list-decimal
   [& blockquote]:text-fg/muted
   [& hr]:(my-8 [margin-inline:10%] [border-color:color-mix(in srgb, var(--text), var(--app-bg-solid) 70%)])
-  [& a]:(text-inherit decoration-accent decoration-[0.08em])
+  [& a]:(text-inherit underline decoration-dotted decoration-accent decoration-1)
   [& code]:(font-mono text-[0.94em] bg-fg/7 rounded-[0.35rem] px-[0.34em] py-[0.08em])
   [& pre]:(
     relative max-w-full overflow-x-auto whitespace-pre rounded-[0.75rem] text-left leading-[1.55]
@@ -446,6 +447,7 @@ export default function WorkbenchFilePanel ({
           />
           <MarkdownCodeBlockChrome client={client} />
           <MarkdownTableChrome client={client} />
+          <MarkdownLinkChrome client={client} route={route} />
           <div
             ref={reviewLayerRef}
             aria-label="Suggestions"

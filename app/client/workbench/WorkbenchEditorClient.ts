@@ -11,7 +11,7 @@
  * - WorkbenchEditorMutationRuntimeOptions: history, draft inspection and replay callbacks.
  * - WorkbenchEditorClientOptions: editor callbacks, dependencies and state readers.
  * - BlockFormat / EditorToolbarState: what the persistent toolbar shows as active, and the review mode.
- * - default WorkbenchEditorClient: own editor DOM, dialogs, formatting, code block and table structure, review
+ * - default WorkbenchEditorClient: own editor DOM, dialogs, formatting, links, code block and table structure, review
  *   (suggestions, comments and mark tags), the markdown source surface, mutations and event cleanup.
  */
 
@@ -61,6 +61,7 @@ import { captureRichCaretAnchor, findRichAnchorPoint, type CaretAnchor } from ".
 import { isMarkdownFile } from "workbench-shared/workbench/project/tree-utils";
 import WorkbenchCommentController, { type WorkbenchCommentController as CommentController } from "./editor/WorkbenchCommentController";
 import WorkbenchFormatCommandController, { type FormatCommand } from "./editor/WorkbenchFormatCommandController";
+import WorkbenchLinkController, { type WorkbenchLinkController as LinkController } from "./editor/WorkbenchLinkController";
 import WorkbenchMarkTagController from "./editor/WorkbenchMarkTagController";
 import WorkbenchInlineFormatController, {
     type CaretRenderContext,
@@ -170,6 +171,8 @@ export interface EditorToolbarState {
   canEditSource: boolean;
   editable: boolean;
   inline: InlineFormatState;
+  /** The selection is in a link. */
+  link: boolean;
   /** The mark tag of the text the selection starts in. */
   markTag: string | null;
   reviewMode: ReviewMode;
@@ -244,8 +247,8 @@ interface WorkbenchEditorClient {
   applyFormatCommand: (command: FormatCommand) => void;
   /** Tag the selection, or the caret's tagged run or word; an annotation, so suggest mode records no suggestion. */
   applyMarkTag: (name: string) => boolean;
-  /** Run a format or comment command as a markdown text edit in source mode. */
-  applySourceCommand: (command: FormatCommand | "comment") => void;
+  /** Run a format, link or comment command as a markdown text edit in source mode. */
+  applySourceCommand: (command: FormatCommand | "comment" | "link") => void;
   codeBlocks: CodeBlockController;
   tables: TableController;
   applyHoveredRevisionAction: (action: "accept" | "reject") => void;
@@ -265,6 +268,7 @@ interface WorkbenchEditorClient {
   handleRichInput: (event: Event) => WorkbenchRichInputResult;
   handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
   hideSaveConflictDialog: () => void;
+  links: LinkController;
   isPointerNearRevisionHoverUi: (clientX: number, clientY: number) => boolean;
   maybeClearPendingInlineFormatsForKey: (event: KeyboardEvent) => void;
   prepareForEdit: () => void;
@@ -275,6 +279,8 @@ interface WorkbenchEditorClient {
   setShowGitMarkers: (show: boolean) => void;
   setSuggestionLayout: (layout: SuggestionLayout) => void;
   startCommentDraft: () => boolean;
+  /** Open the link draft for the selection the toolbar press or shortcut acts on. */
+  startLinkDraft: () => boolean;
   subscribeToolbarState: (listener: () => void) => () => void;
   normalizeRichInputBlocksOutsideSelection: () => void;
   refreshEditorChrome: () => void;
@@ -1093,6 +1099,7 @@ function WorkbenchEditorClient(
       canEditSource,
       editable: Boolean(path) && (options.fileSessionState.mode === "rich" || canEditSource),
       inline: sourceFormats?.inline ?? (isSourceMode() ? NO_INLINE_FORMATS : inlineFormatController.getActiveInlineFormats()),
+      link: linkController.isActive(),
       markTag: options.fileSessionState.mode === "rich" ? markTagController.getActive() : null,
       reviewMode,
       showGitMarkers: !diffGutter.hidden,
@@ -1120,6 +1127,7 @@ function WorkbenchEditorClient(
   function refreshEditorChrome() {
     refreshInlineToolbars();
     updateCustomCaret();
+    linkController.refresh();
   }
 
   function renderDiffGutter() {
@@ -1324,6 +1332,7 @@ function WorkbenchEditorClient(
       commentController.scheduleRefresh();
       codeBlockController.scheduleRefresh();
       tableController.scheduleRefresh();
+      linkController.scheduleRefresh();
       scheduleDiffGutterRefresh();
     },
     // Undo and redo cover both columns; other editor shortcuts stay off the original so it keeps editor markup.
@@ -1356,6 +1365,24 @@ function WorkbenchEditorClient(
     },
   });
 
+  const linkController = WorkbenchLinkController({
+    cancel: (id) => lifecycle.cancel(id),
+    container: editorShell ?? editor,
+    editor,
+    getEditorHasFocus: options.getEditorHasFocus,
+    highlights,
+    isEditable: () => editor.getAttribute("contenteditable") === "true",
+    isRichMode,
+    prepareForEdit: () => suggestionController.prepareForEdit(),
+    runStructuralMutation: (mutate, hooks) => {
+      runStructuralMutation(mutate, hooks);
+    },
+    schedule: (id, delayMs, callback) => lifecycle.scheduleOnce(id, delayMs, callback),
+    scheduleFrame: (callback) => {
+      lifecycle.scheduleAnimationFrame("editor-link-refresh", callback);
+    },
+  });
+
   const markTagController = WorkbenchMarkTagController({
     editor,
     runStructuralMutation: (mutate, hooks) => {
@@ -1380,6 +1407,7 @@ function WorkbenchEditorClient(
     commentController.scheduleRefresh();
     codeBlockController.scheduleRefresh();
     tableController.scheduleRefresh();
+    linkController.scheduleRefresh();
   }
 
   /**
@@ -1392,6 +1420,7 @@ function WorkbenchEditorClient(
     commentController.refresh();
     codeBlockController.refresh();
     tableController.refresh();
+    linkController.refresh();
   }
 
   function setShowGitMarkers(show: boolean) {
@@ -1511,7 +1540,9 @@ function WorkbenchEditorClient(
       };
     }
 
-    return richInputController.handleRichInput(event);
+    const result = richInputController.handleRichInput(event);
+    if (!result.transformedBlock && !result.transformedListItem) linkController.handleInput(event);
+    return result;
   }
 
   function applyFormatCommand(command: FormatCommand) {
@@ -1525,6 +1556,12 @@ function WorkbenchEditorClient(
     prepareEditorForToolbarAction();
     clearToolbarInteraction();
     return commentController.startDraft();
+  }
+
+  function startLinkDraft() {
+    prepareEditorForToolbarAction();
+    clearToolbarInteraction();
+    return linkController.startDraft();
   }
 
   /** Mark tags annotate review, so they apply only while suggesting in rich mode. */
@@ -1682,7 +1719,7 @@ function WorkbenchEditorClient(
     refreshReviewLayoutNow();
   }
 
-  function applySourceCommand(command: FormatCommand | "comment") {
+  function applySourceCommand(command: FormatCommand | "comment" | "link") {
     if (!isSourceMode()) return;
     prepareEditorForToolbarAction();
     sourceController.applyCommand(command);
@@ -1852,7 +1889,7 @@ function WorkbenchEditorClient(
     "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown",
     "Shift", "Control", "Alt", "Meta", "CapsLock", "Escape", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
   ]);
-  const NON_EDITING_SHORTCUTS = new Set(["a", "c", "f", "s", "y", "z"]);
+  const NON_EDITING_SHORTCUTS = new Set(["a", "c", "f", "k", "s", "y", "z"]);
 
   /**
    * Suggest mode tags the blocks a keystroke is about to change, before its default action runs. A key that ends up
@@ -1984,6 +2021,7 @@ function WorkbenchEditorClient(
         return;
       }
       options.handleEditorBeforeInput(event);
+      if (!event.defaultPrevented && isRichMode()) linkController.handleBeforeInput(event);
     }
   }, { signal });
 
@@ -2076,11 +2114,13 @@ function WorkbenchEditorClient(
   }, { signal });
 
   editor.addEventListener("click", (event) => {
+    if (linkController.handleClick(event)) return;
     options.handleEditorClick(event);
   }, { signal });
 
   editor.addEventListener("pointerleave", () => {
     commentController.setHovered(null);
+    linkController.syncHoverFromPointer(null);
   }, { signal });
 
   editor.addEventListener("pointerdown", (event) => {
@@ -2223,6 +2263,7 @@ function WorkbenchEditorClient(
     handleRichInput,
     handleListStructureKeyDown,
     hideSaveConflictDialog,
+    links: linkController,
     isPointerNearRevisionHoverUi,
     maybeClearPendingInlineFormatsForKey,
     prepareForEdit: suggestionController.prepareForEdit,
@@ -2235,6 +2276,7 @@ function WorkbenchEditorClient(
     setShowGitMarkers,
     setSuggestionLayout: suggestionController.setLayout,
     startCommentDraft,
+    startLinkDraft,
     subscribeToolbarState: (listener) => {
       toolbarListeners.add(listener);
       return () => {

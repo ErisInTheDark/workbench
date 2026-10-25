@@ -29,7 +29,7 @@ interface OpenMark {
 }
 
 /** Marks whose markdown may run across the whitespace and threads between two equally marked words. */
-const GAP_SPANNING_MARKS = new Set<InlineMark["tag"]>(["strong", "em", "mark", "u"]);
+const GAP_SPANNING_MARKS = new Set<InlineMark["tag"]>(["a", "strong", "em", "mark", "u"]);
 const WORD_CHARACTER = /[\p{L}\p{N}]/u;
 
 function hasMark(marks: readonly InlineMark[], mark: InlineMark) {
