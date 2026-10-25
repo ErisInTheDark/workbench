@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default OpenCodeStreamCutController: end managed model responses early, at open reasoning for a pending steer, or before bare text so an unfinished agent retries through the commentary tool; tracks whether each execution set its task status.
+ * - OpenCodeEndTurnOutcome: whether an end turn request armed the next response's cut, or why it was refused.
+ * - default OpenCodeStreamCutController: end managed model responses early, at open reasoning for a pending steer, before bare text so an unfinished agent retries through the commentary tool, or at the first frame after the agent asked to end its turn; tracks whether each execution set its task status.
  */
 import type { SessionHttpResponse } from "@opencode/plugin/promise/session";
 import OpenCodeSseTap, { type OpenCodeSseTapDecision } from "./OpenCodeSseTap";
@@ -10,6 +11,9 @@ import { OPENCODE_COMMENTARY_TOOL_NAME } from "../opencode-workbench-rpc";
 /** Consecutive bare-text cuts without a work tool call before bare text is kept, so a model that ignores hints still ends. */
 const BARE_TEXT_CUT_LIMIT = 3;
 
+/** `unavailable`: cutting is disposed, so only a native response without tool calls can end the turn. */
+export type OpenCodeEndTurnOutcome = "ending" | "status-missing" | "steer-pending" | "unavailable";
+
 interface LiveResponse {
   sessionID: string;
   tap: OpenCodeSseTap | null;
@@ -17,12 +21,15 @@ interface LiveResponse {
   tracker: OpenCodeStreamCutTracker | null | undefined;
   /** Bare text arrived; it and every later event wait for the hint and cut. */
   bareText: boolean;
+  /** The agent ended its turn before this response; every event is held and the first one cuts it empty. */
+  ending: boolean;
   cutting: boolean;
 }
 
 /**
  * OpenCode delivers steers only between model steps. A clean synthetic finish ends the step early, so OpenCode's own
- * loop promotes the pending steer, or the admitted commentary hint, on the next step.
+ * loop promotes the pending steer, or the admitted commentary hint, on the next step. Without either, an empty
+ * finished step is OpenCode's native turn end.
  */
 export default class OpenCodeStreamCutController {
   /** Undelivered steer inbox IDs per session that have not yet caused a cut. */
@@ -33,6 +40,8 @@ export default class OpenCodeStreamCutController {
   private readonly strikes = new Map<string, number>();
   /** Sessions whose current execution set its task completed or blocked, so ending the turn is legal. */
   private readonly taskStatus = new Set<string>();
+  /** Sessions whose agent ended its turn; their next primary response is cut empty. */
+  private readonly ending = new Set<string>();
   private readonly live = new Map<string, Set<LiveResponse>>();
   private disposed = false;
 
@@ -52,7 +61,10 @@ export default class OpenCodeStreamCutController {
       this.options.warn("OpenCode stream cut session lookup failed; this response cannot be cut.");
       return;
     }
-    const response: LiveResponse = { sessionID: input.sessionID, tap: null, tracker: undefined, bareText: false, cutting: false };
+    const ending = this.ending.delete(input.sessionID);
+    const response: LiveResponse = {
+      sessionID: input.sessionID, tap: null, tracker: undefined, bareText: false, ending, cutting: false,
+    };
     response.tap = OpenCodeSseTap.wrap(input, {
       event: data => this.observe(response, data),
       settle: () => this.evaluate(response),
@@ -70,6 +82,7 @@ export default class OpenCodeStreamCutController {
   /** An undelivered user steer exists for the session. */
   async steerPending(sessionID: string, inboxID: string) {
     if (this.disposed || this.served.get(sessionID)?.has(inboxID)) return;
+    this.ending.delete(sessionID);
     let steers = this.pending.get(sessionID);
     if (!steers) this.pending.set(sessionID, steers = new Set());
     steers.add(inboxID);
@@ -99,12 +112,25 @@ export default class OpenCodeStreamCutController {
     return this.taskStatus.has(sessionID);
   }
 
+  /**
+   * The agent asked to end its turn. Ending needs the task status the bare-text guard also requires, and yields to
+   * an undelivered steer, which a later steer also does by disarming the cut.
+   */
+  endTurn(sessionID: string): OpenCodeEndTurnOutcome {
+    if (this.disposed) return "unavailable";
+    if (!this.taskStatus.has(sessionID)) return "status-missing";
+    if (this.pending.get(sessionID)?.size) return "steer-pending";
+    this.ending.add(sessionID);
+    return "ending";
+  }
+
   /** The session's execution ended; nothing it admitted can still be pending, and the next turn sets status anew. */
   settleSession(sessionID: string) {
     this.pending.delete(sessionID);
     this.served.delete(sessionID);
     this.strikes.delete(sessionID);
     this.taskStatus.delete(sessionID);
+    this.ending.delete(sessionID);
   }
 
   /** Stop cutting. Live responses keep forwarding their native bytes untouched. */
@@ -114,17 +140,27 @@ export default class OpenCodeStreamCutController {
     this.served.clear();
     this.strikes.clear();
     this.taskStatus.clear();
+    this.ending.clear();
   }
 
   private observe(response: LiveResponse, data: string): OpenCodeSseTapDecision {
     if (response.bareText) return "hold";
-    if (response.tracker === null || data === "[DONE]") return "forward";
+    if (response.tracker === null) return "forward";
+    // Forwarding releases every held event first, so a whole response arriving with its [DONE] would leak.
+    if (data === "[DONE]") return response.ending ? "hold" : "forward";
     const value: unknown = JSON.parse(data);
     const frame = value !== null && typeof value === "object" && !Array.isArray(value)
       ? value as Record<string, unknown> : null;
-    if (!frame) return "forward";
+    if (!frame) return response.ending ? "hold" : "forward";
     response.tracker ??= openCodeStreamCutTracker(frame);
-    if (!response.tracker) return "forward";
+    if (!response.tracker) {
+      if (response.ending) {
+        response.ending = false;
+        this.options.warn("OpenCode end turn could not cut an unsupported response wire; the turn continues.");
+      }
+      return "forward";
+    }
+    if (response.ending) return "hold";
     const text = response.tracker.text(frame);
     const guarded = text !== null && this.cutsBareText(response.sessionID);
     if (guarded && text.trim()) {
@@ -146,6 +182,10 @@ export default class OpenCodeStreamCutController {
   private async evaluate(response: LiveResponse) {
     const tracker = response.tracker;
     if (this.disposed || response.cutting || !response.tap || !tracker) return;
+    if (response.ending) {
+      await this.cut(response, response.tap, tracker);
+      return;
+    }
     if (response.bareText) {
       await this.cutBareText(response, response.tap, tracker);
       return;

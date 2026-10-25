@@ -109,6 +109,7 @@ async function verifyOpenCodeSteerCuts(input: {
     const steerProof = passphrase();
     const answerProof = passphrase();
     const bareProof = passphrase();
+    const endedProof = passphrase();
     const steer = `Stop deliberating. Reply with exactly: ${steerProof}`;
     const { agentPath, agentSource, harness, reasoningEffort, serviceTier, contextWindowTokens } = profile;
     const selection: WorkbenchComposerProfileTargetSelection = {
@@ -116,13 +117,15 @@ async function verifyOpenCodeSteerCuts(input: {
       settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens },
     };
     // The steered step first answers in bare text, which is cut and hinted; the retried step answers through the
-    // commentary tool. That answer ends the turn with its task unfinished, so Workbench continues it once to completion.
+    // commentary tool. That answer ends the turn with its task unfinished, so Workbench continues it once to completion,
+    // which ends through the end turn tool: the step after it is cut empty, so its scripted text never lands.
     fakeModel?.enqueue([
       { reasoning: `Weighing ${answerProof}`, hold: true },
       { text: bareProof, bare: true },
       { text: steerProof },
       fakeOpenCodeDirectTool("task_completed", {}),
-      { text: "" },
+      fakeOpenCodeDirectTool("end_turn", {}),
+      { text: endedProof, bare: true },
     ]);
     const held = fakeModel?.nextHeld(signal);
     const threadId = await runtime.launchDraft(projectId, selection, [
@@ -171,6 +174,7 @@ async function verifyOpenCodeSteerCuts(input: {
           value.turns.some(turn => turn.id !== turnId && turn.status === "completed"));
         assert.equal(continued.turns.length, 2, "Workbench must continue the unfinished turn exactly once");
         assert.equal(fakeModel.queuedActions, 0, "The continuation must consume its scripted completion");
+        assert.ok(!JSON.stringify(continued).includes(endedProof), "The step after an end turn call must be cut empty");
       } else {
         const answeredBeforeSteer = items.slice(reasoningIndex, steerIndex).some(item => item.type === "agentMessage");
         console.log(`[opencode paid] ${model} steer ${answeredBeforeSteer ? "waited for a boundary" : "cut reasoning"}`);

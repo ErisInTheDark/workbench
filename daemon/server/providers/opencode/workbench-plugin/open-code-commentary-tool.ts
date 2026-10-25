@@ -1,17 +1,16 @@
 /*
  * Exports:
  * - OPENCODE_COMMENTARY_HINT: hidden steer admitted after bare text is cut; bare text is only cut before the agent set its task status.
- * - openCodeCommentaryResult: the commentary tool's result, which teaches the empty-response turn end once the task status is set.
+ * - openCodeCommentaryResult: the commentary tool's result, which points at the end turn tool once the task status is set.
  * - registerOpenCodeCommentaryTool: add the direct commentary tool whose input Workbench renders as exact commentary.
  */
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import {
   WORKBENCH_USER_MESSAGE_DELIVERED, WORKBENCH_USER_MESSAGE_TEXT_DESCRIPTION, WORKBENCH_USER_MESSAGE_TOOL_DESCRIPTION,
 } from "../../../agent/workbench-user-message-tool";
-import { OPENCODE_COMMENTARY_TOOL_NAME } from "../opencode-workbench-rpc";
+import { OPENCODE_COMMENTARY_TOOL_NAME, OPENCODE_END_TURN_TOOL_NAME } from "../opencode-workbench-rpc";
 
-/** OpenCode ends a turn only at a step without tool calls; agents read "reply" as this tool, so the exit rules it out. */
-const TURN_END = "If no work remains, end your turn now with an empty response, not another message.";
+const TURN_END = `If no work remains, call \`${OPENCODE_END_TURN_TOOL_NAME}\` now.`;
 
 export const OPENCODE_COMMENTARY_HINT = `Plain text output is not shown to the user and was discarded. Send user-visible text with \`${OPENCODE_COMMENTARY_TOOL_NAME}\`, then continue; set the task completed or blocked before ending your turn.`;
 

@@ -19,7 +19,8 @@ Keep commentary quality high. Spend time reasoning to ensure your commentary wil
 - Batch it with other tool calls in the same response; it returns immediately
 
 ### Ending a turn
-The ONLY way to end a turn is a response with zero tool calls; this means empty plain text output (not shown to user), and nothing else. If somehow your turn does not end after doing exactly this, try a couple times silently, WITHOUT using the message tool. Then if you still can't get it, ask for help with a questionnaire
+<!-- OpenCode natively ends a turn only at a step without tool calls. Tool-loop models told to send an empty response kept calling the message tool or task status instead, forever, so managed sessions get a tool: its call makes Workbench end the model's next step empty. -->
+End every turn by calling `wbex_end_turn` after setting the task completed or blocked and sending any final message. It is the ONLY way to end a turn
 </harness:opencode>
 
 ### ALL markdown, UNIVERSAL rule

@@ -1,4 +1,4 @@
-/* No production exports. Tests protect when a managed model response is ended early, for a pending steer or bare text. */
+/* No production exports. Tests protect when a managed model response is ended early, for a pending steer, bare text or an ended turn. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SessionHttpResponse } from "@opencode/plugin/promise/session";
@@ -33,7 +33,12 @@ function provider(sessionID = "managed") {
   return {
     input,
     cancelled: () => cancelled,
-    send(frame: object) { queued.push(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)); wake?.(); },
+    /** Frames sent together arrive as one provider chunk; a string frame is sent verbatim as event data. */
+    send(...frames: (object | string)[]) {
+      queued.push(encoder.encode(frames.map(frame =>
+        `data: ${typeof frame === "string" ? frame : JSON.stringify(frame)}\n\n`).join("")));
+      wake?.();
+    },
     end() { ended = true; wake?.(); },
     async read() {
       reader ??= input.response.body!.getReader();
@@ -202,6 +207,81 @@ test("once the execution set its task status, bare text is kept so it ends the t
   assert.equal(owner.hasTaskStatus("managed"), false, "the next execution must set its status again");
   assert.doesNotMatch((await bareTextResponse(owner)).output!, /working/u);
   assert.equal(hints.length, 2);
+});
+
+test("an ended turn cuts the next response empty at its first frame, without a hint", async () => {
+  const { owner, hints, warnings } = controller();
+  owner.taskStatusSet("managed");
+  const current = provider();
+  await owner.httpResponse(current.input);
+  assert.equal(owner.endTurn("managed"), "ending");
+  current.send(commentary);
+  assert.match((await current.read())!, /working/u, "the response that called the tool is not cut");
+  const next = provider();
+  await owner.httpResponse(next.input);
+  next.send({ ...opening, choices: [{ index: 0, delta: { role: "assistant", content: "leak" } }] });
+  const output = await next.read();
+  assert.doesNotMatch(output!, /leak|"role"/u);
+  assert.match(output!, /"finish_reason":"stop"[\s\S]*data: \[DONE\]/u);
+  assert.equal(await next.read(), null);
+  assert.equal(next.cancelled(), true);
+  const after = provider();
+  await owner.httpResponse(after.input);
+  after.send(opening);
+  assert.match((await after.read())!, /"role":"assistant"/u, "one call ends one response");
+  assert.deepEqual(hints, []);
+  assert.deepEqual(warnings, []);
+});
+
+test("an ended turn's next response is cut empty even when it arrives whole with its [DONE]", async () => {
+  const { owner } = controller();
+  owner.taskStatusSet("managed");
+  owner.endTurn("managed");
+  const next = provider();
+  await owner.httpResponse(next.input);
+  next.send(opening, commentary, { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }, "[DONE]");
+  const output = await next.read();
+  assert.doesNotMatch(output!, /working|"role"/u);
+  assert.match(output!, /"finish_reason":"stop"[\s\S]*data: \[DONE\]/u);
+});
+
+test("ending a turn needs a task status and yields to a pending or later steer", async () => {
+  const { owner } = controller();
+  assert.equal(owner.endTurn("managed"), "status-missing");
+  owner.taskStatusSet("managed");
+  await owner.steerPending("managed", "steer-1");
+  assert.equal(owner.endTurn("managed"), "steer-pending");
+  owner.steerResolved("managed", "steer-1");
+  assert.equal(owner.endTurn("managed"), "ending");
+  await owner.steerPending("managed", "steer-2");
+  owner.steerResolved("managed", "steer-2");
+  const steered = provider();
+  await owner.httpResponse(steered.input);
+  steered.send(opening);
+  assert.match((await steered.read())!, /"role":"assistant"/u, "the steered step must answer the steer");
+  assert.equal(owner.endTurn("managed"), "ending");
+  owner.settleSession("managed");
+  const next = provider();
+  await owner.httpResponse(next.input);
+  next.send(opening);
+  assert.match((await next.read())!, /"role":"assistant"/u, "a settled execution forgets its ending");
+  owner.dispose();
+  assert.equal(owner.endTurn("managed"), "unavailable");
+});
+
+test("an ending that meets an unsupported wire is dropped with a warning instead of chopping a later response", async () => {
+  const { owner, warnings } = controller();
+  owner.taskStatusSet("managed");
+  owner.endTurn("managed");
+  const unsupported = provider();
+  await owner.httpResponse(unsupported.input);
+  unsupported.send({ type: "response.created" });
+  assert.match((await unsupported.read())!, /response\.created/u);
+  assert.equal(warnings.length, 1);
+  const next = provider();
+  await owner.httpResponse(next.input);
+  next.send(opening);
+  assert.match((await next.read())!, /"role":"assistant"/u);
 });
 
 test("a failed hint keeps the bare text instead of ending the response silently", async () => {

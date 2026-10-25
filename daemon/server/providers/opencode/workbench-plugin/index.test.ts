@@ -6,8 +6,9 @@ import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDire
 import path from "node:path";
 import type { Result } from "@opencode/plugin/promise/tool";
 import { createOpenCodeWorkbenchPlugin, MANAGED_NATIVE_TOOLS, readOpenCodeGoQuota, resolveOpenCodeGoCredential } from "./index";
-import { OPENCODE_COMMENTARY_TOOL_NAME } from "../opencode-workbench-rpc";
+import { OPENCODE_COMMENTARY_TOOL_NAME, OPENCODE_END_TURN_TOOL_NAME } from "../opencode-workbench-rpc";
 import { OPENCODE_COMMENTARY_HINT, openCodeCommentaryResult } from "./open-code-commentary-tool";
+import { openCodeEndTurnResult } from "./open-code-end-turn-tool";
 
 async function* lifecycleEvents({ signal }: { signal: AbortSignal }) {
   if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -164,14 +165,18 @@ test("managed sessions keep only allowlisted native tools while ordinary session
   const owner = await fixture();
   const cleanup = await owner.setup();
   try {
-    const retained = [...MANAGED_NATIVE_TOOLS, "wb_shell", "wbex_task_completed", OPENCODE_COMMENTARY_TOOL_NAME];
+    const retained = [...MANAGED_NATIVE_TOOLS, "wb_shell", "wbex_task_completed", OPENCODE_COMMENTARY_TOOL_NAME,
+      OPENCODE_END_TURN_TOOL_NAME];
     const unlisted = ["shell", "read", "grep", "glob", "question", "skill", "subagent", "opencode_worktree_create", "future_native"];
     const tools = Object.fromEntries([...unlisted, ...retained].map(name => [name, { description: name }]));
     await owner.hooks.get("context")!({ sessionID: "managed", tools } as never);
     assert.deepEqual(Object.keys(tools), retained);
-    const ordinaryCommentary = { [OPENCODE_COMMENTARY_TOOL_NAME]: { description: "commentary" }, edit: { description: "edit" } };
+    const ordinaryCommentary = {
+      [OPENCODE_COMMENTARY_TOOL_NAME]: { description: "commentary" }, [OPENCODE_END_TURN_TOOL_NAME]: { description: "end" },
+      edit: { description: "edit" },
+    };
     await owner.hooks.get("context")!({ sessionID: "ordinary", tools: ordinaryCommentary } as never);
-    assert.deepEqual(Object.keys(ordinaryCommentary), ["edit"], "ordinary sessions keep native text output");
+    assert.deepEqual(Object.keys(ordinaryCommentary), ["edit"], "ordinary sessions keep native text output and turn ends");
     for (const tool of unlisted) {
       await assert.rejects(owner.hooks.get("execute.before")!({ sessionID: "managed", tool } as never), /unavailable/);
       await owner.hooks.get("execute.before")!({ sessionID: "ordinary", tool } as never);
@@ -225,19 +230,40 @@ test("patch targets appear while both response and arguments are unfinished and 
   } finally { if (typeof cleanup === "function") await cleanup(); }
 });
 
-test("a successful task status call turns commentary results into turn-end guidance and lets bare text end the turn", async () => {
-  const bareText = async (owner: Awaited<ReturnType<typeof fixture>>) => {
-    const frame = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
-    const input = { sessionID: "managed", kind: "primary", model: { providerID: "opencode-go", modelID: "test" },
-      request: new Request("https://example.test/v1/chat/completions"),
-      response: new Response(new TextEncoder().encode(
-        frame({ id: "c", object: "chat.completion.chunk", model: "m", choices: [{ index: 0, delta: { role: "assistant" } }] })
-        + frame({ choices: [{ index: 0, delta: { content: "Done." } }] }),
-      ), { headers: { "content-type": "text/event-stream" } }),
-    };
-    await owner.hooks.get("http.response")!(input as never);
-    return await input.response.text();
+/** A managed chat-wire model response answering "Done." in bare text, as OpenCode reads it through the companion. */
+async function bareText(owner: Awaited<ReturnType<typeof fixture>>) {
+  const frame = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
+  const input = { sessionID: "managed", kind: "primary", model: { providerID: "opencode-go", modelID: "test" },
+    request: new Request("https://example.test/v1/chat/completions"),
+    response: new Response(new TextEncoder().encode(
+      frame({ id: "c", object: "chat.completion.chunk", model: "m", choices: [{ index: 0, delta: { role: "assistant" } }] })
+      + frame({ choices: [{ index: 0, delta: { content: "Done." } }] }),
+    ), { headers: { "content-type": "text/event-stream" } }),
   };
+  await owner.hooks.get("http.response")!(input as never);
+  return await input.response.text();
+}
+
+test("the end turn tool needs a task status, then turns the session's next response into an empty finished step", async () => {
+  const owner = await fixture({ catalogue: ["task_completed"] });
+  const cleanup = await owner.setup();
+  const call = { sessionID: "managed", id: "call", messageID: "message" };
+  try {
+    const end = owner.tools.get(OPENCODE_END_TURN_TOOL_NAME)!;
+    assert.equal((await end.execute({}, call)).content, openCodeEndTurnResult("status-missing"));
+    await owner.tools.get("task_completed")!.execute({}, call);
+    assert.equal((await end.execute({}, { ...call, sessionID: "other" })).content, openCodeEndTurnResult("status-missing"),
+      "status belongs to the session that set it");
+    assert.equal((await end.execute({}, call)).content, openCodeEndTurnResult("ending"));
+    const ended = await bareText(owner);
+    assert.doesNotMatch(ended, /Done\.|"role"/u, "nothing from the ending response reaches OpenCode");
+    assert.match(ended, /"finish_reason":"stop"[\s\S]*data: \[DONE\]/u);
+    assert.match(await bareText(owner), /Done\./u, "only the response after the call is ended");
+    assert.deepEqual(owner.synthetic, []);
+  } finally { if (typeof cleanup === "function") await cleanup(); }
+});
+
+test("a successful task status call turns commentary results into turn-end guidance and lets bare text end the turn", async () => {
   const call = { sessionID: "managed", id: "call", messageID: "message" };
   const failing = await fixture({ catalogue: ["task_completed"], toolFails: true });
   const failingCleanup = await failing.setup();

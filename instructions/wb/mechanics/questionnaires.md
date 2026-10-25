@@ -22,7 +22,7 @@ Constraints:
 Response:
 - **On questionnaire tool timeout error (not your Workbench Long Wait intervals!), override normal workflow completion: immediately call <tool id="task_blocked" />; end the turn with <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
-<harness:opencode>an empty response</harness:opencode>
+<harness:opencode>a `wbex_end_turn` call</harness:opencode>
 <else>empty final</else>
 </>. No commentary, retries, recall, or other work**
 - If custom text response, classify whether it narrows, clarifies, or changes the visible plan

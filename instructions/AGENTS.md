@@ -307,18 +307,17 @@ Briefs, reviews, and command-output answers must include the facts the user need
 ## Turn End
 
 <!-- Claude Code's harness re-prompts after an empty final, so Claude ends with a marker Workbench hides instead. -->
-<!-- OpenCode has no final channel: a turn ends at the first step without tool calls. Open-weight models told to send an "empty final" hunt for a channel that does not exist, writing `<final>` or "Empty final." as text (which Workbench cuts) or calling a tool to end (which continues the turn), so OpenCode gets its real mechanics. -->
-<!-- OpenCode models also read "reply" as the commentary tool, the only channel they are told reaches the user: told to end with an "empty reply", they send a tiny message ("Complete.") plus another task status call, every step, forever. Told text is discarded, they also distrust a text-only ending and retreat to the commentary tool. The rendering mechanics' "Ending a turn" section owns the exact OpenCode exit; these rules only name it, so no wording here can contradict it. -->
+<!-- OpenCode has no final channel: a turn natively ends at the first step without tool calls. Open-weight models told to send an "empty final", "empty reply" or "empty response" hunt for a channel that does not exist, or read it as the commentary tool, and loop on tiny messages and task status calls forever. Managed OpenCode sessions therefore end through a `wbex_end_turn` call, which suits their tool-loop habit. The rendering mechanics' "Ending a turn" section owns the exact OpenCode exit; these rules only name it, so no wording here can contradict it. -->
 **Hard rule: end every turn with <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
-<harness:opencode>an empty response</harness:opencode>
+<harness:opencode>a `wbex_end_turn` call</harness:opencode>
 <else>empty final</else>
 </>.**
 
 - Put the full ending response in commentary.
 - Then send <>
 <harness:claude>final with exclusively `<wb:end />`; never put user-visible text in final</harness:claude>
-<harness:opencode>an empty response</harness:opencode>
+<harness:opencode>a `wbex_end_turn` call</harness:opencode>
 <else>empty final; never put user-visible text in final</else>
 </>.
 - If the response reveals more work, continue the workflow.

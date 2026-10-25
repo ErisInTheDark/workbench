@@ -16,6 +16,7 @@ import OpenCodePatchStreamController from "./OpenCodePatchStreamController";
 import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
 import OpenCodeStreamCutController from "./OpenCodeStreamCutController";
 import { OPENCODE_COMMENTARY_HINT, registerOpenCodeCommentaryTool } from "./open-code-commentary-tool";
+import { registerOpenCodeEndTurnTool } from "./open-code-end-turn-tool";
 import providerAccountFingerprint from "../../provider-account-fingerprint";
 import {
   isOpenCodeWorkbenchToolName,
@@ -295,6 +296,7 @@ export function createOpenCodeWorkbenchPlugin(
         context.tool.transform(editor => {
           tools.register(editor);
           registerOpenCodeCommentaryTool(editor, sessionID => cuts.hasTaskStatus(sessionID));
+          registerOpenCodeEndTurnTool(editor, sessionID => cuts.endTurn(sessionID));
         }),
         context.permission.hook("evaluate", async input => {
           if (input.action !== "edit") return;

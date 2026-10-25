@@ -10,6 +10,7 @@
  * - isOpenCodeWorkbenchToolName: whether a native OpenCode tool name belongs to a companion-registered wb tool.
  * - OPENCODE_COMMENTARY_TOOL_NAME: direct companion tool whose `text` input is the agent's exact user-visible commentary.
  * - isOpenCodeCommentaryToolName: whether a recorded tool part is commentary, including the pre-rename name in older sessions.
+ * - OPENCODE_END_TURN_TOOL_NAME: direct companion tool that ends a managed turn; its `wbex_` name keeps it managed-only and unrecorded.
  * - OPENCODE_TASK_STATUS_TOOLS: companion tool names whose success means the agent may end its turn.
  */
 import { z } from "zod";
@@ -21,6 +22,7 @@ export const OPENCODE_WORKBENCH_DIRECT_NAMESPACE = "wbex";
 /** Named like a direct wb tool, but the companion answers it locally; its input renders as commentary. */
 export const OPENCODE_COMMENTARY_TOOL_NAME = `${OPENCODE_WORKBENCH_DIRECT_NAMESPACE}_${WORKBENCH_USER_MESSAGE_TOOL_NAME}`;
 const LEGACY_COMMENTARY_TOOL_NAME = "mcp__user__message";
+export const OPENCODE_END_TURN_TOOL_NAME = `${OPENCODE_WORKBENCH_DIRECT_NAMESPACE}_end_turn`;
 /** Workbench resumes a turn that ends before one of these succeeds. */
 export const OPENCODE_TASK_STATUS_TOOLS: ReadonlySet<string> = new Set(["task_completed", "task_blocked"]);
 
