@@ -225,6 +225,47 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
   assert.ok(isWorkbenchAgentMcpShellStop(yielded.signal.reason));
 });
 
+test("a steer ends a yielding shell's window without stopping its command, unless it still waits in the queue", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const shell = (requestId: number) => registry.register("client-1", requestId, {
+    owner, toolName: "shell", yields: true, shellItem: { threadId, references: [`item-${requestId}`] },
+  });
+
+  const running = shell(1);
+  assert.equal(registry.interruptThreadWaits(threadId), 1);
+  assert.equal(running.earlyYield?.aborted, true, "the call may answer now");
+  assert.equal(running.signal.aborted, false, "the command runs on");
+  registry.backgroundShell("client-1", 1);
+
+  const queued = shell(2);
+  queued.shellQueue!.queued(0);
+  assert.equal(registry.interruptThreadWaits(threadId), 1);
+  assert.ok(isWorkbenchAgentMcpSteerInterruption(queued.signal.reason), "a command that never started is cancelled, not backgrounded");
+  queued.unregister();
+
+  const plain = registry.register("client-1", 3, { owner, toolName: "shell", shellItem: { threadId, references: ["item-3"] } });
+  assert.equal(plain.earlyYield, undefined);
+  assert.equal(registry.interruptThreadWaits(threadId), 0, "a backgrounded or plain shell takes no steer");
+  assert.equal(running.signal.aborted, false);
+  assert.equal(plain.signal.aborted, false);
+  plain.unregister();
+  registry.stopBackgroundShells(threadId);
+});
+
+test("a yielding shell starting while a steer is undelivered yields at once", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  registry.activateUndeliveredMessages(owner, async () => [{}]);
+  const shell = registry.register("client-1", 1, { owner, toolName: "shell", yields: true, shellItem: { threadId, references: ["item-1"] } });
+  await new Promise<void>(resolve => { setImmediate(resolve); });
+  assert.equal(shell.earlyYield?.aborted, true);
+  assert.equal(shell.signal.aborted, false);
+  shell.unregister();
+});
+
 test("a yielded shell's result goes once to its own thread, and its turn ending stops and discards it", async () => {
   const registry = new WorkbenchAgentMcpRequestRegistry();
   const owner = {};

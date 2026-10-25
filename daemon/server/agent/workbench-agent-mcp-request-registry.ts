@@ -6,8 +6,8 @@
  * - WorkbenchAgentMcpShellOutputEntry: one live shell's newest output and the transcript references naming it.
  * - WorkbenchAgentBatchTurn: how a serial call's turn in its provider tool batch ended.
  * - WorkbenchAgentMcpUndeliveredMessage: one message admitted for a thread that its agent has not received; a sender marks an agent message.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, steer interruption of waits (including waits attaching while a message is
- *   undelivered), user shell stops and queue skips, yielded shells running on until collected or their turn ends, provider tool batches
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, steer interruption of waits and shell yield windows (including those
+ *   attaching while a message is undelivered), user shell stops and queue skips, yielded shells running on until collected or their turn ends, provider tool batches
  *   and serial call turns, wait, shell-queue and windowed live shell output observation, reload-safe command re-entry, the current MCP
  *   tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
@@ -66,6 +66,8 @@ interface WorkbenchAgentMcpRequestEntry {
   steerInterruptible?: boolean;
   /** Set once its call yielded: the shell runs on, keyed by `shellId`, until it ends or its turn does. */
   background?: { shellId: string; discard: boolean };
+  /** A `yield_ms` shell's call before it yields; a steer aborts it so the call answers now while the command runs on. */
+  yieldWindow?: AbortController;
   /** Pre-patch process state retained only until its live request unregisters. */
   threadId?: string;
   workbenchThreadId?: WorkbenchThreadId;
@@ -147,6 +149,15 @@ function isQueuedShell(entry: WorkbenchAgentMcpRequestEntry) {
   return entry.shellQueue !== undefined && entry.shellQueue.admittedAt === null;
 }
 
+/** A queued shell never started, so a steer cancels it instead of yielding it. */
+function hasOpenYieldWindow(entry: WorkbenchAgentMcpRequestEntry) {
+  return entry.yieldWindow !== undefined && !entry.yieldWindow.signal.aborted && !entry.controller.signal.aborted && !isQueuedShell(entry);
+}
+
+function takesSteer(entry: WorkbenchAgentMcpRequestEntry) {
+  return !entry.controller.signal.aborted && (entry.steerInterruptible === true || hasOpenYieldWindow(entry));
+}
+
 interface WorkbenchAgentBatchTurnWaiter {
   threadId: WorkbenchThreadId | null;
   toolName: string;
@@ -161,6 +172,8 @@ interface WorkbenchAgentMcpRequestRegistrationOptions {
   shellItem?: { threadId?: WorkbenchThreadId; references: readonly string[] };
   steerInterruptible?: boolean;
   toolName: string;
+  /** The shell call may yield, so a steer ends its wait early instead of being held behind it. */
+  yields?: boolean;
 }
 
 export interface WorkbenchAgentMcpPendingRequest {
@@ -341,13 +354,16 @@ export class WorkbenchAgentMcpRequestRegistry {
       toolName: options.toolName,
       ...(options.shellItem?.references.length ? { shellItemReferences: [...options.shellItem.references] } : {}),
       ...(options.shellItem?.threadId ? { workbenchThreadId: WorkbenchThreadIdSchema.parse(options.shellItem.threadId) } : {}),
+      ...(options.yields && options.shellItem ? { yieldWindow: new AbortController() } : {}),
     };
     requests.set(requestId, entry);
     this.state.requestsByClient.set(clientScope, requests);
     if (ownerState.phase !== "active" && phaseCancels(entry.policy, ownerState.phase)) {
       entry.controller.abort(new Error("Workbench MCP tool call was cancelled for runtime reload."));
     }
+    if (entry.yieldWindow) this.replayUndeliveredMessages(entry);
     return {
+      earlyYield: entry.yieldWindow?.signal,
       markDrainIndependent: () => { entry.drainIndependent = true; },
       setWorkbenchThreadId: (threadId: WorkbenchThreadId) => {
         const workbenchThreadId = WorkbenchThreadIdSchema.parse(threadId);
@@ -360,10 +376,8 @@ export class WorkbenchAgentMcpRequestRegistry {
         if (deferredInterruption && entry.steerInterruptible && !entry.controller.signal.aborted) {
           entry.controller.abort(deferredInterruption);
         }
-        if (entry.steerInterruptible && !entry.controller.signal.aborted) {
-          this.notifyThreadWaits(workbenchThreadId);
-          this.replayUndeliveredMessages(entry);
-        }
+        if (entry.steerInterruptible && !entry.controller.signal.aborted) this.notifyThreadWaits(workbenchThreadId);
+        if (takesSteer(entry)) this.replayUndeliveredMessages(entry);
         if (entry.shellQueue) this.notifyShellQueue(workbenchThreadId);
         if (entry.shellOutput) this.scheduleShellOutput(workbenchThreadId);
       },
@@ -403,6 +417,7 @@ export class WorkbenchAgentMcpRequestRegistry {
     const wasWaiting = entry.steerInterruptible === true;
     entry.background = { shellId, discard: false };
     entry.steerInterruptible = false;
+    entry.yieldWindow = undefined;
     const background = this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE) ?? new Map();
     background.set(shellId, entry);
     this.state.requestsByClient.set(BACKGROUND_CLIENT_SCOPE, background);
@@ -920,7 +935,14 @@ export class WorkbenchAgentMcpRequestRegistry {
     let interrupted = 0;
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
-        if (!entry.steerInterruptible || entry.controller.signal.aborted || excludedToolNames.includes(entry.toolName)) continue;
+        if (excludedToolNames.includes(entry.toolName)) continue;
+        if (entry.workbenchThreadId === workbenchThreadId && hasOpenYieldWindow(entry)) {
+          // The call answers now and the command runs on; its backgrounding then releases any steer held behind it.
+          entry.yieldWindow!.abort();
+          interrupted += 1;
+          continue;
+        }
+        if (!entry.steerInterruptible || entry.controller.signal.aborted) continue;
         if (entry.workbenchThreadId && entry.workbenchThreadId !== workbenchThreadId) continue;
         const interruption = createWorkbenchAgentMcpSteerInterruption(reason);
         if (!entry.workbenchThreadId) {
@@ -958,7 +980,7 @@ export class WorkbenchAgentMcpRequestRegistry {
     const source = this.state.undeliveredMessages;
     if (!threadId || !source) return;
     void source.read(threadId).then(messages => {
-      if (!entry.steerInterruptible || entry.controller.signal.aborted) return;
+      if (!takesSteer(entry)) return;
       for (const { senderThreadId } of messages) this.interruptForSteer(threadId, senderThreadId);
     }, (error: unknown) => {
       console.warn("[workbench-mcp] a new wait could not check for undelivered messages",

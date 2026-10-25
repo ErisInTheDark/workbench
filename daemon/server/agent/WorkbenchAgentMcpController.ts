@@ -725,17 +725,17 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     // Workbench-recorded items are named by their item id; Codex records its own item, named by the call id it sends.
     const nativeCallId = typeof call.meta?.callId === "string" && call.meta.callId ? call.meta.callId : null;
     const shellItemReferences = [started.reference?.itemId, nativeCallId].filter((reference): reference is string => Boolean(reference));
+    // Only an ingress that backgrounds shells may let the command stop following its call.
+    const yields = call.shellYields === true && call.detachableShell === true && input.yield_ms !== undefined;
     try {
       registration = this.requestRegistry.register(scope.clientScope, call.requestId, {
-        owner: this.runtimeOwner, steerInterruptible: false, toolName: "shell",
+        owner: this.runtimeOwner, steerInterruptible: false, toolName: "shell", yields,
         shellItem: { references: shellItemReferences, ...(started.reference ? { threadId: started.reference.threadId } : {}) },
       });
     } catch (error) {
       return await finishFailure(error, call.signal);
     }
     registration.markDrainIndependent();
-    // Only an ingress that backgrounds shells may let the command stop following its call.
-    const yields = call.shellYields === true && call.detachableShell === true && input.yield_ms !== undefined;
     const caller = yields ? linkWorkbenchMcpCallSignal(call.signal) : null;
     const signal = AbortSignal.any([caller?.signal ?? call.signal, registration.signal]);
     let prepared: WorkbenchPreparedShell;
@@ -754,9 +754,12 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       shell: prepared, signal, toolName: "shell", transcript: started.reference,
       unregister: registration.unregister,
       ...(registration.shellQueue ? { shellQueue: registration.shellQueue } : {}),
-      // The yield clock starts once the command is admitted, so an approval wait never counts against it.
+      // The yield clock starts once the command is admitted, so an approval wait never counts against it; a steer yields at once.
       ...(caller && input.yield_ms !== undefined
-        ? { yieldSignal: this.createWaitDeadline(input.yield_ms), unlinkCaller: caller.unlink }
+        ? {
+          yieldSignal: AbortSignal.any([this.createWaitDeadline(input.yield_ms), ...(registration.earlyYield ? [registration.earlyYield] : [])]),
+          unlinkCaller: caller.unlink,
+        }
         : {}),
     };
     if (call.detachableShell) return { kind: "detached", call: detached };

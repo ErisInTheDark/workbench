@@ -2114,6 +2114,7 @@ async function yieldingShellServer(yieldsLongWaits = false) {
   const deadlines: AbortController[] = [];
   const deadlineCreated = { next: deferred<void>() };
   const runs: Array<(result: { exitCode: number; stdout: string; stderr: string }) => void> = [];
+  const runStarted = deferred<void>();
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "claude", threadId, cwd: process.cwd() }),
     describe: async () => ({ shellDescription: "test", ...(yieldsLongWaits ? { yieldsLongWaits } : {}) }),
@@ -2131,6 +2132,7 @@ async function yieldingShellServer(yieldsLongWaits = false) {
     tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", requestRegistry,
     executeShell: async (_run, signal) => await new Promise((resolve, reject) => {
       runs.push(resolve);
+      runStarted.resolve();
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
     }),
     createWaitDeadline: () => {
@@ -2148,7 +2150,7 @@ async function yieldingShellServer(yieldsLongWaits = false) {
     deadlines.at(-1)!.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
   };
   return {
-    client, finished, fireNextDeadline, requestRegistry, runs, threadId,
+    client, finished, fireNextDeadline, firstRun: runStarted.promise, requestRegistry, runs, threadId,
     close: async () => { requestRegistry.dispose(); await client.close(); await server.close(); },
   };
 }
@@ -2202,6 +2204,26 @@ test("a yielded shell stops and finishes its row when its turn ends", async () =
     assert.match(responseText(finished[0]?.result), /Stopped when its turn ended/u);
     const collected = await client.callTool({ name: "shell_wait", arguments: { shellId } });
     assert.equal(collected.isError, true, "a stopped turn's shell cannot be collected");
+  } finally {
+    await close();
+  }
+});
+
+test("a steer yields a shell early and leaves its command running for shell_wait", async () => {
+  const { client, close, finished, firstRun, requestRegistry, runs, threadId } = await yieldingShellServer();
+  try {
+    const call = client.callTool({ name: "shell", arguments: { command: "build", yield_ms: 600_000 } });
+    await firstRun;
+    assert.equal(requestRegistry.interruptThreadWaits(threadId), 1);
+    const yielded = await call;
+    const { exitCode, shellId } = yielded.structuredContent as { exitCode: number | null; shellId?: string };
+    assert.equal(exitCode, null, "the call answers before its deadline, with the command still running");
+    assert.ok(shellId);
+    assert.equal(finished.length, 0);
+
+    const wait = client.callTool({ name: "shell_wait", arguments: { shellId } });
+    runs[0]!({ exitCode: 0, stdout: "built", stderr: "" });
+    assert.match(responseText(await wait), /Exit code: 0\nOutput:\nbuilt/u, "the steer never stopped the command");
   } finally {
     await close();
   }

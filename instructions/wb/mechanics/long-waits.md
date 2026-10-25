@@ -1,6 +1,6 @@
 <docs tools="request_user_input message_wait subagent_wait subagent_queue git_arc_wait">
 <!-- Prevent agents from restarting a lifecycle wait, polling it, or treating a Code cell yield as completion. -->
-<!-- Claude and OpenCode cannot leave a running call, so steer-interruptible waits offer an MCP-layer `timeoutMs`; Codex cells yield instead and never see it. Re-calling is safe: waits re-read state, undelivered messages persist, queue places survive. Polling with short timeouts burns turns, so it stays forbidden. Shell `yield_ms` answers while the command runs on; its turn ending stops it, so agents must collect it with `shell_wait` within the turn. -->
+<!-- Claude and OpenCode cannot leave a running call, so steer-interruptible waits offer an MCP-layer `timeoutMs`; Codex cells yield instead and never see it. Re-calling is safe: waits re-read state, undelivered messages persist, queue places survive. Polling with short timeouts burns turns, so it stays forbidden. Shell `yield_ms` answers while the command runs on, early on a steer so the steer is never held behind the window; its turn ending stops it, so agents must collect it with `shell_wait` within the turn. -->
 ## Workbench Long Waits
 
 <harness:codex>

@@ -2,4 +2,5 @@
 - Caller/tool cancellation, declared steer or dismissal rules, and full-process shutdown remain terminal.
 - Message waits return a selected sender's undelivered message even if it was admitted before the wait attached. Otherwise another sender's undelivered message interrupts them, whenever admitted.
 - Steer-interruptible waits attaching while their thread holds an undelivered steer or agent message are interrupted at once, as if it just arrived.
+- A steer ends a shell's `yield_ms` window early; the command runs on for `shell_wait`. Plain shells and admitted commands are never steer-interrupted.
 - `request_user_input` also survives user steers and turns ending due to process interruption virtually.

@@ -33,7 +33,7 @@ export const WorkbenchParallelShellInputFields = {
 
 /** Added to the shell input only for providers whose agents cannot leave a running call. */
 export const WorkbenchYieldShellInputFields = {
-  yield_ms: z.number().int().positive().optional().describe("Return after this many milliseconds if the command still runs; it keeps running until your turn ends. Collect it with shell_wait."),
+  yield_ms: z.number().int().positive().optional().describe("Return after this many milliseconds, or sooner on a steer, if the command still runs; it keeps running until your turn ends. Collect it with shell_wait."),
 };
 
 /** The shell input a provider accepts, from its parallel and yield support. */
