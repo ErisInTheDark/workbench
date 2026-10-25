@@ -1,6 +1,8 @@
 /*
  * Exports:
- * - inspectSaveGuardMarkup: clone, serialize, round-trip, and compare rich editor markup for save-guard checks. Keywords: workbench, save guard, rich editor, markdown, markup.
+ * - InspectSaveGuardMarkupOptions: editor root, markup normalization and serialization hooks for save-guard checks.
+ * - createSaveGuardNormalizer: the normalize, canonicalize, normalize pass both save-guard sides read markup through.
+ * - inspectSaveGuardMarkup: clone, serialize, round-trip, and compare the whole rich editor document for save-guard checks.
  * - inspectDraftContent: compute current draft content and save issue for rich vs plain editor modes. Keywords: workbench, draft, content, save guard, mode.
  * - isSameSaveGuardIssue: compare save-guard issues for logging deduplication. Keywords: workbench, save guard, dedupe, logging.
  * - describeFirstDifference: find the first differing character and excerpts between markup strings. Keywords: workbench, save guard, diff, excerpt.
@@ -24,7 +26,7 @@ interface SaveGuardMarkupInspection {
   issue: SaveGuardIssue | null;
 }
 
-interface InspectSaveGuardMarkupOptions {
+export interface InspectSaveGuardMarkupOptions {
   canonicalizeMarkup?: ((root: ParentNode) => void) | null;
   editorRoot: HTMLDivElement;
   isInlineRunContainer: (element: HTMLElement) => boolean;
@@ -34,6 +36,15 @@ interface InspectSaveGuardMarkupOptions {
   style?: MarkdownStyle;
 }
 
+/** Both sides of the save guard read markup in this form before serializing or comparing it. */
+export function createSaveGuardNormalizer({ canonicalizeMarkup, normalizeMarkup }: InspectSaveGuardMarkupOptions) {
+  return (root: ParentNode) => {
+    normalizeMarkup(root);
+    canonicalizeMarkup?.(root);
+    normalizeMarkup(root);
+  };
+}
+
 interface InspectDraftContentOptions {
   mode: EditorMode;
   plainTextContent: string;
@@ -41,14 +52,10 @@ interface InspectDraftContentOptions {
 }
 
 export function inspectSaveGuardMarkup(options: InspectSaveGuardMarkupOptions): SaveGuardMarkupInspection {
-  const { canonicalizeMarkup, editorRoot, isInlineRunContainer, normalizeMarkup } = options;
+  const { editorRoot, isInlineRunContainer } = options;
   const renderMarkdown = options.renderMarkdown ?? renderMarkdownToHtml;
   const serializeMarkdown = options.serializeMarkdown ?? ((root, serializeOptions) => serializeWorkbenchDomToMarkdown(root, serializeOptions));
-  const normalizeForSaveGuard = (root: ParentNode) => {
-    normalizeMarkup(root);
-    canonicalizeMarkup?.(root);
-    normalizeMarkup(root);
-  };
+  const normalizeForSaveGuard = createSaveGuardNormalizer(options);
   const editorSnapshot = editorRoot.cloneNode(true) as HTMLDivElement;
   const markdown = serializeMarkdown(editorSnapshot, {
     isInlineRunContainer,

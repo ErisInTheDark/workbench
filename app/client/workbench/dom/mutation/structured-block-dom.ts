@@ -8,6 +8,8 @@
  * - normalizeListItemHierarchy: normalize a single list item into the details-plus-summary structured nesting form when needed. Keywords: workbench, list, hierarchy, details.
  * - normalizeNestedListHierarchy: normalize all list items under a root into structured nesting form. Keywords: workbench, list, hierarchy, normalize.
  * - mergeAdjacentSiblingLists: merge compatible sibling lists separated only by empty spacer nodes. Keywords: workbench, list, merge, cleanup.
+ * - hasMergeableSiblingLists: whether that merge would apply to a sequence of sibling nodes.
+ * - isRootBreakNode: a root-level break node, which markdown drops at document edges.
  * - normalizeDivBlocks: unwrap block-holding divs and turn inline-only divs into paragraphs, since markdown has no div. Keywords: workbench, div, paste, normalize.
  * - normalizeRootInlineBlocks: wrap direct root inline content into stable paragraph blocks for markdown round-trip comparison. Keywords: workbench, editor, root, inline, paragraph, save guard.
  * - syncStructuredBlockStyles: run structured block normalization plus optional injected inline cleanup callbacks; root paragraphs holding only comment threads become block threads and code blocks keep their line sentinel. Keywords: workbench, block dom, list, sync.
@@ -275,6 +277,27 @@ function skipWhitespaceText(node: ChildNode | null) {
   return current;
 }
 
+/**
+ * The list a sibling list absorbs: the same kind right after it, or after one break between them. `next` and `afterNext`
+ * are the two following non-whitespace siblings.
+ */
+function pickMergeableList(list: HTMLUListElement | HTMLOListElement, next: Node | null, afterNext: Node | null) {
+  const candidate = isListMergeSeparatorNode(next) ? afterNext : next;
+  return isMergeableListElement(candidate) && candidate.tagName === list.tagName ? candidate : null;
+}
+
+function getMergeableNextList(list: HTMLUListElement | HTMLOListElement) {
+  const next = skipWhitespaceText(list.nextSibling);
+  return pickMergeableList(list, next, skipWhitespaceText(next?.nextSibling ?? null));
+}
+
+/** Whether `mergeAdjacentSiblingLists` would merge any two of these nodes, read as consecutive siblings. */
+export function hasMergeableSiblingLists(siblings: readonly Node[]) {
+  const nodes = siblings.filter((node) => node.nodeType !== Node.TEXT_NODE || (node.textContent ?? "").trim());
+  return nodes.some((node, index) => isMergeableListElement(node)
+    && pickMergeableList(node, nodes[index + 1] ?? null, nodes[index + 2] ?? null) !== null);
+}
+
 export function mergeAdjacentSiblingLists(root: ParentNode) {
   for (const childElement of Array.from(root.children)) {
     if (LIST_HOLDER_TAGS.test(childElement.tagName)) {
@@ -290,12 +313,8 @@ export function mergeAdjacentSiblingLists(root: ParentNode) {
       continue;
     }
 
-    const separator = skipWhitespaceText(current.nextSibling);
-    const nextList = isListMergeSeparatorNode(separator)
-      ? skipWhitespaceText(separator?.nextSibling ?? null)
-      : separator;
-
-    if (isMergeableListElement(nextList) && nextList.tagName === current.tagName) {
+    const nextList = getMergeableNextList(current);
+    if (nextList) {
       while (current.nextSibling && current.nextSibling !== nextList) {
         current.nextSibling.remove();
       }
@@ -327,7 +346,8 @@ function getStructuredBlockCandidates(root: ParentNode) {
   return Array.from(root.querySelectorAll("p, div"));
 }
 
-function isRootBreakNode(node: Node | null) {
+/** A root-level break: markdown drops these at the document's edges. */
+export function isRootBreakNode(node: Node | null) {
   return node instanceof HTMLBRElement
     || (
       node instanceof HTMLElement

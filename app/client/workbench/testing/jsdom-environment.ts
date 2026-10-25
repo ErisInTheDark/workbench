@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - installJsdomEnvironment: install one shared jsdom window as browser globals for editor tests, with a minimal layout shim. Runs on import.
+ * - installJsdomEnvironment: install one shared jsdom window as browser globals for editor tests, with a minimal layout
+ *   shim, and turn on save-guard verification. Runs on import.
  * - flushAnimationFrames: run every queued animation frame; frames never fire on their own.
  */
 import { JSDOM } from "jsdom";
@@ -62,6 +63,8 @@ export function installJsdomEnvironment() {
       value: typeof value === "function" && /^[a-z]/u.test(name) ? value.bind(window) : value,
     });
   }
+  // SaveGuardInspector's SAVE_GUARD_VERIFY_FLAG: every editor test cross-checks block inspection with the whole document.
+  (globalThis as Record<symbol, unknown>)[Symbol.for("workbench.saveGuard.verify")] = true;
   installed = dom;
   return dom;
 }

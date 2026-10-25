@@ -4,6 +4,9 @@
  * - createWorkbenchMarkupSignature: create a canonical rich-text markup signature for save-guard round-trip comparisons.
  * - resolveOrderedListItemOrdinals: preserve explicit item values and derive implicit continuations for ordered-list serialization.
  * - serializeListItemMainText: serialize the visible markdown text for a structured list item.
+ * - SerializedMarkdownToken: one top-level block or run of breaks, as read before joining.
+ * - collectMarkdownTokens / joinMarkdownTokens: the two halves of document serialization, for callers reading blocks
+ *   one at a time.
  * - serializeWorkbenchDomToMarkdown: serialize a normalized editor DOM subtree back to a markdown file.
  * - serializeBlocksToMarkdown: serialize detached top-level blocks as a markdown fragment, as suggestions store them.
  */
@@ -47,7 +50,7 @@ interface SerializedBlock {
   text: string;
 }
 
-type SerializedMarkdownToken =
+export type SerializedMarkdownToken =
   | { type: "block"; block: SerializedBlock }
   | { type: "break"; count: number };
 
@@ -659,13 +662,22 @@ function serializeNodes(nodes: readonly ChildNode[], options: WorkbenchMarkupSer
   return serializeMarkdownTokens(collectTokens(nodes, options));
 }
 
+/** Read normalized top-level nodes as markdown tokens; nodes that are each a whole block read the same one at a time. */
+export function collectMarkdownTokens(nodes: readonly ChildNode[], options: WorkbenchMarkupSerializationOptions) {
+  return collectTokens(nodes, options);
+}
+
+/** Join a document's tokens into the markdown file text. */
+export function joinMarkdownTokens(tokens: SerializedMarkdownToken[], style: MarkdownStyle = DEFAULT_MARKDOWN_STYLE) {
+  return applyDocumentLineStyle(`${serializeMarkdownTokens(tokens)}\n`, style);
+}
+
 export function serializeWorkbenchDomToMarkdown(
   sourceRoot: ParentNode,
   options: WorkbenchMarkupSerializationOptions,
 ) {
   options.normalizeMarkup?.(sourceRoot);
-  const markdown = `${serializeNodes(Array.from(sourceRoot.childNodes), options)}\n`;
-  return applyDocumentLineStyle(markdown, options.style ?? DEFAULT_MARKDOWN_STYLE);
+  return joinMarkdownTokens(collectTokens(Array.from(sourceRoot.childNodes), options), options.style);
 }
 
 export function serializeBlocksToMarkdown(blocks: readonly Element[], options: WorkbenchMarkupSerializationOptions) {

@@ -86,10 +86,10 @@ import { getCommentThreadKind, getSuggestionId, isCommentThreadElement } from ".
 import { DEFAULT_MARKDOWN_STYLE, detectMarkdownStyle, type MarkdownStyle } from "./markdown/markdown-style";
 import {
     inspectDraftContent,
-    inspectSaveGuardMarkup,
     isSameSaveGuardIssue,
     logSaveGuardIssue,
 } from "./markdown/save-guard-inspection";
+import SaveGuardInspector from "./markdown/SaveGuardInspector";
 import type { EditHistorySelection } from "./state/edit-history";
 import type { EditHistoryReplayRequest } from "./state/EditHistoryManager";
 import type EditorDocumentAdapter from "./state/EditorDocumentAdapter";
@@ -1247,14 +1247,15 @@ function WorkbenchEditorClient(
     (root as Node).normalize();
   }
 
+  const saveGuard = new SaveGuardInspector({
+    canonicalizeMarkup: (root) => syncStructuredBlockStyles(root),
+    editorRoot: editor,
+    isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
+    normalizeMarkup: (root) => normalizeEditorMarkup(root),
+  });
+
   function inspectRichDocument() {
-    return inspectSaveGuardMarkup({
-      canonicalizeMarkup: syncStructuredBlockStyles,
-      editorRoot: editor,
-      isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
-      normalizeMarkup: normalizeEditorMarkup,
-      style: markdownStyle,
-    });
+    return saveGuard.inspect(markdownStyle);
   }
 
   function normalizeDetachedMarkup(root: ParentNode) {

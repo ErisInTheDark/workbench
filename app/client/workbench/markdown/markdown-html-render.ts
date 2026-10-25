@@ -3,6 +3,7 @@
  * - markdownToHtml: render parsed workbench markdown into sanitized HTML for the rich editor and save guard. Editor
  *   blocks carry their source lines, comment threads become atoms, suggestions become tagged block groups, table
  *   cells carry their column's alignment and code ends in its line sentinel.
+ * - renderEditorMarkdownUnits: the editor rendering split into its top-level units, for per-block save-guard caching.
  */
 
 import {
@@ -308,13 +309,18 @@ function sourceAttributes(entry: SourcedBlock) {
 
 /** Consecutive comment lines are one thread. `groupAttributes` tag every top-level element, as suggestion members. */
 function renderEditorBlocks(entries: readonly SourcedBlock[], options: MarkdownParseOptions, groupAttributes = "") {
-  let html = "";
+  return renderEditorUnits(entries, options, groupAttributes).join("");
+}
+
+/** One html string per top-level unit: a block, a run of breaks, or a group of comment lines. */
+function renderEditorUnits(entries: readonly SourcedBlock[], options: MarkdownParseOptions, groupAttributes = "") {
+  const units: string[] = [];
 
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index]!;
     const { block } = entry;
     if (block.type === "break" || block.type === "list-break") {
-      html += renderBlockHtml(block, options);
+      units.push(renderBlockHtml(block, options));
       continue;
     }
 
@@ -328,20 +334,25 @@ function renderEditorBlocks(entries: readonly SourcedBlock[], options: MarkdownP
         index += 1;
       }
       index -= 1;
-      html += renderCommentLines(lines, sourceAttributes({ ...entry, source: sources.join("\n") }) + groupAttributes);
+      units.push(renderCommentLines(lines, sourceAttributes({ ...entry, source: sources.join("\n") }) + groupAttributes));
       continue;
     }
 
     if (block.type === "suggestion" && groupAttributes) {
       // A suggestion nested in a suggestion's new side reads as its own new side.
-      html += renderEditorBlocks(parseSourcedBlocks(block.new, options), options, groupAttributes);
+      units.push(renderEditorBlocks(parseSourcedBlocks(block.new, options), options, groupAttributes));
       continue;
     }
 
-    html += renderBlockHtml(block, options, sourceAttributes(entry) + groupAttributes);
+    units.push(renderBlockHtml(block, options, sourceAttributes(entry) + groupAttributes));
   }
 
-  return html;
+  return units;
+}
+
+/** The editor rendering of `markdown` split into its top-level units; joined, they are `markdownToHtml`'s output. */
+export function renderEditorMarkdownUnits(markdown: string, options: MarkdownParseOptions = {}) {
+  return renderEditorUnits(parseSourcedBlocks(markdown, options), options);
 }
 
 function renderSuggestion(block: Extract<ParsedBlock, { type: "suggestion" }>, options: MarkdownParseOptions) {

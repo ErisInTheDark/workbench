@@ -1,6 +1,7 @@
 /*
  * No exports. Save-guard sweep over editor DOM: every supported inline/block combination, arriving as pasted DOM or as a
  * mid-edit block still holding the caret, must reach disk through the real save button without changing its words.
+ * Documents whose blocks interact through root normalization must save the same while another block is edited.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -80,6 +81,45 @@ for (const outer of Object.keys(MARKS)) {
     test(`pasted ${inner} inside ${outer} in a paragraph always saves its words`, () => sweepPasted(inlineRuns(outer, inner), BLOCKS.paragraph!));
   }
 }
+
+// Block-by-block inspection hands these to the whole document; the test environment checks both paths agree.
+const INTERACTING_BLOCKS: Record<string, string> = {
+  "lists split by an empty paragraph": "<ul><li>a</li></ul><p><br></p><ul><li>b</li></ul><p>tail</p>",
+  "empty paragraphs at both edges": "<p><br></p><p>tail</p><p><br></p>",
+  "an empty paragraph between blocks": "<p>head</p><p><br></p><p><br></p><p>tail</p>",
+  "a comment group between blocks": "<p>head</p><span data-comment-thread=\"block\" data-comments=\"[{&quot;author&quot;:&quot;a&quot;,&quot;body&quot;:&quot;one&quot;}]\"></span><p>tail</p>",
+};
+
+for (const [name, html] of Object.entries(INTERACTING_BLOCKS)) {
+  test(`${name} keep their words while another block is edited`, async () => {
+    const panel = await MountedFilePanel.open("");
+    try {
+      await panel.replaceHtml(html);
+      await panel.caret("tai|l");
+      await panel.type("x");
+      const saved = await panel.save();
+      assert.match(saved, /taixl/u);
+      assert.deepEqual(renderedWords(saved).filter(word => word !== "taixl"), renderedWords(html).filter(word => word !== "tail"));
+    } finally {
+      panel.dispose();
+    }
+  });
+}
+
+test("a long document saves each edit exactly as its blocks read", async () => {
+  const markdown = "# title\n\nintro *with* `code`\n\n- one\n- two\n\n```ts\nconst a = 1;\n```\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n> quoted\n\nlast line\n";
+  const panel = await MountedFilePanel.open(markdown);
+  try {
+    await panel.caret("intro| ");
+    await panel.type("duced");
+    assert.equal(await panel.save(), markdown.replace("intro ", "introduced "));
+    await panel.caret("last| line");
+    await panel.type("ing");
+    assert.equal(await panel.save(), markdown.replace("intro ", "introduced ").replace("last line", "lasting line"));
+  } finally {
+    panel.dispose();
+  }
+});
 
 for (const mark of Object.keys(MARKS)) {
   test(`${mark} runs still holding the caret save their words`, async () => {
