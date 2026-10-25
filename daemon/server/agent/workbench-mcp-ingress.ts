@@ -5,8 +5,7 @@
  * - WorkbenchMcpIngressCapabilities: what this ingress supports, passed to each generation's describe.
  * - WorkbenchMcpToolGeneration: the current MCP generation's short describe, call, finish and yielded-shell answer steps.
  * - linkWorkbenchMcpCallSignal: follow a call's cancellation until a yielded shell detaches from it.
- * - scheduleWorkbenchMcpProgress: request-owned 60s progress keepalive.
- * - keepWorkbenchMcpCallAlive: pulse a call's request-owned progress until stopped, logging failed pulses.
+ * - WorkbenchMcpProgressScheduler: the keepalive timer seam; every tool call pulses request-owned progress until it answers.
  * - sanitizeWorkbenchMcpError: bounded error text without paths or secrets.
  * - sendWorkbenchMcpJsonRpcError: write a JSON-RPC error when the response is still open.
  * - serveWorkbenchMcpHttpRequest: own one MCP HTTP request, resolving the current generation at every step.
@@ -54,8 +53,6 @@ export interface WorkbenchMcpToolCall {
   meta: Record<string, unknown> | undefined;
   name: string;
   requestId: WorkbenchMcpRequestId;
-  /** Sends the request's next progress value; the ingress owns the counter so every phase stays monotonic. */
-  sendProgress?: () => Promise<void>;
   signal: AbortSignal;
 }
 
@@ -68,9 +65,6 @@ export type WorkbenchMcpDetachedCall = {
   execute?: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
   /** Test-injected shell runner; production runs through the registry's exec-node runner. */
   executeShell?: (run: WorkbenchShellRun, signal: AbortSignal, ticket?: WorkbenchCommandQueueTicket) => Promise<WorkbenchShellRunResult>;
-  keepalive: boolean;
-  /** Test-injected keepalive scheduler; production uses `scheduleWorkbenchMcpProgress`. */
-  scheduleProgress?: (pulse: () => Promise<void>, signal: AbortSignal) => () => void;
   /** The registry's record of this shell's expensive-queue wait. */
   shellQueue?: WorkbenchCommandQueueTicket;
   /** Shells only: fires when the call should answer while the command runs on, which then stops following the call. */
@@ -121,7 +115,9 @@ export function linkWorkbenchMcpCallSignal(caller: AbortSignal) {
   return { signal: link.signal, unlink: () => caller.removeEventListener("abort", follow) };
 }
 
-export function scheduleWorkbenchMcpProgress(pulse: () => Promise<void>, signal: AbortSignal) {
+export type WorkbenchMcpProgressScheduler = (pulse: () => Promise<void>, signal: AbortSignal) => () => void;
+
+function scheduleWorkbenchMcpProgress(pulse: () => Promise<void>, signal: AbortSignal) {
   let stopped = false;
   let inFlight = Promise.resolve();
   const run = () => {
@@ -143,11 +139,10 @@ export function scheduleWorkbenchMcpProgress(pulse: () => Promise<void>, signal:
   return stop;
 }
 
-export function keepWorkbenchMcpCallAlive(
-  call: Pick<WorkbenchMcpToolCall, "sendProgress">, signal: AbortSignal, logError: (name: string, message: string) => void,
-  schedule: (pulse: () => Promise<void>, signal: AbortSignal) => () => void = scheduleWorkbenchMcpProgress,
+function keepWorkbenchMcpCallAlive(
+  sendProgress: (() => Promise<void>) | undefined, signal: AbortSignal, logError: (name: string, message: string) => void,
+  schedule: WorkbenchMcpProgressScheduler = scheduleWorkbenchMcpProgress,
 ) {
-  const { sendProgress } = call;
   if (!sendProgress) return null;
   return schedule(async () => {
     try {
@@ -193,6 +188,8 @@ async function readJsonBody(request: http.IncomingMessage) {
 interface WorkbenchMcpIngressOptions {
   logError: (name: string, message: string) => void;
   registry: WorkbenchAgentMcpRequestRegistry;
+  /** Test-injected keepalive scheduler; production pulses every 60s. */
+  scheduleProgress?: WorkbenchMcpProgressScheduler;
   scope: WorkbenchMcpScope;
 }
 
@@ -236,22 +233,26 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
     server.setRequestHandler(CallToolRequestSchema, async (message, extra) => {
       const progressToken = extra._meta?.progressToken;
       let progress = 0;
-      return await callTool(options, {
-        arguments: message.params.arguments,
-        detachableShell: true,
-        shellYields: true,
-        batchTurns: true,
-        meta: extra._meta,
-        name: message.params.name,
-        requestId: extra.requestId,
-        signal: AbortSignal.any([requestAbort.signal, extra.signal]),
-        ...(progressToken === undefined ? {} : {
-          sendProgress: async () => await extra.sendNotification({
-            method: "notifications/progress",
-            params: { progressToken, progress: ++progress },
-          }),
-        }),
-      });
+      const signal = AbortSignal.any([requestAbort.signal, extra.signal]);
+      // Any call can wait (approvals, batch turns, transition leases), and a silent one idles out at the client's timeout.
+      const stopProgress = keepWorkbenchMcpCallAlive(progressToken === undefined ? undefined : async () => await extra.sendNotification({
+        method: "notifications/progress",
+        params: { progressToken, progress: ++progress },
+      }), signal, logError, options.scheduleProgress);
+      try {
+        return await callTool(options, {
+          arguments: message.params.arguments,
+          detachableShell: true,
+          shellYields: true,
+          batchTurns: true,
+          meta: extra._meta,
+          name: message.params.name,
+          requestId: extra.requestId,
+          signal,
+        });
+      } finally {
+        stopProgress?.();
+      }
     });
     requestAbort.signal.throwIfAborted();
     const body = await readJsonBody(request);
@@ -277,18 +278,11 @@ async function callTool(options: WorkbenchMcpIngressOptions, call: WorkbenchMcpT
   let step = await (await registry.awaitToolGeneration(call.signal)).call(scope, call);
   // The turn wait holds no generation; whichever is current when it ends takes the call from there.
   while (step.kind === "batchTurn") {
-    // The caller sees no output while an earlier call runs, so progress keeps its request from idling out.
-    const stopWaiting = keepWorkbenchMcpCallAlive(call, call.signal, logError);
-    let batchTurn: WorkbenchAgentBatchTurn;
-    try { batchTurn = await registry.awaitBatchTurn(step.key, call.signal, step.toolName); }
-    finally { stopWaiting?.(); }
+    const batchTurn = await registry.awaitBatchTurn(step.key, call.signal, step.toolName);
     step = await (await registry.awaitToolGeneration(call.signal)).call(scope, { ...call, batchTurn });
   }
   if (step.kind === "result") return step.result;
   const detached = step.call;
-  const stopProgress = detached.keepalive
-    ? keepWorkbenchMcpCallAlive(call, detached.signal, logError, detached.scheduleProgress)
-    : null;
   let outcome: WorkbenchMcpCallOutcome | null = null;
   let yielded: { running: Promise<WorkbenchMcpCallOutcome>; shellId: string } | null = null;
   try {
@@ -316,7 +310,6 @@ async function callTool(options: WorkbenchMcpIngressOptions, call: WorkbenchMcpT
   } catch (error) {
     outcome = { error };
   } finally {
-    stopProgress?.();
     detached.unregister();
   }
   if (yielded) {

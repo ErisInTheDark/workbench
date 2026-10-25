@@ -20,8 +20,13 @@ test("compact status preserves counts separately from expanded and ambiguous lit
   assert.ok(expanded.success);
   assert.deepEqual(expanded.data.dirtyClaims, dirtyClaims);
   assert.equal(expanded.data.unclaimedDirt, 6);
-  assert.equal(formatGitArcStatus(empty), "");
-  assert.deepEqual(parseGitArcStatus("").data, empty);
+});
+
+test("an empty status says so and parses back to empty", () => {
+  const output = formatGitArcStatus(empty);
+  assert.notEqual(output, "", "agents read silence as unknown ownership");
+  assert.deepEqual(parseGitArcStatus(output).data, empty);
+  assert.equal(parseGitArcStatus(`${output}\n${output}`).success, false);
 });
 
 test("baseline guards are absent by default and round trip only when selected", () => {

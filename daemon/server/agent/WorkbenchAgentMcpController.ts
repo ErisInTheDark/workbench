@@ -60,7 +60,6 @@ import {
   type WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 import {
-  keepWorkbenchMcpCallAlive,
   linkWorkbenchMcpCallSignal,
   sanitizeWorkbenchMcpError as sanitizeError,
   sendWorkbenchMcpJsonRpcError as sendJsonRpcError,
@@ -68,6 +67,7 @@ import {
   type WorkbenchMcpCallOutcome,
   type WorkbenchMcpDetachedCall,
   type WorkbenchMcpIngressCapabilities,
+  type WorkbenchMcpProgressScheduler,
   type WorkbenchMcpScope,
   type WorkbenchMcpToolCall,
   type WorkbenchMcpToolGeneration,
@@ -131,7 +131,7 @@ export interface WorkbenchAgentMcpControllerOptions {
   lifecycleLogError?: (name: string, message: string) => void;
   daemonOrigin: string;
   requestRegistry?: WorkbenchAgentMcpRequestRegistry;
-  scheduleProgress?: (pulse: () => Promise<void>, signal: AbortSignal) => () => void;
+  scheduleProgress?: WorkbenchMcpProgressScheduler;
   /** Defaults to a platform timeout signal; tests inject their own. */
   createWaitDeadline?: (timeoutMs: number) => AbortSignal;
 }
@@ -334,7 +334,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       return;
     }
     // The ingress owns the accepted request and resolves the current generation for each of its steps.
-    serveWorkbenchMcpHttpRequest(request, response, { logError: this.lifecycleLogError, registry: this.requestRegistry, scope });
+    serveWorkbenchMcpHttpRequest(request, response, {
+      logError: this.lifecycleLogError, registry: this.requestRegistry, scope,
+      ...(this.injectedScheduleProgress ? { scheduleProgress: this.injectedScheduleProgress } : {}),
+    });
   }
 
   /**
@@ -572,8 +575,6 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       kind: "detached",
       call: {
         ...(this.injectedExecuteCommand ? { execute: this.injectedExecuteCommand } : {}),
-        ...(this.injectedScheduleProgress ? { scheduleProgress: this.injectedScheduleProgress } : {}),
-        keepalive: definition.mcpCodeModeEligible === true,
         request: prepared.request,
         signal: prepared.signal,
         toolName,
@@ -674,9 +675,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return {
       kind: "detached",
       call: {
-        ...(this.injectedScheduleProgress ? { scheduleProgress: this.injectedScheduleProgress } : {}),
         collect: { shellId: input.shellId, threadId },
-        keepalive: true, signal, toolName: WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, transcript: started.reference,
+        signal, toolName: WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, transcript: started.reference,
         unregister: registration.unregister,
       },
     };
@@ -711,7 +711,6 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   /**
    * Shells only prepare here: the ingress runs the command through the exec node, so neither an approval wait nor a
    * running command holds this generation or any provider generation. An older ingress gets the same steps inline.
-   * Preparation is kept alive too, since an approval wait can outlast client idle timeouts.
    */
   private async callShell(
     scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchShellInput & { yield_ms?: number },
@@ -739,7 +738,6 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     const yields = call.shellYields === true && call.detachableShell === true && input.yield_ms !== undefined;
     const caller = yields ? linkWorkbenchMcpCallSignal(call.signal) : null;
     const signal = AbortSignal.any([caller?.signal ?? call.signal, registration.signal]);
-    const stopProgress = keepWorkbenchMcpCallAlive(call, signal, this.lifecycleLogError, this.injectedScheduleProgress);
     let prepared: WorkbenchPreparedShell;
     try {
       prepared = await this.prepareShell(input, call.meta, {
@@ -747,15 +745,13 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         ...(started.reference ? { itemId: started.reference.itemId, turnId: started.reference.turnId } : {}),
       }, signal, tools);
     } catch (error) {
-      stopProgress?.();
       caller?.unlink();
       registration.unregister();
       return await finishFailure(error, signal);
     }
     const detached: WorkbenchMcpDetachedCall = {
       ...(this.injectedExecuteShell ? { executeShell: this.injectedExecuteShell } : {}),
-      ...(this.injectedScheduleProgress ? { scheduleProgress: this.injectedScheduleProgress } : {}),
-      keepalive: true, shell: prepared, signal, toolName: "shell", transcript: started.reference,
+      shell: prepared, signal, toolName: "shell", transcript: started.reference,
       unregister: registration.unregister,
       ...(registration.shellQueue ? { shellQueue: registration.shellQueue } : {}),
       // The yield clock starts once the command is admitted, so an approval wait never counts against it.
@@ -763,10 +759,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         ? { yieldSignal: this.createWaitDeadline(input.yield_ms), unlinkCaller: caller.unlink }
         : {}),
     };
-    if (call.detachableShell) {
-      stopProgress?.();
-      return { kind: "detached", call: detached };
-    }
+    if (call.detachableShell) return { kind: "detached", call: detached };
     let outcome: WorkbenchMcpCallOutcome;
     try {
       const shellResult = this.injectedExecuteShell
@@ -776,7 +769,6 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     } catch (error) {
       outcome = { error };
     } finally {
-      stopProgress?.();
       registration.unregister();
     }
     return { kind: "result", result: await this.finish(scope, detached, outcome) };

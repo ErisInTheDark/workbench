@@ -1368,13 +1368,15 @@ for (const readsStructured of [false, true]) {
   });
 }
 
-test("keeps declared Code Mode waits alive with request-owned progress only", async () => {
+test("keeps every detached command alive with request-owned progress until it finishes", async () => {
   const executions = new Map<string, (response: Response) => void>();
   const started = deferred<void>();
   const pulses: Array<() => Promise<void>> = [];
   const stopped: string[] = [];
   const progress: number[] = [];
   const progressed = deferred<number>();
+  const ordinaryProgress: number[] = [];
+  const ordinaryProgressed = deferred<number>();
   const controller = codexController({
     executeCommand: async request => await new Promise<Response>(resolve => {
       executions.set(request.responseKind, resolve);
@@ -1417,28 +1419,33 @@ test("keeps declared Code Mode waits alive with request-owned progress only", as
       arguments: {},
       name: "task_get",
     }, undefined, {
-      onprogress: () => { throw new Error("ordinary tool emitted progress"); },
+      onprogress: update => {
+        ordinaryProgress.push(update.progress);
+        ordinaryProgressed.resolve(update.progress);
+      },
+      resetTimeoutOnProgress: true,
     });
     await started.promise;
-    assert.equal(pulses.length, 1);
-    await pulses[0]!();
+    assert.equal(pulses.length, 2, "an ordinary command waits as long as a declared wait can");
+    await Promise.all(pulses.map(pulse => pulse()));
     assert.equal(await progressed.promise, 1);
-    assert.deepEqual(progress, [1]);
+    assert.equal(await ordinaryProgressed.promise, 1);
 
     executions.get("thread-title-get")?.(Response.json({ title: "done" }));
     executions.get("json")?.(Response.json({ answers: { choice: { answers: ["one"] } } }));
     assert.equal((await ordinary).isError, false);
     assert.equal((await questionnaire).isError, false);
-    assert.deepEqual(stopped, ["stopped"]);
-    await pulses[0]!();
+    assert.deepEqual(stopped, ["stopped", "stopped"]);
+    await Promise.all(pulses.map(pulse => pulse()));
     assert.deepEqual(progress, [1]);
+    assert.deepEqual(ordinaryProgress, [1]);
   } finally {
     await client.close();
     await server.close();
   }
 });
 
-test("outside-sandbox shells keep their stream alive through approval and run with monotonic progress", { timeout: 5_000 }, async () => {
+test("outside-sandbox shells keep one stream alive through approval and run with monotonic progress", { timeout: 5_000 }, async () => {
   const cwd = process.cwd();
   const pulses: Array<() => Promise<void>> = [];
   let stopped = 0;
@@ -1504,18 +1511,17 @@ test("outside-sandbox shells keep their stream alive through approval and run wi
     progressed = deferred<number>();
     approval.resolve();
     await running.promise;
-    assert.equal(stopped, 1, "the approval keepalive stops before the run takes over");
-    assert.equal(pulses.length, 2, "the run is kept alive");
+    assert.equal(stopped, 0, "one keepalive spans approval and run");
+    assert.equal(pulses.length, 1);
     await pulses[0]!();
-    await pulses[1]!();
     assert.equal(await progressed.promise, 2);
 
     release.resolve();
     const result = await call;
     assert.equal(result.isError, false);
     assert.match(responseText(result), /complete/u);
-    assert.equal(stopped, 2);
-    await pulses[1]!();
+    assert.equal(stopped, 1);
+    await pulses[0]!();
     assert.deepEqual(progress, [1, 2]);
   } finally {
     approval.resolve();

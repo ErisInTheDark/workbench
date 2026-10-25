@@ -73,6 +73,9 @@ export function projectGitArcStatus(input: GitArcStatus, full: readonly GitArcSt
   });
 }
 
+/** Said outright, since agents read empty output as unknown ownership. */
+const EMPTY_STATUS = "No claims, proposals or unclaimed dirt.";
+
 function quote(value: string) {
   return !value || /[,"\u0000-\u001f\u007f-\u009f]/u.test(value) || /^\d+$/u.test(value) || value.trim() !== value
     ? JSON.stringify(value) : value;
@@ -159,6 +162,7 @@ export function formatGitArcStatus(input: GitArcStatus, full: readonly GitArcSta
     }
   }
   if (status.unavailableRecovery.length) lines.push(`Claim-loss baseline unavailable: ${status.unavailableRecovery.map(quote).join(", ")}`);
+  if (!lines.length && !status.baselineClaims?.length) return EMPTY_STATUS;
   return lines.join("\n");
 }
 
@@ -168,7 +172,7 @@ export function parseGitArcStatus(output: string) {
       pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
     };
     let evidence: GitArcStatusPresentation["recovery"][number] | undefined;
-    const lines = output.trim() ? output.trim().split(/\r?\n/u) : [];
+    const lines = output.trim() && output.trim() !== EMPTY_STATUS ? output.trim().split(/\r?\n/u) : [];
     const seen = new Set<string>();
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index]!;

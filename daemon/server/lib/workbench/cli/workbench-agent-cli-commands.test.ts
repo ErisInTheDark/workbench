@@ -131,7 +131,8 @@ test("status selectors preserve equivalent CLI and MCP inputs", async () => {
     assert.equal(output.structuredContent?.kind, "success");
     assert.deepEqual(output.structuredContent?.kind === "success" ? output.structuredContent.status.dirtyClaims : null, status.dirtyClaims);
     const empty = adaptWorkbenchAgentCliResponse({ httpOk: true, request: parsed.request, text: JSON.stringify({ ...status, dirtyClaims: [] }) });
-    assert.equal(empty.stdout, "");
+    assert.notEqual(empty.stdout.trim(), "");
+    assert.deepEqual(parseGitArcStatus(empty.stdout).data, { ...status, dirtyClaims: [] });
   }
   const invalid = await parseWorkbenchAgentCliCommand(["git", "arc", "status", "--full=everything"], gitArcOptions);
   assert.equal(invalid.kind, "error");
