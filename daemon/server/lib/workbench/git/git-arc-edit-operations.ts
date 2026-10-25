@@ -2,7 +2,7 @@
  * Exports:
  * - GitArcEditWorkFile/GitArcEditWorkInput/GitArcEditWorkChange/GitArcEditWorkResult: worker-safe snapshot in, renames and new text out.
  * - runGitArcEditOperations: apply ordered moves (with agent-defined reference rewrites) and regex replacements to an in-memory file set; pure CRLF files are matched as LF and written back as CRLF.
- * - underGitArcEditRoots/createGitArcEditPathFilter: shared root and glob selection used by planning and operations.
+ * - underGitArcEditRoots/createGitArcEditScopeFilter: shared root and root-relative glob selection used by planning and operations.
  */
 import path from "node:path";
 
@@ -60,12 +60,15 @@ export function underGitArcEditRoots(filePath: string, roots: readonly string[])
   return roots.some(root => root === "." || filePath === root || filePath.startsWith(`${root}/`));
 }
 
-export function createGitArcEditPathFilter(globs: readonly string[]) {
-  return createRipgrepPathFilter({ globs: globs.map(glob => ({ caseInsensitive: false, glob })), types: [], typesNot: [] });
+/** Files under a root that pass the globs, matched relative to that root as rg matches relative to its search paths. */
+export function createGitArcEditScopeFilter(roots: readonly string[], globs: readonly string[]) {
+  const matches = createRipgrepPathFilter({ globs: globs.map(glob => ({ caseInsensitive: false, glob })), types: [], typesNot: [] });
+  return (filePath: string) => roots.some(root => root === "." ? matches(filePath)
+    : filePath === root ? matches(posix.basename(filePath))
+      : filePath.startsWith(`${root}/`) && matches(filePath.slice(root.length + 1)));
 }
 
 const underRoots = underGitArcEditRoots;
-const pathFilter = createGitArcEditPathFilter;
 
 function compile(pattern: string, flags: string, label: string) {
   try {
@@ -137,7 +140,9 @@ function validateMoves(files: Files, mappings: Array<{ from: string; to: string 
 class ReferenceRewriter {
   private readonly aliases: Array<{ prefix: string; target: string }>;
   private readonly expression: RegExp;
-  private readonly filter: (filePath: string) => boolean;
+  private readonly inScope: (filePath: string) => boolean;
+  /** Moved files rewrite their outgoing references wherever they lie; globs then match from the workspace root. */
+  private readonly movedInScope: (filePath: string) => boolean;
 
   constructor(
     private readonly spec: GitArcEditReferenceSpec,
@@ -147,7 +152,8 @@ class ReferenceRewriter {
   ) {
     if (!/\(\?<path>/u.test(spec.pattern)) throw new Error(`Reference pattern ${JSON.stringify(spec.pattern)} needs a (?<path>...) named group.`);
     this.expression = compile(spec.pattern, "dgu", "reference");
-    this.filter = pathFilter(spec.globs);
+    this.inScope = createGitArcEditScopeFilter(spec.roots, spec.globs);
+    this.movedInScope = createGitArcEditScopeFilter(["."], spec.globs);
     this.aliases = Object.entries(spec.aliases)
       .map(([prefix, target]) => ({ prefix, target: target.replace(/\/+$/u, "") || "." }))
       .sort((left, right) => right.prefix.length - left.prefix.length);
@@ -155,8 +161,8 @@ class ReferenceRewriter {
 
   rewriteAll() {
     for (const [filePath, file] of this.files) {
-      if (file.text === null || (file.ignored && !this.spec.includeIgnored) || !this.filter(filePath)) continue;
-      if (!underRoots(filePath, this.spec.roots) && !this.moved.has(filePath)) continue;
+      if (file.text === null || (file.ignored && !this.spec.includeIgnored)) continue;
+      if (!this.inScope(filePath) && !(this.moved.has(filePath) && this.movedInScope(filePath))) continue;
       const text = file.text;
       const edits: Array<{ end: number; start: number; value: string }> = [];
       for (const match of text.matchAll(this.expression)) {
@@ -255,10 +261,9 @@ function applyMove(files: Files, operation: Extract<GitArcEditOperation, { kind:
 
 function applyReplace(files: Files, operation: Extract<GitArcEditOperation, { kind: "replace" }>, warnings: string[]) {
   const expression = compile(operation.pattern, `gu${operation.flags}`, "replace");
-  const filter = pathFilter(operation.globs);
+  const inScope = createGitArcEditScopeFilter(operation.roots, operation.globs);
   for (const [filePath, file] of files) {
-    if (file.text === null || (file.ignored && !operation.includeIgnored)) continue;
-    if (!underRoots(filePath, operation.roots) || !filter(filePath)) continue;
+    if (file.text === null || (file.ignored && !operation.includeIgnored) || !inScope(filePath)) continue;
     const next = file.text.replace(expression, operation.replacement);
     if (next !== file.text && file.lineEndings === "mixed") {
       warnings.push(`${filePath} has mixed line endings; replace matched raw text, so \\n patterns may leave stray \\r`);

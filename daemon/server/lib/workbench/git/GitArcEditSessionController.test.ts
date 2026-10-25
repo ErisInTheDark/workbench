@@ -69,6 +69,10 @@ editTest("previews write nothing, apply moves and rewrites references under clai
   assert.equal(applied.kind, "applied");
   if (applied.kind !== "applied") return;
   assert.equal(applied.result.matchedPreview, true);
+  assert.equal(applied.result.files.length, 0, "a matched apply does not repeat the preview's rows");
+  assert.equal(applied.result.fileCount, 3);
+  assert.deepEqual(await sessions.tryApply({ checkPending: noPending, owner }), applied,
+    "applying again, as after a timed-out wait, reports the applied session");
   assert.equal(await read("src/ui/Widget.tsx"), "export default function Widget() {\n  return null;\n}\n");
   await assert.rejects(fs.access(path.join(root, "src/components")), "emptied source folders are pruned");
   assert.match(await read("src/app.tsx"), /from "\.\/ui\/Widget"/u);
@@ -143,7 +147,7 @@ editTest("revert reverse-applies onto current files, keeping later edits and mar
   assert.equal(await read("src/app.tsx"), "import Widget from \"./components/Widget\";\nimport { helper } from \"@/lib/helper\";\n// later edit\n\nexport default Widget;\n");
   assert.match(await read("src/lib/helper.ts"), /^<<<<<<< /mu);
   assert.equal(await read("src/components/Widget.tsx"), "export default function Widget() {\n  return null;\n}\n");
-  assert.deepEqual(reverted.releasedClaims, ["src/components/Widget.tsx"], "only session claims that ended clean are released");
+  assert.equal(reverted.releasedCount, 1, "only session claims that ended clean are released");
   assert.deepEqual((await registry.find({ harness: "codex", threadId: "edit-thread" }))?.claimedPaths,
     ["docs/notes.md", "src/app.tsx", "src/lib/helper.ts"]);
 });

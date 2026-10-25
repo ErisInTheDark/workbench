@@ -4,9 +4,9 @@
  * - GitArcEditOperationSchema/GitArcEditOperation/GitArcEditOperationsSchema: ordered move and regex replace operations.
  * - GitArcEditFileSchema/GitArcEditFile: one touched file with its totals and changed new-side lines.
  * - GitArcEditCollisionSchema/GitArcEditCollision: touched paths another thread claims.
- * - GitArcEditResultSchema/GitArcEditResult/GitArcEditPhase: one edit session response.
+ * - GitArcEditResultSchema/GitArcEditResult/GitArcEditPhase: one edit session response; claim effects are counts.
  * - GIT_ARC_EDIT_PAGE_SIZE: files per view page.
- * - formatGitArcEditText/parseGitArcEditText: plain-text session result shared by the CLI and transcript cards.
+ * - formatGitArcEditText/parseGitArcEditText: plain-text session result shared by the CLI and transcript cards; changed lines print as ranges.
  */
 import { z } from "zod";
 import { escapeGitArcValue, readGitArcValue } from "./git-arc-receipts";
@@ -90,10 +90,11 @@ export type GitArcEditPhase = z.infer<typeof GitArcEditPhaseSchema>;
 const count = z.number().int().nonnegative();
 
 export const GitArcEditResultSchema = z.object({
-  additionalClaims: z.array(text).default([]),
   additions: count,
   blockedDirtyPaths: z.array(text).default([]),
   blockedPendingPaths: z.array(text).default([]),
+  /** Paths apply newly claimed; arc status names them. */
+  claimedCount: count.default(0),
   collisions: z.array(GitArcEditCollisionSchema).default([]),
   conflictedPaths: z.array(text).default([]),
   deletions: count,
@@ -105,7 +106,7 @@ export const GitArcEditResultSchema = z.object({
   page: z.number().int().positive(),
   pageCount: z.number().int().positive(),
   phase: GitArcEditPhaseSchema,
-  releasedClaims: z.array(text).default([]),
+  releasedCount: count.default(0),
   rootId: text.optional(),
   session: text,
   skippedFileCount: count.default(0),
@@ -124,6 +125,25 @@ function row(...values: string[]) {
   return values.map(escapeGitArcValue).join("\t");
 }
 
+/** Ascending line numbers as `1-3,5`, so wholesale edits stay one short span. */
+function formatLineRanges(lines: readonly number[]) {
+  const ranges: string[] = [];
+  for (let index = 0; index < lines.length;) {
+    let end = index;
+    while (end + 1 < lines.length && lines[end + 1] === lines[end]! + 1) end += 1;
+    ranges.push(end === index ? String(lines[index]) : `${lines[index]}-${lines[end]}`);
+    index = end + 1;
+  }
+  return ranges.join(",");
+}
+
+function parseLineRanges(value: string) {
+  return value.split(",").filter(Boolean).flatMap((range) => {
+    const [start, end = start] = range.split("-").map(Number);
+    return Array.from({ length: end! - start! + 1 }, (_, offset) => start! + offset);
+  });
+}
+
 export function formatGitArcEditText(input: GitArcEditResult) {
   const result = GitArcEditResultSchema.parse(input);
   const lines = [`arc edit ${result.phase} ${result.session}`];
@@ -137,10 +157,10 @@ export function formatGitArcEditText(input: GitArcEditResult) {
   lines.push(`page ${result.page}/${result.pageCount}`, `files ${result.files.length}`);
   for (const file of result.files) {
     const flags = [...file.ignored ? ["ignored"] : [], ...file.binary ? ["binary"] : []];
-    lines.push(row(file.movedFrom ? "R" : "M", `+${file.additions}`, `-${file.deletions}`, file.path, file.lines.join(","), file.movedFrom ?? "", flags.join(",")));
+    lines.push(row(file.movedFrom ? "R" : "M", `+${file.additions}`, `-${file.deletions}`, file.path, formatLineRanges(file.lines), file.movedFrom ?? "", flags.join(",")));
   }
-  list("claimed", result.additionalClaims);
-  list("released", result.releasedClaims);
+  if (result.claimedCount) lines.push(`claimed-count ${result.claimedCount}`);
+  if (result.releasedCount) lines.push(`released-count ${result.releasedCount}`);
   const collisionRows = result.collisions.flatMap(({ owner, paths, threadId }) => paths.map(filePath => row(threadId, owner, filePath)));
   if (collisionRows.length) lines.push(`collisions ${collisionRows.length}`, ...collisionRows);
   list("blocked-dirty", result.blockedDirtyPaths);
@@ -173,8 +193,11 @@ export function parseGitArcEditText(output: string): GitArcEditResult | null {
     return values;
   };
   const lists: Record<string, string> = {
-    "blocked-dirty": "blockedDirtyPaths", "blocked-pending": "blockedPendingPaths", claimed: "additionalClaims",
-    conflicts: "conflictedPaths", released: "releasedClaims", warnings: "warnings",
+    "blocked-dirty": "blockedDirtyPaths", "blocked-pending": "blockedPendingPaths", conflicts: "conflictedPaths", warnings: "warnings",
+  };
+  // Older output listed claimed and released paths where it now prints their counts.
+  const counts: Record<string, string> = {
+    claimed: "claimedCount", "claimed-count": "claimedCount", released: "releasedCount", "released-count": "releasedCount",
   };
   try {
     while (index < lines.length) {
@@ -204,7 +227,7 @@ export function parseGitArcEditText(output: string): GitArcEditResult | null {
             binary: flagSet.has("binary"),
             deletions: Number(deletions!.slice(1)),
             ignored: flagSet.has("ignored"),
-            lines: (changed ?? "").split(",").filter(Boolean).map(Number),
+            lines: parseLineRanges(changed ?? ""),
             ...(kind === "R" && movedFrom ? { movedFrom } : {}),
             path: filePath,
           };
@@ -221,6 +244,8 @@ export function parseGitArcEditText(output: string): GitArcEditResult | null {
         result.collisions = [...owners.values()];
       } else if (lists[key]) {
         result[lists[key]!] = take(value).map(readGitArcValue);
+      } else if (counts[key]) {
+        result[counts[key]!] = key.endsWith("-count") ? Number(value) : take(value).length;
       } else if (key === "matched-preview") {
         result.matchedPreview = value === "yes";
       } else throw new Error("Unknown edit section.");

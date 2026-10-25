@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcEditDetails: render an edit session's file page, claim effects, blockers, conflicts and warnings.
+ * - default ThreadGitArcEditDetails: render an edit session's file page, claim counts, blockers, conflicts and warnings.
  */
 import type { GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import ThreadClaimedFileList, { type ThreadClaimMarker } from "./ThreadClaimedFileList";
@@ -18,15 +18,16 @@ export default function ThreadGitArcEditDetails({
     { label: "Unclaimed dirty; apply rejects", marker: "dirty", paths: result.blockedDirtyPaths, tone: "danger" },
     { label: "Held by pending proposals; apply rejects", marker: "dirty", paths: result.blockedPendingPaths, tone: "danger" },
     { label: "Resolve conflict markers", marker: "dirty", paths: result.conflictedPaths },
-    { label: "Claimed", marker: "claimed", paths: result.additionalClaims },
-    { label: "Released", marker: "unclaimed", paths: result.releasedClaims },
+  ];
+  const facts = [
+    ...result.files.length && result.pageCount > 1 ? [`Page ${result.page} of ${result.pageCount} · ${result.fileCount} files`] : [],
+    ...result.claimedCount ? [`Claimed ${result.claimedCount} ${result.claimedCount === 1 ? "file" : "files"}`] : [],
+    ...result.releasedCount ? [`Released ${result.releasedCount} ${result.releasedCount === 1 ? "file" : "files"}`] : [],
   ];
   return (
     <div data-thread-git-arc-edit={result.phase}>
       <ThreadFileChangeList changes={rows} />
-      {result.pageCount > 1 ? (
-        <p className="m-0 pb-1 text-[0.78em] text-fg/muted">Page {result.page} of {result.pageCount} · {result.fileCount} files</p>
-      ) : null}
+      {facts.length ? <p className="m-0 pb-1 text-[0.78em] text-fg/muted">{facts.join(" · ")}</p> : null}
       {groups.filter(({ paths }) => paths.length).map(({ label, marker, paths, tone }) => (
         <ThreadClaimedFileList key={label} label={label} marker={marker} paths={paths} tone={tone ?? "default"} />
       ))}

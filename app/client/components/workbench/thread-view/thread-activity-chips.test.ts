@@ -90,10 +90,10 @@ type EditPhase = "applied" | "ended" | "preview" | "reverted";
 
 function editResult(phase: EditPhase, session: string, files: Array<[string, number, number]>, fileCount = files.length) {
   return {
-    additionalClaims: [], additions: files.reduce((total, [, additions]) => total + additions, 0), blockedDirtyPaths: [], blockedPendingPaths: [],
+    additions: files.reduce((total, [, additions]) => total + additions, 0), blockedDirtyPaths: [], blockedPendingPaths: [], claimedCount: 0,
     collisions: [], conflictedPaths: [], deletions: files.reduce((total, [, , deletions]) => total + deletions, 0), diffs: [], fileCount,
     files: files.map(([path, additions, deletions]) => ({ additions, binary: false, deletions, ignored: false, lines: [], path })),
-    ignoredFileCount: 0, page: 1, pageCount: 1, phase, releasedClaims: [], session, skippedFileCount: 0, warnings: [],
+    ignoredFileCount: 0, page: 1, pageCount: 1, phase, releasedCount: 0, session, skippedFileCount: 0, warnings: [],
   };
 }
 

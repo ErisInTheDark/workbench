@@ -42,6 +42,14 @@ test("identifier replacements honour word boundaries, capture groups, globs and 
   assert.deepEqual(result.changes.map(change => change.path), ["src/a.tsx"]);
 });
 
+test("anchored globs, including exclusions, match paths relative to their root as rg does", () => {
+  const input = files({ "src/game/a.ts": "token", "src/game/skip.ts": "token", "src/ui/b.ts": "token", "game/c.ts": "token" });
+  const replaced = (globs: string[]) => run(input, [{ globs, kind: "replace", pattern: "token", replacement: "x", roots: ["src"] }])
+    .changes.map(change => change.path);
+  assert.deepEqual(replaced(["game/**"]), ["src/game/a.ts", "src/game/skip.ts"]);
+  assert.deepEqual(replaced(["*.ts", "!game/skip.ts"]), ["src/game/a.ts", "src/ui/b.ts"]);
+});
+
 test("binary, unread and ignored files are never rewritten unless ignored files opt in", () => {
   const input = files({ "src/bin.dat": null, "src/a.ts": "token", ".local/a.ts": "token" }, [".local/a.ts"]);
   assert.deepEqual(run(input, [{ kind: "replace", pattern: "token", replacement: "x" }]).changes.map(change => change.path), ["src/a.ts"]);

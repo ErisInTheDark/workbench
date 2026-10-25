@@ -73,9 +73,9 @@ test("a claims update shows what changed rather than the whole inventory again",
 
 function editOutput(phase: "applied" | "ended" | "preview" | "reverted", fileCount = 1) {
   return formatGitArcEditText({
-    additionalClaims: [], additions: 3, blockedDirtyPaths: [], blockedPendingPaths: [], collisions: [], conflictedPaths: [],
+    additions: 3, blockedDirtyPaths: [], blockedPendingPaths: [], claimedCount: 0, collisions: [], conflictedPaths: [],
     deletions: 1, diffs: [], fileCount, files: [{ additions: 3, binary: false, deletions: 1, ignored: false, lines: [1], movedFrom: "src/old.ts", path: "src/new.ts" }],
-    ignoredFileCount: 0, page: 1, pageCount: 1, phase, releasedClaims: [], session: "abc12345", skippedFileCount: 0, warnings: [],
+    ignoredFileCount: 0, page: 1, pageCount: 1, phase, releasedCount: 0, session: "abc12345", skippedFileCount: 0, warnings: [],
   });
 }
 

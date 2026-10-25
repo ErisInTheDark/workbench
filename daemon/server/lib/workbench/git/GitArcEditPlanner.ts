@@ -12,7 +12,7 @@ import { Worker } from "node:worker_threads";
 
 import type { GitArcEditFile, GitArcEditOperation } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import {
-  createGitArcEditPathFilter,
+  createGitArcEditScopeFilter,
   underGitArcEditRoots,
   type GitArcEditWorkInput,
   type GitArcEditWorkResult,
@@ -150,7 +150,7 @@ function readScopes(operations: readonly GitArcEditOperation[]) {
   const moveScopes = operations.flatMap(operation => operation.kind !== "move" ? []
     : operation.from !== undefined ? [operation.from] : operation.roots!);
   const readers = operations.flatMap(operation => (operation.kind === "replace" ? [operation] : operation.references)
-    .map(({ globs, roots }) => ({ filter: createGitArcEditPathFilter(globs), roots })));
+    .map(({ globs, roots }) => createGitArcEditScopeFilter(roots, globs)));
   const ignoredScopes = operations.flatMap(operation => operation.kind === "replace"
     ? operation.includeIgnored ? operation.roots : []
     : [
@@ -160,7 +160,7 @@ function readScopes(operations: readonly GitArcEditOperation[]) {
   return {
     ignoredScopes: [...new Set(ignoredScopes)],
     isMoveCandidate: (filePath: string) => underGitArcEditRoots(filePath, moveScopes),
-    isTextCandidate: (filePath: string) => readers.some(({ filter, roots }) => underGitArcEditRoots(filePath, roots) && filter(filePath)),
+    isTextCandidate: (filePath: string) => readers.some(inScope => inScope(filePath)),
   };
 }
 

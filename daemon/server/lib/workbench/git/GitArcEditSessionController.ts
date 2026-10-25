@@ -4,7 +4,7 @@
  *   owners (machine roots) apply and revert only already-claimed paths.
  * - GitArcEditArcPort: active-arc facts and claim publication borrowed from the checkpoint controller.
  * - GitArcEditPendingCheck: absolute paths held by the caller's unsealed pending proposals.
- * - GitArcEditApplyAttempt: one apply attempt, blocked by sibling claims or applied.
+ * - GitArcEditApplyAttempt: one apply attempt, blocked by sibling claims or applied (again reporting an already applied session).
  * - default GitArcEditSessionController: start, view, apply, revert and end one thread's edit session.
  */
 import fs from "node:fs/promises";
@@ -195,32 +195,33 @@ export default class GitArcEditSessionController {
     };
   }
 
+  /** A null page reports totals only: the caller has already seen these rows. */
   private result(
     session: Pick<GitArcEditSession, "metadata" | "session">,
     phase: GitArcEditPhase,
-    page: number,
+    page: number | null,
     extra: Partial<GitArcEditResult> = {},
   ): GitArcEditResult {
     const { files } = session.metadata;
     const pageCount = Math.max(1, Math.ceil(files.length / GIT_ARC_EDIT_PAGE_SIZE));
-    if (page > pageCount) throw new Error(`Page ${page} is past the last page (${pageCount}).`);
+    if (page !== null && page > pageCount) throw new Error(`Page ${page} is past the last page (${pageCount}).`);
     return {
-      additionalClaims: session.metadata.additionalClaims,
       additions: files.reduce((total, file) => total + file.additions, 0),
       blockedDirtyPaths: [],
       blockedPendingPaths: [],
+      claimedCount: session.metadata.additionalClaims.length,
       collisions: [],
       conflictedPaths: [],
       deletions: files.reduce((total, file) => total + file.deletions, 0),
       diffs: [],
       fileCount: files.length,
-      files: files.slice((page - 1) * GIT_ARC_EDIT_PAGE_SIZE, page * GIT_ARC_EDIT_PAGE_SIZE),
+      files: page === null ? [] : files.slice((page - 1) * GIT_ARC_EDIT_PAGE_SIZE, page * GIT_ARC_EDIT_PAGE_SIZE),
       ignoredFileCount: files.filter(file => file.ignored).length,
       ...(session.metadata.matchedPreview === undefined ? {} : { matchedPreview: session.metadata.matchedPreview }),
-      page,
+      page: page ?? 1,
       pageCount,
       phase,
-      releasedClaims: [],
+      releasedCount: 0,
       ...(session.metadata.rootId ? { rootId: session.metadata.rootId } : {}),
       session: session.session,
       skippedFileCount: session.metadata.skippedFileCount,
@@ -289,7 +290,8 @@ export default class GitArcEditSessionController {
     return await GitObjectReadSession.run(async () => {
       const { identity, repository, store } = await this.open(input.owner);
       const session = await this.requireSession(store, input.owner);
-      if (session.metadata.phase !== "preview") throw new Error(`Edit session ${session.session} is already applied.`);
+      // A caller whose wait ended while the write ran applies again to learn the outcome.
+      if (session.metadata.phase === "applied") return { kind: "applied", result: this.appliedResult(session) };
       if (!session.metadata.operations.length) throw new Error("The stored edit session has no readable operations. End it and start again.");
       const plan = await this.planner.plan(repository, session.metadata.operations, input.signal);
       if (!plan.files.length) throw new Error("The operations no longer change any files. End the session.");
@@ -325,8 +327,13 @@ export default class GitArcEditSessionController {
       // Assigned inside `write`, which control-flow analysis cannot see through.
       const recorded = applied as GitArcEditSession | null;
       if (!recorded) throw new Error("The edit session was applied but its record was not written.");
-      return { kind: "applied", result: this.result(recorded, "applied", 1) };
+      return { kind: "applied", result: this.appliedResult(recorded) };
     });
+  }
+
+  /** Rows only when the replan differs from what the preview showed. */
+  private appliedResult(session: GitArcEditSession) {
+    return this.result(session, "applied", session.metadata.matchedPreview === false ? 1 : null);
   }
 
   async revert(input: { checkPending: GitArcEditPendingCheck; owner: GitArcEditOwner }) {
@@ -361,7 +368,7 @@ export default class GitArcEditSessionController {
         if (releasedClaims.length) await this.arc.releaseClaims({ ...identity, paths: releasedClaims });
       }
       await store.delete(input.owner, session.commit);
-      return this.result(session, "reverted", 1, { conflictedPaths: merged.conflictedPaths, releasedClaims });
+      return this.result(session, "reverted", null, { conflictedPaths: merged.conflictedPaths, releasedCount: releasedClaims.length });
     });
   }
 
@@ -377,7 +384,7 @@ export default class GitArcEditSessionController {
       const { store } = await this.open(input.owner);
       const session = await this.requireSession(store, input.owner);
       await store.delete(input.owner, session.commit);
-      return this.result(session, "ended", 1);
+      return this.result(session, "ended", null);
     });
   }
 }
