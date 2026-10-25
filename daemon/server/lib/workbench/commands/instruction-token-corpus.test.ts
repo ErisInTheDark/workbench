@@ -92,6 +92,8 @@ test("builds the active cwd-owned AGENTS tree without source comments", async ()
       writeFile(path.join(root, "leaf.override.md"), "leaf preamble\n## Active leaf\nactive leaf"),
       writeFile(path.join(cwd, "AGENTS.md"), "nested base"),
       writeFile(path.join(cwd, "AGENTS.override.md"), "## Nested\nnested active"),
+      writeFile(path.join(cwd, "AGENTS.local.md"), "local rule\n<!-- local source note -->\n{./local-leaf}"),
+      writeFile(path.join(cwd, "local-leaf.md"), "imported local rule"),
     ]);
 
     const corpus = buildProjectInstructionTokenCorpus({
@@ -101,9 +103,17 @@ test("builds the active cwd-owned AGENTS tree without source comments", async ()
 
     assert.ok(corpus.content.indexOf("root rule") < corpus.content.indexOf("active leaf"));
     assert.ok(corpus.content.indexOf("active leaf") < corpus.content.indexOf("nested active"));
+    assert.ok(corpus.content.indexOf("nested active") < corpus.content.indexOf("local rule"));
+    assert.ok(corpus.content.indexOf("local rule") < corpus.content.indexOf("imported local rule"));
     assert.match(corpus.content, /<!-- literal example -->/u);
-    assert.doesNotMatch(corpus.content, /source note|base leaf|nested base|\{\.\/leaf\}/u);
-    assert.deepEqual(corpus.files, ["AGENTS.md", "leaf.override.md", "nested/AGENTS.override.md"]);
+    assert.doesNotMatch(corpus.content, /source note|base leaf|nested base|\{\.\/(?:local-)?leaf\}/u);
+    assert.deepEqual(corpus.files, [
+      "AGENTS.md",
+      "leaf.override.md",
+      "nested/AGENTS.local.md",
+      "nested/AGENTS.override.md",
+      "nested/local-leaf.md",
+    ]);
     assert.deepEqual(
       corpus.sources.find(({ path }) => path === "leaf.override.md")?.sections
         .map(({ endLine, heading, startLine }) => ({ endLine, heading, startLine })),

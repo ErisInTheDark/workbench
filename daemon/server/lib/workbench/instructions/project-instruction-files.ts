@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - ProjectInstructionContext: cwd and workspace roots used to select one project instruction chain.
- * - ProjectInstructionContent/buildProjectInstructionContentWithSources: resolve instruction content with active-source provenance.
+ * - ProjectInstructionContent: rendered project instructions and their owning workspace root.
+ * - buildProjectInstructionContentWithSources: resolve main and worktree-local instructions with active-source provenance.
  * - buildProjectInstructionContent: read the current owning root-to-cwd AGENTS chain without source narration.
  */
 
@@ -26,6 +27,8 @@ export interface ProjectInstructionContent extends RenderedInstructionContent {
 
 const AGENTS_FILE_NAME = "AGENTS.md";
 const AGENTS_OVERRIDE_FILE_NAME = "AGENTS.override.md";
+const AGENTS_LOCAL_FILE_NAME = "AGENTS.local.md";
+const WORKTREE_INSTRUCTION_NOTE = "The following are instructions specific to this worktree.";
 
 function isFile(filePath: string) {
   try {
@@ -90,15 +93,27 @@ export function buildProjectInstructionContentWithSources(
     scopeLabel: "project instructions",
   });
   const sections = listChainDirectories(owner.root, owner.cwd)
-    .filter((directory) => (
-      isFile(path.join(directory, AGENTS_OVERRIDE_FILE_NAME))
-      || isFile(path.join(directory, AGENTS_FILE_NAME))
-    ))
-    .map((directory) => {
-      const relativePath = path.relative(owner.root, path.join(directory, AGENTS_FILE_NAME))
-        .split(path.sep)
-        .join("/");
-      return trimRenderedContent(instructionFiles.renderWithSources(relativePath));
+    .flatMap((directory): RenderedInstructionContent[] => {
+      const render = (fileName: string) => {
+        const relativePath = path.relative(owner.root, path.join(directory, fileName))
+          .split(path.sep)
+          .join("/");
+        return trimRenderedContent(instructionFiles.renderWithSources(relativePath));
+      };
+      const sections: RenderedInstructionContent[] = [];
+      if (
+        isFile(path.join(directory, AGENTS_OVERRIDE_FILE_NAME))
+        || isFile(path.join(directory, AGENTS_FILE_NAME))
+      ) {
+        sections.push(render(AGENTS_FILE_NAME));
+      }
+      if (isFile(path.join(directory, AGENTS_LOCAL_FILE_NAME))) {
+        const local = render(AGENTS_LOCAL_FILE_NAME);
+        if (local.content) {
+          sections.push({ content: WORKTREE_INSTRUCTION_NOTE, sources: [] }, local);
+        }
+      }
+      return sections;
     })
     .filter(({ content }) => content);
   if (!sections.length) return null;

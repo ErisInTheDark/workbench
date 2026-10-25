@@ -1,4 +1,4 @@
-/* Exports: none. Tests protect project AGENTS ownership, ordering, provenance, overrides, imports, freshness, and root bounds. */
+/* Exports: none. Tests protect project AGENTS ownership, ordering, provenance, overrides, worktree additions, imports, freshness, and root bounds. */
 
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -84,6 +84,65 @@ test("resolves the owning root-to-cwd chain with active imports and no source na
       "rules/b.md",
       "rules/base.override.md",
     ]);
+  });
+});
+
+test("appends local instructions after each selected main file, including local-only directories", async () => {
+  await withProject(async (rootPath) => {
+    const cwd = path.join(rootPath, "nested");
+    await Promise.all([
+      write(rootPath, "AGENTS.md", "{./missing-inactive-import}"),
+      write(rootPath, "AGENTS.override.md", "root override\n{./main-rule}"),
+      write(rootPath, "main-rule.md", "imported main rule"),
+      write(rootPath, "AGENTS.local.md", "root local\n{./local-rule}"),
+      write(rootPath, "local-rule.md", "imported local rule"),
+      write(rootPath, "nested/AGENTS.local.md", "nested local"),
+    ]);
+    const context = { cwd, roots: [root(rootPath)] };
+    const rendered = buildProjectInstructionContentWithSources(context);
+    assert.ok(rendered);
+    const rules = ["root override", "imported main rule", "root local", "imported local rule", "nested local"];
+    let previous = -1;
+    for (const rule of rules) {
+      const index = rendered.content.indexOf(rule);
+      assert.ok(index > previous, `${rule} must follow the preceding instruction`);
+      previous = index;
+    }
+    for (const source of rendered.sources) {
+      const text = rendered.content.slice(source.outputStart, source.outputEnd);
+      assert.equal(text, source.sourceContent.slice(source.sourceStart, source.sourceStart + text.length));
+    }
+    assert.ok(rendered.sources.some(({ absolutePath }) => absolutePath === path.join(cwd, "AGENTS.local.md")));
+
+    await write(rootPath, "AGENTS.local.md", "revised local");
+    const revised = buildProjectInstructionContent(context);
+    assert.match(revised ?? "", /revised local/u);
+    assert.doesNotMatch(revised ?? "", /root local|imported local rule/u);
+  });
+});
+
+test("loads a standalone override through the normal import parser", async () => {
+  await withProject(async (rootPath) => {
+    await Promise.all([
+      write(rootPath, "AGENTS.override.md", "{./rule}"),
+      write(rootPath, "rule.md", "standalone override rule"),
+    ]);
+    assert.equal(buildProjectInstructionContent({ cwd: rootPath, roots: [root(rootPath)] }), "standalone override rule");
+  });
+});
+
+test("local imports retain missing-file and root-boundary failures", async () => {
+  await withProject(async (rootPath) => {
+    const context = { cwd: rootPath, roots: [root(rootPath)] };
+    await write(rootPath, "AGENTS.local.md", "{./missing}");
+    assert.throws(
+      () => buildProjectInstructionContent(context),
+      /does not exist in project instructions[\s\S]*AGENTS\.local\.md -> missing/u,
+    );
+    await write(rootPath, "AGENTS.local.md", "{./../outside}");
+    assert.throws(() => buildProjectInstructionContent(context), /escapes project instructions/u);
+    await write(rootPath, "AGENTS.local.md", " \n ");
+    assert.equal(buildProjectInstructionContent(context), null);
   });
 });
 
