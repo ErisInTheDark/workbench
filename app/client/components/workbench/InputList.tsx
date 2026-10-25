@@ -2,11 +2,11 @@
  * Exports:
  * - default InputList: edit a list of single inputs or key/value pairs, owning the trailing blank row, empty-row cleanup and undo/redo;
  *   optionally a fixed row set, a row limit, drag and arrow-key reordering, leading and trailing row content, and secret values
- *   shown as dots until revealed.
+ *   shown as dots until each row is revealed.
  */
 "use client";
 
-import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { InputListRows, type InputListHistory, type InputListRow } from "./input-list-rows";
 import { EyeIcon, EyeOffIcon, GripVerticalIcon, XIcon } from "./workbench-icons";
 
@@ -25,6 +25,17 @@ interface Drag {
   /** Filled rows' vertical extents when the drag began. */
   slots: ReadonlyArray<{ bottom: number; top: number }>;
   startY: number;
+}
+
+/** Password inputs strip line breaks, so multi-line pastes into a masked value are spliced in by hand. */
+function pasteKeepingLineBreaks(event: ClipboardEvent<HTMLInputElement>, edit: (value: string) => void) {
+  const text = event.clipboardData.getData("text/plain");
+  if (!/[\r\n]/.test(text)) return;
+  event.preventDefault();
+  const field = event.currentTarget;
+  const start = field.selectionStart ?? field.value.length;
+  const end = field.selectionEnd ?? start;
+  edit(`${field.value.slice(0, start)}${text.replace(/\r\n?/g, "\n")}${field.value.slice(end)}`);
 }
 
 export default function InputList<Extra extends object = Record<never, never>>({
@@ -69,7 +80,7 @@ export default function InputList<Extra extends object = Record<never, never>>({
   /** Accessible labels by row id, replacing the numbered `rowLabel`. */
   rowLabels?: Readonly<Record<string, string>>;
   rows: readonly InputListRow<Extra>[];
-  /** Show values as dots until each row is revealed (single inputs only). */
+  /** Show values as dots until each row is revealed; masked multi-line values are read-only until then. */
   secret?: boolean;
 }) {
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
@@ -202,14 +213,15 @@ export default function InputList<Extra extends object = Record<never, never>>({
         const editRow = (patch: Partial<Omit<InputListRow<Extra>, "id">>) => fixedRows
           ? rows.map(candidate => candidate.id === row.id ? { ...candidate, ...patch } : candidate)
           : InputListRows.edit(rows, row.id, patch, limit);
-        const masked = secret && kind === "single" && !revealed.has(row.id);
+        const masked = secret && !revealed.has(row.id);
+        const editValue = (value: string) => emit(editRow({ value } as Partial<Omit<InputListRow<Extra>, "id">>), `${row.id}:value`);
         const inputId = `${idPrefix}-${row.id}`;
         const error = errors?.[row.id];
         const errorId = `${inputId}-issue`;
         const filled = !InputListRows.isBlank(row);
         const showRemove = !fixedRows && !(index === rows.length - 1 && !filled);
         const trailing = renderTrailing?.(row, patch => emit(editRow(patch), null));
-        const buttonCount = Number(secret && kind === "single" && Boolean(row.value)) + Number(Boolean(trailing)) + Number(showRemove);
+        const buttonCount = Number(secret && Boolean(row.value)) + Number(Boolean(trailing)) + Number(showRemove);
         const dragging = drag?.id === row.id;
         const shared = {
           "aria-invalid": Boolean(error),
@@ -273,17 +285,34 @@ export default function InputList<Extra extends object = Record<never, never>>({
                     type="text"
                     value={row.key}
                   />
-                  <textarea
-                    {...shared}
-                    ref={bind(row, "value")}
-                    id={inputId}
-                    aria-label={`${label} value`}
-                    className={`${fieldClassName} resize-none overflow-hidden whitespace-pre-wrap break-words pr-3 font-mono`}
-                    onChange={event => emit(editRow({ value: event.target.value } as Partial<Omit<InputListRow<Extra>, "id">>), `${row.id}:value`)}
-                    placeholder={placeholder}
-                    rows={1}
-                    value={row.value}
-                  />
+                  {masked ? (
+                    <input
+                      {...shared}
+                      ref={bind(row, "value")}
+                      id={inputId}
+                      aria-label={`${label} value`}
+                      className={`${fieldClassName} pr-3 font-mono`}
+                      onChange={event => editValue(event.target.value)}
+                      onPaste={event => pasteKeepingLineBreaks(event, editValue)}
+                      placeholder={placeholder}
+                      readOnly={row.value.includes("\n")}
+                      title={row.value.includes("\n") ? "Show this multi-line value to edit it" : undefined}
+                      type="password"
+                      value={row.value}
+                    />
+                  ) : (
+                    <textarea
+                      {...shared}
+                      ref={bind(row, "value")}
+                      id={inputId}
+                      aria-label={`${label} value`}
+                      className={`${fieldClassName} resize-none overflow-hidden whitespace-pre-wrap break-words pr-3 font-mono`}
+                      onChange={event => editValue(event.target.value)}
+                      placeholder={placeholder}
+                      rows={1}
+                      value={row.value}
+                    />
+                  )}
                 </div>
               ) : (
                 <input
@@ -296,7 +325,7 @@ export default function InputList<Extra extends object = Record<never, never>>({
                     ${buttonInsetClassNames[Math.max(1, buttonCount)]}
                     ${secret ? "font-mono" : ""}
                   `}
-                  onChange={event => emit(editRow({ value: event.target.value } as Partial<Omit<InputListRow<Extra>, "id">>), `${row.id}:value`)}
+                  onChange={event => editValue(event.target.value)}
                   placeholder={placeholder}
                   type={masked ? "password" : "text"}
                   value={row.value}
@@ -305,7 +334,7 @@ export default function InputList<Extra extends object = Record<never, never>>({
               {error ? <p id={errorId} role="alert" className="m-0 px-3 pb-2 text-[0.76rem] text-danger">{error}</p> : null}
             </div>
             <span className="absolute right-1 top-1 flex items-center">
-              {secret && kind === "single" && row.value ? (
+              {secret && row.value ? (
                 <button
                   aria-label={masked ? `Show ${label}` : `Hide ${label}`}
                   aria-pressed={!masked}
