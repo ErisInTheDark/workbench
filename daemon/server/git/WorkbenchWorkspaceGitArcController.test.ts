@@ -1703,4 +1703,9 @@ test("machine roots claim existing files by absolute path, admit scratch edits, 
   await assert.rejects(controller.execute(project, {
     action: "arcClaims", addPaths: [path.join(daemonWorkspaceRoot, "tmp.txt")], adoptPaths: [], removePaths: [], roots: [], inherit: true, ...identity,
   }), /daemon scratch/u);
+  // Unnamed requests resolve to the machine repository the thread works in, never to scratch.
+  const proposal = await controller.execute(project, {
+    action: "proposalCreate", amend: false, description: "", title: "machine change", ...identity,
+  }) as { paths: string[] };
+  assert.deepEqual([...proposal.paths].sort(), ["notes/config.txt", "repo/cache/data.txt"]);
 });

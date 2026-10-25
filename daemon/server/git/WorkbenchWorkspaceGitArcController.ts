@@ -315,7 +315,7 @@ export default class WorkbenchWorkspaceGitArcController {
   ): Promise<WorkspaceGitArcPlanClaimCollisionResult> {
     const members = await this.resolveRepoMembers(project);
     const refs = this.refsByRepo(project, members, request.refs);
-    if (request.checkpointCommit) refs.set(this.memberForRoot(members, project.root).repoRoot, request.checkpointCommit);
+    if (request.checkpointCommit) refs.set((await this.callerMember(project, members, request)).repoRoot, request.checkpointCommit);
     if (!refs.size) for (const [repoRoot, ref] of await this.inactivePlanRefs(project, request.harness, request.threadId)) refs.set(repoRoot, ref);
     const selected = members.filter((member) => refs.has(member.repoRoot));
     if (!selected.length) throw new GitArcRejectionError({ reason: "missingInactiveMembers" }, "This workspace Git arc has no matching inactive plan members.");
@@ -679,6 +679,22 @@ export default class WorkbenchWorkspaceGitArcController {
     return member;
   }
 
+  /**
+   * The repository an unnamed request targets. Daemon projects' own root is scratch, never a member, so they use the
+   * machine repository holding the thread's arc state, else the first machine root.
+   */
+  private async callerMember(project: AgentEndpointProjectResolution, members: readonly RepoMember[], identity: { harness: WorkbenchHarness; threadId: string }) {
+    if (project.project.kind !== "daemon") return this.memberForRoot(members, project.root);
+    const machine = members.filter(isMachineMember);
+    const holding = (await Promise.all(machine.map(async (member) => {
+      const input = { cwd: member.repoRoot, ...identity };
+      return await this.local.findLifecycleState(input) ?? await this.local.findPlanState(input) ? member : null;
+    }))).filter((member): member is RepoMember => member !== null);
+    const member = holding.length === 1 ? holding[0] : machine[0];
+    if (!member) throw new GitArcRejectionError({ reason: "rootNotRepository", rootId: project.root.id }, "No machine Git arc root is available.");
+    return member;
+  }
+
   private rootForRepoPath(member: RepoMember, repoPath: string) {
     const absolute = path.resolve(member.repoRoot, repoPath);
     return [...member.roots].filter((root) => isInside(absolute, root.root))
@@ -745,7 +761,7 @@ export default class WorkbenchWorkspaceGitArcController {
     paths: readonly string[],
     roots: readonly RootPathInput[],
     adoptPaths: readonly string[] = [],
-    includeCaller = false,
+    caller?: RepoMember,
   ) {
     const grouped = new Map<string, { adoptPaths: string[]; member: RepoMember; paths: string[] }>();
     const groupFor = (member: RepoMember) => {
@@ -769,11 +785,7 @@ export default class WorkbenchWorkspaceGitArcController {
       install(root.rootId, root.paths, "paths");
       install(root.rootId, root.adoptPaths ?? [], "adoptPaths");
     }
-    if (includeCaller && !grouped.size) {
-      const root = this.findRoot(project, callerRootId);
-      const member = this.memberForRoot(members, root);
-      grouped.set(member.repoRoot, { adoptPaths: [], member, paths: [] });
-    }
+    if (caller && !grouped.size) grouped.set(caller.repoRoot, { adoptPaths: [], member: caller, paths: [] });
     return [...grouped.values()].map((group) => ({ ...group, adoptPaths: unique(group.adoptPaths), paths: unique(group.paths) }));
   }
 
@@ -986,7 +998,7 @@ export default class WorkbenchWorkspaceGitArcController {
     };
     const joined = candidates.filter(joins);
     const selected = joined.length ? joined : candidates;
-    if (!selected.length) selected.push(this.memberForRoot(members, project.root));
+    if (!selected.length) selected.push(await this.callerMember(project, members, request));
     const starting = request.action === "arcClaims" || request.start;
     // Non-inherited starts replace unnamed repositories' scope with an empty plan while named repositories start.
     const startsMember = (member: RepoMember) => request.action === "arcClaims" || request.inherit || changed.has(member.repoRoot);
@@ -1021,7 +1033,8 @@ export default class WorkbenchWorkspaceGitArcController {
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "plan" | "planStart" }>,
   ) {
-    const groups = this.groupRootPaths(project, members, request.paths, request.roots, request.adoptPaths, true);
+    const unnamed = !request.paths.length && !request.adoptPaths.length && !request.roots.length;
+    const groups = this.groupRootPaths(project, members, request.paths, request.roots, request.adoptPaths, unnamed ? await this.callerMember(project, members, request) : undefined);
     await this.rejectMachinePaths(groups);
     const values = await this.runMembers(groups.map(({ member }) => member), async (member) => {
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot)!;
@@ -1379,7 +1392,7 @@ export default class WorkbenchWorkspaceGitArcController {
     } = {},
   ) {
     const refs = this.refsByRepo(project, members, request.refs);
-    if (request.checkpointCommit) refs.set(this.memberForRoot(members, project.root).repoRoot, request.checkpointCommit);
+    if (request.checkpointCommit) refs.set((await this.callerMember(project, members, request)).repoRoot, request.checkpointCommit);
     if (!refs.size) {
       if (request.action === "arcContinue") {
         for (const member of members) {
@@ -1527,9 +1540,11 @@ export default class WorkbenchWorkspaceGitArcController {
       ? undefined
       : request.paths?.map((value) => this.parseRootPath(project, value, project.root.id));
     const pathRoots = unique(callerPaths?.map(({ root: pathRoot }) => pathRoot.id) ?? []);
+    const unnamedMember = !inferredMember && !request.rootId && pathRoots.length !== 1 ? await this.callerMember(project, members, request) : null;
     const root = inferredMember?.roots[0]
-      ?? this.findRoot(project, request.rootId ?? (pathRoots.length === 1 ? pathRoots[0]! : project.root.id));
-    const member = inferredMember ?? this.memberForRoot(members, root);
+      ?? (unnamedMember ? unnamedMember.roots.find(({ id }) => id === project.root.id) ?? unnamedMember.roots[0] : undefined)
+      ?? this.findRoot(project, request.rootId ?? pathRoots[0]!);
+    const member = inferredMember ?? unnamedMember ?? this.memberForRoot(members, root);
     const requestedPaths = callerPaths ?? request.paths?.map((value) => this.parseRootPath(project, value, root.id));
     if (requestedPaths?.some((candidate) => candidate.root.id !== root.id)) {
       throw new GitArcRejectionError({ reason: "crossRootProposal", rootId: root.id }, `A Git arc proposal for ${root.id} cannot include paths from another workspace root.`);
@@ -1624,7 +1639,7 @@ export default class WorkbenchWorkspaceGitArcController {
     request: { harness: WorkbenchHarness; threadId: string },
     ref: string,
   ) {
-    const callerMember = this.memberForRoot(members, project.root);
+    const callerMember = await this.callerMember(project, members, request);
     if (members.length === 1 || /^[a-f0-9]{7,64}$/iu.test(ref)) return callerMember;
     try {
       return await this.findProposalMember(members, { ...request, proposalId: ref });
@@ -1675,7 +1690,7 @@ export default class WorkbenchWorkspaceGitArcController {
   ) {
     const groups = this.groupRootPaths(project, members, request.paths ?? [], request.roots);
     const refs = this.refsByRepo(project, members, request.refs);
-    if (request.checkpointCommit) refs.set(this.memberForRoot(members, project.root).repoRoot, request.checkpointCommit);
+    if (request.checkpointCommit) refs.set((await this.callerMember(project, members, request)).repoRoot, request.checkpointCommit);
     if (request.confirmRestore && !refs.size) {
       const lifecycle = await this.findLifecycleState(project, request.harness, request.threadId);
       for (const member of lifecycle?.members ?? []) refs.set(member.repoRoot, member.checkpointCommit);
