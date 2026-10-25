@@ -6,6 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
+import { formatRateLimitResetTime } from "../../../workbench/rate-limit-display";
 import ThreadRateLimits from "./ThreadRateLimits.tsx";
 
 test("renders rolling, weekly, and monthly quota windows together", () => {
@@ -30,7 +31,10 @@ test("renders rolling, weekly, and monthly quota windows together", () => {
 });
 
 test("an untouched window shows its full allowance without a reset", () => {
-  const window = (usedPercent: number) => ({ resetsAt: Date.UTC(2026, 9, 25) / 1_000, usedPercent, windowDurationMins: 10_080 });
+  const resetsAt = Date.UTC(2026, 9, 25) / 1_000;
+  // The label is a time on the reset's own day and a date otherwise, in the runner's locale.
+  const resetLabel = formatRateLimitResetTime(resetsAt * 1_000);
+  const window = (usedPercent: number) => ({ resetsAt, usedPercent, windowDurationMins: 10_080 });
   const render = (usedPercent: number) => renderToStaticMarkup(createElement(ThreadRateLimits, {
     harness: "codex",
     rateLimits: {
@@ -40,6 +44,6 @@ test("an untouched window shows its full allowance without a reset", () => {
   }));
   const untouched = render(0);
   assert.match(untouched, /100%/u);
-  assert.doesNotMatch(untouched, /Oct/u);
-  assert.match(render(20), /Oct/u);
+  assert.ok(!untouched.includes(resetLabel), "an untouched window shows no reset");
+  assert.ok(render(20).includes(resetLabel), "a used window shows its reset");
 });
