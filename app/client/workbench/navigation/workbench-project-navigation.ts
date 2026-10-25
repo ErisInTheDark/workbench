@@ -174,6 +174,13 @@ export default class WorkbenchProjectNavigation {
     return implicit?.daemonId === target.daemonId && implicit.projectId === target.projectId ? null : address;
   }
 
+  /** `route` with its url folder naming `location`, so the url and sidebar agree; unchanged when no in-scope address names it. */
+  withFolder(route: WorkbenchRoute, location: ProjectLocationReference): WorkbenchRoute {
+    const addressed = { ...route, folderAddress: this.folderAddressFor(location, route) };
+    const shown = this.folderForRoute(this.resolveRoute(addressed));
+    return shown?.daemonId === location.daemonId && shown.projectId === location.projectId ? addressed : route;
+  }
+
   /**
    * Open a git tab on `location` (default: the route's folder) without replacing the project selection. The tab names
    * its folder itself, so it never depends on which folder the destination route would select implicitly.

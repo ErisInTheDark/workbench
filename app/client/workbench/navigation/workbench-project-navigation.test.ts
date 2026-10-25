@@ -594,6 +594,33 @@ test("a git tab names its own folder, so opening it from any route never loses t
     "two folders' git tabs are different tabs");
 });
 
+test("a route re-addressed to a shown folder names it, omits an implicit folder and never names an out-of-scope one", () => {
+  const id = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const daemonId = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const folder = {
+    target: { daemonId, projectId: ProjectIdSchema.parse("repo") },
+    daemonId, hostname: "alpha", name: "workbench", rootPath: "/home/me/workbench", project: null,
+  };
+  const worktree = {
+    target: { daemonId, projectId: ProjectIdSchema.parse("repo-lab") },
+    daemonId, hostname: "alpha", name: "convex-lab",
+    rootPath: "/home/me/repo/.workbench/worktrees/convex-lab", project: null,
+  };
+  const navigation = new WorkbenchProjectNavigation([], [], [{
+    id, matchKey: "remote://github.com/team/workbench", label: "workbench", locations: [folder, worktree],
+  }]);
+  const onWorktree = { ...createLogicalProjectRoute(id), folderAddress: ["+convex-lab"] };
+  const home = navigation.withFolder(onWorktree, folder.target);
+  assert.equal(home.folderAddress, null);
+  assert.deepEqual(navigation.folderForRoute(home), folder.target);
+  const back = navigation.withFolder(home, worktree.target);
+  assert.deepEqual(navigation.folderForRoute(back), worktree.target);
+
+  const folders = createFolderNavigation();
+  const firstOnly = withProjectSelection(createProjectRoute(""), [folders.first]);
+  assert.equal(folders.navigation.withFolder(firstOnly, folders.worktree.target), firstOnly);
+});
+
 test("folder selection rides hrefs and stays scoped to its owning project", () => {
   const { first, navigation, second, worktree } = createFolderNavigation();
   const current = {

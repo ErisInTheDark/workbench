@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default WorkbenchSidebarPane: the workbench sidebar: a fixed header, a status-counts footer, and between them (and
- *   fading under both) the threads, git, explorer or reload panel. On desktop the active tab brings its panel forward.
+ *   fading under both) the threads, git, explorer or reload panel. On desktop the active tab brings its panel forward, and
+ *   choosing the git panel or a folder in it opens that folder's git tab.
  */
 "use client";
 
@@ -42,8 +43,7 @@ type ActionsProps = ComponentProps<typeof WorkbenchThreadSidebarActionsProvider>
 type ReloadPanelProps = ComponentProps<typeof WorkbenchReloadPanel>;
 
 /** Desktop tabs pick the panel once per tab change, so a footer pick stays until the next tab. Mobile never follows tabs. */
-function useTabPanel(route: WorkbenchRoute, setPanel: (panel: WorkbenchSidebarPanel) => void) {
-  const mobile = useMediaQuery(MOBILE_MEDIA_QUERY);
+function useTabPanel(route: WorkbenchRoute, mobile: boolean, setPanel: (panel: WorkbenchSidebarPanel) => void) {
   const panel = sidebarPanelForRoute(route);
   const tab = `${route.view}\0${route.filePath}\0${route.view === "thread" ? JSON.stringify(route.threadTarget) : ""}`;
   const followed = useRef<string | null>(null);
@@ -91,7 +91,8 @@ export default function WorkbenchSidebarPane({
   const projectHref = useWorkbenchProjectNavigation();
   const navigate = useWorkbenchNavigate();
   const { preferences, setPanel } = useWorkbenchSidebarPreferences();
-  useTabPanel(route, setPanel);
+  const mobile = useMediaQuery(MOBILE_MEDIA_QUERY);
+  useTabPanel(route, mobile, setPanel);
   const panel = preferences.panel;
   const selection = useProjects.selection(route, physicalProjects, browseLocation);
   const projectOrder = (selection.displayedLogicalProjects ?? physicalProjects).map(project => project.id);
@@ -128,11 +129,24 @@ export default function WorkbenchSidebarPane({
       projects={physicalProjects}
     />
   );
+  /** Desktop git choices open the folder's git tab, unless the focused tab already shows its git. */
+  const openGit = (location: ProjectLocationReference | null) => {
+    if (mobile || !navigator || !location) return false;
+    const shown = route.view === "git" ? navigator.gitLocationFor(route) : null;
+    if (shown?.daemonId === location.daemonId && shown.projectId === location.projectId) return false;
+    navigate(navigator.gitRoute(route, location));
+    return true;
+  };
+  const choosePanel = (next: WorkbenchSidebarPanel) => {
+    setPanel(next);
+    if (next === "git") openGit(browseLocation);
+  };
   const folder = (content: (location: ProjectLocationReference) => ReactNode) => folderOptions.length ? (
     <WorkbenchFolderSidebar
       folders={folderOptions}
       label="Choose folder"
       onSelect={location => {
+        if (panel === "git" && openGit(location)) return;
         navigate({
           ...route,
           folderAddress: navigator?.folderAddressFor(location, route) ?? null,
@@ -230,7 +244,7 @@ export default function WorkbenchSidebarPane({
           daemonRuntime={daemonRuntime}
           location={browseLocation}
           onAskAgent={askAgentWithReferences}
-          onPanel={setPanel}
+          onPanel={choosePanel}
           panel={panel}
           projectIds={selection.selectionProjectIds}
         />

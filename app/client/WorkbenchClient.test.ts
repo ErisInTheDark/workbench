@@ -713,6 +713,32 @@ test("viewing a thread browses the thread's own folder over the folder the url l
   }
 });
 
+test("a new thread in another folder rewrites the url folder to the folder the sidebar shows", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const snapshots: ExplorerSnapshot[] = [];
+  const client = WorkbenchClient({ workspace: fixture.workspace,
+    onExplorerStateChange: snapshot => snapshots.push(snapshot) });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  const data = facts(true);
+  const other = { daemonId, projectId: ProjectIdSchema.parse("other-folder") };
+  data.projects[0]!.locations.push({
+    target: other, daemonId, hostname: "local", name: "convex-lab",
+    rootPath: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
+    displayPath: "+convex-lab", project: { ...project, id: other.projectId, name: "convex-lab", relativePath: "convex-lab" },
+  });
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+  const route = { ...createLogicalThreadRoute(logicalId, logicalId, other, { kind: "new" }), folderAddress: ["bak"] };
+  const result = await client.controls.applyRoute(client.projectNavigator.resolveRoute(route));
+  assert.equal(result.ok, true);
+  assert.ok(result.canonicalRoute);
+  assert.deepEqual(client.projectNavigator.folderForRoute(result.canonicalRoute), other);
+  assert.equal((await client.controls.applyRoute(result.canonicalRoute)).ok, true);
+  await Promise.resolve();
+  assert.deepEqual(snapshots.at(-1)?.browseLocation, other);
+});
+
 test("a resolved existing thread starts its observation while catalogue metadata remains pending", async context => {
   const warnings: string[] = [];
   context.mock.method(console, "warn", (message: string) => warnings.push(message));

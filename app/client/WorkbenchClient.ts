@@ -771,12 +771,12 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       });
       if (!context.isCurrent() || outcome.kind === "superseded") return { ok: false };
       if (outcome.kind === "failure") return { ok: false, error: outcome.message };
-      const canonical = {
+      const canonical = projectNavigator.withFolder({
         ...withProjectSelection(createLogicalExistingThreadRoute(logicalId ?? null,
           target?.kind === "provider" ? { ...target, harness: data.identity.harness } : target!, null),
           route.selectedProjectIds),
         folderAddress: route.folderAddress,
-      };
+      }, data.location);
       emit();
       return { ok: true, ...(isSameWorkbenchRoute(route, canonical) ? {} : { canonicalRoute: canonical }) };
     }
@@ -819,12 +819,13 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const registered = logicalFor(location);
       if (registered) {
         const viewedProjectId = route.logical?.threadOwnerProjectId ? route.logical.projectId : logicalId ?? registered.id;
-        const canonical = withProjectSelection(createLogicalThreadRoute(viewedProjectId, registered.id,
+        const canonical = projectNavigator.withFolder(withProjectSelection(createLogicalThreadRoute(viewedProjectId, registered.id,
           saved ? null : browseTarget, saved ? { kind: "draft", draftId: DraftIdSchema.parse(saved.id) } : target),
-          route.selectedProjectIds);
+          route.selectedProjectIds), location);
         return { ok: true, ...(isSameWorkbenchRoute(route, canonical) ? {} : { canonicalRoute: canonical }) };
       }
-      return { ok: true };
+      const addressed = projectNavigator.withFolder(route, location);
+      return { ok: true, ...(isSameWorkbenchRoute(route, addressed) ? {} : { canonicalRoute: addressed }) };
     }
     draftLocation = null;
     threadClient.clearThreadSelection();
