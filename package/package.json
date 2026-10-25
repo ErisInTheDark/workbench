@@ -41,6 +41,6 @@
     "README.md"
   ],
   "dependencies": {
-    "dotenv": "^18.0.4"
+    "dotenv": "18.0.4"
   }
 }

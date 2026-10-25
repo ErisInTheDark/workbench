@@ -3,7 +3,8 @@
  * - typecheckProjects: maps each public filter flag to the TypeScript project configs it checks.
  * - selectTypecheckConfigs: resolves filter flags to unique configs; no flags selects every project.
  * - summarizeTypecheckDiagnostics: retains bounded unique compiler diagnostics across project runs.
- * - runProjectTypechecks: runs selected compiler projects and preserves failure after the complete sequence.
+ * - runProjectTypechecks: runs selected compiler projects, through an arc tree overlay when one holds paths, and
+ *   preserves failure after the complete sequence.
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -76,11 +77,24 @@ export function summarizeTypecheckDiagnostics(outputs, limit = 100) {
   return diagnostics;
 }
 
-export async function runProjectTypechecks(configPaths) {
+/** The compiler over an arc tree overlay; an unusable TypeScript API falls back to the plain compiler, saying so. */
+async function runOverlayCompiler(configPath, overlay) {
+  try {
+    const { typecheckWithArcOverlay } = await import("../test/arc-overlay/arc-overlay-typecheck.ts");
+    const result = typecheckWithArcOverlay(projectRoot, configPath, overlay);
+    process.stdout.write(result.output);
+    return result;
+  } catch (error) {
+    console.error(`arc overlay typecheck failed (${error instanceof Error ? error.message : String(error)}); checking ${configPath} with plain tsc, including other threads' live edits.`);
+    return await runCompiler(configPath);
+  }
+}
+
+export async function runProjectTypechecks(configPaths, overlay = null) {
   let failed = false;
   const outputs = [];
   for (const configPath of configPaths) {
-    const result = await runCompiler(configPath);
+    const result = overlay && !overlay.isEmpty ? await runOverlayCompiler(configPath, overlay) : await runCompiler(configPath);
     const passed = result.code === 0;
     const status = passed ? "\x1b[32mpass\x1b[0m" : "\x1b[31mfail\x1b[0m";
     process.stdout.write(`${configPath}: ${status}\n`);
@@ -90,6 +104,12 @@ export async function runProjectTypechecks(configPaths) {
   const summary = summarizeTypecheckDiagnostics(outputs);
   if (summary.length > 0) process.stderr.write(`\nTypecheck diagnostics:\n${summary.join("\n")}\n`);
   return failed ? 1 : 0;
+}
+
+/** Agent runs check other threads' held paths as the caller's arc tree has them; other runs get null. */
+async function loadArcOverlay() {
+  const { default: ArcTreeOverlay } = await import("../test/arc-overlay/ArcTreeOverlay.ts");
+  return await ArcTreeOverlay.load({ env: process.env, output: (line) => process.stdout.write(`${line}\n`), root: projectRoot });
 }
 
 function selectCliConfigs() {
@@ -105,7 +125,7 @@ function selectCliConfigs() {
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   const configPaths = selectCliConfigs();
   if (configPaths === null) process.exitCode = 1;
-  else void runProjectTypechecks(configPaths).then(
+  else void loadArcOverlay().then(async (overlay) => await runProjectTypechecks(configPaths, overlay)).then(
     (exitCode) => { process.exitCode = exitCode; },
     (error) => {
       console.error(`Workbench typecheck runner failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`);

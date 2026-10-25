@@ -1,15 +1,15 @@
 /*
  * Exports:
  * - ClaimedProjectTestCommandOptions: inject claim transport, selection and execution boundaries.
- * - default ClaimedProjectTestCommand: execute local tests selected by live claims or explicit inputs.
+ * - default ClaimedProjectTestCommand: execute local tests selected by live claims or explicit inputs, reading other
+ *   threads' held paths through the caller's arc tree overlay.
  */
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { GitArcScopeClaimsResponseSchema } from "../shared/workbench/git/git-arc-scope-response";
-import { GitCheckpointRequestSchema } from "../shared/workbench/git/checkpoint-contracts";
-import resolveWorkbenchDataRoot from "../shared/workbench-data-root";
-import { readDaemonEndpoint } from "../shared/process/workbench-daemon-endpoint";
 import ClaimedTestSelector, { type ClaimedTestSelection } from "../daemon/server/lib/workbench/testing/ClaimedTestSelector";
+import ArcTreeOverlay from "./arc-overlay/ArcTreeOverlay";
+import { requestDaemonGitArc } from "./daemon-git-arc-request";
 import ProjectTestCatalog from "./ProjectTestCatalog";
 import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
 
@@ -32,12 +32,13 @@ export default class ClaimedProjectTestCommand {
     const output = this.options.output ?? console.log;
     const usage = "Usage: wb test [--list] [-- [<file>...]]";
     if (args.length === 1 && args[0] === "--help") {
-      output(`${usage}\nDefault: select companion tests from all live claims.\nAfter --: use explicit files/directories, or the full suite when empty.\n--list only prints the selection.`);
+      output(`${usage}\nDefault: select companion tests from all live claims.\nAfter --: use explicit files/directories, or the full suite when empty.\n--list only prints the selection.\nAgent runs read other threads' held paths from the caller's arc tree.`);
       return { exitCode: 0, signal: null };
     }
     const separator = args.indexOf("--");
     const flags = separator < 0 ? args : args.slice(0, separator);
     if (flags.some(argument => argument !== "--list")) throw new Error(usage);
+    const env = this.options.env ?? process.env;
     if (separator >= 0) {
       const { inputs } = parseProjectTestRunnerArguments(args.slice(separator + 1));
       if (flags.includes("--list")) {
@@ -45,21 +46,11 @@ export default class ClaimedProjectTestCommand {
         output(files.map(file => path.relative(root, file)).join("\n"));
         return { exitCode: 0, signal: null };
       }
-      return await (this.options.run ?? (files => new ProjectTestRunner(root).run(files)))(inputs);
+      return await this.execute(root, env, output, inputs);
     }
-    const env = this.options.env ?? process.env;
-    const endpoint = await readDaemonEndpoint(path.join(resolveWorkbenchDataRoot({ environment: env }), "daemon", "runtime.json"));
-    if (!endpoint) throw new Error("The Workbench daemon has not published an endpoint.");
-    const request = GitCheckpointRequestSchema.parse({
-      action: "arcScope", cwd: root, harness: env.WORKBENCH_HARNESS ?? "codex",
-      threadId: env.WORKBENCH_THREAD_ID ?? env.CODEX_THREAD_ID ?? "",
-    });
-    const response = await (this.options.fetch ?? globalThis.fetch)(new URL("/daemon/git-arc", endpoint.origin), {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
-      redirect: "error",
-    });
-    if (!response.ok) throw new Error(`Could not read Git arc claims (HTTP ${response.status}).`);
-    const parsed = GitArcScopeClaimsResponseSchema.safeParse(await response.json());
+    const parsed = GitArcScopeClaimsResponseSchema.safeParse(
+      await requestDaemonGitArc({ action: "arcScope", cwd: root }, { env, fetch: this.options.fetch }),
+    );
     if (!parsed.success) throw new Error("Git arc scope response lacks valid repository-relative claims. Installed CLI and daemon must support this response.");
     const scopes = parsed.data;
     const claims = [...new Set(scopes.filter(scope => !path.relative(root, path.resolve(scope.repoRoot))).flatMap(scope => scope.claimedPaths))];
@@ -76,6 +67,16 @@ export default class ClaimedProjectTestCommand {
       output(selection.files.map(file => path.relative(root, file)).join("\n"));
       return { exitCode: 0, signal: null };
     }
-    return await (this.options.run ?? (files => new ProjectTestRunner(root).run(files)))(selection.files);
+    return await this.execute(root, env, output, selection.files);
+  }
+
+  private async execute(root: string, env: NodeJS.ProcessEnv, output: (message: string) => void, files: string[]) {
+    if (this.options.run) return await this.options.run(files);
+    const overlay = await ArcTreeOverlay.load({ env, fetch: this.options.fetch, output, root });
+    try {
+      return await new ProjectTestRunner(root, { environment: await overlay?.prepareTestEnvironment(env) ?? {} }).run(files);
+    } finally {
+      await overlay?.dispose();
+    }
   }
 }

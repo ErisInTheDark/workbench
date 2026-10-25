@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ProjectTestRunner: validate test discovery and own fixtures and Node test-runner children.
- * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup, cleanup, process spawning, concurrency, and optional timeout.
+ * - ProjectTestRunnerOptions/PreparedTestFixtures: inject extra test-process environment, runner-owned fixture setup, cleanup, process spawning, concurrency, and optional timeout.
  * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse explicit discovery inputs.
  * - chunkTestFileArguments: split a test process's file arguments into runs that fit one command line.
  * - runProjectTests: apply parsed CLI settings to one complete project test run.
@@ -63,6 +63,8 @@ function withoutAmbientAgentIdentity(environment: NodeJS.ProcessEnv) {
 
 export interface ProjectTestRunnerOptions {
   acquireTestRun?: () => Promise<ProjectTestRunLease>;
+  /** Extra environment for test processes, applied after ambient agent identity is removed. */
+  environment?: Record<string, string>;
   prepareTestFixtures?: (files: readonly string[], temporaryRootPath: string) => Promise<PreparedTestFixtures>;
   spawnProcess?: (
     command: string,
@@ -95,6 +97,7 @@ export function parseProjectTestRunnerArguments(arguments_: readonly string[]): 
 
 export default class ProjectTestRunner {
   private readonly acquireTestRun: () => Promise<ProjectTestRunLease>;
+  private readonly environment: Record<string, string>;
   private readonly prepareTestFixtures: (files: readonly string[], temporaryRootPath: string) => Promise<PreparedTestFixtures>;
   private readonly spawnProcess: NonNullable<ProjectTestRunnerOptions["spawnProcess"]>;
   private readonly testConcurrency: number;
@@ -110,6 +113,7 @@ export default class ProjectTestRunner {
     options: ProjectTestRunnerOptions = {},
   ) {
     this.acquireTestRun = options.acquireTestRun ?? (async () => await new ProjectTestRunCoordinator().acquire());
+    this.environment = options.environment ?? {};
     this.prepareTestFixtures = options.prepareTestFixtures ?? prepareWorkbenchGitTestFixtures;
     this.spawnProcess = options.spawnProcess ?? spawn;
     const requestedConcurrency = options.testConcurrency ?? TEST_CONCURRENCY;
@@ -235,7 +239,7 @@ export default class ProjectTestRunner {
         ...files,
       ], {
         cwd: testProcessRoot,
-        env: { ...withoutAmbientAgentIdentity(process.env), ...fixtureEnvironment, ...services.environment },
+        env: { ...withoutAmbientAgentIdentity(process.env), ...this.environment, ...fixtureEnvironment, ...services.environment },
         stdio: "inherit",
         detached: process.platform !== "win32",
         windowsHide: true,

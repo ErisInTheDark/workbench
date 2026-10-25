@@ -19,7 +19,7 @@
     "test:lifecycle": "node --disable-warning=ExperimentalWarning --import tsx test/run-lifecycle-test.mjs",
     "test:install": "node --disable-warning=ExperimentalWarning --import tsx test/run-install-test.mjs",
     "sandbox:install": "node --disable-warning=ExperimentalWarning --import tsx test/install/open-install-sandbox.ts",
-    "typecheck": "node scripts/typecheck.mjs",
+    "typecheck": "node --disable-warning=ExperimentalWarning --import tsx scripts/typecheck.mjs",
     "dev": "node --env-file-if-exists=./daemon/.env.local ./daemon/host/launch-foreground.mjs",
     "codex:types": "pnpm --dir daemon exec codex app-server generate-ts --experimental --out ../shared/codex/generated/app-server",
     "pack": "node scripts/publish-package.mjs --pack",
@@ -27,10 +27,10 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",
-    "@types/node": "^25.6.0",
+    "@types/node": "25.6.0",
     "better-sqlite3": "13.0.3",
     "tsx": "4.23.13",
-    "typescript": "^7.0.2"
+    "typescript": "7.1.0-beta"
   },
   "devEngines": {
     "runtime": {

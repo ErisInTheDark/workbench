@@ -1,10 +1,12 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "allowJs": true,
     "incremental": false
   },
   "include": [
     "./**/*.ts",
+    "./arc-overlay/arc-overlay-preload.mjs",
     "../*.test.ts",
     "../app/client/workbench/thread/thread-command-matchers.test.ts",
     "../shared/workbench/git/checkpoint-contracts.test.ts",
