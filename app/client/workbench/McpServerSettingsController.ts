@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - McpServerSettingsState: MCP server settings presentation state, including whether this browser can sign in.
- * - default McpServerSettingsController: own one daemon's MCP server settings reads, fenced writes and OAuth sign-in starts.
+ * - default McpServerSettingsController: own incremental MCP settings checks, fenced writes and OAuth sign-in starts.
  */
 import type {
   McpServerSettingsSnapshot, McpServerSettingsUpdate, McpServerSignInStartParams, McpServerSignInStartResult,
@@ -26,6 +26,7 @@ export default class McpServerSettingsController {
   constructor(private readonly port: {
     daemonId: string;
     read(): Promise<McpServerSettingsSnapshot>;
+    readServer(id: string): Promise<McpServerSettingsSnapshot>;
     update(update: McpServerSettingsUpdate): Promise<McpServerSettingsSnapshot>;
     startSignIn(params: McpServerSignInStartParams): Promise<McpServerSignInStartResult>;
     readAppPort(): Promise<{ appOrigin: string; loopbackReachable?: boolean }>;
@@ -89,14 +90,42 @@ export default class McpServerSettingsController {
     this.publish({ ...this.snapshot, busy: true, error: "" });
     try {
       const settings = await operation();
-      if (!this.disposed && generation === this.generation) this.publish({ ...this.snapshot, settings, busy: false, error: "" });
+      if (!this.disposed && generation === this.generation) {
+        this.publish({ ...this.snapshot, settings, busy: false, error: "" });
+      }
       return true;
     } catch (error) {
       if (!this.disposed && generation === this.generation) {
         this.publish({ ...this.snapshot, busy: false, error: error instanceof Error ? error.message.slice(0, 300) : "MCP server settings failed." });
       }
       return false;
+    } finally {
+      if (!this.disposed && generation === this.generation) {
+        for (const server of this.snapshot.settings?.servers ?? []) {
+          if (server.catalog.status === "pending") void this.readServer(server.id, generation);
+        }
+      }
     }
+  }
+
+  private async readServer(id: string, generation: number) {
+    let checked: McpServerSettingsSnapshot["servers"][number];
+    try {
+      const settings = await this.port.readServer(id);
+      const server = settings.servers.find(server => server.id === id);
+      if (!server || server.catalog.status === "pending") throw new Error("The server check returned no result.");
+      checked = server;
+    } catch (error) {
+      const server = this.snapshot.settings?.servers.find(server => server.id === id);
+      if (!server) return;
+      checked = { ...server, catalog: {
+        status: "error", detail: error instanceof Error ? error.message.slice(0, 300) : "The server could not be checked.",
+      } };
+    }
+    if (this.disposed || generation !== this.generation || !this.snapshot.settings) return;
+    this.publish({ ...this.snapshot, settings: {
+      servers: this.snapshot.settings.servers.map(server => server.id === id ? checked : server),
+    } });
   }
 
   private publish(snapshot: McpServerSettingsState) {

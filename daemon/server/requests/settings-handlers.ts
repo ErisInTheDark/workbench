@@ -6,7 +6,7 @@
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "workbench-shared/types";
 import { ApprovalReviewSettingsUpdateSchema } from "workbench-shared/workbench/approval-review/approval-review-settings";
 import {
-  McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema, McpServerSignInStartParamsSchema,
+  McpServerSettingsReadParamsSchema, McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema, McpServerSignInStartParamsSchema,
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
@@ -78,7 +78,11 @@ export const settingsRequestHandlers = defineDaemonRequestHandlers({
     if (!parsed.success) throw new InvalidParamsError("Invalid auto-approve settings update.");
     return await owner.update(parsed.data);
   },
-  "mcp-servers/read": async (_params, context) => await mcpServers(context).read(),
+  "mcp-servers/read": async (params, context) => {
+    const parsed = McpServerSettingsReadParamsSchema.safeParse(params);
+    if (!parsed.success) throw new InvalidParamsError("Invalid MCP server settings read.");
+    return await mcpServers(context).read(parsed.data);
+  },
   "mcp-servers/update": async (params, context) => {
     const owner = mcpServers(context);
     const parsed = McpServerSettingsUpdateSchema.safeParse(params);

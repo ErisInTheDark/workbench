@@ -10,7 +10,7 @@ import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
   McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema, McpServerSignInStartParamsSchema,
-  type McpServerSettingsSnapshot, type McpServerSettingsUpdate, type McpServerSignInFinishParams,
+  type McpServerSettingsReadParams, type McpServerSettingsSnapshot, type McpServerSettingsUpdate, type McpServerSignInFinishParams,
   type McpServerSignInFinishResult, type McpServerSignInStartParams, type McpServerSignInStartResult, type McpServerSnapshot,
   WORKBENCH_MCP_SERVER_NAME,
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
@@ -108,6 +108,7 @@ function credentialKey(serverId: string, header: string) {
 
 export default class WorkbenchMcpServerController {
   #secret: Promise<Buffer> | null = null;
+  #nameAdoptions: Promise<void> = Promise.resolve();
   readonly #connections = new Map<string, McpServerConnectionPort>();
   readonly #traffic = new WebSocketTrafficBuffer({ maxEntries: 500, maxBytes: 4 * 1024 * 1024 });
   /** Newest-first links each server sent in call replies; memory only, so a reload means calling again. */
@@ -120,10 +121,13 @@ export default class WorkbenchMcpServerController {
     return this.#traffic.query(query);
   }
 
-  async read(): Promise<McpServerSettingsSnapshot> {
-    const servers = await this.#servers();
-    const catalogs = await Promise.all(servers.map(server => this.#catalog(server)));
-    const names = await this.#adoptServerNames(servers, catalogs);
+  async read(params: McpServerSettingsReadParams = {}): Promise<McpServerSettingsSnapshot> {
+    const servers = (await this.#servers()).filter(server => !params.id || server.id === params.id);
+    if (params.id && !servers.length) throw new Error("That MCP server no longer exists.");
+    const catalogs: (Catalog | { status: "pending" })[] = params.configuredOnly
+      ? servers.map(() => ({ status: "pending" }))
+      : await Promise.all(servers.map(server => this.#catalog(server)));
+    const names = params.configuredOnly ? new Map<string, string>() : await this.#adoptServerNames(servers, catalogs);
     return { servers: servers.map((server, index): McpServerSnapshot => {
       const catalog = catalogs[index]!;
       return {
@@ -143,19 +147,32 @@ export default class WorkbenchMcpServerController {
    * A server still named after its hostname (it could not report a name when added, e.g. before sign-in) takes its
    * reported name on its first successful connection. Names taken from the server never change again.
    */
-  async #adoptServerNames(servers: readonly StoredServer[], catalogs: readonly Catalog[]) {
-    const names = new Map<string, string>();
-    const taken = servers.map(server => server.name);
-    for (const [index, server] of servers.entries()) {
-      if (catalogs[index]?.status !== "ready" || server.name !== hostnameOf(server.url)) continue;
-      const reported = serverNameFrom(await this.#connection(server).serverName().catch(() => null));
-      if (!reported || reported === server.name) continue;
-      const name = uniqueName(reported, taken);
-      await this.options.database.executeTransaction([updateRows(mcpServers, { name }, { id: server.id })]);
-      taken[index] = name;
-      names.set(server.id, name);
-    }
-    return names;
+  async #adoptServerNames(servers: readonly StoredServer[], catalogs: readonly (Catalog | { status: "pending" })[]) {
+    const reported = await Promise.all(servers.map(async (server, index) =>
+      catalogs[index]?.status === "ready" && server.name === hostnameOf(server.url)
+        ? serverNameFrom(await this.#connection(server).serverName().catch(() => null)) : null));
+    if (!reported.some(Boolean)) return new Map<string, string>();
+    const adoption = this.#nameAdoptions.then(async () => {
+      const names = new Map<string, string>();
+      const current = await this.#servers();
+      const taken = current.map(server => server.name);
+      for (const [index, server] of servers.entries()) {
+        const storedIndex = current.findIndex(candidate => candidate.id === server.id);
+        const stored = current[storedIndex];
+        if (!stored) continue;
+        names.set(server.id, stored.name);
+        const candidate = reported[index];
+        if (!candidate || candidate === stored.name || stored.name !== hostnameOf(stored.url)) continue;
+        const name = uniqueName(candidate, taken);
+        await this.options.database.executeTransaction([updateRows(mcpServers, { name }, { id: server.id })]);
+        taken[storedIndex] = name;
+        names.set(server.id, name);
+      }
+      return names;
+    });
+    // Failed callers still receive their error; the name-allocation queue remains usable.
+    this.#nameAdoptions = adoption.then(() => undefined, () => undefined);
+    return adoption;
   }
 
   async update(input: McpServerSettingsUpdate): Promise<McpServerSettingsSnapshot> {

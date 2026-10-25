@@ -5,10 +5,11 @@
  * - McpServerUrlSchema: http(s) endpoint of one streamable-HTTP MCP server.
  * - McpServerAuthHeaderSchema: custom request header name carrying a server's sealed credential.
  * - McpServerToolNameSchema: one tool name a server offers.
+ * - McpServerSettingsReadParamsSchema/McpServerSettingsReadParams: saved-only or targeted live settings reads.
  * - McpServerSettingsSnapshotSchema/McpServerSettingsSnapshot/McpServerSnapshot: configured servers, allow rules and live catalogues; credential values are never included.
  * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add, removal, rename, credential, allow-rule, refresh or sign-out change.
- * - McpServerSignInStart{Params,Result}Schema: begin an OAuth sign-in and receive the provider's authorization URL.
- * - McpServerSignInFinish{Params,Result}Schema: hand the provider's callback (code or error) to the daemon and report the outcome.
+ * - McpServerSignInStart{Params,Result}Schema/McpServerSignInStart{Params,Result}: begin OAuth sign-in and receive its authorization URL.
+ * - McpServerSignInFinish{Params,Result}Schema/McpServerSignInFinish{Params,Result}: finish the provider's callback and report its outcome.
  */
 import { z } from "zod";
 
@@ -42,6 +43,7 @@ const credential = z.object({
 }).strict();
 
 const catalog = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("pending") }).strict(),
   z.object({
     status: z.literal("ready"),
     tools: z.array(z.object({
@@ -76,6 +78,12 @@ export type McpServerSnapshot = z.infer<typeof server>;
 
 export const McpServerSettingsSnapshotSchema = z.object({ servers: z.array(server) }).strict();
 export type McpServerSettingsSnapshot = z.infer<typeof McpServerSettingsSnapshotSchema>;
+
+export const McpServerSettingsReadParamsSchema = z.object({
+  configuredOnly: z.boolean().optional(),
+  id: z.uuid().optional(),
+}).strict();
+export type McpServerSettingsReadParams = z.infer<typeof McpServerSettingsReadParamsSchema>;
 
 const id = z.uuid();
 export const McpServerSettingsUpdateSchema = z.discriminatedUnion("action", [

@@ -88,6 +88,49 @@ function setup(servers: Record<string, FakeServer>) {
 
 const signal = () => new AbortController().signal;
 
+test("configured-only reads do not contact servers; a targeted live read checks only that server", async () => {
+  const drive = new FakeServer("drive");
+  const docs = new FakeServer("docs");
+  const { create, close } = setup({ drive, docs });
+  try {
+    const owner = create();
+    await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    const fresh = create();
+    drive.endpoints.length = 0;
+    docs.endpoints.length = 0;
+    const inventory = await fresh.read({ configuredOnly: true });
+    assert.deepEqual(inventory.servers.map(server => server.catalog.status), ["pending", "pending"]);
+    assert.equal(drive.endpoints.length + docs.endpoints.length, 0);
+
+    const id = inventory.servers[1]!.id;
+    const checked = await fresh.read({ id });
+    assert.deepEqual(checked.servers.map(server => server.id), [id]);
+    assert.equal(checked.servers[0]?.catalog.status, "ready");
+    assert.equal(drive.endpoints.length, 0);
+    assert.equal(docs.endpoints.length, 1);
+  } finally { close(); }
+});
+
+test("concurrent targeted reads allocate distinct reported names across the full inventory", async () => {
+  const drive = new FakeServer("shared");
+  const docs = new FakeServer("shared");
+  drive.failure = docs.failure = new Error("Not signed in yet");
+  const { create, close } = setup({ drive, docs });
+  const owner = create();
+  try {
+    await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    const inventory = await owner.read({ configuredOnly: true });
+    drive.failure = docs.failure = null;
+    const checked = await Promise.all(inventory.servers.map(server => owner.read({ id: server.id })));
+    const names = checked.map(snapshot => snapshot.servers[0]!.name);
+    assert.equal(new Set(names).size, 2);
+    assert.ok(names.every(name => name.startsWith("shared")));
+    assert.deepEqual((await owner.read({ configuredOnly: true })).servers.map(server => server.name), names);
+  } finally { await owner.dispose(); close(); }
+});
+
 test("only allowed tools the server currently offers are forwarded; allow-all covers tools added later", async () => {
   const drive = new FakeServer("drive");
   drive.tools = [tool("SEARCH"), tool("EXECUTE")];

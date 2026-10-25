@@ -32,6 +32,7 @@ type Tool = Extract<McpServerSnapshot["catalog"], { status: "ready" }>["tools"][
 const cardBorder = "border-[color-mix(in_srgb,var(--text)_10%,transparent)]";
 
 function presentStatus(server: McpServerSnapshot): { tone: WorkbenchSettingsStatusTone; status: string } {
+  if (server.catalog.status === "pending") return { tone: "pending", status: "Checking connection..." };
   if (server.catalog.status === "signInRequired") return { tone: "action", status: "Needs sign-in" };
   if (server.catalog.status === "error") return { tone: "failed", status: "Unavailable" };
   return { tone: "ready", status: server.auth?.kind === "oauth" ? "Signed in" : server.auth?.kind === "header" ? "API key" : "Connected" };
@@ -172,7 +173,8 @@ export default function McpServerSettings({ daemon, daemonId }: { daemon: Workbe
   const rpc = useWorkbenchAppRpc();
   const controller = useMemo(() => new McpServerSettingsController({
     daemonId,
-    read: () => daemon.mcpServers.read(),
+    read: () => daemon.mcpServers.read({ configuredOnly: true }),
+    readServer: id => daemon.mcpServers.read({ id }),
     update: update => daemon.mcpServers.update(update),
     startSignIn: params => daemon.mcpServers.startSignIn(params),
     readAppPort: () => readWorkbenchAppPort(rpc),
@@ -186,10 +188,16 @@ export default function McpServerSettings({ daemon, daemonId }: { daemon: Workbe
     return () => controller.dispose();
   }, [controller]);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const servers = state.settings?.servers ?? [];
+  const pending = servers.filter(server => server.catalog.status === "pending").length;
   // Only servers added from this view animate in; ones already present on load render still.
   const [entering, setEntering] = useState<ReadonlySet<string>>(() => new Set());
   return <div className="flex flex-col">
-    {state.settings?.servers.map(server => <div key={server.id} className={entering.has(server.id) ? enterMotionClassName : ""}>
+    {!state.settings && state.busy ? <p role="status" className="m-0 px-3 pb-2 text-[0.78em] leading-[1.55] text-fg/muted">Loading MCP servers...</p> : null}
+    {pending ? <p role="status" className="m-0 px-3 pb-2 text-[0.78em] leading-[1.55] text-fg/muted">
+      Checking servers: {servers.length - pending} of {servers.length} complete
+    </p> : null}
+    {servers.map(server => <div key={server.id} className={entering.has(server.id) ? enterMotionClassName : ""}>
       <ServerCard server={server} controller={controller} busy={state.busy} loopbackOrigin={state.loopbackOrigin} />
     </div>)}
     <AddServerCard controller={controller} busy={state.busy} onAdded={ids => setEntering(new Set(ids))} />

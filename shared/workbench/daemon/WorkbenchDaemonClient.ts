@@ -242,7 +242,7 @@ class WorkbenchDaemonClient {
   };
 
   readonly mcpServers = {
-    read: () => this.request("mcp-servers/read", {}),
+    read: (params: WorkbenchDaemonParams<"mcp-servers/read"> = {}) => this.request("mcp-servers/read", params),
     update: (params: WorkbenchDaemonParams<"mcp-servers/update">) => this.request("mcp-servers/update", params),
     startSignIn: (params: WorkbenchDaemonParams<"mcp-servers/sign-in/start">) => this.request("mcp-servers/sign-in/start", params),
     finishSignIn: (params: WorkbenchDaemonParams<"mcp-servers/sign-in/finish">) => this.request("mcp-servers/sign-in/finish", params),
