@@ -63,8 +63,9 @@ export default class WorkbenchGitCheckoutController {
     const owners: GitCheckoutOwner[] = [];
     for (const claim of await this.claims(git)) {
       const live = getGitArcLiveClaimPaths(claim);
+      const liveSet = new GitArcPathSet(live);
       const affected = paths
-        ? paths.some(file => new GitArcPathSet(live).overlaps(file))
+        ? paths.some(file => liveSet.overlaps(file))
         : live.length > 0 || Boolean(claim.proposalIds?.length) || Boolean(claim.stackTip);
       if (!affected || owners.some(owner => owner.id === claim.threadId)) continue;
       const owner = await this.options.readOwner(claim.threadId, claim.harness);

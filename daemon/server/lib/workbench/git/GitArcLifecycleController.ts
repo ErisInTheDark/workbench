@@ -179,7 +179,8 @@ export default class GitArcLifecycleController {
     if (current.phase === "resolved" && !scopePaths.length) return result;
     const headIdentity = await repository.readHead();
     const head = headIdentity?.commit ?? null;
-    const retained = guards.filter((scope) => new GitArcPathSet(scopePaths).overlaps(scope));
+    const scope = new GitArcPathSet(scopePaths);
+    const retained = guards.filter((guard) => scope.overlaps(guard));
     const movement = await new GitArcStackController(repository, this.resolveThreadIdentity).arcDrift(current, checkpoint, retained, head);
     if (current.phase !== "resolved" && movement.incompatible) {
       throw new GitArcRejectionError({ reason: "incompatibleHead" }, "Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
