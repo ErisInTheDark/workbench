@@ -2184,8 +2184,10 @@ test("a yielded shell answers still running, keeps its row open, and shell_wait 
     runs[0]!({ exitCode: 0, stdout: "built", stderr: "" });
     const collected = await wait;
     assert.match(responseText(collected), /Exit code: 0\nOutput:\nbuilt/u);
+    assert.equal((collected.structuredContent as { shellId?: string }).shellId, undefined, "the wait gets the command's own result");
     assert.deepEqual(finished.find(entry => entry.tool === "shell")?.result.structuredContent,
-      { cwd: process.cwd(), exitCode: 0, shell: running.shell, stderr: "", stdout: "built" }, "the row gets the real result");
+      { cwd: process.cwd(), exitCode: 0, shell: running.shell, shellId: running.shellId, stderr: "", stdout: "built" },
+      "the row gets the real result, marked with the shell id it yielded as");
     const again = await client.callTool({ name: "shell_wait", arguments: { shellId: running.shellId } });
     assert.equal(again.isError, true);
   } finally {
@@ -2202,6 +2204,7 @@ test("a yielded shell stops and finishes its row when its turn ends", async () =
     assert.equal(requestRegistry.stopBackgroundShells(threadId), 1);
     for (let pass = 0; pass < 5 && !finished.length; pass++) await new Promise<void>(resolve => { setImmediate(resolve); });
     assert.match(responseText(finished[0]?.result), /Stopped when its turn ended/u);
+    assert.deepEqual(finished[0]?.result.structuredContent, { shellId }, "a stopped row still records that it yielded");
     const collected = await client.callTool({ name: "shell_wait", arguments: { shellId } });
     assert.equal(collected.isError, true, "a stopped turn's shell cannot be collected");
   } finally {

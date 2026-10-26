@@ -3,10 +3,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   WORKBENCH_CONTEXT_ROLLOVER_INSTRUCTION,
+  contextCompactionThreshold,
   createWorkbenchContextRolloverInput,
   isWorkbenchContextRolloverInput,
   shouldRequestContextRollover,
 } from "./thread-context-rollover.ts";
+
+test("compaction reserves fixed headroom for small windows and proportional headroom for large ones", () => {
+  assert.equal(contextCompactionThreshold(128_000), 78_000);
+  assert.equal(contextCompactionThreshold(500_000), 450_000);
+  assert.equal(contextCompactionThreshold(872_000), 784_800);
+});
 
 test("rollover threshold uses the selected guarded cap", () => {
   assert.equal(shouldRequestContextRollover(77_999, 128_000), false);

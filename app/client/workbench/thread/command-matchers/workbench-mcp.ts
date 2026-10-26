@@ -3,7 +3,8 @@
  * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route wb calls, including deferred tools run through `mcp_call`, and retain dedicated Git, title, and status failure presentation.
  * - getWorkbenchMcpCommandDisplay: match simple wb calls to shared summary presentation.
  * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive ordinary command presentation from wb shell evidence,
- *   including failures whose reason is only result text, the expensive mark, its recorded queue wait and its yield.
+ *   including failures whose reason is only result text, the expensive mark, its recorded queue wait, its yield window and
+ *   whether it yielded.
  * - WorkbenchShellWaitLink/WorkbenchMcpShellWaitCommandItem/getWorkbenchMcpShellWaitCommandItem/readWorkbenchShellWaitShellId:
  *   draw a `shell_wait` as the yielded command it collects, with the wait's own timing and outcome.
  * - readMcpTextContent: one MCP result content part's text.
@@ -46,14 +47,16 @@ export type WorkbenchMcpShellCommandItem = CommandExecutionItem & {
   workbenchShell: true;
   /** The call answers once the command has run this long, and the command runs on in the background. */
   yieldMs?: number;
+  /** The finished row records that its call answered first; a running row learns that from live shell state. */
+  yielded?: true;
 };
 
 /**
- * The yielded shell a `shell_wait` collects, and how that wait ended: with the shell's result, at its own `timeoutMs`
- * while the shell still runs, or cut short by a steer; null while it waits or when it failed.
+ * The yielded shell a `shell_wait` collects, and how that wait ended: with the shell's result, or yielded again (at its
+ * own `timeoutMs` or a steer) while the shell runs on; null while it waits or when it failed.
  */
 export interface WorkbenchShellWaitLink {
-  ended: "collected" | "interrupted" | "timedOut" | null;
+  ended: "collected" | "yielded" | null;
   shellItemId: string;
 }
 
@@ -126,7 +129,15 @@ export function getWorkbenchMcpShellCommandItem(
     ...(input.data.expensive ? { expensive: true as const } : {}),
     ...(result.success && result.data.queuedMs !== undefined ? { queuedMs: result.data.queuedMs } : {}),
     ...(input.data.yield_ms !== undefined ? { yieldMs: input.data.yield_ms } : {}),
+    ...(readStructuredField(item, "shellId") ? { yielded: true as const } : {}),
   };
+}
+
+/** One string field of an MCP call's structured result, which may be any JSON. */
+function readStructuredField(item: McpToolCallItem, key: string) {
+  const structured = item.result?.structuredContent;
+  const value = structured !== null && typeof structured === "object" && !Array.isArray(structured) ? structured[key] : null;
+  return typeof value === "string" && value ? value : null;
 }
 
 /** The shell id a wb `shell_wait` call collects; a yielded shell's id is its row's item id. */
@@ -139,11 +150,9 @@ export function readWorkbenchShellWaitShellId(item: ThreadItem) {
 
 function readShellWaitEnd(item: McpToolCallItem): WorkbenchShellWaitLink["ended"] {
   if (item.status === "inProgress") return null;
-  const structured = item.result?.structuredContent;
-  const kind = structured !== null && typeof structured === "object" && !Array.isArray(structured) ? structured.kind : null;
-  if (kind === "timedOut") return "timedOut";
-  if (kind === "interruptedBySteer") return "interrupted";
-  return WorkbenchShellResultSchema.safeParse(structured).success ? "collected" : null;
+  const kind = readStructuredField(item, "kind");
+  if (kind === "timedOut" || kind === "interruptedBySteer") return "yielded";
+  return WorkbenchShellResultSchema.safeParse(item.result?.structuredContent).success ? "collected" : null;
 }
 
 export function getWorkbenchMcpShellWaitCommandItem(

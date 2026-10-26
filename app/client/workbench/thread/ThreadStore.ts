@@ -66,6 +66,8 @@ interface ThreadHeadFields {
   addressedFeedback?: readonly WorkbenchThreadAddressedFeedback[];
   /** Live wb shells that waited in the expensive queue; drafts and older daemons have none. */
   shellQueue?: readonly WorkbenchShellQueueEntry[];
+  /** Every transcript reference naming a running wb shell whose call already answered; drafts and older daemons have none. */
+  yieldedShells?: readonly string[];
 }
 
 /** A child or linked thread as renderers see it: its head, plus turns when they are loaded. */

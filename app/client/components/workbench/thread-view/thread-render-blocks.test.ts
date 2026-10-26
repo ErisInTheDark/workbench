@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
@@ -476,21 +476,36 @@ test("a shell wait renders as a copy of the yielded shell it collects, with the 
     ...mcp("wait-1", "shell_wait", { shellId: "shell-1" }),
     result: { _meta: null, content: [], structuredContent: { cwd: "C:/repo", exitCode: 2, shell: "pwsh", stderr: "", stdout: "boom" } },
   };
-  const timedOut = {
-    ...mcp("wait-2", "shell_wait", { shellId: "shell-1", timeoutMs: 1_000 }),
-    result: { _meta: null, content: [], structuredContent: { kind: "timedOut", version: 1 } },
-  };
-  const [block, ...rest] = buildRenderableBlocks([shell, timedOut, collected]);
+  const waitEnded = (id: string, kind: string) => ({
+    ...mcp(id, "shell_wait", { shellId: "shell-1", timeoutMs: 1_000 }),
+    result: { _meta: null, content: [], structuredContent: { kind, version: 1 } },
+  });
+  // Both hand control back while the shell runs on, which is the shell yielding again.
+  const [block, ...rest] = buildRenderableBlocks([shell, waitEnded("wait-2", "timedOut"), waitEnded("wait-3", "interruptedBySteer"), collected]);
   assert.equal(rest.length, 0);
-  const [yielded, stillRunning, finished] = block ? getRenderableBlockItems(block) as CommandItem[] : [];
-  assert.equal(yielded?.yieldMs, 5_000);
+  const [running, ...waits] = block ? getRenderableBlockItems(block) as CommandItem[] : [];
+  assert.equal(running?.yieldMs, 5_000);
+  assert.equal(running?.yielded, undefined, "a running shell's yield is live evidence, not a guess from its row");
   assert.deepEqual(
-    [stillRunning, finished].map(item => item && [item.id, item.type, item.command, item.exitCode, item.aggregatedOutput, item.shellWait]),
+    waits.map(item => [item.id, item.type, item.command, item.exitCode, item.aggregatedOutput, item.shellWait]),
     [
-      ["wait-2", "commandExecution", "pnpm build", null, "", { ended: "timedOut", shellItemId: "shell-1" }],
+      ["wait-2", "commandExecution", "pnpm build", null, "", { ended: "yielded", shellItemId: "shell-1" }],
+      ["wait-3", "commandExecution", "pnpm build", null, "", { ended: "yielded", shellItemId: "shell-1" }],
       ["wait-1", "commandExecution", "pnpm build", 2, "boom", { ended: "collected", shellItemId: "shell-1" }],
     ],
   );
+  const finishedShell = (id: string, structuredContent: JsonValue, status: "completed" | "failed") => ({
+    ...mcp(id, "shell", { command: "pnpm build", yield_ms: 5_000 }), status,
+    result: { _meta: null, content: [{ type: "text", text: "Stopped when its turn ended." }], structuredContent },
+  });
+  const finished = buildRenderableBlocks([
+    finishedShell("done", { cwd: "C:/repo", exitCode: 0, shell: "pwsh", shellId: "done", stderr: "", stdout: "" }, "completed"),
+    finishedShell("stopped", { shellId: "stopped" }, "failed"),
+    finishedShell("quick", { cwd: "C:/repo", exitCode: 0, shell: "pwsh", stderr: "", stdout: "" }, "completed"),
+  ]).flatMap(getRenderableBlockItems) as CommandItem[];
+  assert.deepEqual(finished.map(item => [item.id, item.type, item.yielded]), [
+    ["done", "commandExecution", true], ["stopped", "commandExecution", true], ["quick", "commandExecution", undefined],
+  ], "a finished row says it yielded only when the daemon recorded its shell id");
   // A wait whose shell is not in view stays an ordinary wb step.
   const [orphan] = buildRenderableBlocks([mcp("wait-3", "shell_wait", { shellId: "elsewhere" })]);
   assert.deepEqual(orphan ? getRenderableBlockItems(orphan).map(item => item.type) : null, ["mcpToolCall"]);

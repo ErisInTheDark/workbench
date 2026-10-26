@@ -8,7 +8,7 @@
  * - WorkbenchAgentMcpUndeliveredMessage: one message admitted for a thread that its agent has not received; a sender marks an agent message.
  * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, steer interruption of waits and shell yield windows (including those
  *   attaching while a message is undelivered), user shell stops and queue skips, yielded shells running on until collected or their turn ends, provider tool batches
- *   and serial call turns, wait, shell-queue and windowed live shell output observation, reload-safe command re-entry, the current MCP
+ *   and serial call turns, wait, shell-queue and windowed live shell output and yield observation, reload-safe command re-entry, the current MCP
  *   tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
@@ -395,8 +395,8 @@ export class WorkbenchAgentMcpRequestRegistry {
     if (requests.size === 0) this.state.requestsByClient.delete(clientScope);
     if (entry.steerInterruptible && entry.workbenchThreadId) this.notifyThreadWaits(entry.workbenchThreadId);
     if (entry.shellQueue && entry.workbenchThreadId) this.notifyShellQueue(entry.workbenchThreadId);
-    // The finished item carries the whole output; its live tail leaves now rather than one window later.
-    if (entry.shellOutput && entry.workbenchThreadId) this.publishShellOutput(entry.workbenchThreadId);
+    // The finished item carries the whole output and its yield; its live state leaves now rather than one window later.
+    if ((entry.shellOutput || entry.background) && entry.workbenchThreadId) this.publishShellOutput(entry.workbenchThreadId);
     if (entry.workbenchThreadId) this.releaseHeldSteer(entry.workbenchThreadId);
   }
 
@@ -424,8 +424,15 @@ export class WorkbenchAgentMcpRequestRegistry {
     if (entry.workbenchThreadId) {
       if (wasWaiting) this.notifyThreadWaits(entry.workbenchThreadId);
       this.releaseHeldSteer(entry.workbenchThreadId);
+      this.publishShellOutput(entry.workbenchThreadId);
     }
     return shellId;
+  }
+
+  /** Every transcript reference naming a still-running shell of `threadId` whose call already answered. */
+  readYieldedShells(threadId: WorkbenchThreadId): string[] {
+    return [...this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.values() ?? []]
+      .flatMap(entry => entry.workbenchThreadId === threadId ? entry.shellItemReferences ?? [] : []);
   }
 
   /** The newest output of a yielded shell, for the answer its call gives. */
@@ -829,7 +836,7 @@ export class WorkbenchAgentMcpRequestRegistry {
     return output;
   }
 
-  /** Calls `listener` with a thread whose live shell output changed; read it with `readShellOutput`. */
+  /** Calls `listener` with a thread whose live shell output or yields changed; read them with `readShellOutput` and `readYieldedShells`. */
   subscribeShellOutput(listener: (threadId: WorkbenchThreadId) => void) {
     this.state.shellOutputListeners.add(listener);
     return () => { this.state.shellOutputListeners.delete(listener); };

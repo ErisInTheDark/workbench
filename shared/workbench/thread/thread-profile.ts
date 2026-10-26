@@ -3,7 +3,6 @@
  * - copyComposerSettings: copy only profile-owned settings.
  * - resolveLinkedProfileSelection: resolve current profile settings or saved Custom fallback while retaining the target's approval mode.
  * - WorkbenchThreadCreationProfileSchema: validate creation sources before provider forwarding.
- * - contextCompactionThreshold: reserve fixed or proportional context headroom.
  * - contextWindowFloor: smallest selectable window of a model context capability.
  * - isSelectableContextWindow: check a window against capability bounds in 1K steps from the floor, plus the default and maximum.
  * - WorkbenchModelContextCapabilitySchema: validated configurable model bounds.
@@ -48,10 +47,6 @@ export const WorkbenchThreadCreationProfileSchema = z.discriminatedUnion("kind",
   z.object({ kind: z.literal("target"), slot: WorkbenchComposerProfileSlotSchema }).strict(),
   z.object({ kind: z.literal("snapshot"), selection: WorkbenchComposerProfileSelectionSchema }).strict(),
 ]) as z.ZodType<WorkbenchThreadCreationProfile>;
-
-export function contextCompactionThreshold(cap: number) {
-  return Math.floor(cap - Math.max(50_000, cap * 0.1));
-}
 
 type ContextBounds = Pick<WorkbenchModelContextCapability, "defaultTokens" | "minimumTokens" | "maximumTokens">;
 

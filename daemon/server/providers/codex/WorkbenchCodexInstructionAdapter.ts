@@ -9,7 +9,7 @@ import path from "node:path";
 import { isSamePath } from "workbench-shared/same-path";
 import buildWorkbenchOwnedPromptFields from "./codex-owned-prompt";
 import type { WorkbenchComposerSettings, WorkbenchProjectRoot, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
-import { contextCompactionThreshold } from "workbench-shared/workbench/thread/thread-profile";
+import { contextCompactionThreshold } from "workbench-shared/workbench/thread/thread-context-rollover";
 
 import * as workbenchPromptFiles from "../../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "../../lib/workbench/instructions/WorkbenchPromptFiles";

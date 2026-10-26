@@ -2,11 +2,11 @@
  * Exports:
  * - WORKBENCH_THREAD_COMPACT_TOOL_NAME/WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME: public and OpenCode-native tool identities.
  * - WORKBENCH_CONTEXT_ROLLOVER_INSTRUCTION_KEY/WORKBENCH_CONTEXT_ROLLOVER_INSTRUCTION: stable hidden active-turn directive.
+ * - contextCompactionThreshold: reserve fixed or proportional context headroom.
  * - shouldRequestContextRollover: compare one native model step with the guarded selected cap.
  * - createWorkbenchContextRolloverInput/isWorkbenchContextRolloverInput: construct and recognise the hidden fresh-context opening.
  */
 import type { UserInput } from "./workbench-thread-items.ts";
-import { contextCompactionThreshold } from "./thread-profile.ts";
 import { defineTagWrapper } from "./tag-wrapper.ts";
 
 export const WORKBENCH_THREAD_COMPACT_TOOL_NAME = "thread_compact";
@@ -21,6 +21,10 @@ export const WORKBENCH_CONTEXT_ROLLOVER_INSTRUCTION = [
 ].join(" ");
 
 const WORKBENCH_CONTEXT_ROLLOVER_WRAPPER = defineTagWrapper("wb:context-compaction", { attributes: [] });
+
+export function contextCompactionThreshold(cap: number) {
+  return Math.floor(cap - Math.max(50_000, cap * 0.1));
+}
 
 export function shouldRequestContextRollover(contextTokens: number, selectedCap: number | null | undefined) {
   return selectedCap != null

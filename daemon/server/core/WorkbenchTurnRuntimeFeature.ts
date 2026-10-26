@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchCoreTranscript: the transcript registration surface core owners use.
  * - default WorkbenchTurnRuntimeFeature: build turn admission, liveness, compaction, auto-compaction, context rollover, transcript reading and
- *   reconciliation, unfinished-turn continuation and orphaned-turn settlement, and own runtime fact fan-out (including live shell queues)
+ *   reconciliation, unfinished-turn continuation and orphaned-turn settlement, and own runtime fact fan-out (including live shell queues, output and yields)
  *   plus the `threadRuntime` registration.
  */
 import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -54,7 +54,7 @@ export default class WorkbenchTurnRuntimeFeature {
   /** Threads whose runtime facts (token usage, auto-compaction) changed; thread observations reread them. */
   readonly #listeners = new Set<RuntimeListener>();
   readonly #shells: Pick<WorkbenchAgentMcpRequestRegistry,
-    "readShellQueue" | "subscribeShellQueue" | "readShellOutput" | "subscribeShellOutput">;
+    "readShellQueue" | "subscribeShellQueue" | "readShellOutput" | "readYieldedShells" | "subscribeShellOutput">;
 
   constructor(ports: {
     context: Pick<DaemonProcessContext, "logTurnRecovery">;
@@ -71,9 +71,9 @@ export default class WorkbenchTurnRuntimeFeature {
     setSummaryFacts(threadId: string, facts: ThreadSummaryFacts): void;
     /** The thread's shown approval prompt; approvals are live provider facts, never durable thread state. */
     readPendingApproval(threadId: string): ThreadRuntime["pendingApproval"];
-    /** Live wb shells' expensive-queue timing and newest output, owned by the process-wide MCP request registry. */
+    /** Live wb shells' expensive-queue timing, newest output and yields, owned by the process-wide MCP request registry. */
     shells: Pick<WorkbenchAgentMcpRequestRegistry,
-      "readShellQueue" | "subscribeShellQueue" | "readShellOutput" | "subscribeShellOutput">;
+      "readShellQueue" | "subscribeShellQueue" | "readShellOutput" | "readYieldedShells" | "subscribeShellOutput">;
     warn(message: string): void;
   }) {
     this.#shells = ports.shells;
@@ -233,6 +233,7 @@ export default class WorkbenchTurnRuntimeFeature {
             pendingApproval: ports.readPendingApproval(threadId),
             shellQueue: ports.shells.readShellQueue(WorkbenchThreadIdSchema.parse(threadId)),
             shellOutput: ports.shells.readShellOutput(WorkbenchThreadIdSchema.parse(threadId)),
+            yieldedShells: ports.shells.readYieldedShells(WorkbenchThreadIdSchema.parse(threadId)),
             goal, skills, todos, addressedFeedback,
           }];
         }));
@@ -252,12 +253,13 @@ export default class WorkbenchTurnRuntimeFeature {
     for (const listener of this.#listeners) listener(threadId, change);
   }
 
-  /** Publishes each thread's shell queue and live shell output as they change; returns the stop. */
+  /** Publishes each thread's shell queue, live shell output and yields as they change; returns the stop. */
   observeShells() {
     const stopQueue = this.#shells.subscribeShellQueue(threadId =>
       this.publish(threadId, { shellQueue: this.#shells.readShellQueue(threadId) }));
-    const stopOutput = this.#shells.subscribeShellOutput(threadId =>
-      this.publish(threadId, { shellOutput: this.#shells.readShellOutput(threadId) }));
+    const stopOutput = this.#shells.subscribeShellOutput(threadId => this.publish(threadId, {
+      shellOutput: this.#shells.readShellOutput(threadId), yieldedShells: this.#shells.readYieldedShells(threadId),
+    }));
     return () => { stopQueue(); stopOutput(); };
   }
 }

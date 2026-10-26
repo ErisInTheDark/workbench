@@ -7,15 +7,8 @@ import type { WorkbenchComposerProfile, WorkbenchComposerSettings } from "../../
 import { normalizeComposerProfile, normalizeComposerProfileMutation } from "../state/composer-profile-state.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "./thread-state.ts";
 import {
-  contextCompactionThreshold, copyComposerSettings, isSelectableContextWindow, resolveLinkedProfileSelection,
-  WorkbenchModelContextCapabilitySchema,
+  copyComposerSettings, isSelectableContextWindow, resolveLinkedProfileSelection, WorkbenchModelContextCapabilitySchema,
 } from "./thread-profile.ts";
-
-test("compaction reserves fixed headroom for small windows and proportional headroom for large ones", () => {
-  assert.equal(contextCompactionThreshold(128_000), 78_000);
-  assert.equal(contextCompactionThreshold(500_000), 450_000);
-  assert.equal(contextCompactionThreshold(872_000), 784_800);
-});
 
 test("a context floor below the default widens selectable windows; without one the default stays the floor", () => {
   const nativeDefault = { defaultTokens: 1_000_000, minimumTokens: 200_000, maximumTokens: 1_000_000 };

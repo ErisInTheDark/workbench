@@ -101,7 +101,10 @@ export interface WorkbenchMcpToolGeneration {
     scope: WorkbenchMcpScope, signal: AbortSignal, ingress?: WorkbenchMcpIngressCapabilities,
   ): Promise<{ tools: Tool[] }>;
   call(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall): Promise<WorkbenchMcpToolStep>;
-  finish(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome): Promise<CallToolResult>;
+  /** A shell that yielded as `yieldedShellId` records that id on its row, never in what its call or wait returns. */
+  finish(
+    scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome, yieldedShellId?: string,
+  ): Promise<CallToolResult>;
   /** The answer of a shell call whose command runs on as `shellId`. */
   yielded(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, shellId: string, outputTail: string): Promise<CallToolResult>;
 }
@@ -354,7 +357,7 @@ async function finishYieldedShell(
 ) {
   const outcome = await running;
   try {
-    registry.finishBackgroundShell(shellId, await (await registry.awaitToolGeneration()).finish(scope, detached, outcome));
+    registry.finishBackgroundShell(shellId, await (await registry.awaitToolGeneration()).finish(scope, detached, outcome, shellId));
   } catch (error) {
     logError("workbench-mcp", sanitizeWorkbenchMcpError(error) || "Yielded shell result was not recorded.");
     registry.finishBackgroundShell(shellId, { content: [{ type: "text", text: "Yielded shell result was not recorded." }], isError: true });

@@ -3,6 +3,7 @@
  * - ThreadItemShellQueue: one live wb shell's expensive-queue timing.
  * - deriveThreadItemShellQueue: index one thread's live shell queue by every reference naming each shell item.
  * - ThreadItemShellQueueContext/useThreadItemShellQueue: thread-scoped lookup for command rows.
+ * - deriveThreadYieldedShells/ThreadYieldedShellsContext/useThreadItemShellYielded: which running shell rows already yielded.
  * - ThreadShellOutputStoreContext/useThreadItemShellOutput: a running shell row's newest output from its thread store.
  * - ThreadShellDurationSource/getShellQueueTiming: split a shell's duration into its queue wait and its run, live or recorded.
  */
@@ -31,6 +32,19 @@ export const ThreadItemShellQueueContext = createContext<ReadonlyMap<string, Thr
 
 export function useThreadItemShellQueue(itemId: string): ThreadItemShellQueue | null {
   return useContext(ThreadItemShellQueueContext).get(itemId) ?? null;
+}
+
+const NO_YIELDED_SHELLS: ReadonlySet<string> = new Set();
+
+export function deriveThreadYieldedShells(references: readonly string[] | undefined): ReadonlySet<string> {
+  return references?.length ? new Set(references) : NO_YIELDED_SHELLS;
+}
+
+export const ThreadYieldedShellsContext = createContext<ReadonlySet<string>>(NO_YIELDED_SHELLS);
+
+/** Whether the daemon backgrounded this running shell: its call already answered and the command runs on. */
+export function useThreadItemShellYielded(itemId: string) {
+  return useContext(ThreadYieldedShellsContext).has(itemId);
 }
 
 /** The store whose transcript the rows render; its shell output slice feeds running rows. */

@@ -207,9 +207,15 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
   const threadId = WorkbenchThreadIdSchema.parse("thread");
   const yielded = registry.register("client-1", 1, { owner, toolName: "shell", shellItem: { threadId, references: ["item-1"] } });
   yielded.shellQueue!.output!("stdout", Buffer.from("building..."));
+  const changed: string[] = [];
+  const stopListening = registry.subscribeShellOutput(thread => { changed.push(thread); });
+  assert.deepEqual(registry.readYieldedShells(threadId), [], "a shell whose call still waits has not yielded");
   assert.throws(() => registry.backgroundShell("client-1", 99), /running shell call/u);
   const shellId = registry.backgroundShell("client-1", 1);
+  stopListening();
   assert.equal(shellId, "item-1", "a yielded shell is named after its transcript row, so its waits can find it");
+  assert.deepEqual(registry.readYieldedShells(threadId), ["item-1"]);
+  assert.ok(changed.includes(threadId), "rows learn of the yield as it happens");
   assert.equal(registry.readBackgroundShellTail(shellId), "building...");
   const reused = registry.register("client-1", 1, registrationOptions(owner));
   reused.unregister();
@@ -223,6 +229,8 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
 
   assert.equal(registry.stopShell(threadId, ["item-1"]), true);
   assert.ok(isWorkbenchAgentMcpShellStop(yielded.signal.reason));
+  registry.finishBackgroundShell(shellId, { content: [] });
+  assert.deepEqual(registry.readYieldedShells(threadId), [], "a finished shell's row carries the yield from here");
 });
 
 test("a steer ends a yielding shell's window without stopping its command, unless it still waits in the queue", () => {

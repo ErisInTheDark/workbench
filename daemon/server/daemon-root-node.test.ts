@@ -226,6 +226,8 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   );
   assert.equal(descriptors.get("server:commands")!.paths.some((sourcePath) => sourcePath.endsWith(".test.ts")), false);
   assert.equal(descriptors.get("server:process")!.paths.includes("daemon/server/core/WorkbenchCoreNode.ts"), false);
+  // Editing an evolving shared contract must never ask to restart live Claude sessions.
+  assert.equal(descriptors.get("harness:claude")!.paths.includes("shared/workbench/thread/thread-state.ts"), false);
 });
 
 test("server branch and topology closures never acquire harness roots", () => {

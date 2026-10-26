@@ -602,7 +602,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return { registration, signal: AbortSignal.any([signal, registration.signal, ...deadline]) };
   }
 
-  async finish(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome) {
+  async finish(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome, yieldedShellId?: string) {
     const tools = this.tools(scope.provider);
     let result: CallToolResult;
     if (call.shell) {
@@ -619,7 +619,11 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         ? await this.commandResult(call.request, outcome.response)
         : this.commandFailure(definition, "error" in outcome ? outcome.error : new Error("The command finished without a response."), call.signal);
     }
-    const finished = await this.finishTranscript(tools, call.transcript as WorkbenchToolTranscriptReference | null, result);
+    // Only the row learns it yielded: the transcript cannot record the yield itself, so its finish keeps that fact.
+    const recorded = yieldedShellId
+      ? { ...result, structuredContent: { ...result.structuredContent, shellId: yieldedShellId } }
+      : result;
+    const finished = await this.finishTranscript(tools, call.transcript as WorkbenchToolTranscriptReference | null, recorded, result);
     return call.shell ? finished : await this.wireResult(scope, call.toolName, finished);
   }
 

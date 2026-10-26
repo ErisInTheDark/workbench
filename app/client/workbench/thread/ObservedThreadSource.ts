@@ -101,6 +101,7 @@ function headOf(entry: ThreadEntry, runtime: ThreadRuntime | undefined, cwd: str
     todos: runtime?.todos ?? [],
     addressedFeedback: runtime?.addressedFeedback ?? [],
     shellQueue: runtime?.shellQueue ?? [],
+    yieldedShells: runtime?.yieldedShells ?? [],
   };
 }
 

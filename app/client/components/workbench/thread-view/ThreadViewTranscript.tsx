@@ -14,7 +14,8 @@ import type { ThreadTranscriptProjectionState } from "../../../workbench/transcr
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import { deriveThreadItemApprovals, ThreadItemApprovalsContext } from "../../../workbench/thread/thread-item-approvals";
 import {
-  deriveThreadItemShellQueue, ThreadItemShellQueueContext, ThreadShellOutputStoreContext,
+  deriveThreadItemShellQueue, deriveThreadYieldedShells, ThreadItemShellQueueContext, ThreadShellOutputStoreContext,
+  ThreadYieldedShellsContext,
 } from "../../../workbench/thread/thread-item-shell-queue";
 import { WorkbenchFeedbackAddressingContext, type WorkbenchFeedbackAddressing } from "../address-feedback-context";
 import { useThread } from "../use-thread";
@@ -79,6 +80,8 @@ export default function ThreadViewTranscript ({
   );
   const shellQueue = activeThread?.shellQueue;
   const itemShellQueue = useMemo(() => deriveThreadItemShellQueue(shellQueue), [shellQueue]);
+  const yieldedShellReferences = activeThread?.yieldedShells;
+  const yieldedShells = useMemo(() => deriveThreadYieldedShells(yieldedShellReferences), [yieldedShellReferences]);
   const itemActions = useMemo<ThreadItemActions>(() => ({
     resendSteer: itemId => active.actions.resendSteer(itemId),
     dismissSteer: itemId => active.actions.dismissSteer(itemId),
@@ -129,6 +132,7 @@ export default function ThreadViewTranscript ({
             <TranscriptBodiesContext.Provider value={active.store?.transcriptBodies ?? null}>
             <ThreadItemApprovalsContext.Provider value={itemApprovals}>
             <ThreadItemShellQueueContext.Provider value={itemShellQueue}>
+            <ThreadYieldedShellsContext.Provider value={yieldedShells}>
             <ThreadShellOutputStoreContext.Provider value={active.store}>
             <ThreadItemActionsContext.Provider value={itemActions}>
             <ThreadTodoControlsContext.Provider value={todoControls}>
@@ -150,6 +154,7 @@ export default function ThreadViewTranscript ({
             </ThreadTodoControlsContext.Provider>
             </ThreadItemActionsContext.Provider>
             </ThreadShellOutputStoreContext.Provider>
+            </ThreadYieldedShellsContext.Provider>
             </ThreadItemShellQueueContext.Provider>
             </ThreadItemApprovalsContext.Provider>
             </TranscriptBodiesContext.Provider>

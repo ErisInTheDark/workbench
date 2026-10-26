@@ -9,7 +9,7 @@
  * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
  * - WorkbenchShellQueueEntrySchema/WorkbenchShellQueueEntry: one live wb shell's expensive-queue timing.
  * - WorkbenchShellOutputEntrySchema/WorkbenchShellOutputEntry: one running wb shell's newest output.
- * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, shell queue, goal, skills, todos, addressed feedback) on thread observations.
+ * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, shell queue, shell output, yielded shells, goal, skills, todos, addressed feedback) on thread observations.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts, plus the subagent refinement they reapply.
  * - settleWorkbenchQuestionnaireWait/withWorkbenchThreadLifecycle: repair entries so a questionnaire exists only with its pendingInput wait, and move lifecycles under that rule.
@@ -548,6 +548,8 @@ export const ThreadRuntimeSchema = z.object({
   shellQueue: z.array(WorkbenchShellQueueEntrySchema).optional(),
   /** Running shells' newest output; absent from daemons that predate it. */
   shellOutput: z.array(WorkbenchShellOutputEntrySchema).optional(),
+  /** Every transcript reference naming a running shell whose call already answered; absent from daemons that predate it. */
+  yieldedShells: z.array(z.string()).optional(),
   /** The user-set Workbench goal; absent from daemons that predate goals. */
   goal: WorkbenchThreadGoalSchema.nullable().optional(),
   skills: z.array(WorkbenchThreadSkillSchema).optional(),

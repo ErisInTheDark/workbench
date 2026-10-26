@@ -72,8 +72,8 @@ const TASK_TITLE_ALREADY_MATCHES_OUTPUT = "Task title already matches";
 
 /**
  * `workbenchShell` marks a command derived from a wb shell call, which Workbench owns and the user can stop; such a call
- * may also be `expensive`, recording its slot wait as `queuedMs`, or yield after `yieldMs`. `shellWait` marks a
- * `shell_wait` drawn as the yielded command it collects.
+ * may also be `expensive`, recording its slot wait as `queuedMs`, or yield after `yieldMs`, a finished one recording that
+ * it did as `yielded`. `shellWait` marks a `shell_wait` drawn as the yielded command it collects.
  */
 export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & {
   expensive?: true;
@@ -81,6 +81,7 @@ export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & {
   shell?: CommandShell;
   shellWait?: WorkbenchShellWaitLink;
   workbenchShell?: true;
+  yielded?: true;
   yieldMs?: number;
 };
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" | "dynamicToolCall" }>;

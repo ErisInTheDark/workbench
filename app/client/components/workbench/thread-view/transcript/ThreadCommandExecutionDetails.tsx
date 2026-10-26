@@ -32,7 +32,7 @@ import {
 } from "../../../../workbench/thread/thread-command-matchers";
 import { useThreadItemApproval } from "../../../../workbench/thread/thread-item-approvals";
 import {
-  getShellQueueTiming, useThreadItemShellOutput, useThreadItemShellQueue,
+  getShellQueueTiming, useThreadItemShellOutput, useThreadItemShellQueue, useThreadItemShellYielded,
 } from "../../../../workbench/thread/thread-item-shell-queue";
 import { resolveWorkbenchSubagentCommandTargets } from "../../../../workbench/thread/thread-subagents";
 import MarkdownRender from "../../../ui/MarkdownRender";
@@ -100,13 +100,11 @@ function readGitCheckpointPresentation(item: CommandItem, claimedBy: ThreadComma
 }
 
 /**
- * What became of a shell that yields or a wait that collects one. A shell yields once it has run (queue included) for
- * `yieldMs`, the same clock its call answers on; a wait can end before its shell does.
+ * A shell yielded once the daemon answered its call while the command ran on: live state says so while it runs, its
+ * recorded result afterwards. A wait yields again when it hands control back before its shell ends.
  */
-function readBackgroundShellLabel(item: CommandItem, elapsedMs: number) {
-  if (item.shellWait?.ended === "timedOut") return "still running";
-  if (item.shellWait?.ended === "interrupted") return "interrupted";
-  return item.yieldMs !== undefined && elapsedMs >= item.yieldMs ? "yielded" : null;
+function readYielded(item: CommandItem, liveYielded: boolean) {
+  return item.shellWait ? item.shellWait.ended === "yielded" : Boolean(item.yielded) || liveYielded;
 }
 
 export default function ThreadCommandExecutionDetails ({
@@ -138,7 +136,7 @@ export default function ThreadCommandExecutionDetails ({
   const queuedDurationMs = useThreadItemLiveDuration(queueTiming.queued?.durationMs, queueTiming.queued?.activeStartedAtMs);
   const visibleDurationMs = useThreadItemLiveDuration(queueTiming.run?.durationMs, queueTiming.run?.activeStartedAtMs);
   const waits = item.yieldMs !== undefined || Boolean(item.shellWait);
-  const backgroundShellLabel = readBackgroundShellLabel(item, (queuedDurationMs ?? 0) + (visibleDurationMs ?? 0));
+  const yielded = readYielded(item, useThreadItemShellYielded(item.id));
   const outcomeCommandDisplay = useMemo(() => {
     const display = commandDisplay.summaryParts.length || !item.resultExpiredAt ? commandDisplay : {
       ...commandDisplay,
@@ -396,7 +394,7 @@ export default function ThreadCommandExecutionDetails ({
       waits={waits}
       meta={[
         commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0 ? <ThreadSummaryText text={`exit ${item.exitCode}`} /> : null,
-        backgroundShellLabel ? <ThreadSummaryText text={backgroundShellLabel} /> : null,
+        yielded ? <ThreadSummaryText text="yielded" /> : null,
         queuedDurationMs !== null && queuedDurationMs !== undefined
           ? <span>queued <ThreadDurationText className="inline" durationMs={queuedDurationMs} /></span>
           : null,
