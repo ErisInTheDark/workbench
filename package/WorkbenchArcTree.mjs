@@ -20,11 +20,11 @@ function nonEmptyString(value) {
 /** Keep every well-formed repository and held entry; each malformed one drops only itself. */
 function conformRepositories(body, warn) {
   if (!body || typeof body !== "object" || !Array.isArray(body.repositories)) {
-    throw new Error("the daemon's arc tree response lacks repositories");
+    throw new Error("the daemon's held-paths response lacks repositories");
   }
   let dropped = 0;
   const repositories = body.repositories.flatMap((repository) => {
-    if (!repository || typeof repository !== "object" || !nonEmptyString(repository.repoRoot) || !TREE_SHA.test(String(repository.tree))) {
+    if (!repository || typeof repository !== "object" || !nonEmptyString(repository.repoRoot) || !TREE_SHA.test(String(repository.baseline))) {
       dropped++;
       return [];
     }
@@ -38,7 +38,7 @@ function conformRepositories(body, warn) {
       return [{ threadId: entry.threadId, paths }];
     });
     const head = typeof repository.head === "string" && TREE_SHA.test(repository.head) ? repository.head : null;
-    return [{ root: path.resolve(repository.repoRoot), head, tree: repository.tree, held }];
+    return [{ root: path.resolve(repository.repoRoot), head, baseline: repository.baseline, held }];
   });
   if (dropped) warn(`Workbench arc tree dropped ${dropped} malformed daemon entr${dropped === 1 ? "y" : "ies"}; their paths read from disk.`);
   return repositories;
@@ -101,14 +101,14 @@ export default class WorkbenchArcTree {
     if (!daemonGitArcIdentity(env)) return new WorkbenchArcTree("filesystem", root, new Map(), []);
     try {
       const repositories = conformRepositories(
-        await requestDaemonGitArc({ action: "arcTree", cwd: root, holdOwn, paths: [] }, { env, fetch, signal }),
+        await requestDaemonGitArc({ action: "arcHeld", cwd: root, holdOwn }, { env, fetch, signal }),
         warn,
       );
       if (!repositories.length) throw new Error(`no Workbench arc covers ${root}`);
       const files = new Map();
       for (const repository of repositories) {
         const held = [...new Set(repository.held.flatMap(({ paths }) => paths))];
-        for (const [target, content] of await readTreeFiles(repository.root, repository.tree, held, signal)) files.set(target, content);
+        for (const [target, content] of await readTreeFiles(repository.root, repository.baseline, held, signal)) files.set(target, content);
       }
       return new WorkbenchArcTree("arc", root, files, repositories);
     } catch (error) {

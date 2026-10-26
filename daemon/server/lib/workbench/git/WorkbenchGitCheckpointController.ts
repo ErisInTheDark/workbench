@@ -269,6 +269,11 @@ export default class WorkbenchGitCheckpointController {
     return await this.views.readClaimView({ ...input, harness: normalizeHarness(input.harness) });
   }
 
+  /** That view's held paths and baseline, without composing it; hold the repository read gate around this only. */
+  async readHeldPaths(input: ControllerInput & Pick<GitArcClaimViewInput, "holdOwn" | "signal">) {
+    return await this.views.readHeldPaths({ ...input, harness: normalizeHarness(input.harness) });
+  }
+
   /** Mirror a view tree into an ignored directory, outside any Git gate. */
   async mirrorClaimView(input: Parameters<GitArcClaimViewController["mirrorClaimView"]>[0]) {
     return await this.views.mirrorClaimView(input);

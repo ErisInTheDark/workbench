@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchArcTreeOptions: cwd, hold-own, environment, fetch, cancellation and warning boundaries for loading.
- * - WorkbenchArcTreeRepository: one repository's daemon view: tree, HEAD and other threads' held paths.
+ * - WorkbenchArcTreeRepository: one repository's daemon view: HEAD, other threads' held paths and the baseline holding their bytes.
  * - WorkbenchArcTreeNodeEnvironmentOptions: base environment and manifest parent directory for Node children.
  * - default WorkbenchArcTree: the worktree as the calling agent thread builds it, readable in process and by Node
  *   children; the plain filesystem outside agent threads or when the daemon view fails.
@@ -24,8 +24,8 @@ export interface WorkbenchArcTreeRepository {
   /** Absolute repository root. */
   root: string;
   head: string | null;
-  /** Git tree of the worktree as the caller builds it. */
-  tree: string;
+  /** Git tree holding each held path as the caller builds it; other paths may differ from that build. */
+  baseline: string;
   /** Repository-relative paths each other thread holds. */
   held: ReadonlyArray<{ threadId: string; paths: readonly string[] }>;
 }

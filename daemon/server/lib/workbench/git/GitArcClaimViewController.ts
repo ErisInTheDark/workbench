@@ -2,16 +2,17 @@
  * Exports:
  * - GitArcClaimViewInput: owner and hold-own choice for a build view.
  * - default GitArcClaimViewController: write the worktree as one owner builds it (every other live owner's dirty claims at
- *   HEAD plus the caller's own or inherited sealed layers, written through one index) and mirror selected paths of a view into an ignored directory,
- *   checking out only files whose content differs and removing only files its own record says it wrote. Both stop
- *   once the caller's signal aborts.
+ *   HEAD plus the caller's own or inherited sealed layers, written through one index); list just those held paths and
+ *   the baseline holding their view bytes, diffing only claimed paths; and mirror selected paths of a view into an
+ *   ignored directory, checking out only files whose content differs and removing only files its own record says it
+ *   wrote. All stop once the caller's signal aborts.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-import type { GitArcClaimView } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { GitArcClaimView, GitArcHeldPaths } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { type GitArcHarness, normalizeThreadId } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
@@ -133,19 +134,10 @@ export default class GitArcClaimViewController {
     return await GitObjectReadSession.run(async () => {
       input.signal?.throwIfAborted();
       const repository = await WorkbenchGitRepository.open(input.cwd);
-      const caller = normalizeThreadId(input.threadId);
-      const [snapshot, entries] = await Promise.all([
+      const [snapshot, { baseline, owners }] = await Promise.all([
         repository.writeWorktreeSnapshot(input.signal),
-        new GitArcRegistry(repository, this.resolveThreadIdentity).list(),
+        this.readOwners(repository, input),
       ]);
-      const isCaller = (entry: GitArcRegistryEntry) => entry.harness === input.harness && entry.threadId === caller;
-      const baseline = await this.callerBaseline(repository, entries.find(isCaller), snapshot.head);
-      const owners = entries.flatMap((entry) => {
-        // Inactive plans with no retained arc own nothing yet; their listed paths are only planned scope.
-        if (entry.phase === "plan" && !entry.retainedArc) return [];
-        const claimed = getGitArcLiveClaimPaths(entry);
-        return claimed.length && (input.holdOwn || !isCaller(entry)) ? [{ claimed, threadId: entry.threadId }] : [];
-      });
       input.signal?.throwIfAborted();
       // Held paths are exactly the claimed paths that differ from the caller's baseline.
       const { changedPaths, tree } = await repository.writeTreeWithPathSources(
@@ -154,6 +146,41 @@ export default class GitArcClaimViewController {
       const held = owners.flatMap(({ threadId }, index) => changedPaths[index]!.length ? [{ paths: changedPaths[index]!, threadId }] : []);
       return { head: snapshot.head, held, repoRoot: repository.root, tree };
     });
+  }
+
+  /** The view's held paths without composing it: only claimed paths are compared with the caller's baseline. */
+  async readHeldPaths(input: GitArcClaimViewInput): Promise<GitArcHeldPaths> {
+    return await GitObjectReadSession.run(async () => {
+      input.signal?.throwIfAborted();
+      const repository = await WorkbenchGitRepository.open(input.cwd);
+      const { baseline, head, owners } = await this.readOwners(repository, input);
+      const claimed = [...new Set(owners.flatMap(({ claimed }) => claimed))];
+      input.signal?.throwIfAborted();
+      const changed = claimed.length ? await repository.listWorktreeChangedPaths(baseline, claimed, input.signal) : [];
+      const held = owners.flatMap(({ claimed: scopes, threadId }) => {
+        const scope = new GitArcPathSet(scopes);
+        const paths = changed.filter(candidate => scope.covers(candidate));
+        return paths.length ? [{ paths, threadId }] : [];
+      });
+      return { baseline: await repository.resolveTree(baseline), head, held, repoRoot: repository.root };
+    });
+  }
+
+  /** Other live owners (and the caller's with `holdOwn`) and the caller's baseline they are held at. */
+  private async readOwners(repository: WorkbenchGitRepository, input: GitArcClaimViewInput) {
+    const caller = normalizeThreadId(input.threadId);
+    const [head, entries] = await Promise.all([
+      repository.headOrNull(),
+      new GitArcRegistry(repository, this.resolveThreadIdentity).list(),
+    ]);
+    const isCaller = (entry: GitArcRegistryEntry) => entry.harness === input.harness && entry.threadId === caller;
+    const owners = entries.flatMap((entry) => {
+      // Inactive plans with no retained arc own nothing yet; their listed paths are only planned scope.
+      if (entry.phase === "plan" && !entry.retainedArc) return [];
+      const claimed = getGitArcLiveClaimPaths(entry);
+      return claimed.length && (input.holdOwn || !isCaller(entry)) ? [{ claimed, threadId: entry.threadId }] : [];
+    });
+    return { baseline: await this.callerBaseline(repository, entries.find(isCaller), head), head, owners };
   }
 
   /**

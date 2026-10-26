@@ -30,6 +30,7 @@ import {
   GitArcProposalAlreadyCommittedError,
   type GitArcFailure,
 } from "workbench-shared/workbench/git/git-arc-failures";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "../lib/workbench/git/GitArcPlanController";
 import { GitArcStartDiagnosticError } from "../lib/workbench/git/git-arc-start-diagnostics";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
@@ -38,6 +39,7 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import {
   GitCheckpointRequestSchema,
   type GitArcClaimViewResult,
+  type GitArcHeldPathsResult,
   type GitArcProposalCommitManyResult,
   type GitCheckpointRequest,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
@@ -155,6 +157,10 @@ function failureResponse(failure: GitArcFailure) {
 
 function liveCollisionOwner(entry: GitArcCollisionError["collisions"][number]["entry"]) {
   return entry.phase === "plan" && entry.retainedArc ? entry.retainedArc : entry;
+}
+
+function unmanagedRepository() {
+  return new GitArcRejectionError({ reason: "unmanagedRepository" }, "The managed thread has no Git arc identity for this repository.");
 }
 
 function mutatesGitArcState(request: GitCheckpointRequest) {
@@ -495,7 +501,7 @@ export default class WorkbenchGitArcFeature {
         repositoryRoot: project.cwd,
         threadId: parsed.data.threadId,
       });
-      if (!identity) throw new Error("The managed thread has no Git arc identity for this repository.");
+      if (!identity) throw unmanagedRepository();
       const request = {
         ...parsed.data, cwd: project.cwd,
         harness: WorkbenchHarnessSchema.parse(parsed.data.harness), threadId: WorkbenchThreadIdSchema.parse(identity.threadId),
@@ -1122,7 +1128,7 @@ export default class WorkbenchGitArcFeature {
       repositoryRoot: project.cwd,
       threadId,
     });
-    if (!identity) throw new Error("The managed thread has no Git arc identity for this repository.");
+    if (!identity) throw unmanagedRepository();
     return { harness, threadId: WorkbenchThreadIdSchema.parse(identity.threadId) };
   }
 
@@ -1179,6 +1185,9 @@ export default class WorkbenchGitArcFeature {
       case "arcTree": return Response.json({
         repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn, signal })],
       } satisfies GitArcClaimViewResult);
+      case "arcHeld": return Response.json({
+        repositories: [await this.controller.readHeldPaths({ ...common, holdOwn: input.holdOwn, signal })],
+      } satisfies GitArcHeldPathsResult);
       case "plan": return Response.json(await this.controller.createPlan({
         ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
       }));

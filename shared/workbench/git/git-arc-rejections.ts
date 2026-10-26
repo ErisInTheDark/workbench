@@ -59,6 +59,7 @@ const simpleMessages = {
   unsupportedCommand: "The requested Git arc action is not supported.",
   unexpectedTrailingArguments: "This request does not accept trailing arguments.",
   missingManagedIdentity: "The request has no managed thread identity.",
+  unmanagedRepository: "This thread has no Git arc identity for this repository.",
   invalidHarness: "The request has no supported agent identity.",
   invalidProposalId: "The proposal identifier is invalid.",
   wrongCheckpointOwnership: "The checkpoint does not belong to this thread and worktree.",

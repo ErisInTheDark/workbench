@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; feature tests prove repository-wide Git arc transition serialization, thread timestamp injection, card-read coalescing, typed failures, nested worktree owner resolution, and machine claim approval.
+ * - No production exports; feature tests prove repository-wide Git arc transition serialization, thread timestamp injection, card-read coalescing, typed failures including unmanaged repositories, nested worktree owner resolution, and machine claim approval.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -137,6 +137,13 @@ test("release to a named child keeps the parent as source and refreshes both own
   });
   assert.deepEqual(refreshed, [wbThreadId("codex", "thread"), childId]);
   assert.deepEqual(notices, [childId]);
+});
+
+test("a thread with no Git arc identity for the repository gets a typed rejection tools can match", async () => {
+  const response = await waitFeature().executeRequest({ action: "arcHeld", cwd: "C:/Git/Project", harness: "codex", threadId: "stranger" });
+  const { gitArcFailure } = await response.json() as GitArcFailureEnvelope;
+  assert.deepEqual([response.ok, gitArcFailure.action, gitArcFailure.code === "rejection" && gitArcFailure.rejection.reason],
+    [false, "arcHeld", "unmanagedRepository"]);
 });
 
 test("conflicted unstash passively informs the owner without changing the successful result", async () => {

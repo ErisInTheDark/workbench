@@ -24,6 +24,7 @@ import type { ResolvedProjectRoot } from "../lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   GitArcClaimViewResult,
+  GitArcHeldPathsResult,
   GitArcProposalCommitEntry,
   GitArcRootPaths,
   GitArcStackResult,
@@ -579,6 +580,12 @@ export default class WorkbenchWorkspaceGitArcController {
           cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, holdOwn: request.holdOwn, signal: options.signal,
         }), undefined, "read");
         return { repositories: values.map(({ result }) => result) } satisfies GitArcClaimViewResult;
+      }
+      case "arcHeld": {
+        const values = await this.runMembers(await this.joinedMembers(members, request.harness, request.threadId), async member => await this.local.readHeldPaths({
+          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, holdOwn: request.holdOwn, signal: options.signal,
+        }), undefined, "read");
+        return { repositories: values.map(({ result }) => result) } satisfies GitArcHeldPathsResult;
       }
       case "planClaims":
       case "arcClaims": return await this.executeClaimChanges(project, members, request);

@@ -1,4 +1,4 @@
-/* No exports. Protect arc tree loading: held paths come from the daemon's tree and shape reads; outside agent threads or on failure the filesystem shows through. */
+/* No exports. Protect arc tree loading: held paths come from the daemon's baseline tree and shape reads; outside agent threads or on failure the filesystem shows through. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -33,7 +33,7 @@ test("held paths read from the caller's arc tree, and the filesystem shows throu
   });
 
   let body: unknown = { repositories: [{
-    head: null, held: [{ paths: ["changed.txt", "created.txt", "deleted.txt"], threadId: "other" }], repoRoot: root, tree,
+    baseline: tree, head: null, held: [{ paths: ["changed.txt", "created.txt", "deleted.txt"], threadId: "other" }], repoRoot: root,
   }] };
   let status = 200;
   const requests: Array<{ action: string; holdOwn: boolean }> = [];
@@ -49,7 +49,7 @@ test("held paths read from the caller's arc tree, and the filesystem shows throu
 
   const arc = await load(caller);
   assert.equal(arc.source, "arc", warnings.join("\n"));
-  assert.deepEqual(requests.map(({ action, holdOwn }) => [action, holdOwn]), [["arcTree", false]]);
+  assert.deepEqual(requests.map(({ action, holdOwn }) => [action, holdOwn]), [["arcHeld", false]]);
   assert.equal(await arc.readFile("changed.txt", "utf8"), "baseline\n");
   assert.equal(await arc.readFile("deleted.txt", "utf8"), "kept\n");
   assert.equal(await arc.readFile("plain.txt", "utf8"), "plain\n");
@@ -70,8 +70,8 @@ test("held paths read from the caller's arc tree, and the filesystem shows throu
 
   status = 200;
   body = { repositories: [
-    { repoRoot: root, tree: "not a tree", held: [] },
-    { head: null, repoRoot: root, tree, held: [{ paths: ["changed.txt", 7] }, { paths: ["changed.txt", 7], threadId: "other" }] },
+    { repoRoot: root, baseline: "not a tree", held: [] },
+    { head: null, repoRoot: root, baseline: tree, held: [{ paths: ["changed.txt", 7] }, { paths: ["changed.txt", 7], threadId: "other" }] },
   ] };
   const repaired = await load(caller);
   assert.equal(repaired.source, "arc", "one malformed entry never discards the whole view");

@@ -30,7 +30,7 @@ const GitArcDriftComparisonSchema = z.array(z.object({
 export type GitArcDriftComparison = z.infer<typeof GitArcDriftComparisonSchema>;
 
 const GitArcFailureActionSchema = z.enum([
-  "planClaims", "arcClaims", "arcScope", "arcStatus", "arcTree",
+  "planClaims", "arcClaims", "arcScope", "arcStatus", "arcTree", "arcHeld",
   "arcAdoptSource",
   "arcTransferClaims",
   "plan", "planAdd", "planAdopt", "planRemove", "planStart",

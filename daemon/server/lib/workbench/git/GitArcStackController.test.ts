@@ -1,6 +1,6 @@
 /*
- * Exports: none. Protect stack layer waiting, sealing, reopening, batch landing, history rewrites, subagent transfer and
- * arc tree cancellation on prepared branches.
+ * Exports: none. Protect stack layer waiting, sealing, reopening, batch landing, history rewrites, subagent transfer,
+ * held-path reads matching arc trees, and arc tree cancellation on prepared branches.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -336,8 +336,17 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   // Build views hold other owners' dirty claims at their stack-aware baselines and mirror only into ignored folders.
   await fs.appendFile(path.resolve(cwd, (await git("rev-parse", "--git-path", "info/exclude")).trim()), "\nbuild-out/\n");
   const out = path.join(cwd, "build-out");
+  const repository = await WorkbenchGitRepository.open(cwd);
+  const sorted = (held: ReadonlyArray<{ paths: string[]; threadId: string }>) => held.map(({ paths, threadId }) => ({ paths: [...paths].sort(), threadId }));
   const view = async (threadId: string, holdOwn = false) => {
     const built = await controller.readClaimView({ cwd, threadId, holdOwn });
+    // Held-path reads skip composing the view but must list its held paths and read its bytes there.
+    const held = await controller.readHeldPaths({ cwd, threadId, holdOwn });
+    const files = built.held.flatMap(({ paths }) => paths);
+    assert.deepEqual(
+      [held.head, sorted(held.held), await repository.readTreeFiles(held.baseline, files)],
+      [built.head, sorted(built.held), await repository.readTreeFiles(built.tree, files)],
+    );
     return { ...built, ...await controller.mirrorClaimView({ into: out, paths: ["two.txt"], repoRoot: built.repoRoot, tree: built.tree }) };
   };
   await fs.mkdir(out);
@@ -440,11 +449,12 @@ test("a stack accepted in one batch lands as one claim transition and outcome", 
   assert.deepEqual([scope?.phase, scope?.claimedPaths], ["active", ["four.txt"]], "the dirty claim keeps the arc active");
 });
 
-test("arc tree composition and mirroring stop once their caller disconnects", async () => {
+test("arc tree and held-path composition and mirroring stop once their caller disconnects", async () => {
   const { cwd, git } = branch("stacked");
   await fs.appendFile(path.resolve(cwd, (await git("rev-parse", "--git-path", "info/exclude")).trim()), "\nabort-out/\n");
   const aborted = AbortSignal.abort(new Error("caller left"));
   await assert.rejects(controller.readClaimView({ cwd, threadId: "owner", holdOwn: false, signal: aborted }), /caller left/u);
+  await assert.rejects(controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, signal: aborted }), /caller left/u);
   const view = await controller.readClaimView({ cwd, threadId: "owner", holdOwn: false });
   const out = path.join(cwd, "abort-out");
   await assert.rejects(controller.mirrorClaimView({ into: out, paths: [], repoRoot: view.repoRoot, signal: aborted, tree: view.tree }), /caller left/u);

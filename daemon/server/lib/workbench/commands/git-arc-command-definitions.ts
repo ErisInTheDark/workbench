@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP, plus the deferred build view tree and edit sessions.
+ * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP, plus the deferred build view tree, its held paths and edit sessions.
  */
 import path from "node:path";
 import { z } from "zod";
@@ -530,6 +530,25 @@ const tree = defineWorkbenchAgentCommand({
   },
 });
 
+const held = defineWorkbenchAgentCommand({
+  description: "Print JSON with the paths `wb git arc tree` holds (other live threads' claimed changes) and a baseline tree whose bytes at those paths match the caller's view, without composing the view. Read a held path with `git cat-file --filters <baseline>:<path>`; a missing path is absent in the view. --hold-own holds the caller's back too.",
+  effects: { idempotent: true },
+  helpGroups: ["git-arc"],
+  mcpDeferred: true,
+  words: ["git", "arc", "held"],
+  usage: "wb git arc held [--hold-own]",
+  inputSchema: z.object({ holdOwn: z.boolean().default(false) }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--hold-own"] });
+    return { holdOwn: flags.has("--hold-own") };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      action: "arcHeld", ...baseBody(callerHarness, callerThreadId, cwd), holdOwn: input.holdOwn,
+    }, "json");
+  },
+});
+
 export const WORKBENCH_GIT_ARC_COMMANDS = [
   ...WORKBENCH_GIT_PLAN_COMMANDS,
   start,
@@ -551,6 +570,7 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   inspectionCommand("compare"),
   inspectionCommand("diff"),
   tree,
+  held,
   ...WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS,
   rescind,
   restore,
