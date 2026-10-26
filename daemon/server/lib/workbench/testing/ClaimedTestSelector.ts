@@ -48,7 +48,7 @@ export default class ClaimedTestSelector {
 
   select(claims: readonly string[]): ClaimedTestSelection {
     this.catalog.validate();
-    if (!claims.length) throw new Error("No live Workbench claims. Claim the intended files before running wb test.");
+    if (!claims.length) throw new Error("No live Workbench claims. Claim the intended files before running pnpm test.");
     const nodes = new Map<string, TestReloadNode>();
     const visit = (node: TestReloadNode) => {
       if (nodes.has(node.scope)) return;

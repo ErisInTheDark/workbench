@@ -2,4 +2,4 @@
 - Unmount and evict only verified Workbench-owned paths. On wake, clear expired cache and reconcile stale mounts before returning a path.
 - Keep credentials out of paths, responses, logs and mount data. Never silently fall back to a full checkout or follow repository symlinks outside the snapshot.
 - Report prerequisites from the selected daemon. When the runtime is absent, omit repo CLI/MCP registration; keep settings guidance visible. Never auto-install OS drivers.
-- Run `pnpm test:repo` for native Git/VFS invariants; run `wb test` and `pnpm typecheck` for daemon, settings and commands.
+- Run `pnpm test:repo` for native Git/VFS invariants; run `pnpm test` and `pnpm typecheck` for daemon, settings and commands.

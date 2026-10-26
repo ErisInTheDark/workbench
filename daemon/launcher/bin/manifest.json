@@ -3,13 +3,13 @@
   "artifacts": {
     "windows-x64": {
       "file": "windows-x64/wb.exe",
-      "sha256": "b62bb0fbd7cd128242490ccffadf55cfc427ac4bfd83716371828e56800064b0",
-      "sourceHash": "cf8c27344c515242dc3c7809f207fcbc3f48e838324a1950439e2f50f3c0aedb"
+      "sha256": "dc9791a0f147970840826b565a30f1624b03c064361de516d2ac7451f8749285",
+      "sourceHash": "e15ccd52f6db94f43086c0a8a5c201fe5da56c84a05818f5fe11defaa081c3f1"
     },
     "linux-x64": {
       "file": "linux-x64/wb",
-      "sha256": "61c96f896c6f5775a465a4279973293c55743acd22f51d352f9f4ad39bb64adc",
-      "sourceHash": "cf8c27344c515242dc3c7809f207fcbc3f48e838324a1950439e2f50f3c0aedb"
+      "sha256": "ad48173fdbed80b82b5d0fc50726e16e02011e079d32c22ede28ca350519218d",
+      "sourceHash": "e15ccd52f6db94f43086c0a8a5c201fe5da56c84a05818f5fe11defaa081c3f1"
     }
   }
 }

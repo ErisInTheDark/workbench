@@ -1,4 +1,4 @@
-/* No exports. Tests protect claim/explicit-input boundaries, previews and failure propagation. */
+/* No exports. Tests protect claim/explicit-input boundaries, the identity-less full suite, previews and failure propagation. */
 import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -111,6 +111,11 @@ test("uses every live local claim without mixing repositories or launching list-
   assert.deepEqual(runs.at(-1), files);
   await explicit.run(["--"]);
   assert.deepEqual(runs.at(-1), []);
+  // Outside agent threads plain `pnpm test` is the full suite, and bare files are explicit inputs.
+  runs.length = 0;
+  await explicit.run([]);
+  await explicit.run(files);
+  assert.deepEqual(runs, [[], files]);
   const runsBeforeList = runs.length;
   await explicit.run(["--list", "--", ...files, files[0]]);
   assert.deepEqual(output.at(-1)?.split("\n").sort(), files.map(file => path.normalize(file)).sort());
@@ -118,5 +123,6 @@ test("uses every live local claim without mixing repositories or launching list-
   assert.equal(requests.length, requestsBeforeExplicit);
   assert.equal(selected.length, selectionsBeforeExplicit);
   await assert.rejects(explicit.run(["--", "--invalid-option"]), /Unknown test runner option/);
+  await assert.rejects(explicit.run(["--invalid-option"]), /Usage: pnpm test/);
   await assert.rejects(new ClaimedProjectTestCommand(root, { ...options, cwd: path.join(root, "test") }).run(["--", ...files]), /repository root/);
 });

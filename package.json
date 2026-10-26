@@ -14,7 +14,7 @@
     "build:relay": "node scripts/build-relay.mjs",
     "test:relay": "node scripts/test-relay.mjs",
     "build:launcher": "node scripts/build-launcher.mjs",
-    "test": "node --disable-warning=ExperimentalWarning --import tsx test/run-project-tests.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --import tsx test/run-claimed-tests.mjs",
     "test:thread": "node --disable-warning=ExperimentalWarning --import tsx test/run-thread-test.mjs",
     "test:lifecycle": "node --disable-warning=ExperimentalWarning --import tsx test/run-lifecycle-test.mjs",
     "test:install": "node --disable-warning=ExperimentalWarning --import tsx test/run-install-test.mjs",

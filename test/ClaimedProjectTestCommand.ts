@@ -1,13 +1,13 @@
 /*
  * Exports:
  * - ClaimedProjectTestCommandOptions: inject claim transport, selection and execution boundaries.
- * - default ClaimedProjectTestCommand: execute local tests selected by live claims or explicit inputs, reading other
- *   threads' held paths through the caller's arc tree.
+ * - default ClaimedProjectTestCommand: `pnpm test`: execute local tests selected by live claims (the full suite outside
+ *   agent threads) or explicit inputs, reading other threads' held paths through the caller's arc tree.
  */
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import WorkbenchArcTree from "../package/WorkbenchArcTree.mjs";
-import { requestDaemonGitArc } from "../package/workbench-daemon.mjs";
+import { daemonGitArcIdentity, requestDaemonGitArc } from "../package/workbench-daemon.mjs";
 import { GitArcScopeClaimsResponseSchema } from "../shared/workbench/git/git-arc-scope-response";
 import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import ClaimedTestSelector, { type ClaimedTestSelection } from "../daemon/server/lib/workbench/testing/ClaimedTestSelector";
@@ -29,19 +29,20 @@ export default class ClaimedProjectTestCommand {
   async run(args: readonly string[]) {
     const root = await realpath(this.root);
     const cwd = await realpath(this.options.cwd ?? process.cwd());
-    if (path.relative(root, cwd)) throw new Error("wb test only works from the Workbench repository root.");
+    if (path.relative(root, cwd)) throw new Error("pnpm test only works from the Workbench repository root.");
     const output = this.options.output ?? console.log;
-    const usage = "Usage: wb test [--list] [-- [<file>...]]";
+    const usage = "Usage: pnpm test [--list] [-- [<file>...]]";
     if (args.length === 1 && args[0] === "--help") {
-      output(`${usage}\nDefault: select companion tests from all live claims.\nAfter --: use explicit files/directories, or the full suite when empty.\n--list only prints the selection.\nAgent runs read other threads' held paths from the caller's arc tree.`);
+      output(`${usage}\nDefault: select companion tests from all live claims; outside agent threads, the full suite.\nFiles (with or without --): use explicit files/directories, or the full suite when -- is empty.\n--list only prints the selection.\nAgent runs read other threads' held paths from the caller's arc tree.`);
       return { exitCode: 0, signal: null };
     }
     const separator = args.indexOf("--");
     const flags = separator < 0 ? args : args.slice(0, separator);
-    if (flags.some(argument => argument !== "--list")) throw new Error(usage);
+    const positional = flags.filter(argument => argument !== "--list");
+    if (positional.some(argument => argument.startsWith("--"))) throw new Error(usage);
     const env = this.options.env ?? process.env;
-    if (separator >= 0) {
-      const { inputs } = parseProjectTestRunnerArguments(args.slice(separator + 1));
+    if (separator >= 0 || positional.length || !daemonGitArcIdentity(env)) {
+      const { inputs } = parseProjectTestRunnerArguments([...positional, ...separator < 0 ? [] : args.slice(separator + 1)]);
       if (flags.includes("--list")) {
         const files = await new ProjectTestRunner(root).discoverTestFiles(inputs);
         output(files.map(file => path.relative(root, file)).join("\n"));
@@ -57,7 +58,7 @@ export default class ClaimedProjectTestCommand {
     const claims = [...new Set(scopes.filter(scope => !path.relative(root, path.resolve(scope.repoRoot))).flatMap(scope => scope.claimedPaths))];
     const otherRoots = scopes.filter(scope => path.relative(root, path.resolve(scope.repoRoot)) && scope.claimedPaths.length);
     if (otherRoots.length) output(`Claims in ${otherRoots.length} other repositories are not Workbench test inputs.`);
-    if (!claims.length) throw new Error("No live Workbench claims. Claim the intended files before running wb test.");
+    if (!claims.length) throw new Error("No live Workbench claims. Claim the intended files before running pnpm test.");
     const selection = await (this.options.select ?? (async paths => {
       const catalog = await ProjectTestCatalog.read(root);
       catalog.validate();

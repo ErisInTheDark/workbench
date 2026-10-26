@@ -1,5 +1,5 @@
 // No exports. `wb` for agent shells on Windows and Linux: forwards argv exactly to the local daemon's agent-command
-// route and runs checkout-local `ports` and `test` through node. A native image receives argv from every shell
+// route and runs checkout-local `ports` through node. A native image receives argv from every shell
 // without re-parsing, so quotes, newlines, shell metacharacters and bare `--` arrive intact.
 // Request fields mirror daemon/server/WorkbenchAgentCommandController.ts; daemon discovery lives in endpoint.go.
 package main
@@ -46,9 +46,6 @@ func run(args []string) int {
 	root := os.Getenv(checkoutRootEnv)
 	if len(args) == 1 && args[0] == "ports" {
 		return runPorts(root)
-	}
-	if len(args) > 0 && args[0] == "test" && (len(args) < 2 || args[1] != "live") {
-		return runTests(root, cwd, args[1:])
 	}
 	hook := isHook(args)
 	if hook && len(args) == 0 {
@@ -102,15 +99,6 @@ func runPorts(root string) int {
 		return 1
 	}
 	return runNode("--disable-warning=ExperimentalWarning", cli, "ports")
-}
-
-func runTests(root string, cwd string, args []string) int {
-	if root == "" || !sameFile(cwd, root) {
-		fmt.Fprintln(os.Stderr, "wb test only works from the Workbench repository root.")
-		return 1
-	}
-	entry := filepath.Join(root, "test", "run-claimed-tests.mjs")
-	return runNode(append([]string{"--disable-warning=ExperimentalWarning", "--import", "tsx", entry}, args...)...)
 }
 
 func runNode(args ...string) int {

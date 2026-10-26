@@ -1,4 +1,4 @@
-/* No exports. Tests protect launcher staging, exact argv delivery from agent shells, checkout redirects and local test/ports dispatch. */
+/* No exports. Tests protect launcher staging, exact argv delivery from agent shells, checkout redirects and local ports dispatch. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -132,12 +132,3 @@ test("wb inside another checkout runs that checkout's launcher once", async cont
   );
 });
 
-test("local tests dispatch only from the owning checkout root", async context => {
-  const { dataRoot, temporary } = await daemonFixture(context);
-  const { installed, env } = await installFixture(temporary, dataRoot);
-  assert.match((await execFileAsync(installed.launcherPath, ["test", "--help"], { cwd: repositoryRoot, env })).stdout, /wb test/u);
-  await assert.rejects(
-    execFileAsync(installed.launcherPath, ["test", "--help"], { cwd: temporary, env }),
-    (error: Error & { stderr: string }) => /repository root/u.test(error.stderr),
-  );
-});

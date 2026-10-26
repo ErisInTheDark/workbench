@@ -5,6 +5,7 @@ packages:
   - shared
 
 runtime: false
+verifyDepsBeforeRun: false
 
 allowBuilds:
   '@google/genai': false

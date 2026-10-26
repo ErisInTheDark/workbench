@@ -4,7 +4,6 @@
  * - ProjectTestRunnerOptions/PreparedTestFixtures: inject extra test-process environment, runner-owned fixture setup, cleanup, process spawning, concurrency, and optional timeout.
  * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse explicit discovery inputs.
  * - chunkTestFileArguments: split a test process's file arguments into runs that fit one command line.
- * - runProjectTests: apply parsed CLI settings to one complete project test run.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { availableParallelism } from "node:os";
@@ -250,9 +249,4 @@ export default class ProjectTestRunner {
       await services.dispose();
     }
   }
-}
-
-export async function runProjectTests(projectRoot: string, arguments_: readonly string[]) {
-  const { inputs } = parseProjectTestRunnerArguments(arguments_);
-  return await new ProjectTestRunner(projectRoot).run(inputs);
 }
