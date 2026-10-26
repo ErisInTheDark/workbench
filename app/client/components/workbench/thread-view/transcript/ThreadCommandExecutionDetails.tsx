@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default ThreadCommandExecutionDetails: one shell command through its dedicated renderer (feedback, todo, vis, git arc,
- *   subagent, message) or as a step row opening onto its output, Browse steps and checkpoint changes.
+ *   subagent, message) or as a step row opening onto its output, Browse steps and checkpoint changes; running wb shells
+ *   and the waits collecting them can be stopped.
  */
 "use client";
 
@@ -413,13 +414,15 @@ export default function ThreadCommandExecutionDetails ({
           : checkpointDiff ?? undefined}
     </ThreadCommandDisplay>
   );
-  if (!item.workbenchShell || item.status !== "inProgress") return commandDisplayView;
-  const actions = liveShellQueue?.admittedAt === null ? (
+  // A running wait stops the yielded shell it collects.
+  const stopItemId = item.shellWait?.shellItemId ?? (item.workbenchShell ? item.id : null);
+  if (!stopItemId || item.status !== "inProgress") return commandDisplayView;
+  const actions = item.workbenchShell && liveShellQueue?.admittedAt === null ? (
     <>
       <ThreadShellStartNowAction itemId={item.id} />
-      <ThreadShellStopAction itemId={item.id} />
+      <ThreadShellStopAction itemId={stopItemId} />
     </>
-  ) : <ThreadShellStopAction itemId={item.id} />;
+  ) : <ThreadShellStopAction itemId={stopItemId} />;
   return (
     <div className="group/thread-bubble relative">
       {commandDisplayView}

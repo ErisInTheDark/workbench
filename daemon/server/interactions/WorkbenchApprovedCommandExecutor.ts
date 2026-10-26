@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default executeApprovedCommand: own one explicitly approved unsandboxed process and its retirement, handing each
- *   captured output chunk to an optional listener as it arrives.
+ *   captured output chunk to an optional listener as it arrives. A retired command settles once its root exits, even
+ *   while escaped descendants still hold its output pipes.
  */
 import { spawn } from "node:child_process";
 import type { WorkbenchAdmittedExecution } from "../providers/provider-execution";
@@ -50,9 +51,21 @@ export default async function executeApprovedCommand(
   };
   child.stdout.on("data", capture("stdout", stdout));
   child.stderr.on("data", capture("stderr", stderr));
+  let markRetiring = () => {};
+  const retiring = new Promise<null>(resolve => { markRetiring = () => resolve(null); });
+  const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
+  const ended = new Promise<{ code: number | null; error?: Error }>(resolve => {
+    child.once("error", error => resolve({ code: null, error }));
+    child.once("close", code => {
+      closed = true;
+      resolve({ code });
+    });
+  });
   const retire = (reason: Error) => {
     abortReason ??= reason;
-    if (!closed && !retirement) retirement = killProcessTreeAsync(child.pid);
+    if (closed || retirement) return;
+    retirement = killProcessTreeAsync(child.pid);
+    markRetiring();
   };
   const onAbort = () => retire(signal.reason instanceof Error ? signal.reason : new Error("Command cancelled."));
   signal.addEventListener("abort", onAbort, { once: true });
@@ -61,14 +74,15 @@ export default async function executeApprovedCommand(
   }, request.timeoutMs);
   if (signal.aborted) onAbort();
   try {
-    const exit = await new Promise<{ code: number | null; error?: Error }>(resolve => {
-      child.once("error", error => resolve({ code: null, error }));
-      child.once("close", code => {
-        closed = true;
-        resolve({ code });
-      });
-    });
+    const exit = await Promise.race([ended, retiring]);
     if (retirement) await retirement;
+    if (!exit) {
+      // A descendant that escaped the tree kill can hold the output pipes open for as long as it lives.
+      await Promise.race([ended, exited]);
+      child.stdout.destroy();
+      child.stderr.destroy();
+      throw abortReason ?? new Error("Command cancelled.");
+    }
     if (abortReason) throw abortReason;
     if (exit.error) throw exit.error;
     if (exit.code === null) throw new Error("Approved command exited without a status.");
