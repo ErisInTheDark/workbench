@@ -55,6 +55,7 @@ import {
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { logError } from "../process-helpers";
 import WorkbenchToolAdmissionController, { type WorkbenchToolAdmissionOptions } from "./WorkbenchToolAdmissionController";
+import { readWorkbenchShellPartialOutput } from "../exec/workbench-shell-partial-output";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
@@ -824,18 +825,20 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     }
   }
 
+  /** A command that ran before it failed or was stopped keeps what it printed, for its agent and its row alike. */
   private shellFailure(error: unknown, signal: AbortSignal): CallToolResult {
-    // Expected, not a failure: a stop by the user or by the turn ending already names what happened, so it is the whole result.
-    if (signal.aborted && isWorkbenchAgentMcpShellStop(signal.reason)) {
-      return { content: [{ type: "text", text: (signal.reason as Error).message }], isError: true };
-    }
+    const printed = readWorkbenchShellPartialOutput(error);
+    const failed = (text: string): CallToolResult => ({
+      content: [{ type: "text", text: printed ? `${text}\nOutput:\n${getWorkbenchShellAggregatedOutput(printed)}` : text }],
+      isError: true,
+    });
+    // Expected, not a failure: a stop by the user, the agent or the turn ending already names what happened.
+    if (signal.aborted && isWorkbenchAgentMcpShellStop(signal.reason)) return failed((signal.reason as Error).message);
     // Only a queued shell is steer-interruptible, so the command never ran; an error keeps it a readable failed command.
-    if (signal.aborted && isWorkbenchAgentMcpSteerInterruption(signal.reason)) {
-      return { content: [{ type: "text", text: QUEUED_SHELL_STEER_INTERRUPTION_TEXT }], isError: true };
-    }
+    if (signal.aborted && isWorkbenchAgentMcpSteerInterruption(signal.reason)) return failed(QUEUED_SHELL_STEER_INTERRUPTION_TEXT);
     const message = sanitizeError(error) || "Workbench shell tool call failed.";
     if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
-    return { content: [{ type: "text", text: `Workbench shell failed: ${message}` }], isError: true };
+    return failed(`Workbench shell failed: ${message}`);
   }
 
   private async callTool(

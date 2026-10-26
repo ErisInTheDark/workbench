@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchShellRunnerOptions: the exec node's executor, expensive-command slots and direct-spawn ports.
  * - WorkbenchShellObserver: one shell's expensive-queue ticket plus its live output listener.
- * - default WorkbenchShellRunner: run one prepared agent command where its process lives, outside every provider generation.
+ * - default WorkbenchShellRunner: run one prepared agent command where its process lives, outside every provider generation;
+ *   a failed or stopped command carries what it printed on its failure.
  */
 import type CodexExecServer from "../providers/codex/CodexExecServer";
 import type { CodexExecOutputListener } from "../providers/codex/CodexExecServer";
@@ -10,6 +11,7 @@ import executeApprovedCommand from "../interactions/WorkbenchApprovedCommandExec
 import type WorkbenchCommandCapacity from "./WorkbenchCommandCapacity";
 import type { WorkbenchCommandQueueTicket } from "./WorkbenchCommandCapacity";
 import type { WorkbenchShellRun, WorkbenchShellRunResult } from "../providers/provider-execution";
+import { withWorkbenchShellPartialOutput } from "./workbench-shell-partial-output";
 
 export interface WorkbenchShellRunnerOptions {
   executor: Pick<CodexExecServer, "execute">;
@@ -45,12 +47,25 @@ export default class WorkbenchShellRunner {
       : { ...result, queuedMs: Math.max(0, queue.admittedAt - queue.queuedAt) };
   }
 
+  /** A run that fails or is stopped carries everything it printed on that failure, so its result can still show it. */
   private async start(run: WorkbenchShellRun, signal: AbortSignal, output?: CodexExecOutputListener): Promise<WorkbenchShellRunResult> {
     signal.throwIfAborted();
-    if (run.kind === "approved") {
-      return await (this.options.executeApproved ?? executeApprovedCommand)(
-        run.request, signal, this.options.environment ?? process.env, output);
+    const printed: Record<"stdout" | "stderr", Buffer[]> = { stdout: [], stderr: [] };
+    const capture: CodexExecOutputListener = (stream, chunk) => {
+      printed[stream].push(chunk);
+      output?.(stream, chunk);
+    };
+    try {
+      if (run.kind === "approved") {
+        return await (this.options.executeApproved ?? executeApprovedCommand)(
+          run.request, signal, this.options.environment ?? process.env, capture);
+      }
+      return await this.options.executor.execute(run.request, signal, capture);
+    } catch (error) {
+      throw withWorkbenchShellPartialOutput(error, {
+        stdout: Buffer.concat(printed.stdout).toString("utf8"),
+        stderr: Buffer.concat(printed.stderr).toString("utf8"),
+      });
     }
-    return await this.options.executor.execute(run.request, signal, output);
   }
 }

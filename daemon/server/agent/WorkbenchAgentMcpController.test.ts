@@ -22,6 +22,7 @@ import type CodexShellController from "../providers/codex/CodexShellController";
 import type { JsonRpcRequest, JsonRpcResponse } from "../bridge-types";
 import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import { withWorkbenchShellPartialOutput } from "../exec/workbench-shell-partial-output";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -2107,7 +2108,8 @@ test("only Workbench-root callers read stats across projects", async () => {
   }
 });
 
-async function yieldingShellServer(yieldsLongWaits = false) {
+/** `printed` is what each command printed before a stop ends it, carried on the stop as the shell runner does. */
+async function yieldingShellServer(yieldsLongWaits = false, printed?: string) {
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
   const threadId = WorkbenchThreadIdSchema.parse("thread");
   const finished: Array<{ tool: string; result: ProviderToolResult }> = [];
@@ -2133,7 +2135,9 @@ async function yieldingShellServer(yieldsLongWaits = false) {
     executeShell: async (_run, signal) => await new Promise((resolve, reject) => {
       runs.push(resolve);
       runStarted.resolve();
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      signal.addEventListener("abort", () => reject(printed
+        ? withWorkbenchShellPartialOutput(signal.reason, { stdout: printed, stderr: "" })
+        : signal.reason), { once: true });
     }),
     createWaitDeadline: () => {
       const deadline = new AbortController();
@@ -2232,8 +2236,8 @@ test("a steer yields a shell early and leaves its command running for shell_wait
   }
 });
 
-test("shell_stop ends the agent's own yielded shell like a user stop and hands back its result once", async () => {
-  const { client, close, finished, fireNextDeadline } = await yieldingShellServer();
+test("shell_stop ends the agent's own yielded shell like a user stop and hands back its result and output once", async () => {
+  const { client, close, finished, fireNextDeadline } = await yieldingShellServer(false, "listening on 4500\n");
   try {
     assert.ok((await client.listTools()).tools.some(tool => tool.name === "shell_stop"));
     const unknown = await client.callTool({ name: "shell_stop", arguments: { shellId: "elsewhere" } });
@@ -2245,9 +2249,10 @@ test("shell_stop ends the agent's own yielded shell like a user stop and hands b
     assert.equal(finished.some(entry => entry.tool === "shell"), false, "an unknown id stopped nothing");
 
     const stopped = await client.callTool({ name: "shell_stop", arguments: { shellId } });
-    assert.match(responseText(stopped), /^The agent stopped this command after /u);
+    const stoppedWithOutput = /^The agent stopped this command after .+\nOutput:\nlistening on 4500\n$/u;
+    assert.match(responseText(stopped), stoppedWithOutput);
     const row = finished.find(entry => entry.tool === "shell")?.result;
-    assert.match(responseText(row), /^The agent stopped this command after /u);
+    assert.match(responseText(row), stoppedWithOutput, "the row shows what the agent got");
     assert.deepEqual(row?.structuredContent, { shellId }, "the stopped row still records that it yielded");
     const again = await client.callTool({ name: "shell_wait", arguments: { shellId } });
     assert.equal(again.isError, true, "a stopped shell's result was already handed back");
