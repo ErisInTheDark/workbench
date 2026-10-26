@@ -51,15 +51,16 @@ test("an idle snooze wakes on new work, even when the whole turn finished while 
   assert.equal(ThreadSnooze.isWakeDue(snooze, row(completed("t1", true))), true);
 });
 
+const question = { itemId: "743c92b1-b79c-49d4-98a4-5b402bf6de6f", requestKey: "q", turnId: null, request: {
+  id: "q", title: "Choose", summary: "", submitLabel: "Send",
+  questions: [{ id: "c", header: "c", question: "Go?", options: [], allowOther: true, isSecret: false }],
+} } satisfies Question;
+const waiting = (turnId?: string): ThreadEntry => ({
+  ...row(working("t1")), pendingQuestionnaire: question,
+  lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "q", settled: false, ...(turnId ? { turnId: WorkbenchTurnIdSchema.parse(turnId) } : {}) },
+});
+
 test("questionnaire snooze survives turn movement and wakes only when its question leaves", () => {
-  const question = { itemId: "743c92b1-b79c-49d4-98a4-5b402bf6de6f", requestKey: "q", turnId: null, request: {
-    id: "q", title: "Choose", summary: "", submitLabel: "Send",
-    questions: [{ id: "c", header: "c", question: "Go?", options: [], allowOther: true, isSecret: false }],
-  } } satisfies Question;
-  const waiting = (turnId?: string): ThreadEntry => ({
-    ...row(working("t1")), pendingQuestionnaire: question,
-    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "q", settled: false, ...(turnId ? { turnId: WorkbenchTurnIdSchema.parse(turnId) } : {}) },
-  });
   const snooze = { ...snoozeOf(row(working("t1"))), basis: ThreadSnooze.capture(row(working("t1")), "q") };
   assert.equal(ThreadSnooze.isWakeDue(snooze, waiting()), false);
   assert.equal(ThreadSnooze.isWakeDue(snooze, waiting("t9")), false);
@@ -84,6 +85,15 @@ test("toggling adds a waiting target, removes a held one, and ignores a ready on
   assert.deepEqual(added?.targets, [target]);
   assert.equal(ThreadSnooze.toggleTarget(null, source, target, true), null);
   assert.equal(ThreadSnooze.toggleTarget(added, source, target, false), null);
+});
+
+test("a questionnaire thread can wait on targets without leaving its question, unlike approvals or working turns", () => {
+  assert.equal(ThreadSnooze.canWait(waiting("t1")), true);
+  assert.equal(ThreadSnooze.canWait(row({ kind: "needsAttention", reason: "pendingInput", requestKey: "a", settled: false })), false);
+  assert.equal(ThreadSnooze.canWait(row(working("t1"))), false);
+  const snooze = ThreadSnooze.toggleTarget(null, waiting("t1"), target, false)!;
+  assert.equal(ThreadSnooze.isWakeDue(snooze, waiting("t2")), false);
+  assert.equal(ThreadSnooze.isWakeDue(snooze, row(working("t1"))), true);
 });
 
 test("the overlay decides snooze placement over a stale daemon flag", () => {

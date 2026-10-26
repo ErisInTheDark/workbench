@@ -54,13 +54,23 @@ function isTargetReady(row: Row) {
   return row.entryKind === "thread" && row.lifecycle.kind === "completed" && !row.gitArc?.claimedPaths.length;
 }
 
-/** Dependent snooze may keep claims, but not a turn or questionnaire the provider still owns. */
-function canWait(row: Row) {
-  return row.entryKind === "thread" && !row.metadata.archived && !row.lifecycle.settled
-    && !isWorkbenchThreadStatusProviderOwned(row.lifecycle);
+/** The key of the durable questionnaire this thread waits on; live approvals have none. */
+function waitingQuestionnaireKey(row: ThreadRow) {
+  const { lifecycle } = row;
+  if (lifecycle.kind !== "needsAttention" || lifecycle.reason !== "pendingInput") return null;
+  return row.pendingQuestionnaire?.requestKey === lifecycle.requestKey ? lifecycle.requestKey : null;
 }
 
-/** Toggling a held target removes it; a ready target adds nothing. Null means the thread is no longer snoozed. */
+/** Dependent snooze may keep claims and a live questionnaire, but not a working turn or live approval. */
+function canWait(row: Row) {
+  if (row.entryKind !== "thread" || row.metadata.archived || row.lifecycle.settled) return false;
+  return !isWorkbenchThreadStatusProviderOwned(row.lifecycle) || waitingQuestionnaireKey(row) !== null;
+}
+
+/**
+ * Toggling a held target removes it; a ready target adds nothing. Null means the thread is no longer snoozed.
+ * A new wait on a questionnaire leaves its turn live and wakes when that question leaves.
+ */
 function toggleTarget(
   snooze: ThreadSnooze | null, source: ThreadRow, target: WorkbenchThreadWaitTarget, targetReady: boolean,
 ): ThreadSnooze | null {
@@ -72,7 +82,7 @@ function toggleTarget(
   if (targetReady) return snooze;
   return {
     threadId: WorkbenchThreadIdSchema.parse(source.identity.threadId),
-    basis: snooze?.basis ?? capture(source),
+    basis: snooze?.basis ?? capture(source, waitingQuestionnaireKey(source)),
     targets: [...snooze?.targets ?? [], target],
   };
 }
