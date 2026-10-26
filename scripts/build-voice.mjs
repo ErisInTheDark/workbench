@@ -28,8 +28,14 @@ if (!/^[a-f0-9]{40}$/.test(lock.model.revision ?? "")
   throw new Error("Model repository, revision and filenames must be explicitly pinned.");
 }
 const pinModel = args.has("--pin") || args.has("--pin-model");
+// Builds never write to the user's temp folder, which agent sandboxes also deny.
+const temporary = path.join(cache, "tmp");
+await fs.mkdir(temporary, { recursive: true });
 const env = {
   ...process.env,
+  TEMP: temporary,
+  TMP: temporary,
+  TMPDIR: temporary,
   CARGO_HOME: path.join(cache, "cargo"),
   CARGO_TARGET_DIR: path.join(voice, "target"),
   GIT_CEILING_DIRECTORIES: cache,
