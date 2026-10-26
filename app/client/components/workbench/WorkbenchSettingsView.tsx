@@ -19,6 +19,7 @@ import VoiceSettings, { VoiceInputSetting } from "./voice/VoiceSettings";
 import ThreadAutoCompactSettings from "./ThreadAutoCompactSettings";
 import FormSection from "../ui/FormSection";
 import WorkbenchBrowseCapabilitySetting from "./WorkbenchBrowseCapabilitySetting";
+import WorkbenchInstallationSettings from "./WorkbenchInstallationSettings";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
 import WorkbenchProjectLocationMenu from "./WorkbenchProjectLocationMenu";
@@ -272,6 +273,7 @@ export default function WorkbenchSettingsView({
           {withDaemon((client, id) => <div key={id}>
             <WorkbenchBrowseCapabilitySetting daemon={client} />
             <WorkbenchRepoPrerequisiteSettings daemon={client} />
+            <WorkbenchInstallationSettings daemon={client} />
           </div>)}
         </FormSection>
       </> : null}

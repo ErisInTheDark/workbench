@@ -25,6 +25,8 @@
   "files": [
     "wb",
     "WorkbenchBootstrap.mjs",
+    "WorkbenchInstallationRecord.mjs",
+    "WorkbenchInstallationRecord.d.mts",
     "WorkbenchBootstrapCommand.mjs",
     "WorkbenchToolchain.mjs",
     "WorkbenchPackageRegistration.mjs",

@@ -50,6 +50,11 @@ class WorkbenchDaemonClient {
     dismissFailure: () => this.request("installation/update/failure/dismiss", {}),
   };
 
+  readonly installationRecord = {
+    read: () => this.request("installation/record/read", {}),
+    adopt: () => this.request("installation/record/adopt", {}),
+  };
+
   readonly providerRuntimes = {
     read: () => this.request("provider/runtime/read", {}),
     install: (provider: ProviderRuntimeKey) => this.request("provider/runtime/install", { provider }),

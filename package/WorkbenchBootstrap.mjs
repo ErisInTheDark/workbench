@@ -6,9 +6,8 @@ import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { DatabaseSync } from "node:sqlite";
+import WorkbenchInstallationRecord from "./WorkbenchInstallationRecord.mjs";
 import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
 import WorkbenchBootstrapCommand, { WorkbenchChildExitError } from "./WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "./WorkbenchToolchain.mjs";
@@ -36,10 +35,9 @@ export default class WorkbenchBootstrap {
     this.toolchain = toolchain;
     this.registration = registration;
     this.write = write;
-    this.registry = path.join(
-      resolveWorkbenchDataRoot({ environment, homeDirectory: home, platform }),
-      "installation", "installation.json",
-    );
+    this.installation = new WorkbenchInstallationRecord({
+      dataRoot: resolveWorkbenchDataRoot({ environment, homeDirectory: home, platform }),
+    });
   }
 
   async checkoutExists(root) {
@@ -67,26 +65,6 @@ export default class WorkbenchBootstrap {
     }
   }
 
-  async readInstallation() {
-    try {
-      const record = JSON.parse(await fs.readFile(this.registry, "utf8"));
-      if (record.version !== 1 || typeof record.root !== "string" || !path.isAbsolute(record.root)
-        || !["cloning", "setup", "ready"].includes(record.phase)) {
-        throw new Error(`Invalid Workbench installation record: ${this.registry}. Existing files were not changed.`);
-      }
-      return record;
-    } catch (error) {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    }
-  }
-
-  async writeInstallation(record) {
-    const candidate = `${this.registry}.${randomUUID()}.tmp`;
-    await fs.writeFile(candidate, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    await fs.rename(candidate, this.registry);
-  }
-
   async requireTool(command, cwd) {
     try {
       await this.commands.run(command, ["--version"], {
@@ -109,7 +87,7 @@ export default class WorkbenchBootstrap {
     if (await this.checkoutExists(linked)) {
       return await this.delegate(linked, args);
     }
-    const installed = await this.readInstallation();
+    const installed = await this.installation.read();
     if (installed?.phase === "ready") {
       const state = await this.checkoutState(installed.root);
       if (state === "usable") return await this.delegate(installed.root, args);
@@ -134,21 +112,10 @@ export default class WorkbenchBootstrap {
       ? path.join(this.environment.LOCALAPPDATA || path.join(this.home, "AppData", "Local"), "Programs", "inthedark", "wb")
       : path.join(this.home, ".local", "lib", "inthedark", "wb"));
     const root = path.resolve(await this.prompt.location("Install location", defaultRoot));
-    await fs.mkdir(path.dirname(this.registry), { recursive: true });
-    const lockPath = `${this.registry}.lock.sqlite3`;
-    const lock = new DatabaseSync(lockPath);
-    try {
-      lock.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
-    } catch (error) {
-      lock.close();
-      if (error.errcode === 5 || error.errcode === 6) {
-        throw new Error("Another Workbench installation is running. Let it finish before trying again.");
-      }
-      throw error;
-    }
+    const lock = await this.installation.lock();
     try {
       // Another invocation may have finished while this one was accepting input.
-      const latest = await this.readInstallation();
+      const latest = await this.installation.read();
       if (latest?.phase === "ready") {
         const state = await this.checkoutState(latest.root);
         if (state === "usable") return await this.delegate(latest.root, args);
@@ -162,7 +129,7 @@ export default class WorkbenchBootstrap {
       const resume = latest?.root === root && await this.checkoutExists(root);
       if (!resume) await this.requireEmptyDestination(root);
       // Recording before provisioning keeps the chosen location as the next default if anything fails.
-      await this.writeInstallation({ version: 1, root, phase: resume ? "setup" : "cloning" });
+      await this.installation.write({ version: 1, root, phase: resume ? "setup" : "cloning" });
       await this.registration.prepare();
       await this.toolchain.ensure();
       await this.prompt.withHeader(async () => {
@@ -172,15 +139,13 @@ export default class WorkbenchBootstrap {
           const repository = this.environment.WORKBENCH_INSTALL_REPOSITORY || "https://github.com/ErisInTheDark/workbench.git";
           await this.commands.run("git", ["clone", "--progress", "--branch", "main", "--single-branch", repository, root]);
           if (!await this.checkoutExists(root)) throw new Error("Clone did not produce a Workbench checkout.");
-          await this.writeInstallation({ version: 1, root, phase: "setup" });
+          await this.installation.write({ version: 1, root, phase: "setup" });
         }
         await this.commands.run(process.execPath, [path.join(root, "scripts", "install.mjs"), "--prepare"], { cwd: root });
         await this.registration.register(root);
       });
-      await this.writeInstallation({ version: 1, root, phase: "ready" });
+      await this.installation.write({ version: 1, root, phase: "ready" });
     } finally {
-      // Closing the connection also releases the OS lock after normal completion;
-      // process death releases it without a stale PID or lock-file recovery path.
       lock.close();
     }
     // Persist readiness before optional platform actions: missing native artifacts

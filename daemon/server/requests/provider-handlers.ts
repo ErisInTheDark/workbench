@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - providerRequestHandlers: daemon handlers for provider models, context capabilities, account limits, account sign-in, sandbox
- *   networking, provider runtime installs and installation updates.
+ *   networking, provider runtime installs, installation updates and installation records.
  */
 import type { z } from "zod";
 import {
@@ -12,6 +12,9 @@ import { installedProviderKeys } from "workbench-shared/workbench/provider/provi
 import { ProviderRuntimeInstallRequestSchema } from "workbench-shared/workbench/provider/provider-runtime";
 import { WorkbenchSandboxNetworkUpdateSchema } from "workbench-shared/workbench/provider/provider-settings";
 import { InstallationPullOptionsSchema } from "workbench-shared/workbench/installation-update-prediction";
+import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
+import { projectRoot } from "../lib/project-root";
+import { adoptInstallationRecord, readInstallationRecordStatus } from "../runtime/installation-record-status";
 import { defineDaemonRequestHandlers, InvalidParamsError, requiredString, type DaemonRequestContext } from "./daemon-request-handler";
 
 function provider(params: Record<string, unknown>, { owners }: DaemonRequestContext) {
@@ -119,6 +122,8 @@ export const providerRequestHandlers = defineDaemonRequestHandlers({
     return await installationUpdate(context).pull(request.data);
   },
   "installation/update/failure/dismiss": async (_params, context) => await installationUpdate(context).dismissFailure(),
+  "installation/record/read": async () => await readInstallationRecordStatus({ checkoutRoot: projectRoot, dataRoot: resolveWorkbenchDataRoot() }),
+  "installation/record/adopt": async () => await adoptInstallationRecord({ checkoutRoot: projectRoot, dataRoot: resolveWorkbenchDataRoot() }),
   "provider/runtime/read": async (_params, context) => {
     const runtimes = context.providerRuntimes();
     if (!runtimes) throw new Error("Provider runtimes are unavailable.");

@@ -1,10 +1,11 @@
 /*
  * Exports:
  * - providerDaemonRequests: daemon requests for provider models, context capabilities, account limits, account sign-in, sandbox
- *   networking, provider runtime installs, installation updates and the virtual repository runtime.
+ *   networking, provider runtime installs, installation updates and records, and the virtual repository runtime.
  */
 import { z } from "zod";
 import type { WorkbenchModelContextCapability } from "../../../types.ts";
+import { InstallationRecordStatusSchema, type InstallationRecordStatus } from "../../installation-record.ts";
 import { InstallationPullResultSchema, type InstallationPullResult } from "../../installation-update.ts";
 import type { InstallationPullOptions } from "../../installation-update-prediction.ts";
 import { WorkbenchAccountLimitsSchema, type WorkbenchAccountLimits } from "../../provider/provider-account.ts";
@@ -64,5 +65,7 @@ export const providerDaemonRequests = {
   }),
   "installation/update/pull": defineDaemonRequest<InstallationPullOptions, InstallationPullResult>()({ route: "installation", result: InstallationPullResultSchema }),
   "installation/update/failure/dismiss": defineDaemonRequest<object, { ok: true }>()({ route: "installation", result: ok }),
+  "installation/record/read": defineDaemonRequest<object, InstallationRecordStatus>()({ route: "installation", result: InstallationRecordStatusSchema }),
+  "installation/record/adopt": defineDaemonRequest<object, InstallationRecordStatus>()({ route: "installation", result: InstallationRecordStatusSchema }),
   "repo/runtime/read": defineDaemonRequest<object, VirtualRepoAvailability>()({ route: "installation", result: VirtualRepoAvailabilitySchema }),
 };
