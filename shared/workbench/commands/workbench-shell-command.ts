@@ -6,7 +6,8 @@
  * - WorkbenchParallelShellInputFields/WorkbenchYieldShellInputFields/getWorkbenchShellInputSchema: the opt-in `parallel` and `yield_ms` fields, and one provider's accepted shell input.
  * - WorkbenchShellResultSchema/WorkbenchShellResult: define resolved command output, queue wait and shell evidence shared by the daemon and transcript renderer.
  * - WorkbenchShellCallResultSchema: what a yielding shell call answers: a resolved result, or a still-running one with its shell id and output so far.
- * - WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME/WorkbenchShellWaitInputSchema: collect a yielded shell's result.
+ * - WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME/WORKBENCH_SHELL_STOP_MCP_TOOL_NAME/WorkbenchYieldedShellInputSchema: collect a
+ *   yielded shell's result, or stop it first, named by its shell id.
  * - getWorkbenchShellAggregatedOutput: combine stdout and stderr with one boundary rule. */
 import { z } from "zod";
 
@@ -33,7 +34,7 @@ export const WorkbenchParallelShellInputFields = {
 
 /** Added to the shell input only for providers whose agents cannot leave a running call. */
 export const WorkbenchYieldShellInputFields = {
-  yield_ms: z.number().int().positive().optional().describe("Return after this many milliseconds, or sooner on a steer, if the command still runs; it keeps running until your turn ends. Collect it with shell_wait."),
+  yield_ms: z.number().int().positive().optional().describe("Return after this many milliseconds, or sooner on a steer, if the command still runs; it keeps running until your turn ends. Collect it with shell_wait, or end it early with shell_stop."),
 };
 
 /** The shell input a provider accepts, from its parallel and yield support. */
@@ -47,8 +48,9 @@ export function getWorkbenchShellInputSchema({ parallel, yields }: { parallel: b
 }
 
 export const WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME = "shell_wait";
+export const WORKBENCH_SHELL_STOP_MCP_TOOL_NAME = "shell_stop";
 
-export const WorkbenchShellWaitInputSchema = z.object({
+export const WorkbenchYieldedShellInputSchema = z.object({
   shellId: z.string().min(1).describe("Shell id a yielded shell call returned."),
 }).strict();
 

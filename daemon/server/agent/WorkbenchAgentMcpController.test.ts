@@ -2232,14 +2232,40 @@ test("a steer yields a shell early and leaves its command running for shell_wait
   }
 });
 
-test("providers that yield long waits see no yield_ms or shell_wait", async () => {
+test("shell_stop ends the agent's own yielded shell like a user stop and hands back its result once", async () => {
+  const { client, close, finished, fireNextDeadline } = await yieldingShellServer();
+  try {
+    assert.ok((await client.listTools()).tools.some(tool => tool.name === "shell_stop"));
+    const unknown = await client.callTool({ name: "shell_stop", arguments: { shellId: "elsewhere" } });
+    assert.equal(unknown.isError, true);
+
+    const call = client.callTool({ name: "shell", arguments: { command: "serve", yield_ms: 1_000 } });
+    await fireNextDeadline();
+    const { shellId } = (await call).structuredContent as { shellId: string };
+    assert.equal(finished.some(entry => entry.tool === "shell"), false, "an unknown id stopped nothing");
+
+    const stopped = await client.callTool({ name: "shell_stop", arguments: { shellId } });
+    assert.match(responseText(stopped), /^The agent stopped this command after /u);
+    const row = finished.find(entry => entry.tool === "shell")?.result;
+    assert.match(responseText(row), /^The agent stopped this command after /u);
+    assert.deepEqual(row?.structuredContent, { shellId }, "the stopped row still records that it yielded");
+    const again = await client.callTool({ name: "shell_wait", arguments: { shellId } });
+    assert.equal(again.isError, true, "a stopped shell's result was already handed back");
+  } finally {
+    await close();
+  }
+});
+
+test("providers that yield long waits see no yield_ms, shell_wait or shell_stop", async () => {
   const { client, close } = await yieldingShellServer(true);
   try {
     const listed = (await client.listTools()).tools;
     assert.equal(Object.keys(listed.find(tool => tool.name === "shell")?.inputSchema.properties ?? {}).includes("yield_ms"), false);
-    assert.equal(listed.some(tool => tool.name === "shell_wait"), false);
-    const rejected = await client.callTool({ name: "shell_wait", arguments: { shellId: "any" } });
-    assert.equal(rejected.isError, true);
+    assert.equal(listed.some(tool => tool.name === "shell_wait" || tool.name === "shell_stop"), false);
+    for (const name of ["shell_wait", "shell_stop"]) {
+      const rejected = await client.callTool({ name, arguments: { shellId: "any" } });
+      assert.equal(rejected.isError, true, name);
+    }
   } finally {
     await close();
   }

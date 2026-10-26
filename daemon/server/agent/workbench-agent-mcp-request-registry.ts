@@ -7,12 +7,12 @@
  * - WorkbenchAgentBatchTurn: how a serial call's turn in its provider tool batch ended.
  * - WorkbenchAgentMcpUndeliveredMessage: one message admitted for a thread that its agent has not received; a sender marks an agent message.
  * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, steer interruption of waits and shell yield windows (including those
- *   attaching while a message is undelivered), user shell stops and queue skips, yielded shells running on until collected or their turn ends, provider tool batches
+ *   attaching while a message is undelivered), user shell stops and queue skips, agent stops of yielded shells, yielded shells running on until collected or their turn ends, provider tool batches
  *   and serial call turns, wait, shell-queue and windowed live shell output and yield observation, reload-safe command re-entry, the current MCP
  *   tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
- * - isWorkbenchAgentMcpShellStop: identify a deliberate stop of one shell command, by its user or its turn ending, across module generations.
+ * - isWorkbenchAgentMcpShellStop: identify a deliberate stop of one shell command, by its user, its agent or its turn ending, across module generations.
  */
 import { formatDuration } from "workbench-shared/workbench/format-duration";
 import {
@@ -491,6 +491,14 @@ export class WorkbenchAgentMcpRequestRegistry {
     }
     for (const wake of [...this.state.backgroundWaiters]) wake();
     return stopped;
+  }
+
+  /** The agent stops one of its own yielded shells; its row then records the stop as a user's stop would. */
+  stopYieldedShell(threadId: WorkbenchThreadId, shellId: string) {
+    const entry = this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.get(shellId);
+    if (!entry || entry.workbenchThreadId !== threadId || entry.controller.signal.aborted) return false;
+    entry.controller.abort(createShellStop(`The agent stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`));
+    return true;
   }
 
   /**

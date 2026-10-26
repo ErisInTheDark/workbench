@@ -45,9 +45,11 @@ import type { WorkbenchProviderCaller } from "../providers/provider-execution";
 import {
   getWorkbenchShellAggregatedOutput,
   WORKBENCH_SHELL_MCP_TOOL_NAME,
+  WORKBENCH_SHELL_STOP_MCP_TOOL_NAME,
   WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME,
   WorkbenchShellCallResultSchema,
   WorkbenchShellResultSchema,
+  WorkbenchYieldedShellInputSchema,
   type WorkbenchShellInput,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -222,6 +224,14 @@ const SHELL_WAIT_TOOL: Tool = {
   _meta: CODE_MODE_META,
 };
 
+const SHELL_STOP_TOOL: Tool = {
+  name: WORKBENCH_SHELL_STOP_MCP_TOOL_NAME,
+  description: "Stop a shell that yield_ms backgrounded, then return its final result like shell_wait.",
+  inputSchema: toolJsonSchema(WorkbenchYieldedShellInputSchema, "input") as Tool["inputSchema"],
+  annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: false, readOnlyHint: false },
+  _meta: CODE_MODE_META,
+};
+
 function readClientScope(value: string | null) {
   if (!value) return LEGACY_MCP_CLIENT_SCOPE;
   if (!MCP_CLIENT_SCOPE_PATTERN.test(value)) throw new Error("Workbench MCP client scope is invalid.");
@@ -347,7 +357,9 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
    * commands carry them, so preloaded lists never depend on settings.
    */
   private visibleCommands(scope: WorkbenchMcpScope, capabilities: WorkbenchLocalCapabilitySettings | null = null) {
-    const names = new Set<string>([WORKBENCH_SHELL_MCP_TOOL_NAME, WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, WORKBENCH_USER_MESSAGE_TOOL_NAME]);
+    const names = new Set<string>([
+      WORKBENCH_SHELL_MCP_TOOL_NAME, WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, WORKBENCH_SHELL_STOP_MCP_TOOL_NAME, WORKBENCH_USER_MESSAGE_TOOL_NAME,
+    ]);
     const direct = new Map<string, WorkbenchAgentCommandDefinition>();
     const deferred = new Map<string, WorkbenchAgentCommandDefinition>();
     const audience = { harness: scope.provider, subagent: scope.subagent, workbenchRoot: scope.projectLocal, capabilities };
@@ -406,7 +418,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       outputSchema: listedJsonSchema(SHELL_SCHEMA_OWNER, shape, "output", () => getWorkbenchMcpShellOutputSchema(shape)) as Tool["outputSchema"],
       _meta: CODE_MODE_META,
     }];
-    if (shape.shellYields) tools.push(SHELL_WAIT_TOOL);
+    if (shape.shellYields) tools.push(SHELL_WAIT_TOOL, SHELL_STOP_TOOL);
     if (description.hostsUserMessage) tools.push(USER_MESSAGE_TOOL);
     for (const [name, definition] of this.visibleCommands(this.listingScope(scope, description)).direct) {
       tools.push(this.toolSpec(name, definition, shape));
@@ -448,7 +460,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         }
         return await this.callShell(scope, call, input, tools);
       }
-      if (call.name === WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME && shape.shellYields) return await this.callShellWait(scope, call, tools);
+      if (call.name === WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME && shape.shellYields) return await this.collectShell(scope, call, tools, false);
+      if (call.name === WORKBENCH_SHELL_STOP_MCP_TOOL_NAME && shape.shellYields) return await this.collectShell(scope, call, tools, true);
       if (call.name === WORKBENCH_USER_MESSAGE_TOOL_NAME && description.hostsUserMessage) {
         await validateToolInput(UserMessageInputSchema, call.arguments, call.name);
         return { kind: "result", result: { content: [{ type: "text", text: WORKBENCH_USER_MESSAGE_DELIVERED }] } };
@@ -648,19 +661,21 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   }
 
   /**
-   * `shell_wait` is a long wait: steers interrupt it, `timeoutMs` ends it, and it outlives reloads. Only the caller's
-   * own thread can collect a shell, so the caller resolves before the wait detaches.
+   * `shell_wait` and `shell_stop` are long waits: steers interrupt them, `shell_wait`'s `timeoutMs` ends it, and they
+   * outlive reloads. Only the caller's own thread can stop or collect a shell, so the caller resolves before the wait
+   * detaches; `shell_stop` stops the shell first, then collects its stopped (or already finished) result.
    */
-  private async callShellWait(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, tools: WorkbenchProviderTools): Promise<WorkbenchMcpToolStep> {
-    const input = getWorkbenchMcpShellWaitInputSchema().parse(
-      await validateToolInput(getWorkbenchMcpShellWaitInputSchema(), call.arguments, call.name),
-    );
+  private async collectShell(
+    scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, tools: WorkbenchProviderTools, stop: boolean,
+  ): Promise<WorkbenchMcpToolStep> {
+    const schema = stop ? WorkbenchYieldedShellInputSchema : getWorkbenchMcpShellWaitInputSchema();
+    const input: { shellId: string; timeoutMs?: number } = schema.parse(await validateToolInput(schema, call.arguments, call.name));
     const started = await this.startTranscript(call.name, input, call.meta, scope.clientScope, call.signal, tools);
     if (started.kind === "failed") return { kind: "result", result: started.result };
     let registration: ReturnType<WorkbenchAgentMcpRequestRegistry["register"]>;
     try {
       registration = this.requestRegistry.register(scope.clientScope, call.requestId, {
-        owner: this.runtimeOwner, policy: "preserve-across-reload", steerInterruptible: true, toolName: WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME,
+        owner: this.runtimeOwner, policy: "preserve-across-reload", steerInterruptible: true, toolName: call.name,
       });
     } catch (error) {
       return { kind: "result", result: await this.finishTranscript(tools, started.reference, this.shellWaitFailure(error, call.signal)) };
@@ -675,12 +690,13 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       registration.unregister();
       return { kind: "result", result: await this.finishTranscript(tools, started.reference, this.shellWaitFailure(error, signal)) };
     }
+    if (stop) this.requestRegistry.stopYieldedShell(threadId, input.shellId);
     registration.markDrainIndependent();
     return {
       kind: "detached",
       call: {
         collect: { shellId: input.shellId, threadId },
-        signal, toolName: WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME, transcript: started.reference,
+        signal, toolName: call.name, transcript: started.reference,
         unregister: registration.unregister,
       },
     };

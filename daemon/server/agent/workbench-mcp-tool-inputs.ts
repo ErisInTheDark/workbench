@@ -16,7 +16,7 @@ import {
   getWorkbenchShellInputSchema,
   WorkbenchShellCallResultSchema,
   WorkbenchShellResultSchema,
-  WorkbenchShellWaitInputSchema,
+  WorkbenchYieldedShellInputSchema,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import { getWorkbenchAgentCommandToolName, type WorkbenchAgentCommandDefinition } from "../lib/workbench/commands/workbench-agent-command-definition";
 
@@ -52,7 +52,7 @@ export function getWorkbenchMcpShellOutputSchema(shape: WorkbenchMcpInputShape) 
 }
 
 export function getWorkbenchMcpShellWaitInputSchema() {
-  return WorkbenchShellWaitInputSchema.extend(WaitTimeoutFields);
+  return WorkbenchYieldedShellInputSchema.extend(WaitTimeoutFields);
 }
 
 const WaitTimeoutFields = {
