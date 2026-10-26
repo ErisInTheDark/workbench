@@ -15,11 +15,11 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { rename, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { ProviderRuntimeKeySchema, type ProviderRuntimeKey } from "workbench-shared/workbench/provider/provider-runtime";
+import { commitStagedDirectory } from "../lib/managed-npm-install";
 
 const run = promisify(execFile);
 
@@ -62,8 +62,6 @@ export type ProviderRuntimeDirectory = ProviderRuntimeKey | "codex";
 
 const MARKER = "installed.json";
 export const PROVIDER_RUNTIME_STAGING_PREFIX = ".staging-";
-const WINDOWS_LOCK_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
-const COMMIT_RENAME_RETRIES = 12;
 
 export function currentProviderRuntimeTarget(): ProviderRuntimeTarget {
   const header = process.platform === "linux"
@@ -175,22 +173,10 @@ export async function probeExecutableVersion(executable: string, signal?: AbortS
   return stdout.trim();
 }
 
-/**
- * Marks a verified staging directory and renames it over the version directory, so readers only ever see a
- * committed runtime. Windows briefly locks freshly written files (antivirus, indexers, watchers), so a locked
- * rename backs off for up to ~17s before failing.
- */
+/** Marks a verified staging directory and renames it over the version directory, so readers only ever see a committed runtime. */
 export async function commitProviderRuntime(staging: string, versionRoot: string, marker: InstalledProviderRuntime, signal?: AbortSignal) {
   await writeFile(path.join(staging, MARKER), `${JSON.stringify(marker, null, 2)}\n`);
-  await rm(versionRoot, { recursive: true, force: true });
-  for (let attempt = 0; ; attempt++) {
-    try { return await rename(staging, versionRoot); }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code ?? "";
-      if (process.platform !== "win32" || !WINDOWS_LOCK_CODES.has(code) || attempt >= COMMIT_RENAME_RETRIES) throw error;
-      await delay(Math.min(100 * 2 ** attempt, 2_000), undefined, { signal });
-    }
-  }
+  await commitStagedDirectory(staging, versionRoot, signal);
 }
 
 /** A running executable can hold an old version on Windows; the next commit sweeps it. */

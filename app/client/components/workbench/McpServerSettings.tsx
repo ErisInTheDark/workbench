@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - default McpServerSettings: one daemon's user-added MCP servers as status cards; sign in or set an API key, pick allowed tools, and add servers by URL.
+ * - default McpServerSettings: one daemon's user-added MCP servers as status cards; sign in or set an API key, pick allowed tools, and add servers by URL or npm package.
  */
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import type { McpServerSnapshot } from "workbench-shared/workbench/mcp/mcp-server-settings";
+import { parseMcpPackageCommand } from "workbench-shared/workbench/mcp/mcp-package-command";
+import type { McpServerSettingsUpdate, McpServerSnapshot } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import McpServerSettingsController from "../../workbench/McpServerSettingsController";
 import { openCenteredMcpSignInPopup } from "../../workbench/mcp-sign-in-popup";
 import { mcpToolLabel, mcpToolSharedPrefix } from "../../workbench/mcp-tool-label";
@@ -17,12 +18,13 @@ import FlushInput from "../ui/FlushInput";
 import MarkdownRender from "../ui/MarkdownRender";
 import PressDragMenu from "../ui/PressDragMenu";
 import PrimaryButton from "../ui/PrimaryButton";
+import RadioRow from "../ui/RadioRow";
 import WorkbenchCheckbox from "./WorkbenchCheckbox";
 import { IconLabel, SettingsMenuItem } from "./settings-row-labels";
 import WorkbenchSettingsStatusRow, { type WorkbenchSettingsStatusTone } from "./WorkbenchSettingsStatusRow";
 import WorkbenchTextField from "./WorkbenchTextField";
 import {
-  ChevronDownIcon, KeyRoundIcon, KeyRoundOffIcon, MoreVerticalIcon, PlusIcon, RefreshCwIcon, SparklesIcon, Trash2Icon,
+  ChevronDownIcon, DownloadIcon, KeyRoundIcon, KeyRoundOffIcon, MoreVerticalIcon, PlusIcon, RefreshCwIcon, SparklesIcon, Trash2Icon,
 } from "./workbench-icons";
 import { enterMotionClassName } from "../../tailwind/enter-motion-classes";
 
@@ -99,17 +101,18 @@ function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & 
     : server.allowAll ? "All tools"
       // A search-based server's total is unknown: it holds thousands, found by searching.
       : server.catalog.search ? `${enabledCount} enabled` : `${enabledCount} of ${server.catalog.tools.length} tools`;
+  // A local npm server runs as this computer's user; it takes no API key or sign-in.
   const menu = [
-    server.auth?.kind === "header"
+    ...server.source.kind === "npm" ? [] : [server.auth?.kind === "header"
       ? { id: "remove-key", content: <SettingsMenuItem icon={<KeyRoundOffIcon />}>Remove API key</SettingsMenuItem> }
-      : { id: "key", content: <SettingsMenuItem icon={<KeyRoundIcon />}>Use an API key…</SettingsMenuItem> },
+      : { id: "key", content: <SettingsMenuItem icon={<KeyRoundIcon />}>Use an API key…</SettingsMenuItem> }],
     ...server.auth?.kind === "oauth" ? [{ id: "sign-out", content: <SettingsMenuItem icon={<KeyRoundOffIcon />}>Sign out</SettingsMenuItem> }] : [],
     { id: "remove", content: <SettingsMenuItem icon={<Trash2Icon />} danger>Remove server</SettingsMenuItem> },
   ];
   return <WorkbenchSettingsStatusRow tone={tone}
     label={<FlushInput ariaLabel="Server name" value={server.name} disabled={busy}
       className="-mx-1 rounded-md px-1 hover:bg-fg/5 focus:bg-fg/8"
-      onCommit={name => { void controller.update({ action: "rename", id: server.id, name }); }} />} status={status} detail={server.url.replace(/^https?:\/\//u, "")}
+      onCommit={name => { void controller.update({ action: "rename", id: server.id, name }); }} />} status={status} detail={sourceDetail(server.source)}
     error={server.catalog.status === "error" ? server.catalog.detail : ""}
     body={<>
       {keyOpen ? <ApiKeyFields server={server} controller={controller} busy={busy} onDone={() => setKeyOpen(false)} /> : null}
@@ -137,35 +140,69 @@ function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & 
   </WorkbenchSettingsStatusRow>;
 }
 
-/** The last card in the list; Add appears once a URL is typed. */
+type AddMode = "http" | "npm";
+
+const addModes = {
+  http: { label: "HTTP", inputLabel: "MCP server URL", placeholder: "Add a server by URL" },
+  npm: { label: "npm", inputLabel: "npm package and arguments", placeholder: "Package and arguments, like @azure-devops/mcp my-org" },
+} satisfies Record<AddMode, { label: string; inputLabel: string; placeholder: string }>;
+
+/** The update one typed draft would send, or why it can't be sent yet. */
+function addUpdate(mode: AddMode, draft: string): { update: Extract<McpServerSettingsUpdate, { action: "add" | "addPackage" }> } | { error: string } | null {
+  if (!draft.trim()) return null;
+  if (mode === "http") return { update: { action: "add", url: draft.trim() } };
+  const parsed = parseMcpPackageCommand(draft);
+  return "error" in parsed ? parsed : { update: { action: "addPackage", ...parsed.command } };
+}
+
+function sourceDetail(source: McpServerSnapshot["source"]) {
+  if (source.kind === "http") return source.url.replace(/^https?:\/\//u, "");
+  const args = source.args.map(arg => /^$|\s|["']/u.test(arg) ? JSON.stringify(arg) : arg);
+  return ["npm", `${source.package}@${source.version}`, ...args].join(" ");
+}
+
+/** The last card in the list: pick HTTP or npm, then Add (or hold Install, since npm runs the package's code) appears once something is typed. */
 function AddServerCard({ controller, busy, onAdded }: {
   controller: McpServerSettingsController;
   busy: boolean;
   /** Ids of servers that appeared because of this add. */
   onAdded: (ids: string[]) => void;
 }) {
-  const [url, setUrl] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [mode, setMode] = useState<AddMode>("http");
+  // Each mode keeps its own draft, so peeking at the other mode loses nothing.
+  const [drafts, setDrafts] = useState<Record<AddMode, string>>({ http: "", npm: "" });
+  const [adding, setAdding] = useState<string | null>(null);
+  const draft = drafts[mode];
+  const next = addUpdate(mode, draft);
+  const npm = mode === "npm";
   return <div className="py-1">
-    <form className={`flex items-center gap-2 rounded-[0.95rem] border ${cardBorder} px-3 py-1.5`} onSubmit={event => {
+    <form className={`flex items-center gap-2 rounded-[0.95rem] border ${cardBorder} py-1.5 pl-3 pr-1.5`} onSubmit={event => {
       event.preventDefault();
+      if (!next || !("update" in next)) return;
       const before = new Set(controller.getSnapshot().settings?.servers.map(server => server.id));
-      setAdding(true);
-      void controller.update({ action: "add", url: url.trim() }).then(added => {
-        setAdding(false);
+      const addedMode = mode;
+      setAdding(next.update.action === "addPackage" ? next.update.package : next.update.url);
+      void controller.update(next.update).then(added => {
+        setAdding(null);
         if (!added) return;
-        setUrl("");
+        setDrafts(current => ({ ...current, [addedMode]: "" }));
         onAdded(controller.getSnapshot().settings?.servers.filter(server => !before.has(server.id)).map(server => server.id) ?? []);
       });
     }}>
       <PlusIcon className="size-4 shrink-0 text-fg/muted" />
+      <RadioRow<AddMode> ariaLabel="Server type" value={mode} disabled={busy} onChange={setMode}
+        options={(Object.keys(addModes) as AddMode[]).map(value => ({ value, label: addModes[value].label }))} />
       <input className="min-w-0 flex-1 bg-transparent py-1.5 text-[0.86em] text-text outline-none placeholder:text-fg/muted"
-        aria-label="MCP server URL" placeholder="Add a server by URL" autoComplete="off" spellCheck={false}
-        disabled={busy} value={url} onChange={event => setUrl(event.target.value)} />
-      {url.trim() || adding ? <PrimaryButton type="submit" shape="compact" disabled={busy} pendingHalo={adding}>
-        <IconLabel icon={<SparklesIcon size={14} />}>Add</IconLabel>
+        aria-label={addModes[mode].inputLabel} placeholder={addModes[mode].placeholder} autoComplete="off" spellCheck={false}
+        aria-invalid={next !== null && "error" in next} disabled={busy} value={draft}
+        onChange={event => { const value = event.target.value; setDrafts(current => ({ ...current, [mode]: value })); }} />
+      {next || adding ? <PrimaryButton type="submit" shape="compact" disabled={busy || (next !== null && "error" in next)} pendingHalo={adding !== null}
+        {...npm ? { tone: "danger", holdToConfirmMs: 1000, title: "Hold to install and run this npm package on this computer" } : {}}>
+        <IconLabel icon={npm ? <DownloadIcon size={14} /> : <SparklesIcon size={14} />}>{npm ? "Install" : "Add"}</IconLabel>
       </PrimaryButton> : null}
     </form>
+    {adding && npm ? <p role="status" className="m-0 px-3 pt-1.5 text-[0.78em] leading-[1.55] text-fg/muted">Installing {adding} with npm...</p>
+      : next && "error" in next ? <p className="m-0 px-3 pt-1.5 text-[0.78em] leading-[1.55] text-fg/muted">{next.error}</p> : null}
   </div>;
 }
 

@@ -1,7 +1,7 @@
 /*
  * No production exports. Tests protect the MCP server allow boundary (only allowed, currently offered tools are
  * forwarded), link requests and downloads limited to links the server sent, credential sealing, OAuth sign-in over real transport,
- * per-server failure isolation and settings validation.
+ * per-server failure isolation, settings validation, and npm servers' install-before-save, pinned launch and install removal.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -14,7 +14,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 import { renderCreateTable } from "workbench-shared/database/schema/schema-definition";
 import {
-  mcpServerAuth, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServers, mcpServerTools,
+  mcpServerAuth, mcpServerHttp, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServerPackageArgs, mcpServerPackages,
+  mcpServers, mcpServerTools,
 } from "../lib/workbench/database/schema/mcp-server-schema";
 import type { McpServerConnectionPort, McpServerEndpoint, McpServerTool } from "./McpServerConnection";
 import WorkbenchMcpServerController, { type WorkbenchMcpServerOptions } from "./WorkbenchMcpServerController";
@@ -52,12 +53,28 @@ class FakeServer {
   }
 }
 
-/** Fake servers are addressed by the first label of their URL's hostname. */
+/** A stdio endpoint's port, resolving its launch on first use the way a real connection does when it connects. */
+function launched(endpoint: Extract<McpServerEndpoint, { transport: "stdio" }>, servers: Record<string, FakeServer>): McpServerConnectionPort {
+  const port = endpoint.launch().then(launch => {
+    const server = servers[launch.command];
+    if (!server) throw new Error(`No fake server for ${launch.command}`);
+    return server.connect(endpoint);
+  });
+  return {
+    listTools: async () => (await port).listTools(),
+    serverName: async () => (await port).serverName(),
+    callTool: async (name, args, signal) => (await port).callTool(name, args, signal),
+    close: async () => { await (await port.catch(() => null))?.close(); },
+  };
+}
+
+/** Fake HTTP servers are addressed by the first label of their URL's hostname; stdio ones by their launch command. */
 function setup(servers: Record<string, FakeServer>) {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   const tables = Object.fromEntries([
-    mcpServers, mcpServerTools, mcpServerAuth, mcpServerOAuthClients, mcpServerOAuthTokens, mcpServerOAuthPending,
+    mcpServers, mcpServerHttp, mcpServerPackages, mcpServerPackageArgs,
+    mcpServerTools, mcpServerAuth, mcpServerOAuthClients, mcpServerOAuthTokens, mcpServerOAuthPending,
   ].map(table => [table.name, table]));
   for (const table of Object.values(tables)) database.exec(renderCreateTable(table));
   const port: WorkbenchMcpServerOptions["database"] = {
@@ -77,16 +94,39 @@ function setup(servers: Record<string, FakeServer>) {
   const create = (options: Partial<WorkbenchMcpServerOptions> = {}) => new WorkbenchMcpServerController({
     database: port, readDeviceIdentity: async () => "device-a", user: () => "chiri",
     connect: endpoint => {
+      if (endpoint.transport === "stdio") return launched(endpoint, servers);
       const server = servers[new URL(endpoint.url).hostname.split(".")[0]!];
       if (!server) throw new Error(`No fake server for ${endpoint.url}`);
       return server.connect(endpoint);
     },
     ...options,
   });
-  return { create, database, close: () => database.close() };
+  return { create, database, port, close: () => database.close() };
+}
+
+/** Installs land at 1.4.2 and launch as the fake stdio server named `local`. */
+class FakePackages {
+  readonly installs: string[] = [];
+  readonly launches: { serverId: string; args: readonly string[] }[] = [];
+  readonly removals: string[] = [];
+  failure: Error | null = null;
+
+  install = async (serverId: string, name: string, version = "latest") => {
+    this.installs.push(`${name}@${version}`);
+    if (this.failure) throw this.failure;
+    return "1.4.2";
+  };
+
+  launch = async (serverId: string, source: { args: readonly string[] }) => {
+    this.launches.push({ serverId, args: source.args });
+    return { command: "local", args: [...source.args], cwd: "C:/data/mcp" };
+  };
+
+  remove = async (serverId: string) => { this.removals.push(serverId); };
 }
 
 const signal = () => new AbortController().signal;
+const headersOf = (endpoint: McpServerEndpoint | undefined) => endpoint?.transport === "http" ? endpoint.headers : null;
 
 test("configured-only reads do not contact servers; a targeted live read checks only that server", async () => {
   const drive = new FakeServer("drive");
@@ -169,12 +209,12 @@ test("the credential reaches the server but never the snapshot or storage in pla
     });
     assert.equal(JSON.stringify(snapshot).includes("secret-key"), false);
     assert.deepEqual(snapshot.servers[0]?.auth, { kind: "header", header: "x-consumer-api-key" });
-    assert.deepEqual(drive.endpoints.at(-1)?.headers, { "x-consumer-api-key": "secret-key" });
+    assert.deepEqual(headersOf(drive.endpoints.at(-1)), { "x-consumer-api-key": "secret-key" });
     const stored = database.prepare("SELECT ciphertext FROM mcp_server_auth").get() as { ciphertext: Buffer };
     assert.equal(stored.ciphertext.toString("utf8").includes("secret-key"), false);
 
     await create().read();
-    assert.deepEqual(drive.endpoints.at(-1)?.headers, { "x-consumer-api-key": "secret-key" });
+    assert.deepEqual(headersOf(drive.endpoints.at(-1)), { "x-consumer-api-key": "secret-key" });
     const connections = drive.endpoints.length;
     const elsewhere = await create({ readDeviceIdentity: async () => "device-b" }).read();
     assert.equal(elsewhere.servers[0]?.catalog.status, "error");
@@ -213,6 +253,53 @@ test("a query returns ranked allowed matches with input schemas; without one, ev
     const matches = await owner.listTools({ query: "search" }, signal());
     assert.match(matches, /^docs\/SEARCH_FILES\nFind files by name\nInput: \{\}\n\ndocs\/UPLOAD\n/u);
     assert.equal(matches.includes("HIDDEN"), false);
+  } finally { close(); }
+});
+
+test("an npm server is installed before it is saved, launches its pinned install with the user's ordered arguments, and removal deletes the install", async () => {
+  const local = new FakeServer(null);
+  local.tools = [tool("list_projects")];
+  const packages = new FakePackages();
+  const { create, database, close } = setup({ local });
+  try {
+    const owner = create({ packages });
+    const added = await owner.update({ action: "addPackage", package: "@azure-devops/mcp", args: ["contoso", "-d", "core"] });
+    const source = { kind: "npm", package: "@azure-devops/mcp", version: "1.4.2", args: ["contoso", "-d", "core"] };
+    assert.deepEqual(packages.installs, ["@azure-devops/mcp@latest"]);
+    // No reported name: it is named after its package, never its hostless "URL".
+    assert.deepEqual(added.servers.map(server => [server.name, server.source]), [["azure-devops-mcp", source]]);
+    const id = added.servers[0]!.id;
+
+    const fresh = create({ packages });
+    assert.deepEqual((await fresh.read()).servers[0]?.source, source);
+    assert.deepEqual(packages.launches.at(-1), { serverId: id, args: ["contoso", "-d", "core"] });
+    await fresh.update({ action: "setAllowAll", id, allowAll: true });
+    assert.equal((await fresh.call({ server: "azure-devops-mcp", tool: "list_projects", arguments: {} }, signal())).isError, false);
+    await assert.rejects(fresh.update({ action: "setAuth", id, auth: { header: "authorization", value: "Bearer t" } }), /runs locally from npm/u);
+
+    await fresh.update({ action: "remove", id });
+    assert.deepEqual(packages.removals, [id]);
+    for (const table of ["mcp_servers", "mcp_server_packages", "mcp_server_package_args"]) {
+      assert.equal((database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count, 0);
+    }
+  } finally { close(); }
+});
+
+test("a failed npm install saves nothing, and a failed save removes the install it made", async () => {
+  const local = new FakeServer("local");
+  const packages = new FakePackages();
+  const { create, port, close } = setup({ local });
+  try {
+    packages.failure = new Error("npm couldn't install missing@latest");
+    await assert.rejects(create({ packages }).update({ action: "addPackage", package: "missing", args: [] }), /couldn't install/u);
+    assert.deepEqual((await create({ packages }).read()).servers, []);
+
+    packages.failure = null;
+    const failingSave = create({ packages, database: { ...port, executeTransaction: async () => { throw new Error("disk full"); } } });
+    await assert.rejects(failingSave.update({ action: "addPackage", package: "local-server", version: "^1", args: [] }), /disk full/u);
+    assert.deepEqual(packages.installs.at(-1), "local-server@^1");
+    assert.equal(packages.removals.length, 1);
+    assert.equal(local.closed > 0, true, "the probe's process is closed");
   } finally { close(); }
 });
 

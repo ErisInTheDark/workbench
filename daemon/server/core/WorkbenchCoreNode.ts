@@ -46,6 +46,7 @@ import { readDeviceIdentity } from "../store/device-identity";
 import type { WorkbenchApprovalHandoff } from "../interactions/WorkbenchApprovalController";
 import WorkbenchMcpServerController from "../mcp-servers/WorkbenchMcpServerController";
 import McpDownloadStore from "../mcp-servers/McpDownloadStore";
+import McpPackageInstaller from "../mcp-servers/McpPackageInstaller";
 import { logError } from "../process-helpers";
 import WorkbenchNativeFileController from "../project/WorkbenchNativeFileController";
 import type { WorkbenchMessageWaitHandoff } from "../agent/WorkbenchMessageWaitController";
@@ -257,7 +258,11 @@ function createWorkbenchCoreFeature(
     onError: error => logError("mcp-downloads", `cleanup failed: ${error instanceof Error ? error.message : String(error)}`),
   });
   mcpDownloads.start();
-  const mcpServers = new WorkbenchMcpServerController({ database, readDeviceIdentity, downloads: mcpDownloads });
+  const mcpPackages = new McpPackageInstaller({
+    root: path.join(context.dataRootPath, "daemon", "mcp-servers", "packages"),
+    warn: message => logError("mcp-packages", message),
+  });
+  const mcpServers = new WorkbenchMcpServerController({ database, readDeviceIdentity, downloads: mcpDownloads, packages: mcpPackages });
   const threadActions = new WorkbenchThreadActionController({
     questionnaireSteers,
     autoCompact,
@@ -484,6 +489,7 @@ function createWorkbenchCoreFeature(
       reportPhase("Git arc disposal");
       gitArc.dispose();
       reportPhase("MCP server disposal");
+      await mcpPackages.dispose();
       await mcpServers.dispose();
       await mcpDownloads.dispose();
       reportPhase("stats disposal");

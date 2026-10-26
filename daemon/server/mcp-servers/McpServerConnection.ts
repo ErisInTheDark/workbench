@@ -1,20 +1,22 @@
 /*
  * Exports:
  * - McpServerTrafficFrame: one recorded JSON-RPC message exchanged with a server.
- * - McpServerEndpoint: url, request headers and optional traffic recorder of one user-added MCP server.
+ * - McpServerLaunch: command, arguments and directory of a local stdio server process.
+ * - McpServerEndpoint: one user-added MCP server's HTTP url and auth, or stdio launch, plus an optional traffic recorder.
  * - McpServerTool: one offered tool with its input schema.
  * - McpServerConnectionPort: the catalogue/call/close surface the server controller depends on.
- * - default McpServerConnection: SDK streamable-HTTP client for one server, authenticated by a header or OAuth; caches the catalogue until the server reports a change (or for 30 s when it never promised to), reconnects after transport failure and reports a needed sign-in as McpServerSignInRequiredError.
+ * - default McpServerConnection: SDK client for one server over streamable HTTP (authenticated by a header or OAuth) or a stdio child process whose stderr explains its failures; caches the catalogue until the server reports a change (or for 30 s when it never promised to), reconnects after transport failure and reports a needed sign-in as McpServerSignInRequiredError.
  */
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { McpServerSignInRequiredError } from "./McpServerOAuthProvider";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { McpWrapperSession } from "./wrappers/mcp-wrapper";
 import {
-  CallToolResultSchema, McpError, ToolListChangedNotificationSchema,
+  CallToolResultSchema, ErrorCode, McpError, ToolListChangedNotificationSchema,
   type CallToolResult, type JSONRPCMessage, type MessageExtraInfo,
 } from "@modelcontextprotocol/sdk/types.js";
 
@@ -26,14 +28,27 @@ export interface McpServerTrafficFrame {
   payload: string;
 }
 
-export interface McpServerEndpoint {
+/** A local server process, spoken to over its stdin and stdout. */
+export interface McpServerLaunch {
+  command: string;
+  args: string[];
+  cwd: string;
+}
+
+export type McpServerEndpoint = {
+  /** Receives every JSON-RPC message exchanged with the server, for `wb debug mcp`. */
+  record?: (frame: McpServerTrafficFrame) => void;
+} & ({
+  transport: "http";
   url: string;
   headers: Record<string, string>;
   /** OAuth sign-in for servers without a credential header; the SDK refreshes its tokens on 401. */
   authProvider?: OAuthClientProvider;
-  /** Receives every JSON-RPC message exchanged with the server, for `wb debug mcp`. */
-  record?: (frame: McpServerTrafficFrame) => void;
-}
+} | {
+  transport: "stdio";
+  /** Resolved at each (re)connect, so a missing install can be restored first. */
+  launch: () => Promise<McpServerLaunch>;
+});
 
 export interface McpServerTool {
   name: string;
@@ -83,7 +98,14 @@ function recordTraffic(transport: Transport, record: (frame: McpServerTrafficFra
   });
 }
 
-function describeFailure(error: unknown, signedIn: boolean) {
+const STDERR_TAIL = 400;
+
+function describeFailure(error: unknown, signedIn: boolean, stderr: string) {
+  // A local server explains its own failures on stderr; the transport only says the pipe closed.
+  const said = stderr.trim().split(/\r?\n/u).filter(Boolean).slice(-3).join(" ").slice(-240);
+  if (said && error instanceof McpError && error.code === ErrorCode.ConnectionClosed) {
+    return new Error(`The server stopped: ${said}`, { cause: error });
+  }
   // A failed refresh or a missing sign-in both mean the user must sign in again.
   if (signedIn && (error instanceof UnauthorizedError || error instanceof OAuthError)) return new McpServerSignInRequiredError();
   if (error instanceof StreamableHTTPError && (error.code === 401 || error.code === 403)) {
@@ -99,6 +121,8 @@ function describeFailure(error: unknown, signedIn: boolean) {
 export default class McpServerConnection implements McpServerConnectionPort {
   #client: Promise<Client> | null = null;
   #tools: Promise<McpServerTool[]> | null = null;
+  /** Recent stderr of the current local server process; empty for HTTP servers. */
+  #stderr = "";
   /** When the cached list was read from a server that never promised change notifications; null while it may be kept. */
   #toolsReadAt: number | null = null;
 
@@ -161,7 +185,7 @@ export default class McpServerConnection implements McpServerConnectionPort {
       return await operation(await session);
     } catch (error) {
       if (!(error instanceof McpError) && this.#client === session) await this.close();
-      throw describeFailure(error, this.endpoint.authProvider !== undefined);
+      throw describeFailure(error, this.endpoint.transport === "http" && this.endpoint.authProvider !== undefined, this.#stderr);
     }
   }
 
@@ -180,10 +204,7 @@ export default class McpServerConnection implements McpServerConnectionPort {
   async #connect() {
     const client = new Client({ name: "workbench", version: "1.0.0" }, { capabilities: {} });
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => { this.#tools = null; });
-    const transport = new StreamableHTTPClientTransport(new URL(this.endpoint.url), {
-      requestInit: { headers: this.endpoint.headers },
-      ...this.endpoint.authProvider ? { authProvider: this.endpoint.authProvider } : {},
-    });
+    const transport = await this.#transport();
     if (this.endpoint.record) recordTraffic(transport, this.endpoint.record);
     try {
       await client.connect(transport, { timeout: CATALOGUE_TIMEOUT_MS });
@@ -192,5 +213,20 @@ export default class McpServerConnection implements McpServerConnectionPort {
       throw error;
     }
     return client;
+  }
+
+  async #transport(): Promise<Transport> {
+    const endpoint = this.endpoint;
+    if (endpoint.transport === "http") {
+      return new StreamableHTTPClientTransport(new URL(endpoint.url), {
+        requestInit: { headers: endpoint.headers },
+        ...endpoint.authProvider ? { authProvider: endpoint.authProvider } : {},
+      });
+    }
+    const launch = await endpoint.launch();
+    this.#stderr = "";
+    const transport = new StdioClientTransport({ ...launch, stderr: "pipe" });
+    transport.stderr?.on("data", (chunk: Buffer) => { this.#stderr = (this.#stderr + chunk.toString("utf8")).slice(-STDERR_TAIL); });
+    return transport;
   }
 }

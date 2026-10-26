@@ -3,11 +3,10 @@
  * - ProviderRuntimeControllerOptions: data root and captured pins plus injectable target, npm and executable probe.
  * - default ProviderRuntimeController: own single-flight installs, status reads and pin auto-follow for Workbench-installed provider runtimes.
  */
-import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runBundledNpm } from "../lib/managed-npm-install";
 import {
   ProviderRuntimeKeySchema,
   type ProviderRuntimeKey,
@@ -30,7 +29,6 @@ import {
   type ProviderRuntimeTarget,
 } from "./provider-runtimes";
 
-const run = promisify(execFile);
 const ERROR_LIMIT = 1500;
 
 export interface ProviderRuntimeControllerOptions {
@@ -51,22 +49,6 @@ function bounded(error: unknown) {
   const stderr = (error as { stderr?: unknown } | null)?.stderr;
   const detail = typeof stderr === "string" && stderr.trim() ? `${message}\n${stderr.trim().slice(-800)}` : message;
   return detail.slice(0, ERROR_LIMIT);
-}
-
-/** npm ships beside the daemon's own Node, so installs never depend on PATH. */
-function bundledNpmCli() {
-  const directory = path.dirname(process.execPath);
-  const candidates = [
-    path.join(directory, "node_modules", "npm", "bin", "npm-cli.js"),
-    path.join(directory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
-  ];
-  const found = candidates.find(candidate => existsSync(candidate));
-  if (!found) throw new Error(`The daemon's Node runtime at ${process.execPath} has no bundled npm.`);
-  return found;
-}
-
-async function runBundledNpm(args: string[], signal: AbortSignal) {
-  await run(process.execPath, [bundledNpmCli(), ...args], { signal, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
 }
 
 class VerifyFailure extends Error {}

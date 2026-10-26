@@ -3,11 +3,13 @@
  * - McpServerNameSchema: agent-facing server name used by `mcp_tools` and `mcp_call`.
  * - WORKBENCH_MCP_SERVER_NAME: reserved server name under which `mcp_tools`/`mcp_call` reach Workbench's own deferred tools.
  * - McpServerUrlSchema: http(s) endpoint of one streamable-HTTP MCP server.
+ * - McpPackageNameSchema/McpPackageVersionSchema/McpPackageArgsSchema: npm package, version or range, and command-line arguments of a Workbench-installed stdio server.
+ * - McpServerSourceSchema/McpServerSource: where a server runs: a remote URL, or a Workbench-installed npm package and its arguments.
  * - McpServerAuthHeaderSchema: custom request header name carrying a server's sealed credential.
  * - McpServerToolNameSchema: one tool name a server offers.
  * - McpServerSettingsReadParamsSchema/McpServerSettingsReadParams: saved-only or targeted live settings reads.
  * - McpServerSettingsSnapshotSchema/McpServerSettingsSnapshot/McpServerSnapshot: configured servers, allow rules and live catalogues; credential values are never included.
- * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add, removal, rename, credential, allow-rule, refresh or sign-out change.
+ * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add (by URL or npm package), removal, rename, credential, allow-rule, refresh or sign-out change.
  * - McpServerSignInStart{Params,Result}Schema/McpServerSignInStart{Params,Result}: begin OAuth sign-in and receive its authorization URL.
  * - McpServerSignInFinish{Params,Result}Schema/McpServerSignInFinish{Params,Result}: finish the provider's callback and report its outcome.
  */
@@ -27,6 +29,26 @@ export const McpServerUrlSchema = z.string().trim().max(2048).refine(value => {
     return false;
   }
 }, "Use an http:// or https:// URL.");
+
+// Registry names only: no paths, URLs or git specs, and never a leading `-` npm could read as a flag.
+export const McpPackageNameSchema = z.string().trim().max(214)
+  .regex(/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/u, "Use an npm package name, like @scope/name.");
+
+/** An exact version, range or dist-tag, such as `1.2.3`, `^2` or `latest`. */
+export const McpPackageVersionSchema = z.string().trim().max(256)
+  .regex(/^[A-Za-z0-9^~<>=*][A-Za-z0-9.^~<>=*+_-]*$/u, "Use an npm version, range or tag, like 1.2.3 or latest.");
+
+export const McpPackageArgsSchema = z.array(z.string().max(4096)).max(64);
+
+export const McpServerSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("http"), url: McpServerUrlSchema }).strict(),
+  z.object({
+    kind: z.literal("npm"), package: McpPackageNameSchema,
+    /** The exact version Workbench installed; a missing install is restored at this version. */
+    version: McpPackageVersionSchema, args: McpPackageArgsSchema,
+  }).strict(),
+]);
+export type McpServerSource = z.infer<typeof McpServerSourceSchema>;
 
 // The MCP transport owns these headers; a credential must never replace them.
 const RESERVED_HEADERS = new Set(["accept", "content-length", "content-type", "host", "mcp-protocol-version", "mcp-session-id"]);
@@ -62,7 +84,7 @@ const catalog = z.discriminatedUnion("status", [
 const server = z.object({
   id: z.uuid(),
   name: McpServerNameSchema,
-  url: McpServerUrlSchema,
+  source: McpServerSourceSchema,
   /** Standing allow: every current and future tool the server offers. */
   allowAll: z.boolean(),
   /** Individually allowed tools; kept while `allowAll` is on so turning it off restores them. */
@@ -89,6 +111,12 @@ const id = z.uuid();
 export const McpServerSettingsUpdateSchema = z.discriminatedUnion("action", [
   /** The daemon names the server from its own `serverInfo.name`, falling back to the URL's hostname. */
   z.object({ action: z.literal("add"), url: McpServerUrlSchema }).strict(),
+  /** Installs the package under the daemon's data root first; nothing is saved when the install fails. Names fall back to the package name. */
+  z.object({
+    action: z.literal("addPackage"), package: McpPackageNameSchema,
+    /** Version or range to install; the latest release when omitted. */
+    version: McpPackageVersionSchema.optional(), args: McpPackageArgsSchema,
+  }).strict(),
   z.object({ action: z.literal("remove"), id }).strict(),
   z.object({ action: z.literal("setAuth"), id, auth: credential.nullable() }).strict(),
   z.object({ action: z.literal("setAllowAll"), id, allowAll: z.boolean() }).strict(),
