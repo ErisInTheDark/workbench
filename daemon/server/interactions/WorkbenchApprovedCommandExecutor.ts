@@ -1,8 +1,9 @@
 /*
  * Exports:
+ * - ApprovedCommandOptions: environment, live output listener and the Windows job runner.
  * - default executeApprovedCommand: own one explicitly approved unsandboxed process and its retirement, handing each
- *   captured output chunk to an optional listener as it arrives. A retired command settles once its root exits, even
- *   while escaped descendants still hold its output pipes.
+ *   captured output chunk to an optional listener as it arrives. Retirement ends its process group (Unix) or job
+ *   (Windows), orphans included; it settles once its root exits, even while escaped descendants still hold its pipes.
  */
 import { spawn } from "node:child_process";
 import type { WorkbenchAdmittedExecution } from "../providers/provider-execution";
@@ -11,17 +12,29 @@ import type { CodexExecOutputListener } from "../providers/codex/CodexExecServer
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 
+export interface ApprovedCommandOptions {
+  environment?: NodeJS.ProcessEnv;
+  onOutput?: CodexExecOutputListener;
+  /** Windows: the native binary whose `job-run` mode runs a command in a job of its own, so a stop ends every descendant. */
+  windowsJobRunner?: () => Promise<string>;
+}
+
 export default async function executeApprovedCommand(
   request: WorkbenchAdmittedExecution,
   signal: AbortSignal,
-  environment: NodeJS.ProcessEnv = process.env,
-  onOutput?: CodexExecOutputListener,
+  { environment = process.env, onOutput, windowsJobRunner }: ApprovedCommandOptions = {},
 ) {
   if (request.permissions.mode !== "approved-unrestricted") {
     throw new Error("Direct process execution requires an approved Workbench command.");
   }
   signal.throwIfAborted();
-  const child = spawn(request.command[0]!, request.command.slice(1), {
+  // Unix commands lead their own process group, which their retirement ends; Windows has jobs instead.
+  const jobRunner = process.platform === "win32" && windowsJobRunner ? await windowsJobRunner() : null;
+  signal.throwIfAborted();
+  const [command, args] = jobRunner
+    ? [jobRunner, ["job-run", ...request.command]]
+    : [request.command[0]!, request.command.slice(1)];
+  const options = {
     cwd: request.cwd,
     env: {
       ...environment,
@@ -30,9 +43,14 @@ export default async function executeApprovedCommand(
       WORKBENCH_HARNESS: request.caller.harness,
     },
     detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
-  });
+  };
+  // The job runner ends the command's whole job once its stdin closes.
+  const child = jobRunner
+    ? spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
+    : spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+  // Closing a runner that already exited is expected to fail.
+  child.stdin?.on("error", () => {});
   lowerAgentProcessPriority(child);
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
@@ -64,7 +82,12 @@ export default async function executeApprovedCommand(
   const retire = (reason: Error) => {
     abortReason ??= reason;
     if (closed || retirement) return;
-    retirement = killProcessTreeAsync(child.pid);
+    if (child.stdin) {
+      child.stdin.end();
+      retirement = Promise.race([exited, ended]).then(() => {});
+    } else {
+      retirement = killProcessTreeAsync(child.pid);
+    }
     markRetiring();
   };
   const onAbort = () => retire(signal.reason instanceof Error ? signal.reason : new Error("Command cancelled."));

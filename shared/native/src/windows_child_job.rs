@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - WindowsChildJob: hold a Windows kill-on-close job around a spawned child or an existing process tree.
+ * - WindowsChildJob: hold a Windows job around a spawned child or an existing process tree (ending it on close), or
+ *   around the current process and everything it starts later (ending it only on terminate).
  */
 use std::{io, process::Child};
 
@@ -33,7 +34,18 @@ impl WindowsChildJob {
         attached
     }
 
+    /// Put this process in a fresh job before it starts anything, so every later descendant joins it too. Closing
+    /// the job leaves its members running; only `terminate` ends them.
+    pub fn enter_current() -> io::Result<Self> {
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        Self::create(unsafe { GetCurrentProcess() }, false)
+    }
+
     fn attach_handle(process: *mut std::ffi::c_void) -> io::Result<Self> {
+        Self::create(process, true)
+    }
+
+    fn create(process: *mut std::ffi::c_void, kill_on_close: bool) -> io::Result<Self> {
         use std::{ffi::c_void, mem::size_of};
         use windows_sys::Win32::{
             Foundation::CloseHandle,
@@ -48,18 +60,20 @@ impl WindowsChildJob {
         if handle.is_null() {
             return Err(io::Error::last_os_error());
         }
-        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let configured = unsafe {
-            SetInformationJobObject(
-                handle,
-                JobObjectExtendedLimitInformation,
-                &limits as *const _ as *const c_void,
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
+        let configured = !kill_on_close || {
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let result = unsafe {
+                SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &limits as *const _ as *const c_void,
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            result != 0
         };
-        let assigned = configured != 0
-            && unsafe { AssignProcessToJobObject(handle, process) } != 0;
+        let assigned = configured && unsafe { AssignProcessToJobObject(handle, process) } != 0;
         if !assigned {
             let error = io::Error::last_os_error();
             unsafe {
@@ -103,6 +117,10 @@ impl WindowsChildJob {
     }
 
     pub fn attach_pid(_pid: u32) -> io::Result<Self> {
+        Err(io::Error::other("Process jobs are Windows-only."))
+    }
+
+    pub fn enter_current() -> io::Result<Self> {
         Err(io::Error::other("Process jobs are Windows-only."))
     }
 

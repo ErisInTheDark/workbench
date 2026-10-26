@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchShellRunnerOptions: the exec node's executor, expensive-command slots and direct-spawn ports.
+ * - WorkbenchShellRunnerOptions: the exec node's executor, expensive-command slots, direct-spawn ports and Windows job runner.
  * - WorkbenchShellObserver: one shell's expensive-queue ticket plus its live output listener.
  * - default WorkbenchShellRunner: run one prepared agent command where its process lives, outside every provider generation;
  *   a failed or stopped command carries what it printed on its failure.
@@ -19,6 +19,8 @@ export interface WorkbenchShellRunnerOptions {
   capacity?: Pick<WorkbenchCommandCapacity, "run">;
   executeApproved?: typeof executeApprovedCommand;
   environment?: NodeJS.ProcessEnv;
+  /** Windows: stages the native binary that runs approved commands in jobs of their own. */
+  windowsJobRunner?: () => Promise<string>;
 }
 
 export interface WorkbenchShellObserver extends WorkbenchCommandQueueTicket {
@@ -57,8 +59,11 @@ export default class WorkbenchShellRunner {
     };
     try {
       if (run.kind === "approved") {
-        return await (this.options.executeApproved ?? executeApprovedCommand)(
-          run.request, signal, this.options.environment ?? process.env, capture);
+        return await (this.options.executeApproved ?? executeApprovedCommand)(run.request, signal, {
+          environment: this.options.environment ?? process.env,
+          onOutput: capture,
+          ...(this.options.windowsJobRunner ? { windowsJobRunner: this.options.windowsJobRunner } : {}),
+        });
       }
       return await this.options.executor.execute(run.request, signal, capture);
     } catch (error) {

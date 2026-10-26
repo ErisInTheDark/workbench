@@ -18,14 +18,20 @@ const sandboxedRun = (label: string, expensive: boolean): WorkbenchShellRun => (
   },
 });
 
-test("expensive runs take a machine-wide slot before starting; approved runs spawn directly with their own identity", async () => {
+test("expensive runs take a machine-wide slot before starting; approved runs spawn directly with their own identity and job runner", async () => {
   const admitted: string[] = [];
   const executed: string[] = [];
   const approved: string[] = [];
+  const windowsJobRunner = async () => "workbench-daemon-host.exe";
   const runner = new WorkbenchShellRunner({
     executor: { execute: async request => { executed.push(request.command.at(-1)!); return { exitCode: 0, stdout: "", stderr: "" }; } },
     capacity: { run: async (label, _signal, task) => { admitted.push(label); return await task(); } },
-    executeApproved: async request => { approved.push(request.caller.threadId); return { exitCode: 0, stdout: "", stderr: "" }; },
+    executeApproved: async (request, _signal, options) => {
+      assert.strictEqual(options?.windowsJobRunner, windowsJobRunner);
+      approved.push(request.caller.threadId);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    windowsJobRunner,
   });
   const signal = new AbortController().signal;
   await runner.run(sandboxedRun("cargo build", true), signal);
