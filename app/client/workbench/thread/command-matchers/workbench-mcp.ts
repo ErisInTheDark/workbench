@@ -7,6 +7,8 @@
  *   whether it yielded.
  * - WorkbenchShellWaitLink/WorkbenchMcpShellWaitCommandItem/getWorkbenchMcpShellWaitCommandItem/readWorkbenchShellWaitShellId:
  *   draw a `shell_wait` as the yielded command it collects, with the wait's own timing and outcome.
+ * - WorkbenchShellWaitTarget/readWorkbenchShellWaitTarget: the shell a wait collects, from its loaded row or the command
+ *   the wait names when that row is out of view.
  * - readMcpTextContent: one MCP result content part's text.
  * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes.
  */
@@ -155,9 +157,36 @@ function readShellWaitEnd(item: McpToolCallItem): WorkbenchShellWaitLink["ended"
   return WorkbenchShellResultSchema.safeParse(item.result?.structuredContent).success ? "collected" : null;
 }
 
+/** The shell a `shell_wait` collects, as far as the wait can tell: its row when loaded, else the command it names. */
+export interface WorkbenchShellWaitTarget {
+  command: string;
+  cwd: string;
+  id: string;
+  shell: CommandShell;
+}
+
+/**
+ * The loaded shell row says it all; out of view, the wait's own row names the command once finished, and the live
+ * yielded shell while it waits. Null when nothing names the command, as on older transcripts.
+ */
+export function readWorkbenchShellWaitTarget(
+  wait: McpToolCallItem,
+  { fallbackCwd, liveCommand, shellRow }: { fallbackCwd: string; liveCommand: string | null | undefined; shellRow: McpToolCallItem | undefined },
+): WorkbenchShellWaitTarget | null {
+  const shellId = readWorkbenchShellWaitShellId(wait);
+  if (!shellId) return null;
+  const loaded = shellRow ? getWorkbenchMcpShellCommandItem(shellRow, fallbackCwd) : null;
+  if (loaded) return loaded;
+  const command = readStructuredField(wait, "command") ?? liveCommand;
+  if (!command) return null;
+  const result = WorkbenchShellResultSchema.safeParse(wait.result?.structuredContent);
+  const cwd = result.success ? result.data.cwd : fallbackCwd;
+  return { command, cwd, id: shellId, shell: (result.success ? result.data.shell : null) ?? inferWorkbenchShellFromCwd(cwd) };
+}
+
 export function getWorkbenchMcpShellWaitCommandItem(
   wait: McpToolCallItem,
-  shell: WorkbenchMcpShellCommandItem,
+  shell: WorkbenchShellWaitTarget,
 ): WorkbenchMcpShellWaitCommandItem {
   const result = WorkbenchShellResultSchema.safeParse(wait.result?.structuredContent);
   const failureText = wait.status === "failed" && !result.success

@@ -9,7 +9,8 @@
  * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
  * - WorkbenchShellQueueEntrySchema/WorkbenchShellQueueEntry: one live wb shell's expensive-queue timing.
  * - WorkbenchShellOutputEntrySchema/WorkbenchShellOutputEntry: one running wb shell's newest output.
- * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, shell queue, shell output, yielded shells, goal, skills, todos, addressed feedback) on thread observations.
+ * - WorkbenchBackgroundShellSchema/WorkbenchBackgroundShell: one running wb shell whose call already answered, with its command.
+ * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, shell queue, shell output, background shells, goal, skills, todos, addressed feedback) on thread observations.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts, plus the subagent refinement they reapply.
  * - settleWorkbenchQuestionnaireWait/withWorkbenchThreadLifecycle: repair entries so a questionnaire exists only with its pendingInput wait, and move lifecycles under that rule.
@@ -537,6 +538,14 @@ export const WorkbenchShellOutputEntrySchema = z.object({
 }).strict();
 export type WorkbenchShellOutputEntry = z.infer<typeof WorkbenchShellOutputEntrySchema>;
 
+/** A running wb shell whose call already answered, by one transcript reference naming its item. */
+export const WorkbenchBackgroundShellSchema = z.object({
+  reference: z.string(),
+  /** Null for shells that yielded before their command was kept. */
+  command: z.string().nullable(),
+}).strict();
+export type WorkbenchBackgroundShell = z.infer<typeof WorkbenchBackgroundShellSchema>;
+
 /** Live provider facts per family thread that thread state does not own; unknown keys are dropped so older browsers survive newer servers. */
 export const ThreadRuntimeSchema = z.object({
   tokenUsage: ThreadTokenUsageSchema.nullable(),
@@ -548,8 +557,8 @@ export const ThreadRuntimeSchema = z.object({
   shellQueue: z.array(WorkbenchShellQueueEntrySchema).optional(),
   /** Running shells' newest output; absent from daemons that predate it. */
   shellOutput: z.array(WorkbenchShellOutputEntrySchema).optional(),
-  /** Every transcript reference naming a running shell whose call already answered; absent from daemons that predate it. */
-  yieldedShells: z.array(z.string()).optional(),
+  /** Every transcript reference naming a running shell whose call already answered, with its command; absent from daemons that predate it. */
+  backgroundShells: z.array(WorkbenchBackgroundShellSchema).optional(),
   /** The user-set Workbench goal; absent from daemons that predate goals. */
   goal: WorkbenchThreadGoalSchema.nullable().optional(),
   skills: z.array(WorkbenchThreadSkillSchema).optional(),

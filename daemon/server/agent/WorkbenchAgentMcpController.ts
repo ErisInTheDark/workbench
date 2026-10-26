@@ -633,10 +633,13 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         ? await this.commandResult(call.request, outcome.response)
         : this.commandFailure(definition, "error" in outcome ? outcome.error : new Error("The command finished without a response."), call.signal);
     }
-    // Only the row learns it yielded: the transcript cannot record the yield itself, so its finish keeps that fact.
-    const recorded = yieldedShellId
-      ? { ...result, structuredContent: { ...result.structuredContent, shellId: yieldedShellId } }
-      : result;
+    // Only rows learn these: a shell row that it yielded, which the transcript cannot record itself, and a wait row
+    // which command it waits on, since the shell's own row may be out of view.
+    const rowFacts = {
+      ...(yieldedShellId ? { shellId: yieldedShellId } : {}),
+      ...(call.collect?.command ? { command: call.collect.command } : {}),
+    };
+    const recorded = Object.keys(rowFacts).length ? { ...result, structuredContent: { ...result.structuredContent, ...rowFacts } } : result;
     const finished = await this.finishTranscript(tools, call.transcript as WorkbenchToolTranscriptReference | null, recorded, result);
     return call.shell ? finished : await this.wireResult(scope, call.toolName, finished);
   }
@@ -696,7 +699,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return {
       kind: "detached",
       call: {
-        collect: { shellId: input.shellId, threadId },
+        collect: { shellId: input.shellId, threadId, command: this.requestRegistry.readBackgroundShellCommand(input.shellId) },
         signal, toolName: call.name, transcript: started.reference,
         unregister: registration.unregister,
       },
@@ -751,7 +754,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     try {
       registration = this.requestRegistry.register(scope.clientScope, call.requestId, {
         owner: this.runtimeOwner, steerInterruptible: false, toolName: "shell", yields,
-        shellItem: { references: shellItemReferences, ...(started.reference ? { threadId: started.reference.threadId } : {}) },
+        shellItem: {
+          references: shellItemReferences, command: input.command,
+          ...(started.reference ? { threadId: started.reference.threadId } : {}),
+        },
       });
     } catch (error) {
       return await finishFailure(error, call.signal);

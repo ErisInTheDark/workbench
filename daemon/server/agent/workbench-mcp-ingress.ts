@@ -77,8 +77,8 @@ export type WorkbenchMcpDetachedCall = {
 } & (
   | { request: WorkbenchAgentCommandRequest; shell?: undefined; collect?: undefined }
   | { request?: undefined; shell: WorkbenchPreparedShell; collect?: undefined }
-  /** `shell_wait`: hand over a yielded shell's result. */
-  | { request?: undefined; shell?: undefined; collect: { shellId: string; threadId: WorkbenchThreadId } }
+  /** `shell_wait`: hand over a yielded shell's result; `command` names that shell on the wait's row. */
+  | { request?: undefined; shell?: undefined; collect: { shellId: string; threadId: WorkbenchThreadId; command?: string | null } }
 );
 
 export type WorkbenchMcpToolStep =

@@ -26,7 +26,7 @@ import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thr
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type {
-  WorkbenchShellOutputEntry, WorkbenchShellQueueEntry, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget,
+  WorkbenchBackgroundShell, WorkbenchShellOutputEntry, WorkbenchShellQueueEntry, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DraftId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -66,8 +66,8 @@ interface ThreadHeadFields {
   addressedFeedback?: readonly WorkbenchThreadAddressedFeedback[];
   /** Live wb shells that waited in the expensive queue; drafts and older daemons have none. */
   shellQueue?: readonly WorkbenchShellQueueEntry[];
-  /** Every transcript reference naming a running wb shell whose call already answered; drafts and older daemons have none. */
-  yieldedShells?: readonly string[];
+  /** Running wb shells whose call already answered, with their commands; drafts and older daemons have none. */
+  yieldedShells?: readonly WorkbenchBackgroundShell[];
 }
 
 /** A child or linked thread as renderers see it: its head, plus turns when they are loaded. */

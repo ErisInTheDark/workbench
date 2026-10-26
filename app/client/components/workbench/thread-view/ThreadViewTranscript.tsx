@@ -14,8 +14,8 @@ import type { ThreadTranscriptProjectionState } from "../../../workbench/transcr
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import { deriveThreadItemApprovals, ThreadItemApprovalsContext } from "../../../workbench/thread/thread-item-approvals";
 import {
-  deriveThreadItemShellQueue, deriveThreadYieldedShells, ThreadItemShellQueueContext, ThreadShellOutputStoreContext,
-  ThreadYieldedShellsContext,
+  deriveThreadItemShellQueue, deriveThreadYieldedShells, getThreadYieldedShellsKey, ThreadItemShellQueueContext,
+  ThreadShellOutputStoreContext, ThreadYieldedShellsContext,
 } from "../../../workbench/thread/thread-item-shell-queue";
 import { WorkbenchFeedbackAddressingContext, type WorkbenchFeedbackAddressing } from "../address-feedback-context";
 import { useThread } from "../use-thread";
@@ -80,8 +80,8 @@ export default function ThreadViewTranscript ({
   );
   const shellQueue = activeThread?.shellQueue;
   const itemShellQueue = useMemo(() => deriveThreadItemShellQueue(shellQueue), [shellQueue]);
-  const yieldedShellReferences = activeThread?.yieldedShells;
-  const yieldedShells = useMemo(() => deriveThreadYieldedShells(yieldedShellReferences), [yieldedShellReferences]);
+  const yieldedShellsKey = getThreadYieldedShellsKey(activeThread?.yieldedShells);
+  const yieldedShells = useMemo(() => deriveThreadYieldedShells(yieldedShellsKey), [yieldedShellsKey]);
   const itemActions = useMemo<ThreadItemActions>(() => ({
     resendSteer: itemId => active.actions.resendSteer(itemId),
     dismissSteer: itemId => active.actions.dismissSteer(itemId),

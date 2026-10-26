@@ -2183,12 +2183,16 @@ test("a yielded shell answers still running, keeps its row open, and shell_wait 
     })();
     assert.equal(timedOut.isError, false);
     assert.deepEqual(timedOut.structuredContent, { kind: "timedOut", version: 1 });
+    assert.deepEqual(finished.find(entry => entry.tool === "shell_wait")?.result.structuredContent,
+      { kind: "timedOut", version: 1, command: "build" }, "the wait's row names its shell's command, even with that row out of view");
 
     const wait = client.callTool({ name: "shell_wait", arguments: { shellId: running.shellId } });
     runs[0]!({ exitCode: 0, stdout: "built", stderr: "" });
     const collected = await wait;
     assert.match(responseText(collected), /Exit code: 0\nOutput:\nbuilt/u);
     assert.equal((collected.structuredContent as { shellId?: string }).shellId, undefined, "the wait gets the command's own result");
+    assert.equal((collected.structuredContent as { command?: string }).command, undefined, "only the wait's row names the command");
+    assert.equal((finished.filter(entry => entry.tool === "shell_wait").at(-1)?.result.structuredContent as { command?: string }).command, "build");
     assert.deepEqual(finished.find(entry => entry.tool === "shell")?.result.structuredContent,
       { cwd: process.cwd(), exitCode: 0, shell: running.shell, shellId: running.shellId, stderr: "", stdout: "built" },
       "the row gets the real result, marked with the shell id it yielded as");

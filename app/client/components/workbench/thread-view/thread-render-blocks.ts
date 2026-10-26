@@ -4,7 +4,7 @@
  *   including the card histories and stitched cards that thread-card-folds builds.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
  * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
- * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context and calls a batch never started, and drawing each shell wait as the command it collects), preserve wait folds, then give qualifying subagent coordination one outer render block.
+ * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context and calls a batch never started, and drawing each shell wait as the command it collects, even with that shell's row out of view), preserve wait folds, then give qualifying subagent coordination one outer render block.
  * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
  * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
@@ -45,8 +45,9 @@ import {
 } from "../../../workbench/thread/thread-command-matchers";
 import { parseSleepCommandMs } from "../../../workbench/thread/command-matchers/sleep-command";
 import {
-  getWorkbenchMcpShellWaitCommandItem, readWorkbenchShellWaitShellId, type WorkbenchShellWaitLink,
+  getWorkbenchMcpShellWaitCommandItem, readWorkbenchShellWaitShellId, readWorkbenchShellWaitTarget, type WorkbenchShellWaitLink,
 } from "../../../workbench/thread/command-matchers/workbench-mcp";
+import { NO_YIELDED_SHELLS, type ThreadYieldedShells } from "../../../workbench/thread/thread-item-shell-queue";
 import type { WorkbenchSubagentCommandTarget } from "../../../workbench/thread/command-matchers/workbench-cli";
 import { countKnownCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
@@ -481,14 +482,16 @@ function foldSubagentCoordination(blocks: ThreadRenderableBlock[]): ThreadRender
   return coalesceCommandSequences(folded);
 }
 
-export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadItemIds = {}, fallbackCwd = "."): ThreadRenderableBlock[] {
+export function buildRenderableBlocks(
+  items: ThreadItem[], hidden: HiddenThreadItemIds = {}, fallbackCwd = ".", yieldedShells: ThreadYieldedShells = NO_YIELDED_SHELLS,
+): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
   const capturedGroups = new Set(items.flatMap(item =>
     item.type === "mcpToolCall" && item.server === "wb" && item.toolCallGroupId ? [item.toolCallGroupId] : []));
   const rolloverGroups = new Set(items.flatMap(item =>
     item.type === "mcpToolCall" && item.server === "wb" && item.tool === "thread_compact" && item.toolCallGroupId
       ? [item.toolCallGroupId] : []));
-  // A `shell_wait` names the yielded shell it collects by that shell's item id.
+  // A `shell_wait` names the yielded shell it collects by that shell's item id; live yielded shells name commands out of view.
   const shellCalls = new Map(items.flatMap(item =>
     item.type === "mcpToolCall" && item.tool === "shell" ? [[item.id, item] as const] : []));
   let pending: Extract<ThreadRenderableBlock, { kind: "commandSequence" | "fileChangeSequence" | "reasoningSequence" | "webSearchSequence" }> | null = null;
@@ -558,8 +561,10 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (item.type === "mcpToolCall" && !isNativeFileOperation(item)) {
       const shell = getWorkbenchMcpShellCommandItem(item, fallbackCwd);
       if (shell) { if (!isHiddenCommandExecution(shell.command)) commands(shell); continue; }
-      const waitedShell = shellCalls.get(readWorkbenchShellWaitShellId(item) ?? "");
-      const waitedCommand = waitedShell ? getWorkbenchMcpShellCommandItem(waitedShell, fallbackCwd) : null;
+      const shellId = readWorkbenchShellWaitShellId(item) ?? "";
+      const waitedCommand = readWorkbenchShellWaitTarget(item, {
+        fallbackCwd, liveCommand: yieldedShells.get(shellId), shellRow: shellCalls.get(shellId),
+      });
       if (waitedCommand) {
         if (!isHiddenCommandExecution(waitedCommand.command)) commands(getWorkbenchMcpShellWaitCommandItem(item, waitedCommand));
         continue;

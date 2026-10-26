@@ -3,12 +3,13 @@
  * - ThreadItemShellQueue: one live wb shell's expensive-queue timing.
  * - deriveThreadItemShellQueue: index one thread's live shell queue by every reference naming each shell item.
  * - ThreadItemShellQueueContext/useThreadItemShellQueue: thread-scoped lookup for command rows.
- * - deriveThreadYieldedShells/ThreadYieldedShellsContext/useThreadItemShellYielded: which running shell rows already yielded.
+ * - ThreadYieldedShells/NO_YIELDED_SHELLS/getThreadYieldedShellsKey/deriveThreadYieldedShells/ThreadYieldedShellsContext/
+ *   useThreadYieldedShells/useThreadItemShellYielded: which running shell rows already yielded, and their commands.
  * - ThreadShellOutputStoreContext/useThreadItemShellOutput: a running shell row's newest output from its thread store.
  * - ThreadShellDurationSource/getShellQueueTiming: split a shell's duration into its queue wait and its run, live or recorded.
  */
 import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
-import type { WorkbenchShellQueueEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchBackgroundShell, WorkbenchShellQueueEntry } from "workbench-shared/workbench/thread/thread-state";
 import type ThreadStore from "./ThreadStore";
 
 export type ThreadItemShellQueue = Pick<WorkbenchShellQueueEntry, "admittedAt" | "queuedAt">;
@@ -34,13 +35,27 @@ export function useThreadItemShellQueue(itemId: string): ThreadItemShellQueue | 
   return useContext(ThreadItemShellQueueContext).get(itemId) ?? null;
 }
 
-const NO_YIELDED_SHELLS: ReadonlySet<string> = new Set();
+/** Running shells whose call already answered, by every reference naming their item, to their command when known. */
+export type ThreadYieldedShells = ReadonlyMap<string, string | null>;
 
-export function deriveThreadYieldedShells(references: readonly string[] | undefined): ReadonlySet<string> {
-  return references?.length ? new Set(references) : NO_YIELDED_SHELLS;
+export const NO_YIELDED_SHELLS: ThreadYieldedShells = new Map();
+
+/** A key that changes only when the yielded shells do, not on every runtime publish that repeats them. */
+export function getThreadYieldedShellsKey(shells: readonly WorkbenchBackgroundShell[] | undefined) {
+  return JSON.stringify(shells?.map(({ command, reference }) => [reference, command]) ?? []);
 }
 
-export const ThreadYieldedShellsContext = createContext<ReadonlySet<string>>(NO_YIELDED_SHELLS);
+export function deriveThreadYieldedShells(key: string): ThreadYieldedShells {
+  const entries = JSON.parse(key) as [string, string | null][];
+  return entries.length ? new Map(entries) : NO_YIELDED_SHELLS;
+}
+
+export const ThreadYieldedShellsContext = createContext<ThreadYieldedShells>(NO_YIELDED_SHELLS);
+
+/** The thread's yielded shells, which name the commands of waits whose shell row is out of view. */
+export function useThreadYieldedShells() {
+  return useContext(ThreadYieldedShellsContext);
+}
 
 /** Whether the daemon backgrounded this running shell: its call already answered and the command runs on. */
 export function useThreadItemShellYielded(itemId: string) {

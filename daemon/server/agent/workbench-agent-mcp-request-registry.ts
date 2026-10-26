@@ -4,6 +4,7 @@
  * - WorkbenchAgentMcpThreadWaitState: describe active waits owned by one Workbench thread.
  * - WorkbenchAgentMcpShellQueueEntry: one live shell's expensive-queue timing and the transcript references naming it.
  * - WorkbenchAgentMcpShellOutputEntry: one live shell's newest output and the transcript references naming it.
+ * - WorkbenchAgentMcpYieldedShell: one transcript reference naming a still-running yielded shell, with its command.
  * - WorkbenchAgentBatchTurn: how a serial call's turn in its provider tool batch ended.
  * - WorkbenchAgentMcpUndeliveredMessage: one message admitted for a thread that its agent has not received; a sender marks an agent message.
  * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, steer interruption of waits and shell yield windows (including those
@@ -57,6 +58,8 @@ interface WorkbenchAgentMcpRequestEntry {
   policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
   /** Transcript references of the shell item this request runs; absent on requests the user cannot stop. */
   shellItemReferences?: readonly string[];
+  /** The command that shell item runs, so its waits can name it without the row. */
+  shellCommand?: string;
   /** Set once the shell waits for an expensive slot; kept after admission so the run timer starts there. */
   shellQueue?: { admittedAt: number | null; queuedAt: number; skip: AbortController };
   /** The newest output of the running shell, decoded across chunk boundaries; set once it prints. */
@@ -119,7 +122,7 @@ interface WorkbenchAgentMcpRequestRegistryState {
   ownerStates: WeakMap<WorkbenchAgentMcpRuntimeOwner, WorkbenchAgentMcpRuntimeOwnerState>;
   requestsByClient: Map<WorkbenchAgentMcpClientScope, Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>>;
   /** Finished yielded shells awaiting `shell_wait`, by shell id; their running entries live under the background scope. */
-  backgroundResults: Map<string, { threadId: WorkbenchThreadId | null; result: CallToolResult }>;
+  backgroundResults: Map<string, { threadId: WorkbenchThreadId | null; result: CallToolResult; command?: string }>;
   backgroundWaiters: Set<() => void>;
 }
 
@@ -169,7 +172,7 @@ interface WorkbenchAgentMcpRequestRegistrationOptions {
   owner: WorkbenchAgentMcpRuntimeOwner;
   policy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   /** The shell's transcript item: its thread when known, and every reference that names the item. */
-  shellItem?: { threadId?: WorkbenchThreadId; references: readonly string[] };
+  shellItem?: { threadId?: WorkbenchThreadId; references: readonly string[]; command?: string };
   steerInterruptible?: boolean;
   toolName: string;
   /** The shell call may yield, so a steer ends its wait early instead of being held behind it. */
@@ -197,6 +200,12 @@ export interface WorkbenchAgentMcpShellQueueEntry {
 export interface WorkbenchAgentMcpShellOutputEntry {
   itemReferences: string[];
   tail: string;
+}
+
+export interface WorkbenchAgentMcpYieldedShell {
+  reference: string;
+  /** Null for shells that yielded before their command was kept. */
+  command: string | null;
 }
 
 interface WorkbenchAgentMcpLegacyThreadWaitState {
@@ -353,6 +362,7 @@ export class WorkbenchAgentMcpRequestRegistry {
       steerInterruptible: options.steerInterruptible,
       toolName: options.toolName,
       ...(options.shellItem?.references.length ? { shellItemReferences: [...options.shellItem.references] } : {}),
+      ...(options.shellItem?.command ? { shellCommand: options.shellItem.command } : {}),
       ...(options.shellItem?.threadId ? { workbenchThreadId: WorkbenchThreadIdSchema.parse(options.shellItem.threadId) } : {}),
       ...(options.yields && options.shellItem ? { yieldWindow: new AbortController() } : {}),
     };
@@ -429,10 +439,19 @@ export class WorkbenchAgentMcpRequestRegistry {
     return shellId;
   }
 
-  /** Every transcript reference naming a still-running shell of `threadId` whose call already answered. */
-  readYieldedShells(threadId: WorkbenchThreadId): string[] {
-    return [...this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.values() ?? []]
-      .flatMap(entry => entry.workbenchThreadId === threadId ? entry.shellItemReferences ?? [] : []);
+  /** Every transcript reference naming a still-running shell of `threadId` whose call already answered, with its command. */
+  readYieldedShells(threadId: WorkbenchThreadId): WorkbenchAgentMcpYieldedShell[] {
+    return [...this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.values() ?? []].flatMap(entry =>
+      entry.workbenchThreadId === threadId
+        ? (entry.shellItemReferences ?? []).map(reference => ({ reference, command: entry.shellCommand ?? null }))
+        : []);
+  }
+
+  /** The command of a yielded shell that is running or finished but not yet collected. */
+  readBackgroundShellCommand(shellId: string) {
+    return this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.get(shellId)?.shellCommand
+      ?? this.state.backgroundResults.get(shellId)?.command
+      ?? null;
   }
 
   /** The newest output of a yielded shell, for the answer its call gives. */
@@ -446,7 +465,9 @@ export class WorkbenchAgentMcpRequestRegistry {
     if (!entry) return;
     this.removeEntry(BACKGROUND_CLIENT_SCOPE, shellId, entry);
     if (entry.background?.discard) return;
-    this.state.backgroundResults.set(shellId, { threadId: entry.workbenchThreadId ?? null, result });
+    this.state.backgroundResults.set(shellId, {
+      threadId: entry.workbenchThreadId ?? null, result, ...(entry.shellCommand ? { command: entry.shellCommand } : {}),
+    });
     for (const wake of [...this.state.backgroundWaiters]) wake();
   }
 

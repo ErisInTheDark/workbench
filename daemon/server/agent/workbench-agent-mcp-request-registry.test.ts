@@ -205,7 +205,9 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
   const registry = new WorkbenchAgentMcpRequestRegistry();
   const owner = {};
   const threadId = WorkbenchThreadIdSchema.parse("thread");
-  const yielded = registry.register("client-1", 1, { owner, toolName: "shell", shellItem: { threadId, references: ["item-1"] } });
+  const yielded = registry.register("client-1", 1, {
+    owner, toolName: "shell", shellItem: { threadId, references: ["item-1"], command: "pnpm build" },
+  });
   yielded.shellQueue!.output!("stdout", Buffer.from("building..."));
   const changed: string[] = [];
   const stopListening = registry.subscribeShellOutput(thread => { changed.push(thread); });
@@ -214,7 +216,8 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
   const shellId = registry.backgroundShell("client-1", 1);
   stopListening();
   assert.equal(shellId, "item-1", "a yielded shell is named after its transcript row, so its waits can find it");
-  assert.deepEqual(registry.readYieldedShells(threadId), ["item-1"]);
+  assert.deepEqual(registry.readYieldedShells(threadId), [{ reference: "item-1", command: "pnpm build" }]);
+  assert.equal(registry.readBackgroundShellCommand(shellId), "pnpm build", "its waits can name it without its row");
   assert.ok(changed.includes(threadId), "rows learn of the yield as it happens");
   assert.equal(registry.readBackgroundShellTail(shellId), "building...");
   const reused = registry.register("client-1", 1, registrationOptions(owner));
@@ -231,6 +234,17 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
   assert.ok(isWorkbenchAgentMcpShellStop(yielded.signal.reason));
   registry.finishBackgroundShell(shellId, { content: [] });
   assert.deepEqual(registry.readYieldedShells(threadId), [], "a finished shell's row carries the yield from here");
+});
+
+test("a yielded shell that already finished still names its command until it is collected", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  registry.register("client-1", 1, { owner: {}, toolName: "shell", shellItem: { threadId, references: ["item-1"], command: "pnpm build" } });
+  const shellId = registry.backgroundShell("client-1", 1);
+  registry.finishBackgroundShell(shellId, { content: [] });
+  assert.equal(registry.readBackgroundShellCommand(shellId), "pnpm build");
+  await registry.awaitBackgroundShell(shellId, threadId, new AbortController().signal);
+  assert.equal(registry.readBackgroundShellCommand(shellId), null);
 });
 
 test("a steer ends a yielding shell's window without stopping its command, unless it still waits in the queue", () => {

@@ -233,7 +233,7 @@ export default class WorkbenchTurnRuntimeFeature {
             pendingApproval: ports.readPendingApproval(threadId),
             shellQueue: ports.shells.readShellQueue(WorkbenchThreadIdSchema.parse(threadId)),
             shellOutput: ports.shells.readShellOutput(WorkbenchThreadIdSchema.parse(threadId)),
-            yieldedShells: ports.shells.readYieldedShells(WorkbenchThreadIdSchema.parse(threadId)),
+            backgroundShells: ports.shells.readYieldedShells(WorkbenchThreadIdSchema.parse(threadId)),
             goal, skills, todos, addressedFeedback,
           }];
         }));
@@ -258,7 +258,7 @@ export default class WorkbenchTurnRuntimeFeature {
     const stopQueue = this.#shells.subscribeShellQueue(threadId =>
       this.publish(threadId, { shellQueue: this.#shells.readShellQueue(threadId) }));
     const stopOutput = this.#shells.subscribeShellOutput(threadId => this.publish(threadId, {
-      shellOutput: this.#shells.readShellOutput(threadId), yieldedShells: this.#shells.readYieldedShells(threadId),
+      shellOutput: this.#shells.readShellOutput(threadId), backgroundShells: this.#shells.readYieldedShells(threadId),
     }));
     return () => { stopQueue(); stopOutput(); };
   }

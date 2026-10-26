@@ -14,6 +14,7 @@ import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineE
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadTextPresentationSource } from "../../../../workbench/thread/ThreadTextPresentationController";
+import { NO_YIELDED_SHELLS, useThreadYieldedShells } from "../../../../workbench/thread/thread-item-shell-queue";
 import { useProject } from "../../use-projects";
 import { TranscriptTurnContext, useTranscript, type TranscriptTurnScope } from "../../use-transcript";
 import { getThreadEntryMotionIdentity } from "../ThreadEntryMotionController";
@@ -84,9 +85,14 @@ export default memo(function ThreadTurnItems({
   const renderItemTimeline = useMemo(() => withInteractionTimeline(items, itemTimeline), [items, itemTimeline]);
   const codeDetails = useThreadCodeDetails();
   const project = useProject.contextual();
+  const threadYieldedShells = useThreadYieldedShells();
+  // Yielded shells stop with their turn, so only a running turn's waits can need them.
+  const yieldedShells = turnStatus === "inProgress" ? threadYieldedShells : NO_YIELDED_SHELLS;
   const entries = useMemo(
-    () => buildTranscriptEntries(items, { browseResultEntries, codeDetails, hiddenReasoningStep, project, turnLive: turnStatus === "inProgress" }),
-    [browseResultEntries, codeDetails, hiddenReasoningStep, items, project, turnStatus],
+    () => buildTranscriptEntries(items, {
+      browseResultEntries, codeDetails, hiddenReasoningStep, project, turnLive: turnStatus === "inProgress", yieldedShells,
+    }),
+    [browseResultEntries, codeDetails, hiddenReasoningStep, items, project, turnStatus, yieldedShells],
   );
   const stableBlocks = useStableRenderableBlocks(entries.flatMap(entry => entry.kind === "block" ? [entry.block] : []), "identity");
   let stableBlockIndex = 0;

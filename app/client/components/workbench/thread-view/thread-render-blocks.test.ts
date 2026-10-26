@@ -506,9 +506,20 @@ test("a shell wait renders as a copy of the yielded shell it collects, with the 
   assert.deepEqual(finished.map(item => [item.id, item.type, item.yielded]), [
     ["done", "commandExecution", true], ["stopped", "commandExecution", true], ["quick", "commandExecution", undefined],
   ], "a finished row says it yielded only when the daemon recorded its shell id");
-  // A wait whose shell is not in view stays an ordinary wb step.
-  const [orphan] = buildRenderableBlocks([mcp("wait-3", "shell_wait", { shellId: "elsewhere" })]);
-  assert.deepEqual(orphan ? getRenderableBlockItems(orphan).map(item => item.type) : null, ["mcpToolCall"]);
+  // A wait whose shell row is out of view still names it: from its own row once finished, from live state while waiting.
+  const recorded = {
+    ...mcp("wait-recorded", "shell_wait", { shellId: "elsewhere" }),
+    result: { _meta: null, content: [], structuredContent: { cwd: "C:/repo", exitCode: 0, shell: "pwsh", stderr: "", stdout: "ok", command: "pnpm lint" } },
+  };
+  const live = { ...mcp("wait-live", "shell_wait", { shellId: "running" }), status: "inProgress" as const };
+  const unnamed = mcp("wait-old", "shell_wait", { shellId: "gone" });
+  const outOfView = buildRenderableBlocks([recorded, live, unnamed], {}, "C:/project", new Map([["running", "pnpm test"]]))
+    .flatMap(getRenderableBlockItems) as CommandItem[];
+  assert.deepEqual(outOfView.map(item => [item.id, item.type, item.command, item.cwd, item.shellWait?.shellItemId]), [
+    ["wait-recorded", "commandExecution", "pnpm lint", "C:/repo", "elsewhere"],
+    ["wait-live", "commandExecution", "pnpm test", "C:/project", "running"],
+    ["wait-old", "mcpToolCall", undefined, undefined, undefined],
+  ], "a wait with no evidence of its command stays an ordinary wb step");
 });
 
 test("consecutive non-final agent messages share one commentary block until another row intervenes", () => {

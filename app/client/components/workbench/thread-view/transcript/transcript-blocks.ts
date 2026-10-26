@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - TranscriptEntry: one rendered turn entry: a renderable block, or a generic item that renders alone.
- * - buildTranscriptEntries: the one pipeline from turn items to entries: an ended turn's running calls ended, renderable
+ * - buildTranscriptEntries: the one pipeline from turn items to entries: an ended turn's running calls ended, live yielded
+ *   shells naming waits whose shell row is out of view, renderable
  *   blocks folded into activity runs, then the steps leading into cards folded into them and same-family cards stitched.
  * - withInteractionTimeline: a turn's item timeline with relational questionnaire and approval resolution times.
  * - useStableRenderableBlocks: keep unchanged blocks' identities across renders so memoised block views skip them.
@@ -24,6 +25,7 @@ import type {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { getThreadItemsRenderChunkSignature } from "../../../../workbench/thread/thread-item-signature";
 import type ContextualProject from "../../../../workbench/project/ContextualProject";
+import type { ThreadYieldedShells } from "../../../../workbench/thread/thread-item-shell-queue";
 import { buildActivityRuns } from "../thread-activity-runs";
 import { getBrowseScreenshotUrls } from "../thread-browse-steps";
 import { foldCardBlocks } from "../thread-card-folds";
@@ -69,7 +71,7 @@ export function withInteractionTimeline(
 }
 
 export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscriptItem[], {
-  browseResultEntries, codeDetails, hiddenReasoningStep, project, turnLive,
+  browseResultEntries, codeDetails, hiddenReasoningStep, project, turnLive, yieldedShells,
 }: {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
   codeDetails: boolean;
@@ -77,6 +79,8 @@ export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscr
   project: ContextualProject | null;
   /** An ended turn runs nothing: a call whose finish never arrived still shows as over. */
   turnLive: boolean;
+  /** Commands of running yielded shells, for waits whose shell row is out of view. */
+  yieldedShells?: ThreadYieldedShells;
 }): TranscriptEntry[] {
   const matchers = project?.matcherContext;
   const browseScreenshotUrls = getBrowseScreenshotUrls(items.flatMap(item => item.type === "commandExecution" ? [item] : []), browseResultEntries);
@@ -85,7 +89,7 @@ export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscr
   const flush = () => {
     if (!pending.length) return;
     entries.push(...foldCardBlocks(buildActivityRuns(
-      buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, project?.cwd),
+      buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, project?.cwd, yieldedShells),
       { browseScreenshotUrls, codeDetails, knownSkills: matchers?.knownSkills, projectRootPath: matchers?.projectRootPath, workspaceRoots: matchers?.workspaceRoots },
     )).map(block => ({ block, kind: "block" as const })));
     pending = [];
