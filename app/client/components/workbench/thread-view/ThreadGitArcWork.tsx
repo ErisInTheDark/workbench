@@ -32,7 +32,6 @@ import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 import ThreadGitArcProposalList from "./ThreadGitArcProposalList";
 
 type ClaimAction = "discardStash" | "restore" | "restoreAndUnclaim" | "stash" | "unclaim" | "unstash";
-type ClaimChangeState = "clean" | "dirty" | "error" | "loading";
 
 export type ThreadGitArcWorkClaim = Omit<WorkbenchGitArcLifecycleState, "phase"> & {
   phase?: "active" | "stashed" | "resolved";
@@ -73,11 +72,10 @@ export default function ThreadGitArcWork ({
   // The thread store owns the comparison; without an observing thread nothing can say whether reverting is safe.
   const claimChanges = useThreadGitArcClaimChanges(comparesClaim);
   const comparison = claimChanges?.state ?? null;
-  const changeState: ClaimChangeState = !comparesClaim ? "clean"
-    : comparison?.status === "failed" ? "error"
-      : comparison?.status === "loaded"
-        ? getGitArcClaimReleaseAction(comparison.changeCount, comparison.hasUncommittedChanges) === "restore" ? "dirty" : "clean"
-        : "loading";
+  // Unclaim disowns regardless of dirt, so only revert waits on the comparison.
+  const claimDirty = comparesClaim && comparison?.status === "loaded"
+    && getGitArcClaimReleaseAction(comparison.changeCount, comparison.hasUncommittedChanges) === "restore";
+  const comparisonLoading = comparesClaim && comparison?.status !== "loaded" && comparison?.status !== "failed";
   const failure = actionFailure ?? (comparison?.status === "failed" ? comparison.failure : null);
 
   const runAction = async (action: ClaimAction) => {
@@ -197,22 +195,25 @@ export default function ThreadGitArcWork ({
                         </PrimaryButton>
                       </>
                     ) : null}
-                    {sectionPhase === "active" && changeState === "dirty" ? (
-                      showCombinedAction ? (
-                        <PrimaryButton
-                          key="restore-and-unclaim"
-                          shape="compact"
-                          disabled={activeAction !== null}
-                          holdToConfirmMs={2000}
-                          onClick={() => void runAction("restoreAndUnclaim")}
-                          pendingHalo={activeAction === "restoreAndUnclaim"}
-                          tone="danger"
-                        >
-                          <ResetIcon className="mr-1.5" size={14} />
-                          {activeAction === "restoreAndUnclaim" ? "Reverting & unclaiming…" : "Revert & unclaim"}
-                        </PrimaryButton>
-                      ) : (
-                        <>
+                    {sectionPhase === "active" && comparisonLoading ? (
+                      <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span>
+                    ) : null}
+                    {sectionPhase === "active" && claimDirty && showCombinedAction ? (
+                      <PrimaryButton
+                        key="restore-and-unclaim"
+                        shape="compact"
+                        disabled={activeAction !== null}
+                        holdToConfirmMs={2000}
+                        onClick={() => void runAction("restoreAndUnclaim")}
+                        pendingHalo={activeAction === "restoreAndUnclaim"}
+                        tone="danger"
+                      >
+                        <ResetIcon className="mr-1.5" size={14} />
+                        {activeAction === "restoreAndUnclaim" ? "Reverting & unclaiming…" : "Revert & unclaim"}
+                      </PrimaryButton>
+                    ) : sectionPhase === "active" ? (
+                      <>
+                        {claimDirty ? (
                           <PrimaryButton
                             key="restore"
                             shape="compact"
@@ -225,24 +226,19 @@ export default function ThreadGitArcWork ({
                             <ResetIcon className="mr-1.5" size={14} />
                             {activeAction === "restore" ? "Reverting…" : "Revert"}
                           </PrimaryButton>
-                          <PrimaryButton
-                            key="unclaim"
-                            shape="compact"
-                            disabled={activeAction !== null}
-                            onClick={() => void runAction("unclaim")}
-                            pendingHalo={activeAction === "unclaim"}
-                          >
-                            <GitArcUnclaimIcon className="mr-1.5" size={14} />
-                            {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
-                          </PrimaryButton>
-                        </>
-                      )
-                    ) : sectionPhase === "active" && changeState === "clean" ? (
-                      <PrimaryButton shape="compact" disabled={activeAction !== null} onClick={() => void runAction("unclaim")} pendingHalo={activeAction === "unclaim"}>
-                        <GitArcUnclaimIcon className="mr-1.5" size={14} />
-                        {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
-                      </PrimaryButton>
-                    ) : sectionPhase === "active" && changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}
+                        ) : null}
+                        <PrimaryButton
+                          key="unclaim"
+                          shape="compact"
+                          disabled={activeAction !== null}
+                          onClick={() => void runAction("unclaim")}
+                          pendingHalo={activeAction === "unclaim"}
+                        >
+                          <GitArcUnclaimIcon className="mr-1.5" size={14} />
+                          {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
+                        </PrimaryButton>
+                      </>
+                    ) : null}
                     {sectionPhase === "active" ? (
                       <PrimaryButton shape="compact" disabled={activeAction !== null || stashWouldReplace} title={stashWouldReplace ? "Restore or discard the existing stash first." : undefined} onClick={() => void runAction("stash")} pendingHalo={activeAction === "stash"}>
                         <GitArcIcon action="stash" className="mr-1.5" size={14} />
