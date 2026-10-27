@@ -73,6 +73,8 @@ interface WorkbenchAgentMcpRequestEntry {
   background?: { shellId: string; discard: boolean };
   /** A `yield_ms` shell's call before it yields; a steer aborts it so the call answers now while the command runs on. */
   yieldWindow?: AbortController;
+  /** The provider's call id ordering this call in its tool batch. */
+  toolUseKey?: string;
   /** Pre-patch process state retained only until its live request unregisters. */
   threadId?: string;
   workbenchThreadId?: WorkbenchThreadId;
@@ -159,11 +161,18 @@ function hasOpenYieldWindow(entry: WorkbenchAgentMcpRequestEntry) {
   return entry.yieldWindow !== undefined && !entry.yieldWindow.signal.aborted && !entry.controller.signal.aborted && !isQueuedShell(entry);
 }
 
+/** An admitted `yield_ms` shell, which its agent means to work on past; while queued its yield clock has not started. */
+function isYieldingShell(entry: WorkbenchAgentMcpRequestEntry) {
+  return entry.background !== undefined || (entry.yieldWindow !== undefined && !isQueuedShell(entry));
+}
+
 function takesSteer(entry: WorkbenchAgentMcpRequestEntry) {
   return !entry.controller.signal.aborted && (entry.steerInterruptible === true || hasOpenYieldWindow(entry));
 }
 
 interface WorkbenchAgentBatchTurnWaiter {
+  /** The waiting call's own key in its tool batch. */
+  key: string;
   threadId: WorkbenchThreadId | null;
   toolName: string;
   wake(): void;
@@ -177,6 +186,8 @@ interface WorkbenchAgentMcpRequestRegistrationOptions {
   shellItem?: { threadId?: WorkbenchThreadId; references: readonly string[]; command?: string };
   steerInterruptible?: boolean;
   toolName: string;
+  /** The provider's call id ordering this call in its tool batch. */
+  toolUseKey?: string;
   /** The shell call may yield, so a steer ends its wait early instead of being held behind it. */
   yields?: boolean;
 }
@@ -368,9 +379,12 @@ export class WorkbenchAgentMcpRequestRegistry {
       ...(options.shellItem?.command ? { shellCommand: options.shellItem.command } : {}),
       ...(options.shellItem?.threadId ? { workbenchThreadId: WorkbenchThreadIdSchema.parse(options.shellItem.threadId) } : {}),
       ...(options.yields && options.shellItem ? { yieldWindow: new AbortController() } : {}),
+      ...(options.toolUseKey ? { toolUseKey: options.toolUseKey } : {}),
     };
     requests.set(requestId, entry);
     this.state.requestsByClient.set(clientScope, requests);
+    // Batch calls already queued behind this shell stop counting as waits once it is known to yield.
+    if (entry.toolUseKey && entry.yieldWindow && entry.workbenchThreadId) this.notifyThreadWaits(entry.workbenchThreadId);
     if (ownerState.phase !== "active" && phaseCancels(entry.policy, ownerState.phase)) {
       entry.controller.abort(new Error("Workbench MCP tool call was cancelled for runtime reload."));
     }
@@ -726,8 +740,11 @@ export class WorkbenchAgentMcpRequestRegistry {
         toolNamesByThreadId.set(entry.workbenchThreadId, toolNames);
       }
     }
-    for (const { threadId, toolName } of this.state.batchTurnWaiters) {
-      if (threadId) toolNamesByThreadId.set(threadId, (toolNamesByThreadId.get(threadId) ?? new Set<string>()).add(toolName));
+    for (const waiter of this.state.batchTurnWaiters) {
+      const { threadId, toolName } = waiter;
+      if (threadId && !this.waitsBehindYieldingShell(waiter)) {
+        toolNamesByThreadId.set(threadId, (toolNamesByThreadId.get(threadId) ?? new Set<string>()).add(toolName));
+      }
     }
     return [...toolNamesByThreadId]
       .sort(([left], [right]) => left.localeCompare(right))
@@ -806,7 +823,7 @@ export class WorkbenchAgentMcpRequestRegistry {
           resolve(value);
         };
         const abort = () => finish(false);
-        const waiter: WorkbenchAgentBatchTurnWaiter = { threadId, toolName, wake: () => finish(false), interrupt: () => finish(true) };
+        const waiter: WorkbenchAgentBatchTurnWaiter = { key, threadId, toolName, wake: () => finish(false), interrupt: () => finish(true) };
         this.state.batchTurnWaiters.add(waiter);
         signal.addEventListener("abort", abort, { once: true });
         if (!found) grace?.addEventListener("abort", abort, { once: true });
@@ -814,6 +831,20 @@ export class WorkbenchAgentMcpRequestRegistry {
       });
       if (interrupted) return "interrupted";
     }
+  }
+
+  /** A batch call held by an earlier `yield_ms` shell waits on work its agent means to continue past, not a long wait. */
+  private waitsBehindYieldingShell(waiter: WorkbenchAgentBatchTurnWaiter) {
+    const found = this.findToolBatch(waiter.key);
+    if (!found) return false;
+    const pending = new Set(found.batch.keys.slice(0, found.index).filter(key => !found.batch.settled.has(key)));
+    if (!pending.size) return false;
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (entry.toolUseKey && pending.has(entry.toolUseKey) && isYieldingShell(entry)) return true;
+      }
+    }
+    return false;
   }
 
   private findToolBatch(key: string) {
@@ -890,7 +921,7 @@ export class WorkbenchAgentMcpRequestRegistry {
       }
     }
     for (const waiter of this.state.batchTurnWaiters) {
-      if (waiter.threadId === threadId) toolNames.add(waiter.toolName);
+      if (waiter.threadId === threadId && !this.waitsBehindYieldingShell(waiter)) toolNames.add(waiter.toolName);
     }
     return {
       identityKind: "workbench",

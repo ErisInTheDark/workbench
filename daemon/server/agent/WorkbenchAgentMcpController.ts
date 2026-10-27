@@ -459,7 +459,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
           const turn = await this.batchTurn(scope, call, tools, toolUseKey, call.name, input);
           if (turn) return turn;
         }
-        return await this.callShell(scope, call, input, tools);
+        return await this.callShell(scope, call, input, tools, toolUseKey);
       }
       if (call.name === WORKBENCH_SHELL_WAIT_MCP_TOOL_NAME && shape.shellYields) return await this.collectShell(scope, call, tools, false);
       if (call.name === WORKBENCH_SHELL_STOP_MCP_TOOL_NAME && shape.shellYields) return await this.collectShell(scope, call, tools, true);
@@ -738,7 +738,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
    */
   private async callShell(
     scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchShellInput & { yield_ms?: number },
-    tools: WorkbenchProviderTools,
+    tools: WorkbenchProviderTools, toolUseKey: string | null,
   ): Promise<WorkbenchMcpToolStep> {
     const started = await this.startTranscript("shell", input, call.meta, scope.clientScope, call.signal, tools);
     if (started.kind === "failed") return { kind: "result", result: started.result };
@@ -752,6 +752,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     try {
       registration = this.requestRegistry.register(scope.clientScope, call.requestId, {
         owner: this.runtimeOwner, steerInterruptible: false, toolName: "shell", yields,
+        ...(toolUseKey ? { toolUseKey } : {}),
         shellItem: {
           references: shellItemReferences, command: input.command,
           ...(started.reference ? { threadId: started.reference.threadId } : {}),

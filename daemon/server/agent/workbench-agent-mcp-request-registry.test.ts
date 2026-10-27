@@ -211,6 +211,75 @@ test("steers interrupt a shell only while it waits in the expensive queue", () =
   stop();
 });
 
+test("a yield_ms shell queued for an expensive slot is a thread wait, as is a call held behind it", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const signal = new AbortController().signal;
+  const waits: string[][] = [];
+  const stop = registry.subscribeThreadWaits(state => { if (state.threadId === threadId) waits.push(state.toolNames); });
+  try {
+    registry.declareToolBatch(threadId, "message", ["yielding", "after"]);
+    const yielding = registry.register("client-1", 1, {
+      owner, toolName: "shell", yields: true, toolUseKey: "yielding", shellItem: { threadId, references: ["yielding"] },
+    });
+    yielding.shellQueue!.queued(0);
+    assert.deepEqual(waits.at(-1), ["shell"], "its yield clock has not started, so the agent only waits");
+    const behind = track(registry.awaitBatchTurn("after", signal, "message_user"));
+    await settle();
+    assert.deepEqual(waits.at(-1), ["message_user", "shell"], "a call held behind the queued shell waits too");
+    yielding.shellQueue!.admitted(5);
+    assert.deepEqual(waits.at(-1), [], "once admitted the agent works on past it");
+    registry.settleToolUse("yielding", false);
+    await settle();
+    assert.equal(behind.value, "ready");
+    yielding.unregister();
+  } finally {
+    registry.endToolBatch(threadId);
+    stop();
+  }
+});
+
+test("a batch call behind a yield_ms shell never shows its thread as waiting; behind a plain shell it does", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const signal = new AbortController().signal;
+  const waits: string[][] = [];
+  const stop = registry.subscribeThreadWaits(state => { if (state.threadId === threadId) waits.push(state.toolNames); });
+  try {
+    registry.declareToolBatch(threadId, "message-1", ["yielding", "after-yield"]);
+    const behindYield = track(registry.awaitBatchTurn("after-yield", signal));
+    await settle();
+    const yielding = registry.register("client-1", 1, {
+      owner, toolName: "shell", yields: true, toolUseKey: "yielding", shellItem: { threadId, references: ["yielding"] },
+    });
+    assert.deepEqual(waits.at(-1), [], "the agent means to work on past its yield_ms shell");
+    const replayed: string[][] = [];
+    registry.subscribeThreadWaits(state => replayed.push(state.toolNames))();
+    assert.deepEqual(replayed, [], "a new subscriber sees no wait either");
+    registry.settleToolUse("yielding", false);
+    await settle();
+    assert.equal(behindYield.value, "ready");
+    yielding.unregister();
+
+    registry.declareToolBatch(threadId, "message-2", ["plain", "after-plain"]);
+    const plain = registry.register("client-1", 2, {
+      owner, toolName: "shell", toolUseKey: "plain", shellItem: { threadId, references: ["plain"] },
+    });
+    const behindPlain = track(registry.awaitBatchTurn("after-plain", signal));
+    await settle();
+    assert.deepEqual(waits.at(-1), ["shell"], "a call behind a plain shell still waits");
+    registry.endToolBatch(threadId);
+    await settle();
+    assert.equal(behindPlain.value, "ready");
+    plain.unregister();
+  } finally {
+    registry.endToolBatch(threadId);
+    stop();
+  }
+});
+
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
 function track<T>(promise: Promise<T>) {
