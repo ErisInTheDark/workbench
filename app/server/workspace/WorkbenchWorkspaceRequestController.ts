@@ -436,16 +436,18 @@ export default class WorkbenchWorkspaceRequestController {
     return { subscribed: true };
   }
 
-  async command(input: z.infer<typeof WorkspaceCommandSchema>) {
+  /** Only the browser's explicit cancellation `signal` reaches the daemon; a closing connection lets dispatched commands finish. */
+  async command(input: z.infer<typeof WorkspaceCommandSchema>, signal?: AbortSignal) {
     if (this.closed) throw new Error("Workspace connection is closed.");
     const command = WorkspaceCommandSchema.parse(input);
+    const options = { signal };
     if (command.method === "profiles/target/read" || command.method === "profiles/target/set") {
       const slot = WorkbenchComposerProfileSlotSchema.parse(command.params.slot);
       if (slot.kind === "thread") return this.options.threads.withThread(slot.threadId,
         (source, owner) => source.request<Json>(command.method, {
           ...command.params, slot: { ...slot, projectId: owner.location.projectId,
             threadId: owner.identity.threadId, harness: owner.identity.harness },
-        }), this.cancellation.signal);
+        }, {}, options), this.cancellation.signal);
     }
     const route = workspaceCommandRoutes[command.method];
     if (route === "thread" || route === "threadCwd") {
@@ -455,7 +457,7 @@ export default class WorkbenchWorkspaceRequestController {
         source.request<Json>(command.method, {
           ...command.params, threadId: owner.identity.threadId,
           ...(route === "thread" ? { projectId: owner.location.projectId } : {}),
-        }), this.cancellation.signal);
+        }, {}, options), this.cancellation.signal);
     }
     if (route === "session") {
       const sessionId = command.params.sessionId;
@@ -467,7 +469,7 @@ export default class WorkbenchWorkspaceRequestController {
     if (scope?.kind === "thread") {
       return this.options.threads.withThread(scope.threadId, (source, owner) =>
         this.executeSourceCommand(source, command.method, route === "folder"
-          ? { ...command.params, projectId: owner.location.projectId } : command.params),
+          ? { ...command.params, projectId: owner.location.projectId } : command.params, options),
       this.cancellation.signal);
     }
     const source = scope?.kind === "folder" ? this.options.sources.get(scope.location.daemonId)
@@ -487,14 +489,15 @@ export default class WorkbenchWorkspaceRequestController {
       if (!observed) throw new Error("The selected folder is not observed on its daemon.");
       params.projectId = target.projectId;
     }
-    return this.executeSourceCommand(source, command.method, params);
+    return this.executeSourceCommand(source, command.method, params, options);
   }
 
   private async executeSourceCommand(
     source: WorkbenchDaemonSource, method: z.infer<typeof WorkspaceCommandSchema>["method"], params: Record<string, Json>,
+    options: { signal?: AbortSignal },
   ) {
     if (method === "account/limits/read" || method === "models/list") this.observeProvider(source);
-    if (method !== "voice/start") return source.request<Json>(method, params);
+    if (method !== "voice/start") return source.request<Json>(method, params, {}, options);
     const start = VoiceStartSchema.parse(params);
     if (this.voice.has(start.sessionId)) throw new Error("Voice session is already owned.");
     const upstreamId = randomUUID();

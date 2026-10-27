@@ -82,6 +82,8 @@ export default function ThreadGitArcWork ({
     if (!claim || activeAction) return;
     setActiveAction(action);
     setActionFailure(null);
+    // A running comparison holds the repository read gate this mutation needs, and its answer is moot anyway.
+    const releaseHold = claimChanges?.hold() ?? null;
     try {
       if (action === "stash" || action === "unstash") {
         const result = action === "stash"
@@ -119,7 +121,6 @@ export default function ThreadGitArcWork ({
           threadId,
         });
       }
-      if (action === "restore") claimChanges?.refresh();
     } catch (actionError) {
       setActionFailure(actionError instanceof GitArcFailureException
         ? actionError.failure
@@ -129,6 +130,8 @@ export default function ThreadGitArcWork ({
           actionError instanceof Error ? actionError.message : "Unable to release the Git arc claim.",
         ));
     } finally {
+      // Releasing the hold re-reads, which covers a restore leaving the claimed paths unchanged.
+      releaseHold?.();
       setActiveAction(null);
     }
   };

@@ -138,6 +138,7 @@ export default function createDraftThreadSource(
       observeGitArcProposal: () => () => {},
       observeGitArcClaimChanges: () => () => {},
       refreshGitArcClaimChanges: () => {},
+      holdGitArcClaimChanges: () => () => {},
       setGoal: unsupported("set a goal"),
       clearGoal: unsupported("clear a goal"),
       deactivateSkill: unsupported("deactivate a skill"),

@@ -117,14 +117,14 @@ function WorkbenchThreadClient(
   lifecycle.addUnsubscribe(() => cancellation.abort(new Error("Thread view disposed.")));
   let disposed = false;
 
-  async function requestWorkbench<TResponse>(method: string, params: unknown) {
+  async function requestWorkbench<TResponse>(method: string, params: unknown, requestOptions: { signal?: AbortSignal } = {}) {
     if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error("Workspace request parameters are invalid.");
     const location = options.location;
     return workspace.request<TResponse>(method, params,
       location ? { kind: "folder", location: {
         ...location, projectId: "projectId" in params && typeof params.projectId === "string"
           ? ProjectIdSchema.parse(params.projectId) : location.projectId,
-      } } : undefined);
+      } } : undefined, requestOptions);
   }
 
   const daemon = new WorkbenchDaemonClient({ request: requestWorkbench });
@@ -426,8 +426,8 @@ function WorkbenchThreadClient(
           subscribeRateLimits: listener => subscribe(listener),
           projectRootPath: () => options.projectRootPathFor?.(projectId) ?? null,
           readGitArcProposal: async input => await daemon.git.arc.proposal.read(input),
-          compareGitArcClaims: async ({ cwd, harness, threadId }) => {
-            const comparison = await daemon.git.arc.compare({ cwd, harness, refs: [], roots: [], threadId });
+          compareGitArcClaims: async ({ cwd, harness, threadId }, signal) => {
+            const comparison = await daemon.git.arc.compare({ cwd, harness, refs: [], roots: [], threadId }, { signal });
             return { changeCount: comparison.changes.length, hasUncommittedChanges: Boolean(comparison.hasUncommittedChanges) };
           },
           subscribeGitArcProposalRefresh: listener => {

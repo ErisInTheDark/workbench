@@ -634,7 +634,7 @@ export default class WorkbenchWorkspaceGitArcController {
         if (options.modifiedSince === undefined) {
           throw new Error("Workspace Git arc inspection requires the managed thread creation timestamp.");
         }
-        return await this.executeInspection(project, members, request, options.modifiedSince);
+        return await this.executeInspection(project, members, request, options.modifiedSince, options.signal);
       }
       case "arcEditStart":
       case "arcEditView":
@@ -1459,6 +1459,7 @@ export default class WorkbenchWorkspaceGitArcController {
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "compare" | "diff" }>,
     modifiedSince: number,
+    signal?: AbortSignal,
   ) {
     const groups = this.groupRootPaths(project, members, request.paths ?? [], request.roots);
     const refs = this.refsByRepo(project, members, request.refs);
@@ -1476,10 +1477,11 @@ export default class WorkbenchWorkspaceGitArcController {
     const joined = await this.joinedMembers(members, request.harness, request.threadId);
     const inspected = members.filter((member) => selectedRepos.has(member.repoRoot) || joined.includes(member));
     const values = await this.runMembers(inspected, async (member) => {
-      const inspectionSnapshot = await this.local.createInspectionSnapshot(member.repoRoot);
+      const inspectionSnapshot = await this.local.createInspectionSnapshot(member.repoRoot, signal);
       const unclaimedDirt = this.local.listUnclaimedWorkspaceDirt({
         cwd: member.repoRoot,
         modifiedSince,
+        signal,
       }, inspectionSnapshot);
       if (!selectedRepos.has(member.repoRoot)) {
         return { inspection: null, unclaimedDirtPaths: await unclaimedDirt };
@@ -1491,6 +1493,7 @@ export default class WorkbenchWorkspaceGitArcController {
         patches: request.action === "diff",
         ...(group?.paths.length ? { paths: group.paths } : {}),
         ...(refs.get(member.repoRoot) ? { ref: refs.get(member.repoRoot) } : {}),
+        ...(signal ? { signal } : {}),
       };
       const [inspection, unclaimedDirtPaths] = await Promise.all([
         this.local.compare(input, inspectionSnapshot),

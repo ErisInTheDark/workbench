@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchSocketClient: daemon notification and receipt adapter over shared WebSocket transport.
+ * - default WorkbenchSocketClient: daemon notification, receipt and request-cancellation adapter over shared WebSocket transport.
  * - WorkbenchClientNotification: provider-translated WB transcript messages.
  */
 import type { WorkbenchHarness } from "../types.ts";
@@ -18,8 +18,9 @@ import { isWorkbenchPublicNotification, type WorkbenchTranscriptNotification } f
 import { WORKSPACE_DELTA_METHOD, WORKSPACE_UPDATED_METHOD } from "./workspace/workspace-observation";
 import { WEBSOCKET_SPY_QUERY_METHOD } from "../process/WebSocketTrafficBuffer.ts";
 import { GIT_PEER_FETCH_REQUEST_METHOD } from "./git/git-peer-contracts";
-import type { WorkbenchRpcResponse } from "./workbench-rpc.ts";
+import { createWorkbenchRequestIdGenerator, type WorkbenchRpcResponse } from "./workbench-rpc.ts";
 import WorkbenchRpcSocketClient from "./WorkbenchRpcSocketClient.ts";
+import { sendCancellableRequest } from "./rpc-cancellation.ts";
 
 export type WorkbenchClientNotification = WorkbenchTranscriptNotification;
 type WorkbenchNotification = {
@@ -50,6 +51,8 @@ export default class WorkbenchSocketClient {
   private readonly connectionOpenListeners = new Set<() => void>();
   private readonly reconnectListeners = new Set<() => void>();
   private readonly transport: WorkbenchRpcSocketClient;
+  /** Every request id is assigned here, so a cancellation can name it. */
+  private readonly nextRequestId = createWorkbenchRequestIdGenerator();
   private lastConsumedEventStreamSequence = 0;
   private eventStreamAckTimer: Timer | null = null;
   private pendingEventStreamAckSequence: number | null = null;
@@ -140,11 +143,14 @@ export default class WorkbenchSocketClient {
     this.transport.send(message);
   }
 
+  /** Aborting `signal` after dispatch also asks the daemon to stop the request. */
   async sendRequest<TResponse = unknown>(
     message: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
     options: { socketOnly?: boolean; requireOpen?: boolean; signal?: AbortSignal } = {},
   ): Promise<WorkbenchRpcResponse<TResponse>> {
-    return this.transport.sendRequest<TResponse>(message, { requireOpen: options.requireOpen, signal: options.signal });
+    return sendCancellableRequest<TResponse>(this.transport, { ...message, id: message.id ?? this.nextRequestId() }, {
+      requireOpen: options.requireOpen, signal: options.signal,
+    });
   }
 
   private handleIncomingMessage(parsed: unknown) {

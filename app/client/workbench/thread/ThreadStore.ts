@@ -166,6 +166,8 @@ export interface ThreadStoreActions {
   observeGitArcClaimChanges(): () => void;
   /** Re-reads the active claim's change state, such as after reverting its files. */
   refreshGitArcClaimChanges(): void;
+  /** Cancels and suspends the claim comparison while a claim mutation runs, so the mutation never waits behind it. */
+  holdGitArcClaimChanges(): () => void;
   setGoal(objective: string): Promise<void>;
   clearGoal(): Promise<void>;
   deactivateSkill(path: string): Promise<void>;

@@ -25,7 +25,7 @@ import type ThreadTranscriptProjectionController from "../transcript/ThreadTrans
 import type { ThreadTranscriptLocalThread, ThreadTranscriptProjectionState } from "../transcript/ThreadTranscriptProjectionController";
 import ThreadTranscriptBodies from "../transcript/ThreadTranscriptBodies";
 import { createOptimisticItem } from "./thread-optimistic-items";
-import ThreadGitArcClaimObserver from "./ThreadGitArcClaimObserver";
+import ThreadGitArcClaimObserver, { type ThreadGitArcClaimObserverPorts } from "./ThreadGitArcClaimObserver";
 import ThreadGitArcProposalObserver from "./ThreadGitArcProposalObserver";
 import { ThreadMessageNotSentError } from "./thread-message-submission";
 import { createThreadTurnsSlice, type ThreadHead, type ThreadStoreSource, type ThreadStoreState } from "./ThreadStore";
@@ -56,8 +56,8 @@ export interface ObservedThreadSourcePorts {
   readGitArcProposal?: (input: {
     cwd: string; harness: WorkbenchHarness; includeNewer: boolean; includeUnclaimed: boolean; proposalId: string; rootId?: string; threadId: string;
   }) => Promise<GitCheckpointProposal>;
-  /** Compares the thread's active claim with its checkpoint, for the claimed files' dirty state. */
-  compareGitArcClaims?: (input: { cwd: string; harness: WorkbenchHarness; threadId: string }) => Promise<{ changeCount: number; hasUncommittedChanges: boolean }>;
+  /** Compares the thread's active claim with its checkpoint, for the claimed files' dirty state; aborting cancels it upstream. */
+  compareGitArcClaims?: ThreadGitArcClaimObserverPorts["compare"];
   /** Fires when observed Git arc reads may be stale, such as when the window regains focus. */
   subscribeGitArcProposalRefresh?: (listener: () => void) => () => void;
   /** App-owned snooze; `requestKey` interrupts that questionnaire's turn first, keeping the questionnaire. */
@@ -416,6 +416,15 @@ export default function createObservedThreadSource(
       refreshGitArcClaimChanges() {
         gitArcClaims.refresh();
         sync();
+      },
+      holdGitArcClaimChanges() {
+        if (disposed) return () => {};
+        const release = gitArcClaims.hold();
+        sync();
+        return () => {
+          release();
+          sync();
+        };
       },
       // The observation's runtime carries the resulting goal and skills.
       async setGoal(objective) { await ports.daemon.threads.goal.set({ threadId, objective }); },

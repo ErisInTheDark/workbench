@@ -1228,7 +1228,7 @@ test("status and proposal diff may inspect a cross-harness target without changi
   const internal = (feature as unknown as {
     controller: {
       createInspectionSnapshot: () => Promise<object>;
-      diff: (input: { harness: string; threadId: string; ref?: string }) => Promise<object>;
+      diff: (input: { harness: string; threadId: string; ref?: string; signal?: AbortSignal }) => Promise<object>;
       listUnclaimedWorkspaceDirt: () => Promise<string[]>;
       readStatus: (input: { harness: string; threadId: string }) => Promise<object>;
     };
@@ -1246,7 +1246,7 @@ test("status and proposal diff may inspect a cross-harness target without changi
   const marks: unknown[] = [];
   (feature as unknown as { workspaceController: { markAcceptedViewed: (project: unknown, input: unknown) => Promise<void> } })
     .workspaceController.markAcceptedViewed = async (_project, input) => { marks.push(input); };
-  internal.diff = async input => {
+  internal.diff = async ({ signal: _signal, ...input }) => {
     calls.push({ action: "diff", ...input });
     return { changes: [], checkpointCommit: "a".repeat(40), diff: "", scopePaths: [] };
   };

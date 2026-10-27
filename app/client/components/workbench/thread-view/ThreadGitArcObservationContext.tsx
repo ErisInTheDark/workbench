@@ -3,7 +3,7 @@
  * - ThreadGitArcObservationProvider: provide one active thread controller's proposal and claim-change observations, summaries, demand actions and running acceptance.
  * - ThreadStoreGitArcObservationProvider: provide one leased thread store's observations, so every host of a thread reads the same owner.
  * - useThreadGitArcProposalObservation: read and demand one proposal's (or read variant's) source-local observation state, its observed summary and its acceptance role.
- * - useThreadGitArcClaimChanges: demand the active claim's change state while enabled, with a re-read action.
+ * - useThreadGitArcClaimChanges: demand the active claim's change state while enabled, with re-read and mutation-hold actions.
  */
 "use client";
 
@@ -25,6 +25,7 @@ type ThreadGitArcAcceptance = NonNullable<WorkbenchGitArcLifecycleState["accepta
 interface ThreadGitArcObservationSource {
   acceptance: ThreadGitArcAcceptance | null;
   claimChanges: ThreadGitArcClaimObservation | null;
+  holdClaimChanges(): () => void;
   observeClaimChanges(): () => void;
   observeProposal(proposalId: string, variant?: ThreadGitArcProposalVariant): () => void;
   proposals: Readonly<Record<string, ThreadGitArcProposalObservation>>;
@@ -40,6 +41,7 @@ export function ThreadGitArcObservationProvider({
   acceptance = null,
   children,
   claimChanges = null,
+  holdClaimChanges = NO_DEMAND,
   lifecycleProposals,
   observeClaimChanges = NO_DEMAND,
   observeProposal,
@@ -51,6 +53,7 @@ export function ThreadGitArcObservationProvider({
   children: ReactNode;
   /** Absent for hosts that observe no claim, whose claim state stays unknown. */
   claimChanges?: ThreadGitArcClaimObservation | null;
+  holdClaimChanges?: () => () => void;
   /** The observed lifecycle's proposals; their Git-derived summaries need no proposal read. */
   lifecycleProposals: WorkbenchGitArcLifecycleState["proposals"] | null;
   observeClaimChanges?: () => () => void;
@@ -67,8 +70,10 @@ export function ThreadGitArcObservationProvider({
   shared.current = { summaries: summaryRecord, acceptance: stableAcceptance };
   const summaries = useMemo(() => new Map(Object.entries(summaryRecord)), [summaryRecord]);
   const source = useMemo(
-    () => ({ acceptance: stableAcceptance, claimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries }),
-    [stableAcceptance, claimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries],
+    () => ({
+      acceptance: stableAcceptance, claimChanges, holdClaimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries,
+    }),
+    [stableAcceptance, claimChanges, holdClaimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries],
   );
   return (
     <ThreadGitArcObservationContext.Provider value={source}>
@@ -82,13 +87,15 @@ export function ThreadStoreGitArcObservationProvider({ children, thread }: {
   children: ReactNode;
   /** A `useThread` result: its summary slice and actions. */
   thread: Pick<ThreadSummarySlice, "entry" | "gitArcClaimChanges" | "gitArcProposals"> & {
-    actions: Pick<ThreadStoreActions, "observeGitArcClaimChanges" | "observeGitArcProposal" | "refreshGitArcClaimChanges">;
+    actions: Pick<ThreadStoreActions,
+      "holdGitArcClaimChanges" | "observeGitArcClaimChanges" | "observeGitArcProposal" | "refreshGitArcClaimChanges">;
   };
 }) {
   return (
     <ThreadGitArcObservationProvider
       acceptance={thread.entry?.gitArc?.acceptance ?? null}
       claimChanges={thread.gitArcClaimChanges}
+      holdClaimChanges={thread.actions.holdGitArcClaimChanges}
       lifecycleProposals={thread.entry?.gitArc?.proposals ?? null}
       observeClaimChanges={thread.actions.observeGitArcClaimChanges}
       observeProposal={thread.actions.observeGitArcProposal}
@@ -124,5 +131,7 @@ export function useThreadGitArcClaimChanges(enabled: boolean) {
     if (!enabled || !observe) return;
     return observe();
   }, [enabled, observe]);
-  return source ? { refresh: source.refreshClaimChanges, state: enabled ? source.claimChanges : null } : null;
+  return source
+    ? { hold: source.holdClaimChanges, refresh: source.refreshClaimChanges, state: enabled ? source.claimChanges : null }
+    : null;
 }

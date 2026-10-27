@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect routing, diagnostics, socket isolation and send failures.
+ * No production exports. Tests protect routing, diagnostics, socket isolation, request cancellation and send failures.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -11,6 +11,7 @@ import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-typ
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerOptions } from "./WorkbenchWebSocketRequestController";
 import WorkbenchVoiceController from "./voice/WorkbenchVoiceController";
 import { WEBSOCKET_SPY_QUERY_METHOD, WEBSOCKET_SPY_RESULT_METHOD } from "workbench-shared/process/WebSocketTrafficBuffer";
+import { WORKBENCH_RPC_CANCEL_METHOD } from "workbench-shared/workbench/rpc-cancellation";
 
 class FakeClock {
   nowMs = 0;
@@ -428,6 +429,40 @@ test("labels daemon and compatible Workbench requests with the wb namespace", as
   const requests = lines.filter(line => line.includes(" WS wb:"));
   assert.match(requests[0] ?? "", /WS wb:project\/catalog\/read .*ok/u);
   assert.match(requests[1] ?? "", /WS wb:thread-state\/read .*ok/u);
+  controller.dispose();
+});
+
+test("a caller's cancellation aborts only its own in-flight daemon request", async () => {
+  const signals = new Map<string, AbortSignal>();
+  let started!: () => void;
+  const allStarted = new Promise<void>(resolve => { started = resolve; });
+  const { controller } = createController({
+    clock: new FakeClock(),
+    daemonRequests: {
+      accepts: (method) => method === "git/arc/compare",
+      handle: async (request, connectionId, signal) => {
+        signals.set(`${connectionId}#${String(request.id)}`, signal!);
+        if (signals.size === 3) started();
+        await new Promise<void>(resolve => signal!.addEventListener("abort", () => resolve(), { once: true }));
+        return { id: request.id ?? null, error: { code: -32000, message: "aborted" } };
+      },
+    },
+  });
+  const client = createClient();
+  const first = controller.handleMessage(client, "connection-1", frame("git/arc/compare", 1), false);
+  const second = controller.handleMessage(client, "connection-1", frame("git/arc/compare", 2), false);
+  const other = controller.handleMessage(client, "connection-2", frame("git/arc/compare", 1), false);
+  await allStarted;
+
+  await controller.handleMessage(client, "connection-1", notificationFrame(WORKBENCH_RPC_CANCEL_METHOD, { id: 1 }), false);
+  await first;
+  assert.equal(signals.get("connection-1#1")?.aborted, true);
+  assert.equal(signals.get("connection-1#2")?.aborted, false, "a sibling request keeps running");
+  assert.equal(signals.get("connection-2#1")?.aborted, false, "another connection's same id keeps running");
+
+  await controller.handleMessage(client, "connection-2", notificationFrame(WORKBENCH_RPC_CANCEL_METHOD, { id: 1 }), false);
+  await controller.handleMessage(client, "connection-1", notificationFrame(WORKBENCH_RPC_CANCEL_METHOD, { id: 2 }), false);
+  await Promise.all([second, other]);
   controller.dispose();
 });
 

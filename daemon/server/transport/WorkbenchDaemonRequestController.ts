@@ -86,7 +86,8 @@ export default class WorkbenchDaemonRequestController {
     return () => { this.providerRuntimeRegistrations.delete(port); };
   }
 
-  async handle(request: JsonRpcRequest, connectionId?: string): Promise<JsonRpcResponse> {
+  /** `signal` aborts when the caller cancels; Git arc requests stop their work, other handlers finish regardless. */
+  async handle(request: JsonRpcRequest, connectionId?: string, signal?: AbortSignal): Promise<JsonRpcResponse> {
     const id = request.id ?? null;
     try {
       const params = record(request.params ?? {});
@@ -95,7 +96,7 @@ export default class WorkbenchDaemonRequestController {
         if (!this.owners.threadActions) throw new Error("Workbench thread actions are unavailable.");
         return { id, result: await this.owners.threadActions.handle(method as keyof typeof workbenchThreadActions, params, connectionId) };
       }
-      if (isGitArcMethod(method)) return { id, result: await this.executeGitArc(method, params) };
+      if (isGitArcMethod(method)) return { id, result: await this.executeGitArc(method, params, signal) };
       if (!isHandledMethod(method)) return { id, error: { code: -32601, message: "Daemon method not found." } };
       return { id, result: await HANDLERS[method](params, this.context) };
     } catch (error) {
@@ -113,9 +114,9 @@ export default class WorkbenchDaemonRequestController {
     }
   }
 
-  private async executeGitArc(method: WorkbenchDaemonGitArcMethod, params: Record<string, unknown>) {
+  private async executeGitArc(method: WorkbenchDaemonGitArcMethod, params: Record<string, unknown>, signal?: AbortSignal) {
     const action = WORKBENCH_GIT_ARC_ACTION_BY_METHOD[method];
-    const response = await this.owners.gitArc.executeRequest({ action, ...params });
+    const response = await this.owners.gitArc.executeRequest({ action, ...params }, signal);
     const text = await response.text();
     if (!response.ok) {
       const envelope = parseGitArcFailureEnvelope(text);

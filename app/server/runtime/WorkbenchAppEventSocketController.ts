@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery, bounded traffic logs
+ * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery, browser request cancellation, bounded traffic logs
  *   grouped by the threads frames are about and what they meant (heartbeats left out, app-state writes as one line with
  *   their reply and echo; else named by the event each frame carries), and socket spy recording.
  */
@@ -31,6 +31,7 @@ import type { WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-a
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { z } from "zod";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
+import { WorkbenchRpcCancelSchema, WorkbenchRpcInflight } from "workbench-shared/workbench/rpc-cancellation";
 import { WORKSPACE_COMMAND_NOT_SENT, WORKSPACE_COMMAND_UNCERTAIN } from "workbench-shared/workbench/workspace/workspace-commands";
 import { WORKBENCH_RELOAD_METHOD } from "workbench-shared/workbench/daemon-reload";
 import { workbenchNetworkActionKeepsAppConnection } from "workbench-shared/http/workbench-network";
@@ -189,6 +190,7 @@ export default class WorkbenchAppEventSocketController {
     const connectionName = `browser-${++this.nextConnection}`;
     /** App-state writes this tab sent, by request id, so their replies log with them; the latest also owns its echo. */
     const exchanges = new Map<number, string>();
+    const inflight = new WorkbenchRpcInflight();
     let lastExchange: string | null = null;
     /** `method` names the request an RPC response answers. */
     const send = (
@@ -313,6 +315,12 @@ export default class WorkbenchAppEventSocketController {
         send({ id: null, error: { code: -32700, message: "Invalid app request." } });
         return;
       }
+      const cancel = WorkbenchRpcCancelSchema.safeParse(value);
+      if (cancel.success) {
+        this.recordTraffic("in", `rpc cancel #${cancel.data.params.id}`, receivedBytes);
+        inflight.cancel(cancel.data);
+        return;
+      }
       const parsed = WorkbenchAppRpcRequestSchema.safeParse(value);
       if (parsed.success && parsed.data.method === "app/state/mutate") {
         lastExchange = this.recordExchange(appStateMutationCause(parsed.data.params.mutation), receivedBytes);
@@ -332,7 +340,9 @@ export default class WorkbenchAppEventSocketController {
         send({ id: input.id, error: { code: -32000, message: "App request exceeds its size limit." } }, input.method);
         return;
       }
-      const operation = (async () => {
+      let cancelled = false;
+      const operation = inflight.run(input.id, async signal => {
+        signal.addEventListener("abort", () => { cancelled = true; }, { once: true });
         if (!this.options.routes.admitSocket(request)) throw new Error("App network grant was revoked.");
         if (input.method === "app/reload/all" || input.method === "app/update/pull") {
           const operations = this.options.runtime?.operations;
@@ -371,7 +381,7 @@ export default class WorkbenchAppEventSocketController {
         }
         if (input.method === "workspace/command") {
           if (!workspace) throw new Error("Workspace commands are unavailable.");
-          return workspace.command(input.params);
+          return workspace.command(input.params, signal);
         }
         if (input.method === "workspace/observe") {
           if (!workspace) throw new Error("Workspace queries are unavailable.");
@@ -423,9 +433,10 @@ export default class WorkbenchAppEventSocketController {
         bindState(browserStateId);
         return await this.options.state.mutateBrowser(browserStateId ?? undefined,
           input.params.mutation, true);
-      })().then(result => send({ id: input.id, result }, input.method), error => {
+      }).then(result => send({ id: input.id, result }, input.method), error => {
         const message = error instanceof Error ? boundedSocketError(error) : "Unknown app request failure.";
-        this.options.logger.error("app", `WS app RPC ${input.method} failed: ${message}`);
+        // The browser asked for this; it is not a failure worth logging.
+        if (!cancelled) this.options.logger.error("app", `WS app RPC ${input.method} failed: ${message}`);
         const data = error instanceof WorkbenchDaemonRequestError ? z.json().safeParse(error.data) : null;
         const code = error instanceof WorkbenchRpcRequestInterruptedError
           ? error.dispatched ? WORKSPACE_COMMAND_UNCERTAIN : WORKSPACE_COMMAND_NOT_SENT

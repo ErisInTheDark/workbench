@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - No production exports; tests protect demanded claim-change reads, re-reads on claim changes, stale-read fencing and skipped running arcs.
+ * - No production exports; tests protect demanded claim-change reads, re-reads on claim changes, stale-read fencing, aborting unneeded
+ *   reads, holding off during mutations and skipped running arcs.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -22,11 +23,15 @@ function entry({ claimedPaths = ["src/a.ts"], checkpoint = "a", working = false 
 }
 
 function harness() {
-  const reads: Array<{ resolve: (value: { changeCount: number; hasUncommittedChanges: boolean }) => void; reject: (error: unknown) => void }> = [];
+  const reads: Array<{
+    resolve: (value: { changeCount: number; hasUncommittedChanges: boolean }) => void;
+    reject: (error: unknown) => void;
+    signal: AbortSignal;
+  }> = [];
   let refresh: (() => void) | null = null;
   let changes = 0;
   const observer = new ThreadGitArcClaimObserver({
-    compare: () => new Promise((resolve, reject) => { reads.push({ resolve, reject }); }),
+    compare: (_input, signal) => new Promise((resolve, reject) => { reads.push({ resolve, reject, signal }); }),
     subscribeRefresh: (listener) => { refresh = listener; return () => { refresh = null; }; },
     changed: () => { changes++; },
     isLive: () => true,
@@ -78,6 +83,43 @@ test("changed claims and refreshes re-read, keeping the loaded result while refr
   h.reads[1]!.resolve({ changeCount: 9, hasUncommittedChanges: true });
   await settle();
   assert.deepEqual(h.observer.claimChanges, { changeCount: 1, hasUncommittedChanges: false, status: "loaded" });
+});
+
+test("reads nobody needs any more are aborted upstream", () => {
+  const h = harness();
+  const release = h.observer.demand();
+  h.observer.sync(entry(), "/repo");
+  h.observer.sync(entry({ claimedPaths: ["src/a.ts", "src/b.ts"] }), "/repo");
+  assert.equal(h.reads[0]!.signal.aborted, true, "a superseded read is aborted");
+  assert.equal(h.reads[1]!.signal.aborted, false);
+
+  release();
+  h.observer.sync(entry({ claimedPaths: ["src/a.ts", "src/b.ts"] }), "/repo");
+  assert.equal(h.reads[1]!.signal.aborted, true, "losing the last demand aborts the read");
+
+  h.observer.demand();
+  h.observer.sync(entry(), "/repo");
+  h.observer.dispose();
+  assert.equal(h.reads[2]!.signal.aborted, true, "disposal aborts the read");
+});
+
+test("a held observer aborts its read, starts none, and re-reads once released", async () => {
+  const h = harness();
+  h.observer.demand();
+  h.observer.sync(entry(), "/repo");
+  const release = h.observer.hold();
+  h.observer.sync(entry(), "/repo");
+  assert.equal(h.reads[0]!.signal.aborted, true);
+  h.observer.sync(entry({ claimedPaths: ["src/b.ts"] }), "/repo");
+  assert.equal(h.reads.length, 1, "no read starts while held");
+  h.reads[0]!.resolve({ changeCount: 5, hasUncommittedChanges: true });
+  await settle();
+  assert.equal(h.observer.claimChanges, null, "the aborted read never publishes");
+
+  release();
+  h.observer.sync(entry({ claimedPaths: ["src/b.ts"] }), "/repo");
+  assert.equal(h.reads.length, 2);
+  assert.equal(h.reads[1]!.signal.aborted, false);
 });
 
 test("running turns and resolved arcs read nothing, and failures publish the Git arc failure", async () => {

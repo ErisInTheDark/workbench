@@ -337,13 +337,14 @@ export default class WorkbenchGitCheckpointController {
     return await prepared.apply();
   }
 
-  async createInspectionSnapshot(cwd: string): Promise<GitArcInspectionSnapshot> {
+  async createInspectionSnapshot(cwd: string, signal?: AbortSignal): Promise<GitArcInspectionSnapshot> {
     return await GitObjectReadSession.run(async () => {
       const repository = await WorkbenchGitRepository.open(cwd);
       const [snapshot, entries] = await Promise.all([
-        repository.writeWorktreeSnapshot(),
+        repository.writeWorktreeSnapshot(signal),
         this.registry(repository).list(),
       ]);
+      signal?.throwIfAborted();
       return { ...snapshot, entries, repository };
     });
   }
@@ -1091,7 +1092,9 @@ export default class WorkbenchGitCheckpointController {
   }
 
   private async compareActiveArc(
-    { cwd, harness: rawHarness, patches, paths: rawPaths, threadId }: ControllerInput & { patches?: boolean; paths?: string[] },
+    { cwd, harness: rawHarness, patches, paths: rawPaths, signal, threadId }: ControllerInput & {
+      patches?: boolean; paths?: string[]; signal?: AbortSignal;
+    },
     inspection: GitArcInspectionSnapshot,
   ): Promise<GitCheckpointCompareResult> {
     const { active, checkpoint, harness, metadata, repository } = await this.requireActiveArc(
@@ -1111,28 +1114,31 @@ export default class WorkbenchGitCheckpointController {
     });
     return {
       changes: patches
-        ? await repository.buildFileChanges(baseline, inspection.tree, paths)
-        : await repository.buildFileChangeSummaries(baseline, inspection.tree, paths),
+        ? await repository.buildFileChanges(baseline, inspection.tree, paths, signal)
+        : await repository.buildFileChangeSummaries(baseline, inspection.tree, paths, signal),
       checkpointCommit: checkpoint.checkpointCommit,
       checkpointRef: checkpoint.checkpointRef,
-      hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
+      hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths, signal)).length > 0,
       intentName: metadata.intentName ?? null,
       repoRoot: repository.root,
       scopePaths: metadata.scopePaths,
     };
   }
 
-  /** Changed files with counts; patch text only when `patches` is set, since compare callers read counts alone. */
+  /** Changed files with counts; patch text only when `patches` is set, since compare callers read counts alone. `signal` stops its Git work. */
   async compare(
-    input: ControllerInput & { patches?: boolean; paths?: string[]; ref?: string },
+    input: ControllerInput & { patches?: boolean; paths?: string[]; ref?: string; signal?: AbortSignal },
     existingInspection?: GitArcInspectionSnapshot,
   ): Promise<GitCheckpointCompareResult> {
     return await GitObjectReadSession.run<GitCheckpointCompareResult>(async () => {
-      const inspection = existingInspection ?? await this.createInspectionSnapshot(input.cwd);
+      const { signal } = input;
+      const inspection = existingInspection ?? await this.createInspectionSnapshot(input.cwd, signal);
       const repository = inspection.repository;
       const changesOf = (from: string | null, paths: string[]) => input.patches
-        ? repository.buildFileChanges(from, inspection.tree, paths)
-        : repository.buildFileChangeSummaries(from, inspection.tree, paths);
+        ? repository.buildFileChanges(from, inspection.tree, paths, signal)
+        : repository.buildFileChangeSummaries(from, inspection.tree, paths, signal);
+      const hasUncommittedChanges = async (paths: string[]) =>
+        (await repository.listChangedPaths(inspection.head, inspection.tree, paths, signal)).length > 0;
       if (!input.ref) {
         const current = inspection.entries.find((entry) => entry.harness === normalizeHarness(input.harness)
           && entry.threadId === normalizeThreadId(input.threadId));
@@ -1144,7 +1150,7 @@ export default class WorkbenchGitCheckpointController {
             return {
               checkpointCommit: lost.commit, checkpointRef: lost.ref, phase: "resolved",
               changes: await changesOf(lost.commit, paths),
-              scopePaths: paths, hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
+              scopePaths: paths, hasUncommittedChanges: await hasUncommittedChanges(paths),
               intentName: current?.intentName ?? null, repoRoot: repository.root,
             };
           }
@@ -1157,7 +1163,7 @@ export default class WorkbenchGitCheckpointController {
               checkpointCommit: inspection.head, checkpointRef: inspection.head, phase: "workspace",
               changes: await changesOf(inspection.head, paths),
               scopePaths: paths,
-              hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
+              hasUncommittedChanges: await hasUncommittedChanges(paths),
               intentName: null, repoRoot: repository.root,
             };
           }
@@ -1221,14 +1227,15 @@ export default class WorkbenchGitCheckpointController {
   }
 
   async listUnclaimedWorkspaceDirt(
-    { cwd, modifiedSince }: { cwd: string; modifiedSince: number },
+    { cwd, modifiedSince, signal }: { cwd: string; modifiedSince: number; signal?: AbortSignal },
     existingInspection?: GitArcInspectionSnapshot,
   ) {
     return await GitObjectReadSession.run(async () => {
-      const inspection = existingInspection ?? await this.createInspectionSnapshot(cwd);
-      const changedPaths = await inspection.repository.listAllChangedPaths(inspection.head, inspection.tree);
+      const inspection = existingInspection ?? await this.createInspectionSnapshot(cwd, signal);
+      const changedPaths = await inspection.repository.listAllChangedPaths(inspection.head, inspection.tree, signal);
       const liveClaims = new GitArcPathSet(inspection.entries.flatMap((entry) => getGitArcLiveClaimPaths(entry)));
       const unclaimedPaths = changedPaths.filter((candidate) => !liveClaims.overlaps(candidate));
+      signal?.throwIfAborted();
       return await inspection.repository.listPathsModifiedSince(unclaimedPaths, modifiedSince);
     });
   }
@@ -1237,6 +1244,7 @@ export default class WorkbenchGitCheckpointController {
     page?: number;
     paths?: string[];
     ref?: string;
+    signal?: AbortSignal;
   }, existingInspection?: GitArcInspectionSnapshot): Promise<GitCheckpointDiffResult> {
     return await GitObjectReadSession.run(async () => {
       const result = await this.compare({ ...input, patches: true }, existingInspection);

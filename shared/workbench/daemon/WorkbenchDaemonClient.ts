@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - WorkbenchDaemonRequestOptions: per-request cancellation.
  * - WorkbenchDaemonTransport: existing socket request port.
  * - WorkbenchDaemonRequestError: typed JSON-RPC failure with bounded domain data.
  * - default WorkbenchDaemonClient: create the browser daemon client: a typed `request` for any daemon method, validated against its registered
@@ -28,8 +29,13 @@ import {
   type WorkbenchStatsImportProgress,
 } from "../stats/workbench-stats-contract.ts";
 
+export interface WorkbenchDaemonRequestOptions {
+  /** Aborting cancels the request upstream where the transport supports it. */
+  signal?: AbortSignal;
+}
+
 export interface WorkbenchDaemonTransport {
-  request<TResponse>(method: string, params: object): Promise<TResponse>;
+  request<TResponse>(method: string, params: object, options?: WorkbenchDaemonRequestOptions): Promise<TResponse>;
   onNotification?(listener: (notification: { method: string; params: unknown }) => void): () => void;
   onReconnect?(listener: () => void): () => void;
   onDisconnect?(listener: () => void): () => void;
@@ -309,7 +315,8 @@ class WorkbenchDaemonClient {
     },
     mutateRef: (params: WorkbenchDaemonParams<"git/ref/mutate">) => this.request("git/ref/mutate", params),
     arc: {
-      compare: (params: WorkbenchDaemonParams<"git/arc/compare">) => this.requestGitArc("git/arc/compare", params),
+      compare: (params: WorkbenchDaemonParams<"git/arc/compare">, options?: WorkbenchDaemonRequestOptions) =>
+        this.requestGitArc("git/arc/compare", params, options),
       release: (params: WorkbenchDaemonParams<"git/arc/release">) => this.requestGitArc("git/arc/release", params),
       remove: (params: WorkbenchDaemonParams<"git/arc/remove">) => this.requestGitArc("git/arc/remove", params),
       restore: (params: WorkbenchDaemonParams<"git/arc/restore">) => this.requestGitArc("git/arc/restore", params),
@@ -345,8 +352,9 @@ class WorkbenchDaemonClient {
   async request<TMethod extends WorkbenchDaemonMethod>(
     method: TMethod,
     params: WorkbenchDaemonParams<TMethod>,
+    options?: WorkbenchDaemonRequestOptions,
   ): Promise<WorkbenchDaemonResult<TMethod>> {
-    const result = await this.transport.request<WorkbenchDaemonResult<TMethod>>(method, params);
+    const result = await this.transport.request<WorkbenchDaemonResult<TMethod>>(method, params, options);
     const parsed = getWorkbenchDaemonResultSchema(method).safeParse(result);
     if (!parsed.success) {
       reportClientSchemaError(`Rejected ${method} response`, parsed.error);
@@ -358,9 +366,10 @@ class WorkbenchDaemonClient {
   private async requestGitArc<TMethod extends WorkbenchDaemonGitArcMethod>(
     method: TMethod,
     params: WorkbenchDaemonParams<TMethod>,
+    options?: WorkbenchDaemonRequestOptions,
   ): Promise<WorkbenchDaemonResult<TMethod>> {
     try {
-      return await this.request(method, params);
+      return await this.request(method, params, options);
     } catch (error) {
       const errorData = error instanceof WorkbenchDaemonRequestError
         ? error.data as { gitArcFailure?: object } | null

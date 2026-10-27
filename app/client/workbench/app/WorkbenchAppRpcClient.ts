@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppRpcClient: own the early tab-level app RPC transport.
+ * - default WorkbenchAppRpcClient: own the early tab-level app RPC transport, whose aborted requests are cancelled at the app.
  */
 import { z } from "zod";
 import { WORKBENCH_APP_NETWORK_SOCKET_PATH, conformWorkbenchAppNetworkEvent,
@@ -10,6 +10,8 @@ import { describeObservationRepairs } from "workbench-shared/workbench/workspace
 import type { WorkbenchAppRpcIntent } from "workbench-shared/http/workbench-app-rpc";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import WorkbenchRpcSocketClient, { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
+import { sendCancellableRequest } from "workbench-shared/workbench/rpc-cancellation";
+import { createWorkbenchRequestIdGenerator } from "workbench-shared/workbench/workbench-rpc";
 import { WORKSPACE_COMMAND_NOT_SENT, WORKSPACE_COMMAND_UNCERTAIN } from "workbench-shared/workbench/workspace/workspace-commands";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 
@@ -25,6 +27,8 @@ type ObservationAddress = z.infer<typeof address>;
 
 export default class WorkbenchAppRpcClient {
   private readonly transport: WorkbenchRpcSocketClient;
+  /** Every request id is assigned here, so a cancellation can name it. */
+  private readonly nextRequestId = createWorkbenchRequestIdGenerator();
   private readonly lifetime = new AbortController();
   private readonly eventListeners = new Set<(event: WorkbenchAppNetworkEvent) => void>();
   private readonly invalidObservationListeners = new Set<(address: ObservationAddress) => void>();
@@ -113,7 +117,9 @@ export default class WorkbenchAppRpcClient {
     if (this.lifetime.signal.aborted) {
       throw new Error("Workbench app RPC is unavailable.");
     }
-    const response = await this.transport.sendRequest<unknown>(intent, { requireOpen: true, signal: options.signal });
+    const response = await sendCancellableRequest<unknown>(this.transport, { ...intent, id: this.nextRequestId() }, {
+      requireOpen: true, signal: options.signal,
+    });
     if ("error" in response) {
       const failure = z.object({ code: z.number().int(), message: z.string().max(512), data: z.json().optional() }).safeParse(response.error);
       if (!failure.success) reportClientSchemaError("Rejected Workbench app RPC error", failure.error);

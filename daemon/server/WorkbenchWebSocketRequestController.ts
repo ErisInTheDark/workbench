@@ -5,7 +5,8 @@
  * - WorkbenchWebSocketReloadDirtObserverState: reload-dirt subscriber identity.
  * - WorkbenchWebSocketRequestControllerState: request, observer, and stream handoff.
  * - WorkbenchWebSocketRequestControllerOptions: routing, clock, scheduler, and logging ports.
- * - default WorkbenchWebSocketRequestController: route feature requests, own event-stream health, answer socket spy queries from recorded frames, and ask connected apps to fetch from peer daemons.
+ * - default WorkbenchWebSocketRequestController: route feature requests (aborting daemon requests their caller cancels), own event-stream health,
+ *   answer socket spy queries from recorded frames, and ask connected apps to fetch from peer daemons.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
@@ -75,6 +76,7 @@ import {
   GIT_PEER_FETCH_REQUEST_METHOD, GIT_PEER_FETCH_RESULT_METHOD, GitPeerFetchResultNotificationSchema,
   type GitPeerFetchOutcome, type GitPeerFetchQuestion,
 } from "workbench-shared/workbench/git/git-peer-contracts";
+import { WORKBENCH_RPC_CANCEL_METHOD, WorkbenchRpcCancelSchema, WorkbenchRpcInflight } from "workbench-shared/workbench/rpc-cancellation";
 import { randomUUID } from "node:crypto";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
@@ -261,6 +263,8 @@ export default class WorkbenchWebSocketRequestController {
   private readonly spyQueries = new Map<string, (result: WebSocketTrafficResult) => void>();
   private readonly peerFetches = new Map<string, (outcome: GitPeerFetchOutcome) => void>();
   private readonly peerFetchClients = new Map<string, BridgeClient>();
+  /** Each connection's cancellable running daemon requests. */
+  private readonly inflight = new Map<string, WorkbenchRpcInflight>();
 
   constructor({
     voice,
@@ -432,6 +436,12 @@ export default class WorkbenchWebSocketRequestController {
       else this.writeLine("[git-peer] rejected an app peer fetch result that did not match its contract");
       return;
     }
+    if (method === WORKBENCH_RPC_CANCEL_METHOD) {
+      const cancel = WorkbenchRpcCancelSchema.safeParse(message);
+      if (cancel.success) this.inflight.get(connectionId)?.cancel(cancel.data);
+      else this.writeLine("[socket] rejected a request cancellation that did not match its contract");
+      return;
+    }
 
     if (method === WORKBENCH_EVENT_STREAM_ACK_METHOD) {
       this.eventLog.record("in", "workbench", method, data.length);
@@ -533,7 +543,8 @@ export default class WorkbenchWebSocketRequestController {
       }
       if (daemonRequest) {
         if (method === "stats/import/start") this.statsObservers.set(connectionId, { client, connectionId });
-        await this.sendJsonToClient(client, await this.daemonRequests.handle(message, connectionId));
+        await this.sendJsonToClient(client, await this.inflightFor(connectionId).run(requestId,
+          cancellation => this.daemonRequests.handle(message, connectionId, cancellation)));
         return;
       }
       if (method === WORKBENCH_RELOAD_DIRT_READ_METHOD) {
@@ -791,6 +802,12 @@ export default class WorkbenchWebSocketRequestController {
     });
   }
 
+  private inflightFor(connectionId: string) {
+    let requests = this.inflight.get(connectionId);
+    if (!requests) this.inflight.set(connectionId, requests = new WorkbenchRpcInflight());
+    return requests;
+  }
+
   async disconnect(client: BridgeClient, connectionId: string) {
     this.assertActive();
     const requests = [...(this.pending.get(client)?.values() ?? [])];
@@ -799,6 +816,8 @@ export default class WorkbenchWebSocketRequestController {
       if (asked === client) this.peerFetches.get(requestId)?.({ kind: "failed", failure: "The app disconnected during the fetch." });
     }
     this.connectionIds.delete(client);
+    // Dispatched requests finish without their caller; only an explicit cancellation aborts one.
+    this.inflight.delete(connectionId);
     this.stream.disconnect(client);
     this.reloadDirtObservers.delete(connectionId);
     this.statsObservers.delete(connectionId);

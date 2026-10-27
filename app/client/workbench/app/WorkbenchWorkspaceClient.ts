@@ -126,7 +126,7 @@ export default class WorkbenchWorkspaceClient {
     const existing = this.facades.get(key);
     if (existing) return existing;
     const facade = new WorkbenchDaemonClient({
-      request: <Result>(method: string, params: object) => this.request<Result>(method, params, scope),
+      request: <Result>(method: string, params: object, options?: { signal?: AbortSignal }) => this.request<Result>(method, params, scope, options),
       onNotification: listener => this.onWorkbenchNotification(listener),
       onReconnect: listener => this.rpc.onReconnect(listener),
       onDisconnect: listener => this.onDisconnect(listener),
@@ -175,8 +175,11 @@ export default class WorkbenchWorkspaceClient {
     }
   }
 
-  /** Daemon requests are never sent while the app connection is down; they wait for it instead of failing unsent. */
-  async request<Result>(method: string, params: object, scope?: WorkspaceScope): Promise<Result> {
+  /**
+   * Daemon requests are never sent while the app connection is down; they wait for it instead of failing unsent.
+   * Aborting a daemon command's signal cancels it upstream.
+   */
+  async request<Result>(method: string, params: object, scope?: WorkspaceScope, options: { signal?: AbortSignal } = {}): Promise<Result> {
         await this.connect();
         if (method === "thread/identity/resolve") {
           const target = z.object({ threadId: ThreadReferenceSchema }).parse(params);
@@ -209,7 +212,7 @@ export default class WorkbenchWorkspaceClient {
           : undefined;
         const command = WorkspaceCommandSchema.parse({ method, params: fields, scope: destination });
         // The semantic daemon facade validates each result with its domain schema.
-        return await this.rpc.requestRaw({ method: "workspace/command", params: command }) as Result;
+        return await this.rpc.requestRaw({ method: "workspace/command", params: command }, options) as Result;
   }
 
   onWorkbenchNotification(listener: (notification: Notification) => void) {

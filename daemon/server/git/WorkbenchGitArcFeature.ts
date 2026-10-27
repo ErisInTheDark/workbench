@@ -1212,30 +1212,33 @@ export default class WorkbenchGitArcFeature {
         await this.controller.discardStashedArc(common);
         return Response.json({ ok: true });
       case "compare": {
-        const inspection = await this.controller.createInspectionSnapshot(input.cwd);
+        const inspection = await this.controller.createInspectionSnapshot(input.cwd, signal);
         const [result, unclaimedDirtPaths] = await Promise.all([
           this.controller.compare({
-            ...common, ...(input.paths ? { paths: input.paths } : {}), ...(input.ref ? { ref: input.ref } : {}),
+            ...common, ...(input.paths ? { paths: input.paths } : {}), ...(input.ref ? { ref: input.ref } : {}), signal,
           }, inspection),
           this.controller.listUnclaimedWorkspaceDirt({
             cwd: input.cwd,
             modifiedSince: requireInspectionModifiedSince(modifiedSince),
+            signal,
           }, inspection),
         ]);
         return Response.json({ ...result, unclaimedDirtPaths });
       }
       case "diff": {
-        const inspection = await this.controller.createInspectionSnapshot(input.cwd);
+        const inspection = await this.controller.createInspectionSnapshot(input.cwd, signal);
         const [result, unclaimedDirtPaths] = await Promise.all([
           this.controller.diff({
             ...common,
             ...(input.page !== undefined ? { page: input.page } : {}),
             ...(input.paths ? { paths: input.paths } : {}),
             ...(input.ref ? { ref: input.ref } : {}),
+            signal,
           }, inspection),
           this.controller.listUnclaimedWorkspaceDirt({
             cwd: input.cwd,
             modifiedSince: requireInspectionModifiedSince(modifiedSince),
+            signal,
           }, inspection),
         ]);
         return Response.json({ ...result, unclaimedDirtPaths });
