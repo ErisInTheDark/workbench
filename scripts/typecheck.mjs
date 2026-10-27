@@ -18,6 +18,7 @@ const tscPath = path.join(projectRoot, "node_modules", "typescript", "bin", "tsc
 
 export const typecheckProjects = {
   app: ["app/tsconfig.json"],
+  cli: ["cli/tsconfig.json"],
   daemon: ["daemon/tsconfig.typecheck.json", "daemon/host/tsconfig.json"],
   host: ["daemon/host/tsconfig.json"],
   shared: ["shared/tsconfig.json"],

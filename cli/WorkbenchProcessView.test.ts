@@ -8,6 +8,7 @@ import WorkbenchProcessView from "./WorkbenchProcessView.ts";
 import type { ProcessViewControls, ProcessViewControlsSnapshot } from "./WorkbenchProcessViewControls.ts";
 import type { RepairViewControls, RepairViewSnapshot } from "./WorkbenchRepairViewControls.ts";
 import type { WorkbenchAppControlRuntime } from "../shared/http/workbench-app-control.ts";
+import type { InstallationUpdate } from "../shared/workbench/installation-update.ts";
 import { IDLE_RELOAD_OPERATION } from "../shared/reload/workbench-reload.ts";
 import { KITTY_KEYBOARD_POP, KITTY_KEYBOARD_PUSH, KITTY_KEYBOARD_QUERY } from "./terminal-key-hold.ts";
 
@@ -262,8 +263,8 @@ test("Escape cancels a full hold, and destructive reloads need the longer hold",
 });
 
 test("kitty terminals hold until the real release and restore the keyboard on detach", async () => {
-  const update = { state: "available", reason: null, upstream: "origin/main", behind: 2, ahead: 0, conflicts: [],
-    lockfileChanged: false, checkedAt: 0, projectId: null, failure: null } as const;
+  const update: InstallationUpdate = { state: "available", reason: null, upstream: "origin/main", behind: 2, ahead: 0, conflicts: [],
+    lockfileChanged: false, checkedAt: 0, projectId: null, failure: null };
   const f = fixture({ snapshot: { host: true, daemon: true, app: true, runtime: runtime({ dirty: false, update }) } });
   const running = f.view.run();
   await f.attached.promise;
@@ -321,8 +322,8 @@ test("while a repair is pending, holding r retries it instead of reloading", asy
 });
 
 test("an unavailable hold key warns once for its whole autorepeat", async () => {
-  const conflict = { state: "conflict", reason: null, upstream: "origin/main", behind: 1, ahead: 0, conflicts: ["a.ts"],
-    lockfileChanged: false, checkedAt: 0, projectId: null, failure: null } as const;
+  const conflict: InstallationUpdate = { state: "conflict", reason: null, upstream: "origin/main", behind: 1, ahead: 0, conflicts: ["a.ts"],
+    lockfileChanged: false, checkedAt: 0, projectId: null, failure: null };
   const f = fixture({ snapshot: { host: true, daemon: true, app: true, runtime: runtime({ dirty: false, update: conflict }) } });
   const running = f.view.run();
   await f.attached.promise;

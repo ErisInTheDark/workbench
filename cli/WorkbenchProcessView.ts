@@ -4,6 +4,7 @@
  *   open-in-browser, hold-to-confirm reload-all and pull keys, and dependency repair cancel/retry.
  *   Built-ins only and erasable TypeScript: `wb view` loads it natively while dependencies are being repaired.
  */
+import type { Readable } from "node:stream";
 import type { ReadStream } from "node:tty";
 import WorkbenchLogFollower from "../shared/process/WorkbenchLogFollower.ts";
 import { logDomainColors, logTimestampColor } from "../shared/process/WorkbenchProcessLogger.ts";
@@ -16,7 +17,9 @@ import {
   type HoldOutcome, type TerminalKeyEvent,
 } from "./terminal-key-hold.ts";
 
-type ViewInput = Pick<ReadStream, "isTTY" | "isRaw" | "setRawMode" | "on" | "off" | "resume" | "pause">;
+type ViewInput = Pick<ReadStream, "isTTY" | "isRaw"> & Pick<Readable, "on" | "off" | "resume" | "pause"> & {
+  setRawMode(mode: boolean): unknown;
+};
 type ViewStatusLine = Pick<ProcessViewStatusLine, "enabled" | "install" | "update" | "notice" | "close">;
 type HoldKey = "r" | "u" | "x";
 /** `r` retries a pending dependency repair instead of reloading: nothing can reload until dependencies are whole. */
