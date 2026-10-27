@@ -265,6 +265,9 @@ export function ThreadCommandSummary ({
   const stages = splitCommandSummaryStages(display.summaryParts);
   const plainCode = line && display.summaryKind === "raw";
   const wrap = line ? "flex-nowrap overflow-hidden" : "flex-wrap";
+  // Unwrappable stage text spills into its neighbours once a stage shrinks, so one line keeps earlier stages whole and cuts at its end.
+  const stageFit = (index: number) => !line ? "min-w-0"
+    : index === stages.length - 1 ? "min-w-0 overflow-hidden" : "shrink-0";
 
   return (
     <span
@@ -284,13 +287,13 @@ export function ThreadCommandSummary ({
       <span className={`inline-flex min-w-0 items-center gap-x-[0.45rem] gap-y-[0.3rem] ${wrap}`}>
         {stages.map((stage, index) => (
           index === 0 ? (
-            <span key={`stage:${index}`} className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
+            <span key={`stage:${index}`} className={`inline-flex ${stageFit(index)} max-w-full items-baseline gap-[0.3rem]`}>
               <ThreadCommandStageParts danger={danger} parts={stage} plainCode={plainCode} />
             </span>
           ) : (
             <span
               key={`stage:${index}`}
-              className="inline-flex min-w-0 max-w-full items-center gap-[0.3rem]"
+              className={`inline-flex ${stageFit(index)} max-w-full items-center gap-[0.3rem]`}
             >
               <ArrowRightIcon className="shrink-0 opacity-30" size={22} />
               <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
