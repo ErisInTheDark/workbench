@@ -1702,6 +1702,23 @@ test("machine roots claim existing files by absolute path, admit scratch edits, 
   assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [config, path.join(daemonWorkspaceRoot, "tmp.txt"), other]), {
     allowed: false, pendingProposals: [], uncoveredPaths: [other],
   });
+  // Claimed folders become file claims, so deleting a machine folder is admitted by those files, inside nested repositories too.
+  const archive = path.join(drive, "notes", "archive");
+  await mkdir(archive);
+  await writeFile(path.join(archive, "old.txt"), "old\n", "utf8");
+  await controller.execute(project, {
+    action: "arcClaims", addPaths: [archive], adoptPaths: [], removePaths: [], roots: [], inherit: true, ...identity,
+  });
+  const cacheFolder = path.join(drive, "repo", "cache");
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [archive, cacheFolder]), {
+    allowed: true, pendingProposals: [], uncoveredPaths: [],
+  });
+  const stray = path.join(archive, "stray.txt");
+  await writeFile(stray, "unclaimed\n", "utf8");
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [archive]), {
+    allowed: false, pendingProposals: [], uncoveredPaths: [stray],
+  });
+  await rm(stray);
   await assert.rejects(controller.execute(project, {
     action: "arcClaims", addPaths: [path.join(drive, "repo", "file.txt")], adoptPaths: [], removePaths: [], roots: [], inherit: true, ...identity,
   }), /visible to the Git repository/u);

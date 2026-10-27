@@ -64,6 +64,26 @@ test("invalid targets reject before claims are checked or anything is deleted", 
   }
 });
 
+test("removal deletes links and junctions themselves, never what they point at", async () => {
+  const cwd = await workspace();
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "wb-rm-target-"));
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  try {
+    await fs.writeFile(path.join(outside, "precious.txt"), "keep");
+    await fs.symlink(outside, path.join(cwd, "folder", "nested-link"), linkType);
+    await fs.symlink(outside, path.join(cwd, "top-link"), linkType);
+    const controller = new WorkbenchFileRemovalController(claimsCovering(cwd, ["folder", "top-link"]));
+    const result = await remove(controller, cwd, ["folder", "top-link"], true);
+    assert.equal(result.ok, true, result.text);
+    assert.equal(await exists(path.join(cwd, "folder")), false);
+    assert.equal(await fs.lstat(path.join(cwd, "top-link")).then(() => true, () => false), false);
+    assert.equal(await exists(path.join(outside, "precious.txt")), true);
+  } finally {
+    await fs.rm(cwd, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
 test("claimed files and recursive directories are deleted", async () => {
   const cwd = await workspace();
   try {

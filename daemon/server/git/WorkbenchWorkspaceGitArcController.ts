@@ -9,7 +9,8 @@
  * - WorkspaceGitArcPlanClaimCollisionResult: project-qualified inactive member collision results.
  * Local mechanics: observe mutation claims while the Git transition remains held; machine members reject unusable paths
  * before gates and absorb unowned requested paths into their baseline inside them; daemon scratch needs no claims;
- * unclaimed folders are admitted by their present Git-visible files, and folders holding other roots need real claims.
+ * unclaimed folders, machine folders included, are admitted by the present entries claim expansion would list, and folders
+ * holding other roots need real claims.
  */
 import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
@@ -42,6 +43,7 @@ import WorkbenchGitCheckpointController, {
 import GitClaimHistoryReader from "../lib/workbench/git/GitClaimHistoryReader";
 import GitObjectReadSession from "../lib/workbench/git/GitObjectReadSession";
 import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "../lib/workbench/git/WorkbenchGitRepository";
+import { listGitArcScopeFiles } from "../lib/workbench/git/git-arc-claim-expansion";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
@@ -368,27 +370,28 @@ export default class WorkbenchWorkspaceGitArcController {
     }
   }
 
-  /** Non-machine repository owning a path strictly inside a project root; machine writes are approval-gated through claims, so Git ignore state never waives them. */
-  private findIgnorableMember(project: AgentEndpointProjectResolution, members: readonly RepoMember[]) {
+  /** Repository owning a path strictly inside a project root. */
+  private findMember(project: AgentEndpointProjectResolution, members: readonly RepoMember[]) {
     const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
     const memberByRootId = new Map(members.flatMap((member) => member.roots.map((root) => [root.id, member] as const)));
     return (candidate: string) => {
       const root = roots.find((projectRoot) => isInside(candidate, projectRoot.root));
       const member = root ? memberByRootId.get(root.id) : null;
-      return root && member && !isMachineMember(member) && comparable(candidate) !== comparable(root.root) ? member : null;
+      return root && member && comparable(candidate) !== comparable(root.root) ? member : null;
     };
   }
 
+  /** Machine writes are approval-gated through claims, so Git ignore state waives claims only in project repositories. */
   private async listIgnoredPatchPaths(
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
     absolutePaths: readonly string[],
   ) {
-    const memberFor = this.findIgnorableMember(project, members);
+    const memberFor = this.findMember(project, members);
     const candidatesByRepo = new Map<string, string[]>();
     for (const candidate of absolutePaths) {
       const member = memberFor(candidate);
-      if (member) candidatesByRepo.set(member.repoRoot, [...candidatesByRepo.get(member.repoRoot) ?? [], candidate]);
+      if (member && !isMachineMember(member)) candidatesByRepo.set(member.repoRoot, [...candidatesByRepo.get(member.repoRoot) ?? [], candidate]);
     }
     const ignoredPaths = await Promise.all([...candidatesByRepo].map(async ([repoRoot, candidates]) => {
       const repository = new WorkbenchGitRepository(repoRoot);
@@ -397,19 +400,24 @@ export default class WorkbenchWorkspaceGitArcController {
     return new Set(ignoredPaths.flat());
   }
 
-  /** Present Git-visible files beneath each existing directory candidate; non-directories and machine paths stay absent. */
+  /**
+   * Present entries beneath each existing directory candidate, listed as claim expansion lists them: Git-visible files,
+   * with links as leaves. Non-directories, including links themselves, stay absent.
+   */
   private async listVisibleDirectoryFiles(
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
     candidates: readonly string[],
   ) {
-    const memberFor = this.findIgnorableMember(project, members);
+    const memberFor = this.findMember(project, members);
     const isDirectory = async (target: string) => await lstat(target).then((stats) => stats.isDirectory(), () => false);
     const listed = await Promise.all(candidates.map(async (candidate) => {
       const member = memberFor(candidate);
       if (!member || !await isDirectory(candidate)) return [];
       const repository = new WorkbenchGitRepository(member.repoRoot);
-      const files = (await repository.listWorktreePaths(repository.normalizePaths([candidate]))).map((file) => repository.resolvePath(file));
+      const scopes = repository.normalizePaths([candidate]);
+      const filesUnder = await listGitArcScopeFiles(repository, scopes);
+      const files = scopes.flatMap(filesUnder).map((file) => repository.resolvePath(file));
       const present = await Promise.all(files.map(async (file) => await lstat(file).then(() => [file], () => [])));
       return [[candidate, present.flat()] as const];
     }));

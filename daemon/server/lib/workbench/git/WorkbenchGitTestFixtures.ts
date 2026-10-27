@@ -348,7 +348,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(SRC_BASE_FIXTURE, 3),
   ], nested: false }],
   ["git-arc-claim-expansion.test.ts", { fixtures: [
-    demand(SRC_BASE_FIXTURE, 1),
+    demand(SRC_BASE_FIXTURE, 2),
   ], nested: false }],
   ["GitArcEditSessionController.test.ts", { fixtures: [
     demand(EDIT_SESSION_ARC_READY_FIXTURE, 6),
