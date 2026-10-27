@@ -259,6 +259,7 @@ test("the credential reaches the server but never the snapshot or storage in pla
     });
     assert.equal(JSON.stringify(snapshot).includes("secret-key"), false);
     assert.deepEqual(snapshot.servers[0]?.auth, { kind: "header", header: "x-consumer-api-key" });
+    await create().read({ id: added!.id });
     assert.deepEqual(headersOf(drive.endpoints.at(-1)), { "x-consumer-api-key": "secret-key" });
     const stored = database.prepare("SELECT ciphertext FROM mcp_server_auth").get() as { ciphertext: Buffer };
     assert.equal(stored.ciphertext.toString("utf8").includes("secret-key"), false);
@@ -355,6 +356,7 @@ test("npm arguments and sealed environment relaunch the server; neither appears 
 
     const snapshot = await owner.update({ action: "setArgs", id, args: ["fabrikam", "two words"] });
     assert.equal(JSON.stringify(snapshot).includes("dG9rZW4="), false);
+    await owner.read({ id });
     assert.deepEqual(local.launches.at(-1), {
       command: "local", args: ["fabrikam", "two words"], cwd: "C:/data/mcp", env: { PERSONAL_ACCESS_TOKEN: "dG9rZW4=" },
     });
@@ -718,7 +720,8 @@ test("OAuth sign-in registers, exchanges a PKCE code once, refreshes silently an
   const { create, database, close } = setup({});
   const owner = create({ connect: undefined });
   try {
-    const { servers: [server] } = await owner.update({ action: "add", url: provider.url });
+    const { servers: [added] } = await owner.update({ action: "add", url: provider.url });
+    const { servers: [server] } = await owner.read({ id: added!.id });
     assert.deepEqual(server?.catalog, { status: "signInRequired" });
     assert.equal(server?.name, "127.0.0.1", "a server that needs sign-in first is named after its hostname");
     assert.equal(provider.registrations.length, 0, "background reads never register a client");
@@ -799,9 +802,10 @@ test("a sign-in expires, a provider refusal stores nothing, and sign-out or a he
 });
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
+/** `project-a` and `project-a-next` are two clones of one repository; `project-b` is another repository. */
 const projects: WorkbenchMcpServerOptions["resolveProject"] = async projectId => {
   const id = projectId === "alias-a" ? "project-a" : projectId;
-  return { id, rootPath: `/projects/${id}` };
+  return { id, rootPath: `/projects/${id}`, identityKey: id.startsWith("project-a") ? "remote://host/a" : `remote://host/${id}` };
 };
 const inProject = (threadId: string, projectId: string) => ({ threadId, cwd: `/projects/${projectId}`, projectId });
 
@@ -831,6 +835,42 @@ test("a project server is seen and called only from its project's threads, which
     assert.deepEqual(sim.launches.at(-1), { command: "sim-bin", args: ["--headless"], cwd: "/projects/project-a", env: {} });
     await owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, callerA, signal());
     assert.equal(drive.metas.at(-1), undefined);
+  } finally { await owner.dispose(); close(); }
+});
+
+test("a project server serves every clone of its repository, running one cli process from each caller's own folder", async () => {
+  const sim = new FakeServer();
+  sim.tools = [tool("step")];
+  const { create, close } = setup({ "sim-bin": sim });
+  const owner = create({ resolveProject: projects });
+  const main = inProject("thread-main", "project-a");
+  const next = inProject("thread-next", "project-a-next");
+  try {
+    const { servers: [added] } = await owner.update({ action: "addCommand", command: "sim-bin", args: [], projectId: "project-a" });
+    await owner.update({ action: "setAllowAll", id: added!.id, allowAll: true });
+    await owner.call({ server: "sim-bin", tool: "step", arguments: {} }, next, signal());
+    await owner.call({ server: "sim-bin", tool: "step", arguments: {} }, main, signal());
+    await owner.call({ server: "sim-bin", tool: "step", arguments: {} }, next, signal());
+    assert.deepEqual(sim.launches.map(launch => launch.cwd), ["/projects/project-a-next", "/projects/project-a"]);
+    await assert.rejects(owner.call({ server: "sim-bin", tool: "step", arguments: {} }, inProject("thread-b", "project-b"), signal()),
+      /No MCP server is named sim-bin/u);
+
+    await owner.releaseProject("project-a-next");
+    await settle();
+    assert.equal(sim.closed, 1, "only the released folder's process stops");
+  } finally { await owner.dispose(); close(); }
+});
+
+test("a settings change answers without contacting any server", async () => {
+  const drive = new FakeServer("drive");
+  const { create, close } = setup({ drive });
+  const owner = create();
+  try {
+    const { servers: [added] } = await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    const contacted = drive.endpoints.length;
+    const changed = await owner.update({ action: "setAllowAll", id: added!.id, allowAll: true });
+    assert.equal(drive.endpoints.length, contacted);
+    assert.equal(changed.servers[0]?.catalog.status, "pending");
   } finally { await owner.dispose(); close(); }
 });
 

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - isUnchecked: whether a server card still awaits its own check (pending or installing).
+ * - mergeMcpServerChange: the snapshot after a change, keeping checked catalogues of servers the change did not reconnect.
  * - McpServerSettingsState: MCP server settings presentation state, including whether this browser can sign in.
  * - default McpServerSettingsController: own incremental MCP settings checks, fenced writes and OAuth sign-in starts.
  */
@@ -12,6 +13,25 @@ import type { McpSignInPopup } from "./mcp-sign-in-popup";
 /** A card whose result is still to come: unchecked, or installing its npm package (its own check waits for the install). */
 export function isUnchecked(catalog: McpServerSettingsSnapshot["servers"][number]["catalog"]) {
   return catalog.status === "pending" || catalog.status === "installing";
+}
+
+type Update = McpServerSettingsUpdate;
+/** Changes that leave a server's connection as it was, so its checked catalogue still holds. */
+const KEEPS_CONNECTION = new Set<Update["action"]>(["setAllowAll", "setTools", "rename"]);
+
+/**
+ * The snapshot after a change: the daemon answers without contacting servers, so every server it reports as pending keeps the
+ * catalogue already shown, unless the change reconnected that server; new servers stay pending until their own check.
+ */
+export function mergeMcpServerChange(
+  previous: McpServerSettingsSnapshot | null, next: McpServerSettingsSnapshot, update: Update,
+): McpServerSettingsSnapshot {
+  const reconnected = "id" in update && !KEEPS_CONNECTION.has(update.action) ? update.id : null;
+  return { servers: next.servers.map(server => {
+    const shown = previous?.servers.find(candidate => candidate.id === server.id);
+    return shown && server.catalog.status === "pending" && server.id !== reconnected && !isUnchecked(shown.catalog)
+      ? { ...server, catalog: shown.catalog } : server;
+  }) };
 }
 
 export interface McpServerSettingsState {
@@ -56,7 +76,9 @@ export default class McpServerSettingsController {
   }
 
   /** Resolves true when the daemon accepted the change. */
-  update(update: McpServerSettingsUpdate) { return this.perform(() => this.port.update(update)); }
+  update(update: McpServerSettingsUpdate) {
+    return this.perform(async () => mergeMcpServerChange(this.snapshot.settings, await this.port.update(update), update));
+  }
 
   /** Open the popup first (still inside the click), then point it at the provider's login. */
   async startSignIn(id: string) {

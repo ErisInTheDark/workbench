@@ -50,8 +50,11 @@ export interface WorkbenchMcpServerOptions {
   };
   readDeviceIdentity(): Promise<string>;
   connect?: (endpoint: McpServerEndpoint) => McpServerConnectionPort;
-  /** A daemon project's canonical id and its folder on this machine, where its cli servers start; absent where project servers are not offered. */
-  resolveProject?: (projectId: string) => Promise<{ id: string; rootPath: string }>;
+  /**
+   * A daemon project's canonical id, its folder on this machine (where cli servers start for its threads) and its identity: folders
+   * sharing an identity, such as clones of one repository, are one project to its servers. Absent where project servers are not offered.
+   */
+  resolveProject?: (projectId: string) => Promise<{ id: string; rootPath: string; identityKey: string | null }>;
   /** Fetches links servers sent; absent where downloads are not offered. */
   downloads?: Pick<McpDownloadStore, "download">;
   /** Installs and launches npm-packaged stdio servers; absent where they are not offered. */
@@ -82,6 +85,8 @@ interface StoredServer {
   name: string;
   source: McpServerSource;
   scope: Scope;
+  /** The folder (daemon project) a project-scoped cli server runs from for this use: the caller's, else the stored project's. */
+  folderProjectId?: string;
   allowAll: boolean;
   allowedTools: string[];
   /** `value` is null when the credential was sealed on another device or OS user. */
@@ -164,10 +169,24 @@ function threadServerId(threadId: string, name: string) {
   return `thread\0${threadId}\0${name}`;
 }
 
+/** The folder a project-scoped cli server runs from; each folder runs its own process, since each checkout holds its own code. */
+function launchFolder(server: StoredServer) {
+  return server.source.kind === "cli" && server.scope.kind === "project" ? server.folderProjectId ?? server.scope.projectId : null;
+}
+
+interface LiveConnection {
+  serverId: string;
+  connection: McpServerConnectionPort;
+  scope: Scope;
+  /** The folder a cli project server's process runs from; null for every other connection. */
+  folderProjectId: string | null;
+}
+
 export default class WorkbenchMcpServerController {
   #secret: Promise<Buffer> | null = null;
   #nameAdoptions: Promise<void> = Promise.resolve();
-  readonly #connections = new Map<string, { connection: McpServerConnectionPort; scope: Scope }>();
+  /** Keyed by server id, plus the folder for cli project servers. */
+  readonly #connections = new Map<string, LiveConnection>();
   readonly #traffic = new WebSocketTrafficBuffer({ maxEntries: 500, maxBytes: 4 * 1024 * 1024 });
   /** Newest-first links each server sent in call replies; memory only, so a reload means calling again. */
   readonly #sentLinks = new Map<string, string[]>();
@@ -260,15 +279,15 @@ export default class WorkbenchMcpServerController {
         ? { kind: "project", projectId: (await this.#projects()(update.projectId)).id } : { kind: "global" };
       if (update.action === "add") {
         await this.#addHttp(update.url, scope);
-        return await this.read();
+        return await this.read({ configuredOnly: true });
       }
       if (update.action === "addPackage") this.#packages(); // Refused where npm servers are not offered.
       const source: StdioSource = update.action === "addPackage"
         ? { kind: "npm", package: update.package, version: update.version ?? "latest", args: update.args }
         : { kind: "cli", command: update.command, args: update.args };
-      // Saved before installing, so an npm install shows on the server's own card; the read below starts it.
+      // Saved before installing, so an npm install shows on the server's own card; the card's own check starts it.
       await this.#insert(randomUUID(), uniqueName(fallbackName(source), servers.map(server => server.name)), source, scope);
-      return await this.read();
+      return await this.read({ configuredOnly: true });
     }
     const server = servers.find(candidate => candidate.id === update.id);
     if (!server) throw new Error("That MCP server no longer exists.");
@@ -325,7 +344,8 @@ export default class WorkbenchMcpServerController {
         await this.options.database.executeTransaction([updateRows(mcpServers, { name: update.name }, { id: server.id })]);
         break;
     }
-    return await this.read();
+    // Contacts no server, so a change answers at once; the settings view checks the servers it needs to.
+    return await this.read({ configuredOnly: true });
   }
 
   /** Probe the new server for its reported name, then store it; a failed store closes the probe's connection. */
@@ -401,9 +421,9 @@ export default class WorkbenchMcpServerController {
 
   /**
    * Start the stored stdio server as it is now: an npm server pins the exact version its first install resolved; a cli server
-   * runs from its project's folder, or home when global.
+   * runs from `folderProjectId`'s folder when project-scoped, or home when global.
    */
-  async #launch(serverId: string): Promise<McpServerLaunch> {
+  async #launch(serverId: string, folderProjectId: string | null): Promise<McpServerLaunch> {
     const server = await this.#stdioServer(serverId);
     const source = stdioSource(server);
     const env: Record<string, string> = {};
@@ -412,8 +432,8 @@ export default class WorkbenchMcpServerController {
       env[entry.name] = entry.value;
     }
     if (source.kind === "cli") {
-      const cwd = server.scope.kind === "project"
-        ? (await this.#projects()(server.scope.projectId)).rootPath
+      const cwd = folderProjectId
+        ? (await this.#projects()(folderProjectId)).rootPath
         : (this.options.homeDirectory ?? os.homedir)();
       return { command: source.command, args: [...source.args], cwd, env };
     }
@@ -601,8 +621,8 @@ export default class WorkbenchMcpServerController {
   /** A turn ended: its thread servers are forgotten and their connections close without waiting on them. */
   async endTurn(threadId: string) {
     await this.options.database.executeTransaction([deleteRows(mcpThreadServers, { thread_id: threadId })]);
-    for (const [id, entry] of this.#connections) {
-      if (entry.scope.kind === "thread" && entry.scope.threadId === threadId) this.#closeQuietly(id);
+    for (const [key, entry] of this.#connections) {
+      if (entry.scope.kind === "thread" && entry.scope.threadId === threadId) this.#closeQuietly(key);
     }
   }
 
@@ -613,11 +633,24 @@ export default class WorkbenchMcpServerController {
     for (const threadId of stale) await this.endTurn(threadId);
   }
 
-  /** No thread of the project is working any more: close its project-scoped connections; the next use reopens them. */
-  releaseProject(projectId: string) {
-    for (const [id, entry] of this.#connections) {
-      if (entry.scope.kind === "project" && entry.scope.projectId === projectId) this.#closeQuietly(id);
+  /**
+   * No thread of this folder (daemon project) is working any more: its cli processes stop, and the project's shared connections close;
+   * the next use reopens either.
+   */
+  async releaseProject(projectId: string) {
+    const identity = await this.#identity(projectId);
+    for (const [key, entry] of this.#connections) {
+      if (entry.scope.kind !== "project") continue;
+      const released = entry.folderProjectId !== null
+        ? entry.folderProjectId === projectId
+        : entry.scope.projectId === projectId || (identity !== null && await this.#identity(entry.scope.projectId) === identity);
+      if (released) this.#closeQuietly(key);
     }
+  }
+
+  /** The identity a folder shares with clones of the same repository; null when unknown, so it matches only itself. */
+  async #identity(projectId: string) {
+    return await this.#projects()(projectId).then(project => project.identityKey, () => null);
   }
 
   /** Download, without asking, a link the server itself sent in a recent call reply; the file lives until the thread settles. */
@@ -666,10 +699,23 @@ export default class WorkbenchMcpServerController {
     return server.allowAll || server.allowedTools.includes(tool);
   }
 
-  /** Configured servers come first, so a server configured after a thread connected its own same-named one wins. */
+  /**
+   * A project server serves every folder sharing its project's identity, and runs cli processes from the caller's own folder.
+   * Configured servers come first, so a server configured after a thread connected its own same-named one wins.
+   */
   async #visible(caller: McpServerCaller | null): Promise<StoredServer[]> {
-    const configured = (await this.#servers()).filter(server => server.scope.kind === "global"
-      || (server.scope.kind === "project" && caller !== null && server.scope.projectId === caller.projectId));
+    const servers = await this.#servers();
+    const callerProjectId = caller?.projectId ?? null;
+    const callerIdentity = callerProjectId && servers.some(server => server.scope.kind === "project")
+      ? await this.#identity(callerProjectId) : null;
+    const configured: StoredServer[] = [];
+    for (const server of servers) {
+      if (server.scope.kind === "global") configured.push(server);
+      else if (server.scope.kind === "project" && callerProjectId && (server.scope.projectId === callerProjectId
+        || (callerIdentity !== null && await this.#identity(server.scope.projectId) === callerIdentity))) {
+        configured.push({ ...server, folderProjectId: callerProjectId });
+      }
+    }
     if (!caller) return configured;
     const rows = await this.options.database.query(selectRows(mcpThreadServers, { where: { thread_id: caller.threadId }, orderBy: [{ column: "created_at" }] }));
     return [...configured, ...rows.map(row => this.#threadServer(row))];
@@ -718,13 +764,15 @@ export default class WorkbenchMcpServerController {
   }
 
   #connection(server: StoredServer) {
-    const existing = this.#connections.get(server.id);
+    const folderProjectId = launchFolder(server);
+    const key = folderProjectId ? `${server.id}\0${folderProjectId}` : server.id;
+    const existing = this.#connections.get(key);
     if (existing) return existing.connection;
     const label = server.name || fallbackName(server.source);
     const record = (frame: McpServerTrafficFrame) => this.#traffic.record({ ...frame, connection: label, label: `${label} ${frame.label}` });
     const source = server.source;
     const endpoint: McpServerEndpoint = source.kind !== "http"
-      ? { transport: "stdio", record, launch: () => this.#launch(server.id) }
+      ? { transport: "stdio", record, launch: () => this.#launch(server.id, folderProjectId) }
       // An agent-supplied URL gets no sign-in and a bounded response size.
       : server.scope.kind === "thread"
       ? { transport: "http", url: source.url, headers: {}, record, maxResponseBytes: THREAD_SERVER_MAX_RESPONSE_BYTES }
@@ -737,20 +785,26 @@ export default class WorkbenchMcpServerController {
         }),
       };
     const connection = new WrappedMcpConnection((this.options.connect ?? (value => new McpServerConnection(value)))(endpoint));
-    this.#connections.set(server.id, { connection, scope: server.scope });
+    this.#connections.set(key, { serverId: server.id, connection, scope: server.scope, folderProjectId });
     return connection;
   }
 
+  /** Close every connection of a server, in every folder it runs in. */
   async #disconnect(serverId: string) {
-    const entry = this.#connections.get(serverId);
-    this.#connections.delete(serverId);
     this.#sentLinks.delete(serverId);
+    const keys = [...this.#connections].flatMap(([key, entry]) => entry.serverId === serverId ? [key] : []);
+    await Promise.all(keys.map(key => this.#closeConnection(key)));
+  }
+
+  async #closeConnection(key: string) {
+    const entry = this.#connections.get(key);
+    this.#connections.delete(key);
     await entry?.connection.close();
   }
 
   /** Lifetime ends never wait on a stuck server; a close failure only means the process or socket was already gone. */
-  #closeQuietly(serverId: string) {
-    void this.#disconnect(serverId).catch(() => undefined);
+  #closeQuietly(key: string) {
+    void this.#closeConnection(key).catch(() => undefined);
   }
 
   #clearOAuth(serverId: string) {

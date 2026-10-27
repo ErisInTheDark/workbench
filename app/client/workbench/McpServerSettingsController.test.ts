@@ -1,5 +1,6 @@
 /*
- * No production exports. Protect incremental MCP reads (including installing npm servers) and stale-result fencing.
+ * No production exports. Protect incremental MCP reads (including installing npm servers), changes re-checking only the servers
+ * they touch, and stale-result fencing.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -109,6 +110,26 @@ test("a newer refresh or removal fences older checks, and disposal suppresses la
   requests.at(-1)!.reply.reject(new Error("Late failure"));
   await requests.at(-1)!.reply.promise.catch(() => undefined);
   assert.equal(controller.getSnapshot(), beforeDispose);
+});
+
+test("a change re-checks only the servers it added or reconnected; others keep the catalogue already shown", async t => {
+  const fixture = setup();
+  const { controller, requests } = fixture;
+  t.after(() => controller.dispose());
+  fixture.inventory({ servers: [server("fast"), server("slow")] });
+  await controller.refresh();
+  requests.splice(0).forEach(request => request.reply.resolve({ servers: [{ ...server(request.id), catalog: { status: "ready", tools: [] } }] }));
+  await new Promise(resolve => setImmediate(resolve));
+
+  // The daemon answers changes without contacting servers, so every card it returns is pending.
+  fixture.inventory({ servers: [server("fast"), server("slow"), server("added")] });
+  await controller.update({ action: "addCommand", command: "node", args: [] });
+  assert.deepEqual(requests.map(request => request.id), ["added"]);
+  await controller.update({ action: "setAllowAll", id: "fast", allowAll: true });
+  assert.deepEqual(requests.map(request => request.id), ["added", "added"], "an allow change keeps every checked card");
+  await controller.update({ action: "refresh", id: "slow" });
+  assert.deepEqual(requests.slice(2).map(request => request.id).sort(), ["added", "slow"]);
+  assert.equal(controller.getSnapshot().settings?.servers[0]?.catalog.status, "ready");
 });
 
 test("failed saves and inventory refreshes do not strand previously pending cards", async t => {

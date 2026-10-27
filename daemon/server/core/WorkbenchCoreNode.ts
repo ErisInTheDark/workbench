@@ -267,7 +267,8 @@ function createWorkbenchCoreFeature(
     database, readDeviceIdentity, downloads: mcpDownloads, packages: mcpPackages,
     resolveProject: async projectId => {
       const project = await projectCatalog.resolveProjectById(projectId);
-      return { id: project.id, rootPath: project.rootPath };
+      const location = projectCatalog.getFacts().locations?.data.find(entry => entry.project.id === project.id);
+      return { id: project.id, rootPath: project.rootPath, identityKey: location?.identityKey ?? null };
     },
   });
   const readWorkingThreads = async () => {
@@ -281,7 +282,10 @@ function createWorkbenchCoreFeature(
     subscribe: listener => threadStateController.subscribe((projectId, entry) => {
       if (entry.entryKind !== "draft") listener(projectId, entry.identity.threadId, entry.lifecycle.kind === "working");
     }),
-    release: projectId => mcpServers.releaseProject(projectId),
+    release: projectId => {
+      void mcpServers.releaseProject(projectId).catch((error: unknown) =>
+        logError("mcp-servers", `project servers were not released: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));
+    },
     warn: message => logError("mcp-servers", message),
   });
   const threadActions = new WorkbenchThreadActionController({
