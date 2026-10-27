@@ -9,6 +9,7 @@ import { once } from "node:events";
 import resolveWorkbenchDataRoot from "../shared/workbench-data-root.ts";
 import WorkbenchProcessView from "./WorkbenchProcessView.ts";
 import createWorkbenchRepairViewControls from "./WorkbenchRepairViewControls.ts";
+import loadProcessViewControls from "./load-process-view-controls.ts";
 
 const warn = (text: string) => process.stderr.write(`${text}\n`);
 const write = async (text: string) => {
@@ -39,11 +40,7 @@ async function main() {
     repair,
     openControls: async (warnMessage, signal) => {
       await repair.whenIdle(signal);
-      // Process controls reach into app and host code that needs tsx and installed dependencies.
-      const { register } = await import("tsx/esm/api");
-      register();
-      const { default: createWorkbenchProcessViewControls } = await import("./WorkbenchProcessViewControls.ts");
-      return await createWorkbenchProcessViewControls({ dataRoot, repositoryRoot, warn: warnMessage });
+      return await loadProcessViewControls({ dataRoot, repositoryRoot, warn: warnMessage });
     },
   });
   const detach = () => view.detach();
