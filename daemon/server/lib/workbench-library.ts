@@ -8,6 +8,7 @@
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
  * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions/listActiveWorkbenchSkillDefinitions: discover active Workbench Skill metadata and full file content with source precedence. Keywords: skills, manifest, discovery, builtin.
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
+ * - isAgentMarkdownFile/isAgentUserInvocable/getAgentNameFromFileName: agent file rules shared by library and project agents.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, compact manifest catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
@@ -28,7 +29,8 @@ import {
 import { ensureWorkbenchInstructionSourceFiles } from "./workbench/instructions/instruction-source";
 import { createLibraryInstructionFileGeneration } from "./workbench/instructions/library-instruction-files";
 import { renderWorkbenchSkillContent } from "./workbench/instructions/skill-rendering";
-import { listSkillDefinitionsFromDirectory } from "./workbench/skills/skill-discovery";
+import { EMPTY_PROJECT_SKILLS, listSkillDefinitionsFromDirectory, type WorkbenchProjectSkills } from "./workbench/skills/skill-discovery";
+import { readWorkbenchSkillDirectoryName } from "workbench-shared/workbench/skill-paths";
 
 export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
 
@@ -169,15 +171,15 @@ async function readTextFile(filePath: string) {
   }
 }
 
-function isAgentMarkdownFile(fileName: string) {
+export function isAgentMarkdownFile(fileName: string) {
   return fileName.endsWith(".md") && !isExcludedWorkbenchLibraryFile(fileName);
 }
 
-function isAgentUserInvocable(frontmatter: Map<string, string> | null) {
+export function isAgentUserInvocable(frontmatter: Map<string, string> | null) {
   return frontmatter?.get("user-invocable") !== "false";
 }
 
-function getAgentNameFromFileName(fileName: string) {
+export function getAgentNameFromFileName(fileName: string) {
   return fileName.replace(/\.md$/i, "");
 }
 
@@ -268,13 +270,14 @@ function createSkillSummary(skill: WorkbenchSkillDefinition): WorkbenchSkillSumm
 }
 
 function createSkillShadowKey(skill: Pick<WorkbenchSkillSummary, "name" | "relativePath">) {
-  const normalizedRelativePath = normalizeRelativePath(skill.relativePath);
-  const match = /^(?:\.agents\/)?skills\/(?:builtin\/)?([^/]+)\/SKILL\.md$/i.exec(normalizedRelativePath);
-  return (match?.[1] ?? skill.name).trim().toLocaleLowerCase();
+  return (readWorkbenchSkillDirectoryName(skill.relativePath) ?? skill.name).trim().toLocaleLowerCase();
 }
 
-function applySkillShadowing(skillGroups: readonly (readonly WorkbenchSkillDefinition[])[]) {
-  const seenKeys = new Set<string>();
+function applySkillShadowing(
+  skillGroups: readonly (readonly WorkbenchSkillDefinition[])[],
+  hiddenKeys: readonly string[] = [],
+) {
+  const seenKeys = new Set(hiddenKeys);
   const activeSkills: WorkbenchSkillDefinition[] = [];
   for (const group of skillGroups) {
     for (const skill of group) {
@@ -333,7 +336,7 @@ export async function listWorkbenchLibrarySkillDefinitions(): Promise<WorkbenchS
 }
 
 export async function listActiveWorkbenchSkillDefinitions(
-  projectSkills: readonly WorkbenchSkillDefinition[] = [],
+  projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS,
   userHome = os.homedir(),
 ): Promise<WorkbenchSkillDefinition[]> {
   const [userSkills, userAgentSkills, builtinSkills] = await Promise.all([
@@ -341,7 +344,7 @@ export async function listActiveWorkbenchSkillDefinitions(
     listSkillDefinitionsFromDirectory(userHome, ".agents/skills", parseFrontmatterBlock, true),
     listWorkbenchBuiltinSkillDefinitions(),
   ]);
-  return applySkillShadowing([projectSkills, userSkills, userAgentSkills, builtinSkills]);
+  return applySkillShadowing([projectSkills.skills, userSkills, userAgentSkills, builtinSkills], projectSkills.hiddenNames);
 }
 
 export async function listWorkbenchLibraryAgents(): Promise<WorkbenchAgentOption[]> {
@@ -483,7 +486,7 @@ function escapeXmlAttribute(value: string) {
     .replace(/>/g, "&gt;");
 }
 
-export async function buildWorkbenchSkillManifestInstructions(projectSkills: WorkbenchSkillDefinition[] = []) {
+export async function buildWorkbenchSkillManifestInstructions(projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS) {
   const catalog = await buildWorkbenchSkillCatalog(projectSkills);
   if (!catalog) return null;
   return createLibraryInstructionFileGeneration().render("wb/mechanics/skills.md", {
@@ -503,7 +506,7 @@ export function stripWorkbenchInstructionFrontmatter(content: string) {
 }
 
 export async function buildWorkbenchSkillCatalog(
-  projectSkills: readonly WorkbenchSkillDefinition[] = [],
+  projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS,
 ) {
   const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
   if (!activeSkills.length) {
@@ -516,7 +519,7 @@ export async function buildWorkbenchSkillCatalog(
 }
 
 async function listActivatedSkillDefinitions(
-  projectSkills: readonly WorkbenchSkillDefinition[],
+  projectSkills: WorkbenchProjectSkills,
   activatedSkillPaths: readonly string[],
 ) {
   const activatedPaths = new Set(
@@ -531,7 +534,7 @@ async function listActivatedSkillDefinitions(
 
 /** Canonical path and catalog name of each active skill the paths select; unknown paths drop out. */
 export async function resolveWorkbenchActivatedSkills(
-  projectSkills: readonly WorkbenchSkillDefinition[],
+  projectSkills: WorkbenchProjectSkills,
   activatedSkillPaths: readonly string[],
 ) {
   return (await listActivatedSkillDefinitions(projectSkills, activatedSkillPaths))
@@ -539,7 +542,7 @@ export async function resolveWorkbenchActivatedSkills(
 }
 
 export async function buildWorkbenchActivatedSkillCatalog(
-  projectSkills: readonly WorkbenchSkillDefinition[] = [],
+  projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS,
   activatedSkillPaths: readonly string[] = [],
 ) {
   const activatedSkills = await listActivatedSkillDefinitions(projectSkills, activatedSkillPaths);
@@ -569,7 +572,7 @@ function shouldIncludeInstructionPack(
 }
 
 export async function buildWorkbenchLibraryBootstrapInstructions(
-  projectSkills: WorkbenchSkillDefinition[] = [],
+  projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS,
   options: WorkbenchLibraryBootstrapInstructionsOptions = {},
 ) {
   const [skillManifest, instructionPacks] = await Promise.all([

@@ -11,9 +11,10 @@
 import path from "node:path";
 
 import {
-  listProjectSkillDefinitionsFromRoot,
+  listProjectSkillsFromRoot,
   readUserInvocableAgentDefinitionFromRoot,
-} from "../../project";
+} from "../project/project-agents-folder";
+import { EMPTY_PROJECT_SKILLS } from "../skills/skill-discovery";
 import type {
   WorkbenchAgentDefinition,
   WorkbenchProjectRoot,
@@ -248,13 +249,13 @@ function trimRenderedInstructionContent(rendered: RenderedInstructionContent): R
   };
 }
 
-async function listProjectSkillDefinitionsForPrompt(context: WorkbenchPromptContext) {
+async function listProjectSkillsForPrompt(context: WorkbenchPromptContext) {
   const promptRoot = getPrimaryPromptRoot(context);
   if (!promptRoot?.rootPath.trim()) {
-    return [];
+    return EMPTY_PROJECT_SKILLS;
   }
 
-  return await listProjectSkillDefinitionsFromRoot(promptRoot.rootPath);
+  return await listProjectSkillsFromRoot(promptRoot.rootPath);
 }
 
 export async function ensureWorkbenchPromptFiles() {
@@ -269,7 +270,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
   const instructionFiles = createLibraryInstructionFileGeneration();
   const [agentDefinition, projectSkills, instructionPacks] = await Promise.all([
     voice ? Promise.resolve(null) : readSelectedAgentDefinition(context, instructionFiles),
-    voice ? Promise.resolve([]) : listProjectSkillDefinitionsForPrompt(context),
+    voice ? Promise.resolve(EMPTY_PROJECT_SKILLS) : listProjectSkillsForPrompt(context),
     listWorkbenchLibraryInstructions(),
   ]);
   const skillManifest = voice ? null : await buildWorkbenchSkillCatalog(projectSkills);
@@ -305,7 +306,7 @@ export async function buildWorkbenchActivatedSkillCatalog(
 ): Promise<string | null> {
   await ensureWorkbenchPromptFiles();
 
-  const projectSkills = await listProjectSkillDefinitionsForPrompt(context);
+  const projectSkills = await listProjectSkillsForPrompt(context);
   return await buildActivatedSkillCatalog(
     projectSkills,
     context.activatedSkillPaths,

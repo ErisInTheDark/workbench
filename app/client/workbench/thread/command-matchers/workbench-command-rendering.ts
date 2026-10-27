@@ -17,6 +17,7 @@
  */
 import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import { readWorkbenchSkillDirectoryName } from "workbench-shared/workbench/skill-paths";
 import {
   WORKBENCH_FEEDBACK_TITLE_FALLBACK,
   type WorkbenchFeedbackCategory,
@@ -308,11 +309,7 @@ function simple(
 
 function renderSkillLoad(name: string | null, context: WorkbenchCommandPresentationContext) {
   if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name)) return null;
-  const known = context.knownSkills?.find((skill) => {
-    const relativePath = skill.relativePath.replaceAll("\\", "/");
-    const directory = /^(?:\.agents\/)?skills\/(?:builtin\/)?([^/]+)\/SKILL\.md$/iu.exec(relativePath)?.[1];
-    return directory?.toLocaleLowerCase() === name;
-  });
+  const known = context.knownSkills?.find(skill => readWorkbenchSkillDirectoryName(skill.relativePath)?.toLocaleLowerCase() === name);
   const target = known
     ? CommandMatcher.Skill({ name: known.name, path: known.path })
     : CommandMatcher.Code(name);

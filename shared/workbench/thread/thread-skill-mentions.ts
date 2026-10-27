@@ -10,6 +10,7 @@
  */
 import { z } from "zod";
 import type { WorkbenchSkillSummary } from "../../types.ts";
+import { readWorkbenchSkillDirectoryName } from "../skill-paths.ts";
 
 const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?)}\]]+$/u;
 
@@ -18,7 +19,7 @@ function normalizeMentionPath(value: string) {
 }
 
 export function workbenchSkillMentionAliases(skill: Pick<WorkbenchSkillSummary, "name" | "relativePath">) {
-  const directory = /^(?:\.agents\/)?skills\/(?:builtin\/)?([^/]+)\/SKILL\.md$/iu.exec(normalizeMentionPath(skill.relativePath))?.[1] ?? "";
+  const directory = readWorkbenchSkillDirectoryName(normalizeMentionPath(skill.relativePath)) ?? "";
   return [...new Set([skill.name, directory].filter(Boolean))];
 }
 

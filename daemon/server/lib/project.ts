@@ -14,8 +14,6 @@
  * - getProjectChanges: read a project's Git changes alone, without walking its tree.
  * - resolveExternalFileLinkRoot: locate a file link's Git root.
  * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified paths.
- * - listProjectSkillDefinitionsFromRoot: discover project skills.
- * - listUserInvocableAgentsFromResolvedProject/readUserInvocableAgentDefinitionFromRoot: discover and read project agents.
  */
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -30,22 +28,17 @@ import { appRoot, projectRoot } from "./project-root";
 import { localProjectKey, remoteProjectKey, workspaceProjectKey } from "./workbench/project/project-identity";
 import { projectLocationKey } from "./workbench/project/project-location-discovery";
 import { ProjectIdentityKeySchema, type ProjectIdentityKey } from "workbench-shared/workbench/identity";
-import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
+import type { ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot } from "workbench-shared/types";
 import { createGitignoreMatcher } from "workbench-shared/source-pattern-matcher";
 import {
   ensureWorkbenchLibrary,
-  listWorkbenchLibraryAgents,
-  parseFrontmatterBlock,
-  readWorkbenchLibraryAgentDefinition,
   WORKBENCH_LIBRARY_PROJECT_ID,
   workbenchLibraryRoot,
 } from "./workbench-library";
-import { listSkillDefinitionsFromDirectory } from "./workbench/skills/skill-discovery";
 
 export { appRoot, projectRoot };
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
-const README_FILE_NAME = "README.md";
 const WORKSPACE_FILE_EXTENSION = ".code-workspace";
 
 function normalizeProjectId(projectId: string) {
@@ -74,33 +67,6 @@ function createUniqueWorkspaceRootId(rawId: string, usedIds: Set<string>) {
   }
   usedIds.add(candidateId);
   return candidateId;
-}
-
-function getAgentDirectoryPath(rootDir = projectRoot) {
-  return path.join(rootDir, ".agents", "agents");
-}
-
-function createAgentRelativePath(fileName: string) {
-  return normalizeRelativePath(path.join(".agents", "agents", fileName));
-}
-
-function isAgentMarkdownFile(fileName: string) {
-  return fileName.endsWith(".md")
-    && path.basename(fileName) !== README_FILE_NAME
-    && !fileName.endsWith(".template.md");
-}
-
-function isAgentUserInvocable(frontmatter: Map<string, string> | null) {
-  return frontmatter?.get("user-invocable") !== "false";
-}
-
-function getAgentNameFromFileName(fileName: string) {
-  return fileName.replace(/\.md$/i, "");
-}
-
-async function readAgentFile(rootDir: string, relativePath: string) {
-  const absolutePath = safeResolveProjectPath(rootDir, relativePath);
-  return await fs.readFile(absolutePath, "utf8");
 }
 
 export function normalizeRelativePath(filePath: string) {
@@ -1070,76 +1036,4 @@ export async function getProjectSnapshotFromResolvedProject(resolvedProject: Res
     changes,
     workbenchStorageRootPath: normalizeRelativePath(projectRoot),
   } satisfies ProjectSnapshot;
-}
-
-export async function listProjectSkillDefinitionsFromRoot(rootDir: string): Promise<WorkbenchSkillDefinition[]> {
-  return await listSkillDefinitionsFromDirectory(rootDir, ".agents/skills", parseFrontmatterBlock);
-}
-
-export async function listUserInvocableAgentsFromResolvedProject(resolvedProject: ResolvedProject) {
-  const libraryAgents = await listWorkbenchLibraryAgents();
-  if (resolvedProject.id === WORKBENCH_LIBRARY_PROJECT_ID) {
-    return libraryAgents;
-  }
-
-  const projectAgents: WorkbenchAgentOption[] = [];
-  try {
-    const entries = await fs.readdir(getAgentDirectoryPath(resolvedProject.root), { withFileTypes: true });
-
-    for (const entry of entries) {
-      if (!entry.isFile() || !isAgentMarkdownFile(entry.name)) {
-        continue;
-      }
-
-      const relativePath = createAgentRelativePath(entry.name);
-      const content = await readAgentFile(resolvedProject.root, relativePath);
-      const frontmatter = parseFrontmatterBlock(content);
-      if (!isAgentUserInvocable(frontmatter)) {
-        continue;
-      }
-
-      projectAgents.push({
-        name: frontmatter?.get("name") ?? getAgentNameFromFileName(entry.name),
-        description: frontmatter?.get("description") ?? "",
-        path: relativePath,
-        source: "project",
-        sourceLabel: "Project",
-      });
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return libraryAgents;
-    }
-
-    throw error;
-  }
-
-  return [...libraryAgents, ...projectAgents.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))];
-}
-
-export async function readUserInvocableAgentDefinitionFromRoot(relativePath: string, rootDir: string): Promise<WorkbenchAgentDefinition> {
-  if (relativePath.startsWith("library:")) {
-    return await readWorkbenchLibraryAgentDefinition(relativePath);
-  }
-
-  const normalizedPath = normalizeRelativePath(relativePath);
-  if (!normalizedPath.startsWith(".agents/agents/") || !isAgentMarkdownFile(normalizedPath)) {
-    throw new Error("Agent path is outside the supported agents directory.");
-  }
-
-  const content = await readAgentFile(rootDir, normalizedPath);
-  const frontmatter = parseFrontmatterBlock(content);
-  if (!isAgentUserInvocable(frontmatter)) {
-    throw new Error("Agent is not user-invocable.");
-  }
-
-  const prompt = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
-  return {
-    description: frontmatter?.get("description") ?? "",
-    name: frontmatter?.get("name") ?? getAgentNameFromFileName(path.basename(normalizedPath)),
-    path: normalizedPath,
-    prompt,
-    source: "project",
-    sourceLabel: "Project",
-  };
 }

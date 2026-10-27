@@ -32,7 +32,7 @@ import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/wor
 import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import WorkbenchSkillController from "./WorkbenchSkillController";
 import { WorkbenchSkillExecutionRequestSchema } from "../lib/workbench/commands/skill-command-definition";
-import { listProjectSkillDefinitionsFromRoot } from "../lib/project";
+import { listProjectSkillsFromRoot } from "../lib/workbench/project/project-agents-folder";
 import { listActiveWorkbenchSkillDefinitions } from "../lib/workbench-library";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -102,7 +102,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threadState = build.get("threadState");
     const settings = new WorkbenchServerSettings(database);
     const skill = new WorkbenchSkillController({
-      listSkills: async root => await listActiveWorkbenchSkillDefinitions(await listProjectSkillDefinitionsFromRoot(root)),
+      listSkills: async root => await listActiveWorkbenchSkillDefinitions(await listProjectSkillsFromRoot(root)),
       readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "Skill instruction tool catalogue"),
       readLocalCapabilities: () => settings.readLocalCapabilities(),
       onLoaded: ({ threadId, path }) => build.get("threadSkills").recordActivations(threadId, [path], "agent"),

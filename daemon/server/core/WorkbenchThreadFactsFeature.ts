@@ -11,7 +11,7 @@ import type { ThreadRuntime, WorkbenchThreadSettlementHold, WorkbenchThreadSideb
 import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
-import * as project from "../lib/project";
+import { listProjectSkillsFromRoot } from "../lib/workbench/project/project-agents-folder";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import * as workbenchLibrary from "../lib/workbench-library";
@@ -93,7 +93,7 @@ export default class WorkbenchThreadFactsFeature {
         const resolved = await target(thread.threadId);
         if (!resolved) return [];
         const owner = await projectCatalog.resolveProjectById(resolved.identity.projectId);
-        return workbenchLibrary.resolveWorkbenchActivatedSkills(await project.listProjectSkillDefinitionsFromRoot(owner.rootPath), paths);
+        return workbenchLibrary.resolveWorkbenchActivatedSkills(await listProjectSkillsFromRoot(owner.rootPath), paths);
       },
       buildCatalog: async (thread, paths) => {
         const resolved = await target(thread.threadId);

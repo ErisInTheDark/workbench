@@ -1,10 +1,18 @@
 /*
  * Exports:
  * - listSkillDefinitionsFromDirectory: discover root-bounded SKILL.md packages from one skills directory.
+ * - WorkbenchProjectSkills/EMPTY_PROJECT_SKILLS: a project's skills in precedence order plus lowercase skill names it hides at every layer.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { WorkbenchSkillDefinition } from "workbench-shared/types";
+
+export interface WorkbenchProjectSkills {
+  readonly skills: readonly WorkbenchSkillDefinition[];
+  readonly hiddenNames: readonly string[];
+}
+
+export const EMPTY_PROJECT_SKILLS: WorkbenchProjectSkills = { skills: [], hiddenNames: [] };
 
 export async function listSkillDefinitionsFromDirectory(
   rootPath: string,

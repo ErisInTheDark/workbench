@@ -2,12 +2,13 @@
  * Exports:
  * - default WorkbenchAgentSkillCatalogController: own browser-visible agent and skill catalog reads, and the activatable skills messages are checked against.
  */
+import type { ResolvedProject } from "../lib/project";
 import {
-  listProjectSkillDefinitionsFromRoot,
+  listProjectSkillsFromRoot,
   listUserInvocableAgentsFromResolvedProject,
   readUserInvocableAgentDefinitionFromRoot,
-  type ResolvedProject,
-} from "../lib/project";
+} from "../lib/workbench/project/project-agents-folder";
+import { EMPTY_PROJECT_SKILLS, type WorkbenchProjectSkills } from "../lib/workbench/skills/skill-discovery";
 import {
   buildWorkbenchLibraryBootstrapInstructions,
   listActiveWorkbenchSkillDefinitions,
@@ -18,7 +19,7 @@ interface WorkbenchAgentSkillCatalogOperations {
   buildBootstrap: typeof buildWorkbenchLibraryBootstrapInstructions;
   listActiveSkills: typeof listActiveWorkbenchSkillDefinitions;
   listInstructionPacks: typeof listWorkbenchLibraryInstructions;
-  listProjectSkills: typeof listProjectSkillDefinitionsFromRoot;
+  listProjectSkills: typeof listProjectSkillsFromRoot;
   listUserAgents: typeof listUserInvocableAgentsFromResolvedProject;
   readAgent: typeof readUserInvocableAgentDefinitionFromRoot;
 }
@@ -27,7 +28,7 @@ const defaultOperations: WorkbenchAgentSkillCatalogOperations = {
   buildBootstrap: buildWorkbenchLibraryBootstrapInstructions,
   listActiveSkills: listActiveWorkbenchSkillDefinitions,
   listInstructionPacks: listWorkbenchLibraryInstructions,
-  listProjectSkills: listProjectSkillDefinitionsFromRoot,
+  listProjectSkills: listProjectSkillsFromRoot,
   listUserAgents: listUserInvocableAgentsFromResolvedProject,
   readAgent: readUserInvocableAgentDefinitionFromRoot,
 };
@@ -79,10 +80,10 @@ export default class WorkbenchAgentSkillCatalogController {
 
   private async readProjectSkills(projectId: string | null) {
     const project = projectId ? await this.resolveProjectById(projectId) : null;
-    return project && project.kind !== "workbench-library" ? await this.operations.listProjectSkills(project.root) : [];
+    return project && project.kind !== "workbench-library" ? await this.operations.listProjectSkills(project.root) : EMPTY_PROJECT_SKILLS;
   }
 
-  private async activeSkillSummaries(projectSkills: Awaited<ReturnType<typeof listProjectSkillDefinitionsFromRoot>>) {
+  private async activeSkillSummaries(projectSkills: WorkbenchProjectSkills) {
     return (await this.operations.listActiveSkills(projectSkills))
       .map(({ description, name, path, relativePath }) => ({ description, name, path, relativePath }));
   }

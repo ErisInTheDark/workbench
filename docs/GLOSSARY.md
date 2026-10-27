@@ -6,6 +6,7 @@
 | Workbench Skill | A harness-neutral skill package surfaced to supported harnesses through a compact manifest that tells the harness when and where to read the full skill instructions. Workbench Skills can come from the Workbench Library or the selected project |
 | Project Skill | A skill package stored inside the selected project and surfaced to supported harnesses for that project |
 | Project Agent | An agent prompt stored inside `.agents/agents` in the selected project and surfaced in the composer agent selector for that project |
+| Local Overlay | Gitignored `.agents.local` beside a project's `.agents`; its `skills/<name>/` replace same-named skills at every layer and its `agents/<name>.md` replace same-named project agents. `<name>.tombstone` in either folder hides `<name>` from the project |
 | Skill Load | The act of reading a skill's instruction file so the agent can apply that skill's workflow to the current task |
 | Active Skill | A skill recorded for one thread after user activation or agent Skill Load, until the user deactivates it |
 | Keyed delta | Upserted/removed items plus changed field names against an observation's previous revision; see `shared/workbench/workspace/observation-patch.ts` |

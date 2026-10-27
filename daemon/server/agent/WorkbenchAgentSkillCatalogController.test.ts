@@ -39,9 +39,9 @@ test("catalog delegates source reads and excludes globally installed instruction
       bootstrapOptions = options;
       return "assembled";
     },
-    listActiveSkills: async (skills) => [...skills ?? []],
+    listActiveSkills: async (projectSkills) => [...projectSkills?.skills ?? []],
     listInstructionPacks: async () => instructionPacks,
-    listProjectSkills: async (root) => { projectRoots.push(root); return [projectSkill]; },
+    listProjectSkills: async (root) => { projectRoots.push(root); return { skills: [projectSkill], hiddenNames: [] }; },
     listUserAgents: async (resolvedProject) => { projectRoots.push(resolvedProject.root); return [agent]; },
     readAgent: async (_agentPath, root) => { projectRoots.push(root); return agent; },
   });
