@@ -13,7 +13,8 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
-import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
+import { renderCreateTable } from "workbench-shared/database/schema/schema-definition";
+import { installWorkbenchDatabaseSchema, workbenchDatabaseTables } from "../workbench-database-schema.ts";
 import { boundTranscriptItem, MAX_TRANSCRIPT_ITEM_STRING_CHARS } from "./transcript-item-bounds.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
 import type { WorkbenchTranscriptAtomicObservation } from "./workbench-transcript-types.ts";
@@ -57,6 +58,11 @@ test("the stored-text release repairs older oversized results to exactly what se
     const item = (value: ThreadItem): WorkbenchTranscriptAtomicObservation => ({
       kind: "item", threadId, turnId, lifecycle: "completed", observedAt: 3, item: value,
     });
+    // Today's repository reads tables later releases add; they stand in, empty, while it writes the old rows, then leave so the
+    // upgrade below creates them itself.
+    const existing = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").pluck().all() as string[]);
+    const later = Object.values(workbenchDatabaseTables).filter(table => !existing.has(table.name));
+    for (const table of later) database.exec(renderCreateTable(table));
     // Rows written before the bound existed went straight to the repository, unbounded.
     new WorkbenchTranscriptRepository(database).settle([
       { kind: "thread", threadId, projectId: testProjectIds.project, projectRoot: "C:/project", title: "Thread",
@@ -67,6 +73,7 @@ test("the stored-text release repairs older oversized results to exactly what se
         createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1 },
       item(huge), item(small),
     ]);
+    for (const table of later.toReversed()) database.exec(`DROP TABLE "${table.name}"`);
 
     installWorkbenchDatabaseSchema(database);
     const projected = projectWorkbenchTranscript(new WorkbenchTranscriptRepository(database).read({ threadId, turnLimit: 1 })!);

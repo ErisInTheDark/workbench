@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - MCP_TOOL_REQUEST_QUESTION_ID/MCP_TOOL_REQUEST_APPROVE/MCP_TOOL_REQUEST_DENY: the fixed decision an MCP tool enable request carries.
- * - mcpToolRequestQuestions: the questionnaire questions an enable or sign-in request is stored as.
+ * - mcpToolRequestQuestions: the questionnaire questions an enable, sign-in or connect request is stored as.
  * - isMcpToolRequestApproved: whether a response approves the request; anything else denies it.
  */
 import type { WorkbenchUserInputResponse } from "../../types.ts";
@@ -13,6 +13,7 @@ export const MCP_TOOL_REQUEST_DENY = "Deny";
 const DECISIONS = {
   enable: { header: "MCP tool", approve: "Let agents call this tool.", deny: "Keep this tool disabled." },
   authorize: { header: "MCP sign-in", approve: "I finished; the agent retries.", deny: "I did not sign in." },
+  connect: { header: "MCP server", approve: "Let this thread use the server until its turn ends.", deny: "Don't connect." },
 } as const;
 
 export function mcpToolRequestQuestions(reason: string, kind: keyof typeof DECISIONS = "enable") {

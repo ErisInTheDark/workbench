@@ -85,7 +85,7 @@ export default function ThreadViewTranscript ({
   const itemActions = useMemo<ThreadItemActions>(() => ({
     resendSteer: itemId => active.actions.resendSteer(itemId),
     dismissSteer: itemId => active.actions.dismissSteer(itemId),
-    stopShell: itemId => active.actions.stopShell(itemId),
+    stopCall: itemId => active.actions.stopCall(itemId),
     startShellNow: itemId => active.actions.startShellNow(itemId),
   }), [active.actions]);
 

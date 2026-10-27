@@ -258,9 +258,12 @@ export default function WorkbenchSettingsView({
             <ApprovalReviewSettings />
           </WorkbenchOperationsContext.Provider>)}
         </FormSection>
-        <FormSection id="settings-mcp-servers" title="MCP servers">
-          {withDaemon((client, id) => <McpServerSettings key={id} daemon={client} daemonId={id} />)}
-        </FormSection>
+        {daemon && machine ? <McpServerSettings key={machine.id} daemon={daemon} daemonId={machine.id}
+          projects={projects.flatMap(project => {
+            const location = project.iconProject.locations.find(candidate => candidate.daemonId === machine.id && candidate.project);
+            return location ? [{ id: location.target.projectId, label: project.label, iconProject: project.iconProject }] : [];
+          })} />
+          : <FormSection id="settings-mcp-servers" title="MCP servers"><Unavailable>This machine is not connected.</Unavailable></FormSection>}
         <FormSection id="settings-agent-network" title="Network access">
           {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>
             <SandboxNetworkSettings projectId={null} scope="global" />

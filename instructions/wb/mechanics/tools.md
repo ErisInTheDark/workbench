@@ -7,7 +7,7 @@ before they will look; provider-native tool search does not cover them. Agents g
 instead of telling the user a disabled tool could do it, so the fallback search and request are named here.
 Rarely used Workbench commands are deferred to keep the preloaded tool list small; server `wb` is how MCP-only agents
 find them without shell quoting. -->
-User-added MCP server tools and deferred Workbench tools are not loaded directly. Find them with <tool id="mcp_tools" /> (server `wb` for Workbench's own), then run them with <tool id="mcp_call" />. If no enabled tool fits, search with `includeDisabled` and ask the user to enable one with <tool id="mcp_request" />.
+User-added MCP server tools and deferred Workbench tools are not loaded directly. Find them with <tool id="mcp_tools" /> (server `wb` for Workbench's own), then run them with <tool id="mcp_call" />. If no enabled tool fits, search with `includeDisabled` and ask the user to enable one with <tool id="mcp_request" />. To use an MCP server you started yourself, ask to connect its URL with `wb/mcp_connect`; it lasts until your turn ends. After changing a cli server's code, restart it with `wb/mcp_reload`.
 </docs>
 
 <docs tools="feedback">

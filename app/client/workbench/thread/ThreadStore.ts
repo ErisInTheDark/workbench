@@ -148,7 +148,7 @@ export interface ThreadStoreActions {
   compact(): Promise<void>;
   resendSteer(itemId: string): Promise<void>;
   dismissSteer(itemId: string): Promise<void>;
-  stopShell(itemId: string): Promise<void>;
+  stopCall(itemId: string): Promise<void>;
   /** Start a wb shell waiting in the expensive queue now, as though it was never expensive. */
   startShellNow(itemId: string): Promise<void>;
   submitQuestionnaire(response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions): Promise<void>;

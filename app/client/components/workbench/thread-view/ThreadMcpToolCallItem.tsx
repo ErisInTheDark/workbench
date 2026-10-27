@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default ThreadMcpToolCallItem: one MCP call as a step row (approval glyph, summary, trailing outcome and duration) opening onto results and errors; structured details replace the raw invocation unless the call failed.
+ * - default ThreadMcpToolCallItem: one MCP call as a step row (approval glyph, summary, trailing outcome and duration) opening onto results and errors; structured details replace the raw invocation unless the call failed; a running `mcp_call` offers the user a stop.
  */
 "use client";
 
 import type { ReactNode } from "react";
 
+import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
   getThreadCommandOutcomeDisplay,
@@ -13,7 +14,9 @@ import {
   type ThreadCommandExecutionOutcome,
   type WorkbenchCommandRoute,
 } from "../../../workbench/thread/thread-command-matchers";
+import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
 import ThreadStepRow from "./ThreadStepRow";
+import { ThreadCallStopAction } from "./transcript/ThreadItemActionControls";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { getCommandIcon } from "./thread-activity-chips";
 import { ThreadHydratedToolCallDetails } from "./ThreadToolCallDetails";
@@ -60,8 +63,12 @@ export default function ThreadMcpToolCallItem ({
     : item.status === "failed" || Boolean(item.error) ? "failed" : "completed";
   const outcomeDisplay = commandDisplay ? getThreadCommandOutcomeDisplay(commandDisplay, outcome) : null;
   const Icon = getCommandIcon(outcomeDisplay?.summaryStats);
+  // A running Workbench `mcp_call` to an MCP server can run for minutes, so the user may stop it like a shell; deferred wb tools cannot.
+  const callArguments = item.arguments !== null && typeof item.arguments === "object" && !Array.isArray(item.arguments) ? item.arguments : null;
+  const stoppable = route !== null && outcome === "inProgress" && item.tool === "mcp_call"
+    && callArguments?.server !== WORKBENCH_MCP_SERVER_NAME;
 
-  return (
+  const row = (
     <ThreadStepRow
       icon={<Icon size={16} />}
       meta={[
@@ -109,5 +116,12 @@ export default function ThreadMcpToolCallItem ({
       </>
       )}
     />
+  );
+  if (!stoppable) return row;
+  return (
+    <div className="group/thread-bubble relative">
+      {row}
+      <ThreadBubbleCopyButton actions={<ThreadCallStopAction itemId={item.id} label="Stop call" />} markdown="" side="right" touchVisible />
+    </div>
   );
 }

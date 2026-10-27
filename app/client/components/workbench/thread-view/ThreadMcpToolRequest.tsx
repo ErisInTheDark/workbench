@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - McpToolCard: recessed card naming one MCP server tool, with its markdown description clamped to three lines until expanded.
- * - ThreadMcpRequestSubject: what a pending MCP request asks about, an enable (tool) or a sign-in (server link).
+ * - ThreadMcpRequestSubject: what a pending MCP request asks about: an enable (tool), a sign-in (server link) or a connect (server URL).
  * - ThreadMcpRequestPanel: the composer's pending MCP request; Approve and Deny (Shift: Stop) render into the composer's action slot.
  * - ThreadMcpDecisionCard: the transcript's record of an answered enable or sign-in request.
  * - ThreadMcpDownloadCard: the transcript's record of an `mcp_download`: status and server, then the file name and source URL.
@@ -10,7 +10,9 @@
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpToolContext } from "workbench-shared/types";
+import type {
+  WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpConnectionContext, WorkbenchUserInputMcpToolContext,
+} from "workbench-shared/types";
 import { mcpToolLabel } from "../../../workbench/mcp-tool-label";
 import { openCenteredMcpSignInPopup } from "../../../workbench/mcp-sign-in-popup";
 import MarkdownRender from "../../ui/MarkdownRender";
@@ -20,13 +22,29 @@ import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 
 export type ThreadMcpRequestSubject =
   | { kind: "tool"; tool: WorkbenchUserInputMcpToolContext }
-  | { kind: "authorization"; authorization: WorkbenchUserInputMcpAuthorizationContext };
+  | { kind: "authorization"; authorization: WorkbenchUserInputMcpAuthorizationContext }
+  | { kind: "connection"; connection: WorkbenchUserInputMcpConnectionContext };
 
-const PANEL_TITLES = { tool: "Enable MCP tool", authorization: "Sign in to MCP server" } as const;
+const PANEL_TITLES = { tool: "Enable MCP tool", authorization: "Sign in to MCP server", connection: "Connect MCP server" } as const;
 const DECISION_LABELS = {
   tool: { approved: "Enabled MCP tool", denied: "Denied MCP tool" },
   authorization: { approved: "Signed in to MCP server", denied: "Skipped MCP server sign-in" },
+  connection: { approved: "Connected MCP server", denied: "Denied MCP server" },
 } as const;
+
+/** The server an agent asks to connect for its turn, by name and the URL it serves at. */
+function McpConnectionCard({ connection, rounded = true }: { connection: WorkbenchUserInputMcpConnectionContext; rounded?: boolean }) {
+  return <div className={`flex min-w-0 flex-wrap items-baseline gap-x-2 bg-recess px-3.5 py-3 ${rounded ? "rounded-[0.9rem]" : ""}`}>
+    <span className="text-base font-semibold text-text">{connection.server}</span>
+    <code className="break-all text-[0.8rem] text-fg/muted">{connection.url}</code>
+  </div>;
+}
+
+function SubjectCard({ subject, rounded, onOpen }: { subject: ThreadMcpRequestSubject; rounded?: boolean; onOpen?: (() => void) | undefined }) {
+  if (subject.kind === "tool") return <McpToolCard tool={subject.tool} rounded={rounded} />;
+  if (subject.kind === "connection") return <McpConnectionCard connection={subject.connection} rounded={rounded} />;
+  return <McpAuthorizationCard authorization={subject.authorization} rounded={rounded} onOpen={onOpen} />;
+}
 
 export function McpToolCard({ tool, rounded = true }: { tool: WorkbenchUserInputMcpToolContext; rounded?: boolean }) {
   const description = useRef<HTMLDivElement>(null);
@@ -120,9 +138,7 @@ export function ThreadMcpRequestPanel({ subject, reason, actionTarget, onDecide,
   const url = subject.kind === "authorization" ? subject.authorization.url : undefined;
   return <div className="flex flex-col gap-3 px-1 py-1">
     <h3 className="m-0 text-[1.02em] font-semibold leading-[1.35] text-text">{PANEL_TITLES[subject.kind]}</h3>
-    {subject.kind === "tool"
-      ? <McpToolCard tool={subject.tool} />
-      : <McpAuthorizationCard authorization={subject.authorization} onOpen={url ? () => openLink(url) : undefined} />}
+    <SubjectCard subject={subject} onOpen={url ? () => openLink(url) : undefined} />
     {reason ? <p className="m-0 whitespace-pre-wrap break-words text-[0.95rem] leading-[1.6] text-text">{reason}</p> : null}
     {error ? <p role="alert" className="m-0 text-[0.84em] text-danger">{error}</p> : null}
     {actionTarget ? createPortal(actions, actionTarget) : <div className="flex items-center justify-end gap-2">{actions}</div>}
@@ -172,8 +188,6 @@ export function ThreadMcpDecisionCard({ subject, reason, approved }: {
       </span>
       {reason ? <span className="min-w-0 flex-1 truncate text-fg/muted" title={reason}>{reason}</span> : null}
     </div>
-    {subject.kind === "tool"
-      ? <McpToolCard tool={subject.tool} rounded={false} />
-      : <McpAuthorizationCard authorization={subject.authorization} rounded={false} />}
+    <SubjectCard subject={subject} rounded={false} />
   </div>;
 }

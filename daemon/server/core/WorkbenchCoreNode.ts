@@ -47,6 +47,7 @@ import type { WorkbenchApprovalHandoff } from "../interactions/WorkbenchApproval
 import WorkbenchMcpServerController from "../mcp-servers/WorkbenchMcpServerController";
 import McpDownloadStore from "../mcp-servers/McpDownloadStore";
 import McpPackageInstaller from "../mcp-servers/McpPackageInstaller";
+import McpProjectServerLifetime from "../mcp-servers/McpProjectServerLifetime";
 import { logError } from "../process-helpers";
 import WorkbenchNativeFileController from "../project/WorkbenchNativeFileController";
 import type { WorkbenchMessageWaitHandoff } from "../agent/WorkbenchMessageWaitController";
@@ -262,7 +263,27 @@ function createWorkbenchCoreFeature(
     root: path.join(context.dataRootPath, "daemon", "mcp-servers", "packages"),
     warn: message => logError("mcp-packages", message),
   });
-  const mcpServers = new WorkbenchMcpServerController({ database, readDeviceIdentity, downloads: mcpDownloads, packages: mcpPackages });
+  const mcpServers = new WorkbenchMcpServerController({
+    database, readDeviceIdentity, downloads: mcpDownloads, packages: mcpPackages,
+    resolveProject: async projectId => {
+      const project = await projectCatalog.resolveProjectById(projectId);
+      return { id: project.id, rootPath: project.rootPath };
+    },
+  });
+  const readWorkingThreads = async () => {
+    const records = (await Promise.all(installedProviderKeys.map(harness =>
+      database.readThreadStateRecords({ selection: "working", harness })))).flat();
+    const identities = await Promise.all(records.map(record => lookup.identity(record.identity.threadId)));
+    return identities.flatMap(identity => identity ? [{ projectId: identity.projectId, threadId: identity.threadId }] : []);
+  };
+  const mcpProjectServers = new McpProjectServerLifetime({
+    readWorking: readWorkingThreads,
+    subscribe: listener => threadStateController.subscribe((projectId, entry) => {
+      if (entry.entryKind !== "draft") listener(projectId, entry.identity.threadId, entry.lifecycle.kind === "working");
+    }),
+    release: projectId => mcpServers.releaseProject(projectId),
+    warn: message => logError("mcp-servers", message),
+  });
   const threadActions = new WorkbenchThreadActionController({
     questionnaireSteers,
     autoCompact,
@@ -392,9 +413,12 @@ function createWorkbenchCoreFeature(
         const observation = await threadStateFeature.observeProviderNotification(harness, observed);
         if (!lease.isCurrent()) return null;
         const lifecycle = observation?.lifecycle ?? null;
-        // Yielded shells belong to their turn.
+        // Yielded shells and connected thread MCP servers belong to their turn.
         if (observed.lifecycle?.event?.kind === "turnCompleted") {
-          getProcessWorkbenchAgentMcpRequestRegistry().stopBackgroundShells(observed.lifecycle.threadId);
+          const threadId = observed.lifecycle.threadId;
+          getProcessWorkbenchAgentMcpRequestRegistry().stopBackgroundShells(threadId);
+          void mcpServers.endTurn(threadId).catch((error: unknown) =>
+            logError("mcp-servers", `thread servers of a finished turn were not forgotten: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));
         }
         continuations.observe(harness, observed, lifecycle);
         return lifecycle;
@@ -431,6 +455,10 @@ function createWorkbenchCoreFeature(
       if (coldStart) void turnSettlement.startColdSweep();
       void compaction.retireStrandedBefore(generationStartedAt);
       void busyThreads.start();
+      void mcpProjectServers.start();
+      void readWorkingThreads()
+        .then(working => mcpServers.sweepThreadServers(new Set(working.map(thread => thread.threadId))))
+        .catch((error: unknown) => logError("mcp-servers", `thread server sweep failed: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));
       if (!initialCatalog) return;
       stats.start();
       browseSessionCleanup.start();
@@ -462,6 +490,7 @@ function createWorkbenchCoreFeature(
       unsubscribeHeldSteers();
       unsubscribeAgentMessageDelivery();
       busyThreads.dispose();
+      mcpProjectServers.dispose();
       summaries.dispose();
       facts.disposeVis();
       continuations.dispose();

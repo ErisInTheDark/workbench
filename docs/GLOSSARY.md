@@ -53,4 +53,5 @@
 | held questionnaire | A questionnaire form that is no longer attached to a request_user_input tool call due to an interruption; the thread is stopped, but the form remains answerable by the user. (Response admitted via normal user message) |
 | mark tag | Suggest-mode review label on words, saved as `<u data-mark="name">`; names, colours and Alt+digit order come from the `markTags` setting, global with logical-project overrides |
 | tool docs | `<docs tools="a b">` instruction regions for specific wb tools; render only when a listed tool is visible to the caller; Stats → Tools charges their tokens evenly to those tools |
-| MCP server | Daemon-configured external MCP server; agents reach its allowed tools only through `mcp_tools`/`mcp_call`, identically across providers |
+| MCP server | User-configured external MCP server (http, npm or cli), global or scoped to one project; agents reach its allowed tools only through `mcp_tools`/`mcp_call`, identically across providers |
+| thread MCP server | MCP server URL an agent connected with `mcp_connect` after user approval; only its thread sees it, until the turn ends |

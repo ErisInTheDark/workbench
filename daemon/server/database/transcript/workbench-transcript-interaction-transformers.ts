@@ -174,6 +174,12 @@ export function transformQuestionnaireEntry(
       item_id: itemId, server: mcpAuthorization.server, host: mcpAuthorization.host,
     }, { conflictColumns: ["item_id"], updateColumns: ["server", "host"] }));
   }
+  const mcpConnection = entry.request.mcpConnection;
+  if (mcpConnection) {
+    mutations.push(upsertRow(interactionTables.threadInteractionMcpConnections, {
+      item_id: itemId, server: mcpConnection.server, url: mcpConnection.url,
+    }, { conflictColumns: ["item_id"], updateColumns: ["server", "url"] }));
+  }
   if (command) {
     mutations.push(upsertRow(interactionTables.threadApprovalCommandContexts, {
       item_id: itemId,
@@ -208,6 +214,7 @@ export function transformQuestionnaireEntry(
       deleteRows(interactionTables.threadApprovalCommandActions, { item_id: itemId }),
       deleteRows(interactionTables.threadInteractionMcpTools, { item_id: itemId }),
       deleteRows(interactionTables.threadInteractionMcpAuthorizations, { item_id: itemId }),
+      deleteRows(interactionTables.threadInteractionMcpConnections, { item_id: itemId }),
     ],
     mutations,
   };

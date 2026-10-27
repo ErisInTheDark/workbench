@@ -1,8 +1,9 @@
 /*
  * No production exports. Tests protect the MCP server allow boundary (only allowed, currently offered tools are
  * forwarded), link requests and downloads limited to links the server sent, credential sealing, OAuth sign-in over real transport,
- * per-server failure isolation, settings validation, and npm servers' background install, version pinning, arguments, sealed
- * environment, kept install failures and install removal.
+ * per-server failure isolation, settings validation, npm servers' background install, version pinning, arguments, sealed
+ * environment, kept install failures and install removal, project-scoped visibility and caller identity, cli launch folders,
+ * project release and reload, and approved per-turn thread servers.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -15,8 +16,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 import { renderCreateTable } from "workbench-shared/database/schema/schema-definition";
 import {
-  mcpServerAuth, mcpServerHttp, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServerPackageArgs, mcpServerPackageEnv,
-  mcpServerPackages, mcpServers, mcpServerTools,
+  mcpServerAuth, mcpServerCommands, mcpServerHttp, mcpServerLaunchArgs, mcpServerLaunchEnv, mcpServerOAuthClients, mcpServerOAuthPending,
+  mcpServerOAuthTokens, mcpServerPackages, mcpServerProjects, mcpServers, mcpServerTools, mcpThreadServers,
 } from "../lib/workbench/database/schema/mcp-server-schema";
 import type { McpServerConnectionPort, McpServerEndpoint, McpServerLaunch, McpServerTool } from "./McpServerConnection";
 import type { McpPackageSource, McpPackageState } from "./McpPackageInstaller";
@@ -31,6 +32,8 @@ class FakeServer {
   /** Processes started for a stdio server, as the controller launched them. */
   readonly launches: McpServerLaunch[] = [];
   readonly calls: string[] = [];
+  /** The `_meta` each call carried, in call order. */
+  readonly metas: (Record<string, unknown> | undefined)[] = [];
   result: CallToolResult | null = null;
   respond: ((name: string, args: Record<string, unknown>) => CallToolResult) | null = null;
   closed = 0;
@@ -48,8 +51,9 @@ class FakeServer {
         if (this.failure) throw this.failure;
         return this.reportedName;
       },
-      callTool: async (name, args): Promise<CallToolResult> => {
+      callTool: async (name, args, _signal, meta): Promise<CallToolResult> => {
         this.calls.push(name);
+        this.metas.push(meta);
         return this.respond?.(name, args) ?? this.result ?? { content: [{ type: "text", text: `ran ${name}` }] };
       },
       close: async () => { this.closed += 1; },
@@ -68,7 +72,7 @@ function launched(endpoint: Extract<McpServerEndpoint, { transport: "stdio" }>, 
   return {
     listTools: async () => (await port).listTools(),
     serverName: async () => (await port).serverName(),
-    callTool: async (name, args, signal) => (await port).callTool(name, args, signal),
+    callTool: async (name, args, signal, meta) => (await port).callTool(name, args, signal, meta),
     close: async () => { await (await port.catch(() => null))?.close(); },
   };
 }
@@ -78,9 +82,9 @@ function setup(servers: Record<string, FakeServer>) {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   const tables = Object.fromEntries([
-    mcpServers, mcpServerHttp, mcpServerPackages, mcpServerPackageArgs, mcpServerPackageEnv,
-    mcpServerTools, mcpServerAuth, mcpServerOAuthClients, mcpServerOAuthTokens, mcpServerOAuthPending,
-  ].map(table => [table.name, table]));
+    mcpServers, mcpServerHttp, mcpServerPackages, mcpServerCommands, mcpServerLaunchArgs, mcpServerLaunchEnv, mcpServerProjects,
+    mcpServerTools, mcpServerAuth, mcpServerOAuthClients, mcpServerOAuthTokens, mcpServerOAuthPending, mcpThreadServers,
+  ].map(table => [table.name, table] as const));
   for (const table of Object.values(tables)) database.exec(renderCreateTable(table));
   const port: WorkbenchMcpServerOptions["database"] = {
     query: async <Row extends WorkbenchDatabaseRow>(query: Parameters<WorkbenchMcpServerOptions["database"]["query"]>[0]) => {
@@ -225,21 +229,21 @@ test("only allowed tools the server currently offers are forwarded; allow-all co
     const owner = create();
     const { servers: [server] } = await owner.update({ action: "add", url: "https://drive.example/mcp" });
     const id = server!.id;
-    await assert.rejects(owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, signal()), /not enabled/u);
+    await assert.rejects(owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, null, signal()), /not enabled/u);
 
     await owner.update({ action: "setTools", id, tools: ["SEARCH", "GONE"] });
-    assert.deepEqual(await owner.call({ server: "drive", tool: "SEARCH", arguments: { q: "x" } }, signal()), { text: "ran SEARCH\n", isError: false });
-    await assert.rejects(owner.call({ server: "drive", tool: "EXECUTE", arguments: {} }, signal()), /not enabled/u);
-    await assert.rejects(owner.call({ server: "drive", tool: "GONE", arguments: {} }, signal()), /does not offer/u);
+    assert.deepEqual(await owner.call({ server: "drive", tool: "SEARCH", arguments: { q: "x" } }, null, signal()), { text: "ran SEARCH\n", isError: false });
+    await assert.rejects(owner.call({ server: "drive", tool: "EXECUTE", arguments: {} }, null, signal()), /not enabled/u);
+    await assert.rejects(owner.call({ server: "drive", tool: "GONE", arguments: {} }, null, signal()), /does not offer/u);
 
     await owner.update({ action: "setAllowAll", id, allowAll: true });
     drive.tools = [...drive.tools, tool("LATER")];
-    assert.equal((await owner.call({ server: "drive", tool: "LATER", arguments: {} }, signal())).isError, false);
+    assert.equal((await owner.call({ server: "drive", tool: "LATER", arguments: {} }, null, signal())).isError, false);
     assert.deepEqual(drive.calls, ["SEARCH", "LATER"]);
 
     // Individual picks survive allow-all, so turning it off restores them.
     await owner.update({ action: "setAllowAll", id, allowAll: false });
-    await assert.rejects(owner.call({ server: "drive", tool: "LATER", arguments: {} }, signal()), /not enabled/u);
+    await assert.rejects(owner.call({ server: "drive", tool: "LATER", arguments: {} }, null, signal()), /not enabled/u);
     assert.deepEqual((await owner.read()).servers[0]?.allowedTools, ["GONE", "SEARCH"]);
   } finally { close(); }
 });
@@ -280,7 +284,7 @@ test("one unreachable server is reported without hiding the others", async () =>
     const { servers } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
     await owner.update({ action: "setAllowAll", id: servers.find(server => server.name === "docs")!.id, allowAll: true });
     assert.deepEqual((await owner.read()).servers.map(server => server.catalog.status), ["error", "ready"]);
-    const listing = await owner.listTools({}, signal());
+    const listing = await owner.listTools({}, null, signal());
     assert.match(listing, /^docs\/READ_DOC: Read a document$/mu);
     // Unreachable when added, so it is named after its hostname.
     assert.match(listing, /^drive\.example: unavailable \(connect ECONNREFUSED\)$/mu);
@@ -295,8 +299,8 @@ test("a query returns ranked allowed matches with input schemas; without one, ev
     const owner = create();
     const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
     await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH_FILES", "UPLOAD"] });
-    assert.equal(await owner.listTools({}, signal()), "docs/UPLOAD: Upload a file, then search it\ndocs/SEARCH_FILES: Find files by name\n");
-    const matches = await owner.listTools({ query: "search" }, signal());
+    assert.equal(await owner.listTools({}, null, signal()), "docs/UPLOAD: Upload a file, then search it\ndocs/SEARCH_FILES: Find files by name\n");
+    const matches = await owner.listTools({ query: "search" }, null, signal());
     assert.match(matches, /^docs\/SEARCH_FILES\nFind files by name\nInput: \{\}\n\ndocs\/UPLOAD\n/u);
     assert.equal(matches.includes("HIDDEN"), false);
   } finally { close(); }
@@ -329,7 +333,7 @@ test("an npm server is listed as installing at once; its own check waits, pins t
       ["azure-devops-mcp-server", { kind: "npm", package: "@azure-devops/mcp", version: "1.4.2", args }, "ready"]);
     assert.deepEqual(packages.installs, ["@azure-devops/mcp@latest"]);
     assert.deepEqual(local.launches.map(launch => launch.args), [args]);
-    assert.equal((await owner.call({ server: "azure-devops-mcp-server", tool: "list_projects", arguments: {} }, signal())).isError, false);
+    assert.equal((await owner.call({ server: "azure-devops-mcp-server", tool: "list_projects", arguments: {} }, null, signal())).isError, false);
   } finally { await owner.dispose(); close(); }
 });
 
@@ -346,7 +350,7 @@ test("npm arguments and sealed environment relaunch the server; neither appears 
     await owner.updateEnv({ id, upserts: [{ key: "PERSONAL_ACCESS_TOKEN", value: "dG9rZW4=" }, { key: "ORG", value: "x" }], removals: [] });
     await owner.updateEnv({ id, upserts: [], removals: ["ORG"] });
     assert.deepEqual(await owner.readEnv({ id }), { entries: [{ key: "PERSONAL_ACCESS_TOKEN", value: "dG9rZW4=" }] });
-    const stored = database.prepare("SELECT ciphertext FROM mcp_server_package_env").get() as { ciphertext: Buffer };
+    const stored = database.prepare("SELECT ciphertext FROM mcp_server_launch_env").get() as { ciphertext: Buffer };
     assert.equal(stored.ciphertext.toString("utf8").includes("dG9rZW4="), false);
 
     const snapshot = await owner.update({ action: "setArgs", id, args: ["fabrikam", "two words"] });
@@ -356,11 +360,11 @@ test("npm arguments and sealed environment relaunch the server; neither appears 
     });
     const elsewhere = await create({ packages, readDeviceIdentity: async () => "device-b" }).read({ id });
     assert.match(elsewhere.servers[0]?.catalog.status === "error" ? elsewhere.servers[0].catalog.detail : "", /PERSONAL_ACCESS_TOKEN can't be read/u);
-    await assert.rejects(owner.update({ action: "setAuth", id, auth: { header: "authorization", value: "Bearer t" } }), /runs locally from npm/u);
+    await assert.rejects(owner.update({ action: "setAuth", id, auth: { header: "authorization", value: "Bearer t" } }), /runs locally/u);
 
     await owner.update({ action: "remove", id });
     assert.deepEqual(packages.removals, [id]);
-    for (const table of ["mcp_servers", "mcp_server_packages", "mcp_server_package_args", "mcp_server_package_env"]) assert.equal(count(table), 0, table);
+    for (const table of ["mcp_servers", "mcp_server_packages", "mcp_server_launch_args", "mcp_server_launch_env"]) assert.equal(count(table), 0, table);
   } finally { await owner.dispose(); close(); }
 });
 
@@ -427,8 +431,8 @@ test("disabled tools are hidden by default and listed in their own section only 
     const owner = create();
     const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
     await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH_FILES"] });
-    assert.equal(await owner.listTools({}, signal()), "docs/SEARCH_FILES: Find files by name\n");
-    const withDisabled = await owner.listTools({ includeDisabled: true }, signal());
+    assert.equal(await owner.listTools({}, null, signal()), "docs/SEARCH_FILES: Find files by name\n");
+    const withDisabled = await owner.listTools({ includeDisabled: true }, null, signal());
     assert.equal(withDisabled, [
       "docs/SEARCH_FILES: Find files by name",
       "",
@@ -437,7 +441,7 @@ test("disabled tools are hidden by default and listed in their own section only 
       "",
     ].join("\n"));
     assert.equal(withDisabled.match(/mcp_request/gu)?.length, 1, "the enable hint appears once");
-    await assert.rejects(owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, signal()), /not enabled/u);
+    await assert.rejects(owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, null, signal()), /not enabled/u);
   } finally { close(); }
 });
 
@@ -454,17 +458,17 @@ test("an enable request asks only for offered disabled tools, and enables on the
       asked.push(`${mcpTool.server}/${mcpTool.tool}: ${mcpTool.description}`);
       return enable;
     };
-    const request = (tool: string, enable = true) => owner.requestTool({ server: "docs", tool, reason: "Needed" }, answer(enable), signal());
+    const request = (tool: string, enable = true) => owner.requestTool({ server: "docs", tool, reason: "Needed" }, null, answer(enable), signal());
 
     assert.match(await request("SEARCH_FILES"), /already enabled/u);
     await assert.rejects(request("NOPE"), /does not offer/u);
     assert.deepEqual(asked, [], "enabled and unoffered tools never reach the user");
 
     assert.match(await request("DELETE_FILE", false), /did not enable/u);
-    await assert.rejects(owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, signal()), /not enabled/u);
+    await assert.rejects(owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, null, signal()), /not enabled/u);
     assert.match(await request("DELETE_FILE"), /^Enabled docs\/DELETE_FILE/u);
     assert.deepEqual(asked, ["docs/DELETE_FILE: Delete a file", "docs/DELETE_FILE: Delete a file"]);
-    assert.equal((await owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, signal())).isError, false);
+    assert.equal((await owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, null, signal())).isError, false);
     assert.deepEqual((await owner.read()).servers[0]?.allowedTools, ["DELETE_FILE", "SEARCH_FILES"]);
   } finally { close(); }
 });
@@ -483,11 +487,11 @@ test("a link request asks only about links the server itself sent, and tells the
       asked.push(`${link.server} ${link.host} ${link.url}`);
       return done;
     };
-    const authorize = (url: string, done = true) => owner.authorizeLink({ server: "docs", url, reason: "Sign in to search" }, answer(done));
+    const authorize = (url: string, done = true) => owner.authorizeLink({ server: "docs", url, reason: "Sign in to search" }, null, answer(done));
 
     await assert.rejects(authorize(authorization), /did not send that link/u);
     docs.result = { isError: true, content: [{ type: "text", text: JSON.stringify({ authorization_url: authorization, message: "Sign in." }) }] };
-    const failed = await owner.call({ server: "docs", tool: "SEARCH", arguments: {} }, signal());
+    const failed = await owner.call({ server: "docs", tool: "SEARCH", arguments: {} }, null, signal());
     assert.match(failed.text, /mcp_authorize/u);
     await assert.rejects(authorize("https://evil.example.test/login"), /did not send that link/u);
     assert.deepEqual(asked, [], "unsent links never reach the user");
@@ -514,14 +518,14 @@ test("downloads fetch, without asking, only links the server itself sent", async
     const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
     await owner.update({ action: "setTools", id: server!.id, tools: ["EXPORT"] });
 
-    await assert.rejects(owner.downloadLink({ threadId: "t", server: "docs", url: exported }, signal()), /did not send that link/u);
+    await assert.rejects(owner.downloadLink({ threadId: "t", server: "docs", url: exported }, null, signal()), /did not send that link/u);
     docs.result = { content: [{ type: "text", text: JSON.stringify({ data: { s3url: exported } }) }] };
-    const ran = await owner.call({ server: "docs", tool: "EXPORT", arguments: {} }, signal());
+    const ran = await owner.call({ server: "docs", tool: "EXPORT", arguments: {} }, null, signal());
     assert.match(ran.text, /mcp_download/u, "successful replies with links point at the download tool");
-    await assert.rejects(owner.downloadLink({ threadId: "t", server: "docs", url: "https://evil.example.test/x" }, signal()), /did not send that link/u);
+    await assert.rejects(owner.downloadLink({ threadId: "t", server: "docs", url: "https://evil.example.test/x" }, null, signal()), /did not send that link/u);
     assert.deepEqual(fetched, []);
 
-    assert.match(await owner.downloadLink({ threadId: "t", server: "docs", url: exported, name: "Doc" }, signal()), /Saved Doc\.html .* to \/cache\/Doc\.html/u);
+    assert.match(await owner.downloadLink({ threadId: "t", server: "docs", url: exported, name: "Doc" }, null, signal()), /Saved Doc\.html .* to \/cache\/Doc\.html/u);
     assert.deepEqual(fetched, [`t ${new URL(exported).href} Doc`]);
   } finally { close(); }
 });
@@ -541,8 +545,8 @@ test("a renamed server keeps its allow rules under its new name and refuses a ta
 
     const renamed = await owner.update({ action: "rename", id: server!.id, name: "gdrive" });
     assert.deepEqual(renamed.servers.map(entry => entry.name).sort(), ["docs.example", "gdrive"]);
-    assert.equal((await owner.call({ server: "gdrive", tool: "SEARCH", arguments: {} }, signal())).isError, false);
-    await assert.rejects(owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, signal()), /No MCP server is named drive/u);
+    assert.equal((await owner.call({ server: "gdrive", tool: "SEARCH", arguments: {} }, null, signal())).isError, false);
+    await assert.rejects(owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, null, signal()), /No MCP server is named drive/u);
   } finally { close(); }
 });
 
@@ -562,19 +566,19 @@ test("a Composio server is unwrapped: meta tools hidden, inner tools searched, e
   try {
     const owner = create();
     await owner.update({ action: "add", url: "https://composio.example/mcp" });
-    const listed = await owner.listTools({ includeDisabled: true }, signal());
+    const listed = await owner.listTools({ includeDisabled: true }, null, signal());
     assert.doesNotMatch(listed, /COMPOSIO_/u);
     assert.match(listed, /composio is search-based/u);
-    assert.match(await owner.listTools({ query: "export a google doc", includeDisabled: true }, signal()), /^composio\/GOOGLEDRIVE_DOWNLOAD_FILE$/mu);
+    assert.match(await owner.listTools({ query: "export a google doc", includeDisabled: true }, null, signal()), /^composio\/GOOGLEDRIVE_DOWNLOAD_FILE$/mu);
 
-    await assert.rejects(owner.call({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", arguments: {} }, signal()), /not enabled/u);
-    await assert.rejects(owner.requestTool({ server: "composio", tool: "NOPE", reason: "r" }, async () => true, signal()), /does not offer/u);
-    assert.match(await owner.requestTool({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", reason: "r" }, async () => true, signal()), /^Enabled/u);
+    await assert.rejects(owner.call({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", arguments: {} }, null, signal()), /not enabled/u);
+    await assert.rejects(owner.requestTool({ server: "composio", tool: "NOPE", reason: "r" }, null, async () => true, signal()), /does not offer/u);
+    assert.match(await owner.requestTool({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", reason: "r" }, null, async () => true, signal()), /^Enabled/u);
     const catalog = (await owner.read()).servers[0]!.catalog;
     assert.ok(catalog.status === "ready" && catalog.search === true);
     assert.deepEqual(catalog.tools.map(entry => entry.name), ["GOOGLEDRIVE_DOWNLOAD_FILE"], "settings list the enabled inner tools");
 
-    const ran = await owner.call({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", arguments: { fileId: "1" } }, signal());
+    const ran = await owner.call({ server: "composio", tool: "GOOGLEDRIVE_DOWNLOAD_FILE", arguments: { fileId: "1" } }, null, signal());
     assert.deepEqual(JSON.parse(ran.text), { successful: true, data: { exported: true } });
     assert.deepEqual(executed, [[{ tool_slug: "GOOGLEDRIVE_DOWNLOAD_FILE", arguments: { fileId: "1" } }]]);
   } finally { close(); }
@@ -740,14 +744,14 @@ test("OAuth sign-in registers, exchanges a PKCE code once, refreshes silently an
 
     await owner.update({ action: "setAllowAll", id: server!.id, allowAll: true });
     provider.expireAccess();
-    assert.deepEqual(await owner.call({ server: "composio", tool: "whoami", arguments: {} }, signal()), { text: "access-2\n", isError: false });
+    assert.deepEqual(await owner.call({ server: "composio", tool: "whoami", arguments: {} }, null, signal()), { text: "access-2\n", isError: false });
     assert.equal(provider.counts.refreshes, 1);
 
     provider.expireAccess();
     provider.revokeRefresh();
     await owner.update({ action: "refresh", id: server!.id });
     assert.deepEqual((await owner.read()).servers[0]?.catalog, { status: "signInRequired" });
-    await assert.rejects(owner.call({ server: "composio", tool: "whoami", arguments: {} }, signal()), /needs sign-in/u);
+    await assert.rejects(owner.call({ server: "composio", tool: "whoami", arguments: {} }, null, signal()), /needs sign-in/u);
   } finally {
     await owner.dispose();
     close();
@@ -792,4 +796,117 @@ test("a sign-in expires, a provider refusal stores nothing, and sign-out or a he
     close();
     await provider.close();
   }
+});
+
+const settle = () => new Promise(resolve => setImmediate(resolve));
+const projects: WorkbenchMcpServerOptions["resolveProject"] = async projectId => {
+  const id = projectId === "alias-a" ? "project-a" : projectId;
+  return { id, rootPath: `/projects/${id}` };
+};
+const inProject = (threadId: string, projectId: string) => ({ threadId, cwd: `/projects/${projectId}`, projectId });
+
+test("a project server is seen and called only from its project's threads, which it learns; global servers never learn the caller", async () => {
+  const sim = new FakeServer();
+  const drive = new FakeServer("drive");
+  sim.tools = [tool("step")];
+  drive.tools = [tool("SEARCH")];
+  const { create, close } = setup({ "sim-bin": sim, drive });
+  const owner = create({ resolveProject: projects });
+  const callerA = inProject("thread-a", "project-a");
+  const callerB = inProject("thread-b", "project-b");
+  try {
+    const added = await owner.update({ action: "addCommand", command: "sim-bin", args: ["--headless"], projectId: "alias-a" });
+    const simServer = added.servers.find(server => server.name === "sim-bin")!;
+    assert.deepEqual([simServer.projectId, simServer.source], ["project-a", { kind: "cli", command: "sim-bin", args: ["--headless"] }]);
+    await owner.update({ action: "setAllowAll", id: simServer.id, allowAll: true });
+    const { servers } = await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    await owner.update({ action: "setAllowAll", id: servers.find(server => server.name === "drive")!.id, allowAll: true });
+
+    assert.equal((await owner.listTools({}, callerB, signal())).includes("sim-bin"), false);
+    await assert.rejects(owner.call({ server: "sim-bin", tool: "step", arguments: {} }, callerB, signal()), /No MCP server is named sim-bin/u);
+    await assert.rejects(owner.call({ server: "sim-bin", tool: "step", arguments: {} }, null, signal()), /No MCP server is named sim-bin/u);
+
+    assert.equal((await owner.call({ server: "sim-bin", tool: "step", arguments: {} }, callerA, signal())).isError, false);
+    assert.deepEqual(sim.metas.at(-1), { "workbench/caller": { threadId: "thread-a", cwd: "/projects/project-a" } });
+    assert.deepEqual(sim.launches.at(-1), { command: "sim-bin", args: ["--headless"], cwd: "/projects/project-a", env: {} });
+    await owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, callerA, signal());
+    assert.equal(drive.metas.at(-1), undefined);
+  } finally { await owner.dispose(); close(); }
+});
+
+test("releasing a project closes only its servers, and reload restarts only a server the caller sees", async () => {
+  const sim = new FakeServer();
+  const drive = new FakeServer();
+  sim.tools = [tool("step")];
+  const { create, close } = setup({ "sim-bin": sim, drive });
+  const owner = create({ resolveProject: projects });
+  const callerA = inProject("thread-a", "project-a");
+  try {
+    await owner.update({ action: "addCommand", command: "sim-bin", args: [], projectId: "project-a" });
+    await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    await owner.read();
+    owner.releaseProject("project-b");
+    await settle();
+    assert.deepEqual([sim.closed, drive.closed], [0, 0]);
+    owner.releaseProject("project-a");
+    await settle();
+    assert.deepEqual([sim.closed, drive.closed], [1, 0]);
+
+    await assert.rejects(owner.reload({ server: "sim-bin" }, inProject("thread-b", "project-b")), /No MCP server is named sim-bin/u);
+    await owner.listTools({ server: "sim-bin" }, callerA, signal());
+    const launches = sim.launches.length;
+    assert.match(await owner.reload({ server: "sim-bin" }, callerA), /starts it again/u);
+    await owner.listTools({ server: "sim-bin" }, callerA, signal());
+    assert.equal(sim.launches.length, launches + 1);
+  } finally { await owner.dispose(); close(); }
+});
+
+test("a thread server connects only after approval, serves only its thread with bounded responses, and is gone after its turn", async () => {
+  const scratch = new FakeServer();
+  const drive = new FakeServer("drive");
+  scratch.tools = [tool("probe")];
+  const { create, close } = setup({ scratch, drive });
+  const owner = create({ resolveProject: projects });
+  const caller = inProject("thread-a", "project-a");
+  const url = "http://scratch.local:4100/mcp";
+  try {
+    await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    await assert.rejects(owner.connectThreadServer({ name: "drive", url }, caller, async () => true, signal()), /already available/u);
+
+    const asked: unknown[] = [];
+    assert.match(await owner.connectThreadServer({ name: "scratch", url }, caller, async context => { asked.push(context); return false; }, signal()),
+      /did not connect/u);
+    assert.deepEqual(asked, [{ server: "scratch", url }]);
+    assert.equal(scratch.endpoints.length, 0, "nothing connects before the user approves");
+    await assert.rejects(owner.call({ server: "scratch", tool: "probe", arguments: {} }, caller, signal()), /No MCP server is named scratch/u);
+
+    assert.match(await owner.connectThreadServer({ name: "scratch", url }, caller, async () => true, signal()), /offers 1 tool/u);
+    const endpoint = scratch.endpoints.at(-1);
+    assert.ok(endpoint?.transport === "http" && endpoint.maxResponseBytes !== undefined && endpoint.authProvider === undefined);
+    assert.equal((await owner.call({ server: "scratch", tool: "probe", arguments: {} }, caller, signal())).isError, false, "approved servers allow all tools");
+    assert.equal(scratch.metas.at(-1), undefined);
+    await assert.rejects(owner.call({ server: "scratch", tool: "probe", arguments: {} }, inProject("thread-b", "project-a"), signal()), /No MCP server/u);
+
+    await owner.endTurn("thread-a");
+    await settle();
+    assert.equal(scratch.closed, 1);
+    await assert.rejects(owner.call({ server: "scratch", tool: "probe", arguments: {} }, caller, signal()), /No MCP server is named scratch/u);
+  } finally { await owner.dispose(); close(); }
+});
+
+test("a sweep forgets thread servers of threads no longer working and keeps working threads'", async () => {
+  const scratch = new FakeServer();
+  scratch.tools = [tool("probe")];
+  const { create, close } = setup({ scratch });
+  const owner = create({ resolveProject: projects });
+  const url = "http://scratch.local:4100/mcp";
+  const working = inProject("thread-a", "project-a");
+  const ended = inProject("thread-b", "project-a");
+  try {
+    await owner.connectThreadServer({ name: "scratch", url }, working, async () => true, signal());
+    await owner.connectThreadServer({ name: "scratch", url }, ended, async () => true, signal());
+    await owner.sweepThreadServers(new Set(["thread-a"]));
+    assert.match(await owner.listTools({}, working, signal()), /scratch/u);
+    assert.equal((await owner.listTools({}, ended, signal())).includes("scratch"), false);
+  } finally { await owner.dispose(); close(); }
 });

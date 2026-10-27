@@ -11,7 +11,8 @@ import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/t
 import { WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { buildWorkbenchQuestionnaireRequest } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import type {
-  WorkbenchPendingUserInputRequest, WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpToolContext, WorkbenchUserInputResponse,
+  WorkbenchPendingUserInputRequest, WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpConnectionContext,
+  WorkbenchUserInputMcpToolContext, WorkbenchUserInputResponse,
 } from "workbench-shared/types";
 import type { WorkbenchRequestUserInputCommandInput } from "../lib/workbench/commands/questionnaire-command-definition";
 import type { WorkbenchThreadId, WorkbenchTurnId, ProjectId } from "workbench-shared/workbench/identity";
@@ -109,6 +110,8 @@ export default class WorkbenchQuestionnaireController {
     mcpTool?: WorkbenchUserInputMcpToolContext;
     /** The server link this request asks the user to open. */
     mcpAuthorization?: WorkbenchUserInputMcpAuthorizationContext;
+    /** The server URL this request asks the user to connect for the agent's turn. */
+    mcpConnection?: WorkbenchUserInputMcpConnectionContext;
   }, signal: AbortSignal): Promise<WorkbenchUserInputResponse> {
     this.assertActive();
     signal.throwIfAborted();
@@ -130,6 +133,7 @@ export default class WorkbenchQuestionnaireController {
       itemId: restored?.itemId ?? randomUUID(),
       request: buildWorkbenchQuestionnaireRequest({
         id: requestKey, questions: input.questions, mcpTool: input.mcpTool, mcpAuthorization: input.mcpAuthorization,
+        mcpConnection: input.mcpConnection,
       }),
       requestKey,
       turnId: restored?.turnId ?? turnId,

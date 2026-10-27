@@ -1,13 +1,16 @@
 /*
  * Exports:
- * - default McpServerSettings: one daemon's user-added MCP servers as status cards; sign in or set an API key, pick allowed tools,
- *   edit an npm server's arguments and sealed environment, and add servers by URL or npm package.
+ * - default McpServerSettings: one daemon's user-added MCP servers as status cards, for every project and per project; sign in or set an
+ *   API key, pick allowed tools, edit a stdio (npm or cli) server's arguments and sealed environment, and add servers by URL, npm
+ *   package or command.
  */
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import { formatMcpPackageArgs, parseMcpPackageArgs, parseMcpPackageCommand } from "workbench-shared/workbench/mcp/mcp-package-command";
+import {
+  formatMcpPackageArgs, parseMcpCliCommand, parseMcpPackageArgs, parseMcpPackageCommand,
+} from "workbench-shared/workbench/mcp/mcp-package-command";
 import {
   McpServerEnvNameSchema, type McpServerSettingsUpdate, type McpServerSnapshot, type McpServerSource,
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
@@ -21,6 +24,7 @@ import IconButton, { iconButtonClassName } from "../ui/IconButton";
 import FlushInput from "../ui/FlushInput";
 import MarkdownRender from "../ui/MarkdownRender";
 import PressDragMenu from "../ui/PressDragMenu";
+import ProjectScopedSettingsSection, { type ProjectScopedSettingsProject } from "./ProjectScopedSettingsSection";
 import PrimaryButton from "../ui/PrimaryButton";
 import RadioRow from "../ui/RadioRow";
 import InputList from "./InputList";
@@ -35,7 +39,10 @@ import { enterMotionClassName } from "../../tailwind/enter-motion-classes";
 
 type ServerProps = { server: McpServerSnapshot; controller: McpServerSettingsController; busy: boolean };
 type Tool = Extract<McpServerSnapshot["catalog"], { status: "ready" }>["tools"][number];
-type NpmSource = Extract<McpServerSource, { kind: "npm" }>;
+type StdioSource = Extract<McpServerSource, { kind: "npm" | "cli" }>;
+const isStdio = (source: McpServerSource): source is StdioSource => source.kind !== "http";
+/** What a stdio server's arguments follow: its package or its program. */
+const launchedProgram = (source: StdioSource) => source.kind === "npm" ? source.package : source.command;
 
 const cardBorder = "border-[color-mix(in_srgb,var(--text)_10%,transparent)]";
 const panelLabel = "m-0 text-[0.92em] text-fg/muted";
@@ -82,8 +89,8 @@ function useEnvRows(daemon: WorkbenchDaemonClient, id: string) {
   return { controller, state: useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot) };
 }
 
-/** Arguments after the package name, committed on Enter or blur; a typo such as an open quote stays in the field with its reason. */
-function ArgumentsField({ server, source, controller, busy }: ServerProps & { source: NpmSource }) {
+/** Arguments after the package or program, committed on Enter or blur; a typo such as an open quote stays in the field with its reason. */
+function ArgumentsField({ server, source, controller, busy }: ServerProps & { source: StdioSource }) {
   const saved = formatMcpPackageArgs(source.args);
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -98,7 +105,7 @@ function ArgumentsField({ server, source, controller, busy }: ServerProps & { so
   return <div className="flex flex-col gap-1">
     <p className={panelLabel}>Arguments</p>
     <div className="flex min-w-0 items-center gap-2 font-mono">
-      <span className="shrink-0 text-fg/muted">{source.package}</span>
+      <span className="shrink-0 text-fg/muted">{launchedProgram(source)}</span>
       <WorkbenchTextField variant="dotted" className="min-w-0 flex-1" aria-label="Arguments" placeholder="No arguments"
         autoComplete="off" spellCheck={false} disabled={busy} aria-invalid={Boolean(error)} value={draft ?? saved}
         onChange={event => setDraft(event.target.value)} onBlur={commit}
@@ -111,9 +118,9 @@ function ArgumentsField({ server, source, controller, busy }: ServerProps & { so
   </div>;
 }
 
-/** An npm server's launch: its arguments and its sealed environment variables; Done restarts it when the environment changed. */
+/** A stdio server's launch: its arguments and its sealed environment variables; Done restarts it when the environment changed. */
 function LaunchSettings({ server, source, controller, busy, daemon, onDone }: ServerProps & {
-  source: NpmSource;
+  source: StdioSource;
   daemon: WorkbenchDaemonClient;
   onDone: () => void;
 }) {
@@ -174,9 +181,11 @@ function ToolList({ server, controller, busy }: ServerProps) {
   </div>;
 }
 
-function ServerCard({ server, controller, busy, loopbackOrigin, daemon }: ServerProps & {
+function ServerCard({ server, controller, busy, loopbackOrigin, daemon, projectNamed }: ServerProps & {
   loopbackOrigin: string | null;
   daemon: WorkbenchDaemonClient;
+  /** Whether the server's project, if any, is listed in this view under its own name. */
+  projectNamed: boolean;
 }) {
   const [toolsOpen, setToolsOpen] = useState(false);
   const [keyOpen, setKeyOpen] = useState(false);
@@ -190,9 +199,9 @@ function ServerCard({ server, controller, busy, loopbackOrigin, daemon }: Server
     : server.allowAll ? "All tools"
       // A search-based server's total is unknown: it holds thousands, found by searching.
       : server.catalog.search ? `${enabledCount} enabled` : `${enabledCount} of ${server.catalog.tools.length} tools`;
-  // A local npm server runs as this computer's user; it takes arguments and environment variables instead of an API key or sign-in.
+  // A local stdio server runs as this computer's user; it takes arguments and environment variables instead of an API key or sign-in.
   const menu = [
-    ...server.source.kind === "npm"
+    ...isStdio(server.source)
       ? [{ id: "launch", content: <SettingsMenuItem icon={<TerminalIcon />}>Launch settings…</SettingsMenuItem> }]
       : [server.auth?.kind === "header"
       ? { id: "remove-key", content: <SettingsMenuItem icon={<KeyRoundOffIcon />}>Remove API key</SettingsMenuItem> }
@@ -203,11 +212,12 @@ function ServerCard({ server, controller, busy, loopbackOrigin, daemon }: Server
   return <WorkbenchSettingsStatusRow tone={tone}
     label={<FlushInput ariaLabel="Server name" value={server.name} disabled={busy}
       className="-mx-1 rounded-md px-1 hover:bg-fg/5 focus:bg-fg/8"
-      onCommit={name => { void controller.update({ action: "rename", id: server.id, name }); }} />} status={status} detail={sourceDetail(server.source)}
+      onCommit={name => { void controller.update({ action: "rename", id: server.id, name }); }} />} status={status}
+    detail={`${sourceDetail(server.source)}${server.projectId && !projectNamed ? " · for a project not in the sidebar" : ""}`}
     error={server.catalog.status === "error" ? server.catalog.detail : ""}
     body={<>
       {keyOpen ? <ApiKeyFields server={server} controller={controller} busy={busy} onDone={() => setKeyOpen(false)} /> : null}
-      {launchOpen && server.source.kind === "npm" ? <LaunchSettings server={server} source={server.source} controller={controller}
+      {launchOpen && isStdio(server.source) ? <LaunchSettings server={server} source={server.source} controller={controller}
         busy={busy} daemon={daemon} onDone={() => setLaunchOpen(false)} /> : null}
       {toolsOpen && ready ? <ToolList server={server} controller={controller} busy={busy} /> : null}
     </>}>
@@ -234,42 +244,56 @@ function ServerCard({ server, controller, busy, loopbackOrigin, daemon }: Server
   </WorkbenchSettingsStatusRow>;
 }
 
-type AddMode = "http" | "npm";
+type AddMode = "http" | "npm" | "cli";
 
 const addModes = {
-  http: { label: "HTTP", inputLabel: "MCP server URL", placeholder: "Add a server by URL" },
-  npm: { label: "npm", inputLabel: "npm package and arguments", placeholder: "Package and arguments, like @azure-devops/mcp my-org" },
+  http: { label: "http", inputLabel: "MCP server URL", placeholder: "http://example.com/mcp" },
+  npm: { label: "npm", inputLabel: "npm package and arguments", placeholder: "@org/package p1 p2" },
+  cli: { label: "cli", inputLabel: "Command and arguments", placeholder: "path/to/cli p1 p2" },
 } satisfies Record<AddMode, { label: string; inputLabel: string; placeholder: string }>;
 
+type AddUpdate = Extract<McpServerSettingsUpdate, { action: "add" | "addPackage" | "addCommand" }>;
+
 /** The update one typed draft would send, or why it can't be sent yet. */
-function addUpdate(mode: AddMode, draft: string): { update: Extract<McpServerSettingsUpdate, { action: "add" | "addPackage" }> } | { error: string } | null {
+function addUpdate(mode: AddMode, draft: string, projectId: string | null): { update: AddUpdate } | { error: string } | null {
   if (!draft.trim()) return null;
-  if (mode === "http") return { update: { action: "add", url: draft.trim() } };
-  const parsed = parseMcpPackageCommand(draft);
-  return "error" in parsed ? parsed : { update: { action: "addPackage", ...parsed.command } };
+  const scope = projectId ? { projectId } : {};
+  if (mode === "http") return { update: { action: "add", url: draft.trim(), ...scope } };
+  if (mode === "npm") {
+    const parsed = parseMcpPackageCommand(draft);
+    return "error" in parsed ? parsed : { update: { action: "addPackage", ...parsed.command, ...scope } };
+  }
+  const parsed = parseMcpCliCommand(draft);
+  return "error" in parsed ? parsed : { update: { action: "addCommand", ...parsed.command, ...scope } };
 }
 
 function sourceDetail(source: McpServerSnapshot["source"]) {
   if (source.kind === "http") return source.url.replace(/^https?:\/\//u, "");
-  return ["npm", `${source.package}@${source.version}`, formatMcpPackageArgs(source.args)].filter(Boolean).join(" ");
+  const program = source.kind === "npm" ? `${source.package}@${source.version}` : formatMcpPackageArgs([source.command]);
+  return [source.kind, program, formatMcpPackageArgs(source.args)].filter(Boolean).join(" ");
 }
 
-/** The last card in the list: pick HTTP or npm, then Add (or hold Install, since npm runs the package's code) appears once something is typed. */
-function AddServerCard({ controller, busy, onAdded }: {
+/**
+ * The last card in a scope's list: type a server, pick its kind, then Add (or hold Install, since npm downloads and runs a
+ * package's code). One row that wraps the kind and button under the field when narrow.
+ */
+function AddServerCard({ controller, busy, projectId, onAdded }: {
   controller: McpServerSettingsController;
   busy: boolean;
+  /** The project the added server belongs to; null for every project. */
+  projectId: string | null;
   /** Ids of servers that appeared because of this add. */
   onAdded: (ids: string[]) => void;
 }) {
   const [mode, setMode] = useState<AddMode>("http");
-  // Each mode keeps its own draft, so peeking at the other mode loses nothing.
-  const [drafts, setDrafts] = useState<Record<AddMode, string>>({ http: "", npm: "" });
+  // Each mode keeps its own draft, so peeking at another mode loses nothing.
+  const [drafts, setDrafts] = useState<Record<AddMode, string>>({ http: "", npm: "", cli: "" });
   const [adding, setAdding] = useState(false);
   const draft = drafts[mode];
-  const next = addUpdate(mode, draft);
+  const next = addUpdate(mode, draft, projectId);
   const npm = mode === "npm";
   return <div className="py-1">
-    <form className={`flex items-center gap-2 rounded-[0.95rem] border ${cardBorder} py-1.5 pl-3 pr-1.5`} onSubmit={event => {
+    <form className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[0.95rem] border ${cardBorder} py-1.5 pl-3 pr-1.5`} onSubmit={event => {
       event.preventDefault();
       if (!next || !("update" in next)) return;
       const before = new Set(controller.getSnapshot().settings?.servers.map(server => server.id));
@@ -282,23 +306,32 @@ function AddServerCard({ controller, busy, onAdded }: {
         onAdded(controller.getSnapshot().settings?.servers.filter(server => !before.has(server.id)).map(server => server.id) ?? []);
       });
     }}>
-      <PlusIcon className="size-4 shrink-0 text-fg/muted" />
-      <RadioRow<AddMode> ariaLabel="Server type" value={mode} disabled={busy} onChange={setMode}
-        options={(Object.keys(addModes) as AddMode[]).map(value => ({ value, label: addModes[value].label }))} />
-      <input className="min-w-0 flex-1 bg-transparent py-1.5 text-[0.86em] text-text outline-none placeholder:text-fg/muted"
-        aria-label={addModes[mode].inputLabel} placeholder={addModes[mode].placeholder} autoComplete="off" spellCheck={false}
-        aria-invalid={next !== null && "error" in next} disabled={busy} value={draft}
-        onChange={event => { const value = event.target.value; setDrafts(current => ({ ...current, [mode]: value })); }} />
-      {next || adding ? <PrimaryButton type="submit" shape="compact" disabled={busy || (next !== null && "error" in next)} pendingHalo={adding}
-        {...npm ? { tone: "danger", holdToConfirmMs: 1000, title: "Hold to install and run this npm package on this computer" } : {}}>
-        <IconLabel icon={npm ? <DownloadIcon size={14} /> : <SparklesIcon size={14} />}>{npm ? "Install" : "Add"}</IconLabel>
-      </PrimaryButton> : null}
+      <div className="flex min-w-0 flex-[1_1_14rem] items-center gap-2">
+        <PlusIcon className="size-4 shrink-0 text-fg/muted" />
+        <input className="min-w-0 flex-1 bg-transparent py-1.5 text-[0.86em] text-text outline-none placeholder:text-fg/muted"
+          aria-label={addModes[mode].inputLabel} placeholder={addModes[mode].placeholder} autoComplete="off" spellCheck={false}
+          aria-invalid={next !== null && "error" in next} disabled={busy} value={draft}
+          onChange={event => { const value = event.target.value; setDrafts(current => ({ ...current, [mode]: value })); }} />
+      </div>
+      <div className="ml-auto flex items-center gap-2">
+        <RadioRow<AddMode> ariaLabel="Server type" value={mode} disabled={busy} onChange={setMode}
+          options={(Object.keys(addModes) as AddMode[]).map(value => ({ value, label: addModes[value].label }))} />
+        <PrimaryButton type="submit" shape="compact" disabled={busy || !next || "error" in next} pendingHalo={adding}
+          {...npm ? { tone: "danger", holdToConfirmMs: 1000, title: "Hold to install and run this npm package on this computer" } : {}}>
+          <IconLabel icon={npm ? <DownloadIcon size={14} /> : <SparklesIcon size={14} />}>{npm ? "Install" : "Add"}</IconLabel>
+        </PrimaryButton>
+      </div>
     </form>
     {next && "error" in next ? <p className="m-0 px-3 pt-1.5 text-[0.78em] leading-[1.55] text-fg/muted">{next.error}</p> : null}
   </div>;
 }
 
-export default function McpServerSettings({ daemon, daemonId }: { daemon: WorkbenchDaemonClient; daemonId: string }) {
+export default function McpServerSettings({ daemon, daemonId, projects }: {
+  daemon: WorkbenchDaemonClient;
+  daemonId: string;
+  /** This machine's projects, by daemon project id, that can have their own servers. */
+  projects: readonly ProjectScopedSettingsProject<string>[];
+}) {
   const rpc = useWorkbenchAppRpc();
   const controller = useMemo(() => new McpServerSettingsController({
     daemonId,
@@ -321,15 +354,25 @@ export default function McpServerSettings({ daemon, daemonId }: { daemon: Workbe
   const pending = servers.filter(server => isUnchecked(server.catalog)).length;
   // Only servers added from this view animate in; ones already present on load render still.
   const [entering, setEntering] = useState<ReadonlySet<string>>(() => new Set());
-  return <div className="flex flex-col">
+  const scopedProjectIds = [...new Set(servers.flatMap(server => server.projectId ? [server.projectId] : []))];
+  // A project this view cannot name (not in the sidebar) still lists its servers with the defaults, so they stay removable.
+  const scopeOf = (server: McpServerSnapshot) => server.projectId && projects.some(project => project.id === server.projectId)
+    ? server.projectId : null;
+  return <>
+    <ProjectScopedSettingsSection id="settings-mcp-servers" title="MCP servers" addLabel="Add project-specific servers"
+      defaultLabel="All projects" projects={projects} scopedProjectIds={scopedProjectIds}
+      renderScope={projectId => <div className="flex flex-col">
+        {servers.filter(server => scopeOf(server) === projectId).map(server =>
+          <div key={server.id} className={entering.has(server.id) ? enterMotionClassName : ""}>
+            <ServerCard server={server} controller={controller} busy={state.busy} loopbackOrigin={state.loopbackOrigin} daemon={daemon}
+              projectNamed={scopeOf(server) !== null} />
+          </div>)}
+        <AddServerCard controller={controller} busy={state.busy} projectId={projectId} onAdded={ids => setEntering(new Set(ids))} />
+      </div>} />
     {!state.settings && state.busy ? <p role="status" className="m-0 px-3 pb-2 text-[0.78em] leading-[1.55] text-fg/muted">Loading MCP servers...</p> : null}
     {pending ? <p role="status" className="m-0 px-3 pb-2 text-[0.78em] leading-[1.55] text-fg/muted">
       Checking servers: {servers.length - pending} of {servers.length} complete
     </p> : null}
-    {servers.map(server => <div key={server.id} className={entering.has(server.id) ? enterMotionClassName : ""}>
-      <ServerCard server={server} controller={controller} busy={state.busy} loopbackOrigin={state.loopbackOrigin} daemon={daemon} />
-    </div>)}
-    <AddServerCard controller={controller} busy={state.busy} onAdded={ids => setEntering(new Set(ids))} />
     {state.error ? <p role="alert" className="m-0 px-3 text-[0.78em] leading-[1.55] text-danger">{state.error}</p> : null}
-  </div>;
+  </>;
 }

@@ -138,6 +138,8 @@ export interface WorkbenchAgentCommandDefinition {
   mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
+  /** The user may stop a running call from its transcript row, as they can a running shell. */
+  mcpUserStoppable?: boolean;
   /** Its behaviour follows one cwd, so MCP callers, who cannot `cd`, may name it as `workdir`. */
   mcpWorkdir?: true;
   usage: string;
@@ -160,6 +162,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
+  mcpUserStoppable?: boolean;
   mcpWorkdir?: true;
   parseCliArgs(args: string[]): z.input<TSchema>;
   /** Input fields only Workbench-root callers may set; anyone else setting one is refused. */
@@ -201,6 +204,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     mcpCodeModeEligible: definition.mcpCodeModeEligible,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,
+    mcpUserStoppable: definition.mcpUserStoppable,
     mcpWorkdir: definition.mcpWorkdir,
     usage: definition.usage,
     workbenchRootUsage: definition.workbenchRootUsage,

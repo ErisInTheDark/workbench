@@ -13,7 +13,7 @@
  * - WorkbenchThreadStopSchema/WorkbenchThreadStop: user stop of a live turn and its seen questionnaire.
  * - WorkbenchThreadInterruptSchema/WorkbenchThreadInterrupt: interrupt that keeps a questionnaire waiting.
  * - WorkbenchThreadSteerTargetSchema/WorkbenchThreadSteerTarget: one held steer to resend or dismiss.
- * - WorkbenchThreadShellTargetSchema/WorkbenchThreadShellTarget: one running wb shell item for the user to stop.
+ * - WorkbenchThreadRunningItemTargetSchema/WorkbenchThreadRunningItemTarget: one running wb shell or stoppable call item for the user to stop.
  * - WorkbenchThreadHistoryReadSchema: thread history read, optionally narrowed to some turns.
  * - WorkbenchThreadGitCommitsReadSchema: accepted-commit details for named commit refs.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
@@ -127,11 +127,11 @@ export const WorkbenchThreadSteerTargetSchema = WorkbenchThreadTargetSchema.exte
   itemId: z.string().min(1),
 });
 export type WorkbenchThreadSteerTarget = z.infer<typeof WorkbenchThreadSteerTargetSchema>;
-/** One live wb shell item, for the user to stop or start now past the expensive queue. */
-export const WorkbenchThreadShellTargetSchema = WorkbenchThreadTargetSchema.extend({
+/** One live wb shell or stoppable call item, for the user to stop, or (shells) start now past the expensive queue. */
+export const WorkbenchThreadRunningItemTargetSchema = WorkbenchThreadTargetSchema.extend({
   itemId: z.string().min(1),
 });
-export type WorkbenchThreadShellTarget = z.infer<typeof WorkbenchThreadShellTargetSchema>;
+export type WorkbenchThreadRunningItemTarget = z.infer<typeof WorkbenchThreadRunningItemTargetSchema>;
 
 const threadEnvelope = z.object({
   id: threadId,
@@ -236,8 +236,8 @@ export const workbenchThreadActions = {
   "thread/interrupt": { params: WorkbenchThreadInterruptSchema, result: ok },
   "thread/steer/resend": { params: WorkbenchThreadSteerTargetSchema, result: WorkbenchThreadMessageSubmitResultSchema },
   "thread/steer/dismiss": { params: WorkbenchThreadSteerTargetSchema, result: ok },
-  "thread/shell/stop": { params: WorkbenchThreadShellTargetSchema, result: ok },
-  "thread/shell/start": { params: WorkbenchThreadShellTargetSchema, result: ok },
+  "thread/call/stop": { params: WorkbenchThreadRunningItemTargetSchema, result: ok },
+  "thread/shell/start": { params: WorkbenchThreadRunningItemTargetSchema, result: ok },
   "thread/goal/set": { params: WorkbenchThreadTargetSchema.extend({ objective: WorkbenchThreadGoalObjectiveSchema }), result: goalResult },
   "thread/goal/clear": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/todo/add": {

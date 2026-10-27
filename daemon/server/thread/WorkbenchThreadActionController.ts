@@ -11,7 +11,7 @@ import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/work
 import {
   workbenchThreadActions, type WorkbenchThreadActionMap, type WorkbenchThreadCreate,
   type WorkbenchThreadMessage, type WorkbenchThreadMessageSubmitResult,
-  type WorkbenchThreadShellTarget, type WorkbenchThreadSteerTarget, type WorkbenchThreadStop,
+  type WorkbenchThreadRunningItemTarget, type WorkbenchThreadSteerTarget, type WorkbenchThreadStop,
 } from "workbench-shared/workbench/thread/thread-actions";
 import {
   ThreadReferenceSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId,
@@ -52,7 +52,7 @@ export interface WorkbenchThreadActionOwners {
   /** Canonical transcript writes for Workbench-owned steer decisions and vis ends; latest-turn reads for shell stops and vis ends. */
   transcript: Pick<DaemonTranscriptRegistration, "record" | "read">;
   /** Running wb shell calls the user can stop. */
-  shells: Pick<WorkbenchAgentMcpRequestRegistry, "startShellNow" | "stopShell">;
+  shells: Pick<WorkbenchAgentMcpRequestRegistry, "startShellNow" | "stopCall">;
   /** Settles a stopped turn whose runtime is already gone. */
   settlement: Pick<WorkbenchTurnSettlementController, "settleIfOrphaned">;
   /** Workbench-started hidden turns (refresh, unfinished continuation) that a stop must win against. */
@@ -243,7 +243,7 @@ export default class WorkbenchThreadActionController {
     "thread/skills/deactivate": async input => ({ skills: await this.owners.skills.deactivate(input.threadId, input.path) }),
     "thread/steer/resend": input => this.resendSteer(input),
     "thread/steer/dismiss": input => this.dismissSteer(input),
-    "thread/shell/stop": input => this.stopShell(input),
+    "thread/call/stop": input => this.stopCall(input),
     "thread/shell/start": input => this.startShellNow(input),
   };
 
@@ -459,8 +459,8 @@ export default class WorkbenchThreadActionController {
     return { ok: true as const };
   }
 
-  /** A running shell sits in the latest turn; Codex names its own shell items, reached only through their source aliases. */
-  private async shellReferences({ threadId, itemId }: WorkbenchThreadShellTarget) {
+  /** A running shell or call sits in the latest turn; Codex names its own items, reached only through their source aliases. */
+  private async runningItemReferences({ threadId, itemId }: WorkbenchThreadRunningItemTarget) {
     const { identity } = await this.target(threadId);
     const snapshot = await this.owners.transcript.read({ threadId: identity.threadId, turnLimit: 1 });
     const references = [itemId, ...(snapshot?.rows.itemSourceAliases ?? [])
@@ -469,14 +469,14 @@ export default class WorkbenchThreadActionController {
     return { threadId: identity.threadId, references };
   }
 
-  private async stopShell(target: WorkbenchThreadShellTarget) {
-    const { threadId, references } = await this.shellReferences(target);
-    if (!this.owners.shells.stopShell(threadId, references)) throw new Error("This command is no longer running.");
+  private async stopCall(target: WorkbenchThreadRunningItemTarget) {
+    const { threadId, references } = await this.runningItemReferences(target);
+    if (!this.owners.shells.stopCall(threadId, references)) throw new Error("This is no longer running.");
     return { ok: true as const };
   }
 
-  private async startShellNow(target: WorkbenchThreadShellTarget) {
-    const { threadId, references } = await this.shellReferences(target);
+  private async startShellNow(target: WorkbenchThreadRunningItemTarget) {
+    const { threadId, references } = await this.runningItemReferences(target);
     if (!this.owners.shells.startShellNow(threadId, references)) throw new Error("This command is no longer queued.");
     return { ok: true as const };
   }

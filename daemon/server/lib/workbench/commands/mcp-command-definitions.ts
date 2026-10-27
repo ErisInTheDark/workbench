@@ -1,13 +1,15 @@
 /*
  * Exports:
  * - workbenchMcpFailure: a failed `/internal/mcp` reply in the Workbench error envelope, so tool text survives unwrapping whole.
- * - WorkbenchMcpRequestSchema: validate one `mcp tools` listing, `mcp request` enable request, `mcp call` forwarding request, `mcp authorize` link request or `mcp download` link download.
- * - WORKBENCH_MCP_COMMANDS: `wb mcp tools`, `wb mcp request`, `wb mcp call`, and deferred `wb mcp authorize` and `wb mcp download`, the only agent route to user-added MCP server tools, shared by CLI and MCP.
+ * - WorkbenchMcpRequestSchema: validate one `mcp tools` listing, `mcp request` enable request, `mcp call` forwarding request, `mcp connect`
+ *   thread server request, `mcp reload` restart, `mcp authorize` link request or `mcp download` link download.
+ * - WORKBENCH_MCP_COMMANDS: `wb mcp tools`, `wb mcp request`, `wb mcp call`, and deferred `wb mcp authorize`, `wb mcp download`,
+ *   `wb mcp connect` and `wb mcp reload`, the only agent route to MCP server tools, shared by CLI and MCP.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
-import { McpServerNameSchema, McpServerToolNameSchema } from "workbench-shared/workbench/mcp/mcp-server-settings";
+import { McpServerNameSchema, McpServerToolNameSchema, McpServerUrlSchema } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import { WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { WorkbenchAgentCommandFlags, WorkbenchCommandArgumentError, preservePowerShellTrailingPaths } from "./workbench-agent-command-arguments";
 import {
@@ -26,27 +28,31 @@ const toolArguments = z.record(z.string(), z.unknown());
 const reason = z.string().trim().min(1).max(1000);
 const link = z.string().trim().min(1).max(8000);
 const fileName = z.string().trim().min(1).max(200);
+const caller = { cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1) };
+/** Unmanaged callers have no thread, so they see global servers only. */
+const optionalCaller = { cwd: caller.cwd.optional(), harness: caller.harness.optional(), threadId: caller.threadId.optional() };
+const requestKey = z.string().refine(value => value.startsWith(WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX));
+
+/** The managed caller's identity when there is one; project and thread servers need it, global servers do not. */
+function optionalManagedBody(context: Parameters<typeof managedWorkbenchAgentCommandBody>[0]) {
+  return context.callerThreadId && ProviderKeySchema.safeParse(context.callerHarness).success ? managedWorkbenchAgentCommandBody(context) : {};
+}
 
 export const WorkbenchMcpRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("tools"), server: McpServerNameSchema.optional(), query: z.string().trim().max(500).optional(),
-    includeDisabled: z.boolean().optional(),
+    includeDisabled: z.boolean().optional(), ...optionalCaller,
   }).strict(),
   z.object({
-    action: z.literal("request"), server: McpServerNameSchema, tool: McpServerToolNameSchema, reason,
-    cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1),
-    requestKey: z.string().refine(value => value.startsWith(WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX)),
-  }).strict(),
-  z.object({ action: z.literal("call"), server: McpServerNameSchema, tool: McpServerToolNameSchema, arguments: toolArguments }).strict(),
-  z.object({
-    action: z.literal("download"), server: McpServerNameSchema, url: link, name: fileName.optional(),
-    cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1),
+    action: z.literal("request"), server: McpServerNameSchema, tool: McpServerToolNameSchema, reason, ...caller, requestKey,
   }).strict(),
   z.object({
-    action: z.literal("authorize"), server: McpServerNameSchema, url: link, reason,
-    cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1),
-    requestKey: z.string().refine(value => value.startsWith(WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX)),
+    action: z.literal("call"), server: McpServerNameSchema, tool: McpServerToolNameSchema, arguments: toolArguments, ...optionalCaller,
   }).strict(),
+  z.object({ action: z.literal("connect"), server: McpServerNameSchema, url: McpServerUrlSchema, reason, ...caller, requestKey }).strict(),
+  z.object({ action: z.literal("reload"), server: McpServerNameSchema, ...optionalCaller }).strict(),
+  z.object({ action: z.literal("download"), server: McpServerNameSchema, url: link, name: fileName.optional(), ...caller }).strict(),
+  z.object({ action: z.literal("authorize"), server: McpServerNameSchema, url: link, reason, ...caller, requestKey }).strict(),
 ]);
 
 const mcpTools = defineWorkbenchAgentCommand({
@@ -70,10 +76,10 @@ const mcpTools = defineWorkbenchAgentCommand({
     const server = flags.optional("--server");
     return { ...query ? { query } : {}, ...server ? { server } : {}, ...flags.has("--include-disabled") ? { includeDisabled: true } : {} };
   },
-  buildRequest(input) {
+  buildRequest(input, context) {
     return postWorkbenchAgentCommand("/internal/mcp", {
       action: "tools", ...input.query ? { query: input.query } : {}, ...input.server ? { server: input.server } : {},
-      ...input.includeDisabled ? { includeDisabled: true } : {},
+      ...input.includeDisabled ? { includeDisabled: true } : {}, ...optionalManagedBody(context),
     });
   },
 });
@@ -112,6 +118,7 @@ const mcpCall = defineWorkbenchAgentCommand({
   effects: { readOnly: false, openWorld: true },
   helpGroups: ["mcp"],
   mcpCodeModeEligible: true,
+  mcpUserStoppable: true,
   inputSchema: z.object({
     server: McpServerNameSchema.describe("MCP server name, as listed by mcp_tools."),
     tool: McpServerToolNameSchema.describe("Tool name on that server."),
@@ -132,10 +139,57 @@ const mcpCall = defineWorkbenchAgentCommand({
     if (!input.success) throw new WorkbenchCommandArgumentError("unexpectedArgument", "--arguments-json", "--arguments-json must be a JSON object.");
     return { server: flags.required("--server"), tool: flags.required("--tool"), arguments: input.data };
   },
-  buildRequest(input) {
+  buildRequest(input, context) {
     // A JSON round trip turns arbitrary validated input into transportable JSON values.
     const args = JSON.parse(JSON.stringify(input.arguments)) as { [key: string]: JsonValue };
-    return postWorkbenchAgentCommand("/internal/mcp", { action: "call", server: input.server, tool: input.tool, arguments: args });
+    return postWorkbenchAgentCommand("/internal/mcp", {
+      action: "call", server: input.server, tool: input.tool, arguments: args, ...optionalManagedBody(context),
+    });
+  },
+});
+
+const mcpConnect = defineWorkbenchAgentCommand({
+  words: ["mcp", "connect"],
+  usage: "wb mcp connect --name <name> --url <url> --reason <text>",
+  description: "Ask the user to let this thread use an MCP server you started, by its URL, and wait for their answer. Once approved its tools work with mcp_tools and mcp_call until your turn ends.",
+  effects: { readOnly: false, openWorld: true },
+  helpGroups: ["mcp"],
+  mcpDeferred: true,
+  mcpCodeModeEligible: true,
+  mcpRuntimeDrainPolicy: "preserve-across-reload",
+  inputSchema: z.object({
+    name: McpServerNameSchema.describe("Server name to call it by; must not match an existing server."),
+    url: McpServerUrlSchema.describe("The server's streamable-HTTP MCP endpoint, such as http://127.0.0.1:4100/mcp."),
+    reason: reason.describe("What the server is for, shown to the user."),
+  }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--name", "--url", "--reason"] });
+    return { name: flags.required("--name"), url: flags.required("--url"), reason: flags.required("--reason") };
+  },
+  buildRequest(input, context) {
+    return postWorkbenchAgentCommand("/internal/mcp", {
+      action: "connect", server: input.name, url: input.url, reason: input.reason,
+      ...managedWorkbenchAgentCommandBody(context),
+      requestKey: `${WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX}${randomUUID()}`,
+    });
+  },
+});
+
+const mcpReload = defineWorkbenchAgentCommand({
+  words: ["mcp", "reload"],
+  usage: "wb mcp reload --server <name>",
+  description: "Restart a Workbench-run MCP server, such as a cli server after its script changed: its process stops and starts again on its next use. Remote servers reconnect.",
+  effects: { readOnly: false },
+  helpGroups: ["mcp"],
+  mcpDeferred: true,
+  mcpCodeModeEligible: true,
+  inputSchema: z.object({ server: McpServerNameSchema.describe("MCP server name, as listed by mcp_tools.") }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--server"] });
+    return { server: flags.required("--server") };
+  },
+  buildRequest(input, context) {
+    return postWorkbenchAgentCommand("/internal/mcp", { action: "reload", server: input.server, ...optionalManagedBody(context) });
   },
 });
 
@@ -192,4 +246,4 @@ const mcpDownload = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_MCP_COMMANDS = [mcpTools, mcpRequest, mcpCall, mcpAuthorize, mcpDownload] as const;
+export const WORKBENCH_MCP_COMMANDS = [mcpTools, mcpRequest, mcpCall, mcpAuthorize, mcpDownload, mcpConnect, mcpReload] as const;

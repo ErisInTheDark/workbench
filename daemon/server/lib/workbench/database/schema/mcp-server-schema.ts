@@ -2,8 +2,11 @@
  * Exports:
  * - mcpServers: daemon-configured external MCP servers, their transport and standing allow-all flag.
  * - mcpServerHttp: the URL of each streamable-HTTP server.
- * - mcpServerPackages/mcpServerPackageArgs/mcpServerPackageEnv: the Workbench-installed npm package, pinned version, ordered arguments and
- *   sealed environment variables of each stdio server.
+ * - mcpServerPackages: the Workbench-installed npm package and pinned version of each npm server.
+ * - mcpServerCommands: the program each cli server runs.
+ * - mcpServerLaunchArgs/mcpServerLaunchEnv: ordered arguments and sealed environment variables of each stdio (npm or cli) server.
+ * - mcpServerProjects: the daemon project a project-scoped server belongs to.
+ * - mcpThreadServers: server URLs agents connected for their current turn, with the user's approval.
  * - mcpServerTools: individually allowed tools per server.
  * - mcpServerAuth: optional per-server credential header, sealed per device and user.
  * - mcpServerOAuthClients/mcpServerOAuthTokens/mcpServerOAuthPending: OAuth sign-in registration, sealed tokens and started sign-ins awaiting their callback.
@@ -11,10 +14,10 @@
  * - mcpServerSchemaHistory: MCP server settings and download schema.
  */
 import {
-  blob, booleanInteger, defineTable, enumText, evolveTable, integer, primaryKey, text, type SelectRow, type SqlFragment,
+  blob, booleanInteger, defineTable, enumText, evolveTable, integer, primaryKey, text, type SelectRow, type SqlFragment, type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
 import {
-  createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, sqlData, tableVersion,
+  createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, retireTableHistory, sqlData, tableVersion,
 } from "workbench-shared/database/schema/schema-history";
 import releases from "workbench-shared/workbench/database/schema/releases";
 
@@ -68,8 +71,46 @@ const packageEnv = defineTable("mcp_server_package_env", {
   updated_at: integer().notNull().nonNegative(),
 }, table => ({ constraints: [primaryKey([table.server_id, table.name])] }));
 
+const serversV3 = evolveTable(serversV2, { drop: ["transport"], add: { transport: enumText("http", "npm", "cli").notNull() } });
+
+/** The program a cli server runs; its arguments and environment live in the shared launch tables. */
+const commands = defineTable("mcp_server_commands", {
+  server_id: text().primaryKey().references(servers.name, "id", { onDelete: "CASCADE" }),
+  command: text().notNull(),
+});
+
+/** Ordered arguments of a stdio (npm or cli) server's process. */
+const launchArgs = defineTable("mcp_server_launch_args", {
+  server_id: text().notNull().references(servers.name, "id", { onDelete: "CASCADE" }),
+  position: integer().notNull().nonNegative(),
+  value: text().notNull(),
+}, table => ({ constraints: [primaryKey([table.server_id, table.position])] }));
+
+/** One sealed environment variable of a stdio (npm or cli) server's process. */
+const launchEnv = defineTable("mcp_server_launch_env", {
+  server_id: text().notNull().references(servers.name, "id", { onDelete: "CASCADE" }),
+  name: text().notNull(),
+  nonce: blob().notNull(),
+  ciphertext: blob().notNull(),
+  updated_at: integer().notNull().nonNegative(),
+}, table => ({ constraints: [primaryKey([table.server_id, table.name])] }));
+
+/** The one daemon project whose threads see a project-scoped server; servers without a row serve every project. */
+const projects = defineTable("mcp_server_projects", {
+  server_id: text().primaryKey().references(servers.name, "id", { onDelete: "CASCADE" }),
+  project_id: text().notNull(),
+});
+
+/** An MCP server URL a thread's agent connected with the user's approval; removed when that thread's turn ends. */
+const threadServers = defineTable("mcp_thread_servers", {
+  thread_id: text().notNull(),
+  name: text().notNull(),
+  url: text().notNull(),
+  created_at: integer().notNull().nonNegative(),
+}, table => ({ constraints: [primaryKey([table.thread_id, table.name])] }));
+
 const serverHistory = defineTableHistory({
-  current: serversV2,
+  current: serversV3,
   versions: [
     tableVersion({ schemaVersion: releases.mcpServers.version, table: servers, migration: createTable(servers) }),
     tableVersion({
@@ -83,6 +124,7 @@ const serverHistory = defineTableHistory({
         }),
       ],
     }),
+    tableVersion({ schemaVersion: releases.mcpProjectServers.version, table: serversV3, migration: rebuildTable({ from: serversV2, to: serversV3 }) }),
   ],
 });
 const httpHistory = defineTableHistory({
@@ -91,16 +133,35 @@ const httpHistory = defineTableHistory({
 });
 const packageHistory = defineTableHistory({
   current: packages,
-  versions: [tableVersion({ schemaVersion: releases.mcpServerPackages.version, table: packages, migration: createTable(packages) })],
+  versions: [
+    tableVersion({ schemaVersion: releases.mcpServerPackages.version, table: packages, migration: createTable(packages) }),
+    // npm arguments and environment move to the launch tables cli servers share, before the package tables retire.
+    tableVersion({
+      schemaVersion: releases.mcpProjectServers.version, table: packages,
+      migration: sqlData([
+        "INSERT INTO mcp_server_launch_args (server_id, position, value) SELECT server_id, position, value FROM mcp_server_package_args",
+        "INSERT INTO mcp_server_launch_env (server_id, name, nonce, ciphertext, updated_at) SELECT server_id, name, nonce, ciphertext, updated_at FROM mcp_server_package_env",
+      ]),
+    }),
+  ],
 });
-const packageArgsHistory = defineTableHistory({
+const packageArgsHistory = retireTableHistory(defineTableHistory({
   current: packageArgs,
   versions: [tableVersion({ schemaVersion: releases.mcpServerPackages.version, table: packageArgs, migration: createTable(packageArgs) })],
-});
-const packageEnvHistory = defineTableHistory({
+}), releases.mcpProjectServers.version);
+const packageEnvHistory = retireTableHistory(defineTableHistory({
   current: packageEnv,
   versions: [tableVersion({ schemaVersion: releases.mcpServerPackageEnv.version, table: packageEnv, migration: createTable(packageEnv) })],
+}), releases.mcpProjectServers.version);
+const created = <Table extends TableDefinition>(table: Table) => defineTableHistory({
+  current: table,
+  versions: [tableVersion({ schemaVersion: releases.mcpProjectServers.version, table, migration: createTable(table) })],
 });
+const commandHistory = created(commands);
+const launchArgsHistory = created(launchArgs);
+const launchEnvHistory = created(launchEnv);
+const projectHistory = created(projects);
+const threadServerHistory = created(threadServers);
 const toolHistory = defineTableHistory({
   current: tools,
   versions: [tableVersion({ schemaVersion: releases.mcpServers.version, table: tools, migration: createTable(tools) })],
@@ -169,15 +230,20 @@ const downloadHistory = defineTableHistory({
 export const mcpServers = serverHistory.current;
 export const mcpServerHttp = httpHistory.current;
 export const mcpServerPackages = packageHistory.current;
-export const mcpServerPackageArgs = packageArgsHistory.current;
-export const mcpServerPackageEnv = packageEnvHistory.current;
+export const mcpServerCommands = commandHistory.current;
+export const mcpServerLaunchArgs = launchArgsHistory.current;
+export const mcpServerLaunchEnv = launchEnvHistory.current;
+export const mcpServerProjects = projectHistory.current;
+export const mcpThreadServers = threadServerHistory.current;
 export const mcpServerTools = toolHistory.current;
 export const mcpServerAuth = authHistory.current;
 export const mcpServerOAuthClients = oauthClientHistory.current;
 export const mcpServerOAuthTokens = oauthTokenHistory.current;
 export const mcpServerOAuthPending = oauthPendingHistory.current;
 export const mcpDownloads = downloadHistory.current;
-// Transport tables come first: within one release, the server rebuild copies each URL into an already-created table.
+// Within one release, operations run in this order: transport tables exist before the server rebuild copies into them (102), and the
+// launch tables exist before the package table's copy into them, which runs before the retired package tables drop (104).
 export const mcpServerSchemaHistory = defineSubsystemHistory([
-  httpHistory, packageHistory, packageArgsHistory, packageEnvHistory, serverHistory, toolHistory, authHistory, oauthClientHistory, oauthTokenHistory, oauthPendingHistory, downloadHistory,
+  httpHistory, commandHistory, launchArgsHistory, launchEnvHistory, projectHistory, packageHistory, packageArgsHistory, packageEnvHistory,
+  serverHistory, toolHistory, authHistory, oauthClientHistory, oauthTokenHistory, oauthPendingHistory, downloadHistory, threadServerHistory,
 ]);

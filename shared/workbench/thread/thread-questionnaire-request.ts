@@ -2,13 +2,14 @@
  * Exports:
  * - WorkbenchQuestionnaireInputQuestion: loose questionnaire question accepted from model or wire input. Keywords: questionnaire, input, repair.
  * - repairQuestionnaireQuestion: fill missing question identity and clean options into the durable question shape. Keywords: questionnaire, repair, id, header.
- * - buildWorkbenchQuestionnaireRequest: assemble a durable questionnaire request, optionally about one MCP tool, from loose input under shared presentation policy. Keywords: questionnaire, request, policy.
+ * - buildWorkbenchQuestionnaireRequest: assemble a durable questionnaire request, optionally about one MCP tool, sign-in link or server connection, from loose input under shared presentation policy. Keywords: questionnaire, request, policy.
  * - buildWorkbenchApprovalRequest: assemble the fixed approval decision request from shared approval vocabulary. Keywords: questionnaire, approval, request.
  */
 
 import type {
   WorkbenchUserInputApprovalContext,
   WorkbenchUserInputMcpAuthorizationContext,
+  WorkbenchUserInputMcpConnectionContext,
   WorkbenchUserInputMcpToolContext,
   WorkbenchUserInputOption,
   WorkbenchUserInputQuestion,
@@ -85,6 +86,7 @@ export function buildWorkbenchQuestionnaireRequest(input: {
   questions: readonly WorkbenchQuestionnaireInputQuestion[];
   mcpTool?: WorkbenchUserInputMcpToolContext;
   mcpAuthorization?: WorkbenchUserInputMcpAuthorizationContext;
+  mcpConnection?: WorkbenchUserInputMcpConnectionContext;
 }): WorkbenchUserInputRequest {
   const questions = input.questions
     .map((question, index) => repairQuestionnaireQuestion(index, question))
@@ -94,6 +96,7 @@ export function buildWorkbenchQuestionnaireRequest(input: {
     id: input.id,
     ...(input.mcpTool ? { mcpTool: input.mcpTool } : {}),
     ...(input.mcpAuthorization ? { mcpAuthorization: input.mcpAuthorization } : {}),
+    ...(input.mcpConnection ? { mcpConnection: input.mcpConnection } : {}),
     questions: repaired,
     submitLabel: QUESTIONNAIRE_SUBMIT_LABEL,
     summary: repaired.length > 1 ? QUESTIONNAIRE_MULTI_QUESTION_SUMMARY : "",

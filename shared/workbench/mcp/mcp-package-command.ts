@@ -3,8 +3,9 @@
  * - McpPackageCommand: npm package, optional version and arguments of a stdio MCP server the user typed.
  * - parseMcpPackageCommand: read `package[@version] args...`, also accepting a pasted `npx -y ...`-style launcher, or explain why it can't.
  * - parseMcpPackageArgs/formatMcpPackageArgs: read typed arguments with the same quote rules, and write arguments so they read back exactly.
+ * - parseMcpCliCommand: read `command args...` for a cli server with the same quote rules, or explain why it can't.
  */
-import { McpPackageArgsSchema, McpPackageNameSchema, McpPackageVersionSchema } from "./mcp-server-settings.ts";
+import { McpPackageArgsSchema, McpPackageNameSchema, McpPackageVersionSchema, McpServerCommandSchema } from "./mcp-server-settings.ts";
 
 export interface McpPackageCommand {
   package: string;
@@ -70,6 +71,16 @@ export function formatMcpPackageArgs(args: readonly string[]) {
     if (!arg.includes("\"")) return `"${arg}"`;
     return arg.split("'").map(part => `'${part}'`).join("\"'\"");
   }).join(" ");
+}
+
+export function parseMcpCliCommand(text: string): { command: { command: string; args: string[] } } | { error: string } {
+  const parsed = words(text);
+  if (!parsed) return { error: "Close the quote." };
+  const [program, ...args] = parsed;
+  const command = McpServerCommandSchema.safeParse(program ?? "");
+  if (!command.success) return { error: command.error.issues[0]?.message ?? "Type a command." };
+  const checked = checkedArgs(args);
+  return "error" in checked ? checked : { command: { command: command.data, args: checked.args } };
 }
 
 export function parseMcpPackageCommand(text: string): { command: McpPackageCommand } | { error: string } {

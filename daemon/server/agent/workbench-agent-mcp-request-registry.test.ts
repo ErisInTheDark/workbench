@@ -1,4 +1,4 @@
-/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user shell stops and queue skips, shell queue steers, yielded shells, steer races, and reload-stable cancellation. */
+/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user stops of shells and stoppable calls, queue skips, shell queue steers, yielded shells, steer races, and reload-stable cancellation. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -8,7 +8,7 @@ import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
-  isWorkbenchAgentMcpShellStop,
+  isWorkbenchAgentMcpCallStop,
   WorkbenchAgentMcpRequestRegistry,
   type WorkbenchAgentMcpUndeliveredMessage,
 } from "./workbench-agent-mcp-request-registry";
@@ -61,18 +61,36 @@ test("user shell stops abort only the shell its thread's item names, once, with 
   const ordinary = registry.register("client-1", 4, registrationOptions(owner));
   try {
     now = 66_000;
-    assert.equal(registry.stopShell(otherThreadId, ["item-1"]), false, "another thread's view cannot stop this shell");
-    assert.equal(registry.stopShell(threadId, ["item-1"]), true);
-    assert.ok(isWorkbenchAgentMcpShellStop(recorded.signal.reason));
+    assert.equal(registry.stopCall(otherThreadId, ["item-1"]), false, "another thread's view cannot stop this shell");
+    assert.equal(registry.stopCall(threadId, ["item-1"]), true);
+    assert.ok(isWorkbenchAgentMcpCallStop(recorded.signal.reason));
     assert.equal((recorded.signal.reason as Error).message, "The user stopped this command after 1m 5s.");
-    assert.equal(registry.stopShell(threadId, ["item-1"]), false, "an already stopped shell reports nothing left to stop");
-    assert.equal(registry.stopShell(threadId, ["public-item", "call_native"]), true, "a shell without thread identity matches its references");
+    assert.equal(registry.stopCall(threadId, ["item-1"]), false, "an already stopped shell reports nothing left to stop");
+    assert.equal(registry.stopCall(threadId, ["public-item", "call_native"]), true, "a shell without thread identity matches its references");
     assert.equal(native.signal.aborted, true);
     assert.equal(unrecorded.signal.aborted, false);
     assert.equal(ordinary.signal.aborted, false);
-    assert.equal(isWorkbenchAgentMcpShellStop(new Error("The user stopped this command after 1m 5s.")), false);
+    assert.equal(isWorkbenchAgentMcpCallStop(new Error("The user stopped this command after 1m 5s.")), false);
   } finally {
     for (const registration of [recorded, native, unrecorded, ordinary]) registration.unregister();
+  }
+});
+
+test("a stoppable call stops by its transcript item once it names one, and only in its own thread", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry(undefined, () => 5_000);
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const call = registry.register("client-1", 1, { owner, toolName: "mcp_call" });
+  try {
+    assert.equal(registry.stopCall(threadId, ["call-item"]), false, "a call without stop references is not stoppable");
+    call.setWorkbenchThreadId(threadId);
+    call.setStopReferences(["call-item", "call_native"]);
+    assert.equal(registry.stopCall(WorkbenchThreadIdSchema.parse("other-thread"), ["call-item"]), false);
+    assert.equal(registry.stopCall(threadId, ["call_native"]), true);
+    assert.ok(isWorkbenchAgentMcpCallStop(call.signal.reason));
+    assert.equal((call.signal.reason as Error).message, "The user stopped this call after 0s.");
+  } finally {
+    call.unregister();
   }
 });
 
@@ -230,8 +248,8 @@ test("a yielded shell frees its call, never delays a steer, and stays stoppable 
   assert.equal(registry.interruptThreadWaits(threadId), 1, "a yielded shell is no running call that holds a steer back");
   queued.unregister();
 
-  assert.equal(registry.stopShell(threadId, ["item-1"]), true);
-  assert.ok(isWorkbenchAgentMcpShellStop(yielded.signal.reason));
+  assert.equal(registry.stopCall(threadId, ["item-1"]), true);
+  assert.ok(isWorkbenchAgentMcpCallStop(yielded.signal.reason));
   registry.finishBackgroundShell(shellId, { content: [] });
   assert.deepEqual(registry.readYieldedShells(threadId), [], "a finished shell's row carries the yield from here");
 });
@@ -314,7 +332,7 @@ test("a yielded shell's result goes once to its own thread, and its turn ending 
   const uncollected = start(3);
   registry.finishBackgroundShell(uncollected.shellId, result);
   assert.equal(registry.stopBackgroundShells(threadId), 1);
-  assert.ok(isWorkbenchAgentMcpShellStop(running.registration.signal.reason));
+  assert.ok(isWorkbenchAgentMcpCallStop(running.registration.signal.reason));
   assert.match((running.registration.signal.reason as Error).message, /turn ended/u);
   registry.finishBackgroundShell(running.shellId, result);
   await assert.rejects(registry.awaitBackgroundShell(running.shellId, threadId, signal), /No yielded shell/u);

@@ -59,7 +59,7 @@ function fixture(providerWarning?: string) {
     transcripts: { readPage: unused, history: unused },
     transcript: { record: async observations => { recorded.push(...observations); return undefined as never; }, read: unused },
     shells: {
-      stopShell: () => { throw new Error("Unexpected shell stop."); },
+      stopCall: () => { throw new Error("Unexpected call stop."); },
       startShellNow: () => { throw new Error("Unexpected shell start."); },
     },
     settlement: { settleIfOrphaned: async () => { stopOrder.push("settle"); return false; } },
@@ -108,7 +108,7 @@ test("shell stops reach Codex call ids through item source aliases and reject co
   const f = fixture();
   const stops: Array<{ threadId: string; references: readonly string[] }> = [];
   let running = true;
-  f.owners.shells.stopShell = (threadId, references) => { stops.push({ threadId, references }); return running; };
+  f.owners.shells.stopCall = (threadId, references) => { stops.push({ threadId, references }); return running; };
   f.owners.transcript.read = async request => {
     assert.deepEqual(request, { threadId: "wb-thread", turnLimit: 1 });
     return { rows: { itemSourceAliases: [
@@ -116,10 +116,10 @@ test("shell stops reach Codex call ids through item source aliases and reject co
       { item_identity_id: "other-item", reference: "call_other" },
     ] } } as never;
   };
-  assert.deepEqual(await f.controller.handle("thread/shell/stop", { threadId: "native-thread", itemId: "shell-item" }), { ok: true });
+  assert.deepEqual(await f.controller.handle("thread/call/stop", { threadId: "native-thread", itemId: "shell-item" }), { ok: true });
   assert.deepEqual(stops, [{ threadId: "wb-thread", references: ["shell-item", "call_native"] }]);
   running = false;
-  await assert.rejects(f.controller.handle("thread/shell/stop", { threadId: "wb-thread", itemId: "shell-item" }), /no longer running/);
+  await assert.rejects(f.controller.handle("thread/call/stop", { threadId: "wb-thread", itemId: "shell-item" }), /no longer running/);
 });
 
 test("starting a queued shell now reaches it through the same aliases and rejects one that already left the queue", async () => {

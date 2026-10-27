@@ -2,7 +2,7 @@
  * Exports:
  * - UndeliveredSteerActions: resend or dismiss every undelivered stored steer of one bubble, in order.
  * - ThreadShellStartNowAction: start a wb shell call waiting in the expensive queue now, without taking a slot.
- * - ThreadShellStopAction: stop a running wb shell call; the transcript then shows the agent's stopped result.
+ * - ThreadCallStopAction: stop a running wb shell or stoppable call such as mcp_call; the transcript then shows the agent's stopped result.
  * Keep runtime exports component-only for React Refresh.
  */
 "use client";
@@ -115,7 +115,7 @@ export function ThreadShellStartNowAction({ itemId }: { itemId: string }) {
   );
 }
 
-export function ThreadShellStopAction({ itemId }: { itemId: string }) {
+export function ThreadCallStopAction({ itemId, label }: { itemId: string; label: string }) {
   const actions = useContext(ThreadItemActionsContext);
   const { busy, error, run } = useThreadItemActionRun();
   if (!actions) return null;
@@ -123,11 +123,11 @@ export function ThreadShellStopAction({ itemId }: { itemId: string }) {
     <>
       <button
         type="button"
-        aria-label="Stop command"
+        aria-label={label}
         className={`${threadBubbleControlClassName} hover:text-danger focus-visible:text-danger disabled:opacity-50`}
         disabled={busy}
-        onClick={() => run(() => actions.stopShell(itemId))}
-        title="Stop command"
+        onClick={() => run(() => actions.stopCall(itemId))}
+        title={label}
       >
         <StopIcon size={14} />
       </button>

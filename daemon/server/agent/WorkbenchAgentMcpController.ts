@@ -59,7 +59,7 @@ import { readWorkbenchShellPartialOutput } from "../exec/workbench-shell-partial
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
-  isWorkbenchAgentMcpShellStop,
+  isWorkbenchAgentMcpCallStop,
   type WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 import {
@@ -746,9 +746,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       kind: "result", result: await this.finishTranscript(tools, started.reference, this.shellFailure(error, signal)),
     });
     let registration: ReturnType<WorkbenchAgentMcpRequestRegistry["register"]>;
-    // Workbench-recorded items are named by their item id; Codex records its own item, named by the call id it sends.
-    const nativeCallId = typeof call.meta?.callId === "string" && call.meta.callId ? call.meta.callId : null;
-    const shellItemReferences = [started.reference?.itemId, nativeCallId].filter((reference): reference is string => Boolean(reference));
+    const shellItemReferences = this.itemReferences(started.reference, call.meta);
     // Only an ingress that backgrounds shells may let the command stop following its call.
     const yields = call.shellYields === true && call.detachableShell === true && input.yield_ms !== undefined;
     try {
@@ -831,6 +829,12 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     }
   }
 
+  /** Every reference naming a call's transcript item: Workbench-recorded items by item id; Codex records its own, named by the call id it sends. */
+  private itemReferences(reference: WorkbenchToolTranscriptReference | null | undefined, meta: Record<string, unknown> | undefined) {
+    const nativeCallId = typeof meta?.callId === "string" && meta.callId ? meta.callId : null;
+    return [reference?.itemId, nativeCallId].filter((value): value is string => Boolean(value));
+  }
+
   /** A command that ran before it failed or was stopped keeps what it printed, for its agent and its row alike. */
   private shellFailure(error: unknown, signal: AbortSignal): CallToolResult {
     const printed = readWorkbenchShellPartialOutput(error);
@@ -839,7 +843,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       isError: true,
     });
     // Expected, not a failure: a stop by the user, the agent or the turn ending already names what happened.
-    if (signal.aborted && isWorkbenchAgentMcpShellStop(signal.reason)) return failed((signal.reason as Error).message);
+    if (signal.aborted && isWorkbenchAgentMcpCallStop(signal.reason)) return failed((signal.reason as Error).message);
     // Only a queued shell is steer-interruptible, so the command never ran; an error keeps it a readable failed command.
     if (signal.aborted && isWorkbenchAgentMcpSteerInterruption(signal.reason)) return failed(QUEUED_SHELL_STEER_INTERRUPTION_TEXT);
     const message = sanitizeError(error) || "Workbench shell tool call failed.";
@@ -860,7 +864,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       transcript = { tool: getWorkbenchAgentCommandToolName(definition), input },
     }: { decorate?: (result: CallToolResult) => CallToolResult; transcript?: ToolTranscriptIdentity } = {},
   ) {
-    const execute = async () => decorate(await this.executeTool(definition, input, meta, clientScope, requestId, signal, tools));
+    const execute = async (reference: WorkbenchToolTranscriptReference | null) =>
+      decorate(await this.executeTool(definition, input, meta, clientScope, requestId, signal, tools, reference));
     if (definition.hideMcpTranscript) {
       return this.observeTool(transcript.tool, {}, meta, clientScope, signal, tools, execute,
         result => ({ content: [], isError: result.isError === true }));
@@ -941,8 +946,9 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
+    transcript: WorkbenchToolTranscriptReference | null,
   ): Promise<CallToolResult> {
-    const prepared = await this.prepareCommand(definition, input, meta, clientScope, requestId, signal, tools);
+    const prepared = await this.prepareCommand(definition, input, meta, clientScope, requestId, signal, tools, undefined, transcript);
     if (prepared.kind === "result") {
       prepared.unregister?.();
       return prepared.result;
@@ -968,6 +974,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
     registered?: WorkbenchAgentMcpRegisteredCommand,
+    /** The call's transcript item, which the user stops a stoppable command by. */
+    transcript: WorkbenchToolTranscriptReference | null = null,
   ): Promise<
     | { kind: "ready"; request: WorkbenchAgentCommandRequest; signal: AbortSignal; unregister: () => void }
     | { kind: "result"; result: CallToolResult; unregister?: () => void }
@@ -982,6 +990,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal, { clientScope });
       if (signal.aborted) throw signal.reason;
       registration.setWorkbenchThreadId(caller.threadId);
+      if (definition.mcpUserStoppable) registration.setStopReferences(this.itemReferences(transcript, meta));
       // Root status follows the thread's own cwd, never a `workdir`.
       const workbenchRoot = this.isWorkbenchRootCaller(caller);
       const refusal = await refuseWorkbenchCommandCaller(
@@ -1031,6 +1040,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   private commandFailure(definition: WorkbenchAgentCommandDefinition | undefined, error: unknown, signal: AbortSignal): CallToolResult {
     const ended = this.expectedWaitEnd(definition ? getWorkbenchAgentCommandToolName(definition) : "the same tool", error, signal);
     if (ended) return ended;
+    // Expected, not a failure: the user stopped the call from its row, and the stop names what happened.
+    if (signal.aborted && isWorkbenchAgentMcpCallStop(signal.reason)) {
+      return { content: [{ type: "text" as const, text: (signal.reason as Error).message }], isError: true };
+    }
     const message = sanitizeError(error) || "Workbench MCP tool call failed.";
     if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
     if (definition?.words[0] === "git" && (definition.words[1] === "arc" || definition.words[1] === "plan")) {

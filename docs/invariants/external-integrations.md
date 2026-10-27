@@ -1,2 +1,3 @@
 - Keep external system details at their adapter boundary.
 - Convert external data into shared Workbench types before core code uses it.
+- Only project-scoped MCP servers receive caller identity; never send thread ids or paths to global servers.

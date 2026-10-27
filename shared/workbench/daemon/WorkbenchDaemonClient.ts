@@ -134,8 +134,10 @@ class WorkbenchDaemonClient {
       resend: (params: WorkbenchDaemonParams<"thread/steer/resend">) => this.request("thread/steer/resend", params),
       dismiss: (params: WorkbenchDaemonParams<"thread/steer/dismiss">) => this.request("thread/steer/dismiss", params),
     },
+    call: {
+      stop: (params: WorkbenchDaemonParams<"thread/call/stop">) => this.request("thread/call/stop", params),
+    },
     shell: {
-      stop: (params: WorkbenchDaemonParams<"thread/shell/stop">) => this.request("thread/shell/stop", params),
       start: (params: WorkbenchDaemonParams<"thread/shell/start">) => this.request("thread/shell/start", params),
     },
     goal: {

@@ -483,6 +483,8 @@ const WorkbenchUserInputRequestSchema = z.object({
   mcpAuthorization: z.object({
     server: z.string().min(1), host: z.string().min(1), url: z.string().url().optional(),
   }).strict().optional(),
+  /** The server URL an agent asks to connect for its turn. */
+  mcpConnection: z.object({ server: z.string().min(1), url: z.string().url() }).strict().optional(),
   questions: z.array(WorkbenchUserInputQuestionSchema).min(1),
   submitLabel: z.string(),
   summary: z.string(),

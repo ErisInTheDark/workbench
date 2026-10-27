@@ -352,9 +352,9 @@ export default function createObservedThreadSource(
       async compact() { await ports.daemon.threads.compact({ threadId: requireEntry().identity.threadId }); },
       async resendSteer(itemId) { await ports.daemon.threads.steer.resend({ threadId, itemId }); },
       async dismissSteer(itemId) { await ports.daemon.threads.steer.dismiss({ threadId, itemId }); },
-      async stopShell(itemId) {
-        try { await ports.daemon.threads.shell.stop({ threadId, itemId }); }
-        catch (error) { throw new Error(`The command could not be stopped: ${sanitize(error instanceof Error ? error.message : String(error)).slice(0, 300)}`); }
+      async stopCall(itemId) {
+        try { await ports.daemon.threads.call.stop({ threadId, itemId }); }
+        catch (error) { throw new Error(`It could not be stopped:${sanitize(error instanceof Error ? error.message : String(error)).slice(0, 300)}`); }
       },
       async startShellNow(itemId) {
         try { await ports.daemon.threads.shell.start({ threadId, itemId }); }

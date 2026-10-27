@@ -22,9 +22,9 @@ export default class WrappedMcpConnection implements McpServerConnectionPort {
     return this.#detect(await this.inner.listTools(signal))?.session ?? null;
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
+  async callTool(name: string, args: Record<string, unknown>, signal: AbortSignal, meta?: Record<string, unknown>): Promise<CallToolResult> {
     const session = await this.wrapped(signal);
-    return session ? await session.call(name, args, signal) : await this.inner.callTool(name, args, signal);
+    return session ? await session.call(name, args, signal) : await this.inner.callTool(name, args, signal, meta);
   }
 
   serverName() {

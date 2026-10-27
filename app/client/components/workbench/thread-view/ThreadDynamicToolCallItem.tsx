@@ -117,7 +117,7 @@ function parseQuestionnaireRequest (value: unknown, requestId: string) {
   } satisfies WorkbenchUserInputRequest;
 }
 
-/** What an MCP enable or sign-in request was about, when this questionnaire was one. */
+/** What an MCP enable, sign-in or connect request was about, when this questionnaire was one. */
 function parseMcpRequestSubject (value: unknown): ThreadMcpRequestSubject | null {
   const request = asRecord(value);
   const tool = asRecord(request?.mcpTool);
@@ -126,6 +126,10 @@ function parseMcpRequestSubject (value: unknown): ThreadMcpRequestSubject | null
   if (tool && toolServer && toolName) {
     return { kind: "tool", tool: { server: toolServer, tool: toolName, title: asString(tool.title), description: asString(tool.description) ?? "" } };
   }
+  const connection = asRecord(request?.mcpConnection);
+  const connectionServer = asString(connection?.server);
+  const connectionUrl = asString(connection?.url);
+  if (connectionServer && connectionUrl) return { kind: "connection", connection: { server: connectionServer, url: connectionUrl } };
   const authorization = asRecord(request?.mcpAuthorization);
   const server = asString(authorization?.server);
   const host = asString(authorization?.host);

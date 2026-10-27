@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests protect the real streamable-HTTP edge: the credential header reaches the server,
- * calls are forwarded, recorded traffic holds the exact replies, and a refused credential is reported plainly instead of as a raw transport error;
+ * calls are forwarded with their _meta, oversized responses fail, recorded traffic holds the exact replies, and a refused credential is reported plainly instead of as a raw transport error;
  * and the real stdio edge: launch arguments and environment reach the process, and a crashed process is explained by the reason on its stderr, including JSON logs.
  */
 import assert from "node:assert/strict";
@@ -26,6 +26,8 @@ async function startServer() {
     const mcp = new McpServer({ name: "fake", version: "1.0.0" });
     mcp.registerTool("echo", { description: "Echo text\nback", inputSchema: { text: z.string() } },
       async ({ text }) => ({ content: [{ type: "text", text: `echo: ${text}` }] }));
+    mcp.registerTool("caller", { description: "Report the request's _meta" },
+      async (extra) => ({ content: [{ type: "text", text: JSON.stringify(extra._meta ?? null) }] }));
     mcp.registerTool("authorize", { description: "Needs a sign-in" },
       async () => ({ content: [{ type: "text", text: "Click the link." }], _meta: { authorization_url: "https://example.test/authorize" }, isError: true }));
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -50,13 +52,30 @@ test("the credential header authenticates catalogue reads and forwarded calls", 
   const connection = new McpServerConnection({ transport: "http", url: server.url, headers: { "x-consumer-api-key": KEY } });
   try {
     const tools = await connection.listTools();
-    assert.deepEqual(tools.map(tool => tool.name), ["echo", "authorize"]);
+    assert.deepEqual(tools.map(tool => tool.name), ["echo", "caller", "authorize"]);
     assert.equal(tools[0]!.description, "Echo text\nback");
     assert.equal((tools[0]!.inputSchema.properties as Record<string, unknown>).text !== undefined, true);
     const result = await connection.callTool("echo", { text: "hi" }, new AbortController().signal);
     assert.deepEqual(result.content, [{ type: "text", text: "echo: hi" }]);
   } finally {
     await connection.close();
+    await server.close();
+  }
+});
+
+test("call meta reaches the server as the request's _meta, and a response past the byte limit fails instead of arriving", async () => {
+  const server = await startServer();
+  const headers = { "x-consumer-api-key": KEY };
+  const connection = new McpServerConnection({ transport: "http", url: server.url, headers });
+  const bounded = new McpServerConnection({ transport: "http", url: server.url, headers, maxResponseBytes: 64 });
+  try {
+    const meta = { "workbench/caller": { threadId: "thread-a", cwd: "/projects/a" } };
+    const result = await connection.callTool("caller", {}, new AbortController().signal, meta);
+    assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text)["workbench/caller"], meta["workbench/caller"]);
+    await assert.rejects(bounded.callTool("echo", { text: "x".repeat(200) }, new AbortController().signal), /more than/u);
+  } finally {
+    await connection.close();
+    await bounded.close();
     await server.close();
   }
 });
@@ -206,7 +225,7 @@ test("a refused credential is reported as such, and a failed connection is not r
   try {
     await assert.rejects(connection.listTools(), /rejected the credential \(401\)/u);
     server.accepted.key = "rotated";
-    assert.deepEqual((await connection.listTools()).map(tool => tool.name), ["echo", "authorize"]);
+    assert.deepEqual((await connection.listTools()).map(tool => tool.name), ["echo", "caller", "authorize"]);
   } finally {
     await connection.close();
     await server.close();

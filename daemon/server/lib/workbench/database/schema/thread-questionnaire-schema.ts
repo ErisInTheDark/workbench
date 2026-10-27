@@ -138,12 +138,25 @@ export function defineThreadQuestionnaireSchema(schemaVersion: number) {
     })],
   });
 
+  /** The server URL a connect request asks the user to approve for the agent's turn. */
+  const mcpConnectionTable = defineTable("workbench_thread_questionnaire_mcp_connections", {
+    questionnaire_id: text().primaryKey().references("workbench_thread_questionnaires", "id", { onDelete: "CASCADE" }),
+    server: text().notNull(),
+    url: text().notNull(),
+  });
+  const mcpConnections = defineTableHistory({
+    current: mcpConnectionTable,
+    versions: [tableVersion({
+      schemaVersion: releases.mcpProjectServers.version, table: mcpConnectionTable, migration: createTable(mcpConnectionTable),
+    })],
+  });
+
   return {
     tables: {
       questionnaires: questionnaires.current, questions: questions.current, options: options.current,
       answerGroups: answerGroups.current, answers: answers.current, mcpTools: mcpTools.current,
-      mcpAuthorizations: mcpAuthorizations.current,
+      mcpAuthorizations: mcpAuthorizations.current, mcpConnections: mcpConnections.current,
     },
-    history: defineSubsystemHistory([questionnaires, questions, options, answerGroups, answers, mcpTools, mcpAuthorizations]),
+    history: defineSubsystemHistory([questionnaires, questions, options, answerGroups, answers, mcpTools, mcpAuthorizations, mcpConnections]),
   };
 }

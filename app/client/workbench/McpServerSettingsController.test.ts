@@ -14,7 +14,7 @@ function deferred<T>() {
 }
 
 function server(id: string): McpServerSnapshot {
-  return { id, name: id, source: { kind: "http", url: `https://${id}.example/mcp` }, allowAll: false, allowedTools: [], auth: null, catalog: { status: "pending" } };
+  return { id, name: id, source: { kind: "http", url: `https://${id}.example/mcp` }, projectId: null, allowAll: false, allowedTools: [], auth: null, catalog: { status: "pending" } };
 }
 
 function setup() {

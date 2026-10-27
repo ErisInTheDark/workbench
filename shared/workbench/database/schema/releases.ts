@@ -111,6 +111,7 @@ const databaseReleases = Object.freeze({
   threadItemThreadIndex: release(101, "1e43bf24f717b58eb949d65d1f57970d12bc42684f070dec8b684eac38860d1c"),
   mcpServerPackages: release(102, "da9bb5cce3199ad1ac2189354c82c0af012a21daaaf77d1ff3b6553d0cb6c124"),
   mcpServerPackageEnv: release(103, "59f66a47a35577570205321a795c3c5c56178dee97b8195e265d8d0c48d01f83"),
+  mcpProjectServers: release(104, "fca6eea9484d25299ef8844936217cc3b5c5f1f872b7b1241ea4d4d1321aed31"),
 });
 
 export default databaseReleases;

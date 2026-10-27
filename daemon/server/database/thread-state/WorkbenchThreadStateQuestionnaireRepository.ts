@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadStateQuestionnaireRepository: persist one thread's canonical questionnaire source facts, including MCP tool enable and sign-in link context.
+ * - default WorkbenchThreadStateQuestionnaireRepository: persist one thread's canonical questionnaire source facts, including MCP tool enable, sign-in link and server connect context.
  * - WorkbenchThreadQuestionnaires: pending request and ordered answered history.
  */
 import { randomUUID } from "node:crypto";
@@ -41,11 +41,13 @@ type AnswerGroupRow = { questionnaire_id: string; question_id: string };
 type AnswerRow = { questionnaire_id: string; question_id: string; answer_index: number; answer: string };
 type McpToolRow = { questionnaire_id: string; server: string; tool: string; title: string | null; description: string };
 type McpAuthorizationRow = { questionnaire_id: string; server: string; host: string; url: string | null };
+type McpConnectionRow = { questionnaire_id: string; server: string; url: string };
 interface QuestionnaireBatch {
   questions: Map<string, QuestionRow[]>;
   options: Map<string, OptionRow[]>;
   mcpTools: Map<string, McpToolRow>;
   mcpAuthorizations: Map<string, McpAuthorizationRow>;
+  mcpConnections: Map<string, McpConnectionRow>;
   groups: Map<string, AnswerGroupRow[]>;
   answers: Map<string, AnswerRow[]>;
 }
@@ -78,11 +80,14 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         .all(...ids) as McpToolRow[];
       const mcpAuthorizations = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_mcp_authorizations WHERE questionnaire_id IN (${selection})`)
         .all(...ids) as McpAuthorizationRow[];
+      const mcpConnections = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_mcp_connections WHERE questionnaire_id IN (${selection})`)
+        .all(...ids) as McpConnectionRow[];
       const batch: QuestionnaireBatch = {
         questions: Map.groupBy(questions, row => row.questionnaire_id),
         options: Map.groupBy(options, row => row.questionnaire_id),
         mcpTools: new Map(mcpTools.map(row => [row.questionnaire_id, row])),
         mcpAuthorizations: new Map(mcpAuthorizations.map(row => [row.questionnaire_id, row])),
+        mcpConnections: new Map(mcpConnections.map(row => [row.questionnaire_id, row])),
         groups: Map.groupBy(groups, row => row.questionnaire_id),
         answers: Map.groupBy(answers, row => row.questionnaire_id),
       };
@@ -163,6 +168,12 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         INSERT INTO workbench_thread_questionnaire_mcp_authorizations(questionnaire_id, server, host, url) VALUES (?, ?, ?, ?)
       `).run(id, mcpAuthorization.server, mcpAuthorization.host, answered ? null : mcpAuthorization.url ?? null);
     }
+    const mcpConnection = entry.request.mcpConnection;
+    if (mcpConnection) {
+      this.database.prepare(`
+        INSERT INTO workbench_thread_questionnaire_mcp_connections(questionnaire_id, server, url) VALUES (?, ?, ?)
+      `).run(id, mcpConnection.server, mcpConnection.url);
+    }
     entry.request.questions.forEach((question, questionIndex) => {
       questionStatement.run(id, questionIndex, question.id, question.header, question.question, Number(question.allowOther), Number(question.isSecret));
       question.options.forEach((option, optionIndex) => {
@@ -189,12 +200,14 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
     const options = batch.options.get(row.id) ?? [];
     const mcpTool = batch.mcpTools.get(row.id);
     const mcpAuthorization = batch.mcpAuthorizations.get(row.id);
+    const mcpConnection = batch.mcpConnections.get(row.id);
     return {
       id: row.request_id, title: row.title, summary: row.summary, submitLabel: row.submit_label,
       ...(mcpTool ? { mcpTool: { server: mcpTool.server, tool: mcpTool.tool, title: mcpTool.title, description: mcpTool.description } } : {}),
       ...(mcpAuthorization ? { mcpAuthorization: {
         server: mcpAuthorization.server, host: mcpAuthorization.host, ...(mcpAuthorization.url ? { url: mcpAuthorization.url } : {}),
       } } : {}),
+      ...(mcpConnection ? { mcpConnection: { server: mcpConnection.server, url: mcpConnection.url } } : {}),
       questions: questions.map((question, questionIndex) => {
         if (question.question_index !== questionIndex) throw new Error("Questionnaire has incomplete question ordering.");
         return {

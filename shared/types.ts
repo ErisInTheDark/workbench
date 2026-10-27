@@ -129,6 +129,7 @@
  * - WorkbenchUserInputApprovalContext: approval request context.
  * - WorkbenchUserInputMcpToolContext: MCP tool an enable request is about.
  * - WorkbenchUserInputMcpAuthorizationContext: server link a sign-in request asks the user to open.
+ * - WorkbenchUserInputMcpConnectionContext: server URL an agent asks to connect for its turn.
  * - WorkbenchUserInputRequest: questionnaire request contract.
  * - WorkbenchUserInputAnswer: questionnaire answer contract.
  * - WorkbenchUserInputResponse: questionnaire response contract.
@@ -1137,6 +1138,12 @@ export interface WorkbenchUserInputMcpAuthorizationContext {
   url?: string | undefined;
 }
 
+/** An MCP server URL an agent asks to use for the rest of its turn. */
+export interface WorkbenchUserInputMcpConnectionContext {
+  server: string;
+  url: string;
+}
+
 export interface WorkbenchUserInputRequest {
   id: string;
   title: string;
@@ -1145,6 +1152,7 @@ export interface WorkbenchUserInputRequest {
   approval?: WorkbenchUserInputApprovalContext;
   mcpTool?: WorkbenchUserInputMcpToolContext | undefined;
   mcpAuthorization?: WorkbenchUserInputMcpAuthorizationContext | undefined;
+  mcpConnection?: WorkbenchUserInputMcpConnectionContext | undefined;
   questions: WorkbenchUserInputQuestion[];
 }
 

@@ -687,7 +687,8 @@ export default function ThreadComposer ({
   const pendingRequest = visiblePendingUserInputRequest?.request;
   const pendingMcpSubject: ThreadMcpRequestSubject | null = pendingRequest?.mcpTool
     ? { kind: "tool", tool: pendingRequest.mcpTool }
-    : pendingRequest?.mcpAuthorization ? { kind: "authorization", authorization: pendingRequest.mcpAuthorization } : null;
+    : pendingRequest?.mcpAuthorization ? { kind: "authorization", authorization: pendingRequest.mcpAuthorization }
+      : pendingRequest?.mcpConnection ? { kind: "connection", connection: pendingRequest.mcpConnection } : null;
   const questionnairePreviewText = visiblePendingUserInputRequest
     ? getThreadUserInputRequestPreviewText(visiblePendingUserInputRequest.request)
     : "";

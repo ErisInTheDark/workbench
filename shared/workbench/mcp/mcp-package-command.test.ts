@@ -1,10 +1,10 @@
 /*
- * No production exports. Tests protect how a typed or pasted stdio server command splits into package, version and
+ * No production exports. Tests protect how a typed or pasted stdio server command splits into package (or cli program), version and
  * arguments, that npm-flag-shaped or path-shaped packages never reach an install, and that shown arguments edit back unchanged.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatMcpPackageArgs, parseMcpPackageArgs, parseMcpPackageCommand } from "./mcp-package-command.ts";
+import { formatMcpPackageArgs, parseMcpCliCommand, parseMcpPackageArgs, parseMcpPackageCommand } from "./mcp-package-command.ts";
 
 test("a pasted README launcher line keeps only the package and its own arguments", () => {
   assert.deepEqual(parseMcpPackageCommand("npx -y @azure-devops/mcp contoso"), { command: { package: "@azure-devops/mcp", args: ["contoso"] } });
@@ -22,6 +22,12 @@ test("a version follows the package name's own @, and quotes keep spaces inside 
 test("formatted arguments read back exactly, whatever spaces and quotes they hold", () => {
   const args = ["wayward", "--authentication", "pat", "", "two words", "say \"hi\"", "it's", "both ' and \"", "'"];
   assert.deepEqual(parseMcpPackageArgs(formatMcpPackageArgs(args)), { args });});
+
+test("a cli command keeps its program, even a quoted path with spaces, apart from its arguments", () => {
+  assert.deepEqual(parseMcpCliCommand("\"C:/Program Files/sim/sim.exe\" --headless 'two words'"),
+    { command: { command: "C:/Program Files/sim/sim.exe", args: ["--headless", "two words"] } });
+  for (const text of ["", "   ", "node 'open"]) assert.ok("error" in parseMcpCliCommand(text), text);
+});
 
 test("anything npm could read as a flag, path or URL is refused before install", () => {
   for (const text of ["", "npx -y", "--registry=https://evil.example pkg", "./local", "git+https://host/repo.git", "Upper", "pkg@", "pkg@-x", "pkg 'open"]) {

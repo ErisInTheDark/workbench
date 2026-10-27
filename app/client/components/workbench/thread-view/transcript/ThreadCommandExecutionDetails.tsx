@@ -66,7 +66,7 @@ import type { CommandItem } from "../thread-render-blocks";
 import type { ThreadSubagentWaitTiming } from "../thread-subagent-wait-groups";
 import { ThreadCommandSummary } from "../thread-view-primitives";
 import { useThreadItemLiveDuration } from "../use-thread-live-duration";
-import { ThreadShellStartNowAction, ThreadShellStopAction } from "./ThreadItemActionControls";
+import { ThreadCallStopAction, ThreadShellStartNowAction } from "./ThreadItemActionControls";
 import { SubagentActivitySlot } from "./subagent-activity-slot";
 
 type ThreadCommandDisplayValue = ReturnType<typeof getThreadCommandDisplay>;
@@ -420,9 +420,9 @@ export default function ThreadCommandExecutionDetails ({
   const actions = item.workbenchShell && liveShellQueue?.admittedAt === null ? (
     <>
       <ThreadShellStartNowAction itemId={item.id} />
-      <ThreadShellStopAction itemId={stopItemId} />
+      <ThreadCallStopAction itemId={stopItemId} label="Stop command" />
     </>
-  ) : <ThreadShellStopAction itemId={stopItemId} />;
+  ) : <ThreadCallStopAction itemId={stopItemId} label="Stop command" />;
   return (
     <div className="group/thread-bubble relative">
       {commandDisplayView}

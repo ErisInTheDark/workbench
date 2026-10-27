@@ -8,12 +8,12 @@
  * - WorkbenchAgentBatchTurn: how a serial call's turn in its provider tool batch ended.
  * - WorkbenchAgentMcpUndeliveredMessage: one message admitted for a thread that its agent has not received; a sender marks an agent message.
  * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, steer interruption of waits and shell yield windows (including those
- *   attaching while a message is undelivered), user shell stops and queue skips, agent stops of yielded shells, yielded shells running on until collected or their turn ends, provider tool batches
+ *   attaching while a message is undelivered), user stops of shells and stoppable calls, shell queue skips, agent stops of yielded shells, yielded shells running on until collected or their turn ends, provider tool batches
  *   and serial call turns, wait, shell-queue and windowed live shell output and yield observation, reload-safe command re-entry, the current MCP
  *   tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
- * - isWorkbenchAgentMcpShellStop: identify a deliberate stop of one shell command, by its user, its agent or its turn ending, across module generations.
+ * - isWorkbenchAgentMcpCallStop: identify a deliberate stop of one shell command or stoppable call, by its user, its agent or its turn ending, across module generations.
  */
 import { formatDuration } from "workbench-shared/workbench/format-duration";
 import {
@@ -56,8 +56,10 @@ interface WorkbenchAgentMcpRequestEntry {
   drainIndependent: boolean;
   owner: WorkbenchAgentMcpRuntimeOwner;
   policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
-  /** Transcript references of the shell item this request runs; absent on requests the user cannot stop. */
+  /** Transcript references of the shell item this request runs; absent on requests that run no shell. */
   shellItemReferences?: readonly string[];
+  /** Transcript references the user stops this request by: a shell's item, or a stoppable command's once its item exists. */
+  stopReferences?: readonly string[];
   /** The command that shell item runs, so its waits can name it without the row. */
   shellCommand?: string;
   /** Set once the shell waits for an expensive slot; kept after admission so the run timer starts there. */
@@ -234,16 +236,16 @@ export function isWorkbenchAgentMcpSteerInterruption(error: unknown) {
   return error instanceof Error && Reflect.get(error, STEER_INTERRUPTION_KEY) === true;
 }
 
-const SHELL_STOP_KEY = Symbol.for("workbench.agentMcpUserStop.v1");
+const CALL_STOP_KEY = Symbol.for("workbench.agentMcpUserStop.v1");
 
-function createShellStop(message: string) {
+function createCallStop(message: string) {
   const error = new Error(message);
-  Reflect.set(error, SHELL_STOP_KEY, true);
+  Reflect.set(error, CALL_STOP_KEY, true);
   return error;
 }
 
-export function isWorkbenchAgentMcpShellStop(error: unknown) {
-  return error instanceof Error && Reflect.get(error, SHELL_STOP_KEY) === true;
+export function isWorkbenchAgentMcpCallStop(error: unknown) {
+  return error instanceof Error && Reflect.get(error, CALL_STOP_KEY) === true;
 }
 
 function createState(): WorkbenchAgentMcpRequestRegistryState {
@@ -361,7 +363,8 @@ export class WorkbenchAgentMcpRequestRegistry {
       startedAt: this.now(),
       steerInterruptible: options.steerInterruptible,
       toolName: options.toolName,
-      ...(options.shellItem?.references.length ? { shellItemReferences: [...options.shellItem.references] } : {}),
+      ...(options.shellItem?.references.length
+        ? { shellItemReferences: [...options.shellItem.references], stopReferences: [...options.shellItem.references] } : {}),
       ...(options.shellItem?.command ? { shellCommand: options.shellItem.command } : {}),
       ...(options.shellItem?.threadId ? { workbenchThreadId: WorkbenchThreadIdSchema.parse(options.shellItem.threadId) } : {}),
       ...(options.yields && options.shellItem ? { yieldWindow: new AbortController() } : {}),
@@ -375,6 +378,10 @@ export class WorkbenchAgentMcpRequestRegistry {
     return {
       earlyYield: entry.yieldWindow?.signal,
       markDrainIndependent: () => { entry.drainIndependent = true; },
+      /** Lets the user stop this request from the transcript item these references name. */
+      setStopReferences: (references: readonly string[]) => {
+        if (references.length) entry.stopReferences = [...references];
+      },
       setWorkbenchThreadId: (threadId: WorkbenchThreadId) => {
         const workbenchThreadId = WorkbenchThreadIdSchema.parse(threadId);
         if (entry.workbenchThreadId === workbenchThreadId) return;
@@ -504,7 +511,7 @@ export class WorkbenchAgentMcpRequestRegistry {
       if (entry.workbenchThreadId !== threadId || !entry.background) continue;
       entry.background.discard = true;
       if (entry.controller.signal.aborted) continue;
-      entry.controller.abort(createShellStop(`Stopped when its turn ended, after ${formatDuration(this.now() - entry.startedAt)}.`));
+      entry.controller.abort(createCallStop(`Stopped when its turn ended, after ${formatDuration(this.now() - entry.startedAt)}.`));
       stopped += 1;
     }
     for (const [shellId, finished] of this.state.backgroundResults) {
@@ -518,7 +525,7 @@ export class WorkbenchAgentMcpRequestRegistry {
   stopYieldedShell(threadId: WorkbenchThreadId, shellId: string) {
     const entry = this.state.requestsByClient.get(BACKGROUND_CLIENT_SCOPE)?.get(shellId);
     if (!entry || entry.workbenchThreadId !== threadId || entry.controller.signal.aborted) return false;
-    entry.controller.abort(createShellStop(`The agent stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`));
+    entry.controller.abort(createCallStop(`The agent stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`));
     return true;
   }
 
@@ -931,14 +938,21 @@ export class WorkbenchAgentMcpRequestRegistry {
   }
 
   /**
-   * Stop the running shell whose transcript item any of `references` names; aborting its signal kills the command.
-   * A shell registered without thread identity matches on its references alone.
+   * Stop the running shell or stoppable call whose transcript item any of `references` names; aborting its signal kills the
+   * command or cancels the call. A request registered without thread identity matches on its references alone.
    */
-  stopShell(threadId: WorkbenchThreadId, references: readonly string[]) {
-    const entry = this.findLiveShell(threadId, references);
-    if (!entry) return false;
-    entry.controller.abort(createShellStop(`The user stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`));
-    return true;
+  stopCall(threadId: WorkbenchThreadId, references: readonly string[]) {
+    const workbenchThreadId = WorkbenchThreadIdSchema.parse(threadId);
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (entry.controller.signal.aborted || !entry.stopReferences?.some(reference => references.includes(reference))) continue;
+        if (entry.workbenchThreadId && entry.workbenchThreadId !== workbenchThreadId) continue;
+        const noun = entry.shellItemReferences ? "command" : "call";
+        entry.controller.abort(createCallStop(`The user stopped this ${noun} after ${formatDuration(this.now() - entry.startedAt)}.`));
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Start the matching shell now if it still waits in the expensive queue, as though it was never expensive. */

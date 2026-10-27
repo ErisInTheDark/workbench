@@ -1613,7 +1613,7 @@ test("a user-stopped shell answers only the stop sentence, found through its Cod
   });
   assert.ok(step.kind === "detached");
   now = 12_000;
-  assert.equal(requestRegistry.stopShell(reference.threadId, ["call_native"]), true);
+  assert.equal(requestRegistry.stopCall(reference.threadId, ["call_native"]), true);
   const result = await controller.finish(scope, step.call, { error: step.call.signal.reason });
   step.call.unregister();
   assert.deepEqual(result, { content: [{ type: "text", text: "The user stopped this command after 12s." }], isError: true });

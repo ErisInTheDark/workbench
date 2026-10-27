@@ -252,11 +252,31 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         if (!parsed.success) return workbenchMcpFailure("Invalid mcp arguments.\n", 400);
         const request = parsed.data;
         const mcpServers = build.get("mcpServers");
+        /** The managed thread behind the request and the project it works in, which decides the project servers it sees. */
+        const resolveCaller = async (target: { threadId: string; cwd: string; harness: string }) => {
+          const { identity } = await nativeTarget(target.threadId, target.cwd, target.harness);
+          const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(target.cwd, { endpointName: "MCP servers" });
+          return { identity, mcp: { threadId: identity.threadId, cwd: target.cwd, projectId: project.id } };
+        };
+        /** Unmanaged callers have no thread and see global servers only. */
+        const optionalCaller = async () => request.threadId && request.cwd && request.harness
+          ? (await resolveCaller({ threadId: request.threadId, cwd: request.cwd, harness: request.harness })).mcp : null;
         try {
-          if (request.action === "tools") return new Response(await mcpServers.listTools(request, signal), { headers });
+          if (request.action === "tools") return new Response(await mcpServers.listTools(request, await optionalCaller(), signal), { headers });
+          if (request.action === "reload") return new Response(await mcpServers.reload(request, await optionalCaller()), { headers });
+          if (request.action === "connect") {
+            const resolved = await resolveCaller(request);
+            const text = await mcpServers.connectThreadServer({ name: request.server, url: request.url }, resolved.mcp,
+              async mcpConnection => isMcpToolRequestApproved(await questionnaires.request({
+                callerThreadId: resolved.identity.threadId, cwd: request.cwd, requestKey: request.requestKey, mcpConnection,
+                questions: mcpToolRequestQuestions(request.reason, "connect"),
+              }, signal)), signal);
+            return new Response(text, { headers });
+          }
           if (request.action === "request") {
-            const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
-            const text = await mcpServers.requestTool(request, async mcpTool => {
+            const resolved = await resolveCaller(request);
+            const { identity } = resolved;
+            const text = await mcpServers.requestTool(request, resolved.mcp, async mcpTool => {
               const response = await questionnaires.request({
                 callerThreadId: identity.threadId, cwd: request.cwd, requestKey: request.requestKey, mcpTool,
                 questions: mcpToolRequestQuestions(request.reason),
@@ -266,18 +286,19 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             return new Response(text, { headers });
           }
           if (request.action === "download") {
-            const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
-            return new Response(await mcpServers.downloadLink({ ...request, threadId: identity.threadId }, signal), { headers });
+            const resolved = await resolveCaller(request);
+            return new Response(await mcpServers.downloadLink({ ...request, threadId: resolved.identity.threadId }, resolved.mcp, signal), { headers });
           }
           if (request.action === "authorize") {
-            const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
-            const text = await mcpServers.authorizeLink(request, async mcpAuthorization => isMcpToolRequestApproved(await questionnaires.request({
+            const resolved = await resolveCaller(request);
+            const { identity } = resolved;
+            const text = await mcpServers.authorizeLink(request, resolved.mcp, async mcpAuthorization => isMcpToolRequestApproved(await questionnaires.request({
               callerThreadId: identity.threadId, cwd: request.cwd, requestKey: request.requestKey, mcpAuthorization,
               questions: mcpToolRequestQuestions(request.reason, "authorize"),
             }, signal)));
             return new Response(text, { headers });
           }
-          const outcome = await mcpServers.call(request, signal);
+          const outcome = await mcpServers.call(request, await optionalCaller(), signal);
           return outcome.isError ? workbenchMcpFailure(outcome.text, 422) : new Response(outcome.text, { headers });
         } catch (error) {
           if (signal.aborted) throw error;

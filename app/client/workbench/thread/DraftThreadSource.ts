@@ -125,7 +125,7 @@ export default function createDraftThreadSource(
       compact: async () => {},
       resendSteer: unsupported("resend a steer"),
       dismissSteer: unsupported("dismiss a steer"),
-      stopShell: unsupported("stop a command"),
+      stopCall: unsupported("stop a command"),
       startShellNow: unsupported("start a command"),
       submitQuestionnaire: unsupported("answer a question"),
       snooze: unsupported("snooze a thread"),

@@ -25,7 +25,7 @@ import {
 
 const labReadOnly = async () => { throw new Error("Thread lab fixtures are read-only."); };
 /** Item action controls render as in the app; pressing one reports that fixtures cannot be changed. */
-const labItemActions: ThreadItemActions = { resendSteer: labReadOnly, dismissSteer: labReadOnly, stopShell: labReadOnly, startShellNow: labReadOnly };
+const labItemActions: ThreadItemActions = { resendSteer: labReadOnly, dismissSteer: labReadOnly, stopCall: labReadOnly, startShellNow: labReadOnly };
 const buttonClass ="rounded px-3 py-1.5 text-sm hover:bg-fg-7 focus-visible:outline-2 focus-visible:outline-accent";
 const inputClass = "min-w-0 rounded border border-fg-15 bg-transparent px-2 py-1 font-mono text-sm";
 

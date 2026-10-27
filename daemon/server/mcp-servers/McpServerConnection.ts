@@ -5,6 +5,7 @@
  * - McpServerEndpoint: one user-added MCP server's HTTP url and auth, or stdio launch, plus an optional traffic recorder.
  * - McpServerTool: one offered tool with its input schema.
  * - McpServerConnectionPort: the catalogue/call/close surface the server controller depends on.
+ * - boundedFetch: `fetch` whose response bodies fail past a byte limit.
  * - stderrReason: the reason a stopped local server gave on stderr, reading JSON log records and skipping stack frames.
  * - default McpServerConnection: SDK client for one server over streamable HTTP (authenticated by a header or OAuth) or a stdio child process whose stderr explains its failures; caches the catalogue until the server reports a change (or for 30 s when it never promised to), reconnects after transport failure and reports a needed sign-in as McpServerSignInRequiredError.
  */
@@ -47,6 +48,8 @@ export type McpServerEndpoint = {
   headers: Record<string, string>;
   /** OAuth sign-in for servers without a credential header; the SDK refreshes its tokens on 401. */
   authProvider?: OAuthClientProvider;
+  /** Fails any one HTTP response body larger than this, so an untrusted server cannot flood the daemon. */
+  maxResponseBytes?: number;
 } | {
   transport: "stdio";
   /** Resolved at each (re)connect, so a missing install can be restored first. */
@@ -67,7 +70,8 @@ export interface McpServerConnectionPort {
   wrapped?(signal?: AbortSignal): Promise<McpWrapperSession | null>;
   /** The `serverInfo.name` the server reported when its session started. */
   serverName(): Promise<string | null>;
-  callTool(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult>;
+  /** `meta` travels as the request's `_meta`, such as the calling thread a project-scoped server needs. */
+  callTool(name: string, args: Record<string, unknown>, signal: AbortSignal, meta?: Record<string, unknown>): Promise<CallToolResult>;
   close(): Promise<void>;
 }
 
@@ -99,6 +103,31 @@ function recordTraffic(transport: Transport, record: (frame: McpServerTrafficFra
     }),
     set: (handler: Transport["onmessage"]) => { receive = handler; },
   });
+}
+
+/**
+ * `fetch` whose response bodies error once they pass `limit` bytes, calling `overflowed` with that error; streamed (SSE) bodies
+ * count across the whole stream.
+ */
+export function boundedFetch(limit: number, overflowed: (error: Error) => void, base: typeof fetch = fetch): typeof fetch {
+  return async (input, init) => {
+    const response = await base(input, init);
+    if (!response.body) return response;
+    let received = 0;
+    const counted = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        received += chunk.byteLength;
+        if (received > limit) {
+          const size = limit >= 1_048_576 ? `${Math.round(limit / 1_048_576)} MiB` : `${limit} bytes`;
+          const error = new Error(`The server sent more than ${size} in one response.`);
+          controller.error(error);
+          overflowed(error);
+        }
+        else controller.enqueue(chunk);
+      },
+    }));
+    return new Response(counted, { status: response.status, statusText: response.statusText, headers: response.headers });
+  };
 }
 
 const STDERR_TAIL = 16 * 1024;
@@ -155,6 +184,8 @@ export default class McpServerConnection implements McpServerConnectionPort {
   #stderr = { text: "", truncated: false };
   /** When the cached list was read from a server that never promised change notifications; null while it may be kept. */
   #toolsReadAt: number | null = null;
+  /** Why the session was last closed for an oversized response; it explains the failures that close caused. */
+  #overflow: Error | null = null;
 
   constructor(private readonly endpoint: McpServerEndpoint, private readonly options: { now?: () => number } = {}) {}
 
@@ -181,8 +212,9 @@ export default class McpServerConnection implements McpServerConnectionPort {
     return this.#use(async client => client.getServerVersion()?.name?.trim() || null);
   }
 
-  callTool(name: string, args: Record<string, unknown>, signal: AbortSignal) {
-    return this.#use(async client => CallToolResultSchema.parse(await client.callTool({ name, arguments: args }, CallToolResultSchema, {
+  callTool(name: string, args: Record<string, unknown>, signal: AbortSignal, meta?: Record<string, unknown>) {
+    const params = { name, arguments: args, ...meta ? { _meta: meta } : {} };
+    return this.#use(async client => CallToolResultSchema.parse(await client.callTool(params, CallToolResultSchema, {
       signal, timeout: CALL_TIMEOUT_MS, resetTimeoutOnProgress: true,
     })));
   }
@@ -215,6 +247,9 @@ export default class McpServerConnection implements McpServerConnectionPort {
       return await operation(await session);
     } catch (error) {
       if (!(error instanceof McpError) && this.#client === session) await this.close();
+      const overflow = this.#overflow;
+      this.#overflow = null;
+      if (overflow) throw overflow;
       throw describeFailure(error, this.endpoint.transport === "http" && this.endpoint.authProvider !== undefined, this.#stderr);
     }
   }
@@ -248,10 +283,18 @@ export default class McpServerConnection implements McpServerConnectionPort {
   async #transport(): Promise<Transport> {
     const endpoint = this.endpoint;
     if (endpoint.transport === "http") {
-      return new StreamableHTTPClientTransport(new URL(endpoint.url), {
+      const transport: StreamableHTTPClientTransport = new StreamableHTTPClientTransport(new URL(endpoint.url), {
         requestInit: { headers: endpoint.headers },
         ...endpoint.authProvider ? { authProvider: endpoint.authProvider } : {},
+        // A failed stream alone leaves its pending requests waiting out their timeouts; closing the transport rejects them now.
+        ...endpoint.maxResponseBytes === undefined ? {} : {
+          fetch: boundedFetch(endpoint.maxResponseBytes, error => {
+            this.#overflow = error;
+            void transport.close();
+          }),
+        },
       });
+      return transport;
     }
     const launch = await endpoint.launch();
     this.#stderr = { text: "", truncated: false };
