@@ -838,7 +838,7 @@ test("a project server is seen and called only from its project's threads, which
   } finally { await owner.dispose(); close(); }
 });
 
-test("a project server serves every clone of its repository, running one cli process from each caller's own folder", async () => {
+test("a project server serves every clone of its repository, running one cli process from each caller's own folder; settings check the most recently active", async () => {
   const sim = new FakeServer();
   sim.tools = [tool("step")];
   const { create, close } = setup({ "sim-bin": sim });
@@ -848,6 +848,11 @@ test("a project server serves every clone of its repository, running one cli pro
   try {
     const { servers: [added] } = await owner.update({ action: "addCommand", command: "sim-bin", args: [], projectId: "project-a" });
     await owner.update({ action: "setAllowAll", id: added!.id, allowAll: true });
+    owner.noteFolderActive("project-b");
+    owner.noteFolderActive("project-a-next");
+    await owner.read({ id: added!.id });
+    assert.deepEqual(sim.launches.map(launch => launch.cwd), ["/projects/project-a-next"],
+      "a settings check runs from the clone a thread was most recently active in, ignoring other repositories");
     await owner.call({ server: "sim-bin", tool: "step", arguments: {} }, next, signal());
     await owner.call({ server: "sim-bin", tool: "step", arguments: {} }, main, signal());
     await owner.call({ server: "sim-bin", tool: "step", arguments: {} }, next, signal());

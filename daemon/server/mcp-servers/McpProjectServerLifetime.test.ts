@@ -9,13 +9,15 @@ import McpProjectServerLifetime from "./McpProjectServerLifetime";
 function setup(working: { projectId: string; threadId: string }[] = []) {
   let publish!: (projectId: string, threadId: string, working: boolean) => void;
   const released: string[] = [];
+  const active: string[] = [];
   const lifetime = new McpProjectServerLifetime({
     readWorking: async () => working,
     subscribe: listener => { publish = listener; return () => undefined; },
     release: projectId => released.push(projectId),
+    active: projectId => active.push(projectId),
     warn: () => undefined,
   });
-  return { lifetime, released, publish: (...args: Parameters<typeof publish>) => publish(...args) };
+  return { lifetime, released, active, publish: (...args: Parameters<typeof publish>) => publish(...args) };
 }
 
 test("a project's servers are released when its last working thread stops, not before, and other projects are untouched", async () => {
@@ -33,8 +35,9 @@ test("a project's servers are released when its last working thread stops, not b
 });
 
 test("threads already working at start keep their project's servers until they stop", async () => {
-  const { lifetime, released, publish } = setup([{ projectId: "a", threadId: "t1" }, { projectId: "a", threadId: "t2" }]);
+  const { lifetime, released, active, publish } = setup([{ projectId: "a", threadId: "t1" }, { projectId: "a", threadId: "t2" }]);
   await lifetime.start();
+  assert.ok(active.includes("a"), "a project working at start counts as active");
   publish("a", "t1", false);
   assert.deepEqual(released, []);
   publish("a", "t2", false);

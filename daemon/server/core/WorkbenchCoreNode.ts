@@ -282,6 +282,7 @@ function createWorkbenchCoreFeature(
     subscribe: listener => threadStateController.subscribe((projectId, entry) => {
       if (entry.entryKind !== "draft") listener(projectId, entry.identity.threadId, entry.lifecycle.kind === "working");
     }),
+    active: projectId => mcpServers.noteFolderActive(projectId),
     release: projectId => {
       void mcpServers.releaseProject(projectId).catch((error: unknown) =>
         logError("mcp-servers", `project servers were not released: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));

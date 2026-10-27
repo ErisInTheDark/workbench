@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - McpProjectServerLifetimePorts: working-thread seed, lifecycle changes by project, and the release a project's servers get.
- * - default McpProjectServerLifetime: track each project's working threads and release its project-scoped MCP servers when its last
- *   working thread stops; a server first used while none works is released at that project's next such stop.
+ * - McpProjectServerLifetimePorts: working-thread seed, lifecycle changes by project, and the activity and release its servers learn of.
+ * - default McpProjectServerLifetime: track each project's working threads, report each project a thread starts working in, and
+ *   release its project-scoped MCP servers when its last working thread stops; a server first used while none works is released at
+ *   that project's next such stop.
  */
 
 export interface McpProjectServerLifetimePorts {
@@ -11,6 +12,8 @@ export interface McpProjectServerLifetimePorts {
   /** Every published thread lifecycle change, as whether that thread of that project is now working. */
   subscribe(listener: (projectId: string, threadId: string, working: boolean) => void): () => void;
   release(projectId: string): void;
+  /** A thread of this project started working, or was working at start. */
+  active(projectId: string): void;
   warn(message: string): void;
 }
 
@@ -48,6 +51,7 @@ export default class McpProjectServerLifetime {
     if (working) {
       if (threads) threads.add(threadId);
       else this.#working.set(projectId, new Set([threadId]));
+      this.ports.active(projectId);
       return;
     }
     // Every idle transition with nobody else working releases, so a server opened while nothing worked still closes.

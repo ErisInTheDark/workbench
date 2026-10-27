@@ -85,7 +85,7 @@ interface StoredServer {
   name: string;
   source: McpServerSource;
   scope: Scope;
-  /** The folder (daemon project) a project-scoped cli server runs from for this use: the caller's, else the stored project's. */
+  /** The folder (daemon project) a project-scoped server runs from for this use: the caller's, or the most recently active one. */
   folderProjectId?: string;
   allowAll: boolean;
   allowedTools: string[];
@@ -169,11 +169,6 @@ function threadServerId(threadId: string, name: string) {
   return `thread\0${threadId}\0${name}`;
 }
 
-/** The folder a project-scoped cli server runs from; each folder runs its own process, since each checkout holds its own code. */
-function launchFolder(server: StoredServer) {
-  return server.source.kind === "cli" && server.scope.kind === "project" ? server.folderProjectId ?? server.scope.projectId : null;
-}
-
 interface LiveConnection {
   serverId: string;
   connection: McpServerConnectionPort;
@@ -190,6 +185,8 @@ export default class WorkbenchMcpServerController {
   readonly #traffic = new WebSocketTrafficBuffer({ maxEntries: 500, maxBytes: 4 * 1024 * 1024 });
   /** Newest-first links each server sent in call replies; memory only, so a reload means calling again. */
   readonly #sentLinks = new Map<string, string[]>();
+  /** When a thread last started working in each folder (daemon project); settings checks run cli servers from the newest. Memory only. */
+  readonly #folderActivity = new Map<string, number>();
 
   constructor(private readonly options: WorkbenchMcpServerOptions) {}
 
@@ -199,7 +196,8 @@ export default class WorkbenchMcpServerController {
   }
 
   async read(params: McpServerSettingsReadParams = {}): Promise<McpServerSettingsSnapshot> {
-    const servers = (await this.#servers()).filter(server => !params.id || server.id === params.id);
+    const servers = await Promise.all((await this.#servers()).filter(server => !params.id || server.id === params.id)
+      .map(server => this.#withActiveFolder(server)));
     if (params.id && !servers.length) throw new Error("That MCP server no longer exists.");
     const catalogs = await Promise.all(servers.map(server => this.#settingsCatalog(server, params)));
     const names = params.configuredOnly ? new Map<string, string>() : await this.#adoptServerNames(servers, catalogs);
@@ -763,8 +761,30 @@ export default class WorkbenchMcpServerController {
     return tools.find(tool => tool.name === name) ?? null;
   }
 
+  /** The folder a project-scoped cli server runs from; each folder runs its own process, since each checkout holds its own code. */
+  #launchFolder(server: StoredServer) {
+    return server.source.kind === "cli" && server.scope.kind === "project" ? server.folderProjectId ?? server.scope.projectId : null;
+  }
+
+  /** For settings checks, which have no caller: the folder of the project where a thread most recently started working. */
+  async #withActiveFolder(server: StoredServer): Promise<StoredServer> {
+    if (server.source.kind !== "cli" || server.scope.kind !== "project") return server;
+    const identity = await this.#identity(server.scope.projectId);
+    let newest: { projectId: string; at: number } | null = null;
+    for (const [projectId, at] of this.#folderActivity) {
+      if (newest && at <= newest.at) continue;
+      if (projectId === server.scope.projectId || (identity !== null && await this.#identity(projectId) === identity)) newest = { projectId, at };
+    }
+    return newest ? { ...server, folderProjectId: newest.projectId } : server;
+  }
+
+  /** A thread started working in this folder (daemon project). */
+  noteFolderActive(projectId: string) {
+    this.#folderActivity.set(projectId, this.#now());
+  }
+
   #connection(server: StoredServer) {
-    const folderProjectId = launchFolder(server);
+    const folderProjectId = this.#launchFolder(server);
     const key = folderProjectId ? `${server.id}\0${folderProjectId}` : server.id;
     const existing = this.#connections.get(key);
     if (existing) return existing.connection;
