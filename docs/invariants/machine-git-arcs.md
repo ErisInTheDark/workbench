@@ -3,4 +3,5 @@
 - Publishing or acquiring machine paths first absorbs disk content of requested paths no arc scopes into HEAD; adopted paths are never absorbed.
 - New live ownership of machine paths requires approval through the thread's approval mode, outside any Git transition; arc writes touch only owned paths, historical full restores only the arc's own scope, and ignore rules never waive machine claims. Machine Git never converts line endings.
 - Claims are the daemon thread's write permission: patch approvals wholly inside its claims auto-allow, and daemon Codex turns run `on-request` so out-of-sandbox patches can ask instead of failing.
+- Machine Git never tracks links or junctions, nor paths reached through them; claims on them grant write permission only.
 - Machine arc paths reject filesystem roots, the Workbench data root and paths another Git repository does not ignore; daemon scratch needs no claims. Git cannot walk past a nested `.git`, so Workbench discovers and stages ignored files there itself.

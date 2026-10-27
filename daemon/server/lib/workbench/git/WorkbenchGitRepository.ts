@@ -19,7 +19,9 @@
  * provably orphaned locks; checkoutTreeTransition moves index and worktree between two commits' trees like a checkout.
  * Machine worktrees run Git against their internal Git dir; their whole-worktree reads cover tracked files only,
  * oversized scope sets batch pathspecs instead of walking the machine, and scopes inside nested repositories are walked
- * and staged by Workbench (machine-git-boundaries) because Git stops at their `.git`.
+ * and staged by Workbench (machine-git-boundaries) because Git stops at their `.git`. Machine links and junctions are
+ * listed as leaf entries but never walked by Git, diffed or staged (WorktreeLinks), since Git for Windows treats
+ * junctions as directories.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -36,6 +38,7 @@ import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
 import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
 import { BoundaryWalkLimitError, listBoundaryFiles, nestedRepositoryScopes } from "./machine-git-boundaries";
 import { isMachineGitWorktree, machineGitEnvironment, readMachineKnownPaths } from "./machine-git-worktrees";
+import WorktreeLinks from "./worktree-links";
 import { comparablePath, isPathInside as isWithinRoot } from "../../comparable-path";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
@@ -713,19 +716,34 @@ export default class WorkbenchGitRepository {
     };
   }
 
+  /** Machine worktrees list links as leaf entries, never what Git reached through them. */
   async listWorktreePaths(
     scopes: readonly string[] = [],
     env: NodeJS.ProcessEnv = process.env,
     signal?: AbortSignal,
   ) {
-    const [outputs, boundary] = await Promise.all([
-      Promise.all(this.scopeBatches(scopes).map(async (pathspecs) => await this.run([
+    const links = this.machine ? new WorktreeLinks(this.root) : null;
+    const { linkScopes, walked } = await this.splitLinkScopes(links, scopes);
+    const [outputs, boundary] = scopes.length && !walked.length ? [[], []] : await Promise.all([
+      Promise.all(this.scopeBatches(walked).map(async (pathspecs) => await this.run([
         "ls-files", "-z", "--cached", ...this.walksUntracked(pathspecs) ? ["--others", "--exclude-standard"] : [], ...pathspecs,
       ], env, signal))),
-      this.listBoundaryPaths(scopes),
+      this.listBoundaryPaths(walked),
     ]);
-    const candidates = [...new Set([...outputs.flatMap(parseNullPaths), ...boundary])].sort((left, right) => left.localeCompare(right));
+    const listed = [...outputs.flatMap(parseNullPaths), ...boundary];
+    const entries = links ? await Promise.all(listed.map(async (entry) => await links.outermostLink(entry) ?? entry)) : listed;
+    const candidates = [...new Set([...entries, ...linkScopes])].sort((left, right) => left.localeCompare(right));
     return filterPathsByScopes(candidates, scopes);
+  }
+
+  /** Splits scopes into links, which Git must never walk, and the rest; without `links`, every scope is walked. */
+  private async splitLinkScopes(links: WorktreeLinks | null, scopes: readonly string[]) {
+    if (!links) return { linkScopes: [], walked: [...scopes] };
+    const linked = await Promise.all(scopes.map(async (scope) => await links.isLink(scope)));
+    return {
+      linkScopes: scopes.filter((_scope, index) => linked[index]),
+      walked: scopes.filter((_scope, index) => !linked[index]),
+    };
   }
 
   /** Machine worktrees: files under scopes inside nested repositories, which Git cannot walk itself. */
@@ -734,23 +752,18 @@ export default class WorkbenchGitRepository {
     return (await listBoundaryFiles(this.root, await nestedRepositoryScopes(this.root, scopes))).map(file => file.path);
   }
 
-  /** Stage machine files inside nested repositories, where `git add` silently stages nothing; missing paths are removed. */
+  /**
+   * Stage machine files inside nested repositories, where `git add` silently stages nothing; missing paths and links
+   * are removed, since machine Git never tracks links.
+   */
   private async stageBoundaryFiles(paths: readonly string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) {
-    const present = await listBoundaryFiles(this.root, paths);
+    const present = (await listBoundaryFiles(this.root, paths)).filter(file => file.mode !== "120000");
     const found = new Set(present.map(file => file.path));
-    const regular = present.filter(file => file.mode !== "120000");
-    const ids = regular.length
-      ? (await this.runWithInput(["hash-object", "-w", "--stdin-paths"], `${regular.map(file => file.path).join("\n")}\n`, env, signal))
+    const ids = present.length
+      ? (await this.runWithInput(["hash-object", "-w", "--stdin-paths"], `${present.map(file => file.path).join("\n")}\n`, env, signal))
         .trim().split(/\r?\n/u)
       : [];
-    const links = await Promise.all(present.filter(file => file.mode === "120000").map(async file => ({
-      ...file,
-      id: await this.objects.writeObject("blob", await fs.readlink(path.join(this.root, ...file.path.split("/")), { encoding: "buffer" })),
-    })));
-    const records = [
-      ...regular.map((file, index) => `${file.mode} ${ids[index]}\t${file.path}`),
-      ...links.map(file => `${file.mode} ${file.id}\t${file.path}`),
-    ];
+    const records = present.map((file, index) => `${file.mode} ${ids[index]}\t${file.path}`);
     if (records.length) await this.runWithInput(["update-index", "-z", "--index-info"], `${records.join("\0")}\0`, env, signal);
     const removed = paths.filter(filePath => !found.has(filePath));
     if (removed.length) await this.runWithInput(["update-index", "-z", "--force-remove", "--stdin"], `${removed.join("\0")}\0`, env, signal);
@@ -796,23 +809,26 @@ export default class WorkbenchGitRepository {
     scopes: readonly string[] = [],
     signal?: AbortSignal,
   ) {
+    const links = this.machine ? new WorktreeLinks(this.root) : null;
+    const { walked } = await this.splitLinkScopes(links, scopes);
+    if (scopes.length && !walked.length) return [];
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       const base = await this.contentBase(baseTreeish);
       await this.run(["read-tree", base], env, signal);
       const [outputs, boundary] = await Promise.all([
-        Promise.all(this.scopeBatches(scopes).flatMap((pathspecs) => [
+        Promise.all(this.scopeBatches(walked).flatMap((pathspecs) => [
           this.run(["diff", "--name-only", "-z", "--no-renames", ...pathspecs.length ? pathspecs : ["--"]], env, signal),
           ...this.walksUntracked(pathspecs)
             ? [this.run(["ls-files", "-z", "--others", "--exclude-standard", ...pathspecs.length ? pathspecs : ["--"]], env, signal)]
             : [],
         ])),
-        this.listBoundaryPaths(scopes),
+        this.listBoundaryPaths(walked),
       ]);
       // Git diffs tracked boundary files itself; only files the base never held are new.
       const known = boundary.length ? new Set(await this.listTreePaths(base, boundary)) : new Set<string>();
-      const changedPaths = [...new Set([...outputs.flatMap(parseNullPaths), ...boundary.filter(filePath => !known.has(filePath))])]
-        .sort((left, right) => left.localeCompare(right));
+      const listed = [...new Set([...outputs.flatMap(parseNullPaths), ...boundary.filter(filePath => !known.has(filePath))])];
+      const changedPaths = (links ? await links.withoutLinked(listed) : listed).sort((left, right) => left.localeCompare(right));
       return filterPathsByScopes(changedPaths, scopes);
     });
   }
@@ -826,9 +842,13 @@ export default class WorkbenchGitRepository {
     });
   }
 
-  /** Stages current content beneath scopes into the index `env` names, walking untracked files only inside them. */
+  /**
+   * Stages current content beneath scopes into the index `env` names, walking untracked files only inside them.
+   * Machine link entries stay unstaged: Git would write them as directories, or restore through them.
+   */
   private async stageScopedPaths(paths: readonly string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) {
-    const matchedPaths = await this.listWorktreePaths(paths, env, signal);
+    const listed = await this.listWorktreePaths(paths, env, signal);
+    const matchedPaths = this.machine ? await new WorktreeLinks(this.root).withoutLinked(listed) : listed;
     const boundary = new Set(this.machine ? await nestedRepositoryScopes(this.root, matchedPaths) : []);
     const added = matchedPaths.filter(filePath => !boundary.has(filePath));
     if (added.length) {

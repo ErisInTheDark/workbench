@@ -780,6 +780,43 @@ test("machine snapshots include untracked files at paths an arc requested, and n
   assert.deepEqual(await repository.listTreePaths(snapshot.tree), ["made/inner.txt", "notes/fresh.txt"]);
 });
 
+test("machine worktrees list links and junctions as leaves, never walking, diffing or staging them", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-links-");
+  context.after(async () => await temporary.dispose());
+  const drive = path.join(temporary.path, "drive");
+  const target = path.join(temporary.path, "target");
+  await fs.mkdir(target, { recursive: true });
+  await fs.writeFile(path.join(target, "precious.txt"), "elsewhere\n", "utf8");
+  await fs.mkdir(path.join(drive, "folder"), { recursive: true });
+  await fs.writeFile(path.join(drive, "folder", "own.txt"), "own\n", "utf8");
+  await fs.mkdir(path.join(drive, "repo", "node_modules"), { recursive: true });
+  await git(temporary.path, ["init", "-q", path.join(drive, "repo")]);
+  await fs.writeFile(path.join(drive, "repo", "node_modules", "real.txt"), "real\n", "utf8");
+  // Git for Windows walks junctions as plain directories.
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  await fs.symlink(target, path.join(drive, "linked"), linkType);
+  await fs.symlink(target, path.join(drive, "folder", "inner-link"), linkType);
+  await fs.symlink(target, path.join(drive, "repo", "node_modules", "pkg"), linkType);
+  await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
+  const scopes = ["linked", "folder", "repo/node_modules"];
+  await recordMachineKnownPaths(drive, scopes);
+  const repository = new WorkbenchGitRepository(drive);
+  const run = repository.run.bind(repository);
+  const pathspecs: string[] = [];
+  context.mock.method(repository, "run", async (...args: Parameters<typeof repository.run>) => {
+    pathspecs.push(...args[0].slice(args[0].indexOf("--") + 1));
+    return await run(...args);
+  });
+  const root = await repository.headOrNull();
+  const real = ["folder/own.txt", "repo/node_modules/real.txt"];
+
+  assert.deepEqual(await repository.listWorktreePaths(scopes), ["folder/inner-link", "folder/own.txt", "linked", "repo/node_modules/pkg", "repo/node_modules/real.txt"]);
+  assert.deepEqual(await repository.listWorktreeChangedPaths(root, scopes), real);
+  assert.deepEqual(await repository.listTreePaths(await repository.writeScopedWorktreeTree(scopes, root)), real);
+  assert.deepEqual(await repository.listTreePaths((await repository.writeWorktreeSnapshot()).tree), real);
+  assert.ok(!pathspecs.some(pathspec => pathspec.endsWith("linked")), "a link scope reached Git");
+});
+
 test("a repository rooted at a filesystem root accepts the paths beneath it", () => {
   const root = path.parse(process.cwd()).root;
   const repository = new WorkbenchGitRepository(root);
