@@ -44,7 +44,7 @@ export interface WorkbenchDaemonRequestOwners {
   autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
   commandApprovals?: Pick<import("../interactions/WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
   approvalReview?: Pick<import("../approval-review/WorkbenchApprovalReviewController").default, "read" | "update">;
-  mcpServers?: Pick<import("../mcp-servers/WorkbenchMcpServerController").default, "read" | "update" | "startSignIn" | "finishSignIn">;
+  mcpServers?: Pick<import("../mcp-servers/WorkbenchMcpServerController").default, "read" | "update" | "readEnv" | "updateEnv" | "startSignIn" | "finishSignIn">;
   projectStore?: Pick<import("../store/WorkbenchProjectStore").default, "read" | "update">;
   providers?: Pick<WorkbenchProviderDispatcher, "get">;
   threadActions?: Pick<WorkbenchThreadActionController, "handle">;

@@ -2,7 +2,8 @@
  * Exports:
  * - mcpServers: daemon-configured external MCP servers, their transport and standing allow-all flag.
  * - mcpServerHttp: the URL of each streamable-HTTP server.
- * - mcpServerPackages/mcpServerPackageArgs: the Workbench-installed npm package, exact version and ordered arguments of each stdio server.
+ * - mcpServerPackages/mcpServerPackageArgs/mcpServerPackageEnv: the Workbench-installed npm package, pinned version, ordered arguments and
+ *   sealed environment variables of each stdio server.
  * - mcpServerTools: individually allowed tools per server.
  * - mcpServerAuth: optional per-server credential header, sealed per device and user.
  * - mcpServerOAuthClients/mcpServerOAuthTokens/mcpServerOAuthPending: OAuth sign-in registration, sealed tokens and started sign-ins awaiting their callback.
@@ -45,7 +46,7 @@ const http = defineTable("mcp_server_http", {
   url: text().notNull(),
 });
 
-/** A stdio server Workbench installed from npm under its data root, at the exact version it installed. */
+/** A stdio server Workbench installs from npm under its data root; `version` is the requested one until the first install pins it. */
 const packages = defineTable("mcp_server_packages", {
   server_id: text().primaryKey().references(servers.name, "id", { onDelete: "CASCADE" }),
   package: text().notNull(),
@@ -57,6 +58,15 @@ const packageArgs = defineTable("mcp_server_package_args", {
   position: integer().notNull().nonNegative(),
   value: text().notNull(),
 }, table => ({ constraints: [primaryKey([table.server_id, table.position])] }));
+
+/** One environment variable of a stdio server's process, sealed like the header credential. */
+const packageEnv = defineTable("mcp_server_package_env", {
+  server_id: text().notNull().references(packages.name, "server_id", { onDelete: "CASCADE" }),
+  name: text().notNull(),
+  nonce: blob().notNull(),
+  ciphertext: blob().notNull(),
+  updated_at: integer().notNull().nonNegative(),
+}, table => ({ constraints: [primaryKey([table.server_id, table.name])] }));
 
 const serverHistory = defineTableHistory({
   current: serversV2,
@@ -86,6 +96,10 @@ const packageHistory = defineTableHistory({
 const packageArgsHistory = defineTableHistory({
   current: packageArgs,
   versions: [tableVersion({ schemaVersion: releases.mcpServerPackages.version, table: packageArgs, migration: createTable(packageArgs) })],
+});
+const packageEnvHistory = defineTableHistory({
+  current: packageEnv,
+  versions: [tableVersion({ schemaVersion: releases.mcpServerPackageEnv.version, table: packageEnv, migration: createTable(packageEnv) })],
 });
 const toolHistory = defineTableHistory({
   current: tools,
@@ -156,6 +170,7 @@ export const mcpServers = serverHistory.current;
 export const mcpServerHttp = httpHistory.current;
 export const mcpServerPackages = packageHistory.current;
 export const mcpServerPackageArgs = packageArgsHistory.current;
+export const mcpServerPackageEnv = packageEnvHistory.current;
 export const mcpServerTools = toolHistory.current;
 export const mcpServerAuth = authHistory.current;
 export const mcpServerOAuthClients = oauthClientHistory.current;
@@ -164,5 +179,5 @@ export const mcpServerOAuthPending = oauthPendingHistory.current;
 export const mcpDownloads = downloadHistory.current;
 // Transport tables come first: within one release, the server rebuild copies each URL into an already-created table.
 export const mcpServerSchemaHistory = defineSubsystemHistory([
-  httpHistory, packageHistory, packageArgsHistory, serverHistory, toolHistory, authHistory, oauthClientHistory, oauthTokenHistory, oauthPendingHistory, downloadHistory,
+  httpHistory, packageHistory, packageArgsHistory, packageEnvHistory, serverHistory, toolHistory, authHistory, oauthClientHistory, oauthTokenHistory, oauthPendingHistory, downloadHistory,
 ]);

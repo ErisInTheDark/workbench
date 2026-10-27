@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { isEnvironmentFile } from "workbench-shared/workbench/project/tree-utils";
 import EnvironmentFilesController from "../../../workbench/environment/EnvironmentFilesController";
-import ProjectStoreRowsController from "../../../workbench/environment/ProjectStoreRowsController";
+import SecretRowsController from "../../../workbench/state/SecretRowsController";
 import { createInitialEditHistory } from "../../../workbench/state/edit-history";
 import FileDraftStore from "../../../workbench/state/FileDraftStore";
 import InputList from "../InputList";
@@ -18,7 +18,8 @@ import WorkbenchEnvironmentFile from "./WorkbenchEnvironmentFile";
 
 function useStoreRows(projectId: ProjectId) {
   const daemon = useWorkbenchDaemonClient();
-  const controller = useMemo(() => new ProjectStoreRowsController({
+  const controller = useMemo(() => new SecretRowsController({
+    subject: "project store",
     read: () => daemon.projectStore.read({ projectId }),
     update: (upserts, removals) => daemon.projectStore.update({ projectId, upserts, removals }),
   }), [daemon, projectId]);

@@ -1,10 +1,11 @@
 /*
  * Exports:
  * - McpServerTrafficFrame: one recorded JSON-RPC message exchanged with a server.
- * - McpServerLaunch: command, arguments and directory of a local stdio server process.
+ * - McpServerLaunch: command, arguments, directory and extra environment of a local stdio server process.
  * - McpServerEndpoint: one user-added MCP server's HTTP url and auth, or stdio launch, plus an optional traffic recorder.
  * - McpServerTool: one offered tool with its input schema.
  * - McpServerConnectionPort: the catalogue/call/close surface the server controller depends on.
+ * - stderrReason: the reason a stopped local server gave on stderr, reading JSON log records and skipping stack frames.
  * - default McpServerConnection: SDK client for one server over streamable HTTP (authenticated by a header or OAuth) or a stdio child process whose stderr explains its failures; caches the catalogue until the server reports a change (or for 30 s when it never promised to), reconnects after transport failure and reports a needed sign-in as McpServerSignInRequiredError.
  */
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -33,6 +34,8 @@ export interface McpServerLaunch {
   command: string;
   args: string[];
   cwd: string;
+  /** Added to the SDK's safe inherited environment. */
+  env?: Record<string, string>;
 }
 
 export type McpServerEndpoint = {
@@ -98,11 +101,38 @@ function recordTraffic(transport: Transport, record: (frame: McpServerTrafficFra
   });
 }
 
-const STDERR_TAIL = 400;
+const STDERR_TAIL = 16 * 1024;
 
-function describeFailure(error: unknown, signedIn: boolean, stderr: string) {
+/** A JSON log record's message (first line) and whether it is an error, as winston/pino-style loggers write them. */
+function logRecord(line: string): { text: string; error: boolean } | null {
+  if (!line.startsWith("{")) return null;
+  try {
+    const record = JSON.parse(line) as { message?: unknown; msg?: unknown; level?: unknown };
+    const message = typeof record.message === "string" ? record.message : typeof record.msg === "string" ? record.msg : null;
+    if (message === null) return null;
+    // pino writes numeric levels; 50 and up are error and fatal.
+    const error = typeof record.level === "number" ? record.level >= 50 : /^(error|fatal|crit)/iu.test(String(record.level ?? ""));
+    return { text: message.split(/\r?\n/u)[0]!.trim(), error };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a stopped local server said about why: its last error log record when it logs JSON, else its last lines without stack frames
+ * or Node's version footer. A tail that filled up starts mid-line, so that first line is dropped.
+ */
+export function stderrReason(stderr: string, truncated: boolean) {
+  const lines = stderr.split(/\r?\n/u).slice(truncated ? 1 : 0).map(line => line.trim())
+    .filter(line => line && !/^at\s/u.test(line) && !/^Node\.js v\d/u.test(line) && line !== "^");
+  const said = lines.map(line => logRecord(line) ?? { text: line, error: false });
+  const error = said.findLast(entry => entry.error);
+  return (error ? error.text : said.slice(-3).map(entry => entry.text).join(" ")).slice(-240);
+}
+
+function describeFailure(error: unknown, signedIn: boolean, stderr: { text: string; truncated: boolean }) {
   // A local server explains its own failures on stderr; the transport only says the pipe closed.
-  const said = stderr.trim().split(/\r?\n/u).filter(Boolean).slice(-3).join(" ").slice(-240);
+  const said = stderrReason(stderr.text, stderr.truncated);
   if (said && error instanceof McpError && error.code === ErrorCode.ConnectionClosed) {
     return new Error(`The server stopped: ${said}`, { cause: error });
   }
@@ -121,8 +151,8 @@ function describeFailure(error: unknown, signedIn: boolean, stderr: string) {
 export default class McpServerConnection implements McpServerConnectionPort {
   #client: Promise<Client> | null = null;
   #tools: Promise<McpServerTool[]> | null = null;
-  /** Recent stderr of the current local server process; empty for HTTP servers. */
-  #stderr = "";
+  /** Recent stderr of the current local server process, and whether older output was dropped; empty for HTTP servers. */
+  #stderr = { text: "", truncated: false };
   /** When the cached list was read from a server that never promised change notifications; null while it may be kept. */
   #toolsReadAt: number | null = null;
 
@@ -224,9 +254,12 @@ export default class McpServerConnection implements McpServerConnectionPort {
       });
     }
     const launch = await endpoint.launch();
-    this.#stderr = "";
+    this.#stderr = { text: "", truncated: false };
     const transport = new StdioClientTransport({ ...launch, stderr: "pipe" });
-    transport.stderr?.on("data", (chunk: Buffer) => { this.#stderr = (this.#stderr + chunk.toString("utf8")).slice(-STDERR_TAIL); });
+    transport.stderr?.on("data", (chunk: Buffer) => {
+      const text = this.#stderr.text + chunk.toString("utf8");
+      this.#stderr = { text: text.slice(-STDERR_TAIL), truncated: this.#stderr.truncated || text.length > STDERR_TAIL };
+    });
     return transport;
   }
 }

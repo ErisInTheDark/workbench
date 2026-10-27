@@ -2,6 +2,7 @@
  * Exports:
  * - McpPackageCommand: npm package, optional version and arguments of a stdio MCP server the user typed.
  * - parseMcpPackageCommand: read `package[@version] args...`, also accepting a pasted `npx -y ...`-style launcher, or explain why it can't.
+ * - parseMcpPackageArgs/formatMcpPackageArgs: read typed arguments with the same quote rules, and write arguments so they read back exactly.
  */
 import { McpPackageArgsSchema, McpPackageNameSchema, McpPackageVersionSchema } from "./mcp-server-settings.ts";
 
@@ -52,6 +53,25 @@ function withoutLauncher(input: string[]) {
   return rest;
 }
 
+function checkedArgs(args: string[]): { args: string[] } | { error: string } {
+  const checked = McpPackageArgsSchema.safeParse(args);
+  return checked.success ? { args: checked.data } : { error: "Use at most 64 arguments of up to 4096 characters." };
+}
+
+export function parseMcpPackageArgs(text: string): { args: string[] } | { error: string } {
+  const parsed = words(text);
+  return parsed ? checkedArgs(parsed) : { error: "Close the quote." };
+}
+
+/** Arguments as `parseMcpPackageArgs` reads them back: plain words bare, others quoted, splicing `'` between single-quoted runs. */
+export function formatMcpPackageArgs(args: readonly string[]) {
+  return args.map(arg => {
+    if (arg && !/[\s"']/u.test(arg)) return arg;
+    if (!arg.includes("\"")) return `"${arg}"`;
+    return arg.split("'").map(part => `'${part}'`).join("\"'\"");
+  }).join(" ");
+}
+
 export function parseMcpPackageCommand(text: string): { command: McpPackageCommand } | { error: string } {
   const parsed = words(text);
   if (!parsed) return { error: "Close the quote." };
@@ -63,7 +83,7 @@ export function parseMcpPackageCommand(text: string): { command: McpPackageComma
   if (!name.success) return { error: name.error.issues[0]?.message ?? "Use an npm package name." };
   const version = at < 0 ? null : McpPackageVersionSchema.safeParse(spec.slice(at + 1));
   if (version && !version.success) return { error: version.error.issues[0]?.message ?? "Use an npm version." };
-  const checkedArgs = McpPackageArgsSchema.safeParse(args);
-  if (!checkedArgs.success) return { error: "Use at most 64 arguments of up to 4096 characters." };
-  return { command: { package: name.data, ...version ? { version: version.data } : {}, args: checkedArgs.data } };
+  const checked = checkedArgs(args);
+  if ("error" in checked) return checked;
+  return { command: { package: name.data, ...version ? { version: version.data } : {}, args: checked.args } };
 }

@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - isUnchecked: whether a server card still awaits its own check (pending or installing).
  * - McpServerSettingsState: MCP server settings presentation state, including whether this browser can sign in.
  * - default McpServerSettingsController: own incremental MCP settings checks, fenced writes and OAuth sign-in starts.
  */
@@ -7,6 +8,11 @@ import type {
   McpServerSettingsSnapshot, McpServerSettingsUpdate, McpServerSignInStartParams, McpServerSignInStartResult,
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { McpSignInPopup } from "./mcp-sign-in-popup";
+
+/** A card whose result is still to come: unchecked, or installing its npm package (its own check waits for the install). */
+export function isUnchecked(catalog: McpServerSettingsSnapshot["servers"][number]["catalog"]) {
+  return catalog.status === "pending" || catalog.status === "installing";
+}
 
 export interface McpServerSettingsState {
   settings: McpServerSettingsSnapshot | null;
@@ -102,7 +108,7 @@ export default class McpServerSettingsController {
     } finally {
       if (!this.disposed && generation === this.generation) {
         for (const server of this.snapshot.settings?.servers ?? []) {
-          if (server.catalog.status === "pending") void this.readServer(server.id, generation);
+          if (isUnchecked(server.catalog)) void this.readServer(server.id, generation);
         }
       }
     }
@@ -113,7 +119,7 @@ export default class McpServerSettingsController {
     try {
       const settings = await this.port.readServer(id);
       const server = settings.servers.find(server => server.id === id);
-      if (!server || server.catalog.status === "pending") throw new Error("The server check returned no result.");
+      if (!server || isUnchecked(server.catalog)) throw new Error("The server check returned no result.");
       checked = server;
     } catch (error) {
       const server = this.snapshot.settings?.servers.find(server => server.id === id);

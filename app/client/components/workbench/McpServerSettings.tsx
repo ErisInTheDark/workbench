@@ -1,14 +1,18 @@
 /*
  * Exports:
- * - default McpServerSettings: one daemon's user-added MCP servers as status cards; sign in or set an API key, pick allowed tools, and add servers by URL or npm package.
+ * - default McpServerSettings: one daemon's user-added MCP servers as status cards; sign in or set an API key, pick allowed tools,
+ *   edit an npm server's arguments and sealed environment, and add servers by URL or npm package.
  */
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import { parseMcpPackageCommand } from "workbench-shared/workbench/mcp/mcp-package-command";
-import type { McpServerSettingsUpdate, McpServerSnapshot } from "workbench-shared/workbench/mcp/mcp-server-settings";
-import McpServerSettingsController from "../../workbench/McpServerSettingsController";
+import { formatMcpPackageArgs, parseMcpPackageArgs, parseMcpPackageCommand } from "workbench-shared/workbench/mcp/mcp-package-command";
+import {
+  McpServerEnvNameSchema, type McpServerSettingsUpdate, type McpServerSnapshot, type McpServerSource,
+} from "workbench-shared/workbench/mcp/mcp-server-settings";
+import McpServerSettingsController, { isUnchecked } from "../../workbench/McpServerSettingsController";
+import SecretRowsController from "../../workbench/state/SecretRowsController";
 import { openCenteredMcpSignInPopup } from "../../workbench/mcp-sign-in-popup";
 import { mcpToolLabel, mcpToolSharedPrefix } from "../../workbench/mcp-tool-label";
 import { readWorkbenchAppPort } from "../../workbench/app/workbench-app-port-client";
@@ -19,22 +23,26 @@ import MarkdownRender from "../ui/MarkdownRender";
 import PressDragMenu from "../ui/PressDragMenu";
 import PrimaryButton from "../ui/PrimaryButton";
 import RadioRow from "../ui/RadioRow";
+import InputList from "./InputList";
 import WorkbenchCheckbox from "./WorkbenchCheckbox";
 import { IconLabel, SettingsMenuItem } from "./settings-row-labels";
 import WorkbenchSettingsStatusRow, { type WorkbenchSettingsStatusTone } from "./WorkbenchSettingsStatusRow";
 import WorkbenchTextField from "./WorkbenchTextField";
 import {
-  ChevronDownIcon, DownloadIcon, KeyRoundIcon, KeyRoundOffIcon, MoreVerticalIcon, PlusIcon, RefreshCwIcon, SparklesIcon, Trash2Icon,
+  ChevronDownIcon, DownloadIcon, KeyRoundIcon, KeyRoundOffIcon, MoreVerticalIcon, PlusIcon, RefreshCwIcon, SparklesIcon, TerminalIcon, Trash2Icon,
 } from "./workbench-icons";
 import { enterMotionClassName } from "../../tailwind/enter-motion-classes";
 
 type ServerProps = { server: McpServerSnapshot; controller: McpServerSettingsController; busy: boolean };
 type Tool = Extract<McpServerSnapshot["catalog"], { status: "ready" }>["tools"][number];
+type NpmSource = Extract<McpServerSource, { kind: "npm" }>;
 
 const cardBorder = "border-[color-mix(in_srgb,var(--text)_10%,transparent)]";
+const panelLabel = "m-0 text-[0.92em] text-fg/muted";
 
 function presentStatus(server: McpServerSnapshot): { tone: WorkbenchSettingsStatusTone; status: string } {
   if (server.catalog.status === "pending") return { tone: "pending", status: "Checking connection..." };
+  if (server.catalog.status === "installing") return { tone: "pending", status: "Installing with npm..." };
   if (server.catalog.status === "signInRequired") return { tone: "action", status: "Needs sign-in" };
   if (server.catalog.status === "error") return { tone: "failed", status: "Unavailable" };
   return { tone: "ready", status: server.auth?.kind === "oauth" ? "Signed in" : server.auth?.kind === "header" ? "API key" : "Connected" };
@@ -55,6 +63,83 @@ function ApiKeyFields({ server, controller, busy, onDone }: ServerProps & { onDo
     <PrimaryButton type="submit" shape="compact" disabled={busy || !header.trim() || !value.trim()}>Save</PrimaryButton>
     <PrimaryButton shape="compact" disabled={busy} onClick={onDone}>Cancel</PrimaryButton>
   </form>;
+}
+
+function useEnvRows(daemon: WorkbenchDaemonClient, id: string) {
+  const controller = useMemo(() => new SecretRowsController({
+    subject: "environment",
+    read: () => daemon.mcpServers.env.read({ id }),
+    update: (upserts, removals) => daemon.mcpServers.env.update({ id, upserts, removals }),
+    keyIssue: key => {
+      const parsed = McpServerEnvNameSchema.safeParse(key);
+      return parsed.success ? null : parsed.error.issues[0]?.message ?? "Use a valid variable name.";
+    },
+  }), [daemon, id]);
+  useEffect(() => {
+    void controller.load();
+    return () => controller.dispose();
+  }, [controller]);
+  return { controller, state: useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot) };
+}
+
+/** Arguments after the package name, committed on Enter or blur; a typo such as an open quote stays in the field with its reason. */
+function ArgumentsField({ server, source, controller, busy }: ServerProps & { source: NpmSource }) {
+  const saved = formatMcpPackageArgs(source.args);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const commit = () => {
+    if (draft === null) return;
+    const parsed = parseMcpPackageArgs(draft);
+    if ("error" in parsed) return setError(parsed.error);
+    setError("");
+    setDraft(null);
+    if (formatMcpPackageArgs(parsed.args) !== saved) void controller.update({ action: "setArgs", id: server.id, args: parsed.args });
+  };
+  return <div className="flex flex-col gap-1">
+    <p className={panelLabel}>Arguments</p>
+    <div className="flex min-w-0 items-center gap-2 font-mono">
+      <span className="shrink-0 text-fg/muted">{source.package}</span>
+      <WorkbenchTextField variant="dotted" className="min-w-0 flex-1" aria-label="Arguments" placeholder="No arguments"
+        autoComplete="off" spellCheck={false} disabled={busy} aria-invalid={Boolean(error)} value={draft ?? saved}
+        onChange={event => setDraft(event.target.value)} onBlur={commit}
+        onKeyDown={event => {
+          if (event.key === "Enter") commit();
+          else if (event.key === "Escape") { setDraft(null); setError(""); }
+        }} />
+    </div>
+    {error ? <p role="alert" className="m-0 text-danger">{error}</p> : null}
+  </div>;
+}
+
+/** An npm server's launch: its arguments and its sealed environment variables; Done restarts it when the environment changed. */
+function LaunchSettings({ server, source, controller, busy, daemon, onDone }: ServerProps & {
+  source: NpmSource;
+  daemon: WorkbenchDaemonClient;
+  onDone: () => void;
+}) {
+  const env = useEnvRows(daemon, server.id);
+  const [envEdited, setEnvEdited] = useState(false);
+  return <div className="mt-2.5 flex flex-col gap-3 border-t border-fg/8 pt-2.5 text-[0.82em]">
+    <ArgumentsField server={server} source={source} controller={controller} busy={busy} />
+    <div className="flex flex-col gap-1">
+      <p className={panelLabel}>Environment, encrypted for this device and user</p>
+      <InputList kind="pairs" idPrefix={`mcp-env-${server.id}`} rowLabel="Environment variable" keyPlaceholder="NAME" placeholder="value" secret
+        disabled={env.state.status === "loading"} errors={env.state.issues} rows={env.state.rows}
+        onRowsChange={rows => { setEnvEdited(true); env.controller.setRows(rows); }} />
+    </div>
+    <div className="flex min-h-7 items-center gap-2">
+      {env.state.status === "loading" ? <p role="status" className="m-0 text-fg/muted">Loading environment...</p> : null}
+      {env.state.status === "saving" ? <p role="status" className="m-0 text-fg/muted">Saving...</p> : null}
+      {env.state.status === "failed" ? <>
+        <p role="alert" className="m-0 text-danger">{env.state.error}</p>
+        <button type="button" className="rounded-lg px-2 py-1 text-accent hover:bg-accent-soft" onClick={() => env.controller.retry()}>Retry</button>
+      </> : null}
+      <PrimaryButton shape="compact" className="ml-auto" disabled={busy || env.state.status === "saving"} onClick={() => {
+        if (envEdited) void controller.update({ action: "refresh", id: server.id });
+        onDone();
+      }}>Done</PrimaryButton>
+    </div>
+  </div>;
 }
 
 function ToolList({ server, controller, busy }: ServerProps) {
@@ -89,9 +174,13 @@ function ToolList({ server, controller, busy }: ServerProps) {
   </div>;
 }
 
-function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & { loopbackOrigin: string | null }) {
+function ServerCard({ server, controller, busy, loopbackOrigin, daemon }: ServerProps & {
+  loopbackOrigin: string | null;
+  daemon: WorkbenchDaemonClient;
+}) {
   const [toolsOpen, setToolsOpen] = useState(false);
   const [keyOpen, setKeyOpen] = useState(false);
+  const [launchOpen, setLaunchOpen] = useState(false);
   const { tone, status } = presentStatus(server);
   const ready = server.catalog.status === "ready";
   // Only offered tools count; picks the server no longer offers stay listed below but are not "enabled".
@@ -101,9 +190,11 @@ function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & 
     : server.allowAll ? "All tools"
       // A search-based server's total is unknown: it holds thousands, found by searching.
       : server.catalog.search ? `${enabledCount} enabled` : `${enabledCount} of ${server.catalog.tools.length} tools`;
-  // A local npm server runs as this computer's user; it takes no API key or sign-in.
+  // A local npm server runs as this computer's user; it takes arguments and environment variables instead of an API key or sign-in.
   const menu = [
-    ...server.source.kind === "npm" ? [] : [server.auth?.kind === "header"
+    ...server.source.kind === "npm"
+      ? [{ id: "launch", content: <SettingsMenuItem icon={<TerminalIcon />}>Launch settings…</SettingsMenuItem> }]
+      : [server.auth?.kind === "header"
       ? { id: "remove-key", content: <SettingsMenuItem icon={<KeyRoundOffIcon />}>Remove API key</SettingsMenuItem> }
       : { id: "key", content: <SettingsMenuItem icon={<KeyRoundIcon />}>Use an API key…</SettingsMenuItem> }],
     ...server.auth?.kind === "oauth" ? [{ id: "sign-out", content: <SettingsMenuItem icon={<KeyRoundOffIcon />}>Sign out</SettingsMenuItem> }] : [],
@@ -116,6 +207,8 @@ function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & 
     error={server.catalog.status === "error" ? server.catalog.detail : ""}
     body={<>
       {keyOpen ? <ApiKeyFields server={server} controller={controller} busy={busy} onDone={() => setKeyOpen(false)} /> : null}
+      {launchOpen && server.source.kind === "npm" ? <LaunchSettings server={server} source={server.source} controller={controller}
+        busy={busy} daemon={daemon} onDone={() => setLaunchOpen(false)} /> : null}
       {toolsOpen && ready ? <ToolList server={server} controller={controller} busy={busy} /> : null}
     </>}>
     {server.catalog.status === "signInRequired" ? <PrimaryButton shape="compact" disabled={busy || !loopbackOrigin}
@@ -131,6 +224,7 @@ function ServerCard({ server, controller, busy, loopbackOrigin }: ServerProps & 
       triggerAppearance="plain" triggerClassName={iconButtonClassName({ size: "small", display: "hover-border" })}
       onSelect={id => {
         if (id === "key") setKeyOpen(true);
+        else if (id === "launch") setLaunchOpen(true);
         else if (id === "remove-key") void controller.update({ action: "setAuth", id: server.id, auth: null });
         else if (id === "sign-out") void controller.update({ action: "signOut", id: server.id });
         else if (id === "remove") void controller.update({ action: "remove", id: server.id });
@@ -157,8 +251,7 @@ function addUpdate(mode: AddMode, draft: string): { update: Extract<McpServerSet
 
 function sourceDetail(source: McpServerSnapshot["source"]) {
   if (source.kind === "http") return source.url.replace(/^https?:\/\//u, "");
-  const args = source.args.map(arg => /^$|\s|["']/u.test(arg) ? JSON.stringify(arg) : arg);
-  return ["npm", `${source.package}@${source.version}`, ...args].join(" ");
+  return ["npm", `${source.package}@${source.version}`, formatMcpPackageArgs(source.args)].filter(Boolean).join(" ");
 }
 
 /** The last card in the list: pick HTTP or npm, then Add (or hold Install, since npm runs the package's code) appears once something is typed. */
@@ -171,7 +264,7 @@ function AddServerCard({ controller, busy, onAdded }: {
   const [mode, setMode] = useState<AddMode>("http");
   // Each mode keeps its own draft, so peeking at the other mode loses nothing.
   const [drafts, setDrafts] = useState<Record<AddMode, string>>({ http: "", npm: "" });
-  const [adding, setAdding] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const draft = drafts[mode];
   const next = addUpdate(mode, draft);
   const npm = mode === "npm";
@@ -181,9 +274,9 @@ function AddServerCard({ controller, busy, onAdded }: {
       if (!next || !("update" in next)) return;
       const before = new Set(controller.getSnapshot().settings?.servers.map(server => server.id));
       const addedMode = mode;
-      setAdding(next.update.action === "addPackage" ? next.update.package : next.update.url);
+      setAdding(true);
       void controller.update(next.update).then(added => {
-        setAdding(null);
+        setAdding(false);
         if (!added) return;
         setDrafts(current => ({ ...current, [addedMode]: "" }));
         onAdded(controller.getSnapshot().settings?.servers.filter(server => !before.has(server.id)).map(server => server.id) ?? []);
@@ -196,13 +289,12 @@ function AddServerCard({ controller, busy, onAdded }: {
         aria-label={addModes[mode].inputLabel} placeholder={addModes[mode].placeholder} autoComplete="off" spellCheck={false}
         aria-invalid={next !== null && "error" in next} disabled={busy} value={draft}
         onChange={event => { const value = event.target.value; setDrafts(current => ({ ...current, [mode]: value })); }} />
-      {next || adding ? <PrimaryButton type="submit" shape="compact" disabled={busy || (next !== null && "error" in next)} pendingHalo={adding !== null}
+      {next || adding ? <PrimaryButton type="submit" shape="compact" disabled={busy || (next !== null && "error" in next)} pendingHalo={adding}
         {...npm ? { tone: "danger", holdToConfirmMs: 1000, title: "Hold to install and run this npm package on this computer" } : {}}>
         <IconLabel icon={npm ? <DownloadIcon size={14} /> : <SparklesIcon size={14} />}>{npm ? "Install" : "Add"}</IconLabel>
       </PrimaryButton> : null}
     </form>
-    {adding && npm ? <p role="status" className="m-0 px-3 pt-1.5 text-[0.78em] leading-[1.55] text-fg/muted">Installing {adding} with npm...</p>
-      : next && "error" in next ? <p className="m-0 px-3 pt-1.5 text-[0.78em] leading-[1.55] text-fg/muted">{next.error}</p> : null}
+    {next && "error" in next ? <p className="m-0 px-3 pt-1.5 text-[0.78em] leading-[1.55] text-fg/muted">{next.error}</p> : null}
   </div>;
 }
 
@@ -226,7 +318,7 @@ export default function McpServerSettings({ daemon, daemonId }: { daemon: Workbe
   }, [controller]);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const servers = state.settings?.servers ?? [];
-  const pending = servers.filter(server => server.catalog.status === "pending").length;
+  const pending = servers.filter(server => isUnchecked(server.catalog)).length;
   // Only servers added from this view animate in; ones already present on load render still.
   const [entering, setEntering] = useState<ReadonlySet<string>>(() => new Set());
   return <div className="flex flex-col">
@@ -235,7 +327,7 @@ export default function McpServerSettings({ daemon, daemonId }: { daemon: Workbe
       Checking servers: {servers.length - pending} of {servers.length} complete
     </p> : null}
     {servers.map(server => <div key={server.id} className={entering.has(server.id) ? enterMotionClassName : ""}>
-      <ServerCard server={server} controller={controller} busy={state.busy} loopbackOrigin={state.loopbackOrigin} />
+      <ServerCard server={server} controller={controller} busy={state.busy} loopbackOrigin={state.loopbackOrigin} daemon={daemon} />
     </div>)}
     <AddServerCard controller={controller} busy={state.busy} onAdded={ids => setEntering(new Set(ids))} />
     {state.error ? <p role="alert" className="m-0 px-3 text-[0.78em] leading-[1.55] text-danger">{state.error}</p> : null}

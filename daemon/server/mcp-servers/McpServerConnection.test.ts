@@ -1,7 +1,7 @@
 /*
  * No production exports. Tests protect the real streamable-HTTP edge: the credential header reaches the server,
  * calls are forwarded, recorded traffic holds the exact replies, and a refused credential is reported plainly instead of as a raw transport error;
- * and the real stdio edge: launch arguments reach the process, and a crashed process is explained by its own stderr.
+ * and the real stdio edge: launch arguments and environment reach the process, and a crashed process is explained by the reason on its stderr, including JSON logs.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -11,7 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import McpServerConnection from "./McpServerConnection";
+import McpServerConnection, { stderrReason } from "./McpServerConnection";
 
 const KEY = "consumer-key";
 
@@ -150,28 +150,29 @@ test("a URL that is not an MCP server reports its HTTP status, not its page body
 });
 
 /** A local stdio server run by this Node, the way an installed package's bin is; it echoes the arguments it was launched with. */
-function stdioServer(script: string, args: string[] = []) {
+function stdioServer(script: string, args: string[] = [], env?: Record<string, string>) {
   const sdk = (entry: string) => JSON.stringify(require.resolve(`@modelcontextprotocol/sdk/${entry}`));
   const source = `
     const { McpServer } = require(${sdk("server/mcp.js")});
     const { StdioServerTransport } = require(${sdk("server/stdio.js")});
     ${script}`;
   return new McpServerConnection({
-    transport: "stdio", launch: async () => ({ command: process.execPath, args: ["-e", source, "--", ...args], cwd: process.cwd() }),
+    transport: "stdio",
+    launch: async () => ({ command: process.execPath, args: ["-e", source, "--", ...args], cwd: process.cwd(), ...env ? { env } : {} }),
   });
 }
 
-test("a stdio server receives its launch arguments and serves catalogue reads and calls", async () => {
+test("a stdio server receives its launch arguments and environment and serves catalogue reads and calls", async () => {
   const connection = stdioServer(`
     const mcp = new McpServer({ name: "local", version: "1.0.0" });
     mcp.registerTool("argv", { description: "Launch arguments" },
-      async () => ({ content: [{ type: "text", text: JSON.stringify(process.argv.slice(1)) }] }));
-    void mcp.connect(new StdioServerTransport());`, ["contoso", "two words"]);
+      async () => ({ content: [{ type: "text", text: JSON.stringify([process.argv.slice(1), process.env.PERSONAL_ACCESS_TOKEN]) }] }));
+    void mcp.connect(new StdioServerTransport());`, ["contoso", "two words"], { PERSONAL_ACCESS_TOKEN: "dG9rZW4=" });
   try {
     assert.equal(await connection.serverName(), "local");
     assert.deepEqual((await connection.listTools()).map(tool => tool.name), ["argv"]);
     const result = await connection.callTool("argv", {}, new AbortController().signal);
-    assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(["contoso", "two words"]) }]);
+    assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify([["contoso", "two words"], "dG9rZW4="]) }]);
   } finally {
     await connection.close();
   }
@@ -184,6 +185,19 @@ test("a stdio server that exits is reported by what it printed to stderr", async
   } finally {
     await connection.close();
   }
+});
+
+test("a stopped server's reason is its error log record or error line, never its stack frames or a cut-off line", () => {
+  const winston = JSON.stringify({
+    level: "error", message: "Environment variable 'PERSONAL_ACCESS_TOKEN' is not set or empty.\nPlease set it.",
+    stack: "Error: Environment variable...\n    at main (file:///C:/x/dist/index.js:99:34)", timestamp: "2026-10-27T01:11:03.493Z",
+  });
+  const info = JSON.stringify({ level: "info", message: "Starting Azure DevOps MCP server" });
+  assert.equal(stderrReason(`${info}\n${winston}\n${JSON.stringify({ level: "info", message: "exiting" })}\n`, false),
+    "Environment variable 'PERSONAL_ACCESS_TOKEN' is not set or empty.");
+  const uncaught = "file:///C:/x/index.js:3\n  throw new Error('bad org');\n  ^\n\nError: bad org\n    at main (file:///C:/x/index.js:3:9)\n\nNode.js v26.9.0\n";
+  assert.match(stderrReason(uncaught, false), /Error: bad org$/u);
+  assert.equal(stderrReason("level\":\"error\",\"message\":\"cut off\"}\nready to serve\n", true), "ready to serve");
 });
 
 test("a refused credential is reported as such, and a failed connection is not reused", async () => {

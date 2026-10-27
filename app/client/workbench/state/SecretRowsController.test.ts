@@ -1,15 +1,16 @@
-/* No production exports. Protect store row autosave ordering, diffing and unreadable values. */
+/* No production exports. Protect sealed row autosave ordering, diffing, unreadable values and key rules. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ProjectStoreSnapshot } from "workbench-shared/workbench/project/project-store";
 import { InputListRows } from "../../components/workbench/input-list-rows.ts";
-import ProjectStoreRowsController from "./ProjectStoreRowsController.ts";
+import SecretRowsController, { type SecretEntry } from "./SecretRowsController.ts";
 
 type Update = { upserts: { key: string; value: string }[]; removals: string[]; settle(error?: Error): void };
 
-function fixture(snapshot: ProjectStoreSnapshot) {
+function fixture(snapshot: { entries: SecretEntry[] }, keyIssue?: (key: string) => string | null) {
   const updates: Update[] = [];
-  const controller = new ProjectStoreRowsController({
+  const controller = new SecretRowsController({
+    subject: "store",
+    ...keyIssue ? { keyIssue } : {},
     read: async () => snapshot,
     update: (upserts, removals) => new Promise<void>((resolve, reject) => {
       updates.push({ upserts, removals, settle: error => error ? reject(error) : resolve() });
@@ -53,6 +54,20 @@ test("renames and deletions save; incomplete or duplicate rows never remove stor
   edit(blank.id, { value: "orphan" });
   assert.equal(updates.length, 1);
   assert.deepEqual([...controller.getSnapshot().savedKeys!].sort(), ["B", "C"]);
+});
+
+test("a key the set's rules reject is flagged, never saved, and holds back removals until corrected", async () => {
+  const { controller, updates, rowFor, edit, flush } = fixture({ entries: [{ key: "A", value: "1" }] },
+    key => /^[A-Z_]+$/u.test(key) ? null : "Use capital letters and _.");
+  await controller.load();
+  edit(rowFor("A").id, { key: "A-B" });
+  assert.equal(controller.getSnapshot().issues[rowFor("A-B").id], "Use capital letters and _.");
+  assert.equal(updates.length, 0);
+  edit(rowFor("A-B").id, { key: "A_B" });
+  assert.deepEqual({ upserts: updates[0]!.upserts, removals: updates[0]!.removals }, { upserts: [{ key: "A_B", value: "1" }], removals: ["A"] });
+  updates[0]!.settle();
+  await flush();
+  assert.deepEqual([...controller.getSnapshot().savedKeys!], ["A_B"]);
 });
 
 test("unreadable values stay stored until replaced, and failed saves retry with the latest rows", async () => {

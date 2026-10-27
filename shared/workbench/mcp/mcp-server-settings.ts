@@ -5,11 +5,13 @@
  * - McpServerUrlSchema: http(s) endpoint of one streamable-HTTP MCP server.
  * - McpPackageNameSchema/McpPackageVersionSchema/McpPackageArgsSchema: npm package, version or range, and command-line arguments of a Workbench-installed stdio server.
  * - McpServerSourceSchema/McpServerSource: where a server runs: a remote URL, or a Workbench-installed npm package and its arguments.
+ * - McpServerEnvNameSchema: one environment variable name of an npm server's process.
+ * - McpServerEnv{ReadParams,Snapshot,Update,UpdateResult}Schema and types: read (values included) and transactional changes of an npm server's sealed environment.
  * - McpServerAuthHeaderSchema: custom request header name carrying a server's sealed credential.
  * - McpServerToolNameSchema: one tool name a server offers.
  * - McpServerSettingsReadParamsSchema/McpServerSettingsReadParams: saved-only or targeted live settings reads.
  * - McpServerSettingsSnapshotSchema/McpServerSettingsSnapshot/McpServerSnapshot: configured servers, allow rules and live catalogues; credential values are never included.
- * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add (by URL or npm package), removal, rename, credential, allow-rule, refresh or sign-out change.
+ * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add (by URL or npm package), removal, rename, npm arguments, credential, allow-rule, refresh or sign-out change.
  * - McpServerSignInStart{Params,Result}Schema/McpServerSignInStart{Params,Result}: begin OAuth sign-in and receive its authorization URL.
  * - McpServerSignInFinish{Params,Result}Schema/McpServerSignInFinish{Params,Result}: finish the provider's callback and report its outcome.
  */
@@ -44,11 +46,38 @@ export const McpServerSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("http"), url: McpServerUrlSchema }).strict(),
   z.object({
     kind: z.literal("npm"), package: McpPackageNameSchema,
-    /** The exact version Workbench installed; a missing install is restored at this version. */
+    /** The requested version or range until the first install pins the exact version; a missing install is restored at this version. */
     version: McpPackageVersionSchema, args: McpPackageArgsSchema,
   }).strict(),
 ]);
 export type McpServerSource = z.infer<typeof McpServerSourceSchema>;
+
+export const McpServerEnvNameSchema = z.string().trim().max(256)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/u, "Use letters, digits and _, not starting with a digit.");
+
+export const McpServerEnvUpdateSchema = z.object({
+  id: z.uuid(),
+  upserts: z.array(z.object({ key: McpServerEnvNameSchema, value: z.string().max(32 * 1024) }).strict()).max(256),
+  removals: z.array(McpServerEnvNameSchema).max(256),
+}).strict().refine(({ upserts, removals }) => {
+  const keys = upserts.map(entry => entry.key);
+  return new Set(keys).size === keys.length && !keys.some(key => removals.includes(key));
+}, "Each variable may change at most once per update.");
+export type McpServerEnvUpdate = z.infer<typeof McpServerEnvUpdateSchema>;
+
+export const McpServerEnvReadParamsSchema = z.object({ id: z.uuid() }).strict();
+export type McpServerEnvReadParams = z.infer<typeof McpServerEnvReadParamsSchema>;
+
+export const McpServerEnvSnapshotSchema = z.object({
+  entries: z.array(z.union([
+    z.object({ key: McpServerEnvNameSchema, value: z.string() }).strict(),
+    z.object({ key: McpServerEnvNameSchema, unreadable: z.literal(true) }).strict(),
+  ])),
+}).strict();
+export type McpServerEnvSnapshot = z.infer<typeof McpServerEnvSnapshotSchema>;
+
+export const McpServerEnvUpdateResultSchema = z.object({ ok: z.literal(true) }).strict();
+export type McpServerEnvUpdateResult = z.infer<typeof McpServerEnvUpdateResultSchema>;
 
 // The MCP transport owns these headers; a credential must never replace them.
 const RESERVED_HEADERS = new Set(["accept", "content-length", "content-type", "host", "mcp-protocol-version", "mcp-session-id"]);
@@ -66,6 +95,8 @@ const credential = z.object({
 
 const catalog = z.discriminatedUnion("status", [
   z.object({ status: z.literal("pending") }).strict(),
+  /** Workbench is installing the server's npm package; a targeted read waits for it. */
+  z.object({ status: z.literal("installing") }).strict(),
   z.object({
     status: z.literal("ready"),
     tools: z.array(z.object({
@@ -111,12 +142,13 @@ const id = z.uuid();
 export const McpServerSettingsUpdateSchema = z.discriminatedUnion("action", [
   /** The daemon names the server from its own `serverInfo.name`, falling back to the URL's hostname. */
   z.object({ action: z.literal("add"), url: McpServerUrlSchema }).strict(),
-  /** Installs the package under the daemon's data root first; nothing is saved when the install fails. Names fall back to the package name. */
+  /** Saves the server at once, named after the package, and installs it under the daemon's data root in the background. */
   z.object({
     action: z.literal("addPackage"), package: McpPackageNameSchema,
     /** Version or range to install; the latest release when omitted. */
     version: McpPackageVersionSchema.optional(), args: McpPackageArgsSchema,
   }).strict(),
+  z.object({ action: z.literal("setArgs"), id: z.uuid(), args: McpPackageArgsSchema }).strict(),
   z.object({ action: z.literal("remove"), id }).strict(),
   z.object({ action: z.literal("setAuth"), id, auth: credential.nullable() }).strict(),
   z.object({ action: z.literal("setAllowAll"), id, allowAll: z.boolean() }).strict(),

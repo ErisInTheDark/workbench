@@ -1,10 +1,10 @@
 /*
  * No production exports. Tests protect how a typed or pasted stdio server command splits into package, version and
- * arguments, and that npm-flag-shaped or path-shaped packages never reach an install.
+ * arguments, that npm-flag-shaped or path-shaped packages never reach an install, and that shown arguments edit back unchanged.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseMcpPackageCommand } from "./mcp-package-command.ts";
+import { formatMcpPackageArgs, parseMcpPackageArgs, parseMcpPackageCommand } from "./mcp-package-command.ts";
 
 test("a pasted README launcher line keeps only the package and its own arguments", () => {
   assert.deepEqual(parseMcpPackageCommand("npx -y @azure-devops/mcp contoso"), { command: { package: "@azure-devops/mcp", args: ["contoso"] } });
@@ -18,6 +18,10 @@ test("a version follows the package name's own @, and quotes keep spaces inside 
     { command: { package: "@scope/server", version: "^2.1", args: ["--root", "C:/My Files", ""] } });
   assert.deepEqual(parseMcpPackageCommand("plain-server@latest"), { command: { package: "plain-server", version: "latest", args: [] } });
 });
+
+test("formatted arguments read back exactly, whatever spaces and quotes they hold", () => {
+  const args = ["wayward", "--authentication", "pat", "", "two words", "say \"hi\"", "it's", "both ' and \"", "'"];
+  assert.deepEqual(parseMcpPackageArgs(formatMcpPackageArgs(args)), { args });});
 
 test("anything npm could read as a flag, path or URL is refused before install", () => {
   for (const text of ["", "npx -y", "--registry=https://evil.example pkg", "./local", "git+https://host/repo.git", "Upper", "pkg@", "pkg@-x", "pkg 'open"]) {

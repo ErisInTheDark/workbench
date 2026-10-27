@@ -1,7 +1,8 @@
 /*
  * No production exports. Tests protect the MCP server allow boundary (only allowed, currently offered tools are
  * forwarded), link requests and downloads limited to links the server sent, credential sealing, OAuth sign-in over real transport,
- * per-server failure isolation, settings validation, and npm servers' install-before-save, pinned launch and install removal.
+ * per-server failure isolation, settings validation, and npm servers' background install, version pinning, arguments, sealed
+ * environment, kept install failures and install removal.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -14,10 +15,11 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 import { renderCreateTable } from "workbench-shared/database/schema/schema-definition";
 import {
-  mcpServerAuth, mcpServerHttp, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServerPackageArgs, mcpServerPackages,
-  mcpServers, mcpServerTools,
+  mcpServerAuth, mcpServerHttp, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServerPackageArgs, mcpServerPackageEnv,
+  mcpServerPackages, mcpServers, mcpServerTools,
 } from "../lib/workbench/database/schema/mcp-server-schema";
-import type { McpServerConnectionPort, McpServerEndpoint, McpServerTool } from "./McpServerConnection";
+import type { McpServerConnectionPort, McpServerEndpoint, McpServerLaunch, McpServerTool } from "./McpServerConnection";
+import type { McpPackageSource, McpPackageState } from "./McpPackageInstaller";
 import WorkbenchMcpServerController, { type WorkbenchMcpServerOptions } from "./WorkbenchMcpServerController";
 
 const tool = (name: string, description = `${name} tool`): McpServerTool => ({ name, description, inputSchema: { type: "object" } });
@@ -26,6 +28,8 @@ class FakeServer {
   tools: McpServerTool[] = [];
   failure: Error | null = null;
   readonly endpoints: McpServerEndpoint[] = [];
+  /** Processes started for a stdio server, as the controller launched them. */
+  readonly launches: McpServerLaunch[] = [];
   readonly calls: string[] = [];
   result: CallToolResult | null = null;
   respond: ((name: string, args: Record<string, unknown>) => CallToolResult) | null = null;
@@ -58,6 +62,7 @@ function launched(endpoint: Extract<McpServerEndpoint, { transport: "stdio" }>, 
   const port = endpoint.launch().then(launch => {
     const server = servers[launch.command];
     if (!server) throw new Error(`No fake server for ${launch.command}`);
+    server.launches.push(launch);
     return server.connect(endpoint);
   });
   return {
@@ -73,7 +78,7 @@ function setup(servers: Record<string, FakeServer>) {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   const tables = Object.fromEntries([
-    mcpServers, mcpServerHttp, mcpServerPackages, mcpServerPackageArgs,
+    mcpServers, mcpServerHttp, mcpServerPackages, mcpServerPackageArgs, mcpServerPackageEnv,
     mcpServerTools, mcpServerAuth, mcpServerOAuthClients, mcpServerOAuthTokens, mcpServerOAuthPending,
   ].map(table => [table.name, table]));
   for (const table of Object.values(tables)) database.exec(renderCreateTable(table));
@@ -104,25 +109,66 @@ function setup(servers: Record<string, FakeServer>) {
   return { create, database, port, close: () => database.close() };
 }
 
-/** Installs land at 1.4.2 and launch as the fake stdio server named `local`. */
+/** Single-flight installs that land at 1.4.2 and launch as the fake stdio server named `local`, like McpPackageInstaller. */
 class FakePackages {
   readonly installs: string[] = [];
-  readonly launches: { serverId: string; args: readonly string[] }[] = [];
   readonly removals: string[] = [];
   failure: Error | null = null;
+  readonly #installed = new Set<string>();
+  readonly #flights = new Map<string, Promise<void>>();
+  readonly #failures = new Map<string, string>();
+  #gate: Promise<void> | null = null;
+  readonly #launchWaiters: (() => void)[] = [];
 
-  install = async (serverId: string, name: string, version = "latest") => {
-    this.installs.push(`${name}@${version}`);
-    if (this.failure) throw this.failure;
-    return "1.4.2";
+  /** Holds installs until the returned release is called. */
+  hold() {
+    let release!: () => void;
+    this.#gate = new Promise(resolve => { release = resolve; });
+    return () => { this.#gate = null; release(); };
+  }
+
+  state = (serverId: string): McpPackageState => {
+    if (this.#installed.has(serverId)) return { state: "installed" };
+    if (this.#flights.has(serverId)) return { state: "installing" };
+    const failure = this.#failures.get(serverId);
+    return failure === undefined ? { state: "missing" } : { state: "failed", detail: failure };
   };
 
-  launch = async (serverId: string, source: { args: readonly string[] }) => {
-    this.launches.push({ serverId, args: source.args });
-    return { command: "local", args: [...source.args], cwd: "C:/data/mcp" };
+  install = (serverId: string, source: Pick<McpPackageSource, "package" | "version">) => {
+    void this.#install(serverId, source).catch(() => undefined);
   };
 
-  remove = async (serverId: string) => { this.removals.push(serverId); };
+  /** Resolves when the next launch has joined or started its install. */
+  nextLaunch() {
+    return new Promise<void>(resolve => { this.#launchWaiters.push(resolve); });
+  }
+
+  launch = async (serverId: string, source: McpPackageSource) => {
+    const install = this.#installed.has(serverId) ? null : this.#install(serverId, source);
+    for (const resolve of this.#launchWaiters.splice(0)) resolve();
+    await install;
+    return { launch: { command: "local", args: [...source.args], cwd: "C:/data/mcp" }, version: "1.4.2" };
+  };
+
+  remove = async (serverId: string) => { this.removals.push(serverId); this.#installed.delete(serverId); };
+
+  #install(serverId: string, source: Pick<McpPackageSource, "package" | "version">) {
+    const running = this.#flights.get(serverId);
+    if (running) return running;
+    this.#failures.delete(serverId);
+    this.installs.push(`${source.package}@${source.version}`);
+    const gate = this.#gate;
+    const flight = (async () => {
+      await gate;
+      if (this.failure) throw this.failure;
+      this.#installed.add(serverId);
+    })().catch((error: Error) => {
+      this.#failures.set(serverId, error.message);
+      throw error;
+    }).finally(() => { this.#flights.delete(serverId); });
+    this.#flights.set(serverId, flight);
+    return flight;
+  }
 }
 
 const signal = () => new AbortController().signal;
@@ -256,51 +302,99 @@ test("a query returns ranked allowed matches with input schemas; without one, ev
   } finally { close(); }
 });
 
-test("an npm server is installed before it is saved, launches its pinned install with the user's ordered arguments, and removal deletes the install", async () => {
-  const local = new FakeServer(null);
+test("an npm server is listed as installing at once; its own check waits, pins the version and takes the reported name", async () => {
+  const local = new FakeServer("Azure DevOps MCP Server");
   local.tools = [tool("list_projects")];
   const packages = new FakePackages();
-  const { create, database, close } = setup({ local });
+  const { create, close } = setup({ local });
+  const owner = create({ packages });
   try {
-    const owner = create({ packages });
-    const added = await owner.update({ action: "addPackage", package: "@azure-devops/mcp", args: ["contoso", "-d", "core"] });
-    const source = { kind: "npm", package: "@azure-devops/mcp", version: "1.4.2", args: ["contoso", "-d", "core"] };
-    assert.deepEqual(packages.installs, ["@azure-devops/mcp@latest"]);
-    // No reported name: it is named after its package, never its hostless "URL".
-    assert.deepEqual(added.servers.map(server => [server.name, server.source]), [["azure-devops-mcp", source]]);
+    const release = packages.hold();
+    const args = ["contoso", "--authentication", "pat"];
+    const added = await owner.update({ action: "addPackage", package: "@azure-devops/mcp", args });
+    // Named after its package until it reports a name, never after a hostless "URL".
+    assert.deepEqual(added.servers.map(server => [server.name, server.source, server.catalog]),
+      [["azure-devops-mcp", { kind: "npm", package: "@azure-devops/mcp", version: "latest", args }, { status: "installing" }]]);
     const id = added.servers[0]!.id;
+    assert.deepEqual((await owner.read({ configuredOnly: true })).servers[0]?.catalog, { status: "installing" });
+    assert.deepEqual((await owner.update({ action: "setAllowAll", id, allowAll: true })).servers[0]?.catalog, { status: "installing" },
+      "other settings changes never wait on the install");
 
-    const fresh = create({ packages });
-    assert.deepEqual((await fresh.read()).servers[0]?.source, source);
-    assert.deepEqual(packages.launches.at(-1), { serverId: id, args: ["contoso", "-d", "core"] });
-    await fresh.update({ action: "setAllowAll", id, allowAll: true });
-    assert.equal((await fresh.call({ server: "azure-devops-mcp", tool: "list_projects", arguments: {} }, signal())).isError, false);
-    await assert.rejects(fresh.update({ action: "setAuth", id, auth: { header: "authorization", value: "Bearer t" } }), /runs locally from npm/u);
-
-    await fresh.update({ action: "remove", id });
-    assert.deepEqual(packages.removals, [id]);
-    for (const table of ["mcp_servers", "mcp_server_packages", "mcp_server_package_args"]) {
-      assert.equal((database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count, 0);
-    }
-  } finally { close(); }
+    const joined = packages.nextLaunch();
+    const checked = owner.read({ id });
+    await joined;
+    release();
+    const [ready] = (await checked).servers;
+    assert.deepEqual([ready?.name, ready?.source, ready?.catalog.status],
+      ["azure-devops-mcp-server", { kind: "npm", package: "@azure-devops/mcp", version: "1.4.2", args }, "ready"]);
+    assert.deepEqual(packages.installs, ["@azure-devops/mcp@latest"]);
+    assert.deepEqual(local.launches.map(launch => launch.args), [args]);
+    assert.equal((await owner.call({ server: "azure-devops-mcp-server", tool: "list_projects", arguments: {} }, signal())).isError, false);
+  } finally { await owner.dispose(); close(); }
 });
 
-test("a failed npm install saves nothing, and a failed save removes the install it made", async () => {
+test("npm arguments and sealed environment relaunch the server; neither appears in the snapshot and removal drops every row", async () => {
   const local = new FakeServer("local");
   const packages = new FakePackages();
-  const { create, port, close } = setup({ local });
+  const { create, database, close } = setup({ local });
+  const owner = create({ packages });
+  const count = (table: string) => (database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
   try {
-    packages.failure = new Error("npm couldn't install missing@latest");
-    await assert.rejects(create({ packages }).update({ action: "addPackage", package: "missing", args: [] }), /couldn't install/u);
-    assert.deepEqual((await create({ packages }).read()).servers, []);
+    const { servers: [added] } = await owner.update({ action: "addPackage", package: "local-server", version: "1.4.2", args: ["contoso"] });
+    const id = added!.id;
+    await owner.read({ id });
+    await owner.updateEnv({ id, upserts: [{ key: "PERSONAL_ACCESS_TOKEN", value: "dG9rZW4=" }, { key: "ORG", value: "x" }], removals: [] });
+    await owner.updateEnv({ id, upserts: [], removals: ["ORG"] });
+    assert.deepEqual(await owner.readEnv({ id }), { entries: [{ key: "PERSONAL_ACCESS_TOKEN", value: "dG9rZW4=" }] });
+    const stored = database.prepare("SELECT ciphertext FROM mcp_server_package_env").get() as { ciphertext: Buffer };
+    assert.equal(stored.ciphertext.toString("utf8").includes("dG9rZW4="), false);
+
+    const snapshot = await owner.update({ action: "setArgs", id, args: ["fabrikam", "two words"] });
+    assert.equal(JSON.stringify(snapshot).includes("dG9rZW4="), false);
+    assert.deepEqual(local.launches.at(-1), {
+      command: "local", args: ["fabrikam", "two words"], cwd: "C:/data/mcp", env: { PERSONAL_ACCESS_TOKEN: "dG9rZW4=" },
+    });
+    const elsewhere = await create({ packages, readDeviceIdentity: async () => "device-b" }).read({ id });
+    assert.match(elsewhere.servers[0]?.catalog.status === "error" ? elsewhere.servers[0].catalog.detail : "", /PERSONAL_ACCESS_TOKEN can't be read/u);
+    await assert.rejects(owner.update({ action: "setAuth", id, auth: { header: "authorization", value: "Bearer t" } }), /runs locally from npm/u);
+
+    await owner.update({ action: "remove", id });
+    assert.deepEqual(packages.removals, [id]);
+    for (const table of ["mcp_servers", "mcp_server_packages", "mcp_server_package_args", "mcp_server_package_env"]) assert.equal(count(table), 0, table);
+  } finally { await owner.dispose(); close(); }
+});
+
+test("a failed npm install keeps the server with npm's reason, unchanged by later reads, until Retry installs again", async () => {
+  const local = new FakeServer("local");
+  const packages = new FakePackages();
+  const { create, close } = setup({ local });
+  const owner = create({ packages });
+  try {
+    packages.failure = new Error("npm couldn't install missing@latest: code E404");
+    const release = packages.hold();
+    const { servers: [added] } = await owner.update({ action: "addPackage", package: "missing", args: [] });
+    const id = added!.id;
+    const joined = packages.nextLaunch();
+    const checked = owner.read({ id });
+    await joined;
+    release();
+    assert.deepEqual((await checked).servers[0]?.catalog, { status: "error", detail: "npm couldn't install missing@latest: code E404" });
+    assert.deepEqual((await owner.read()).servers[0]?.catalog, { status: "error", detail: "npm couldn't install missing@latest: code E404" });
+    assert.equal(packages.installs.length, 1);
 
     packages.failure = null;
-    const failingSave = create({ packages, database: { ...port, executeTransaction: async () => { throw new Error("disk full"); } } });
-    await assert.rejects(failingSave.update({ action: "addPackage", package: "local-server", version: "^1", args: [] }), /disk full/u);
-    assert.deepEqual(packages.installs.at(-1), "local-server@^1");
-    assert.equal(packages.removals.length, 1);
-    assert.equal(local.closed > 0, true, "the probe's process is closed");
-  } finally { close(); }
+    const retry = packages.hold();
+    assert.deepEqual((await owner.update({ action: "refresh", id })).servers[0]?.catalog, { status: "installing" });
+    const rejoined = packages.nextLaunch();
+    const rechecked = owner.read({ id });
+    await rejoined;
+    retry();
+    assert.equal((await rechecked).servers[0]?.catalog.status, "ready");
+    assert.equal(packages.installs.length, 2);
+    const { servers } = await owner.update({ action: "add", url: "https://local.example/mcp" });
+    const remote = servers.find(server => server.source.kind === "http")!;
+    await assert.rejects(owner.update({ action: "setArgs", id: remote.id, args: [] }), /remote server/u);
+  } finally { await owner.dispose(); close(); }
 });
 
 test("invalid settings store nothing; removal closes the connection and drops every row", async () => {

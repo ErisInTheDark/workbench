@@ -1,18 +1,25 @@
 /*
  * Exports:
- * - ProjectStoreRowsPort: one project's store read and transactional update.
- * - ProjectStoreRowsState: editable rows, row issues, saved keys and save status.
- * - default ProjectStoreRowsController: own store row loading, validation and serial autosave against the acknowledged baseline.
+ * - SecretEntry: one stored key with its value, or a key whose value cannot be decrypted here.
+ * - SecretRowsPort: one sealed key/value set's read, transactional update and key rules.
+ * - SecretRowsState: editable rows, row issues, saved keys and save status.
+ * - default SecretRowsController: own sealed key/value row loading, validation and serial autosave against the acknowledged baseline,
+ *   such as a project store or an MCP server's environment.
  */
-import type { ProjectStoreSnapshot } from "workbench-shared/workbench/project/project-store";
 import { InputListRows, type InputListRow } from "../../components/workbench/input-list-rows";
 
-export interface ProjectStoreRowsPort {
-  read(): Promise<ProjectStoreSnapshot>;
+export type SecretEntry = { key: string; value: string } | { key: string; unreadable: true };
+
+export interface SecretRowsPort {
+  /** What failure messages call the set, such as "project store". */
+  subject: string;
+  read(): Promise<{ entries: readonly SecretEntry[] }>;
   update(upserts: { key: string; value: string }[], removals: string[]): Promise<unknown>;
+  /** Why a trimmed key can't be stored, or null; such rows are never saved. */
+  keyIssue?(key: string): string | null;
 }
 
-export interface ProjectStoreRowsState {
+export interface SecretRowsState {
   rows: InputListRow[];
   issues: Readonly<Record<string, string>>;
   /** Keys saved in the store, or null before the first successful read. */
@@ -25,15 +32,15 @@ type Saved = { value: string } | { unreadable: true };
 
 const UNREADABLE = "This value cannot be decrypted on this device. Enter it again to replace it.";
 
-export default class ProjectStoreRowsController {
-  #state: ProjectStoreRowsState = { rows: InputListRows.create([]), issues: {}, savedKeys: null, status: "loading", error: "" };
+export default class SecretRowsController {
+  #state: SecretRowsState = { rows: InputListRows.create([]), issues: {}, savedKeys: null, status: "loading", error: "" };
   #listeners = new Set<() => void>();
   #saved = new Map<string, Saved>();
   #unreadableRows = new Set<string>();
   #saving = false;
   #disposed = false;
 
-  constructor(private readonly port: ProjectStoreRowsPort) {}
+  constructor(private readonly port: SecretRowsPort) {}
 
   getSnapshot = () => this.#state;
   subscribe = (listener: () => void) => {
@@ -50,7 +57,7 @@ export default class ProjectStoreRowsController {
       this.#unreadableRows = new Set(rows.filter(row => this.#saved.get(row.key) && "unreadable" in this.#saved.get(row.key)!).map(row => row.id));
       this.#publish({ rows, issues: this.#issues(rows), savedKeys: new Set(this.#saved.keys()), status: "ready" });
     } catch (error) {
-      this.#publish({ status: "failed", error: error instanceof Error ? error.message : "The project store could not be read." });
+      this.#publish({ status: "failed", error: error instanceof Error ? error.message : `The ${this.port.subject} could not be read.` });
     }
   }
 
@@ -81,11 +88,18 @@ export default class ProjectStoreRowsController {
     const issues: Record<string, string> = {};
     for (const row of rows) {
       const key = row.key.trim();
+      const invalid = key ? this.port.keyIssue?.(key) ?? null : null;
       if (!key && row.value.trim()) issues[row.id] = "Enter a key for this value.";
+      else if (invalid) issues[row.id] = invalid;
       else if (key && counts.get(key)! > 1) issues[row.id] = "This key is listed more than once.";
       else if (this.#unreadableRows.has(row.id)) issues[row.id] = UNREADABLE;
     }
     return issues;
+  }
+
+  #invalid(row: InputListRow) {
+    const key = row.key.trim();
+    return key ? this.port.keyIssue?.(key) != null : Boolean(row.value.trim());
   }
 
   #changes() {
@@ -93,7 +107,7 @@ export default class ProjectStoreRowsController {
     const blocked = new Set<string>();
     for (const row of this.#state.rows) {
       const key = row.key.trim();
-      if (!key) continue;
+      if (!key || this.#invalid(row)) continue;
       if (desired.has(key) || blocked.has(key)) {
         blocked.add(key);
         desired.delete(key);
@@ -106,7 +120,7 @@ export default class ProjectStoreRowsController {
       return value !== null && !(saved && "value" in saved && saved.value === value) ? [{ key, value }] : [];
     });
     // A row under correction may be a renamed stored key, so removals wait until every row is valid.
-    const incomplete = this.#state.rows.some(row => !row.key.trim() && row.value.trim());
+    const incomplete = this.#state.rows.some(row => this.#invalid(row));
     const removals = blocked.size || incomplete ? [] : Array.from(this.#saved.keys()).filter(key => !desired.has(key));
     return { upserts, removals };
   }
@@ -129,11 +143,11 @@ export default class ProjectStoreRowsController {
       await this.#flush();
     } catch (error) {
       this.#saving = false;
-      this.#publish({ status: "failed", error: error instanceof Error ? error.message : "The project store could not be saved." });
+      this.#publish({ status: "failed", error: error instanceof Error ? error.message : `The ${this.port.subject} could not be saved.` });
     }
   }
 
-  #publish(patch: Partial<ProjectStoreRowsState>) {
+  #publish(patch: Partial<SecretRowsState>) {
     this.#state = { ...this.#state, ...patch };
     if (this.#disposed) return;
     for (const listener of this.#listeners) listener();

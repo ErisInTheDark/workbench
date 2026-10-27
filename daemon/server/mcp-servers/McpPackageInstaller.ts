@@ -1,8 +1,11 @@
 /*
  * Exports:
  * - McpPackageInstallerOptions: install root plus injectable npm runner and warning sink.
+ * - McpPackageSource: the package, version or range and arguments one server launches.
+ * - McpPackageState: whether a server's install is present, running, failed (with npm's reason) or missing.
  * - default McpPackageInstaller: own Workbench-installed npm packages of stdio MCP servers, one directory per server under the data root:
- *   single-flight staged installs, the launch command of each package's bin, restore of a missing install at its pinned version, and removal.
+ *   single-flight staged background installs and their last failure, the launch command and exact version of each package's bin,
+ *   restore of a missing install at its pinned version, and removal.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
@@ -17,6 +20,14 @@ export interface McpPackageInstallerOptions {
   /** Runs npm with the given arguments; rejects with npm's failure. */
   runNpm?: (args: string[], signal: AbortSignal) => Promise<void>;
 }
+
+export interface McpPackageSource {
+  package: string;
+  version: string;
+  args: readonly string[];
+}
+
+export type McpPackageState = { state: "installed" | "installing" | "missing" } | { state: "failed"; detail: string };
 
 /** `installed.json` of one committed install. */
 interface InstalledPackage {
@@ -76,6 +87,8 @@ async function isNodeScript(file: string) {
 
 export default class McpPackageInstaller {
   readonly #flights = new Map<string, Promise<InstalledPackage>>();
+  /** Why each server's last install failed; cleared when another install starts. */
+  readonly #failures = new Map<string, string>();
   readonly #lifetime = new AbortController();
   readonly #runNpm: NonNullable<McpPackageInstallerOptions["runNpm"]>;
 
@@ -83,24 +96,38 @@ export default class McpPackageInstaller {
     this.#runNpm = options.runNpm ?? runBundledNpm;
   }
 
-  /** Install `version` (a version, range or tag; the latest release when omitted) for a server; resolves with the exact version installed. */
-  async install(serverId: string, name: string, version = "latest") {
-    return (await this.#install(serverId, name, version)).version;
+  /** The server's install as it is now; starts nothing. */
+  state(serverId: string): McpPackageState {
+    try {
+      if (this.#read(this.#directory(serverId))) return { state: "installed" };
+    } catch (error) {
+      return { state: "failed", detail: bounded(error) };
+    }
+    if (this.#flights.has(serverId)) return { state: "installing" };
+    const failure = this.#failures.get(serverId);
+    return failure === undefined ? { state: "missing" } : { state: "failed", detail: failure };
   }
 
-  /** How to start the server's installed bin with `args`, first restoring its pinned version when the install is gone. */
-  async launch(serverId: string, source: { package: string; version: string; args: readonly string[] }): Promise<McpServerLaunch> {
+  /** Start installing in the background unless an install is already running; its failure is kept for `state`. */
+  install(serverId: string, source: Pick<McpPackageSource, "package" | "version">) {
+    void this.#install(serverId, source.package, source.version).catch(() => undefined);
+  }
+
+  /** How to start the server's installed bin with its arguments, and the exact version installed; installs first when the install is gone. */
+  async launch(serverId: string, source: McpPackageSource): Promise<{ launch: McpServerLaunch; version: string }> {
     const directory = this.#directory(serverId);
     const installed = this.#read(directory) ?? await this.#install(serverId, source.package, source.version);
     const bin = path.join(directory, installed.bin);
-    return installed.node
+    const launch = installed.node
       ? { command: process.execPath, args: [bin, ...source.args], cwd: directory }
       : { command: bin, args: [...source.args], cwd: directory };
+    return { launch, version: installed.version };
   }
 
   /** Close the server's process before removing; a leftover directory is only warned about. */
   async remove(serverId: string) {
     await this.#flights.get(serverId)?.catch(() => undefined);
+    this.#failures.delete(serverId);
     await rm(this.#directory(serverId), { recursive: true, force: true, maxRetries: 3 }).catch((error: unknown) => {
       this.options.warn(`Could not remove MCP package install ${this.#directory(serverId)}: ${bounded(error)}`);
     });
@@ -132,7 +159,11 @@ export default class McpPackageInstaller {
   #install(serverId: string, name: string, version: string) {
     const existing = this.#flights.get(serverId);
     if (existing) return existing;
-    const flight = this.#perform(serverId, name, version).finally(() => { this.#flights.delete(serverId); });
+    this.#failures.delete(serverId);
+    const flight = this.#perform(serverId, name, version).catch((error: unknown) => {
+      if (!this.#lifetime.signal.aborted) this.#failures.set(serverId, bounded(error));
+      throw error;
+    }).finally(() => { this.#flights.delete(serverId); });
     this.#flights.set(serverId, flight);
     return flight;
   }

@@ -1,5 +1,5 @@
 /*
- * No production exports. Protect incremental MCP reads and stale-result fencing.
+ * No production exports. Protect incremental MCP reads (including installing npm servers) and stale-result fencing.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -67,6 +67,19 @@ test("saved cards appear before checks finish; fast replies and failures publish
     assert.deepEqual(controller.getSnapshot().settings?.servers.map(server => server.catalog.status), ["ready", "error"]);
     assert.equal(controller.getSnapshot().error, "");
   } finally { controller.dispose(); }
+});
+
+test("a card installing its npm package is checked until the install settles", async t => {
+  const fixture = setup();
+  const { controller, requests } = fixture;
+  t.after(() => controller.dispose());
+  fixture.inventory({ servers: [{ ...server("fast"), catalog: { status: "installing" } }, { ...server("slow"), catalog: { status: "ready", tools: [] } }] });
+  await controller.refresh();
+  assert.deepEqual(requests.map(request => request.id), ["fast"]);
+  const installed = nextPublish(controller);
+  requests[0]!.reply.resolve({ servers: [{ ...server("fast"), catalog: { status: "ready", tools: [] } }] });
+  await installed;
+  assert.deepEqual(controller.getSnapshot().settings?.servers.map(entry => entry.catalog.status), ["ready", "ready"]);
 });
 
 test("a newer refresh or removal fences older checks, and disposal suppresses late replies", async t => {

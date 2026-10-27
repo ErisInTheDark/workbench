@@ -6,7 +6,7 @@
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "workbench-shared/types";
 import { ApprovalReviewSettingsUpdateSchema } from "workbench-shared/workbench/approval-review/approval-review-settings";
 import {
-  McpServerSettingsReadParamsSchema, McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema, McpServerSignInStartParamsSchema,
+  McpServerEnvReadParamsSchema, McpServerEnvUpdateSchema, McpServerSettingsReadParamsSchema, McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema, McpServerSignInStartParamsSchema,
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
@@ -88,6 +88,17 @@ export const settingsRequestHandlers = defineDaemonRequestHandlers({
     const parsed = McpServerSettingsUpdateSchema.safeParse(params);
     if (!parsed.success) throw new InvalidParamsError(parsed.error.issues[0]?.message ?? "Invalid MCP server settings update.");
     return await owner.update(parsed.data);
+  },
+  "mcp-servers/env/read": async (params, context) => {
+    const parsed = McpServerEnvReadParamsSchema.safeParse(params);
+    if (!parsed.success) throw new InvalidParamsError("Invalid MCP server environment read.");
+    return await mcpServers(context).readEnv(parsed.data);
+  },
+  "mcp-servers/env/update": async (params, context) => {
+    const owner = mcpServers(context);
+    const parsed = McpServerEnvUpdateSchema.safeParse(params);
+    if (!parsed.success) throw new InvalidParamsError(parsed.error.issues[0]?.message ?? "Invalid MCP server environment update.");
+    return await owner.updateEnv(parsed.data);
   },
   "mcp-servers/sign-in/start": async (params, context) => {
     const owner = mcpServers(context);

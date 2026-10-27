@@ -1,7 +1,7 @@
 /*
  * No production exports. Tests protect Workbench-owned npm installs of stdio MCP servers: the launched command is the
- * package's own bin run with the user's arguments, a missing install is restored at its pinned version, and failed
- * installs leave nothing behind.
+ * package's own bin run with the user's arguments, background installs are visible while they run and joined by launches,
+ * a missing install is restored at its pinned version, and failed installs leave nothing behind but their reason until retried.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -21,12 +21,14 @@ async function harness(context: TestContext, packages: Record<string, { bin?: un
   context.after(() => temporary.dispose());
   const installs: string[] = [];
   let failure: Error | null = null;
+  let gate: Promise<void> | null = null;
   const installer = new McpPackageInstaller({
     root: temporary.path,
     warn: message => assert.fail(message),
     runNpm: async args => {
       const spec = args.at(-1)!;
       installs.push(spec);
+      await gate;
       if (failure) throw failure;
       const name = spec.slice(0, spec.lastIndexOf("@"));
       const entry = packages[name];
@@ -41,43 +43,75 @@ async function harness(context: TestContext, packages: Record<string, { bin?: un
     },
   });
   context.after(() => installer.dispose());
-  return { root: temporary.path, installer, installs, fail: (error: Error | null) => { failure = error; } };
+  return {
+    root: temporary.path, installer, installs,
+    fail: (error: Error | null) => { failure = error; },
+    /** Holds every npm run until the returned release is called. */
+    hold: () => {
+      let release!: () => void;
+      gate = new Promise(resolve => { release = resolve; });
+      return () => { gate = null; release(); };
+    },
+  };
 }
 
 test("the launched command runs the package's bin with the user's arguments, choosing the bin npx would", async context => {
   const { installer } = await harness(context, {
     "@azure-devops/mcp": { bin: { "mcp-helper": "dist/helper.js", mcp: "dist/index" }, files: { "dist/index": `#!/usr/bin/env node\n${ECHO_ARGV}` } },
   });
-  const version = await installer.install("server-1", "@azure-devops/mcp");
+  const { launch, version } = await installer.launch("server-1", { package: "@azure-devops/mcp", version: "latest", args: ["contoso", "two words"] });
   assert.equal(version, "1.4.2");
-  const launch = await installer.launch("server-1", { package: "@azure-devops/mcp", version, args: ["contoso", "two words"] });
   // An extensionless Node script still runs under the daemon's own Node, so PATH never decides which Node starts it.
   assert.equal(launch.command, process.execPath);
   const { stdout } = await run(launch.command, launch.args, { cwd: launch.cwd });
   assert.deepEqual(JSON.parse(stdout), ["contoso", "two words"]);
 });
 
+test("a background install reads as installing until it lands, and a launch meanwhile joins it", async context => {
+  const { installer, installs, hold } = await harness(context, { server: { bin: "index.js", files: { "index.js": ECHO_ARGV } } });
+  const release = hold();
+  assert.deepEqual(installer.state("server-1"), { state: "missing" });
+  installer.install("server-1", { package: "server", version: "^1" });
+  installer.install("server-1", { package: "server", version: "^1" });
+  assert.deepEqual(installer.state("server-1"), { state: "installing" });
+  const launched = installer.launch("server-1", { package: "server", version: "^1", args: [] });
+  release();
+  assert.equal((await launched).version, "1.4.2");
+  assert.deepEqual(installs, ["server@^1"]);
+  assert.deepEqual(installer.state("server-1"), { state: "installed" });
+});
+
 test("a missing install is restored at the pinned version before launching", async context => {
   const { root, installer, installs } = await harness(context, { server: { bin: "index.js", files: { "index.js": ECHO_ARGV } } });
-  await installer.install("server-1", "server", "^1");
+  await installer.launch("server-1", { package: "server", version: "^1", args: [] });
   await rm(path.join(root, "server-1"), { recursive: true, force: true });
-  const launch = await installer.launch("server-1", { package: "server", version: "1.4.2", args: [] });
+  const { launch } = await installer.launch("server-1", { package: "server", version: "1.4.2", args: [] });
   assert.deepEqual(installs, ["server@^1", "server@1.4.2"]);
   assert.deepEqual(JSON.parse((await run(launch.command, launch.args, { cwd: launch.cwd })).stdout), []);
 });
 
-test("a failed install or a package with no command leaves nothing installed", async context => {
+test("a failed install leaves nothing installed and stays failed until the next install retries", async context => {
   const { root, installer, fail } = await harness(context, {
     library: { files: { "index.js": "" } },
     tools: { bin: { one: "one.js", two: "two.js" }, files: { "one.js": "", "two.js": "" } },
+    missing: { bin: "index.js", files: { "index.js": "" } },
   });
-  await assert.rejects(installer.install("server-1", "library"), /has no command to run/u);
-  await assert.rejects(installer.install("server-1", "tools"), /several commands \(one, two\)/u);
+  await assert.rejects(installer.launch("server-1", { package: "library", version: "latest", args: [] }), /has no command to run/u);
+  await assert.rejects(installer.launch("server-1", { package: "tools", version: "latest", args: [] }), /several commands \(one, two\)/u);
   // npm's exec error leads with its whole command line; only npm's own explanation is worth showing.
   fail(Object.assign(new Error("Command failed: C:/node.exe npm-cli.js install --prefix C:/staging missing@latest"), {
     stderr: "npm warn Unknown user config\nnpm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/missing\nnpm error\n",
   }));
-  await assert.rejects(installer.install("server-1", "missing"),
-    { message: "npm couldn't install missing@latest: code E404; 404 Not Found - GET https://registry.npmjs.org/missing" });
+  const failure = "npm couldn't install missing@latest: code E404; 404 Not Found - GET https://registry.npmjs.org/missing";
+  const source = { package: "missing", version: "latest", args: [] };
+  installer.install("server-1", source);
+  // A launch during the background install joins it rather than starting another.
+  await assert.rejects(installer.launch("server-1", source), { message: failure });
+  assert.deepEqual(installer.state("server-1"), { state: "failed", detail: failure });
   assert.deepEqual(await readdir(root), []);
+  fail(null);
+  installer.install("server-1", source);
+  assert.deepEqual(installer.state("server-1"), { state: "installing" });
+  await installer.launch("server-1", source);
+  assert.deepEqual(installer.state("server-1"), { state: "installed" });
 });

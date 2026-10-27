@@ -2,14 +2,15 @@
  * Exports:
  * - WorkbenchMcpServerOptions: database, device identity, connection factory, download and npm package install ports.
  * - McpServerCallOutcome: agent-facing text of one forwarded call and whether it failed.
- * - default WorkbenchMcpServerController: single owner of user-added MCP servers (remote URLs or Workbench-installed npm packages), their allow rules, sealed header credentials, OAuth sign-ins, live (meta-tool unwrapped) connections and their recent raw traffic; answers settings reads/updates, sign-in steps and agent tool listing, enable requests, calls, requests to open or download links a server sent, and `wb debug mcp`.
+ * - default WorkbenchMcpServerController: single owner of user-added MCP servers (remote URLs or Workbench-installed npm packages), their allow rules, sealed header credentials and npm environment variables, OAuth sign-ins, live (meta-tool unwrapped) connections and their recent raw traffic; answers settings reads/updates, npm environment reads/updates, sign-in steps and agent tool listing, enable requests, calls, requests to open or download links a server sent, and `wb debug mcp`.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import os from "node:os";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
-  McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema, McpServerSignInStartParamsSchema,
+  McpServerEnvReadParamsSchema, McpServerEnvUpdateSchema, McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema,
+  McpServerSignInStartParamsSchema, type McpServerEnvReadParams, type McpServerEnvSnapshot, type McpServerEnvUpdate,
   type McpServerSettingsReadParams, type McpServerSettingsSnapshot, type McpServerSettingsUpdate, type McpServerSignInFinishParams,
   type McpServerSignInFinishResult, type McpServerSignInStartParams, type McpServerSignInStartResult, type McpServerSnapshot,
   type McpServerSource, WORKBENCH_MCP_SERVER_NAME,
@@ -19,8 +20,8 @@ import {
   type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 import {
-  mcpServerAuth, mcpServerHttp, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServerPackageArgs, mcpServerPackages,
-  mcpServers, mcpServerTools,
+  mcpServerAuth, mcpServerHttp, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServerPackageArgs, mcpServerPackageEnv,
+  mcpServerPackages, mcpServers, mcpServerTools,
 } from "../lib/workbench/database/schema/mcp-server-schema";
 import { deriveProjectStoreKey, openProjectStoreValue, sealProjectStoreValue } from "../store/project-store-crypto";
 import WebSocketTrafficBuffer, { type WebSocketTrafficQuery } from "workbench-shared/process/WebSocketTrafficBuffer";
@@ -44,7 +45,7 @@ export interface WorkbenchMcpServerOptions {
   /** Fetches links servers sent; absent where downloads are not offered. */
   downloads?: Pick<McpDownloadStore, "download">;
   /** Installs and launches npm-packaged stdio servers; absent where they are not offered. */
-  packages?: Pick<McpPackageInstaller, "install" | "launch" | "remove">;
+  packages?: Pick<McpPackageInstaller, "state" | "install" | "launch" | "remove">;
   user?: () => string;
   now?: () => number;
 }
@@ -72,9 +73,14 @@ type Catalog =
   | { status: "signInRequired" }
   | { status: "error"; detail: string };
 
+type SettingsCatalog = Catalog | { status: "pending" } | { status: "installing" };
+
+type NpmSource = Extract<McpServerSource, { kind: "npm" }>;
+
 // Secrets are sealed with the project-store cipher, bound to this device, OS user, this scope and each secret's own key.
 const SECRET_SCOPE = "mcp-servers";
 const UNREADABLE_CREDENTIAL = "The saved credential can't be read on this device or OS user. Set it again.";
+const unreadableEnv = (name: string) => `The saved ${name} can't be read on this device or OS user. Set it again in Launch settings.`;
 const SIGN_IN_TTL_MS = 10 * 60_000;
 const SENT_LINK_LIMIT = 20;
 const LINK_HINT = "To open a link above for the user use wb/mcp_authorize; to fetch a file link use wb/mcp_download (both via mcp_call on server wb).\n";
@@ -100,6 +106,15 @@ function fallbackName(source: McpServerSource) {
 function httpUrl(server: StoredServer) {
   if (server.source.kind !== "http") throw new Error(`${server.name} runs locally from npm and takes no sign-in or API key.`);
   return server.source.url;
+}
+
+function npmSource(server: StoredServer) {
+  if (server.source.kind !== "npm") throw new Error(`${server.name} is a remote server; it has no arguments or environment.`);
+  return server.source;
+}
+
+function envKey(serverId: string, name: string) {
+  return `${serverId}\0env\0${name}`;
 }
 
 function uniqueName(base: string, existing: readonly string[]) {
@@ -134,14 +149,17 @@ export default class WorkbenchMcpServerController {
   async read(params: McpServerSettingsReadParams = {}): Promise<McpServerSettingsSnapshot> {
     const servers = (await this.#servers()).filter(server => !params.id || server.id === params.id);
     if (params.id && !servers.length) throw new Error("That MCP server no longer exists.");
-    const catalogs: (Catalog | { status: "pending" })[] = params.configuredOnly
-      ? servers.map(() => ({ status: "pending" }))
-      : await Promise.all(servers.map(server => this.#catalog(server)));
+    const catalogs = await Promise.all(servers.map(server => this.#settingsCatalog(server, params)));
     const names = params.configuredOnly ? new Map<string, string>() : await this.#adoptServerNames(servers, catalogs);
+    // A first launch pins the npm version it installed; show the pinned one.
+    const sources = params.configuredOnly || !servers.some(server => server.source.kind === "npm")
+      ? new Map<string, McpServerSource>()
+      : new Map((await this.#servers()).map(server => [server.id, server.source]));
     return { servers: servers.map((server, index): McpServerSnapshot => {
       const catalog = catalogs[index]!;
       return {
-        id: server.id, name: names.get(server.id) ?? server.name, source: server.source, allowAll: server.allowAll, allowedTools: server.allowedTools,
+        id: server.id, name: names.get(server.id) ?? server.name, source: sources.get(server.id) ?? server.source,
+        allowAll: server.allowAll, allowedTools: server.allowedTools,
         auth: server.header ? { kind: "header", header: server.header.name } : server.oauth.signedIn ? { kind: "oauth" } : null,
         catalog: catalog.status === "ready"
           ? {
@@ -154,10 +172,24 @@ export default class WorkbenchMcpServerController {
   }
 
   /**
+   * A settings read never waits on an npm install: an untargeted read reports it as installing (starting a missing one), and only a
+   * targeted read of that server waits for it, the way an agent's use does.
+   */
+  async #settingsCatalog(server: StoredServer, params: McpServerSettingsReadParams): Promise<SettingsCatalog> {
+    const install = server.source.kind === "npm" && !params.id ? this.#packages().state(server.id) : null;
+    if (install?.state === "failed") return { status: "error", detail: install.detail.slice(0, 300) };
+    if (install && install.state !== "installed") {
+      if (install.state === "missing" && !params.configuredOnly) this.#packages().install(server.id, npmSource(server));
+      return { status: "installing" };
+    }
+    return params.configuredOnly ? { status: "pending" } : await this.#catalog(server);
+  }
+
+  /**
    * A server still named after its hostname or package (it could not report a name when added, e.g. before sign-in) takes its
    * reported name on its first successful connection. Names taken from the server never change again.
    */
-  async #adoptServerNames(servers: readonly StoredServer[], catalogs: readonly (Catalog | { status: "pending" })[]) {
+  async #adoptServerNames(servers: readonly StoredServer[], catalogs: readonly SettingsCatalog[]) {
     const reported = await Promise.all(servers.map(async (server, index) =>
       catalogs[index]?.status === "ready" && server.name === fallbackName(server.source)
         ? serverNameFrom(await this.#connection(server).serverName().catch(() => null)) : null));
@@ -189,19 +221,14 @@ export default class WorkbenchMcpServerController {
     const update = McpServerSettingsUpdateSchema.parse(input);
     const servers = await this.#servers();
     if (update.action === "add") {
-      await this.#add({ kind: "http", url: update.url });
+      await this.#addHttp(update.url);
       return await this.read();
     }
     if (update.action === "addPackage") {
-      const packages = this.#packages();
-      const id = randomUUID();
-      const version = await packages.install(id, update.package, update.version);
-      try {
-        await this.#add({ kind: "npm", package: update.package, version, args: update.args }, id);
-      } catch (error) {
-        await packages.remove(id);
-        throw error;
-      }
+      this.#packages(); // Refused where npm servers are not offered.
+      const source: NpmSource = { kind: "npm", package: update.package, version: update.version ?? "latest", args: update.args };
+      // Saved before installing, so the install shows on the server's own card; the read below starts it.
+      await this.#insert(randomUUID(), uniqueName(fallbackName(source), servers.map(server => server.name)), source);
       return await this.read();
     }
     const server = servers.find(candidate => candidate.id === update.id);
@@ -236,7 +263,20 @@ export default class WorkbenchMcpServerController {
         break;
       case "refresh":
         await this.#disconnect(server.id);
+        // Retries a failed install; one already running is joined.
+        if (server.source.kind === "npm" && this.#packages().state(server.id).state !== "installed") {
+          this.#packages().install(server.id, server.source);
+        }
         break;
+      case "setArgs": {
+        npmSource(server);
+        await this.options.database.executeTransaction([
+          deleteRows(mcpServerPackageArgs, { server_id: server.id }),
+          ...update.args.map((value, position) => insertRow(mcpServerPackageArgs, { server_id: server.id, position, value })),
+        ]);
+        await this.#disconnect(server.id);
+        break;
+      }
       case "rename":
         if (update.name === server.name) break;
         if (servers.some(candidate => candidate.id !== server.id && candidate.name === update.name)) {
@@ -250,27 +290,90 @@ export default class WorkbenchMcpServerController {
   }
 
   /** Probe the new server for its reported name, then store it; a failed store closes the probe's connection. */
-  async #add(source: McpServerSource, id: string = randomUUID()) {
+  async #addHttp(url: string) {
+    const id = randomUUID();
+    const source: McpServerSource = { kind: "http", url };
     const probe = this.#connection({
       id, name: "", source, allowAll: false, allowedTools: [], header: null, oauth: { redirectUri: null, signedIn: false },
     });
     const reported = await probe.serverName().catch(() => null);
-    // Read after the probe: a package install can take long enough for another add to claim a name.
+    // Read after the probe: another add may have claimed a name meanwhile.
     const name = uniqueName(serverNameFrom(reported) ?? fallbackName(source), (await this.#servers()).map(server => server.name));
     try {
-      await this.options.database.executeTransaction([
-        insertRow(mcpServers, { id, name, transport: source.kind, allow_all: 0, created_at: this.#now() }),
-        ...source.kind === "http"
-          ? [insertRow(mcpServerHttp, { server_id: id, url: source.url })]
-          : [
-            insertRow(mcpServerPackages, { server_id: id, package: source.package, version: source.version }),
-            ...source.args.map((value, position) => insertRow(mcpServerPackageArgs, { server_id: id, position, value })),
-          ],
-      ]);
+      await this.#insert(id, name, source);
     } catch (error) {
       await this.#disconnect(id);
       throw error;
     }
+  }
+
+  async #insert(id: string, name: string, source: McpServerSource) {
+    await this.options.database.executeTransaction([
+      insertRow(mcpServers, { id, name, transport: source.kind, allow_all: 0, created_at: this.#now() }),
+      ...source.kind === "http"
+        ? [insertRow(mcpServerHttp, { server_id: id, url: source.url })]
+        : [
+          insertRow(mcpServerPackages, { server_id: id, package: source.package, version: source.version }),
+          ...source.args.map((value, position) => insertRow(mcpServerPackageArgs, { server_id: id, position, value })),
+        ],
+    ]);
+  }
+
+  /** An npm server's environment variables, values included, for its launch settings. */
+  async readEnv(input: McpServerEnvReadParams): Promise<McpServerEnvSnapshot> {
+    const { id } = McpServerEnvReadParamsSchema.parse(input);
+    const server = await this.#npmServer(id);
+    return { entries: (await this.#env(server.id)).map(entry => entry.value === null
+      ? { key: entry.name, unreadable: true as const } : { key: entry.name, value: entry.value }) };
+  }
+
+  /** Seal and store environment changes in one transaction; the server's process restarts with them on its next use. */
+  async updateEnv(input: McpServerEnvUpdate) {
+    const { id, upserts, removals } = McpServerEnvUpdateSchema.parse(input);
+    const server = await this.#npmServer(id);
+    const key = await this.#key();
+    await this.options.database.executeTransaction([
+      ...removals.map(name => deleteRows(mcpServerPackageEnv, { server_id: server.id, name })),
+      ...upserts.map(({ key: name, value }) => {
+        const sealed = sealProjectStoreValue(key, SECRET_SCOPE, envKey(server.id, name), value);
+        return upsertRow(mcpServerPackageEnv, {
+          server_id: server.id, name, nonce: sealed.nonce, ciphertext: sealed.ciphertext, updated_at: this.#now(),
+        }, { conflictColumns: ["server_id", "name"], updateColumns: ["nonce", "ciphertext", "updated_at"] });
+      }),
+    ]);
+    await this.#disconnect(server.id);
+    return { ok: true as const };
+  }
+
+  async #npmServer(id: string) {
+    const server = (await this.#servers()).find(candidate => candidate.id === id);
+    if (!server) throw new Error("That MCP server no longer exists.");
+    npmSource(server);
+    return server;
+  }
+
+  /** `value` is null when the variable was sealed on another device or OS user. */
+  async #env(serverId: string) {
+    const rows = await this.options.database.query(selectRows(mcpServerPackageEnv, { where: { server_id: serverId }, orderBy: [{ column: "name" }] }));
+    if (!rows.length) return [];
+    const key = await this.#key();
+    return rows.map(row => ({ name: row.name, value: openProjectStoreValue(key, SECRET_SCOPE, envKey(serverId, row.name), row) }));
+  }
+
+  /** Start the stored npm server as it is now, pinning the exact version its first install resolved. */
+  async #launch(serverId: string) {
+    const server = await this.#npmServer(serverId);
+    const source = npmSource(server);
+    const env: Record<string, string> = {};
+    for (const entry of await this.#env(serverId)) {
+      if (entry.value === null) throw new Error(unreadableEnv(entry.name));
+      env[entry.name] = entry.value;
+    }
+    const { launch, version } = await this.#packages().launch(serverId, source);
+    if (version !== source.version) {
+      await this.options.database.executeTransaction([updateRows(mcpServerPackages, { version }, { server_id: serverId })]);
+    }
+    return { ...launch, env };
   }
 
   #packages() {
@@ -480,7 +583,7 @@ export default class WorkbenchMcpServerController {
       const record = (frame: McpServerTrafficFrame) => this.#traffic.record({ ...frame, connection: label, label: `${label} ${frame.label}` });
       const source = server.source;
       const endpoint: McpServerEndpoint = source.kind === "npm"
-        ? { transport: "stdio", record, launch: () => this.#packages().launch(server.id, source) }
+        ? { transport: "stdio", record, launch: () => this.#launch(server.id) }
         : server.header
         ? { transport: "http", url: source.url, headers: server.header.value ? { [server.header.name]: server.header.value } : {}, record }
         : {

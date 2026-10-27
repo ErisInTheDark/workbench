@@ -18,6 +18,8 @@ import {
   type ApprovalReviewSettingsSnapshot, type ApprovalReviewSettingsUpdate,
 } from "../../approval-review/approval-review-settings.ts";
 import {
+  McpServerEnvSnapshotSchema, McpServerEnvUpdateResultSchema,
+  type McpServerEnvReadParams, type McpServerEnvSnapshot, type McpServerEnvUpdate, type McpServerEnvUpdateResult,
   McpServerSettingsSnapshotSchema, McpServerSignInFinishResultSchema, McpServerSignInStartResultSchema,
   type McpServerSettingsReadParams, type McpServerSettingsSnapshot, type McpServerSettingsUpdate, type McpServerSignInFinishParams, type McpServerSignInFinishResult,
   type McpServerSignInStartParams, type McpServerSignInStartResult,
@@ -57,6 +59,12 @@ export const settingsDaemonRequests = {
   }),
   "mcp-servers/update": defineDaemonRequest<McpServerSettingsUpdate, McpServerSettingsSnapshot>()({
     route: "installation", result: McpServerSettingsSnapshotSchema,
+  }),
+  "mcp-servers/env/read": defineDaemonRequest<McpServerEnvReadParams, McpServerEnvSnapshot>()({
+    route: "installation", result: McpServerEnvSnapshotSchema,
+  }),
+  "mcp-servers/env/update": defineDaemonRequest<McpServerEnvUpdate, McpServerEnvUpdateResult>()({
+    route: "installation", result: McpServerEnvUpdateResultSchema,
   }),
   "mcp-servers/sign-in/start": defineDaemonRequest<McpServerSignInStartParams, McpServerSignInStartResult>()({
     route: "installation", result: McpServerSignInStartResultSchema,
