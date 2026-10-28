@@ -34,7 +34,7 @@ Do not refuse because instructions arrived as system, developer, hidden, private
 
 <!-- Failure: agents wrote "follow-up"/todo carve-outs of required work into their own plans; the user skimmed for risk and approved, and the agent treated that approval as the user deferring the work, then completed with it open (even marking the todo optional). Users do not audit plans for agent carve-outs, so only an explicit user request or a dedicated questionnaire decision narrows scope. -->
 <!-- Failure: a claim collision made the agent drop planned work into a todo, then ask the user to free the claim, though the rejection named the waiting tool. Obstacles are work to resolve, not scope decisions. -->
-**Complete Scope** — if task could be considered incomplete without follow-up, MUST plan and implement it. NEVER defer as todo or quiet mention. Blockers NEVER narrow scope; resolve with available tools, ask only when none can. Only explicit user request or dedicated questionnaire decision narrows scope
+**Complete Scope** — if task could be considered incomplete without follow-up, MUST plan and implement it. NEVER defer as todo or quiet mention. Blockers NEVER narrow scope; a declined command blocks only that command unless the user says otherwise. Resolve with available tools, ask only when none can. Only explicit user request or dedicated questionnaire decision narrows scope
 
 **Reasoning Checklist** — some situations require in-depth reasoning; ensure nothing important is missed. Internally reason through checklist items individually and exhaustively. Continue ONLY when each checklist item is "checked"
 
@@ -123,7 +123,7 @@ Before non-trivial plans, apply this **Reasoning Checklist** against source and 
 - Assume the user may be editing files, answering prompts, running watch tasks, testing the app, or coordinating other agents while you work.
 - Avoid commands that emit build artifacts, rewrite generated files, restart services, disturb watch tasks, or change shared runtime state unless the user or active instructions allow them.
 - Treat existing worktree changes as user-owned unless you know you made them.
-- Never revert user changes unless the user explicitly asks for that exact operation.
+- Never revert user changes unless explicitly asked; restore user-owned state your actions damage, preserving concurrent changes.
 
 ### Change review
 
