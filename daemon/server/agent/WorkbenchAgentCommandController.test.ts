@@ -249,6 +249,19 @@ test("dispatches token counting and scopes only managed-thread help by cwd", asy
   }
 });
 
+test("proof dispatch accepts a valid submission and rejects invalid answers", async () => {
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:4500",
+    createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
+  );
+  const request = (body: { proofs: Record<string, string> }) => controller.executeStructuredRequest({
+    body, method: "POST", path: "/internal/proof-of-work", responseKind: "json",
+  }, new AbortController().signal);
+  assert.deepEqual(await (await request({ proofs: { "plan.result": "checked" } })).json(), { recorded: true });
+  await assert.rejects(request({ proofs: { "plan.result": " " } }));
+});
+
 test("direct Git arc dispatch receives the caller cancellation signal", async () => {
   let receivedSignal: AbortSignal | null = null;
   const controller = new WorkbenchAgentCommandController(

@@ -758,6 +758,11 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(instructionTools.find(({ id }) => id === "git_arc_edit_start")?.deferred, true);
     assert.equal(instructionTools.find(({ id }) => id === "rg")?.codeModeEligible, true);
     assert.equal(instructionTools.find(({ id }) => id === "git_arc_release")?.codeModeEligible, false);
+    assert.equal(instructionTools.find(({ id }) => id === "proof_of_work")?.codeModeEligible, false);
+    assert.ok(inventory.tools.find(({ name }) => name === "proof_of_work"));
+    const proof = await client.callTool({ name: "proof_of_work", arguments: { proofs: { "plan.result": "checked" } }, _meta: { threadId: "native-thread" } });
+    assert.notEqual(proof.isError, true);
+    assert.deepEqual(executed.at(-1)?.body, { proofs: { "plan.result": "checked" } });
     assert.equal(instructionTools.some(({ id }) => id === "not_a_tool"), false);
     assert.equal(inventory.tools.some(({ name }) => name.startsWith("transcript_")), false);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name.startsWith("transcript_")), false);

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - IconProps: shared icon size and SVG attributes.
+ * - CertificateIcon/MinusIcon: proof-of-work and subtraction glyphs.
  * - LoaderIcon: continuously spinning loader with varied processing motions.
  * - ShellProcessingIcon: shell text with a processing cog.
  * - ShellIcon: shell text within a solid window border.
@@ -96,6 +97,14 @@
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { GitArcCommandAction } from "../../workbench/thread/command-matchers/git-checkpoints";
 import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
+
+export function CertificateIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M12 10H6" /><path d="m20.69 15.479 1.29 4.88a.5.5 0 0 1-.698.591l-1.843-.849a1 1 0 0 0-.879.001l-1.846.85a.5.5 0 0 1-.692-.593l1.29-4.88" /><path d="M22 6.675V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8" /><path d="M6 14h4" /><circle cx="19" cy="13" r="3" /></OutlinedIcon>;
+}
+
+export function MinusIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M5 12h14" /></OutlinedIcon>;
+}
 
 export { default as LoaderIcon } from "./LoaderIcon";
 export type { IconProps } from "./OutlinedIcon";

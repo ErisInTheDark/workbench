@@ -14,7 +14,7 @@ import {
   createWorkbenchUnfinishedTurnInput,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import {
-  buildCommandSequenceRenderSegments, buildRenderableBlocks, getRenderableBlockItems, groupIncomingAgentMessageRuns,
+  buildCommandSequenceRenderSegments, buildRenderableBlocks, getRenderableBlockItems, getRenderableBlockKey, groupIncomingAgentMessageRuns,
   reuseRenderableBlocks, hasSameBlockTimeline, isHiddenCommandExecution, type CommandItem,
 } from "./thread-render-blocks";
 
@@ -47,6 +47,16 @@ function user(id: string): Extract<ThreadItem, { type: "userMessage" }> {
 function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted") {
   return withWorkbenchInputState(user(id), { kind: "steer", status });
 }
+
+test("consecutive proofs merge without crossing failures or other items", () => {
+  const proof = (id: string, answer: string) => mcp(id, "proof_of_work", { proofs: { "plan.result": answer } });
+  const failed = { ...proof("failed", "bad"), status: "failed" as const };
+  const blocks = buildRenderableBlocks([proof("a", "first"), proof("b", "last"), failed, proof("c", "next"), user("boundary"), proof("d", "final")]);
+  assert.deepEqual(blocks.filter(block => block.kind === "proofOfWork").map(block => block.items.map(item => item.id)), [["a", "b"], ["c"], ["d"]]);
+  assert.ok(blocks.some(block => getRenderableBlockItems(block).some(item => item.id === "failed")));
+  assert.deepEqual(getRenderableBlockItems(blocks[0]!).map(item => item.id), ["a", "b"]);
+  assert.equal(getRenderableBlockKey(buildRenderableBlocks([proof("a", "first")])[0]!), getRenderableBlockKey(blocks[0]!));
+});
 
 test("transcript-hidden screenshots create no block, so the work around them stays together", () => {
   const image = { type: "image" as const, url: "/api/transcript-assets/thread/shot.png" };

@@ -3,6 +3,7 @@
  * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute structured commands while preserving direct-port lifecycles.
  */
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import { ProofOfWorkSchema } from "workbench-shared/workbench/thread/proof-of-work";
 import type http from "node:http";
 import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
@@ -397,6 +398,10 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path.startsWith("/api/thread-context/") && this.direct.executeThreadRecallRequest) {
       return await this.direct.executeThreadRecallRequest(request, signal);
+    }
+    if (request.path === "/internal/proof-of-work" && request.body) {
+      ProofOfWorkSchema.parse(request.body);
+      return Response.json({ recorded: true });
     }
     if (request.path === "/api/toc" && request.body) {
       return await this.markdownToc.execute(request.body, signal);

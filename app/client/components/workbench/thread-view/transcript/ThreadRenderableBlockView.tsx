@@ -23,6 +23,7 @@ import ThreadFileChangeItem from "../ThreadFileChangeItem";
 import ThreadGenericItem from "../ThreadGenericItem";
 import ThreadIncomingAgentMessageGroup from "../ThreadIncomingAgentMessageGroup";
 import ThreadMessageTimestamp from "../ThreadMessageTimestamp";
+import ThreadProofOfWorkItem from "../ThreadProofOfWorkItem";
 import ThreadSleepItem from "../ThreadSleepItem";
 import ThreadToolOutputItem from "../ThreadToolOutputItem";
 import ThreadWebSearchItem, { ThreadWebSearchSequence } from "../ThreadWebSearchItem";
@@ -233,6 +234,8 @@ function ThreadRenderableBlockViewComponent ({
   const transcript = useTranscript();
   const turn = useTranscript.turn();
   switch (block.kind) {
+    case "proofOfWork":
+      return <ThreadProofOfWorkItem items={block.items} />;
     case "activityRun":
       return <ThreadActivityRunBlock animateEntries={animateEntries} block={block} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} />;
     case "cardHistory":
