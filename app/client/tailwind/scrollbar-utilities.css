@@ -2,6 +2,7 @@
   @apply fg-alpha/16;
   scrollbar-color: transparent transparent;
   scrollbar-width: thin;
+  scrollbar-gutter: stable;
 
   &:hover {
     scrollbar-color: var(--fg) transparent;

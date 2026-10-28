@@ -24,9 +24,9 @@ import type { WorkbenchSidebarPanel } from "./sidebar-panel";
 const NO_SUBSCRIPTION = () => () => undefined;
 const ATTENTION = "text-amber-600 dark:text-amber-300";
 
-function Pill({ id, label, panel, onPanel, children }: {
+function Pill ({ id, label, panel, onPanel, children }: {
   id: WorkbenchSidebarPanel; label: string; panel: WorkbenchSidebarPanel;
-  onPanel(panel: WorkbenchSidebarPanel): void; children: ReactNode;
+  onPanel (panel: WorkbenchSidebarPanel): void; children: ReactNode;
 }) {
   const pressed = panel === id;
   return (
@@ -45,14 +45,14 @@ function Pill({ id, label, panel, onPanel, children }: {
 }
 
 /** Threads waiting on you across the selected projects. */
-function useWaitingThreads(projectIds: readonly string[]) {
+function useWaitingThreads (projectIds: readonly string[]) {
   const facts = useWorkbenchClientController().mounted?.projectFacts ?? null;
   return useSyncExternalStore(facts?.subscribe ?? NO_SUBSCRIPTION, () => projectIds.reduce((total, id) =>
     total + (facts?.getSummary(id)?.counts.needsAttentionActive ?? 0), 0));
 }
 
 /** Whether the browsed folder has unclaimed changes, unpushed commits or commits a peer lacks. */
-function useGitHasWork(location: ProjectLocationReference | null) {
+function useGitHasWork (location: ProjectLocationReference | null) {
   const tree = useWorkingTree();
   useEffect(() => location ? tree.acquireDemand("summary") : undefined, [location, tree]);
   const summary = useWorkingTreeSnapshot().summary;
@@ -63,18 +63,18 @@ function useGitHasWork(location: ProjectLocationReference | null) {
     || (snapshot.data?.peers ?? []).some(peer => peer.state === "current" && peer.ahead > 0);
 }
 
-export default function WorkbenchSidebarFooter({
+export default function WorkbenchSidebarFooter ({
   panel, onPanel, projectIds, location, appRuntime, daemonRuntime, onAskAgent,
 }: {
   panel: WorkbenchSidebarPanel;
-  onPanel(panel: WorkbenchSidebarPanel): void;
+  onPanel (panel: WorkbenchSidebarPanel): void;
   /** The selected projects whose threads count. */
   projectIds: readonly string[];
   /** The browsed folder whose git state counts. */
   location: ProjectLocationReference | null;
   appRuntime: WorkbenchAppRuntimeStore | null;
   daemonRuntime: WorkbenchDaemonRuntimeStore | null;
-  onAskAgent(projectId: string, references: readonly PresentationDraftReference[]): void;
+  onAskAgent (projectId: string, references: readonly PresentationDraftReference[]): void;
 }) {
   const waiting = useWaitingThreads(projectIds);
   const gitHasWork = useGitHasWork(location);
@@ -83,7 +83,7 @@ export default function WorkbenchSidebarFooter({
   const remotes = useRemoteReloadDevices({ appRuntime, sources });
   const shared = { panel, onPanel };
   return (
-    <div className="flex min-w-0 items-center gap-0.5 px-1">
+    <div className="flex min-w-0 items-center gap-0.5 pl-3 pr-4">
       <Pill {...shared} id="threads" label={waiting ? `Threads: ${waiting} waiting on you` : "Threads"}>
         {waiting ? <>
           <NeedsAttentionThreadIcon className={ATTENTION} size={14} />

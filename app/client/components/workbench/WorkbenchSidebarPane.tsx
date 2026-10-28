@@ -9,10 +9,10 @@
 import { useEffect, useRef, type ComponentProps, type ReactNode } from "react";
 
 import type { WorkbenchLogicalThreadRow } from "workbench-shared/types";
-import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
   createNewProjectRoute, createSettingsRoute, createStatsRoute, createToggledProjectSelectionRoute, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type WorkbenchBrowseSessionController from "../../workbench/browse/WorkbenchBrowseSessionController";
 import useMediaQuery from "../../workbench/dom/layout/use-media-query";
 import { useWorkbenchNavigate, useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
@@ -28,13 +28,13 @@ import { useWorkbenchSearch } from "./search/workbench-search-context";
 import { sidebarPanelForRoute, type WorkbenchSidebarPanel } from "./sidebar/sidebar-panel";
 import WorkbenchSidebarFooter from "./sidebar/WorkbenchSidebarFooter";
 import { useProjects } from "./use-projects";
-import WorkbenchBrowseSessionsSection from "./WorkbenchBrowseSessionsSection";
 import { useWorkbenchClientController } from "./workbench-client-context";
+import { DraftThreadIcon, GearIcon, SearchIcon, StatsIcon } from "./workbench-icons";
+import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
+import WorkbenchBrowseSessionsSection from "./WorkbenchBrowseSessionsSection";
 import WorkbenchConnectionSpinner from "./WorkbenchConnectionSpinner";
 import WorkbenchFolderSidebar from "./WorkbenchFolderSidebar";
-import { DraftThreadIcon, GearIcon, SearchIcon, StatsIcon } from "./workbench-icons";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
-import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchThreadSidebar from "./WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 
@@ -43,7 +43,7 @@ type ActionsProps = ComponentProps<typeof WorkbenchThreadSidebarActionsProvider>
 type ReloadPanelProps = ComponentProps<typeof WorkbenchReloadPanel>;
 
 /** Desktop tabs pick the panel once per tab change, so a footer pick stays until the next tab. Mobile never follows tabs. */
-function useTabPanel(route: WorkbenchRoute, mobile: boolean, setPanel: (panel: WorkbenchSidebarPanel) => void) {
+function useTabPanel (route: WorkbenchRoute, mobile: boolean, setPanel: (panel: WorkbenchSidebarPanel) => void) {
   const panel = sidebarPanelForRoute(route);
   const tab = `${route.view}\0${route.filePath}\0${route.view === "thread" ? JSON.stringify(route.threadTarget) : ""}`;
   const followed = useRef<string | null>(null);
@@ -54,7 +54,7 @@ function useTabPanel(route: WorkbenchRoute, mobile: boolean, setPanel: (panel: W
   }, [mobile, panel, setPanel, tab]);
 }
 
-export default function WorkbenchSidebarPane({
+export default function WorkbenchSidebarPane ({
   activeProjectId, appRuntime, askAgentWithReferences,
   browseSessionController, collapsed, createThread, currentFilePath,
   onFileDeleted, onOpenQualifiedThread, onOpenThread,
@@ -167,8 +167,8 @@ export default function WorkbenchSidebarPane({
       overflow-hidden pr-5 text-[0.95rem] leading-6 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6
       ${collapsed ? "md:hidden" : ""}
     `}>
-      <header className="z-10 col-start-1 row-start-1 grid min-w-0 grid-cols-[1fr_auto_auto_auto] items-center gap-1 pt-3 pb-2">
-        <span className="flex min-w-0 items-center gap-2 pl-5 text-xl font-semibold leading-tight text-text">
+      <header className="z-10 col-start-1 row-start-1 grid min-w-0 grid-cols-[1fr_auto_auto_auto] items-center gap-1 pt-3 pb-2 pl-5 pr-2">
+        <span className="flex min-w-0 items-center gap-2 text-xl font-semibold leading-tight text-text">
           <span className="min-w-0 truncate">workbench</span>
           <WorkbenchConnectionSpinner />
         </span>
