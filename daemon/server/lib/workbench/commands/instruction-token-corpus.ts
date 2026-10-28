@@ -7,6 +7,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { formatWorkbenchSkillCatalogEntry, parseFrontmatterBlock } from "../../workbench-library";
+import { listSkillDefinitionsFromDirectory } from "../skills/skill-discovery";
 import { stripWorkbenchInstructionHtmlComments } from "../instructions/instruction-context-filter";
 import {
   buildProjectInstructionContentWithSources,
@@ -122,12 +124,23 @@ function createInstructionTokenSource(
 
 export async function buildWorkbenchInstructionTokenCorpus(root: string): Promise<WorkbenchInstructionTokenCorpus> {
   const absoluteRoot = path.resolve(root);
-  const absoluteFiles = (await listMarkdownLeaves(absoluteRoot)).sort((left, right) => left.localeCompare(right));
+  const builtinRoot = path.join(absoluteRoot, "skills", "builtin");
+  const absoluteFiles = (await listMarkdownLeaves(absoluteRoot))
+    .filter(file => {
+      const relative = path.relative(builtinRoot, file);
+      return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    })
+    .sort((left, right) => left.localeCompare(right));
   const sources = await Promise.all(absoluteFiles.map(async (filePath) => createInstructionTokenSource(
     path.relative(absoluteRoot, filePath).replaceAll("\\", "/"),
     await readFile(filePath, "utf8"),
     stripInstructionSourceSyntax,
   )));
+  const skills = await listSkillDefinitionsFromDirectory(absoluteRoot, "skills/builtin", parseFrontmatterBlock);
+  if (skills.length) {
+    const content = skills.map(formatWorkbenchSkillCatalogEntry).join("\n");
+    sources.push({ content, path: "skills/builtin catalog", sections: [] });
+  }
   return {
     content: sources.map(({ content }) => content).filter(Boolean).join("\n\n"),
     files: sources.map(({ path: sourcePath }) => sourcePath),

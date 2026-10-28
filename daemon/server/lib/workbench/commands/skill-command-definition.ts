@@ -2,19 +2,20 @@
  * Exports:
  * - WorkbenchSkillExecutionRequestSchema: validate managed skill-load requests.
  * - WORKBENCH_SKILL_COMMANDS: expose precedence-selected skill loading to wb and MCP.
+ * - workbenchSkillName: validate a skill directory name.
  */
 import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { defineWorkbenchAgentCommand, managedWorkbenchAgentCommandBody, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
-const skillName = z.string().trim().min(1).max(64)
+export const workbenchSkillName = z.string().trim().min(1).max(64)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u)
   .describe("Skill directory name resolved by Workbench precedence.");
 
 export const WorkbenchSkillExecutionRequestSchema = z.object({
   cwd: z.string().trim().min(1),
   harness: ProviderKeySchema,
-  name: skillName,
+  name: workbenchSkillName,
   threadId: z.string().trim().min(1),
 }).strict();
 
@@ -26,7 +27,7 @@ const skill = defineWorkbenchAgentCommand({
   mcpWorkdir: true,
   words: ["skill"],
   usage: "wb skill <name>",
-  inputSchema: z.object({ name: skillName }).strict(),
+  inputSchema: z.object({ name: workbenchSkillName }).strict(),
   parseCliArgs(args) {
     if (args.length !== 1) throw new Error("wb skill requires one skill name.");
     return { name: args[0] };

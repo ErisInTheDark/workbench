@@ -51,6 +51,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "tokens",
   "tokens_instructions",
   "tokens_project",
+  "tokens_skill",
   "feedback",
   "todo",
   "todo_remove",
@@ -789,6 +790,8 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-cli.tokens", actionTarget("Counting ", "instruction tokens"), actionTarget("Counted ", "instruction tokens"));
     case "tokens_project":
       return simple("workbench-cli.tokens", actionTarget("Counting ", "project instruction tokens"), actionTarget("Counted ", "project instruction tokens"));
+    case "tokens_skill":
+      return simple("workbench-cli.tokens", actionTarget("Counting ", "skill tokens"), actionTarget("Counted ", "skill tokens"));
     case "feedback": {
       const operation = readFeedbackOperation(args);
       if (!operation) {

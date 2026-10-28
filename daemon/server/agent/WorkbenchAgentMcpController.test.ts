@@ -933,6 +933,19 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       responseKind: "native",
     });
 
+    const skillTokens = await client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { model: "gpt-5-test", name: "spark" },
+      name: "tokens_skill",
+    });
+    assert.equal(skillTokens.isError, false);
+    assert.deepEqual(executed.at(-1), {
+      body: { cwd: "C:/authoritative", harness: "codex", kind: "skill", model: "gpt-5-test", name: "spark", threadId: "thread-1" },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    });
+
     const projectTokens = await client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: { model: "gpt-5-test", toc: true },

@@ -29,6 +29,10 @@ export default class WorkbenchSkillController {
   constructor(private readonly options: WorkbenchSkillControllerOptions) {}
 
   async execute(request: WorkbenchSkillRequest, signal: AbortSignal): Promise<Response> {
+    return await this.render(request, signal, true);
+  }
+
+  async render(request: WorkbenchSkillRequest, signal: AbortSignal, recordLoad = false): Promise<Response> {
     signal.throwIfAborted();
     const skills = await this.options.listSkills(request.cwd);
     const skill = skills.find(candidate => (
@@ -50,10 +54,12 @@ export default class WorkbenchSkillController {
       }, this.options.readLocalCapabilities);
       signal.throwIfAborted();
       const rendered = filter(body, skill.path)?.trim() ?? "";
-      await this.options.onLoaded?.({ threadId: request.threadId, path: skill.path }).catch((error: unknown) => {
-        const detail = error instanceof Error ? error.message : "unknown error";
-        console.warn(`[workbench-skill] Skill load was not recorded: ${detail.replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 300)}`);
-      });
+      if (recordLoad) {
+        await this.options.onLoaded?.({ threadId: request.threadId, path: skill.path }).catch((error: unknown) => {
+          const detail = error instanceof Error ? error.message : "unknown error";
+          console.warn(`[workbench-skill] Skill load was not recorded: ${detail.replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 300)}`);
+        });
+      }
       return new Response(rendered, {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });

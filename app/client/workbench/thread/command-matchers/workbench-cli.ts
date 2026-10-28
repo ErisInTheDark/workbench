@@ -512,6 +512,9 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (/^wb(?:\.cmd)?\s+tokens\s+project(?:\s|$)/iu.test(normalized)) {
         return getWorkbenchCommandRendering("tokens_project", {})?.result ?? null;
       }
+      if (/^wb(?:\.cmd)?\s+tokens\s+skill(?:\s|$)/iu.test(normalized)) {
+        return getWorkbenchCommandRendering("tokens_skill", {})?.result ?? null;
+      }
       if (/^wb(?:\.cmd)?\s+tokens(?:\s|$)/iu.test(normalized)) {
         return getWorkbenchCommandRendering("tokens", {})?.result ?? null;
       }

@@ -30,6 +30,7 @@ test("selected skill returns only filtered body with relative imports", async ()
     ].join("\n"));
     await fs.writeFile(path.join(path.dirname(skillPath), "notes.md"), "imported instructions\n");
     let browseRawEnabled = false;
+    let loads = 0;
     const controller = new WorkbenchSkillController({
       listSkills: async () => [{
         content: "unused catalogue body",
@@ -43,6 +44,7 @@ test("selected skill returns only filtered body with relative imports", async ()
         { id: "browse_raw", codeModeEligible: false, deferred: true, requiresCapability: "browseRawCommandsEnabled" },
       ],
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: browseRawEnabled }),
+      onLoaded: async () => { loads += 1; },
     });
     const response = await controller.execute({
       cwd: temporary.path, harness: "opencode", model: "gpt-test",
@@ -53,6 +55,12 @@ test("selected skill returns only filtered body with relative imports", async ()
     assert.match(body, /call `tools\.wb\.rg`/u);
     assert.match(body, /imported instructions/u);
     assert.doesNotMatch(body, /name: spark|hidden note|wrong model|raw browse enabled|<skill/u);
+    const counted = await controller.render({
+      cwd: temporary.path, harness: "opencode", model: "gpt-test",
+      name: "spark", threadId: "thread",
+    }, new AbortController().signal);
+    assert.equal(await counted.text(), body);
+    assert.equal(loads, 1);
     browseRawEnabled = true;
     const withBrowse = await controller.execute({
       cwd: temporary.path, harness: "opencode", model: "gpt-test",

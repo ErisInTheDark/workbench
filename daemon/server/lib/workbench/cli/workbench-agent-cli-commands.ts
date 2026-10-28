@@ -158,9 +158,9 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     footer: "Loads one precedence-selected skill for the managed caller and prints only its rendered body.",
   },
   {
-    commandOrder: ["tokens", "tokens instructions", "tokens project"],
+    commandOrder: ["tokens", "tokens instructions", "tokens project", "tokens skill"],
     footer: "Pass one exact text value after --. Project counting uses the command cwd. Managed threads can count Workbench source instructions only from the running Workbench repository root.",
-    key: "tokens", usage: "wb tokens [instructions|project] [options]", words: ["tokens"],
+    key: "tokens", usage: "wb tokens [instructions|project|skill] [options]", words: ["tokens"],
   },
   {
     commandOrder: ["rg"],

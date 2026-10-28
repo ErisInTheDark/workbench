@@ -28,6 +28,7 @@ import WorkbenchFeedbackCommandController from "./WorkbenchFeedbackCommandContro
 import WorkbenchFileRemovalController from "../project/WorkbenchFileRemovalController";
 import WorkbenchTranscriptCommandController from "../transcript/WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import WorkbenchSkillController from "./WorkbenchSkillController";
@@ -109,11 +110,29 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     });
     const transcript = build.get("transcript");
     const reloadDirt = build.get("reloadDirt");
+    const resolveSkillRequest = async (request: { cwd: string; harness: WorkbenchHarness; name: string; threadId: string }) => {
+      const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
+      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Workbench skill" });
+      const profile = await threadState.controller.readComposerProfileTarget({
+        harness: request.harness,
+        kind: "thread",
+        projectId: resolved.project.id,
+        threadId: identity.threadId,
+      });
+      return {
+        cwd: resolved.root.rootPath,
+        harness: request.harness,
+        model: profile?.settings.model ?? "",
+        name: request.name,
+        threadId: identity.threadId,
+      };
+    };
     const tokens = new WorkbenchTokenCountController({
       projectRoot: context.legacyMigrationProjectRoot,
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, {
         endpointName: "Project token counting",
       }),
+      renderSkill: async (request, signal) => await skill.render(await resolveSkillRequest(request), signal),
     });
     const fileRemoval = new WorkbenchFileRemovalController(async ({ cwd, harness, threadId, paths }, signal) => {
       const { identity, binding } = await nativeTarget(threadId, cwd, harness);
@@ -353,21 +372,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       hydrateRepoPath: async (absolutePath, signal) => await repo.hydrate(absolutePath, signal),
       executeSkillRequest: async (body, signal) => {
         const request = WorkbenchSkillExecutionRequestSchema.parse(body);
-        const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
-        const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Workbench skill" });
-        const profile = await threadState.controller.readComposerProfileTarget({
-          harness: request.harness,
-          kind: "thread",
-          projectId: resolved.project.id,
-          threadId: identity.threadId,
-        });
-        return await skill.execute({
-          cwd: resolved.root.rootPath,
-          harness: request.harness,
-          model: profile?.settings.model ?? "",
-          name: request.name,
-          threadId: identity.threadId,
-        }, signal);
+        return await skill.execute(await resolveSkillRequest(request), signal);
       },
       executeSessionRequest: context.executeBrowseSessionRequest,
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),

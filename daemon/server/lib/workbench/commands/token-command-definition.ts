@@ -6,8 +6,10 @@
 import { z } from "zod";
 
 import Gpt5TextTokens from "./gpt-5-text-tokens";
+import { workbenchSkillName } from "./skill-command-definition";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
-import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
+import { defineWorkbenchAgentCommand, managedWorkbenchAgentCommandBody, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
 const DEFAULT_MODEL = "gpt-5.6";
 const model = z.string().trim().min(1).max(200)
@@ -23,6 +25,7 @@ export const WorkbenchTokenCountExecutionRequestSchema = z.discriminatedUnion("k
   z.object({ cwd, kind: z.literal("text"), model, text }).strict(),
   z.object({ callerThreadId, cwd, kind: z.literal("instructions"), model, toc }).strict(),
   z.object({ cwd, kind: z.literal("projectInstructions"), model, toc }).strict(),
+  z.object({ cwd, harness: ProviderKeySchema, kind: z.literal("skill"), model, name: workbenchSkillName, threadId: z.string().trim().min(1) }).strict(),
 ]);
 
 const countText = defineWorkbenchAgentCommand({
@@ -44,7 +47,7 @@ const countText = defineWorkbenchAgentCommand({
 });
 
 const countInstructions = defineWorkbenchAgentCommand({
-  description: "Count actual tokens provided to agents in Workbench instructions. Strips HTML comments. Use over `tokens` when applicable. Count -> patch -> count",
+  description: "Count the stripped Workbench instruction source corpus with builtin skill catalogue entries, not skill bodies. Includes workflow and harness variants.",
   effects: { idempotent: true, openWorld: false, readOnly: true },
   helpGroups: ["tokens"],
   audience: { rootOnly: true },
@@ -66,6 +69,28 @@ const countInstructions = defineWorkbenchAgentCommand({
       kind: "instructions",
       model: input.model,
       ...(input.toc ? { toc: true } : {}),
+    });
+  },
+});
+
+const countSkill = defineWorkbenchAgentCommand({
+  description: "Count the rendered skill body for the current managed thread without loading it.",
+  effects: { idempotent: true, openWorld: false, readOnly: true },
+  helpGroups: ["tokens"],
+  mcpCodeModeEligible: true,
+  mcpWorkdir: true,
+  words: ["tokens", "skill"],
+  usage: "wb tokens skill <name> [--model <model>]",
+  inputSchema: z.object({ model, name: workbenchSkillName }).strict(),
+  parseCliArgs(args) {
+    const [name, ...options] = args;
+    if (!name || name.startsWith("-")) throw new Error("wb tokens skill requires one skill name.");
+    const flags = new WorkbenchAgentCommandFlags(options, { values: ["--model"] });
+    return { name, model: flags.optional("--model") ?? DEFAULT_MODEL };
+  },
+  buildRequest(input, context) {
+    return postWorkbenchAgentCommand("/internal/tokens", {
+      ...managedWorkbenchAgentCommandBody(context), kind: "skill", model: input.model, name: input.name,
     });
   },
 });
@@ -96,4 +121,4 @@ const countProjectInstructions = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_TOKEN_COMMANDS = [countText, countInstructions, countProjectInstructions] as const;
+export const WORKBENCH_TOKEN_COMMANDS = [countText, countInstructions, countProjectInstructions, countSkill] as const;

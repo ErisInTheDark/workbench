@@ -10,6 +10,29 @@ import {
   buildWorkbenchInstructionTokenCorpus,
 } from "./instruction-token-corpus";
 
+test("counts builtin skill catalogue entries without skill bodies", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-token-skills-");
+  try {
+    const skillDir = path.join(temporary.path, "skills", "builtin", "spark");
+    await mkdir(skillDir, { recursive: true });
+    const skillPath = path.join(skillDir, "SKILL.md");
+    await writeFile(path.join(temporary.path, "base.md"), "base instructions");
+    await writeFile(skillPath, "---\nname: spark\ndescription: Sparkle work.\n---\nfirst body");
+    const first = await buildWorkbenchInstructionTokenCorpus(temporary.path);
+    assert.match(first.content, /spark/u);
+    assert.match(first.content, /Sparkle work/u);
+    assert.doesNotMatch(first.content, /first body/u);
+    await writeFile(skillPath, "---\nname: spark\ndescription: Sparkle work.\n---\na different and longer body");
+    const second = await buildWorkbenchInstructionTokenCorpus(temporary.path);
+    assert.equal(second.content, first.content);
+    await writeFile(skillPath, "---\nname: spark\ndescription: Different trigger.\n---\nfirst body");
+    const third = await buildWorkbenchInstructionTokenCorpus(temporary.path);
+    assert.notEqual(third.content, first.content);
+  } finally {
+    await temporary.dispose();
+  }
+});
+
 test("builds one deterministic corpus without authoring or control syntax", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-instruction-tokens-");
   const root = temporary.path;

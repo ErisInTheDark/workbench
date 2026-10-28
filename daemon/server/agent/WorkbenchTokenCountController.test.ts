@@ -8,6 +8,39 @@ import { test } from "node:test";
 import Gpt5TextTokens from "../lib/workbench/commands/gpt-5-text-tokens";
 import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 
+test("counts rendered skill text without recording a skill load", async () => {
+  let calls = 0;
+  const controller = new WorkbenchTokenCountController({
+    projectRoot: "C:/workbench",
+    resolveProjectFromCwd: async (cwd) => ({ cwd, root: { root: cwd } }),
+    renderSkill: async () => {
+      calls += 1;
+      return new Response("rendered skill instructions");
+    },
+  });
+  const result = await controller.execute({
+    cwd: "C:/project", harness: "codex", kind: "skill", model: "gpt-5.6",
+    name: "spark", threadId: "thread",
+  }, new AbortController().signal);
+  assert.equal(result.status, 200);
+  assert.match(await result.text(), new RegExp(`${Gpt5TextTokens.count("rendered skill instructions")} tokens`, "u"));
+  assert.equal(calls, 1);
+});
+
+test("passes skill rendering failures through without reporting a count", async () => {
+  const controller = new WorkbenchTokenCountController({
+    projectRoot: "C:/workbench",
+    resolveProjectFromCwd: async (cwd) => ({ cwd, root: { root: cwd } }),
+    renderSkill: async () => new Response("missing", { status: 404 }),
+  });
+  const result = await controller.execute({
+    cwd: "C:/project", harness: "codex", kind: "skill", model: "gpt-5.6",
+    name: "spark", threadId: "thread",
+  }, new AbortController().signal);
+  assert.equal(result.status, 404);
+  assert.equal(await result.text(), "missing");
+});
+
 function createController(
   projectRoot: string,
   resolveProjectFromCwd: (cwd: string) => Promise<{ cwd: string; root: { root: string } }>
@@ -29,9 +62,9 @@ test("counts exact text and stripped Workbench instructions locally", async () =
     const text = await controller.execute({ cwd: "C:/elsewhere", kind: "text", model: "gpt-5.6", text: "exact  text" }, signal);
     assert.equal(await text.text(), "3 tokens for gpt-5.6\n");
     const instructions = await controller.execute({ callerThreadId: null, cwd: "C:/elsewhere", kind: "instructions", model: "gpt-5.6" }, signal);
-    assert.equal(await instructions.text(), "7 tokens across 1 instruction file for gpt-5.6\n");
+    assert.equal(await instructions.text(), "7 tokens across 1 instruction source for gpt-5.6\n");
     const managedInstructions = await controller.execute({ callerThreadId: "thread", cwd: root, kind: "instructions", model: "gpt-5.6" }, signal);
-    assert.equal(await managedInstructions.text(), "7 tokens across 1 instruction file for gpt-5.6\n");
+    assert.equal(await managedInstructions.text(), "7 tokens across 1 instruction source for gpt-5.6\n");
   } finally {
     await temporary.dispose();
   }
@@ -55,7 +88,7 @@ test("reports independent source and toc-range counts for Workbench instructions
       toc: true,
     }, new AbortController().signal);
     const output = await response.text();
-    assert.match(output, new RegExp(`${Gpt5TextTokens.count(source)} tokens across 1 instruction file`, "u"));
+    assert.match(output, new RegExp(`${Gpt5TextTokens.count(source)} tokens across 1 instruction source`, "u"));
     assert.match(output, new RegExp(`base\\.md: ${Gpt5TextTokens.count(source)} tokens`, "u"));
     assert.match(output, new RegExp(`1-1 \\[preamble\\]: ${Gpt5TextTokens.count("plain preamble")} tokens`, "u"));
     assert.match(output, new RegExp(`2-5 ## Policy: ${Gpt5TextTokens.count("## Policy\npolicy body\n### Detail\ndetail body")} tokens`, "u"));

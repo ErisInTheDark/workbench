@@ -1,17 +1,18 @@
 /*
  * Exports:
- * - WORKBENCH_LIBRARY_PROJECT_ID: stable project id for the external Workbench Library. Keywords: workbench library, project id.
- * - workbenchLibraryRoot: absolute root for personal Workbench skills, agents, workflows, mechanics, and instructions. Keywords: workbench library, root.
- * - parseFrontmatterBlock: parse simple markdown frontmatter fields. Keywords: frontmatter, markdown, metadata.
+ * - WORKBENCH_LIBRARY_PROJECT_ID: stable project id for the external Workbench Library.
+ * - workbenchLibraryRoot: absolute root for personal Workbench skills, agents, workflows, mechanics, and instructions.
+ * - parseFrontmatterBlock: parse simple markdown frontmatter fields.
  * - stripWorkbenchInstructionFrontmatter: return body text without YAML metadata.
- * - ensureWorkbenchLibrary: create the library root as a Git repository with standard folders. Keywords: workbench library, mkdir, scaffold, git init.
- * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
- * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions/listActiveWorkbenchSkillDefinitions: discover active Workbench Skill metadata and full file content with source precedence. Keywords: skills, manifest, discovery, builtin.
- * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
+ * - ensureWorkbenchLibrary: create the library root as a Git repository with standard folders.
+ * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners.
+ * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions/listActiveWorkbenchSkillDefinitions: discover skills with source precedence.
+ * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files.
  * - isAgentMarkdownFile/isAgentUserInvocable/getAgentNameFromFileName: agent file rules shared by library and project agents.
- * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
- * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
- * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, compact manifest catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
+ * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs.
+ * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering.
+ * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build skill catalogs and universal instructions.
+ * - formatWorkbenchSkillCatalogEntry: render a skill's name and trigger for the instruction catalog.
  * - resolveWorkbenchActivatedSkills: canonical path and catalog name for each active skill selected by path.
  */
 import fs from "node:fs/promises";
@@ -505,6 +506,10 @@ export function stripWorkbenchInstructionFrontmatter(content: string) {
   return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
 }
 
+export function formatWorkbenchSkillCatalogEntry(skill: WorkbenchSkillDefinition) {
+  return `<skill name="${escapeXmlAttribute(createSkillShadowKey(skill))}" trigger="${escapeXmlAttribute(skill.description)}" />`;
+}
+
 export async function buildWorkbenchSkillCatalog(
   projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS,
 ) {
@@ -513,9 +518,7 @@ export async function buildWorkbenchSkillCatalog(
     return null;
   }
 
-  return activeSkills.map((skill) => (
-    `<skill name="${escapeXmlAttribute(createSkillShadowKey(skill))}" trigger="${escapeXmlAttribute(skill.description)}" />`
-  )).join("\n");
+  return activeSkills.map(formatWorkbenchSkillCatalogEntry).join("\n");
 }
 
 async function listActivatedSkillDefinitions(

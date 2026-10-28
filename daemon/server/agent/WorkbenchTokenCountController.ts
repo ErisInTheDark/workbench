@@ -12,6 +12,7 @@ import {
 } from "../lib/workbench/commands/instruction-token-corpus";
 import Gpt5TextTokens from "../lib/workbench/commands/gpt-5-text-tokens";
 import { WorkbenchTokenCountExecutionRequestSchema } from "../lib/workbench/commands/token-command-definition";
+import type { WorkbenchHarness } from "workbench-shared/types";
 
 interface ProjectInstructionResolution {
   readonly cwd: string;
@@ -21,6 +22,7 @@ interface ProjectInstructionResolution {
 interface WorkbenchTokenCountControllerOptions {
   projectRoot: string;
   resolveProjectFromCwd(cwd: string): Promise<ProjectInstructionResolution>;
+  renderSkill?(request: { cwd: string; harness: WorkbenchHarness; name: string; threadId: string }, signal: AbortSignal): Promise<Response>;
 }
 
 function boundedErrorMessage(error: unknown) {
@@ -38,7 +40,7 @@ function tokenCountLabel(count: number) {
 
 function formatSourceBreakdown(sources: readonly InstructionTokenSource[]) {
   const lines = [
-    "Source and section counts are independent; heading ranges include nested headings, active sources are listed once even when imports reuse them, and these counts do not sum to the resolved total.",
+    "Source and section counts are independent; heading ranges include nested headings, active sources are listed once even when imports reuse them, and these counts do not sum to the reported total.",
   ];
   for (const source of sources) {
     lines.push("", `${source.path}: ${tokenCountLabel(Gpt5TextTokens.count(source.content))}`);
@@ -54,10 +56,12 @@ function formatSourceBreakdown(sources: readonly InstructionTokenSource[]) {
 export default class WorkbenchTokenCountController {
   private readonly projectRoot: string;
   private readonly resolveProjectFromCwd: WorkbenchTokenCountControllerOptions["resolveProjectFromCwd"];
+  private readonly renderSkill: WorkbenchTokenCountControllerOptions["renderSkill"];
 
-  constructor({ projectRoot, resolveProjectFromCwd }: WorkbenchTokenCountControllerOptions) {
+  constructor({ projectRoot, resolveProjectFromCwd, renderSkill }: WorkbenchTokenCountControllerOptions) {
     this.projectRoot = path.resolve(projectRoot);
     this.resolveProjectFromCwd = resolveProjectFromCwd;
+    this.renderSkill = renderSkill;
   }
 
   async execute(input: object, signal: AbortSignal) {
@@ -76,6 +80,15 @@ export default class WorkbenchTokenCountController {
       return new Response(`${Gpt5TextTokens.count(parsed.data.text)} tokens for ${parsed.data.model}\n`);
     }
 
+    if (parsed.data.kind === "skill") {
+      if (!this.renderSkill) return new Response("Skill token counting is not configured.\n", { status: 500 });
+      const response = await this.renderSkill(parsed.data, signal);
+      if (!response.ok) return response;
+      const body = await response.text();
+      signal.throwIfAborted();
+      return new Response(`${Gpt5TextTokens.count(body)} tokens for skill ${parsed.data.name} using ${parsed.data.model}\n`);
+    }
+
     if (parsed.data.kind === "instructions") {
       try {
         const corpus = await buildWorkbenchInstructionTokenCorpus(
@@ -83,7 +96,7 @@ export default class WorkbenchTokenCountController {
         );
         if (signal.aborted) throw signal.reason;
         const count = Gpt5TextTokens.count(corpus.content);
-        const suffix = ` across ${corpus.files.length} instruction file${corpus.files.length === 1 ? "" : "s"}`;
+        const suffix = ` across ${corpus.files.length} instruction source${corpus.files.length === 1 ? "" : "s"}`;
         const summary = `${count} tokens${suffix} for ${parsed.data.model}`;
         return new Response(parsed.data.toc
           ? `${summary}\n\n${formatSourceBreakdown(corpus.sources)}\n`
