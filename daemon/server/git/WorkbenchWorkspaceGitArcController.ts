@@ -8,7 +8,8 @@
  * - WorkspaceGitArcPlanState: workspace plan projection.
  * - WorkspaceGitArcPlanClaimCollisionResult: project-qualified inactive member collision results.
  * Local mechanics: observe mutation claims while the Git transition remains held; machine members reject unusable paths
- * before gates and absorb unowned requested paths into their baseline inside them; daemon scratch needs no claims;
+ * before gates, absorb unowned requested paths into their baseline inside them and prune unreachable objects when due
+ * before write gates release; daemon scratch needs no claims;
  * unclaimed folders, machine folders included, are admitted by the present entries claim expansion would list, and folders
  * holding other roots need real claims.
  */
@@ -54,6 +55,7 @@ import {
 import type { WorkbenchFileClaimCheckResult } from "../lib/workbench/file-claim-check";
 import { claimSnapshotsFor, isConfiguredMultiRoot, isNestedGitWorktreeRoot, qualifiesGitArcRoot } from "./nested-git-worktree-roots";
 import { isMachineGitArcRoot, machineArcDisplayPath, machineArcPathRejection } from "./machine-git-arc-roots";
+import { pruneMachineGitObjectsIfDue } from "../lib/workbench/git/machine-git-worktrees";
 import { comparablePath as comparable, isPathInside as isInside } from "../lib/comparable-path";
 import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
 
@@ -851,6 +853,9 @@ export default class WorkbenchWorkspaceGitArcController {
         return results;
       } finally {
         if (observation && mode === "write") await this.observeMemberClaims(selected, observation);
+        if (mode === "write") {
+          for (const member of selected.filter(isMachineMember)) await pruneMachineGitObjectsIfDue(member.repoRoot);
+        }
       }
     });
   }

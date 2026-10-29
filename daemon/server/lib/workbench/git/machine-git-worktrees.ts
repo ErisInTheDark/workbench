@@ -7,9 +7,12 @@
  * - readMachineKnownPaths: repository paths any arc has requested on a machine worktree.
  * - recordMachineKnownPaths: remember requested paths so snapshots include them once they exist, though untracked.
  * - listMachineGitWorktreeRoots: filesystem roots that already have machine Git dirs under a base.
+ * - pruneMachineGitObjects: delete a machine Git dir's unreachable objects and stale temporary packs past the grace.
+ * - pruneMachineGitObjectsIfDue: prune at most once per interval per root; failures warn, never fail the caller.
  * Machine worktrees are filesystem roots whose Git state lives under the data root, never on the machine itself.
  * Registration is per daemon generation: arc project resolution re-ensures roots before any Git work reaches them,
- * and an unregistered root simply reads as "not a git repository".
+ * and an unregistered root simply reads as "not a git repository". Machine Git runs only plumbing, so Git's own auto
+ * gc never fires; Workbench owns the object lifetime instead.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -17,11 +20,15 @@ import { createHash, randomUUID } from "node:crypto";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
 import { comparablePath as comparable } from "../../comparable-path";
+import renameWhenUnlocked from "../../locked-rename";
 import { gitProcesses } from "./GitProcessHost";
 
 const KNOWN_PATHS_FILE = "workbench-known-paths";
+const MACHINE_GIT_PRUNE_GRACE_MS = 60 * 60_000;
+const MACHINE_GIT_PRUNE_INTERVAL_MS = 60 * 60_000;
 const registered = new Map<string, string>();
 const pending = new Map<string, Promise<string>>();
+const lastPruned = new Map<string, number>();
 
 const MACHINE_IDENTITY = {
   GIT_AUTHOR_NAME: "Workbench", GIT_AUTHOR_EMAIL: "workbench@localhost",
@@ -93,7 +100,7 @@ async function initialise(worktree: string, gitDir: string) {
     const root = (await git(["commit-tree", emptyTree, "-m", "machine baseline"], base, { ...env, ...MACHINE_IDENTITY })).trim();
     await git(["update-ref", "HEAD", root], base, env);
     try {
-      await fs.rename(staging, gitDir);
+      await renameWhenUnlocked(staging, gitDir);
     } catch (error) {
       if (!await exists(path.join(gitDir, "HEAD"))) throw error;
     }
@@ -149,6 +156,24 @@ export async function recordMachineKnownPaths(root: string, paths: readonly stri
   const staging = `${file}.${randomUUID()}`;
   await fs.writeFile(staging, [...known].sort((left, right) => left.localeCompare(right)).join("\0"), "utf8");
   await fs.rename(staging, file);
+}
+
+/** Callers hold the worktree's exclusive Git transition; the grace also spares objects written outside one. */
+export async function pruneMachineGitObjects(root: string) {
+  const gitDir = registered.get(comparable(root));
+  if (!gitDir) return;
+  await git(["prune", `--expire=${Math.ceil(MACHINE_GIT_PRUNE_GRACE_MS / 1000)}.seconds.ago`], path.dirname(gitDir), { GIT_DIR: gitDir });
+}
+
+export async function pruneMachineGitObjectsIfDue(root: string, now = Date.now()) {
+  const key = comparable(root);
+  if (!registered.has(key) || now - (lastPruned.get(key) ?? -Infinity) < MACHINE_GIT_PRUNE_INTERVAL_MS) return;
+  lastPruned.set(key, now);
+  try {
+    await pruneMachineGitObjects(root);
+  } catch (error) {
+    console.warn(`[machine-git] prune failed for ${root}: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`);
+  }
 }
 
 export async function listMachineGitWorktreeRoots(base = defaultMachineGitBase()) {
