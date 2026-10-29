@@ -1,14 +1,24 @@
 /*
  * Exports:
- * - default WorkbenchProjectLocationMenu: choose one concrete folder from the selectable folder universe.
+ * - default WorkbenchProjectLocationMenu: choose one available folder from the selectable folder universe, newest thread launch first.
  */
 "use client";
 
+import { useCallback, useContext, useSyncExternalStore } from "react";
+
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
-import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
+import { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
 import PressDragMenu from "../ui/PressDragMenu";
+import WorkbenchClientContext from "./workbench-client-context";
 import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
+import WorkbenchThreadOwnerLabel from "./WorkbenchThreadOwnerLabel";
 import { FolderOpenIcon } from "./workbench-icons";
+
+const noSubscription = () => () => {};
+
+function folderDisplayPath(folder: ProjectFolderOption) {
+  return folder.displayPath ?? `${folder.hostname}:${folder.rootPath}`;
+}
 
 export default function WorkbenchProjectLocationMenu({
   folders,
@@ -21,23 +31,24 @@ export default function WorkbenchProjectLocationMenu({
   onSelect: (location: ProjectLocationReference) => void;
   selected: ProjectLocationReference | null;
 }) {
+  const presentation = useContext(WorkbenchClientContext)?.mounted?.presentationClient ?? null;
+  const readLaunches = useCallback(() => presentation?.snapshot().data?.recentLaunches, [presentation]);
+  const launches = useSyncExternalStore(presentation?.subscribe ?? noSubscription, readLaunches, readLaunches);
   const current = folders.find(folder =>
     folder.target.daemonId === selected?.daemonId && folder.target.projectId === selected?.projectId);
-  const showOwners = new Set(folders.map(folder => folder.ownerProjectId)).size > 1;
+  const ordered = ProjectFolderOption.byRecentLaunch(
+    folders.filter(folder => folder.project || folder === current), launches ?? []);
   return (
     <PressDragMenu
       label={label}
-      items={folders.map(folder => ({
+      items={ordered.map(folder => ({
         id: `${folder.target.daemonId}/${folder.target.projectId}`,
         checked: folder === current,
         content: (
-          <span className="flex min-w-0 flex-col text-left" title={folder.rootPath}>
-            {showOwners && folder.ownerLabel
-              ? <span className="text-[0.72em] text-fg/muted">{folder.ownerLabel}</span>
-              : null}
-            <WorkbenchProjectLocationLabel
-              displayPath={folder.displayPath ?? `${folder.hostname}:${folder.rootPath}`}
-              hostname={folder.hostname}
+          <span className="flex min-w-0 flex-col text-left">
+            <WorkbenchThreadOwnerLabel
+              owner={{ ...folder.target, hostname: folder.hostname, rootPath: folder.rootPath, displayPath: folderDisplayPath(folder) }}
+              project={folder.project}
             />
             {!folder.project ? <span className="text-[0.72em] text-danger">Unavailable</span> : null}
           </span>
@@ -50,10 +61,7 @@ export default function WorkbenchProjectLocationMenu({
     >
       <FolderOpenIcon className="shrink-0" size={16} />
       <span className="min-w-0 max-w-52 truncate" title={current?.rootPath}>
-        {current ? <WorkbenchProjectLocationLabel
-          displayPath={current.displayPath ?? `${current.hostname}:${current.rootPath}`}
-          hostname={current.hostname}
-        /> : "Choose folder"}
+        {current ? <WorkbenchProjectLocationLabel displayPath={folderDisplayPath(current)} hostname={current.hostname} /> : "Choose folder"}
       </span>
     </PressDragMenu>
   );

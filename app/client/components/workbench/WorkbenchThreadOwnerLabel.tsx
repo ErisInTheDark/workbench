@@ -17,7 +17,7 @@ export default function WorkbenchThreadOwnerLabel({ owner, project }: {
   return (
     <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${owner.hostname}: ${owner.rootPath}`}>
       {project && "kind" in project
-        ? <WorkbenchProjectIcon project={project} variant="thread" />
+        ? <WorkbenchProjectIcon project={project} assetSource={{ kind: "source", daemonId: owner.daemonId }} variant="thread" />
         : <ProjectIcon className="shrink-0" size={16} />}
       <span className="min-w-0 truncate">
         <WorkbenchProjectLocationLabel displayPath={owner.displayPath} hostname={owner.hostname} />

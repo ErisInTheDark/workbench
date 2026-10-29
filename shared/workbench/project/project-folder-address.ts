@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ProjectFolderOption: one selectable daemon folder (location facts plus owning project identity).
+ * - ProjectFolderOption: one selectable daemon folder (location facts plus owning project identity); `byRecentLaunch` orders folders newest thread launch first.
  * - ProjectFolderAddress: per-daemon shortest folder suffixes, url-address derivation and resolution over a folder universe.
  * - projectFolderOptions: build the folder universe from logical and plain project facts.
  */
@@ -16,7 +16,24 @@ export interface ProjectFolderOption {
   displayPath?: string;
   project: WorkbenchProjectOption | null;
   ownerProjectId: string;
-  ownerLabel?: string;
+}
+
+export namespace ProjectFolderOption {
+  /** Folders with a launched thread first, newest launch first; the rest keep their input order. */
+  export function byRecentLaunch<Folder extends { target: ProjectLocationReference }>(
+    folders: readonly Folder[],
+    launches: readonly { target: ProjectLocationReference; revision: number }[],
+  ): Folder[] {
+    const newest = new Map<string, number>();
+    for (const launch of launches) {
+      const key = folderKey(launch.target);
+      newest.set(key, Math.max(newest.get(key) ?? launch.revision, launch.revision));
+    }
+    return folders
+      .map((folder, index) => ({ folder, index, revision: newest.get(folderKey(folder.target)) ?? -1 }))
+      .sort((left, right) => right.revision - left.revision || left.index - right.index)
+      .map(entry => entry.folder);
+  }
 }
 
 type FolderAddressEntry = { folder: ProjectFolderOption; address: string[] };
@@ -97,7 +114,6 @@ export function projectFolderOptions(
         displayPath: location.displayPath,
         project: location.project,
         ownerProjectId: project.id,
-        ownerLabel: project.label,
       });
     }
     for (const location of project.observedLocations ?? []) {
@@ -109,7 +125,6 @@ export function projectFolderOptions(
         rootPath: location.rootPath,
         project: location.project,
         ownerProjectId: project.id,
-        ownerLabel: project.label,
       });
     }
   }
@@ -124,7 +139,6 @@ export function projectFolderOptions(
         displayPath: project.relativePath,
         project,
         ownerProjectId: project.id,
-        ownerLabel: project.name,
       });
     }
   }
