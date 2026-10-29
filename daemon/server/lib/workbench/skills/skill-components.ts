@@ -60,9 +60,12 @@ export function readSkillComponentPaths(content: string): string[] {
 }
 
 export function formatSkillComponentHints(content: string): string {
-  const paths = readSkillComponentPaths(content);
-  if (!paths.length) return "";
-  return `\n\nWorkbench components: ${paths.join(", ")}. Test markup with \`wb vis test --markup '<Component ... />'\`.`;
+  const tags = readSkillComponentPaths(content).map(declared => {
+    const fileName = path.posix.basename(declared.replaceAll("\\", "/"));
+    return `<${fileName.slice(0, fileName.length - path.posix.extname(fileName).length)}>`;
+  });
+  if (!tags.length) return "";
+  return `\n\nChat components: ${tags.join(", ")}. Test markup with the wb \`vis_test\` tool (CLI: \`wb vis test --markup '<Component ... />'\`).`;
 }
 
 export async function resolveSkillComponents(skillPath: string, content: string, onlyName?: string): Promise<SkillComponent[]> {
