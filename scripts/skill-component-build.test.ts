@@ -87,13 +87,31 @@ test("the component command resolves the Workbench checkout independently of its
   const file = join(temporary.path, "Card.tsx");
   const compiledFile = join(temporary.path, "compiled.json");
   await writeFile(file, "export default function Card({ text }: { text: string }) { return <p>{text}</p> }");
-  await writeFile(compiledFile, JSON.stringify(await compileSkillTemplate(file)));
+  await writeFile(compiledFile, JSON.stringify({
+    compiled: await compileSkillTemplate(file), name: "Card", markup: '<Card text="@result:greeting" />', results: { greeting: "works" },
+  }));
   const result = spawnSync(process.execPath, [
-    "--import", "tsx", join(projectRoot, "scripts", "skill-component-build.mts"),
-    "render", compiledFile, "Card", '<Card text="works" />',
+    "--import", "tsx", join(projectRoot, "scripts", "skill-component-build.mts"), "render", compiledFile,
   ], { cwd: projectRoot, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /works/u);
+});
+
+test("kept result references anywhere in an invocation's props become the kept data", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("skill-results-");
+  context.after(() => temporary.dispose());
+  const file = join(temporary.path, "Lists.tsx");
+  await writeFile(file, `export default function Lists({ lists }: { lists: { name: string, cards: { data: { cards: { id: string }[] } } }[] }) {
+    return <div>{lists.map(list => <section key={list.name}>{list.name}:{list.cards.data.cards.map(card => card.id).join(",")}</section>)}</div>
+  }`);
+  const compiled = await compileSkillTemplate(file);
+  const markup = '<Lists lists={[{ name: "Doing", cards: "@result:doing" }, { name: "Next", cards: "@result:next" }]} />';
+  const output = JSON.stringify(await renderSkillComponent(compiled, "Lists", markup, {
+    doing: { data: { cards: [{ id: "a" }, { id: "b" }] } }, next: { data: { cards: [{ id: "c" }] } },
+  }));
+  assert.match(output, /Doing.*a,b/u);
+  assert.match(output, /Next.*c/u);
+  await assert.rejects(renderSkillComponent(compiled, "Lists", markup, {}), /No kept MCP result named doing/u);
 });
 
 test("nested components can import helpers elsewhere inside the skill", async context => {

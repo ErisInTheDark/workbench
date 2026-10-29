@@ -5,11 +5,13 @@
  * - ThreadCompiledComponentSchema/ThreadCompiledComponent: compiled template code and input files.
  * - ThreadComponentStyleSchema/ThreadComponentStyle: one active skill's compiled styles.
  * - ThreadComponentStyleRevisionSchema/ThreadComponentStyleRevision: identify current skill styles.
+ * - ThreadComponentRenderInputSchema: one invocation to render, with the kept results it references.
  * - ThreadComponentStyleBuildSchema/ThreadCompiledStyleSchema/ThreadCompiledStyle: stylesheet build input and output.
  * - ThreadComponentRenderSchema/ThreadComponentRender: a rendered tree and current skill style revisions.
  * - ThreadComponentPreviewSchema/ThreadComponentPreview: rendered tree and styles for a standalone preview.
  * - readThreadComponentRender/readThreadComponentStyle/readThreadComponentPreview: validate component data.
- * - readThreadComponentTree: validate a component template's rendered node tree.
+ * - ThreadComponentTreeOptions/readThreadComponentTree: validate a rendered node tree; template output may name public images.
+ * - listThreadComponentImageUrls/inlineThreadComponentImages: find a tree's public images, then replace them with data URLs.
  */
 import { z } from "zod";
 import { conformToZodSchema } from "../zod-schema-conformer";
@@ -24,6 +26,10 @@ export interface ThreadComponentNode {
 export const ThreadCompiledComponentSchema = z.object({
   code: z.string().min(1).max(6 * 1024 * 1024),
   inputs: z.array(z.string().min(1).max(4_000)).max(5_000),
+}).strict();
+/** Kept MCP results referenced as `"@result:<name>"` prop values arrive in `results`, by name. */
+export const ThreadComponentRenderInputSchema = z.object({
+  compiled: ThreadCompiledComponentSchema, name: z.string().min(1), markup: z.string().min(1), results: z.record(z.string(), z.unknown()),
 }).strict();
 export const ThreadComponentStyleBuildSchema = z.object({
   files: z.array(z.string().min(1)).min(1), root: z.string().min(1),
@@ -72,27 +78,38 @@ function normalizedCss(value: string) {
   }).replace(/\\\r?\n/gu, "").replace(/\\(.)/gu, "$1").replace(/\/\*[\s\S]*?\*\//gu, "");
 }
 
-function validateCss(value: string): void {
+const IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/iu;
+const REMOTE_IMAGE_URL = /^https:\/\/[^\s"'()\\]+$/u;
+const CSS_URL = /url\s*\(\s*([^)]*)\)/giu;
+const STYLE_KEYS = ["color", "fill", "stroke", "filter", "mask", "clipPath", "cursor"];
+const isStyleKey = (key: string) => /style$/iu.test(key) || STYLE_KEYS.includes(key);
+const unquote = (raw: string) => raw.trim().replace(/^(['"])([\s\S]*)\1$/u, "$2").trim();
+
+/** Template output may name public https images, which the daemon inlines before a tree is saved or shown. */
+export interface ThreadComponentTreeOptions {
+  remoteImages?: boolean;
+}
+
+function validateCss(value: string, options: ThreadComponentTreeOptions = {}): void {
   const css = normalizedCss(value);
   if (/@import\b|(?:-webkit-)?image-set\s*\(/iu.test(css)) throw new Error("Component styles cannot fetch remote resources.");
-  const urls = [...css.matchAll(/url\s*\(\s*([^)]*)\)/giu)];
+  const urls = [...css.matchAll(CSS_URL)];
   if ((css.match(/url\s*\(/giu)?.length ?? 0) !== urls.length) throw new Error("Invalid component style URL.");
   for (const match of urls) {
-    const url = match[1]!.trim().replace(/^(['"])([\s\S]*)\1$/u, "$2").trim();
-    if (!/^#[A-Za-z0-9_.:-]+$/u.test(url)
-      && !/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/iu.test(url)) {
+    const url = unquote(match[1]!);
+    if (!/^#[A-Za-z0-9_.:-]+$/u.test(url) && !IMAGE_DATA_URL.test(url) && !(options.remoteImages && REMOTE_IMAGE_URL.test(url))) {
       throw new Error("Component styles cannot fetch remote resources.");
     }
   }
 }
 
-function validateValue(value: ThreadComponentValue, style = false): void {
+function validateValue(value: ThreadComponentValue, options: ThreadComponentTreeOptions, style = false): void {
   if (typeof value === "string") {
-    if (style) validateCss(value);
+    if (style) validateCss(value, options);
     return;
   }
   if (Array.isArray(value)) {
-    for (const item of value) validateValue(item, style);
+    for (const item of value) validateValue(item, options, style);
     return;
   }
   if (!value || typeof value !== "object") return;
@@ -116,8 +133,8 @@ function validateValue(value: ThreadComponentValue, style = false): void {
       if (["srcset", "poster", "background", "action", "formaction", "ping"].includes(lower)) {
         throw new Error(`Unsupported component property: ${key}`);
       }
-      if (lower === "src" && typeof item === "string"
-        && !/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/iu.test(item)) {
+      if (lower === "src" && typeof item === "string" && !IMAGE_DATA_URL.test(item)
+        && !(options.remoteImages && value.type === "img" && REMOTE_IMAGE_URL.test(item))) {
         throw new Error("Component images cannot fetch remote resources.");
       }
       if ((lower === "href" || lower === "xlinkhref") && typeof item === "string") {
@@ -126,22 +143,57 @@ function validateValue(value: ThreadComponentValue, style = false): void {
           throw new Error(`Unsafe component ${key}.`);
         }
       }
-      const styleProperty = /style$/iu.test(key) || ["color", "fill", "stroke", "filter", "mask", "clipPath", "cursor"].includes(key);
-      validateValue(item, style || styleProperty);
+      validateValue(item, options, style || isStyleKey(key));
     }
     return;
   }
   for (const [key, item] of Object.entries(value)) {
-    validateValue(item, style || /style$/iu.test(key) || ["color", "fill", "stroke", "filter", "mask", "clipPath", "cursor"].includes(key));
+    validateValue(item, options, style || isStyleKey(key));
   }
 }
 
-export function readThreadComponentTree(value: unknown): ThreadComponentNode {
+function replaceImages(value: ThreadComponentValue, resolve: (url: string) => string | null, style: boolean): ThreadComponentValue {
+  if (typeof value === "string") {
+    if (!style || !/url\s*\(/iu.test(value)) return value;
+    return normalizedCss(value).replace(CSS_URL, (match, raw: string) => {
+      const url = unquote(raw);
+      if (!REMOTE_IMAGE_URL.test(url)) return match;
+      const inlined = resolve(url);
+      return inlined ? `url("${inlined}")` : "none";
+    });
+  }
+  if (Array.isArray(value)) return value.map(item => replaceImages(item, resolve, style));
+  if (!value || typeof value !== "object") return value;
+  const image = value.$workbench === "element" && value.type === "img";
+  return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => {
+    if (key === "props" && image && item && typeof item === "object" && !Array.isArray(item)
+      && typeof item.src === "string" && REMOTE_IMAGE_URL.test(item.src)) {
+      const inlined = resolve(item.src);
+      const { src: _src, ...rest } = item;
+      return [[key, replaceImages(inlined ? { ...rest, src: inlined } : rest, resolve, style)]];
+    }
+    return [[key, replaceImages(item, resolve, style || isStyleKey(key))]];
+  }));
+}
+
+/** Every public https image a tree names, in `img src` or style `url()`, for the daemon to fetch. */
+export function listThreadComponentImageUrls(tree: ThreadComponentNode): string[] {
+  const urls = new Set<string>();
+  replaceImages({ ...tree }, url => { urls.add(url); return url; }, false);
+  return [...urls];
+}
+
+/** Swap each public https image for its inlined data URL, dropping images that could not be fetched; the result is strict. */
+export function inlineThreadComponentImages(tree: ThreadComponentNode, images: ReadonlyMap<string, string | null>): ThreadComponentNode {
+  return readThreadComponentTree(replaceImages({ ...tree }, url => images.get(url) ?? null, false));
+}
+
+export function readThreadComponentTree(value: unknown, options: ThreadComponentTreeOptions = {}): ThreadComponentNode {
   const result = conformToZodSchema(nodeSchema, value);
   if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
     throw new Error("Component output must be a serializable element tree.");
   }
-  validateValue(result.data);
+  validateValue(result.data, options);
   return result.data;
 }
 

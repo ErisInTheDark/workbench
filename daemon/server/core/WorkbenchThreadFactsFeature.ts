@@ -24,6 +24,8 @@ import type { ReloadableNodeBuild, ReloadableNodeLease } from "../runtime/Reload
 import WorkbenchVisBrowse from "../vis/WorkbenchVisBrowse";
 import WorkbenchVisController from "../vis/WorkbenchVisController";
 import WorkbenchComponentsController from "../skills/WorkbenchComponentsController";
+import type McpDownloadStore from "../mcp-servers/McpDownloadStore";
+import { fetchPublicHttps, readBoundedBody } from "../lib/public-https-fetch";
 import { requireWorkbenchPowerShellExecutable } from "../runtime/windows-powershell-runtime";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
 import WorkbenchAgentContextController from "../agent/WorkbenchAgentContextController";
@@ -38,6 +40,9 @@ import WorkbenchThreadSkillsController from "../thread/WorkbenchThreadSkillsCont
 import WorkbenchThreadTodoController from "../thread/WorkbenchThreadTodoController";
 import type { WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
 import type WorkbenchCoreThreadLookup from "./WorkbenchCoreThreadLookup";
+
+/** Bounds one component image fetch; message renders have no caller signal. */
+const COMPONENT_IMAGE_TIMEOUT_MS = 15_000;
 
 export default class WorkbenchThreadFactsFeature {
   readonly skillCatalog: WorkbenchAgentSkillCatalogController;
@@ -66,6 +71,7 @@ export default class WorkbenchThreadFactsFeature {
     lease: ReloadableNodeLease;
     /** Built after this feature, read at call time. */
     providers: () => WorkbenchProviderDispatcher;
+    keptResults: () => Pick<McpDownloadStore, "readKept">;
     harnesses: () => WorkbenchHarnessController;
     publishRuntime(threadId: string, change: Partial<ThreadRuntime>): void;
     setSummaryFacts(threadId: string, facts: ThreadSummaryFacts): void;
@@ -204,8 +210,20 @@ export default class WorkbenchThreadFactsFeature {
         if (!parsed.success || parsed.repairedPaths.length || parsed.discardedPaths.length) throw new Error("Component styles compiler returned invalid output.");
         return parsed.data;
       }),
-      evaluate: async (compiled, name, markup, threadId, signal) => await withComponentInput(compiled, async file =>
-        readThreadComponentTree(await executeComponent(threadId, ["render", file, name, markup], signal))),
+      evaluate: async (compiled, name, markup, results, threadId, signal) => await withComponentInput({ compiled, name, markup, results }, async file =>
+        readThreadComponentTree(await executeComponent(threadId, ["render", file], signal), { remoteImages: true })),
+      results: async (threadId, names) => {
+        const resolved = await target(threadId);
+        if (!resolved) return {};
+        const store = ports.keptResults();
+        const entries = await Promise.all(names.map(async name => [name, await store.readKept(resolved.identity.threadId, name)] as const));
+        return Object.fromEntries(entries.filter(([, value]) => value !== null));
+      },
+      fetchImage: async (url, maxBytes, signal) => {
+        const bounded = AbortSignal.any([AbortSignal.timeout(COMPONENT_IMAGE_TIMEOUT_MS), ...signal ? [signal] : []]);
+        const { response } = await fetchPublicHttps(url, bounded);
+        return { contentType: response.headers.get("content-type") ?? "", bytes: await readBoundedBody(response, maxBytes) };
+      },
       preview: async (result, threadId, signal) => await withComponentInput(result, async file => {
         const parsed = conformToZodSchema(z.string().max(6 * 1024 * 1024), await executeComponent(threadId, ["preview", file], signal));
         if (!parsed.success || parsed.repairedPaths.length || parsed.discardedPaths.length) throw new Error("Component preview returned invalid output.");

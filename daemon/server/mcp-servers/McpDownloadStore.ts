@@ -1,13 +1,15 @@
 /*
  * Exports:
  * - McpDownload: one saved download, with its file name, absolute path, content type and size.
+ * - McpKeptResult: one kept tool result's name, JSON file path and size.
  * - McpDownloadStoreOptions: cache directory, database, thread lifecycle and network ports.
- * - default McpDownloadStore: single owner of fetching links MCP servers sent and of those files' lifetime; refuses local
- *   and private addresses (re-checked on every redirect), caps size, and deletes a thread's downloads when it settles.
+ * - default McpDownloadStore: single owner of a thread's MCP files: downloads of links servers sent (refusing local and
+ *   private addresses, re-checked on every redirect, size-capped) and kept tool results (one per name, capped per thread);
+ *   all are deleted when their thread settles.
  */
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -26,6 +28,12 @@ export interface McpDownload {
   bytes: number;
 }
 
+export interface McpKeptResult {
+  name: string;
+  path: string;
+  bytes: number;
+}
+
 export interface McpDownloadStoreOptions extends PublicHttpsFetchPorts {
   directory: string;
   database: {
@@ -40,11 +48,18 @@ export interface McpDownloadStoreOptions extends PublicHttpsFetchPorts {
   };
   onError(error: unknown): void;
   maxBytes?: number;
+  maxKeptBytesPerThread?: number;
   now?: () => number;
 }
 
 const MAX_BYTES = 50 * 1024 * 1024;
 const NAME_LIMIT = 120;
+const KEPT_NAME = /^[A-Za-z0-9_-]{1,64}$/u;
+const KEPT_PREFIX = "kept-";
+/** `-` plus a UUID. */
+const KEPT_SUFFIX_LENGTH = 37;
+const MAX_KEPT_BYTES = 4 * 1024 * 1024;
+const MAX_KEPT_BYTES_PER_THREAD = 256 * 1024 * 1024;
 
 const EXTENSIONS: Record<string, string> = {
   "text/html": "html", "text/markdown": "md", "text/plain": "txt", "text/csv": "csv", "application/json": "json",
@@ -144,6 +159,68 @@ export default class McpDownloadStore {
     }
     this.#owners.add(threadId);
     return { name, path: file, contentType, bytes };
+  }
+
+  /**
+   * Keep a tool result as pretty-printed JSON, so agents can read slices of it with file tools and components can take it as a
+   * prop. A name holds one result; keeping it again replaces the old file. The oldest kept results go past the thread's cap.
+   */
+  async keep(threadId: string, name: string, value: unknown): Promise<McpKeptResult> {
+    if (!KEPT_NAME.test(name)) throw new Error("Kept result names use 1-64 letters, digits, - or _.");
+    const body = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+    if (body.byteLength > MAX_KEPT_BYTES) throw new Error(`The result is larger than ${MAX_KEPT_BYTES} bytes and cannot be kept.`);
+    const id = `${KEPT_PREFIX}${name}-${randomUUID()}`;
+    const directory = path.join(this.options.directory, id);
+    const file = path.join(directory, `${name}.json`);
+    await mkdir(directory, { recursive: true });
+    try {
+      await writeFile(file, body);
+      await this.options.database.executeTransaction([insertRow(mcpDownloads, {
+        id, thread_id: threadId, directory, created_at: (this.options.now ?? Date.now)(),
+      })]);
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
+    this.#owners.add(threadId);
+    const kept = await this.#kept(threadId);
+    const evicted = kept.filter(entry => entry.id !== id && entry.name === name);
+    let rest = kept.filter(entry => !evicted.includes(entry));
+    let bytes = rest.reduce((sum, entry) => sum + entry.bytes, 0);
+    while (bytes > (this.options.maxKeptBytesPerThread ?? MAX_KEPT_BYTES_PER_THREAD)) {
+      const oldest = rest[0]!;
+      if (oldest.id === id) break;
+      evicted.push(oldest);
+      rest = rest.slice(1);
+      bytes -= oldest.bytes;
+    }
+    await this.#remove(evicted);
+    return { name, path: file, bytes: body.byteLength };
+  }
+
+  /** The kept result's value, or null when the thread kept nothing under that name. */
+  async readKept(threadId: string, name: string): Promise<unknown> {
+    const entry = (await this.#kept(threadId)).findLast(candidate => candidate.name === name);
+    if (!entry) return null;
+    return JSON.parse(await readFile(entry.file, "utf8")) as unknown;
+  }
+
+  /** A thread's kept results, oldest first. */
+  async #kept(threadId: string) {
+    const rows = await this.options.database.query(selectRows(mcpDownloads, { where: { thread_id: threadId } }));
+    const entries = await Promise.all(rows.filter(row => row.id.startsWith(KEPT_PREFIX)).map(async row => {
+      const name = row.id.slice(KEPT_PREFIX.length, -KEPT_SUFFIX_LENGTH);
+      const file = path.join(row.directory, `${name}.json`);
+      const bytes = await stat(file).then(info => info.size, () => 0);
+      return { id: row.id, name, file, directory: row.directory, bytes, createdAt: row.created_at };
+    }));
+    return entries.sort((left, right) => left.createdAt - right.createdAt);
+  }
+
+  async #remove(entries: readonly { id: string; directory: string }[]) {
+    if (!entries.length) return;
+    await Promise.all(entries.map(entry => rm(entry.directory, { recursive: true, force: true })));
+    await this.options.database.executeTransaction(entries.map(entry => deleteRows(mcpDownloads, { id: entry.id })));
   }
 
   async #release(threadId: string) {

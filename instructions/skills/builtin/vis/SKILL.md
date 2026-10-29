@@ -5,13 +5,14 @@ description: Use when showing the user a visual draft (mockup, layout, chart, co
 
 ## Session
 
-Commands are CLI-only (`wb vis --help`); run them through your shell.
+<!-- Managed agents on harnesses that block the wb CLI get an error pointing at mcp_call; naming both routes avoids that wasted call. -->
+Run commands through your shell (`wb vis --help`), or via `mcp_call` server `wb` (`vis_*` tools) where the wb CLI is blocked.
 
 - `wb vis start [--project <.|folder|kit>] <path>` shows file live in user's thread until `wb vis end <path>`. Edits re-render automatically; last good render stays while next builds.
 - Write file in cwd project (`.html`, `.svg`, `.tsx`, `.jsx`). Gitignored location (e.g. `.workbench/`) unless user wants it kept.
 - One live session per file. End sessions when done; settling ends leftovers.
 - Start snapshot and end snapshot appear in transcript. User may end session themselves.
-- `wb vis test --markup '<Component ... />'` screenshots active skill-component markup or returns an error.
+- `wb vis test --markup '<Component ... />'` screenshots active skill-component markup or returns an error. A prop value `"@result:<name>"` becomes the result kept by `mcp_call` `keep: "<name>"`.
 
 ## Pick a context (`--project`)
 

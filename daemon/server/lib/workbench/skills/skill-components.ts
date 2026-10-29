@@ -65,7 +65,8 @@ export function formatSkillComponentHints(content: string): string {
     return `<${fileName.slice(0, fileName.length - path.posix.extname(fileName).length)}>`;
   });
   if (!tags.length) return "";
-  return `\n\nChat components: ${tags.join(", ")}. Test markup with the wb \`vis_test\` tool (CLI: \`wb vis test --markup '<Component ... />'\`).`;
+  return `\n\nChat components: ${tags.join(", ")}. Test markup with the wb \`vis_test\` tool (CLI: \`wb vis test --markup '<Component ... />'\`).`
+    + " Pass MCP data without retyping it: `mcp_call` with `keep: \"<name>\"` (and `keepOnly: true` to skip the inline copy), then a prop value `\"@result:<name>\"`.";
 }
 
 export async function resolveSkillComponents(skillPath: string, content: string, onlyName?: string): Promise<SkillComponent[]> {

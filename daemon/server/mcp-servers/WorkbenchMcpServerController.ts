@@ -37,7 +37,7 @@ import McpServerConnection, {
   type McpServerConnectionPort, type McpServerEndpoint, type McpServerLaunch, type McpServerTool, type McpServerTrafficFrame,
 } from "./McpServerConnection";
 import McpServerOAuthProvider, { McpServerSignInRequiredError, type McpServerOAuthStore } from "./McpServerOAuthProvider";
-import { formatMcpToolListing, formatMcpToolResult, type McpToolListing } from "./mcp-tool-search";
+import { describeMcpKeptValue, formatMcpToolListing, formatMcpToolResult, readMcpResultValue, type McpToolListing } from "./mcp-tool-search";
 import { matchesMcpResultLink, mcpResultLinks } from "./mcp-result-links";
 import type McpDownloadStore from "./McpDownloadStore";
 import type McpPackageInstaller from "./McpPackageInstaller";
@@ -56,7 +56,7 @@ export interface WorkbenchMcpServerOptions {
    */
   resolveProject?: (projectId: string) => Promise<{ id: string; rootPath: string; identityKey: string | null }>;
   /** Fetches links servers sent; absent where downloads are not offered. */
-  downloads?: Pick<McpDownloadStore, "download">;
+  downloads?: Pick<McpDownloadStore, "download" | "keep">;
   /** Installs and launches npm-packaged stdio servers; absent where they are not offered. */
   packages?: Pick<McpPackageInstaller, "state" | "install" | "launch" | "remove">;
   user?: () => string;
@@ -566,8 +566,12 @@ export default class WorkbenchMcpServerController {
 
   /** Forward one call only when the tool is both allowed and currently offered; project-scoped servers learn the calling thread. */
   async call(
-    input: { server: string; tool: string; arguments: Record<string, unknown> }, caller: McpServerCaller | null, signal: AbortSignal,
+    input: { server: string; tool: string; arguments: Record<string, unknown>; keep?: string | undefined; keepOnly?: boolean | undefined },
+    caller: McpServerCaller | null, signal: AbortSignal,
   ): Promise<McpServerCallOutcome> {
+    if (input.keepOnly && !input.keep) throw new Error("keepOnly needs keep.");
+    if (input.keep && !caller) throw new Error("Only a thread can keep results.");
+    if (input.keep && !this.options.downloads) throw new Error("Kept results are not available here.");
     const server = await this.#named(input.server, caller);
     if (!this.#allows(server, input.tool)) throw new Error(`${input.server}/${input.tool} is not enabled. Ask the user to enable it with mcp_request.`);
     if (server.header && server.header.value === null) throw new Error(UNREADABLE_CREDENTIAL);
@@ -577,7 +581,23 @@ export default class WorkbenchMcpServerController {
     const result = await this.#connection(server).callTool(input.tool, input.arguments, signal, meta);
     const links = mcpResultLinks(result);
     if (links.length) this.#sentLinks.set(server.id, [...links, ...this.#sentLinks.get(server.id) ?? []].slice(0, SENT_LINK_LIMIT));
-    return { text: `${formatMcpToolResult(result)}${links.length ? LINK_HINT : ""}`, isError: result.isError === true };
+    const linkHint = links.length ? LINK_HINT : "";
+    if (!input.keep || !caller || !this.options.downloads || result.isError === true) {
+      const unkept = input.keep && result.isError === true ? "The result was an error, so it was not kept.\n" : "";
+      return { text: `${formatMcpToolResult(result)}${linkHint}${unkept}`, isError: result.isError === true };
+    }
+    const value = readMcpResultValue(result);
+    const kept = await this.options.downloads.keep(caller.threadId, input.keep, value);
+    const keptLine = `Kept as \`@result:${kept.name}\` (${describeMcpKeptValue(value, kept.bytes)}). Full JSON: ${kept.path}\n`;
+    // Notes beside a JSON result, such as a wrapper's truncation warning, still reach a keepOnly caller.
+    const notes = typeof value === "string" ? [] : result.content.flatMap(part => {
+      if (part.type !== "text") return [];
+      try { JSON.parse(part.text); return []; } catch { return [`${part.text}\n`]; }
+    });
+    return {
+      text: input.keepOnly ? `${notes.join("")}${keptLine}` : `${formatMcpToolResult(result)}${linkHint}${keptLine}`,
+      isError: false,
+    };
   }
 
   /**

@@ -15,7 +15,7 @@ import { Script } from "node:vm";
 import type * as Esbuild from "../app/node_modules/esbuild/lib/main";
 import { projectRoot } from "../shared/project-root.ts";
 import {
-  readThreadComponentTree, ThreadCompiledComponentSchema, ThreadComponentStyleBuildSchema, readThreadComponentPreview,
+  readThreadComponentTree, ThreadComponentRenderInputSchema, ThreadComponentStyleBuildSchema, readThreadComponentPreview,
   type ThreadComponentNode, type ThreadCompiledComponent, type ThreadCompiledStyle, type ThreadComponentPreview,
 } from "../shared/workbench/thread/thread-component-tree.ts";
 import { conformToZodSchema } from "../shared/workbench/zod-schema-conformer.ts";
@@ -179,7 +179,9 @@ export async function compileSkillStyles(files: readonly string[], skillRoot: st
   };
 }
 
-export async function renderSkillComponent(compiled: CompiledSkillComponent, name: string, markup: string): Promise<ThreadComponentNode> {
+export async function renderSkillComponent(
+  compiled: CompiledSkillComponent, name: string, markup: string, results: Readonly<Record<string, unknown>> = {},
+): Promise<ThreadComponentNode> {
   if (!/^[A-Z][A-Za-z0-9_]*$/u.test(name)) throw new Error("Invalid component name.");
   const parsed = readThreadComponentMarkup(markup);
   if (!parsed || parsed.end !== markup.length || parsed.name !== name) throw new Error("Expected one complete component invocation.");
@@ -194,7 +196,20 @@ export async function renderSkillComponent(compiled: CompiledSkillComponent, nam
     if (typeof __wbDefault !== "function") throw new Error("Component must have a default function export.");
     const __wbResult = { exports: {} };
     const __wbChildren = ${JSON.stringify(parsed.body === null ? null : childMarkdown(parsed.body.trim()))};
+    const __wbResults = ${JSON.stringify(results)};
+    const __wbResolve = value => {
+      if (typeof value === "string") {
+        const reference = /^@result:([A-Za-z0-9_-]{1,64})$/.exec(value);
+        if (!reference) return value;
+        if (!Object.hasOwn(__wbResults, reference[1])) throw new Error("No kept MCP result named " + reference[1] + " in this thread.");
+        return __wbResults[reference[1]];
+      }
+      if (Array.isArray(value)) return value.map(__wbResolve);
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, __wbResolve(item)]));
+      return value;
+    };
     const __wbCreateElement = (type, props, ...children) => {
+      if (type === __wbDefault) props = __wbResolve(props ?? {});
       if (type === __wbDefault && __wbChildren !== null) children = [__wbChildren];
       const value = { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) };
       return typeof type === "function" ? type(value) : { $workbench: "element", type, props: value };
@@ -212,7 +227,7 @@ export async function renderSkillComponent(compiled: CompiledSkillComponent, nam
     timeout: COMPONENT_EXECUTION_TIMEOUT_MS, contextCodeGeneration: { strings: false, wasm: false }, microtaskMode: "afterEvaluate",
   });
   if (typeof serialized !== "string") throw new Error("Component output must be a serializable element tree.");
-  return readThreadComponentTree(JSON.parse(serialized));
+  return readThreadComponentTree(JSON.parse(serialized), { remoteImages: true });
 }
 
 export async function renderSkillComponentPreview(
@@ -245,16 +260,17 @@ async function main() {
     if (!parsed.success || parsed.discardedPaths.length || parsed.repairedPaths.length) throw new Error("Invalid component style build.");
     process.stdout.write(JSON.stringify(await compileSkillStyles(parsed.data.files, parsed.data.root)));
   }
-  else if (action === "render" && file && name && markup) {
-    const parsed = conformToZodSchema(ThreadCompiledComponentSchema, JSON.parse(await readFile(file, "utf8")));
+  else if (action === "render" && file) {
+    const parsed = conformToZodSchema(ThreadComponentRenderInputSchema, JSON.parse(await readFile(file, "utf8")));
     if (!parsed.success || parsed.discardedPaths.length || parsed.repairedPaths.length) {
-      throw new Error("Compiled component is invalid.");
+      throw new Error("Component render input is invalid.");
     }
-    process.stdout.write(JSON.stringify(await renderSkillComponent(parsed.data, name, markup)));
+    const input = parsed.data;
+    process.stdout.write(JSON.stringify(await renderSkillComponent(input.compiled, input.name, input.markup, input.results)));
   } else if (action === "preview" && file) {
     const result = readThreadComponentPreview(JSON.parse(await readFile(file, "utf8")));
     process.stdout.write(JSON.stringify(await renderSkillComponentPreview(result)));
-  } else throw new Error("Usage: skill-component-build.mts compile <file> | styles <input> | render <compiled> <name> <markup> | preview <result>");
+  } else throw new Error("Usage: skill-component-build.mts compile <file> | styles <input> | render <input> | preview <result>");
 }
 
 if (scriptPath) {

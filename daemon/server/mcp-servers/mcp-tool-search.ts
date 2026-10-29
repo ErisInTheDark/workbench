@@ -4,6 +4,7 @@
  * - formatMcpToolListing: agent-facing text for `mcp_tools`; allowed tools first, then disabled ones under one hint; a query ranks matches (a wrapped server's own search leads) and adds TypeScript-like input types.
  * - formatWorkbenchToolSection: the same ranked text for Workbench's deferred tools under server `wb`.
  * - formatMcpToolResult: agent-facing text for one `mcp_call` result, including structured content its text does not already mirror.
+ * - readMcpResultValue/describeMcpKeptValue: a result as keepable data, and a one-line description of kept data.
  */
 import { isDeepStrictEqual } from "node:util";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -128,6 +129,24 @@ export function formatMcpToolResult(result: CallToolResult) {
     parts.push(JSON.stringify(structured, null, 2));
   }
   return `${parts.join("\n") || "(no content)"}\n`;
+}
+
+/** A result as data: its structured content, else its first JSON text part, else its text. */
+export function readMcpResultValue(result: CallToolResult): unknown {
+  if (result.structuredContent) return result.structuredContent;
+  const texts = result.content.flatMap(part => part.type === "text" ? [part.text] : []);
+  for (const text of texts) {
+    try { return JSON.parse(text) as unknown; } catch { /* not JSON */ }
+  }
+  return texts.join("\n");
+}
+
+/** One line telling an agent what it kept without showing the data. */
+export function describeMcpKeptValue(value: unknown, bytes: number) {
+  const shape = Array.isArray(value) ? `JSON array of ${value.length} items`
+    : value && typeof value === "object" ? `JSON object with keys ${Object.keys(value).slice(0, 12).join(", ") || "(none)"}`
+      : "text";
+  return `${bytes.toLocaleString("en-NZ")} bytes, ${shape}`;
 }
 
 /**

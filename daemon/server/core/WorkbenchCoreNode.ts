@@ -138,6 +138,7 @@ function createWorkbenchCoreFeature(
     context, database, transcript, lookup, projectCatalog, settings, run, lease,
     providers: () => providers,
     harnesses: () => harnesses,
+    keptResults: () => mcpDownloads,
     publishRuntime: (threadId, change) => turns.publish(threadId, change),
     setSummaryFacts,
   });

@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - WorkbenchComponentTarget: message and markup identifying a rendered component.
- * - WorkbenchComponentsOptions: skill, compilation and transcript asset ports.
- * - default WorkbenchComponentsController: resolve active templates and retain their rendered results.
+ * - WorkbenchComponentsOptions: skill, compilation, kept-result, image and transcript asset ports.
+ * - default WorkbenchComponentsController: resolve active templates, feed them referenced kept MCP results, inline their
+ *   images and retain their rendered results.
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -15,6 +16,7 @@ import type {
   ThreadComponentStyle, ThreadComponentValue,
 } from "workbench-shared/workbench/thread/thread-component-tree";
 import { readSkillComponentPaths, resolveSkillComponents } from "../lib/workbench/skills/skill-components";
+import { inlineComponentImages, type ComponentImageFetch } from "./component-images";
 
 const MAX_COMPILED_CACHE_BYTES = 16 * 1024 * 1024;
 /** A template can emit a markdown body naming its own invocation; this bounds that recursion. */
@@ -36,7 +38,12 @@ export interface WorkbenchComponentsOptions {
   skills(threadId: string): Promise<readonly WorkbenchSkillDefinition[]>;
   compile(file: string, threadId: string, signal?: AbortSignal, skillRoot?: string): Promise<ThreadCompiledComponent>;
   compileStyles(files: string[], threadId: string, skillRoot: string): Promise<ThreadCompiledStyle>;
-  evaluate(compiled: ThreadCompiledComponent, name: string, markup: string, threadId: string, signal?: AbortSignal): Promise<ThreadComponentNode>;
+  evaluate(
+    compiled: ThreadCompiledComponent, name: string, markup: string, results: Record<string, unknown>, threadId: string, signal?: AbortSignal,
+  ): Promise<ThreadComponentNode>;
+  /** The thread's kept MCP result for each name it has; missing names are absent. */
+  results?(threadId: string, names: readonly string[]): Promise<Record<string, unknown>>;
+  fetchImage?: ComponentImageFetch;
   preview?(result: ThreadComponentPreview, threadId: string, signal?: AbortSignal): Promise<string>;
   read(target: WorkbenchComponentTarget): Promise<ThreadComponentNode | null>;
   write(target: WorkbenchComponentTarget, tree: ThreadComponentNode): Promise<ThreadComponentNode>;
@@ -53,7 +60,7 @@ export default class WorkbenchComponentsController {
     const saved = await this.options.read(target);
     if (saved) return { tree: saved, styleRevisions: [] };
     const result = await this.#render(target.threadId, target.markup);
-    const tree = await this.options.write(target, result.tree);
+    const tree = await this.options.write(target, await this.#inline(result.tree));
     return readThreadComponentRender({ tree, styleRevisions: result.styles.map(({ path, revision }) => ({ path, revision })) });
   }
 
@@ -61,7 +68,22 @@ export default class WorkbenchComponentsController {
     if (!this.options.preview) throw new Error("Component preview is unavailable.");
     const result = await this.#render(threadId, markup, signal);
     const css = [...new Set(result.styles.map(style => style.css))].filter(Boolean).join("\n");
-    return await this.options.preview({ tree: result.tree, css }, threadId, signal);
+    return await this.options.preview({ tree: await this.#inline(result.tree, signal), css }, threadId, signal);
+  }
+
+  async #inline(tree: ThreadComponentNode, signal?: AbortSignal) {
+    const fetchImage = this.options.fetchImage ?? (async () => { throw new Error("Component images are unavailable."); });
+    return await inlineComponentImages(tree, fetchImage, signal);
+  }
+
+  async #results(threadId: string, opening: string): Promise<Record<string, unknown>> {
+    const names = [...new Set([...opening.matchAll(/["']@result:([A-Za-z0-9_-]{1,64})["']/gu)].map(match => match[1]!))];
+    if (!names.length) return {};
+    if (!this.options.results) throw new Error("Kept MCP results are unavailable.");
+    const results = await this.options.results(threadId, names);
+    const missing = names.find(name => !Object.hasOwn(results, name));
+    if (missing) throw new Error(`No kept MCP result named ${missing} in this thread.`);
+    return results;
   }
 
   async styles(threadId: string, signal?: AbortSignal): Promise<ThreadComponentStyle[]> {
@@ -178,7 +200,10 @@ export default class WorkbenchComponentsController {
       this.#compiled.delete(file);
       this.#compiled.set(file, cached);
     }
-    const evaluated = readThreadComponentTree(await this.options.evaluate(cached.compiled, invocation.name, source, threadId, signal));
+    const results = await this.#results(threadId, invocation.opening);
+    const evaluated = readThreadComponentTree(
+      await this.options.evaluate(cached.compiled, invocation.name, source, results, threadId, signal), { remoteImages: true },
+    );
     const styles = new Map<string, ThreadComponentStyle>();
     const ownStyle = await this.#style(skill, threadId);
     if (ownStyle) styles.set(ownStyle.path, ownStyle);
@@ -198,7 +223,7 @@ export default class WorkbenchComponentsController {
       }));
       return { ...value, props: { ...props, components: Object.fromEntries(resolved) } };
     };
-    const tree = readThreadComponentTree(await resolveNested({ ...evaluated }));
+    const tree = readThreadComponentTree(await resolveNested({ ...evaluated }), { remoteImages: true });
     signal?.throwIfAborted();
     return { tree, styles: [...styles.values()] };
   }

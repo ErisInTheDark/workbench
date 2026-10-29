@@ -512,10 +512,13 @@ test("downloads fetch, without asking, only links the server itself sent", async
   try {
     const fetched: string[] = [];
     const owner = create({
-      downloads: { download: async (threadId, url, name) => {
-        fetched.push(`${threadId} ${url} ${name}`);
-        return { name: "Doc.html", path: "/cache/Doc.html", contentType: "text/html", bytes: 9 };
-      } },
+      downloads: {
+        download: async (threadId, url, name) => {
+          fetched.push(`${threadId} ${url} ${name}`);
+          return { name: "Doc.html", path: "/cache/Doc.html", contentType: "text/html", bytes: 9 };
+        },
+        keep: async () => { throw new Error("unexpected keep"); },
+      },
     });
     const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
     await owner.update({ action: "setTools", id: server!.id, tools: ["EXPORT"] });
@@ -529,6 +532,41 @@ test("downloads fetch, without asking, only links the server itself sent", async
 
     assert.match(await owner.downloadLink({ threadId: "t", server: "docs", url: exported, name: "Doc" }, null, signal()), /Saved Doc\.html .* to \/cache\/Doc\.html/u);
     assert.deepEqual(fetched, [`t ${new URL(exported).href} Doc`]);
+  } finally { close(); }
+});
+
+test("a kept call saves its data for the calling thread, and keepOnly withholds the data but not wrapper notes", async () => {
+  const docs = new FakeServer("docs");
+  docs.tools = [tool("SEARCH")];
+  const { create, close } = setup({ docs });
+  try {
+    const kept: { threadId: string; name: string; value: unknown }[] = [];
+    const owner = create({
+      downloads: {
+        download: async () => { throw new Error("unexpected download"); },
+        keep: async (threadId, name, value) => { kept.push({ threadId, name, value }); return { name, path: `/cache/${name}.json`, bytes: 42 }; },
+      },
+    });
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH"] });
+    const caller = { threadId: "thread", cwd: "/project", projectId: null };
+    const data = { successful: true, data: { cards: [{ id: "secret-card-name", url: "https://files.example.test/card?x=1" }] } };
+    docs.result = { content: [{ type: "text", text: JSON.stringify(data) }, { type: "text", text: "Composio truncated this reply" }] };
+
+    const full = await owner.call({ server: "docs", tool: "SEARCH", arguments: {}, keep: "doing" }, caller, signal());
+    assert.match(full.text, /secret-card-name/u);
+    assert.match(full.text, /mcp_download/u);
+    assert.match(full.text, /Kept as `@result:doing` \(42 bytes, JSON object with keys successful, data\)\. Full JSON: \/cache\/doing\.json/u);
+    const only = await owner.call({ server: "docs", tool: "SEARCH", arguments: {}, keep: "doing", keepOnly: true }, caller, signal());
+    assert.doesNotMatch(only.text, /secret-card-name/u);
+    assert.doesNotMatch(only.text, /mcp_download/u, "no hint about links the caller was not shown");
+    assert.match(only.text, /Composio truncated this reply/u);
+    assert.deepEqual(kept, [{ threadId: "thread", name: "doing", value: data }, { threadId: "thread", name: "doing", value: data }]);
+
+    await assert.rejects(owner.call({ server: "docs", tool: "SEARCH", arguments: {}, keep: "doing" }, null, signal()), /Only a thread/u);
+    docs.result = { isError: true, content: [{ type: "text", text: "boom" }] };
+    assert.match((await owner.call({ server: "docs", tool: "SEARCH", arguments: {}, keep: "doing" }, caller, signal())).text, /not kept/u);
+    assert.equal(kept.length, 2);
   } finally { close(); }
 });
 

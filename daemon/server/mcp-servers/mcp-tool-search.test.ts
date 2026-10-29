@@ -3,7 +3,16 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatMcpToolListing, formatMcpToolResult } from "./mcp-tool-search";
+import { formatMcpToolListing, formatMcpToolResult, readMcpResultValue } from "./mcp-tool-search";
+
+test("a kept result prefers structured content, then a JSON text part, then plain text", () => {
+  const structured = { cards: [1] };
+  assert.deepEqual(readMcpResultValue({ content: [{ type: "text", text: "summary" }], structuredContent: structured }), structured);
+  assert.deepEqual(readMcpResultValue({ content: [
+    { type: "text", text: '{"successful":true,"data":{"cards":[]}}' }, { type: "text", text: "a hint line" },
+  ] }), { successful: true, data: { cards: [] } });
+  assert.equal(readMcpResultValue({ content: [{ type: "text", text: "plain" }, { type: "text", text: "words" }] }), "plain\nwords");
+});
 
 test("a wrapped server's own search matches are listed first, in its order, even without local term hits", () => {
   const tool = (name: string, description: string) => ({ name, description, inputSchema: { type: "object" } });

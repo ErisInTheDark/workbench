@@ -28,6 +28,7 @@ const toolArguments = z.record(z.string(), z.unknown());
 const reason = z.string().trim().min(1).max(1000);
 const link = z.string().trim().min(1).max(8000);
 const fileName = z.string().trim().min(1).max(200);
+const keepName = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u, "Use 1-64 letters, digits, - or _.");
 const caller = { cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1) };
 /** Unmanaged callers have no thread, so they see global servers only. */
 const optionalCaller = { cwd: caller.cwd.optional(), harness: caller.harness.optional(), threadId: caller.threadId.optional() };
@@ -47,7 +48,8 @@ export const WorkbenchMcpRequestSchema = z.discriminatedUnion("action", [
     action: z.literal("request"), server: McpServerNameSchema, tool: McpServerToolNameSchema, reason, ...caller, requestKey,
   }).strict(),
   z.object({
-    action: z.literal("call"), server: McpServerNameSchema, tool: McpServerToolNameSchema, arguments: toolArguments, ...optionalCaller,
+    action: z.literal("call"), server: McpServerNameSchema, tool: McpServerToolNameSchema, arguments: toolArguments,
+    keep: keepName.optional(), keepOnly: z.boolean().optional(), ...optionalCaller,
   }).strict(),
   z.object({ action: z.literal("connect"), server: McpServerNameSchema, url: McpServerUrlSchema, reason, ...caller, requestKey }).strict(),
   z.object({ action: z.literal("reload"), server: McpServerNameSchema, ...optionalCaller }).strict(),
@@ -113,8 +115,8 @@ const mcpRequest = defineWorkbenchAgentCommand({
 
 const mcpCall = defineWorkbenchAgentCommand({
   words: ["mcp", "call"],
-  usage: "wb mcp call --server <name> --tool <name> [--arguments-json <json>]",
-  description: "Run one enabled tool on a user-added MCP server. Find tools and their input schemas with mcp_tools first.",
+  usage: "wb mcp call --server <name> --tool <name> [--arguments-json <json>] [--keep <name> [--keep-only]]",
+  description: "Run one enabled tool on a user-added MCP server. Find tools and their input schemas with mcp_tools first. keep saves the result as a JSON file and as `@result:<name>` for chat component props; keepOnly returns only its path and shape.",
   effects: { readOnly: false, openWorld: true },
   helpGroups: ["mcp"],
   mcpCodeModeEligible: true,
@@ -123,11 +125,14 @@ const mcpCall = defineWorkbenchAgentCommand({
     server: McpServerNameSchema.describe("MCP server name, as listed by mcp_tools."),
     tool: McpServerToolNameSchema.describe("Tool name on that server."),
     arguments: toolArguments.default({}).describe("Tool input matching its input schema."),
+    keep: keepName.optional().describe("Save the result under this name for this thread."),
+    keepOnly: z.boolean().optional().describe("With keep, return only the saved file's path and shape, not the result."),
   }).strict(),
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, {
-      values: ["--server", "--tool", "--arguments-json"], leadingDashValues: ["--arguments-json"],
+      values: ["--server", "--tool", "--arguments-json", "--keep"], boolean: ["--keep-only"], leadingDashValues: ["--arguments-json"],
     });
+    const keep = flags.optional("--keep");
     const raw = flags.optional("--arguments-json");
     let parsed: unknown = {};
     if (raw !== null) {
@@ -137,13 +142,17 @@ const mcpCall = defineWorkbenchAgentCommand({
     }
     const input = toolArguments.safeParse(parsed);
     if (!input.success) throw new WorkbenchCommandArgumentError("unexpectedArgument", "--arguments-json", "--arguments-json must be a JSON object.");
-    return { server: flags.required("--server"), tool: flags.required("--tool"), arguments: input.data };
+    return {
+      server: flags.required("--server"), tool: flags.required("--tool"), arguments: input.data,
+      ...keep !== null ? { keep } : {}, ...flags.has("--keep-only") ? { keepOnly: true } : {},
+    };
   },
   buildRequest(input, context) {
     // A JSON round trip turns arbitrary validated input into transportable JSON values.
     const args = JSON.parse(JSON.stringify(input.arguments)) as { [key: string]: JsonValue };
     return postWorkbenchAgentCommand("/internal/mcp", {
-      action: "call", server: input.server, tool: input.tool, arguments: args, ...optionalManagedBody(context),
+      action: "call", server: input.server, tool: input.tool, arguments: args,
+      ...input.keep ? { keep: input.keep } : {}, ...input.keepOnly ? { keepOnly: true } : {}, ...optionalManagedBody(context),
     });
   },
 });

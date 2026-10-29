@@ -16,7 +16,10 @@ import McpDownloadStore, { type McpDownloadStoreOptions } from "./McpDownloadSto
 
 const PUBLIC = "203.0.113.10";
 
-async function setup(responses: Record<string, () => Response>, addresses: Record<string, string> = {}) {
+async function setup(
+  responses: Record<string, () => Response>, addresses: Record<string, string> = {},
+  overrides: Partial<McpDownloadStoreOptions> = {},
+) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "mcp-downloads-"));
   const sqlite = new Database(":memory:");
   sqlite.exec(renderCreateTable(mcpDownloads));
@@ -55,6 +58,7 @@ async function setup(responses: Record<string, () => Response>, addresses: Recor
       if (!respond) throw new Error(`unexpected fetch ${url}`);
       return respond();
     },
+    ...overrides,
   });
   const store = create();
   return {
@@ -121,6 +125,39 @@ test("a download over the size cap is aborted and leaves no partial file", async
   try {
     await assert.rejects(store.download(THREAD, "https://files.example.test/big", undefined, signal()), /larger than/u);
     assert.deepEqual(await files(), []);
+  } finally { await close(); }
+});
+
+test("a kept result is readable JSON, replaced by its name, scoped to its thread and deleted when the thread settles", async () => {
+  const { store, settle, settledThreads, files, rows, close } = await setup({});
+  try {
+    settledThreads.set(THREAD, false).set("thread-b", false);
+    store.start();
+    await store.idle();
+    const first = await store.keep(THREAD, "doing", { cards: [{ id: "a" }] });
+    assert.match(await readFile(first.path, "utf8"), /\n {2}"cards": \[/u, "pretty-printed so file tools can read slices");
+    await store.keep(THREAD, "doing", { cards: [{ id: "b" }] });
+    await store.keep("thread-b", "doing", { other: true });
+    assert.deepEqual(await store.readKept(THREAD, "doing"), { cards: [{ id: "b" }] });
+    assert.equal(await store.readKept(THREAD, "missing"), null);
+    assert.deepEqual((await files()).sort(), ["doing.json", "doing.json"], "keeping a name again removes the old file");
+    await assert.rejects(store.keep(THREAD, "../escape", {}), /names use/u);
+    settle(THREAD);
+    await store.dispose();
+    assert.equal(await store.readKept(THREAD, "doing"), null);
+    assert.deepEqual(rows(), [{ thread_id: "thread-b" }]);
+  } finally { await close(); }
+});
+
+test("past its byte cap a thread drops its oldest kept results, never the newest", async () => {
+  const { store, close } = await setup({}, {}, { maxKeptBytesPerThread: 60 });
+  try {
+    for (let index = 0; index < 4; index += 1) await store.keep(THREAD, `r${index}`, { value: "x".repeat(6) });
+    assert.equal(await store.readKept(THREAD, "r0"), null);
+    assert.equal(await store.readKept(THREAD, "r1"), null);
+    assert.deepEqual(await store.readKept(THREAD, "r3"), { value: "xxxxxx" });
+    await store.keep(THREAD, "huge", { value: "x".repeat(200) });
+    assert.deepEqual(await store.readKept(THREAD, "huge"), { value: "x".repeat(200) });
   } finally { await close(); }
 });
 

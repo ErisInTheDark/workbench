@@ -113,6 +113,36 @@ test("a template whose body names its own invocation fails instead of recursing 
   assert.ok(evaluations < 20);
 });
 
+test("referenced kept results reach the template, and the saved tree carries its images inline", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("components-results-");
+  context.after(() => temporary.dispose());
+  const skillPath = join(temporary.path, "SKILL.md");
+  const content = "---\nworkbench_components:\n  - Cards.tsx\n---\n";
+  await writeFile(skillPath, content);
+  await writeFile(join(temporary.path, "Cards.tsx"), "cards");
+  const asked: string[][] = [];
+  const saved: unknown[] = [];
+  const controller = new WorkbenchComponentsController({
+    skills: async () => [{ path: skillPath, relativePath: "SKILL.md", name: "cards", description: "", content }],
+    compile: async file => ({ code: "cards", inputs: [file] }),
+    compileStyles: async files => ({ css: "", inputs: files }),
+    evaluate: async (_compiled, _name, _markup, results) => ({ $workbench: "element", type: "img", props: {
+      alt: JSON.stringify(results), src: "https://img.example.test/a.png",
+    } }),
+    results: async (_threadId, names) => { asked.push([...names]); return names.includes("doing") ? { doing: { cards: 2 } } : {}; },
+    fetchImage: async () => ({ contentType: "image/png", bytes: Buffer.from("png") }),
+    read: async () => null,
+    write: async (_target, tree) => { saved.push(tree); return tree; },
+  });
+  const rendered = await controller.renderMessage({ threadId: "thread", itemId: "item", markup: '<Cards lists={[{ cards: "@result:doing" }]} />' });
+  assert.deepEqual(asked, [["doing"]]);
+  assert.equal(rendered.tree.props.alt, JSON.stringify({ doing: { cards: 2 } }));
+  assert.equal(rendered.tree.props.src, `data:image/png;base64,${Buffer.from("png").toString("base64")}`);
+  assert.equal(JSON.stringify(saved).includes("https://"), false);
+  await assert.rejects(controller.renderMessage({ threadId: "thread", itemId: "other", markup: '<Cards lists="@result:gone" />' }),
+    /No kept MCP result named gone in this thread/u);
+});
+
 test("one active skill shares its stylesheet across simultaneous requests and drops it on deactivation", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("skill-styles-owner-");
   context.after(() => temporary.dispose());
