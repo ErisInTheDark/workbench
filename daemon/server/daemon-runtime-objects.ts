@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - DaemonReloadableModules: helper modules consumed dynamically by persistent provider bridges.
+ * - DaemonReloadableModules: reloadable helper modules the process shell reads through the core node.
  * - DaemonProviderNotification: provider event routed into the core node.
  * - DaemonCodexAppServerRuntime: persistent Codex app-server registration.
  * - DaemonBrowseExecution: warm Browse execution registration.
@@ -8,13 +8,10 @@
  * - DaemonTranscriptRegistration: SQLite transcript recording and recovery registration.
  * - DaemonRuntimeObjects: centralized live object registry contract populated by reloadable nodes.
  */
-import * as project from "./lib/project";
 import type CodexThreadOperations from "./providers/codex/CodexThreadOperations";
 import type WorkbenchDaemonSleepController from "./WorkbenchDaemonSleepController";
 import type CodexConfigurationController from "./providers/codex/CodexConfigurationController";
-import * as threadBootstrap from "./lib/thread-bootstrap";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
-import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { TranscriptStreamUpdate, TranscriptLiveUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type {
@@ -59,9 +56,6 @@ import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchProvider from "./providers/WorkbenchProvider";
 
 export type DaemonReloadableModules = {
-  project: Pick<typeof project, "isPathWithinRoot">;
-  threadBootstrap: Pick<typeof threadBootstrap, "buildThreadTitleBootstrapInstructions" | "normalizeThreadTitle">;
-  workbenchLibrary: Pick<typeof workbenchLibrary, "buildWorkbenchLibraryBootstrapInstructions">;
   workbenchPromptFiles: Pick<typeof workbenchPromptFiles, "buildWorkbenchPromptInstructions" | "buildWorkbenchThreadUtilityDeveloperInstructions" | "filterWorkbenchInstructionContent" | "listWorkbenchInstructionMechanics" | "ensureWorkbenchPromptFiles">;
 };
 

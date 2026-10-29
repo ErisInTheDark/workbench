@@ -8,7 +8,8 @@ import fileSystem from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
 
-import { discoverProjectIdentities, isPathWithinRoot, normalizeRelativePath, resolveProjectRootFromProjects } from "../lib/project";
+import { discoverProjectIdentities, resolveProjectRootFromProjects } from "../lib/project";
+import { isPathWithinRoot, normalizeRelativePath } from "../lib/project-paths";
 import { discoverWorkbenchProjectIcon } from "../lib/workbench/project/project-icon-discovery";
 import type { WorkbenchProjectCacheRecord, WorkbenchProjectPersistence, WorkbenchProjectStartup } from "../database/project/workbench-project-persistence";
 import type { ProjectId } from "workbench-shared/workbench/identity";

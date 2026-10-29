@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { appRoot } from "../../project";
+import { appRoot } from "../../project-root";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import { killProcessTree, lowerAgentProcessPriority } from "../../../process-helpers";
 import type WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";

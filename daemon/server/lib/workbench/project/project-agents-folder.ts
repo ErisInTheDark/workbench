@@ -7,7 +7,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { WorkbenchAgentDefinition, WorkbenchAgentOption } from "workbench-shared/types";
-import { normalizeRelativePath, safeResolveProjectPath, type ResolvedProject } from "../../project";
+import { normalizeRelativePath, safeResolveProjectPath } from "../../project-paths";
+import type { ResolvedProject } from "../../project";
 import {
   getAgentNameFromFileName,
   isAgentMarkdownFile,

@@ -14,7 +14,8 @@ import { isSamePath } from "workbench-shared/same-path";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 
 import { readRegisteredGitWorktrees, resolveGitDirectory } from "../lib/git";
-import { isPathWithinRoot, normalizeRelativePath, type ResolvedProjectRoot } from "../lib/project";
+import { isPathWithinRoot, normalizeRelativePath } from "../lib/project-paths";
+import type { ResolvedProjectRoot } from "../lib/project";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import { isMachineGitArcRoot } from "./machine-git-arc-roots";

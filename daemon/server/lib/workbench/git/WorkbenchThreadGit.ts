@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isSamePath } from "workbench-shared/same-path";
 
-import { isPathWithinRoot, normalizeRelativePath } from "../../project";
+import { isPathWithinRoot, normalizeRelativePath } from "../../project-paths";
 import { readRegisteredGitWorktrees } from "../../git";
 import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";

@@ -13,7 +13,7 @@ import type {
   WorkbenchProviderTools, WorkbenchShellRun,
 } from "../providers/provider-execution";
 import { prepareWorkbenchShellExecution } from "../exec/host-shell-command";
-import { isPathWithinRoot } from "../lib/project";
+import { isPathWithinRoot } from "../lib/project-paths";
 import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
 
 export interface WorkbenchToolAdmissionOptions {

@@ -7,11 +7,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import {
-  normalizeRelativePath,
-  resolveDiscoveredProject,
-  type ResolvedProject,
-} from "../../project";
+import { resolveDiscoveredProject, type ResolvedProject } from "../../project";
+import { normalizeRelativePath } from "../../project-paths";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { isLinkedGitWorktree, resolveGitDirectory } from "../../git";
 

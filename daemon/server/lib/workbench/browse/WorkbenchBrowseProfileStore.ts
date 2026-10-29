@@ -6,7 +6,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { normalizeRelativePath, projectRoot, safeResolveProjectPath } from "../../project";
+import { normalizeRelativePath, safeResolveProjectPath } from "../../project-paths";
+import { projectRoot } from "../../project-root";
 import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import { deleteRows, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { browseProfiles } from "../database/schema/browse-persistence-schema";

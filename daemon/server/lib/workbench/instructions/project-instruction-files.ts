@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { isPathWithinRoot } from "../../project";
+import { isPathWithinRoot } from "../../project-paths";
 import {
   createInstructionFileGeneration,
   type InstructionSourceSpan,

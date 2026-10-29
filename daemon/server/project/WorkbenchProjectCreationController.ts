@@ -16,7 +16,7 @@ import {
 } from "workbench-shared/workbench/project/project-creation";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import { initGitRepository, resolveGitDirectory } from "../lib/git";
-import { isPathWithinRoot } from "../lib/project";
+import { isPathWithinRoot } from "../lib/project-paths";
 
 export interface WorkbenchProjectCreationControllerOptions {
   catalog: {

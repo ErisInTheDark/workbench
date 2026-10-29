@@ -30,7 +30,7 @@ import WorkbenchThreadStateStore, {
 } from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
 import type { DaemonTranscriptRegistration } from "../daemon-runtime-objects";
-import { isPathWithinRoot } from "../lib/project";
+import { isPathWithinRoot } from "../lib/project-paths";
 import type { NativeTranscriptIdentityOwners } from "../transcript/thread-identity-transcript-mapping";
 
 interface ProjectRecord { id: ProjectId; rootPath: string }

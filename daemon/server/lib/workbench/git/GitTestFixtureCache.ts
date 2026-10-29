@@ -10,7 +10,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { projectRoot } from "../../project";
+import { projectRoot } from "../../project-root";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import {
   describeGitTestFixture,

@@ -12,7 +12,7 @@ import path from "node:path";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
 import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
-import { isPathWithinRoot } from "../lib/project";
+import { isPathWithinRoot } from "../lib/project-paths";
 import { isMachineGitWorktree } from "../lib/workbench/git/machine-git-worktrees";
 import { isMachineGitArcRoot, withMachineGitArcRoots } from "./machine-git-arc-roots";
 import GitArcAcceptanceProgress, { type GitArcAcceptance } from "./GitArcAcceptanceProgress";

@@ -6,12 +6,9 @@
  * Local helpers: construct reloadable modules and the core feature lifecycle.
  */
 import path from "node:path";
-import * as project from "../lib/project";
-import * as threadBootstrap from "../lib/thread-bootstrap";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
-import * as workbenchLibrary from "../lib/workbench-library";
 import type { WorkbenchProjectStartup } from "../database/project/workbench-project-persistence";
 import BrowseSessionCleanupSupervisor from "../browse/BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "../providers/codex/CodexBridgeNode";
@@ -81,7 +78,7 @@ interface WorkbenchCoreReloadState {
 }
 
 function createModules(): DaemonReloadableModules {
-  return { project, threadBootstrap, workbenchLibrary, workbenchPromptFiles };
+  return { workbenchPromptFiles };
 }
 
 function createWorkbenchCoreFeature(

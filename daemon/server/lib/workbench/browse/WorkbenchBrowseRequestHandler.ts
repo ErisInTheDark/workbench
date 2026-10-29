@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { normalizeRelativePath, safeResolveProjectPath } from "../../project";
+import { normalizeRelativePath, safeResolveProjectPath } from "../../project-paths";
 import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import type {
   WorkbenchBrowseAgentAction,

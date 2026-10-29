@@ -2,9 +2,6 @@
  * Exports:
  * - appRoot: absolute Workbench server workspace.
  * - projectRoot: absolute Workbench repository root.
- * - normalizeRelativePath: normalise transport paths.
- * - safeResolve/safeResolveProjectPath: validate project-relative paths.
- * - isPathWithinRoot: check absolute path containment.
  * - resolveDiscoveredProject/resolveProjectRootFromProjects: resolve durably admitted catalogue projects.
  * - discoverProjectIdentities: prepare structural projects, including the daemon project and pinned checkouts outside discovery folders, and canonical identity evidence without icon scans.
  * - ResolvedProject/ResolvedProjectRoot: validated project and root locations.
@@ -19,12 +16,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectId } from "workbench-shared/workbench/identity";
-import { comparablePath, isPathInside } from "./comparable-path";
+import { comparablePath } from "./comparable-path";
 import { DAEMON_PROJECT_ID, daemonWorkspaceRoot, ensureDaemonWorkspace } from "./daemon-workspace-paths";
 import type { WorkbenchProjectDiscovery } from "../database/project/workbench-project-persistence";
 
 import { getGitChanges, isLinkedGitWorktree, listGitTrackedFiles, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory } from "./git";
 import { appRoot, projectRoot } from "./project-root";
+import { normalizeRelativePath, safeResolveProjectPath } from "./project-paths";
 import { localProjectKey, remoteProjectKey, workspaceProjectKey } from "./workbench/project/project-identity";
 import { projectLocationKey } from "./workbench/project/project-location-discovery";
 import { ProjectIdentityKeySchema, type ProjectIdentityKey } from "workbench-shared/workbench/identity";
@@ -69,10 +67,6 @@ function createUniqueWorkspaceRootId(rawId: string, usedIds: Set<string>) {
   return candidateId;
 }
 
-export function normalizeRelativePath(filePath: string) {
-  return String(filePath ?? "").replace(/\\/g, "/");
-}
-
 async function createProjectGitignoreMatcher(rootDir: string) {
   let contents = "";
   try {
@@ -82,21 +76,6 @@ async function createProjectGitignoreMatcher(rootDir: string) {
   }
 
   return createGitignoreMatcher(contents).matches;
-}
-
-export function safeResolveProjectPath(rootDir: string, requestPath: string) {
-  const normalized = String(requestPath ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
-  const absoluteRoot = path.resolve(rootDir);
-  const absolute = path.resolve(absoluteRoot, normalized);
-  if (!isPathInside(absolute, absoluteRoot)) {
-    throw new Error("Path is outside the project workspace.");
-  }
-
-  return absolute;
-}
-
-export function safeResolve(requestPath: string) {
-  return safeResolveProjectPath(projectRoot, requestPath);
 }
 
 export function formatWorkspaceQualifiedPath(rootId: string, relativePath: string) {
@@ -116,13 +95,6 @@ export function parseWorkspaceQualifiedPath(requestPath: string) {
     rootId: normalizedPath.slice(0, separatorIndex),
     relativePath: normalizedPath.slice(separatorIndex + 1).replace(/^\/+/, ""),
   };
-}
-
-export function isPathWithinRoot(candidatePath: string, rootPath = projectRoot) {
-  if (!String(candidatePath ?? "").trim() || !String(rootPath ?? "").trim()) {
-    return false;
-  }
-  return isPathInside(candidatePath, rootPath);
 }
 
 async function hasGitMarker(rootDir: string) {

@@ -16,7 +16,8 @@ import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
 import { comparablePath as comparable } from "../lib/comparable-path";
 import { isDaemonWorkspacePath } from "../lib/daemon-workspace-paths";
-import { isPathWithinRoot, normalizeRelativePath, type ResolvedProjectRoot } from "../lib/project";
+import { isPathWithinRoot, normalizeRelativePath } from "../lib/project-paths";
+import type { ResolvedProjectRoot } from "../lib/project";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import { gitProcesses, GitProcessError } from "../lib/workbench/git/GitProcessHost";
 import {

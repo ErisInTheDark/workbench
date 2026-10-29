@@ -13,7 +13,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { appRoot, normalizeRelativePath, type ResolvedProject } from "../../project";
+import { normalizeRelativePath } from "../../project-paths";
+import { appRoot } from "../../project-root";
+import type { ResolvedProject } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import { killProcessTreeAsync, logError, lowerAgentProcessPriority } from "../../../process-helpers";
 import {

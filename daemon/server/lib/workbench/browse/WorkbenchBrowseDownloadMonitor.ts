@@ -7,7 +7,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { normalizeRelativePath } from "../../project";
+import { normalizeRelativePath } from "../../project-paths";
 
 export interface WorkbenchBrowseDownloadResult {
   absolutePath: string;
