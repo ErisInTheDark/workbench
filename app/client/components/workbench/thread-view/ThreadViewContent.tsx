@@ -37,6 +37,7 @@ import useThreadEntryMotion from "./use-thread-entry-motion";
 import useThreadReferenceSelection from "./use-thread-reference-selection";
 import useThreadSubagentTabs from "./use-thread-subagent-tabs";
 import useWorkbenchSkillCatalogue from "./use-workbench-skill-catalogue";
+import useProofOfWorkCatalogue, { ThreadProofOfWorkCatalogueContext } from "./use-proof-of-work-catalogue";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
 const EMPTY_TURNS: readonly Turn[] = [];
@@ -149,6 +150,7 @@ export default memo(function ThreadViewContent ({
     entryMotion: entryMotion.controller,
   }), [entryMotion.activityRunController, entryMotion.controller, threadScrollViewport]);
   const [workbenchSkills, reconcileRejectedSkills] = useWorkbenchSkillCatalogue(projectId, activeThread?.harness ?? thread.harness);
+  const proofOfWorkChecklists = useProofOfWorkCatalogue(projectId);
   const loadedTurns = activeThread?.isDraft || activeTranscriptProjection ? activeTurns.turns : EMPTY_TURNS;
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const showDraftComposer = isDraftThreadView && loadedTurns.length === 0;
@@ -248,6 +250,7 @@ export default memo(function ThreadViewContent ({
   );
   return (
     <WorkbenchThreadDisplaySettingsContext.Provider value={threadCodeDetails}>
+    <ThreadProofOfWorkCatalogueContext.Provider value={proofOfWorkChecklists}>
     <ThreadScrollViewportContext.Provider value={entryMotionContext}>
     <ContextualProjectProvider
       cwd={activeThread?.cwd}
@@ -374,6 +377,7 @@ export default memo(function ThreadViewContent ({
       </ThreadComponentStyles>
     </ContextualProjectProvider>
     </ThreadScrollViewportContext.Provider>
+    </ThreadProofOfWorkCatalogueContext.Provider>
     </WorkbenchThreadDisplaySettingsContext.Provider>
   );
 });

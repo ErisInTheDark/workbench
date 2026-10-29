@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchAgentSkillCatalogController: own browser-visible agent and skill catalog reads, and the activatable skills messages are checked against.
+ * - default WorkbenchAgentSkillCatalogController: own browser-visible agent, skill and proof-of-work checklist catalog reads, and the activatable skills messages are checked against.
  */
+import { readWorkbenchProofOfWorkCatalogue } from "../lib/workbench/instructions/proof-of-work-catalogue";
 import type { ResolvedProject } from "../lib/project";
 import {
   listProjectSkillsFromRoot,
@@ -22,6 +23,7 @@ interface WorkbenchAgentSkillCatalogOperations {
   listProjectSkills: typeof listProjectSkillsFromRoot;
   listUserAgents: typeof listUserInvocableAgentsFromResolvedProject;
   readAgent: typeof readUserInvocableAgentDefinitionFromRoot;
+  readProofOfWorkCatalogue: typeof readWorkbenchProofOfWorkCatalogue;
 }
 
 const defaultOperations: WorkbenchAgentSkillCatalogOperations = {
@@ -31,6 +33,7 @@ const defaultOperations: WorkbenchAgentSkillCatalogOperations = {
   listProjectSkills: listProjectSkillsFromRoot,
   listUserAgents: listUserInvocableAgentsFromResolvedProject,
   readAgent: readUserInvocableAgentDefinitionFromRoot,
+  readProofOfWorkCatalogue: readWorkbenchProofOfWorkCatalogue,
 };
 
 export default class WorkbenchAgentSkillCatalogController {
@@ -71,6 +74,11 @@ export default class WorkbenchAgentSkillCatalogController {
       instructionPacks,
       instructions: await this.operations.buildBootstrap(projectSkills, { skipInstructionPackContents: globallyPresent }) ?? "",
     };
+  }
+
+  async readProofOfWorkChecklists(projectId: string | null) {
+    const project = projectId ? await this.resolveProjectById(projectId) : null;
+    return { data: await this.operations.readProofOfWorkCatalogue(project && project.kind !== "workbench-library" ? project.root : null) };
   }
 
   /** The skills a message in this project can activate: the same list `readSkills` gives the composer. */

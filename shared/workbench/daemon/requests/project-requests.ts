@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - projectDaemonRequests: daemon requests for the project catalogue, trees, files, stores, discovery, creation, search, native file
- *   actions, and the agent and skill catalogues.
+ *   actions, and the agent, skill and proof-of-work checklist catalogues.
  * - WorkbenchFileWriteResult: successful save or optimistic-write conflict.
  * - WorkbenchAgentDefinitionResponse/WorkbenchSkillCatalogResponse/WorkbenchInstructionPack: agent and skill catalogue results.
  */
@@ -23,6 +23,7 @@ import type {
   WorkbenchSkillSummary,
 } from "../../../types.ts";
 import { FilePayloadSchema } from "../../project/project-file.ts";
+import { ProofOfWorkChecklistSchema, type ProofOfWorkChecklist } from "../../thread/proof-of-work.ts";
 import {
   ProjectCreateResultSchema, ProjectFolderListSchema,
   type ProjectCreateRequest, type ProjectCreateResult, type ProjectFolderList, type ProjectFolderListRequest,
@@ -123,5 +124,8 @@ export const projectDaemonRequests = {
   }),
   "skills/read": defineDaemonRequest<{ projectId: string | null; provider: string }, WorkbenchSkillCatalogResponse>()({
     route: "folder", result: z.object({ data: z.array(recordSchema), instructionPacks: z.array(recordSchema), instructions: z.string() }).strict(),
+  }),
+  "proof-of-work/read": defineDaemonRequest<{ projectId: string | null }, { data: ProofOfWorkChecklist[] }>()({
+    route: "folder", result: z.object({ data: z.array(ProofOfWorkChecklistSchema) }).strict(),
   }),
 };

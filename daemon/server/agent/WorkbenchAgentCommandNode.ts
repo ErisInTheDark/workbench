@@ -26,6 +26,9 @@ import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
 import WorkbenchToolStatsCommandController from "./WorkbenchToolStatsCommandController";
 import WorkbenchFeedbackCommandController from "./WorkbenchFeedbackCommandController";
+import WorkbenchProofOfWorkController from "./WorkbenchProofOfWorkController";
+import { readWorkbenchProofOfWorkCatalogue } from "../lib/workbench/instructions/proof-of-work-catalogue";
+import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import WorkbenchFileRemovalController from "../project/WorkbenchFileRemovalController";
 import WorkbenchTranscriptCommandController from "../transcript/WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
@@ -140,6 +143,25 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       signal.throwIfAborted();
       return await gitArc.checkActiveClaimPaths(cwd, WorkbenchHarnessSchema.parse(binding.harness), identity.threadId, paths);
     });
+    const proofOfWork = new WorkbenchProofOfWorkController({
+      resolveCaller: async ({ cwd, harness, threadId }, signal) => {
+        const { identity } = await nativeTarget(threadId, cwd, harness);
+        const { root } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Proof of work" });
+        signal.throwIfAborted();
+        return { threadId: identity.threadId, projectRoot: root.rootPath };
+      },
+      readCatalogue: async projectRoot => await readWorkbenchProofOfWorkCatalogue(projectRoot),
+      readTurnItems: async (threadId, signal) => {
+        const snapshot = await transcript.read({ threadId, turnLimit: 1 });
+        signal.throwIfAborted();
+        if (!snapshot) return [];
+        const projection = projectWorkbenchTranscriptItems(snapshot.rows);
+        if (!projection.success) throw new Error("The current turn's transcript could not be read.");
+        return projection.data
+          .sort((left, right) => left.root.item_position - right.root.item_position)
+          .flatMap(({ item }) => item.type === "mcpToolCall" ? [item] : []);
+      },
+    });
     const commandLogger = new WorkbenchAgentCommandLogger();
     const materializeTurn = async (threadId: string, turnId: string | null, signal: AbortSignal) => {
       signal.throwIfAborted();
@@ -251,6 +273,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeToolStats: async (body, signal) => await toolStats.execute(body, signal),
       executeFeedbackSubmit: async (body, signal) => await feedback.submit(body, signal),
+      executeProofOfWorkRequest: async (body, signal) => await proofOfWork.execute(body, signal),
       executeTodoRequest: async (body, signal) => {
         const parsed = WorkbenchTodoRequestSchema.safeParse(body);
         if (!parsed.success) {

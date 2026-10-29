@@ -762,7 +762,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.ok(inventory.tools.find(({ name }) => name === "proof_of_work"));
     const proof = await client.callTool({ name: "proof_of_work", arguments: { proofs: { "plan.result": "checked" } }, _meta: { threadId: "native-thread" } });
     assert.notEqual(proof.isError, true);
-    assert.deepEqual(executed.at(-1)?.body, { proofs: { "plan.result": "checked" } });
+    assert.deepEqual((executed.at(-1)?.body as { proof?: unknown } | undefined)?.proof, { proofs: { "plan.result": "checked" } });
     assert.equal(instructionTools.some(({ id }) => id === "not_a_tool"), false);
     assert.equal(inventory.tools.some(({ name }) => name.startsWith("transcript_")), false);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name.startsWith("transcript_")), false);

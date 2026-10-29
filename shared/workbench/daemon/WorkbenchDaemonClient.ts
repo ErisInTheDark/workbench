@@ -211,6 +211,10 @@ class WorkbenchDaemonClient {
     read: (params: WorkbenchDaemonParams<"skills/read">) => this.request("skills/read", params),
   };
 
+  readonly proofOfWork = {
+    read: (params: WorkbenchDaemonParams<"proof-of-work/read">) => this.request("proof-of-work/read", params),
+  };
+
   readonly search = {
     query: (params: WorkbenchDaemonParams<"search/query">) => this.request("search/query", params),
   };

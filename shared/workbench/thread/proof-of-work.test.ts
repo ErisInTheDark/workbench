@@ -1,29 +1,54 @@
 /*
- * No production exports. Tests proof validation and last-answer-wins merging.
+ * No production exports. Tests proof validation, latest-state merging and checklist reconciliation.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ProofOfWorkSchema, mergeProofs, countProofs, formatProofId, proofFamilies, isNotApplicable } from "./proof-of-work";
+import { ProofOfWorkSchema, mergeProofs, presentProofOfWork, reconcileProofOfWork, type ProofOfWorkChecklist } from "./proof-of-work";
 
-test("proofs require named items and nonblank answers", () => {
-  assert.equal(ProofOfWorkSchema.safeParse({ proofs: {} }).success, false);
+const plan: ProofOfWorkChecklist = {
+  id: "plan",
+  hidden: false,
+  items: [{ id: "plan.result", label: "Result" }, { id: "plan.failure", label: "Failure" }, { id: "plan.verify", label: "Verify" }],
+};
+
+test("submissions need valid ids in exactly one bucket", () => {
+  assert.equal(ProofOfWorkSchema.safeParse({}).success, false);
+  assert.equal(ProofOfWorkSchema.safeParse({ proofs: {}, defer: [] }).success, false);
   assert.equal(ProofOfWorkSchema.safeParse({ proofs: { invalid: "answer" } }).success, false);
   assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": " " } }).success, false);
-  assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": "good", "plan.other": "not applicable" } }).success, true);
+  assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": "good" }, defer: ["plan.result"] }).success, false);
+  assert.equal(ProofOfWorkSchema.safeParse({ notApplicable: ["plan.failure", "plan.failure"] }).success, true);
+  assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": "good" }, notApplicable: ["plan.failure"], defer: ["plan.verify"] }).success, true);
 });
 
-test("later answers replace earlier answers before counts", () => {
+test("a later filing replaces an earlier deferral", () => {
   const proofs = mergeProofs([
-    { "plan.result": "first", "plan.other": "not applicable" },
-    { "plan.result": " NOT APPLICABLE ", "plan.other": "checked" },
+    { proofs: { "plan.result": "first" }, defer: ["plan.failure", "plan.verify"] },
+    { notApplicable: ["plan.failure"] },
   ]);
-  assert.deepEqual(proofs, { "plan.result": " NOT APPLICABLE ", "plan.other": "checked" });
-  assert.deepEqual(countProofs(proofs), { answered: 1, notApplicable: 1 });
+  const [report] = reconcileProofOfWork(proofs, [plan]).checklists;
+  assert.equal(report?.resolved, 2);
+  assert.deepEqual(report?.deferred, ["plan.verify"]);
+  assert.deepEqual(report?.missing, []);
 });
 
-test("proof display labels and not-applicable classification are consistent", () => {
-  assert.equal(formatProofId("recovery.missing_requirement"), "Missing requirement");
-  assert.deepEqual(proofFamilies({ "review.first": "a", "quality.second": "b", "review.third": "c" }), ["Review", "Quality"]);
-  assert.equal(isNotApplicable(" NOT APPLICABLE "), true);
-  assert.equal(isNotApplicable("checked"), false);
+test("display leaves out hidden checklists and labels items from their declaration", () => {
+  const recovery: ProofOfWorkChecklist = { id: "recovery", hidden: true, items: [{ id: "recovery.user_said", label: "What has the user said" }] };
+  const shown = presentProofOfWork(mergeProofs([{
+    proofs: { "plan.result": "done", "recovery.user_said": "terse", "custom.thing": "x" },
+    notApplicable: ["plan.failure"],
+    defer: ["plan.verify"],
+  }]), [plan, recovery]);
+  assert.deepEqual(shown.families, ["Plan", "Custom"]);
+  assert.deepEqual(shown.answered.map(entry => [entry.label, entry.answer]), [["Result", "done"], ["Thing", "x"]]);
+  assert.deepEqual(shown.notApplicable.map(entry => entry.id), ["plan.failure"]);
+  assert.deepEqual(shown.deferred.map(entry => entry.id), ["plan.verify"]);
+});
+
+test("reconciliation reports missing items and unknown ids only for touched families", () => {
+  const review: ProofOfWorkChecklist = { id: "review", hidden: false, items: [{ id: "review.diff", label: "Diff" }] };
+  const result = reconcileProofOfWork(mergeProofs([{ proofs: { "plan.result": "a", "plan.typo": "b", "plann.result": "c" } }]), [plan, review]);
+  assert.deepEqual(result.checklists.map(report => [report.checklist.id, report.missing]), [["plan", ["plan.failure", "plan.verify"]]]);
+  assert.deepEqual(result.unknownItems, ["plan.typo"]);
+  assert.deepEqual(result.unknownFamilies, ["plann"]);
 });

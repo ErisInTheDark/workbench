@@ -4,18 +4,20 @@
  * - WorkbenchInstructionFacts: one caller's workspace facts.
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
- * - filterWorkbenchInstructionContent: strip comments, apply selectors, `<docs tools>` tool gates, `<else>` fallbacks and provider tool references, and collapse inline wrapper regions.
+ * - filterWorkbenchInstructionContent: strip comments, apply selectors, `<docs tools>` tool gates, `<else>` fallbacks and provider tool references, drop `<proof-of-work>` checklist tags, and collapse inline wrapper regions.
+ * - collectWorkbenchInstructionProofOfWork: read every `<proof-of-work>` checklist an instruction source declares, regardless of selectors.
  * - formatWorkbenchInstructionFilterWarning: render one bounded source diagnostic with ANSI emphasis.
  */
 
 import os from "node:os";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
+import type { ProofOfWorkChecklist } from "workbench-shared/workbench/thread/proof-of-work";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
 
 /** `available` and `setting` are retired: their tags still parse so they strip with a warning instead of leaking into payloads. */
-type SelectorAxis = "available" | "docs" | "else" | "harness" | "model" | "setting" | "shell" | "role" | "tool" | "workspace" | "wrapper";
+type SelectorAxis = "available" | "docs" | "else" | "harness" | "model" | "proof" | "setting" | "shell" | "role" | "tool" | "workspace" | "wrapper";
 type WorkbenchShell = "bash" | "pwsh";
 
 export const WORKBENCH_INSTRUCTION_WORKSPACE_FACTS = ["project", "daemon", "multi-root"] as const;
@@ -81,7 +83,11 @@ const ELSE_TAG = /<(\/)?else>/uy;
 const TOOL_TAG = /<tool id="([a-z][a-z0-9_]*)"\s*\/>/uy;
 const DOCS_OPEN_TAG = /<docs tools="([a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*)">/uy;
 const DOCS_CLOSE_TAG = /<\/docs>/uy;
-const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|docs|else|harness|model|setting|shell|role|tool|workspace)(?::|\s|>)/u;
+const PROOF_OPEN_TAG = /<proof-of-work id="([a-z][a-z0-9_]*)"( hidden)?>/uy;
+const PROOF_CLOSE_TAG = /<\/proof-of-work>/uy;
+/** A top-level checklist item: `- [ ] **Label [family.item]:**`, the colon optional. */
+const PROOF_ITEM = /^- \[ \] \*\*(.+?) \[(([a-z][a-z0-9_]*)\.[a-z][a-z0-9_]*)\]:?\*\*/u;
+const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|docs|else|harness|model|proof-of-work|setting|shell|role|tool|workspace)(?::|\s|>)/u;
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
 const MAX_MODEL_REGEX_LENGTH = 200;
 const WORKSPACE_FACTS = new Set<string>(WORKBENCH_INSTRUCTION_WORKSPACE_FACTS);
@@ -147,6 +153,26 @@ function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column:
         start: index,
       });
       index += toolMatch[0].length;
+      continue;
+    }
+    PROOF_OPEN_TAG.lastIndex = index;
+    PROOF_CLOSE_TAG.lastIndex = index;
+    const proofMatch = PROOF_OPEN_TAG.exec(line) ?? PROOF_CLOSE_TAG.exec(line);
+    if (proofMatch) {
+      tags.push({
+        control: {
+          axis: "proof",
+          closing: proofMatch[1] === undefined,
+          matchMode: "exact",
+          neutral: false,
+          pattern: null,
+          value: proofMatch[1] ?? "",
+        },
+        end: index + proofMatch[0].length,
+        line: lineIndex,
+        start: index,
+      });
+      index += proofMatch[0].length;
       continue;
     }
     DOCS_OPEN_TAG.lastIndex = index;
@@ -354,7 +380,7 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
 
 function isKnownValue(axis: SelectorAxis, value: string) {
   // Docs tool ids are syntax-checked by their tag; whether one resolves is visibility, not validity.
-  if (axis === "wrapper" || axis === "else" || axis === "docs") return true;
+  if (axis === "wrapper" || axis === "else" || axis === "docs" || axis === "proof") return true;
   if (axis === "tool" || axis === "available" || axis === "setting") return false;
   if (axis === "role") return value === "agent" || value === "voice-to-text";
   if (axis === "harness") return ProviderKeySchema.safeParse(value).success;
@@ -368,8 +394,7 @@ function docsTools(control: SelectorControl) {
 }
 
 function matches(control: SelectorControl, context: WorkbenchInstructionFilterContext) {
-  if (control.axis === "wrapper") return true;
-  if (control.axis === "tool") return true;
+  if (control.axis === "wrapper" || control.axis === "tool" || control.axis === "proof") return true;
   if (control.axis === "else") return control.elseIncluded ?? true;
   if (control.axis === "role") return control.value === (context.role ?? "agent");
   if (control.axis === "harness") return control.value === context.harness;
@@ -498,7 +523,7 @@ function warn(
   lineStart: number,
   recovery: WorkbenchInstructionFilterWarning["recovery"],
   source: string,
-  detail: { axis?: SelectorAxis; column?: number; length?: number; value?: string } = {},
+  detail: { axis?: SelectorAxis; column?: number; length?: number; message?: string; value?: string } = {},
 ) {
   const column = detail.column ?? source.search(/\S/u);
   const location = resolveWarningLocation(
@@ -513,9 +538,37 @@ function warn(
   context.onWarning({
     ...location,
     field: context.field,
-    message: warningMessage(recovery, detail.axis, detail.value),
+    message: detail.message ?? warningMessage(recovery, detail.axis, detail.value),
     recovery,
   });
+}
+
+/** Malformed tags and items are left to the payload filter's warnings; this read only keeps well-formed items. */
+export function collectWorkbenchInstructionProofOfWork(value: string): ProofOfWorkChecklist[] {
+  const checklists: ProofOfWorkChecklist[] = [];
+  let open: ProofOfWorkChecklist | null = null;
+  let fence: Fence | null = null;
+  for (const line of stripWorkbenchInstructionHtmlComments(value.replace(/\r\n?/gu, "\n")).split("\n")) {
+    if (fence) { if (closesFence(line, fence)) fence = null; continue; }
+    fence = readFence(line);
+    if (fence) continue;
+    const trimmed = line.trim();
+    PROOF_OPEN_TAG.lastIndex = 0;
+    const opened = PROOF_OPEN_TAG.exec(trimmed);
+    if (opened && !open) {
+      open = { id: opened[1]!, hidden: Boolean(opened[2]), items: [] };
+      continue;
+    }
+    PROOF_CLOSE_TAG.lastIndex = 0;
+    if (open && PROOF_CLOSE_TAG.test(trimmed)) {
+      checklists.push(open);
+      open = null;
+      continue;
+    }
+    const item = open ? PROOF_ITEM.exec(line) : null;
+    if (open && item?.[3] === open.id) open.items.push({ id: item[2]!, label: item[1]! });
+  }
+  return checklists;
 }
 
 export function formatWorkbenchInstructionFilterWarning(warning: WorkbenchInstructionFilterWarning) {
@@ -570,6 +623,13 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
       warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, { column });
     });
     if (tags.length) tagsByLine.set(lineIndex, tags);
+    const checklist = openTags.find(opened => opened.control.axis === "proof" && !opened.control.neutral)?.control;
+    if (checklist && line.startsWith("- ") && PROOF_ITEM.exec(line)?.[3] !== checklist.value) {
+      warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, {
+        column: 0,
+        message: `Proof-of-work items must read \`- [ ] **Label [${checklist.value}.item]:**\``,
+      });
+    }
     tags.forEach((tag) => {
       const { control } = tag;
       if (control.axis === "tool" && !openTags.every(opened => opened.control.neutral || matches(opened.control, context))) return;
@@ -597,6 +657,17 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         return;
       }
       if (control.axis === "tool") return;
+      if (!control.closing && control.axis !== "wrapper"
+        && openTags.some(opened => opened.control.axis === "proof" && !opened.control.neutral)) {
+        // Coverage feedback reads checklists without selectors, so every item must reach every caller.
+        control.neutral = true;
+        warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, {
+          ...detail,
+          column: tag.start,
+          length: tag.end - tag.start,
+          message: control.axis === "proof" ? "Proof-of-work checklists cannot nest" : "Selectors cannot sit inside a proof-of-work checklist",
+        });
+      }
       if (!control.closing && control.axis !== "wrapper") {
         // Branches are decided in source order: `<else>` sees only the selectors directly inside its `<>` before it.
         const parent = openTags.at(-1)?.control;

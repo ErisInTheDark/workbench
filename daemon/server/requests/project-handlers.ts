@@ -215,4 +215,7 @@ export const projectRequestHandlers = defineDaemonRequestHandlers({
   "skills/read": async (params, { owners }) => await owners.agents.readSkills(
     typeof params.projectId === "string" ? params.projectId : null, requiredString(params, "provider"),
   ),
+  "proof-of-work/read": async (params, { owners }) => await owners.agents.readProofOfWorkChecklists(
+    typeof params.projectId === "string" ? params.projectId : null,
+  ),
 });

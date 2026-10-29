@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  collectWorkbenchInstructionProofOfWork,
   filterWorkbenchInstructionContent,
   formatWorkbenchInstructionFilterWarning,
   stripWorkbenchInstructionHtmlComments,
@@ -61,6 +62,50 @@ test("tool references expand in ordinary text without disturbing selectors or ex
     "```",
   ].join("\n"));
   assert.equal(filter(value, "opencode").output?.includes("`tools.opencode.rg`"), true);
+});
+
+test("proof-of-work checklists render their items verbatim and declare their families", () => {
+  const value = [
+    "apply this checklist:",
+    "<!-- <proof-of-work id=\"ghost\"> -->",
+    "<proof-of-work id=\"plan\" hidden>",
+    "- [ ] **Result [plan.result]:** check <tool id=\"rg\" />",
+    "  - nested detail",
+    "- [ ] **Is it sacred? [plan.sacred]** never",
+    "</proof-of-work>",
+    "```md",
+    "<proof-of-work id=\"example\">",
+    "- [ ] **Example [example.item]:** literal",
+    "</proof-of-work>",
+    "```",
+  ].join("\n");
+  const result = filter(value);
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.output, [
+    "apply this checklist:",
+    "",
+    "- [ ] **Result [plan.result]:** check `tools.codex.rg`",
+    "  - nested detail",
+    "- [ ] **Is it sacred? [plan.sacred]** never",
+    "```md",
+    "<proof-of-work id=\"example\">",
+    "- [ ] **Example [example.item]:** literal",
+    "</proof-of-work>",
+    "```",
+  ].join("\n"));
+  assert.deepEqual(collectWorkbenchInstructionProofOfWork(value), [{
+    id: "plan",
+    hidden: true,
+    items: [{ id: "plan.result", label: "Result" }, { id: "plan.sacred", label: "Is it sacred?" }],
+  }]);
+});
+
+test("proof-of-work checklists warn on foreign items, nesting and selectors", () => {
+  const messages = (body: string) => filter(`<proof-of-work id="plan">\n${body}\n</proof-of-work>`).warnings.map(warning => warning.message);
+  assert.deepEqual(messages("- [ ] **Other [review.item]:** x"), ["Proof-of-work items must read `- [ ] **Label [plan.item]:**`"]);
+  assert.deepEqual(messages("- plain bullet"), ["Proof-of-work items must read `- [ ] **Label [plan.item]:**`"]);
+  assert.deepEqual(messages("<harness:codex>\n- [ ] **Result [plan.result]:** x\n</harness:codex>"), ["Selectors cannot sit inside a proof-of-work checklist"]);
+  assert.deepEqual(messages("<proof-of-work id=\"inner\">\n</proof-of-work>"), ["Proof-of-work checklists cannot nest"]);
 });
 
 test("invalid tool references stay visible and report their source", () => {

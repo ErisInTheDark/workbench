@@ -44,6 +44,7 @@ test("catalog delegates source reads and excludes globally installed instruction
     listProjectSkills: async (root) => { projectRoots.push(root); return { skills: [projectSkill], hiddenNames: [] }; },
     listUserAgents: async (resolvedProject) => { projectRoots.push(resolvedProject.root); return [agent]; },
     readAgent: async (_agentPath, root) => { projectRoots.push(root); return agent; },
+    readProofOfWorkCatalogue: async () => [],
   });
 
   assert.deepEqual(await controller.listAgents("project"), { data: [agent] });

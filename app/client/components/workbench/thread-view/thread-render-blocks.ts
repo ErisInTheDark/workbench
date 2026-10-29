@@ -14,8 +14,7 @@
  * - reuseRenderableBlocks/hasSameBlockTimeline: retain unchanged rows across transcript item arrivals.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import { ProofOfWorkSchema } from "workbench-shared/workbench/thread/proof-of-work";
-import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
+import { readProofOfWorkSubmission } from "workbench-shared/workbench/thread/proof-of-work";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
@@ -558,16 +557,12 @@ export function buildRenderableBlocks(
       }
     }
     if (isUnstartedToolCall(item)) continue;
-    if (item.type === "mcpToolCall" && (item.server === "wb" || item.server === "wbex")
-      && item.tool === "proof_of_work" && item.status !== "failed" && !item.error) {
-      const proof = conformToZodSchema(ProofOfWorkSchema, item.arguments);
-      if (proof.success && !proof.discardedPaths.length) {
-        flush();
-        const previous = blocks.at(-1);
-        if (previous?.kind === "proofOfWork") previous.items.push(item);
-        else blocks.push({ kind: "proofOfWork", items: [item] });
-        continue;
-      }
+    if (item.type === "mcpToolCall" && readProofOfWorkSubmission(item)) {
+      flush();
+      const previous = blocks.at(-1);
+      if (previous?.kind === "proofOfWork") previous.items.push(item);
+      else blocks.push({ kind: "proofOfWork", items: [item] });
+      continue;
     }
     if (item.type === "commandExecution") {
       if (!isHiddenCommandExecution(item.command)) commands(item);

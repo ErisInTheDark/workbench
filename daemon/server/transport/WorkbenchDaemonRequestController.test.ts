@@ -188,6 +188,7 @@ function createController(options: {
       listAgents: async () => ({ data: [] }),
       readAgent: async () => ({ providerGlobalDuplicate: false, data: { description: "", name: "", path: "", prompt: "" } }),
       readSkills: async () => ({ data: [], instructionPacks: [], instructions: "" }),
+      readProofOfWorkChecklists: async () => ({ data: [] }),
     },
     files: {
       read: async ({ path, projectId }) => ({ content: "", headContent: null, mtimeMs: 1, path, projectId: ProjectIdSchema.parse(projectId), updatedAt: "" }),
