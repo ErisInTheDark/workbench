@@ -201,7 +201,8 @@ export interface WorkbenchThreadStateControllerOptions {
   ) => Promise<WorkbenchThreadReconciliationFailure[]>;
   resolveGitArc: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null>;
   resolveGitArcPlan: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<WorkbenchGitArcPlanState | null>;
-  runGitArcReadTransition: <TValue>(projectId: ProjectId, operation: () => Promise<TValue>) => Promise<TValue>;
+  /** Exclusive Git ownership of one thread, shared with claim transfers into or out of it. */
+  runGitArcOwnershipTransition: <TValue>(threadId: WorkbenchThreadId, operation: () => Promise<TValue>) => Promise<TValue>;
   /** The process lock manager, so thread-state queues and Git transition leases share one deadlock-free graph. */
   locks?: Pick<WorkbenchThreadTransitionCoordinator, "exclusive" | "holds">;
   threadStateStore: WorkbenchThreadStatePersistence;
@@ -2078,7 +2079,7 @@ export default class WorkbenchThreadStateController {
       return { accepted: true, revision: state.revision };
     });
     return request.method === "workbench/thread-state/settle"
-      ? await this.options.runGitArcReadTransition(request.projectId, mutate)
+      ? await this.options.runGitArcOwnershipTransition(request.identity.threadId, mutate)
       : await mutate();
   }
 

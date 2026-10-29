@@ -29,6 +29,7 @@ import WorkbenchThreadStateStore, {
     type WorkbenchThreadStateStoreDatabase,
 } from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
+import type { createWorktreeGitTransitions } from "../git/worktree-git-transitions";
 import type { DaemonTranscriptRegistration } from "../daemon-runtime-objects";
 import { isPathWithinRoot } from "../lib/project-paths";
 import type { NativeTranscriptIdentityOwners } from "../transcript/thread-identity-transcript-mapping";
@@ -103,8 +104,7 @@ export interface WorkbenchThreadStateFeatureContext {
   pruneThreadVis?(threadIds: readonly WorkbenchThreadId[]): Promise<void>;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
-  transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
-    & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read">>;
+  transitions: Pick<ReturnType<typeof createWorktreeGitTransitions>, "run" | "ownership">;
   /** The process lock manager the Git transitions use, shared by thread-state queues. */
   locks?: Pick<WorkbenchThreadTransitionCoordinator, "exclusive" | "holds">;
 }
@@ -257,13 +257,7 @@ export default class WorkbenchThreadStateFeature {
         return Boolean(state && (state.claimedPaths.length || ("phase" in state && state.phase === "stashed")));
       },
       ...(context.settlementHold ? { settlementHold: (threadId: WorkbenchThreadId) => context.settlementHold!(threadId) } : {}),
-      runGitArcReadTransition: async (projectId, operation) => {
-        if (!this.projectCatalogued(projectId)) return await operation();
-        const project = await context.resolveProjectById(projectId);
-        return context.transitions.read
-          ? await context.transitions.read(project.rootPath, operation)
-          : await context.transitions.run(project.rootPath, operation);
-      },
+      runGitArcOwnershipTransition: async (threadId, operation) => await context.transitions.ownership([threadId], operation),
       threadStateStore: new WorkbenchThreadStateStore(context.database),
     });
     this.unsubscribeItemActivity = context.itemActivity?.subscribeItemActivity(async (activity) => {

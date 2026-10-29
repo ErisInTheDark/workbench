@@ -88,8 +88,8 @@ const fixtureThreadIds = {
   "working": WorkbenchThreadIdSchema.parse("working"),
 };
 
-type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasGitArcBlockingSettlement" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
-  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasGitArcBlockingSettlement" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
+type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasGitArcBlockingSettlement" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcOwnershipTransition" | "threadStateStore">
+  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasGitArcBlockingSettlement" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcOwnershipTransition" | "threadStateStore">>
   & {
     storageRoot: string;
     onProject?: (snapshot: WorkbenchThreadSidebarSnapshot) => void;
@@ -691,7 +691,7 @@ class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner
       hasGitArcBlockingSettlement: async () => false,
       resolveGitArc: async () => null,
       resolveGitArcPlan: async () => null,
-      runGitArcReadTransition: async (_projectId, operation) => await operation(),
+      runGitArcOwnershipTransition: async (_threadId, operation) => await operation(),
       ...controllerOptions,
       threadStateStore,
     });
@@ -3850,7 +3850,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-manual-attention-");
   const root = temporary.path;
   const published: WorkbenchThreadSidebarSnapshot[] = [];
-  let insideGitArcTransition = false;
+  let insideGitArcTransition: string | null = null;
   let gitArcTransitions = 0;
   let terminalHasGitArc = false;
   let terminalGitArcResolved = false;
@@ -3880,7 +3880,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     hasGitArcBlockingSettlement: async (_projectId, _harness, threadId) => {
-      assert.equal(insideGitArcTransition, true);
+      assert.equal(insideGitArcTransition, threadId);
       return terminalHasGitArc && !terminalGitArcResolved && threadId === "terminal";
     },
     settlementHold: async threadId => terminalHasRequiredTodos && threadId === "terminal" ? "requiredTodos" : null,
@@ -3889,13 +3889,13 @@ test("manual status persists, restores settled threads, and rejects provider-own
       await acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
       return [];
     },
-    runGitArcReadTransition: async (_projectId, operation) => {
+    runGitArcOwnershipTransition: async (threadId, operation) => {
       gitArcTransitions += 1;
-      insideGitArcTransition = true;
+      insideGitArcTransition = threadId;
       try {
         return await operation();
       } finally {
-        insideGitArcTransition = false;
+        insideGitArcTransition = null;
       }
     },
     storageRoot: root,

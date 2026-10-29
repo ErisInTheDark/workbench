@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - createWorktreeGitTransitions: adapt resolved worktree paths into canonical transition keys. Keywords: git, worktree, transition.
+ * - createWorktreeGitTransitions: adapt resolved worktree paths into canonical transition keys, plus per-thread Git ownership leases.
  */
 import { normalizePathKey } from "../lib/comparable-path";
 import type WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
@@ -26,6 +26,14 @@ export function createWorktreeGitTransitions(
     run: async <TValue>(worktreePath: string, operation: () => Promise<TValue>) => await transitions.run(key(worktreePath), operation),
     runMany: async <TValue>(worktreePaths: readonly string[], operation: () => Promise<TValue>) => {
       const keys = [...new Set(worktreePaths.map(key))].sort((left, right) => left.localeCompare(right));
+      return await transitions.runMany(keys, operation);
+    },
+    /**
+     * Exclusive Git ownership of Workbench threads across every repository: settlement and claim transfers into or out of
+     * a thread serialize here, never on unrelated worktree writes. Take it before any worktree lease.
+     */
+    ownership: async <TValue>(threadIds: readonly string[], operation: () => Promise<TValue>) => {
+      const keys = [...new Set(threadIds.map(threadId => `git-arc-owner\0${threadId}`))].sort((left, right) => left.localeCompare(right));
       return await transitions.runMany(keys, operation);
     },
   };

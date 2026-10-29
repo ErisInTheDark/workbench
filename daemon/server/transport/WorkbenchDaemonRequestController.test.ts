@@ -724,7 +724,7 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
         reconcileProject: async () => [],
         resolveGitArc: async () => null,
         resolveGitArcPlan: async () => null,
-        runGitArcReadTransition: async (_id, operation) => operation(),
+        runGitArcOwnershipTransition: async (_threadId, operation) => operation(),
       });
       states.push(state);
       return state;

@@ -9,6 +9,7 @@
 - Provider list snapshots seed unknown rows only; a lifecycle with a known turn changes through that turn's events. Snapshots may end only turnless provider-owned lifecycles.
 - Settled and archived are placement, not status. Preserve lifecycle presentation.
 - Live claims, required todos and addressed feedback hold settlement; addressed feedback releases only when resolved or detached.
+- Settlement serializes only with Git ownership transfers involving that thread; unrelated Git work never delays it.
 - Subagent settle attempts every selected child and reports each outcome. Handover moves a child's Git claims, saved stash and todos to its parent before settling; rejected Git adoption leaves that child unchanged.
 - Settled sidebar threads archive 14 days after the later of their last thread item or settling, including existing records. Pins are app-owned and never exempt them: a settled thread keeps its pin only so restoring returns it pinned, and archiving drops the pin.
 - Transcript payload retention uses the current settlement generation. Restoring or re-settling starts a new generation; old tombstones never suppress new turns.

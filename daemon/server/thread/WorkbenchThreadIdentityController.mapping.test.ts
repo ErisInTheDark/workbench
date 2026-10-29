@@ -112,7 +112,10 @@ test("Git arc mutations and state callbacks share the canonical Workbench owner"
     },
     refreshThreadGitArcState: async (_projectId, _harness, threadId) => { refreshed.push(threadId); },
     resolveProjectFromCwd: async () => ({ cwd: native.nativeLocation, project: { id: parent.projectId } }),
-    transitions: { run: async (_key, operation) => operation() },
+    transitions: {
+      run: async (_key, operation) => operation(),
+      ownership: async (_threadIds, operation) => await operation(),
+    },
   });
   const local = (feature as unknown as {
     controller: { createAndStartPlan: (input: { threadId: string }) => Promise<object> };

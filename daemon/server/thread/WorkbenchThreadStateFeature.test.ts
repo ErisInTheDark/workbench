@@ -17,10 +17,16 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import CodexThreadOperations from "../providers/codex/CodexThreadOperations";
 import type WorkbenchProvider from "../providers/WorkbenchProvider";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { createWorktreeGitTransitions } from "../git/worktree-git-transitions";
+import WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
 
 const canonicalFixtureLookup = {
   knownThread: (reference: fixtureIdentitySchemas.ThreadReference) => ({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(reference) }),
   knownTurn: (reference: fixtureIdentitySchemas.TurnReference) => ({ turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(reference) }),
+};
+const passthroughTransitions = {
+  run: async <T>(_key: string, operation: () => Promise<T>) => await operation(),
+  ownership: async <T>(_threadIds: readonly string[], operation: () => Promise<T>) => await operation(),
 };
 const storedRecordDefaults = {
   gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, settledAt: null,
@@ -186,7 +192,7 @@ test("project reads reject unknown owners before loading or writing state", asyn
       return { id: projectId, rootPath: "C:/project" };
     },
     resolveProjectFromCwd: async cwd => ({ cwd, project: { id: projectId, rootPath: "C:/project" } }),
-    transitions: { run: async (_key, operation) => operation() },
+    transitions: passthroughTransitions,
   });
   try {
     await feature.controller.readProject(fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"));
@@ -234,7 +240,7 @@ test("Workbench Library threads project their Git arc proposals", async () => {
     harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
     resolveProjectById: async () => ({ id: projectId, rootPath: "C:/library" }),
     resolveProjectFromCwd: async cwd => ({ cwd, project: { id: projectId, rootPath: "C:/library" } }),
-    transitions: { run: async (_key, operation) => operation() },
+    transitions: passthroughTransitions,
   });
   try {
     const sidebar = normalizeProviderSidebarEntry("codex", { id: "thread", status: { type: "idle" }, name: "Idle", updatedAt: 1 });
@@ -309,7 +315,7 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd: string) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: cwd } }),
-    transitions: { run: async <T>(_: string, operation: () => Promise<T>) => await operation() },
+    transitions: passthroughTransitions,
   };
   options.database.admitThread(fixtureIdentityValues.ProjectId.project, "thread", harness, "native:thread", "C:/workspace");
   options.database.admitThread(fixtureIdentityValues.ProjectId.project, "parent", harness, "native:parent", "C:/workspace");
@@ -549,7 +555,7 @@ test("a launched thread keeps its launch and first-message name through untitled
     harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
     resolveProjectById: async () => ({ id: projectId, rootPath: "C:/project" }),
     resolveProjectFromCwd: async cwd => ({ cwd, project: { id: projectId, rootPath: "C:/project" } }),
-    transitions: { run: async (_key, operation) => operation() },
+    transitions: passthroughTransitions,
   });
   try {
     const created = { id: "thread", harness: "codex", name: null, preview: "", status: { type: "idle" }, updatedAt: 1 };
@@ -643,7 +649,7 @@ test("provider notification observation returns the persisted lifecycle result",
     listSubagents: async () => ({ subagents: [] }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], provider);
 
@@ -686,7 +692,7 @@ test("settlement succeeds when the thread's project worktree is gone", async () 
     // The project folder is gone, so its worktree cannot be resolved.
     resolveProjectById: async () => { throw new Error("Project is missing a .git marker."); },
     resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   await feature.controller.readProject(fixtureIdentityValues.ProjectId.project);
   await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId.project, entry);
@@ -698,6 +704,76 @@ test("settlement succeeds when the thread's project worktree is gone", async () 
     selection: "threads", projectId: fixtureIdentityValues.ProjectId.project, threadIds: [entry.identity.threadId],
   });
   assert.equal(record?.lifecycle.settled, true);
+  await feature.dispose();
+  await temporary.dispose();
+});
+
+test("settlement waits only on Git ownership of the settling thread, never on unrelated repository writes", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-settle-ownership-");
+  const storageRoot = temporary.path;
+  const database = createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]);
+  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one") },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread one",
+  };
+  database.admitRecord({ ...storedRecordDefaults, ...entry, providerObserved: true });
+  const transitions = createWorktreeGitTransitions(new WorkbenchThreadTransitionCoordinator());
+  let transferredClaims = false;
+  const feature = createFeature({
+    database,
+    getProjectCatalog: () => discoveredProject(storageRoot),
+    gitArcs: {
+      blocksThreadSettlement: async () => transferredClaims,
+      findActiveClaim: async () => null,
+      listActiveClaims: async () => [],
+    },
+    harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
+    listSubagents: async () => ({ subagents: [] }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
+    resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
+    transitions,
+  });
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId.project);
+  await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId.project, entry);
+  const settle = async () => {
+    const response = await feature.controller.handleRequest("observer", {
+      identity: entry.identity, method: "workbench/thread-state/settle", projectId: fixtureIdentityValues.ProjectId.project,
+    });
+    return "result" in response ? (response.result as { accepted?: boolean }).accepted : false;
+  };
+  const drain = async () => { for (let index = 0; index < 20; index += 1) await new Promise<void>(resolve => setImmediate(resolve)); };
+
+  const unrelatedWrite = deferred<void>();
+  let settledDuringWrite = false;
+  const held = transitions.run(storageRoot, async () => await unrelatedWrite.promise);
+  const settling = settle().then(accepted => { settledDuringWrite = accepted === true; });
+  await drain();
+  const settledBeforeRelease = settledDuringWrite;
+  unrelatedWrite.resolve();
+  await Promise.all([held, settling]);
+  assert.equal(settledBeforeRelease, true);
+
+  const restored = await feature.controller.handleRequest("observer", {
+    identity: entry.identity, method: "workbench/thread-state/restore", projectId: fixtureIdentityValues.ProjectId.project,
+  });
+  assert.equal("result" in restored ? (restored.result as { accepted?: boolean }).accepted : false, true);
+  const transfer = deferred<void>();
+  let settleResult: boolean | undefined;
+  const transferring = transitions.ownership([entry.identity.threadId], async () => {
+    await transfer.promise;
+    transferredClaims = true;
+  });
+  const blocked = settle().then(accepted => { settleResult = accepted; });
+  await drain();
+  assert.equal(settleResult, undefined);
+  transfer.resolve();
+  await Promise.all([transferring, blocked]);
+  assert.equal(settleResult, false);
+
   await feature.dispose();
   await temporary.dispose();
 });
@@ -731,7 +807,7 @@ test("creation installs captured settings before first admission and refreshes o
       },
       resolveProjectById: async () => ({ id: projectId, rootPath: "C:/workspace" }),
       resolveProjectFromCwd: async cwd => ({ cwd, project: { id: projectId, rootPath: "C:/workspace" } }),
-      transitions: { run: async (_key, operation) => operation() },
+      transitions: passthroughTransitions,
     });
     try {
       const captured = await feature.captureCreationProfile(harness, "C:/workspace", {
@@ -845,7 +921,7 @@ test("MCP admission consumes translated metadata without additional provider rea
       if (cwd !== storageRoot) throw new Error("Unowned cwd");
       return { cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } };
     },
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   const observed = await feature.observeThread(providerThread(storageRoot, "thread", { id: "thread" }));
@@ -924,7 +1000,7 @@ for (const foreignPage of ["first", "last"] as const) {
       resolveProjectFromCwd: async cwd => ({ cwd, project: {
         id: cwd === local.cwd ? projectId : otherProjectId, rootPath: cwd,
       } }),
-      transitions: { run: async (_key, operation) => operation() },
+      transitions: passthroughTransitions,
     });
     try {
       await feature.controller.setComposerProfileTarget({ kind: "new-thread", projectId }, selection);
@@ -1009,7 +1085,7 @@ test("a relationship committed during provider pagination remains a subagent aft
     listSubagents: async () => ({ subagents: relationships }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
@@ -1040,7 +1116,7 @@ test("a project gone from the catalogue reconciles quietly as stored, without as
     log: message => logs.push(message),
     resolveProjectById: async () => { throw new Error("Unknown project."); },
     resolveProjectFromCwd: async () => { throw new Error("Unknown project."); },
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   try {
     await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
@@ -1148,7 +1224,7 @@ test("provider reconciliation publishes its first page before deeper history and
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
@@ -1257,7 +1333,7 @@ test("deep provider pages serialize across projects while both newest pages star
     }),
     resolveProjectById: async (projectId) => ({ id: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), rootPath: projectRoots.get(projectId) ?? storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   await Promise.all([feature.controller.readProject(fixtureIdentityValues.ProjectId["project-a"]), feature.controller.readProject(fixtureIdentityValues.ProjectId["project-b"])]);
@@ -1302,7 +1378,7 @@ test("managed title commands use the workbench-recorded title as the mutation pr
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   const response = await feature.handleManagedThreadRequest({
@@ -1459,7 +1535,7 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
     harnesses: createHarnesses(async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
@@ -1507,7 +1583,7 @@ test("expired settled threads reach repository retention through the feature bou
     listSubagents: async () => ({ subagents: [] }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
@@ -1585,6 +1661,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: {
+      ...passthroughTransitions,
       run: async (_key, operation) => {
         transitionCount += 1;
         return await operation();
@@ -1710,7 +1787,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
     }, async (harness, threadId) => { resumes.push({ harness, threadId }); }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   const response = await feature.handleManagedThreadRequest({
@@ -1759,7 +1836,7 @@ test("observed title mutations update the provider and published sidebar togethe
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
 
   await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);

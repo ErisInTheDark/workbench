@@ -43,7 +43,7 @@ function controller(database: ReturnType<typeof createThreadStateTestDatabase>, 
     hasGitArcBlockingSettlement: async () => false,
     resolveGitArc: async () => null,
     resolveGitArcPlan: async () => null,
-    runGitArcReadTransition: async (_projectId, operation) => await operation(),
+    runGitArcOwnershipTransition: async (_threadId, operation) => await operation(),
     reconcileProject,
     threadStateStore: database.persistence,
   });

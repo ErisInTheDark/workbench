@@ -23,6 +23,7 @@ import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkspaceGitArcMemberError } from "./WorkbenchWorkspaceGitArcController";
 import WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
+import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import { GitArcStartDiagnosticError } from "../lib/workbench/git/git-arc-start-diagnostics";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -72,23 +73,54 @@ function waitFeature(extraOptions: object = {}) {
     }),
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
     ...extraOptions,
   });
 }
 
+const passthroughTransitions = {
+  run: async <T>(_key: string, operation: () => Promise<T>) => await operation(),
+  ownership: async <T>(_threadIds: readonly string[], operation: () => Promise<T>) => await operation(),
+};
+
+/** Records which thread ownership leases are held while transfers run. */
+function ownershipRecorder() {
+  let held: readonly string[] | null = null;
+  return {
+    held: () => held,
+    transitions: {
+      ...passthroughTransitions,
+      ownership: async <T>(threadIds: readonly string[], operation: () => Promise<T>) => {
+        held = threadIds;
+        try {
+          return await operation();
+        } finally {
+          held = null;
+        }
+      },
+    },
+  };
+}
+
 test("adoption resolves admitted source ids and preserves explicit stash intent", async () => {
   const captured: Array<{ threadId: string; source: { harness: string; threadId: string }; transferStash?: boolean }> = [];
+  const ownership = ownershipRecorder();
+  const heldDuringAdoption: Array<readonly string[] | null> = [];
   const feature = waitFeature({
     publishAgentContext: async () => "admitted",
     resolveSubagentPeer: async () => ({
       harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(wbThreadId("opencode", "sibling")),
     }),
+    transitions: ownership.transitions,
   });
   const internal = feature as unknown as {
     workspaceController: { adopt: (project: object, input: { threadId: string; source: { harness: string; threadId: string }; transferStash?: boolean }) => Promise<object> };
   };
-  internal.workspaceController.adopt = async (_project, input) => { captured.push(input); return {}; };
+  internal.workspaceController.adopt = async (_project, input) => {
+    heldDuringAdoption.push(ownership.held());
+    captured.push(input);
+    return {};
+  };
   for (const [source, transferStash] of [
     [{ kind: "thread", threadId: wbThreadId("codex", "sibling") }, false],
     [{ kind: "subagent", name: "mira" }, true],
@@ -102,20 +134,27 @@ test("adoption resolves admitted source ids and preserves explicit stash intent"
     { cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"), source: { harness: "codex", threadId: wbThreadId("codex", "sibling") }, transferStash: false },
     { cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"), source: { harness: "opencode", threadId: wbThreadId("opencode", "sibling") }, transferStash: true },
   ]);
+  assert.deepEqual(heldDuringAdoption, [
+    [wbThreadId("codex", "sibling"), wbThreadId("codex", "thread")],
+    [wbThreadId("opencode", "sibling"), wbThreadId("codex", "thread")],
+  ]);
 });
 
 test("release to a named child keeps the parent as source and refreshes both owners", async () => {
   const refreshed: string[] = [];
   const notices: string[] = [];
   const childId = wbThreadId("opencode", "sibling");
+  const ownership = ownershipRecorder();
   const feature = waitFeature({
     refreshThreadGitArcState: async (_project: string, _harness: string, threadId: string) => { refreshed.push(threadId); },
     publishAgentContext: async (target: { threadId: string }) => { notices.push(target.threadId); return "admitted"; },
     resolveSubagentPeer: async () => ({
       harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(childId),
     }),
+    transitions: ownership.transitions,
   });
   let captured: object | null = null;
+  let heldDuringTransfer: readonly string[] | null = null;
   const internal = feature as unknown as {
     workspaceController: {
       releaseToChild: (project: object, input: object, beforeTransfer: () => Promise<void>) => Promise<object>;
@@ -123,6 +162,7 @@ test("release to a named child keeps the parent as source and refreshes both own
   };
   internal.workspaceController.releaseToChild = async (_project, input, beforeTransfer) => {
     await beforeTransfer();
+    heldDuringTransfer = ownership.held();
     captured = input;
     return { checkpointCommit: "a".repeat(40), intentName: "parent", kind: "arc", phase: "resolved", scopePaths: [], releasedClaims: ["one.txt"] };
   };
@@ -137,6 +177,7 @@ test("release to a named child keeps the parent as source and refreshes both own
   });
   assert.deepEqual(refreshed, [wbThreadId("codex", "thread"), childId]);
   assert.deepEqual(notices, [childId]);
+  assert.deepEqual(heldDuringTransfer, [wbThreadId("codex", "thread"), childId]);
 });
 
 test("a thread with no Git arc identity for the repository gets a typed rejection tools can match", async () => {
@@ -308,7 +349,7 @@ test("startup claim reconciliation seeds current scopes at observation time", as
       },
       root: { id: "api", name: "API", root: "C:/workspace/api", rootPath: "C:/workspace/api" },
     }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   const internal = feature as unknown as {
     workspaceController: {
@@ -344,7 +385,7 @@ for (const driftAfterRelease of [false, true]) test(`competing Git arc waits rev
     }),
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions,
+    transitions: createWorktreeGitTransitions(transitions),
   });
   const internal = feature as unknown as {
     controller: {
@@ -482,6 +523,7 @@ test("sibling thread card reads share the Git read lease instead of taking the w
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
     transitions: {
+      ownership: passthroughTransitions.ownership,
       read: async (key, operation) => {
         keys.push(`read:${key}`);
         return await operation();
@@ -519,6 +561,7 @@ test("exact concurrent proposal and claim card reads share one transition operat
       refreshThreadGitArcState: async () => undefined,
       resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
       transitions: {
+        ownership: passthroughTransitions.ownership,
         read: async (_key, operation) => {
           transitionCount += 1;
           return await operation();
@@ -562,6 +605,7 @@ test("different proposal cards read in one turn share one read lease, and a muta
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
     transitions: {
+      ownership: passthroughTransitions.ownership,
       read: async (key, operation) => { leases.push("read"); return await coordinator.read(key, operation); },
       run: async (key, operation) => { leases.push("write"); return await coordinator.run(key, operation); },
     },
@@ -610,6 +654,7 @@ test("a Git arc mutation fences later card reads from an older shared result", a
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
     transitions: {
+      ownership: passthroughTransitions.ownership,
       read: async (key, operation) => {
         transitionCount += 1;
         return await coordinator.read(key, operation);
@@ -672,7 +717,7 @@ test("compare forwards an explicit inspection ref to the controller", async () =
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   let receivedRef: string | undefined;
   let receivedModifiedSince: number | undefined;
@@ -721,7 +766,7 @@ test("arc release forwards explicit dirty disown intent to the controller", asyn
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   let receivedDisown: boolean | undefined;
   const internal = (feature as unknown as {
@@ -754,7 +799,7 @@ test("settled threads cannot start claims", async () => {
     }),
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   const response = await feature.executeRequest({
     action: "arcStart",
@@ -801,7 +846,7 @@ test("atomic claim collisions use structured owner and path diagnostics", async 
     }),
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   Object.defineProperty(feature, "dispatch", {
     value: async () => {
@@ -864,7 +909,7 @@ test("missing arc refs return one typed message without unrelated recovery", asy
     }),
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   Object.defineProperty(feature, "dispatch", {
     value: async () => { throw new GitCheckpointMissingObjectError("deadbeef"); },
@@ -894,7 +939,7 @@ test("ignored path failures remain typed through workspace member wrappers", asy
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   Object.defineProperty(feature, "dispatch", {
     value: async () => {
@@ -954,7 +999,7 @@ test("accepted proposal receipts remain structured when a resolved arc cannot co
     }),
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   Object.defineProperty(feature, "dispatch", {
     value: async () => {
@@ -1021,7 +1066,7 @@ test("known proposal and claim-set errors keep recovery typed", async () => {
       getThreadClaimContext: async () => null,
       refreshThreadGitArcState: async () => undefined,
       resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-      transitions: { run: async (_key, operation) => await operation() },
+      transitions: passthroughTransitions,
     });
     Object.defineProperty(feature, "dispatch", { value: async () => { throw item.error; } });
     const request = item.action === "proposalCreate"
@@ -1042,7 +1087,7 @@ test("successful Git responses survive a failed thread claim refresh", async (co
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => { throw new Error("projection exploded"); },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   Object.defineProperty(feature, "dispatch", {
     value: async () => Response.json({ proposalId: "proposal-one" }),
@@ -1072,7 +1117,7 @@ test("failed Git mutations still refresh durable arc projection once", async () 
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => { refreshCount += 1; },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   Object.defineProperty(feature, "dispatch", { value: async () => { throw new Error("mutation failed"); } });
 
@@ -1101,7 +1146,7 @@ test("plan creation and edit session endings refresh Git arc state while edit vi
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => { refreshCount += 1; },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   Object.defineProperty(feature, "dispatch", { value: async () => Response.json({ ok: true }) });
 
@@ -1134,7 +1179,7 @@ test("Git arc responses ignore legacy reload projections and admission claims", 
     refreshThreadGitArcState: async () => undefined,
     reloadScopeProjectRoot: "C:/Git/Project",
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   Object.defineProperty(feature, "dispatch", {
     value: async (request: { paths: string[] }) => Response.json({ scopePaths: request.paths }),
@@ -1166,7 +1211,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
     }),
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   const internal = (feature as unknown as { controller: Record<string, (...args: never[]) => Promise<object>> }).controller;
   internal.createInspectionSnapshot = async () => ({});
@@ -1223,7 +1268,7 @@ test("status and proposal diff may inspect a cross-harness target without changi
       cwd: "C:/Git/Project",
       project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
     }),
-    transitions: { run: async (_key, operation) => await operation() },
+    transitions: passthroughTransitions,
   });
   const internal = (feature as unknown as {
     controller: {

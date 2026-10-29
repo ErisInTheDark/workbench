@@ -256,7 +256,7 @@ async function questionnaireFixture(childHarness: WorkbenchHarness, options: {
     hasGitArcBlockingSettlement: async () => false,
     resolveGitArc: async () => null,
     resolveGitArcPlan: async () => null,
-    runGitArcReadTransition: async (_projectId, operation) => operation(),
+    runGitArcOwnershipTransition: async (_threadId, operation) => operation(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/repo" }),
     reconcileProject: async () => [],
   });

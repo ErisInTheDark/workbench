@@ -47,6 +47,7 @@ import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status
 import type { WorkbenchContextAdmission } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchAgentContextTarget } from "../agent/WorkbenchAgentContextController";
 import type WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
+import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchThreadClaimContext } from "../thread/WorkbenchThreadStateController";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
@@ -106,7 +107,8 @@ export interface WorkbenchGitArcFeatureOptions {
     subject: WorkbenchApprovalSubject;
   }, signal: AbortSignal): Promise<WorkbenchApprovalDecision>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
-    & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read" | "readMany" | "runMany">>;
+    & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read" | "readMany" | "runMany">>
+    & Pick<ReturnType<typeof createWorktreeGitTransitions>, "ownership">;
 }
 
 type PublicGitOwner<T extends { threadId: string }> = Omit<T, "threadId"> & { threadId: WorkbenchThreadId };
@@ -561,7 +563,7 @@ export default class WorkbenchGitArcFeature {
           let response: Response;
           try {
             response = effectiveRequest.action === "arcTransferClaims" && transferDestination
-              ? Response.json(await this.workspaceController.releaseToChild(project, {
+              ? Response.json(await this.options.transitions.ownership([owner.threadId, transferDestination.threadId], async () => await this.workspaceController.releaseToChild(project, {
                 cwd: project.cwd, harness: owner.harness, threadId: owner.threadId,
                 destination: transferDestination, paths: effectiveRequest.paths,
                 transferStash: effectiveRequest.transferStash,
@@ -573,9 +575,11 @@ export default class WorkbenchGitArcFeature {
                 if (!parent || parent.lifecycle.settled || !child || child.lifecycle.settled) {
                   throw new Error("Both ownership threads must be available and unsettled during claim transfer.");
                 }
-              }))
+              })))
               : effectiveRequest.action === "arcAdoptSource" && adoptionSource
-              ? Response.json(await this.workspaceController.adopt(project, {
+              ? Response.json(await this.options.transitions.ownership([
+                adoptionSource.threadId, adoptionRecipient?.threadId ?? owner.threadId,
+              ], async () => await this.workspaceController.adopt(project, {
                 cwd: project.cwd, harness: adoptionRecipient?.harness ?? owner.harness,
                 threadId: adoptionRecipient?.threadId ?? owner.threadId, source: adoptionSource,
                 transferStash: effectiveRequest.transferStash,
@@ -587,7 +591,7 @@ export default class WorkbenchGitArcFeature {
                 if (owners.some(context => !context || context.lifecycle.settled)) {
                   throw new Error("A settled or unavailable thread cannot adopt Git arc ownership.");
                 }
-              }, effectiveRequest.paths))
+              }, effectiveRequest.paths)))
               : effectiveRequest.action === "proposalCommitMany"
               ? Response.json(await this.commitProposals(project, effectiveRequest))
               : effectiveRequest.action === "readDiffArtifact"
