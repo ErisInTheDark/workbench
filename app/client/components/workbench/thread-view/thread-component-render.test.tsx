@@ -4,6 +4,14 @@ import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderThreadComponentNode } from "./thread-component-render";
 
+test("component links open outside the Workbench tab", () => {
+  const html = renderToStaticMarkup(renderThreadComponentNode({
+    $workbench: "element", type: "a", props: { href: "https://trello.com/c/abc", children: "card" },
+  }));
+  assert.match(html, /target="_blank"/u);
+  assert.match(html, /rel="noreferrer"/u);
+});
+
 test("serialized kit options render their initial selected content", () => {
   const html = renderToStaticMarkup(renderThreadComponentNode({
     $workbench: "element", type: "kit:Options",

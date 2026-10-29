@@ -47,7 +47,9 @@ function renderNode(node: ThreadComponentNode, key?: string, options?: ThreadRen
   }
   const type = name ? exported as ElementType : node.type === "fragment" ? Fragment : node.type;
   const props = Object.fromEntries(Object.entries(node.props).map(([name, value]) => [name, renderValue(value, `${key ?? "node"}-${name}`, options)]));
-  return createElement(type, { ...props, ...(key === undefined ? {} : { key }) });
+  // Like markdown links, component links never navigate the Workbench tab itself.
+  const link = node.type === "a" ? { target: "_blank", rel: "noreferrer" } : {};
+  return createElement(type, { ...props, ...link, ...(key === undefined ? {} : { key }) });
 }
 
 export function renderThreadComponentNode(node: ThreadComponentNode, options?: ThreadRenderOptions): ReactNode {

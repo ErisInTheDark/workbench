@@ -23,6 +23,18 @@ test("ordinary form controls can appear as native template markup", () => {
   assert.deepEqual(readThreadComponentTree(tree), tree);
 });
 
+test("component links can only leave Workbench, never navigate its tab", () => {
+  const link = (href: string, props: Record<string, unknown> = {}) => ({ $workbench: "element", type: "a", props: { href, children: "x", ...props } });
+  for (const href of ["https://trello.com/c/abc", "http://example.com", "mailto:someone@example.com"]) {
+    assert.doesNotThrow(() => readThreadComponentTree(link(href)), href);
+  }
+  for (const href of ["#section", "/thread/workbench/abc", "../x", "./x", "thread", "javascript:alert(1)", " java\tscript:x"]) {
+    assert.throws(() => readThreadComponentTree(link(href)), href);
+  }
+  assert.throws(() => readThreadComponentTree(link("https://example.com", { target: "_self" })));
+  assert.throws(() => readThreadComponentTree({ $workbench: "element", type: "kit:Callout", props: { href: "https://example.com" } }));
+});
+
 test("component output cannot automatically fetch remote data", () => {
   const image = { $workbench: "element", type: "img", props: { src: "https://example.com/private" } };
   const style = { $workbench: "element", type: "div", props: { style: { backgroundImage: "u\\72l(https://example.com/private)" } } };

@@ -79,7 +79,9 @@ function normalizedCss(value: string) {
 }
 
 const IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/iu;
-const REMOTE_IMAGE_URL = /^https:\/\/[^\s"'()\\]+$/u;
+/** Component links only ever leave Workbench; relative and fragment links would navigate its own tab. */
+const EXTERNAL_LINK = /^(?:https?:\/\/[^\s]+|mailto:[^\s]+)$/iu;
+const REMOTE_IMAGE_URL =/^https:\/\/[^\s"'()\\]+$/u;
 const CSS_URL = /url\s*\(\s*([^)]*)\)/giu;
 const STYLE_KEYS = ["color", "fill", "stroke", "filter", "mask", "clipPath", "cursor"];
 const isStyleKey = (key: string) => /style$/iu.test(key) || STYLE_KEYS.includes(key);
@@ -137,11 +139,13 @@ function validateValue(value: ThreadComponentValue, options: ThreadComponentTree
         && !(options.remoteImages && value.type === "img" && REMOTE_IMAGE_URL.test(item))) {
         throw new Error("Component images cannot fetch remote resources.");
       }
-      if ((lower === "href" || lower === "xlinkhref") && typeof item === "string") {
-        if (/^\s*(?:javascript|vbscript|data):/iu.test(item.replace(/[\u0000-\u001f]/gu, ""))
-          || (value.type !== "a" && !value.type.startsWith("kit:") && !item.startsWith("#"))) {
-          throw new Error(`Unsafe component ${key}.`);
+      if (lower === "href" || lower === "xlinkhref") {
+        if (value.type !== "a" || typeof item !== "string" || !EXTERNAL_LINK.test(item)) {
+          throw new Error("Component links must be absolute https, http or mailto URLs on <a>.");
         }
+      }
+      if (value.type === "a" && ["target", "rel", "download"].includes(lower)) {
+        throw new Error(`Unsupported component property: ${key}`);
       }
       validateValue(item, options, style || isStyleKey(key));
     }
