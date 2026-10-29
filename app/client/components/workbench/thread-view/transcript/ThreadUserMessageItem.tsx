@@ -8,6 +8,7 @@
 "use client";
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { mapThreadComponentSources } from "workbench-shared/workbench/thread/thread-component-markup";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import {
@@ -23,21 +24,27 @@ import { getUserMessageCopyMarkdown } from "../bubble-copy";
 import ComposerReferencePills from "../ComposerReferencePills";
 import ThreadAgentScreenshotItem from "../ThreadAgentScreenshotItem";
 import ThreadBubbleCopyButton from "../ThreadBubbleCopyButton";
+import ThreadComponent from "../ThreadComponent";
 import ThreadIncomingAgentMessageItem from "../ThreadIncomingAgentMessageItem";
 import ThreadMessageTimestamp from "../ThreadMessageTimestamp";
 import ThreadSteerDecoration from "../ThreadSteerDecoration";
 import ThreadUserImage from "../ThreadUserImage";
 import { getUserMessageDeliveryState } from "../thread-render-blocks";
 import { layoutUserMessageBubbles } from "../user-message-bubbles";
+import type { ThreadComponentContext } from "../thread-markdown-render";
 import { UndeliveredSteerActions } from "./ThreadItemActionControls";
 
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 
-function ThreadUserInputLine ({ input }: { input: UserInput }) {
+function ThreadUserInputLine ({ input, componentContext }: {
+  input: UserInput;
+  componentContext: ThreadComponentContext;
+}) {
   switch (input.type) {
     case "text": {
       const text = input.text.trim();
-      return <MarkdownRender className="[&>p]:mb-[0.45em]" markdown={text || "No text captured."} />;
+      return <MarkdownRender className="[&>p]:mb-[0.45em]" componentContext={componentContext}
+        componentRenderer={ThreadComponent} markdown={text || "No text captured."} />;
     }
     case "image":
       return <ThreadUserImage alt="User-provided image" className="max-w-[22rem]" src={input.url} />;
@@ -105,6 +112,28 @@ export default function ThreadUserMessageItem ({
   const isPendingInitial = isUndeliveredInitialOptimisticInputItem(item);
   // `=====` lines split one stored message into several bubbles; the agent still receives the whole message.
   const { bubbles, references } = layoutUserMessageBubbles(unwrapWorkbenchSteerDisplayInput(item.content));
+  const combined = getUserMessageCopyMarkdown(unwrapWorkbenchSteerDisplayInput(item.content)).replaceAll("\r\n", "\n");
+  const sources = mapThreadComponentSources(combined, (sourceItems ?? []).map(source => ({
+    itemId: source.id,
+    sourceText: getUserMessageCopyMarkdown(unwrapWorkbenchSteerDisplayInput(source.content)),
+  })));
+  let displayOffset = 0;
+  const contextFor = (content: UserInput): ThreadComponentContext => {
+    if (sourceItems?.length === 1) {
+      return { threadId: transcript.threadId, itemId: sourceItems[0]!.id, sourceText: sources[0]?.sourceText ?? combined };
+    }
+    if (!sourceItems || content.type !== "text") {
+      return { threadId: transcript.threadId, itemId: item.id, sourceText: combined };
+    }
+    const text = content.text.trim().replaceAll("\r\n", "\n");
+    const start = combined.indexOf(text, displayOffset);
+    if (start >= 0) displayOffset = start + text.length;
+    return {
+      threadId: transcript.threadId, itemId: item.id, sourceText: text,
+      sources: start < 0 ? [] : sources.filter(source => source.end > start && source.start < start + text.length)
+        .map(source => ({ ...source, start: source.start - start, end: source.end - start })),
+    };
+  };
   if (!bubbles.length) return null;
   return (
     <section
@@ -117,7 +146,8 @@ export default function ThreadUserMessageItem ({
             {/* References lead the first bubble like its opening paragraph. */}
             {bubbleIndex === 0 ? <ComposerReferencePills references={references} /> : null}
             {bubble.map((content, index) => (
-              <ThreadUserInputLine key={`${item.id}:content:${bubbleIndex}:${index}:${content.type}`} input={content} />
+              <ThreadUserInputLine componentContext={contextFor(content)}
+                key={`${item.id}:content:${bubbleIndex}:${index}:${content.type}`} input={content} />
             ))}
           </ThreadSteerDecoration>
           <ThreadBubbleCopyButton

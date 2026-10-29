@@ -18,6 +18,7 @@ import MarkdownRender from "../../../ui/MarkdownRender";
 import { useTranscript } from "../../use-transcript";
 import { getThreadEntryMotionIdentity } from "../ThreadEntryMotionController";
 import ThreadCommentaryActionRow from "../ThreadCommentaryActionRow";
+import ThreadComponent from "../ThreadComponent";
 import ThreadIncomingAgentMessageItem from "../ThreadIncomingAgentMessageItem";
 import { ThreadMarkdownSectionActionsProvider } from "../ThreadMarkdownSectionActions";
 import ThreadAnimationStyleContext from "../ThreadAnimationStyleContext";
@@ -71,7 +72,8 @@ export function ThreadAgentMessageItem ({
   return (
     <section className={copyRuns ? "relative py-3" : "py-3"}>
       <ThreadMarkdownSectionActionsProvider value={copyRuns ? renderBreakActions : null}>
-        <MarkdownRender live={Boolean(presentationSource)} markdown={text} streaming={streaming} />
+        <MarkdownRender componentContext={{ threadId: transcript.threadId, itemId: item.id, sourceText: item.text }} componentRenderer={ThreadComponent}
+          live={Boolean(presentationSource)} markdown={text} streaming={streaming} />
       </ThreadMarkdownSectionActionsProvider>
       {copyRuns?.endCopyMarkdown ? <ThreadCommentaryActionRow markdown={copyRuns.endCopyMarkdown} placement="end" /> : null}
       {isFinal ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={completedAt} /> : null}

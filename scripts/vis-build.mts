@@ -12,6 +12,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandVariantGroupsInSource } from "../app/server/variant-group-source.ts";
+import { collectTailwindCandidates } from "./tailwind-candidates.mts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const app = path.join(root, "app");
@@ -55,7 +56,9 @@ const bundled = await esbuild.build({
         if (args.path.includes(`${path.sep}node_modules${path.sep}`)) return undefined;
         const source = await readFile(args.path, "utf8");
         const transformed = expandVariantGroupsInSource(source, args.path);
-        return transformed.map ? { contents: transformed.code, loader: path.extname(args.path).slice(1) as "tsx" } : undefined;
+        const extension = path.extname(args.path);
+        const loader = extension === ".tsx" ? "tsx" : extension === ".ts" ? "ts" : extension === ".jsx" ? "jsx" : "js";
+        return transformed.map ? { contents: transformed.code, loader } : undefined;
       });
     },
   }],
@@ -82,17 +85,7 @@ const inputs = Object.keys(bundled.metafile.inputs).filter((input) => !input.sta
 // `<` and `>` stay in tokens: child and sibling selectors like `[&>*]:flex` are class names.
 // Class names balance their brackets; an unbalanced code token like `for(var` makes Tailwind read the following
 // candidates as its argument and drop them.
-function balanced(token: string) {
-  const closers: string[] = [];
-  for (const character of token) {
-    if (character === "(") closers.push(")");
-    else if (character === "[") closers.push("]");
-    else if ((character === ")" || character === "]") && closers.pop() !== character) return false;
-  }
-  return closers.length === 0;
-}
-const candidates = [...new Set(script.match(/[^\s"'`{}\\]{2,}/gu) ?? [])]
-  .filter((token) => /[a-z]/u.test(token) && balanced(token));
+const candidates = collectTailwindCandidates(script);
 const tailwindInput = [
   `@import ${JSON.stringify(path.join(app, "client", "components", "vis-kit", "vis-page.css").replaceAll("\\", "/"))};`,
   `@source inline(${JSON.stringify(candidates.join(" "))});`,

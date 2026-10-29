@@ -9,7 +9,8 @@ import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/p
 import { HistoryQueryError, type HistoryPage, type HistoryQuery } from "../history/history-query-contract.ts";
 import WorkbenchHistoryQueryRepository from "../history/WorkbenchHistoryQueryRepository.ts";
 import WorkbenchApprovalOutcomeRepository from "../transcript/WorkbenchApprovalOutcomeRepository.ts";
-import WorkbenchTranscriptAssetStore, { type TranscriptAssetRead, type TranscriptAssetWrite } from "../transcript/WorkbenchTranscriptAssetStore.ts";
+import WorkbenchTranscriptAssetStore, { type TranscriptAssetRead, type TranscriptAssetWrite, type TranscriptComponentTarget } from "../transcript/WorkbenchTranscriptAssetStore.ts";
+import type { ThreadComponentNode } from "workbench-shared/workbench/thread/thread-component-tree";
 import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
@@ -109,6 +110,14 @@ export const transcriptRequests = {
   readTranscriptAsset: defineDatabaseRequest({
     read: "transcript",
     run: ({ database }, input: TranscriptAssetRead) => new WorkbenchTranscriptAssetStore(database).read(input),
+  }),
+  readTranscriptComponent: defineDatabaseRequest({
+    read: "transcript",
+    run: ({ database }, input: TranscriptComponentTarget) => new WorkbenchTranscriptAssetStore(database).readComponent(input),
+  }),
+  writeTranscriptComponent: defineDatabaseRequest({
+    run: ({ database }, input: TranscriptComponentTarget, result: ThreadComponentNode) =>
+      new WorkbenchTranscriptAssetStore(database).writeComponent(input, result),
   }),
   recordApprovalOutcome: defineDatabaseRequest({
     run: ({ database }, entry: WorkbenchApprovalOutcomeEntry) => { new WorkbenchApprovalOutcomeRepository(database).record(entry); },

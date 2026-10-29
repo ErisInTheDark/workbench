@@ -14,6 +14,7 @@
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build skill catalogs and universal instructions.
  * - formatWorkbenchSkillCatalogEntry: render a skill's name and trigger for the instruction catalog.
  * - resolveWorkbenchActivatedSkills: canonical path and catalog name for each active skill selected by path.
+ * - listActivatedSkillDefinitions: resolve active skill definitions by their canonical paths.
  */
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -31,6 +32,7 @@ import { ensureWorkbenchInstructionSourceFiles } from "./workbench/instructions/
 import { createLibraryInstructionFileGeneration } from "./workbench/instructions/library-instruction-files";
 import { renderWorkbenchSkillContent } from "./workbench/instructions/skill-rendering";
 import { EMPTY_PROJECT_SKILLS, listSkillDefinitionsFromDirectory, type WorkbenchProjectSkills } from "./workbench/skills/skill-discovery";
+import { formatSkillComponentHints } from "./workbench/skills/skill-components";
 import { readWorkbenchSkillDirectoryName } from "workbench-shared/workbench/skill-paths";
 
 export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
@@ -521,7 +523,7 @@ export async function buildWorkbenchSkillCatalog(
   return activeSkills.map(formatWorkbenchSkillCatalogEntry).join("\n");
 }
 
-async function listActivatedSkillDefinitions(
+export async function listActivatedSkillDefinitions(
   projectSkills: WorkbenchProjectSkills,
   activatedSkillPaths: readonly string[],
 ) {
@@ -555,7 +557,7 @@ export async function buildWorkbenchActivatedSkillCatalog(
 
   return activatedSkills.map((skill) => {
     const attributes = `name="${escapeXmlAttribute(createSkillShadowKey(skill))}" trigger="${escapeXmlAttribute(skill.description)}"`;
-    const body = stripWorkbenchInstructionFrontmatter(renderWorkbenchSkillContent(skill));
+    const body = stripWorkbenchInstructionFrontmatter(renderWorkbenchSkillContent(skill)) + formatSkillComponentHints(skill.content);
     return body
       ? `<skill ${attributes}>\n${body}\n</skill>`
       : `<skill ${attributes} />`;

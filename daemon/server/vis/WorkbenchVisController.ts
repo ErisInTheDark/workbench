@@ -20,7 +20,7 @@ import { renderVisDocument, visWantsCss } from "workbench-shared/workbench/vis/v
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredBuild, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
 import { WORKBENCH_PROJECT_CONFIG_FILE } from "workbench-shared/workbench/project-config/workbench-project-config";
 import {
-  buildVisDocument, compileVisCss, VisRenderRuns, WORKBENCH_KIT_VIS_CONFIG,
+  buildVisDocument, compileVisCss, runVisCommand, VisRenderRuns, WORKBENCH_KIT_VIS_CONFIG,
   type VisBuildContext, type VisCommandRunner,
 } from "./vis-project-command";
 import type WorkbenchVisBrowse from "./WorkbenchVisBrowse";
@@ -30,7 +30,7 @@ export interface WorkbenchVisControllerOptions {
   /** The project root a stored session's path is relative to; null once the project is gone. */
   resolveRoot(session: ThreadVisStoredSession): Promise<string | null>;
   /** Runs a project's vis command as the session's thread, in that thread's sandbox. */
-  runCommand(session: ThreadVisStoredSession): VisCommandRunner;
+  runCommand(session: Pick<ThreadVisStoredSession, "threadId" | "harness" | "cwd">): VisCommandRunner;
   /** Workbench-owned directory for project command input files. */
   scratchDirectory: string;
   /** Workbench's checkout, where the kit context's commands run. */
@@ -39,6 +39,8 @@ export interface WorkbenchVisControllerOptions {
   powerShellExecutable?(): Promise<string>;
   /** Each session's headless browser, opened with it and stopped when it ends. */
   browse?: Pick<WorkbenchVisBrowse, "end" | "inspect" | "open" | "refresh">;
+  /** Renders active skill component markup through the native component renderer. */
+  componentPreview?(threadId: string, markup: string, signal: AbortSignal): Promise<string>;
   /** Calls `onChange` whenever the file may have changed; returns a stop function. */
   watch?(file: string, onChange: () => void): () => void;
   now?(): number;
@@ -145,6 +147,42 @@ export default class WorkbenchVisController {
     if (!live.state.render) throw new Error(`${display} has not rendered yet; try again once it has.`);
     if (!this.#options.browse) throw new Error("Vis browser checks are unavailable.");
     return await this.#options.browse.inspect({ ...live.stored, document: live.state.render.document, controls: live.state.controls }, kind);
+  }
+
+  async testMarkup(input: { threadId: string; cwd: string; markup: string }, signal?: AbortSignal) {
+    const { browse, componentPreview } = this.#options;
+    if (!browse || !componentPreview) throw new Error("Component markup testing is unavailable.");
+    const cancellation = signal ? AbortSignal.any([this.#lifetime.signal, signal]) : this.#lifetime.signal;
+    cancellation.throwIfAborted();
+    const document = await componentPreview(input.threadId, input.markup, cancellation);
+    cancellation.throwIfAborted();
+    const target = {
+      sessionId: randomUUID(), threadId: input.threadId, cwd: input.cwd,
+      path: "component markup", document, controls: {}, signal: cancellation,
+    };
+    let output: string | null = null;
+    let failure: Error | null = null;
+    try { output = await browse.inspect(target, "screenshot"); }
+    catch (error) { failure = error instanceof Error ? error : new Error(String(error)); }
+    try { await browse.end(target, { strict: true }); }
+    catch (error) {
+      const cleanup = error instanceof Error ? error : new Error(String(error));
+      if (failure) throw new AggregateError([failure, cleanup], `Screenshot failed: ${failure.message}; cleanup failed: ${cleanup.message}`);
+      throw cleanup;
+    }
+    if (failure) throw failure;
+    if (output === null) throw new Error("Component screenshot returned no output.");
+    return output;
+  }
+
+  async runComponentCommand(
+    caller: Pick<ThreadVisStoredSession, "threadId" | "harness" | "cwd">,
+    command: readonly string[], cwd: string, signal: AbortSignal,
+  ) {
+    return await runVisCommand({
+      command, cwd, label: "component", run: this.#options.runCommand(caller),
+      runs: this.#runs, signal, powerShellExecutable: this.#options.powerShellExecutable,
+    });
   }
 
   async endSession(input: { threadId: string; cwd: string; rootPath: string; path: string }) {

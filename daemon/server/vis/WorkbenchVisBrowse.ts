@@ -8,12 +8,14 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { z } from "zod";
 import type { WorkbenchBrowseAgentScriptInlineRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import { formatVisScreenshotResult, type VisControls } from "workbench-shared/workbench/vis/vis-contract";
 import { frameVisDocument } from "workbench-shared/workbench/vis/vis-frame";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 
 export interface VisBrowsePort {
-  execute(request: WorkbenchBrowseAgentScriptInlineRequest): Promise<Response>;
+  execute(request: WorkbenchBrowseAgentScriptInlineRequest, signal?: AbortSignal): Promise<Response>;
   stop(request: { session: string; threadId: string; cwd: string }): Promise<void>;
 }
 
@@ -25,6 +27,7 @@ export interface VisBrowseTarget {
   document: string;
   /** The file's synced control state, so checks see what the user sees. */
   controls: VisControls;
+  signal?: AbortSignal;
 }
 
 /**
@@ -55,6 +58,19 @@ export default class WorkbenchVisBrowse {
     return `vis-${sessionId.slice(0, 8)}`;
   }
 
+  static async checkStopResponse(response: Response) {
+    const parsed = conformToZodSchema(z.object({
+      error: z.string().optional(),
+      stopped: z.boolean().optional(),
+      result: z.object({ ok: z.boolean(), error: z.string().optional() }).nullable().optional(),
+    }), await response.json());
+    if (!response.ok || !parsed.success || !parsed.data.stopped || !parsed.data.result?.ok) {
+      throw new Error(parsed.success
+        ? parsed.data.result?.error ?? parsed.data.error ?? `Browse stop failed with status ${response.status}.`
+        : `Browse stop failed with status ${response.status}.`);
+    }
+  }
+
   /** Opens the render ahead of the first check; checks reopen it anyway, so failing here only costs a warning. */
   async open(target: VisBrowseTarget) {
     try {
@@ -82,24 +98,35 @@ export default class WorkbenchVisBrowse {
     await this.#load(target, `${verb} vis of ${target.path}`);
     const stdout = await this.#script(target, kind === "snapshot" ? "snapshot --compact" : "screenshot --full-page", `${verb} vis of ${target.path}`);
     if (kind === "screenshot") {
-      const assetUrl = (JSON.parse(stdout) as { assetUrl?: unknown }).assetUrl;
-      return formatVisScreenshotResult(target.path, typeof assetUrl === "string" ? assetUrl : null);
+      const result = conformToZodSchema(z.object({ assetUrl: z.string().min(1) }), JSON.parse(stdout));
+      if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
+        throw new Error("Browse screenshot did not return an image.");
+      }
+      return formatVisScreenshotResult(target.path, result.data.assetUrl);
     }
-    const tree = (JSON.parse(stdout) as { tree?: unknown }).tree;
-    if (typeof tree !== "string") throw new Error("Browse returned a snapshot without an accessibility tree.");
-    return `${tree}\n`;
+    const result = conformToZodSchema(z.object({ tree: z.string() }), JSON.parse(stdout));
+    if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
+      throw new Error("Browse returned a snapshot without an accessibility tree.");
+    }
+    return `${result.data.tree}\n`;
   }
 
-  async end(target: Pick<VisBrowseTarget, "sessionId" | "threadId" | "cwd">) {
+  async end(target: Pick<VisBrowseTarget, "sessionId" | "threadId" | "cwd">, options: { strict?: boolean } = {}) {
+    const failures: Error[] = [];
     try {
       await this.#port.stop({ session: WorkbenchVisBrowse.sessionName(target.sessionId), threadId: target.threadId, cwd: target.cwd });
     } catch (error) {
       this.#log(`Vis browser ${WorkbenchVisBrowse.sessionName(target.sessionId)} could not stop: ${message(error)}`);
+      failures.push(error instanceof Error ? error : new Error(String(error)));
     }
-    await this.#queuePage(target.sessionId, () => rm(this.#page(target.sessionId), { force: true })).catch((error: unknown) => {
+    try {
+      await this.#queuePage(target.sessionId, () => rm(this.#page(target.sessionId), { force: true }));
+    } catch (error) {
       this.#log(`Vis browser page for ${target.sessionId} could not be removed: ${message(error)}`);
-    });
+      failures.push(error instanceof Error ? error : new Error(String(error)));
+    }
     this.#pageWrites.delete(target.sessionId);
+    if (options.strict && failures.length) throw new AggregateError(failures, "Vis browser cleanup failed.");
   }
 
   #page(sessionId: string) {
@@ -137,7 +164,7 @@ export default class WorkbenchVisBrowse {
       stopOnError: true,
       summary,
       script,
-    });
+    }, target.signal);
     const body = await response.json() as Partial<WorkbenchBrowseCommandResponse>;
     if (!response.ok || !body.ok) throw new Error(body.error || body.stderr || `Browse failed with status ${response.status}.`);
     return body.stdout ?? "";

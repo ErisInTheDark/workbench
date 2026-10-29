@@ -11,6 +11,7 @@ import { WorkbenchMcpRequestSchema, workbenchMcpFailure } from "../lib/workbench
 import { isMcpToolRequestApproved, mcpToolRequestQuestions } from "workbench-shared/workbench/mcp/mcp-tool-request";
 import { WorkbenchVisRequestSchema } from "../lib/workbench/commands/vis-command-definitions";
 import { formatVisControls, formatVisSessionResult, parseVisProject } from "workbench-shared/workbench/vis/vis-contract";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "../lib/workbench/commands/workbench-agent-command-definition";
 import {
   WorkbenchHeapSnapshotRequestSchema, WorkbenchMcpSpyRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchMcpSpy, formatWorkbenchSocketSpy,
@@ -325,7 +326,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         }
       },
       executeVisRequest: async (body, signal) => {
-        const parsed = WorkbenchVisRequestSchema.safeParse(body);
+        const parsed = conformToZodSchema(WorkbenchVisRequestSchema, body);
         if (!parsed.success) return new Response("Invalid vis arguments.\n", { headers: { "Content-Type": "text/plain; charset=utf-8" }, status: 400 });
         const request = parsed.data;
         const { identity, binding } = await nativeTarget(request.threadId, request.cwd, request.harness);
@@ -335,7 +336,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const text = (kind: "start" | "end", result: { sessionId: string; path: string; failure: string | null }) =>
           `${formatVisSessionResult(kind, result.sessionId, result.path)}${result.failure ? `\nRendered with a problem: ${result.failure}` : ""}\n`;
         try {
-          const body = request.action === "start"
+          const body = request.action === "test"
+            ? await vis.testMarkup({ threadId: identity.threadId, cwd: request.cwd, markup: request.markup }, signal)
+            : request.action === "start"
             ? text("start", await vis.startSession({
               threadId: identity.threadId, harness: binding.harness, cwd: request.cwd, projectId: project.id, rootPath: root.rootPath,
               path: request.path, project: parseVisProject(request.project),

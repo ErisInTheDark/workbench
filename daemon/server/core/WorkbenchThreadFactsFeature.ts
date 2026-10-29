@@ -1,14 +1,19 @@
 /*
  * Exports:
- * - default WorkbenchThreadFactsFeature: build the thread-owned facts (activatable skills, instruction selection, active skills, goals, todos,
+ * - default WorkbenchThreadFactsFeature: build the thread-owned facts (activatable skills, components, instruction selection, goals, todos,
  *   addressed feedback, vis sessions and agent context), fan their changes out to runtime observers and thread summaries, and answer which
  *   thread-owned work holds settlement.
  */
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { z } from "zod";
 import { WorkbenchThreadIdSchema, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { ThreadRuntime, WorkbenchThreadSettlementHold, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
+import { readThreadComponentTree, ThreadCompiledComponentSchema, ThreadCompiledStyleSchema } from "workbench-shared/workbench/thread/thread-component-tree";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
 import { listProjectSkillsFromRoot } from "../lib/workbench/project/project-agents-folder";
@@ -18,6 +23,7 @@ import * as workbenchLibrary from "../lib/workbench-library";
 import type { ReloadableNodeBuild, ReloadableNodeLease } from "../runtime/ReloadableNode";
 import WorkbenchVisBrowse from "../vis/WorkbenchVisBrowse";
 import WorkbenchVisController from "../vis/WorkbenchVisController";
+import WorkbenchComponentsController from "../skills/WorkbenchComponentsController";
 import { requireWorkbenchPowerShellExecutable } from "../runtime/windows-powershell-runtime";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
 import WorkbenchAgentContextController from "../agent/WorkbenchAgentContextController";
@@ -37,6 +43,7 @@ export default class WorkbenchThreadFactsFeature {
   readonly skillCatalog: WorkbenchAgentSkillCatalogController;
   readonly instructionSelection: WorkbenchThreadInstructionSelectionController;
   readonly skills: WorkbenchThreadSkillsController;
+  readonly components: WorkbenchComponentsController;
   readonly goals: WorkbenchThreadGoalController;
   readonly todos: WorkbenchThreadTodoController;
   readonly addressedFeedback: WorkbenchThreadAddressedFeedbackController;
@@ -137,8 +144,79 @@ export default class WorkbenchThreadFactsFeature {
       },
     });
     const visBrowseLifetime = this.#visBrowseLifetime;
+    const workbenchRoot = path.resolve(import.meta.dirname, "..", "..", "..");
+    const componentScript = path.join(workbenchRoot, "scripts", "skill-component-build.mts");
+    const componentScratch = path.join(context.dataRootPath, "daemon", "components");
+    const runAsThread = async (
+      session: { harness: string; threadId: string; cwd: string }, command: string[], cwd: string, signal: AbortSignal,
+    ) => {
+      const key = installedProviderKeys.find(candidate => candidate === session.harness);
+      const prepare = key ? providers().get(key).tools?.prepareExecution : undefined;
+      if (!prepare) throw new Error(`Provider ${session.harness} cannot run sandboxed commands.`);
+      const prepared = await prepare({
+        caller: { harness: session.harness, threadId: WorkbenchThreadIdSchema.parse(session.threadId), cwd: session.cwd },
+        command, cwd, permissions: { mode: "restricted", writableRoots: [], network: false },
+      }, signal);
+      return await getProcessWorkbenchAgentMcpRequestRegistry().executeShell(prepared, signal);
+    };
+    const executeComponent = async (threadId: string, args: string[], signal?: AbortSignal) => {
+      const resolved = await target(threadId);
+      if (!resolved) throw new Error("This thread has no installed provider for components.");
+      const owner = await projectCatalog.resolveProjectById(resolved.identity.projectId);
+      const cancellation = signal ? AbortSignal.any([visBrowseLifetime.signal, signal]) : visBrowseLifetime.signal;
+      const output = await this.vis.runComponentCommand(
+        { harness: resolved.harness, threadId: resolved.identity.threadId, cwd: owner.rootPath },
+        [process.execPath, "--disable-warning=ExperimentalWarning", "--import", "tsx", componentScript, ...args],
+        path.join(workbenchRoot, "daemon"), cancellation,
+      );
+      try { return JSON.parse(output) as unknown; }
+      catch { throw new Error("Component command returned invalid output."); }
+    };
+    const withComponentInput = async <Result>(value: object, runInput: (file: string) => Promise<Result>) => {
+      await mkdir(componentScratch, { recursive: true });
+      const file = path.join(componentScratch, `${randomUUID()}.json`);
+      try {
+        await writeFile(file, JSON.stringify(value), "utf8");
+        return await runInput(file);
+      } finally {
+        await rm(file, { force: true });
+      }
+    };
+    this.components = new WorkbenchComponentsController({
+      skills: async threadId => {
+        const resolved = await target(threadId);
+        if (!resolved) return [];
+        const owner = await projectCatalog.resolveProjectById(resolved.identity.projectId);
+        const active = await skills.read(resolved.identity.threadId);
+        return await workbenchLibrary.listActivatedSkillDefinitions(
+          await listProjectSkillsFromRoot(owner.rootPath), active.map(skill => skill.path),
+        );
+      },
+      compile: async (file, threadId, signal, skillRoot) => {
+        const parsed = conformToZodSchema(ThreadCompiledComponentSchema, await executeComponent(
+          threadId, ["compile", file, skillRoot ?? path.dirname(file)], signal,
+        ));
+        if (!parsed.success || parsed.repairedPaths.length || parsed.discardedPaths.length) throw new Error("Component compiler returned invalid output.");
+        return parsed.data;
+      },
+      compileStyles: async (files, threadId, root) => await withComponentInput({ files, root }, async file => {
+        const parsed = conformToZodSchema(ThreadCompiledStyleSchema, await executeComponent(threadId, ["styles", file]));
+        if (!parsed.success || parsed.repairedPaths.length || parsed.discardedPaths.length) throw new Error("Component styles compiler returned invalid output.");
+        return parsed.data;
+      }),
+      evaluate: async (compiled, name, markup, threadId, signal) => await withComponentInput(compiled, async file =>
+        readThreadComponentTree(await executeComponent(threadId, ["render", file, name, markup], signal))),
+      preview: async (result, threadId, signal) => await withComponentInput(result, async file => {
+        const parsed = conformToZodSchema(z.string().max(6 * 1024 * 1024), await executeComponent(threadId, ["preview", file], signal));
+        if (!parsed.success || parsed.repairedPaths.length || parsed.discardedPaths.length) throw new Error("Component preview returned invalid output.");
+        return parsed.data;
+      }),
+      read: target => database.readTranscriptComponent(target),
+      write: (target, result) => database.writeTranscriptComponent(target, result),
+    });
     this.vis = new WorkbenchVisController({
       store: command => database.executeThreadVis(command),
+      componentPreview: (threadId, markup, signal) => this.components.previewMarkup(threadId, markup, signal),
       resolveRoot: async session => {
         try {
           return (await projectCatalog.resolveAgentEndpointProjectFromCwd(session.cwd, { endpointName: "Vis session" })).root.rootPath;
@@ -148,30 +226,23 @@ export default class WorkbenchThreadFactsFeature {
         }
       },
       // Project vis commands run as the session's thread, in its sandbox, with nothing writable and no network.
-      runCommand: session => async ({ command, cwd }, signal) => {
-        const key = installedProviderKeys.find(key => key === session.harness);
-        const prepare = key ? providers().get(key).tools?.prepareExecution : undefined;
-        if (!prepare) throw new Error(`Provider ${session.harness} cannot run sandboxed commands.`);
-        const prepared = await prepare({
-          caller: { harness: session.harness, threadId: WorkbenchThreadIdSchema.parse(session.threadId), cwd: session.cwd },
-          command, cwd, permissions: { mode: "restricted", writableRoots: [], network: false },
-        }, signal);
-        return await getProcessWorkbenchAgentMcpRequestRegistry().executeShell(prepared, signal);
-      },
+      runCommand: session => async ({ command, cwd }, signal) => await runAsThread(session, command, cwd, signal),
       scratchDirectory: path.join(context.dataRootPath, "daemon", "vis"),
       powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
       // This file lives at daemon/server/core in the Workbench checkout the kit vis context builds from.
-      workbenchRoot: path.resolve(import.meta.dirname, "..", "..", ".."),
+      workbenchRoot,
       browse: new WorkbenchVisBrowse({
         directory: path.join(context.dataRootPath, "daemon", "vis", "browse"),
         // Browse is its own reload node; these run as the session's thread through its agent entry points.
         port: {
-          execute: request => run("browseExecution", execution => execution.executeBrowseRequest(Buffer.from(JSON.stringify(request)), visBrowseLifetime.signal), "Vis browser"),
+          execute: (request, signal) => run("browseExecution", execution => execution.executeBrowseRequest(
+            Buffer.from(JSON.stringify(request)), signal ? AbortSignal.any([visBrowseLifetime.signal, signal]) : visBrowseLifetime.signal,
+          ), "Vis browser"),
           stop: async request => {
             const response = await run("browseExecution", execution => execution.executeSessionRequest({
               body: Buffer.from(JSON.stringify({ action: "stop", ...request })), method: "POST", url: "/",
-            }, visBrowseLifetime.signal), "Vis browser stop");
-            if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? `Browse stop failed with status ${response.status}.`);
+            }, new AbortController().signal), "Vis browser stop");
+            await WorkbenchVisBrowse.checkStopResponse(response);
           },
         },
         log: message => console.warn(`[vis] ${message.slice(0, 500)}`),

@@ -30,6 +30,14 @@ async function fixture(context: TestContext, reply: (request: WorkbenchBrowseAge
 const reply = (stdout: string) => Response.json({ ok: true, durationMs: 1, exitCode: 0, stderr: "", stdout });
 const json = (value: object) => `${JSON.stringify(value, null, 2)}\n`;
 
+test("a successful HTTP response cannot hide a failed browser stop", async () => {
+  await assert.rejects(
+    WorkbenchVisBrowse.checkStopResponse(Response.json({ stopped: false, result: { ok: false, error: "stop failed" } })),
+    /stop failed/u,
+  );
+  await WorkbenchVisBrowse.checkStopResponse(Response.json({ stopped: true, result: { ok: true } }));
+});
+
 test("a snapshot opens the framed current render in the session's browser and returns its tree", async context => {
   const f = await fixture(context, request => request.script.startsWith("open ")
     ? reply(`${json({ url: "file:///page" })}${json({ waited: true })}`)
@@ -71,6 +79,27 @@ test("a screenshot names the stored image so its transcript entry can show it", 
   const output = await f.browse.inspect(f.target, "screenshot");
   assert.equal(parseVisScreenshotImage(output), assetUrl);
   assert.equal(parseVisScreenshotImage("Image: https://example.com/x.png"), null, "only Workbench transcript assets render");
+});
+
+test("a screenshot without an image reports failure", async context => {
+  const f = await fixture(context, request => request.script.startsWith("open ")
+    ? reply(json({ url: "file:///page" }))
+    : reply(json({ screenshot: "captured" })));
+  await assert.rejects(f.browse.inspect(f.target, "screenshot"), /screenshot.*image/i);
+});
+
+test("strict cleanup reports a failed browser stop", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("vis-cleanup-");
+  context.after(() => temporary.dispose());
+  const browse = new WorkbenchVisBrowse({
+    directory: temporary.path,
+    port: {
+      execute: async () => reply(json({})),
+      stop: async () => { throw new Error("browser stop failed"); },
+    },
+    log: () => {},
+  });
+  await assert.rejects(browse.end({ sessionId: "test", threadId: "thread", cwd: temporary.path }, { strict: true }), /cleanup/i);
 });
 
 test("a failed Browse step surfaces its error; a failed eager open only warns", async context => {

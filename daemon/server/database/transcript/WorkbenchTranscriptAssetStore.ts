@@ -3,6 +3,7 @@
  * - TranscriptAssetWrite: validated thread reference and image upload.
  * - TranscriptAssetRead: compatibility address and optional expected thread owner.
  * - TranscriptAssetContent: immutable image metadata and bytes.
+ * - TranscriptComponentTarget: one component invocation owned by a transcript item.
  * - default WorkbenchTranscriptAssetStore: own atomic immutable content, thread-scoped addresses, read-only reachability prefiltering, and per-digest orphan collection.
  */
 import { createHash } from "node:crypto";
@@ -10,6 +11,7 @@ import type Database from "better-sqlite3";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 import { createTranscriptAssetAddress } from "workbench-shared/workbench/transcript/transcript-asset-address";
+import { readThreadComponentTree, type ThreadComponentNode } from "workbench-shared/workbench/thread/thread-component-tree";
 
 export interface TranscriptAssetWrite {
   threadId: string;
@@ -33,8 +35,15 @@ export interface TranscriptAssetContent {
   assetUrl: string;
 }
 
+export interface TranscriptComponentTarget {
+  threadId: string;
+  itemId: string;
+  markup: string;
+}
+
 const extensions = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" } as const;
 const assetPattern = /^([a-f0-9]{64})\.(png|jpg|webp|gif)$/u;
+const COMPONENT_MIME_TYPE = "application/vnd.workbench.component+json";
 
 const unreferencedAsset = `
   asset.created_at < @createdBefore
@@ -108,6 +117,83 @@ const unaddressedAsset = `
 
 export default class WorkbenchTranscriptAssetStore {
   constructor(private readonly database: Database.Database) {}
+
+  readComponent(target: TranscriptComponentTarget): ThreadComponentNode | null {
+    return this.database.transaction(() => this.#readComponent(target))();
+  }
+
+  writeComponent(target: TranscriptComponentTarget, tree: ThreadComponentNode): ThreadComponentNode {
+    return this.database.transaction(() => {
+      const existing = this.#readComponent(target);
+      if (existing) return existing;
+      const itemId = this.#componentItem(target);
+      if (itemId === null) throw new Error("Component markup is not present in that message.");
+      const bytes = Buffer.from(JSON.stringify(readThreadComponentTree(tree)), "utf8");
+      const digest = this.#writeComponentAsset(bytes, COMPONENT_MIME_TYPE);
+      const role = this.#componentRole(target.markup);
+      const reference = this.database.prepare(`INSERT OR IGNORE INTO transcript_asset_refs
+        (id, thread_id, item_id, owner_kind, role, ref_index, asset_digest, created_at)
+        VALUES (?, NULL, ?, 'item', ?, 0, ?, ?)`);
+      reference.run(`component:${itemId}:${role}`, itemId, role, digest, Date.now());
+      const retained = this.#readComponent(target);
+      if (!retained) throw new Error("Component result could not be retained.");
+      return retained;
+    })();
+  }
+
+  #componentRole(markup: string) {
+    return `component:${createHash("sha256").update(markup).digest("hex")}`;
+  }
+
+  #writeComponentAsset(bytes: Buffer, mimeType: typeof COMPONENT_MIME_TYPE): string {
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    this.database.prepare(`INSERT OR IGNORE INTO transcript_assets(digest, mime_type, byte_length, storage_key, created_at)
+      VALUES (?, ?, ?, ?, ?)`).run(digest, mimeType, bytes.byteLength, `component:${digest}`, Date.now());
+    const metadata = this.database.prepare("SELECT mime_type, byte_length FROM transcript_assets WHERE digest = ?")
+      .get(digest) as { mime_type: string; byte_length: number } | undefined;
+    if (metadata?.mime_type !== mimeType || metadata.byte_length !== bytes.byteLength) throw new Error("Component asset metadata does not match its bytes.");
+    const existing = this.database.prepare("SELECT bytes FROM transcript_asset_content WHERE digest = ?").get(digest) as { bytes: Uint8Array } | undefined;
+    if (existing && !Buffer.from(existing.bytes).equals(bytes)) throw new Error("Component asset bytes do not match their digest.");
+    this.database.prepare("INSERT OR IGNORE INTO transcript_asset_content(digest, bytes) VALUES (?, ?)").run(digest, bytes);
+    return digest;
+  }
+
+  #componentItem(target: TranscriptComponentTarget): number | null {
+    const thread = new WorkbenchThreadIdentityRepository(this.database).resolve({
+      threadId: ThreadReferenceSchema.parse(target.threadId),
+    });
+    if (!thread) return null;
+    const item = this.database.prepare(`SELECT i.id FROM thread_items i
+      WHERE i.thread_id = ? AND i.public_id = ? AND (
+        EXISTS (SELECT 1 FROM thread_item_assistant_messages a WHERE a.item_id = i.id AND instr(replace(a.text, char(13) || char(10), char(10)), ?) > 0)
+        OR EXISTS (SELECT 1 FROM thread_user_message_parts p WHERE p.item_id = i.id AND instr(replace(COALESCE(p.text, ''), char(13) || char(10), char(10)), ?) > 0)
+      )`).get(thread.threadId, target.itemId, target.markup, target.markup) as { id: number } | undefined;
+    return item?.id ?? null;
+  }
+
+  #readComponentAsset(itemId: number, role: string) {
+    const row = this.database.prepare(`SELECT a.digest, a.mime_type, a.byte_length, c.bytes
+      FROM transcript_asset_refs r JOIN transcript_assets a ON a.digest = r.asset_digest
+      JOIN transcript_asset_content c ON c.digest = a.digest
+      WHERE r.item_id = ? AND r.role = ? AND r.ref_index = 0`)
+      .get(itemId, role) as
+      { digest: string; mime_type: string; byte_length: number; bytes: Uint8Array } | undefined;
+    if (!row) return null;
+    if (row.byte_length !== row.bytes.byteLength || createHash("sha256").update(row.bytes).digest("hex") !== row.digest) {
+      throw new Error("Stored component asset is invalid.");
+    }
+    return row;
+  }
+
+  #readComponent(target: TranscriptComponentTarget): ThreadComponentNode | null {
+    const itemId = this.#componentItem(target);
+    if (itemId === null) return null;
+    const role = this.#componentRole(target.markup);
+    const asset = this.#readComponentAsset(itemId, role);
+    if (!asset) return null;
+    if (asset.mime_type !== COMPONENT_MIME_TYPE) throw new Error("Stored component asset is invalid.");
+    return readThreadComponentTree(JSON.parse(Buffer.from(asset.bytes).toString("utf8")));
+  }
 
   /** Cheap indexed prefilter; `collectOrphan` owns the canonical reachability decision per digest. */
   listOrphanCandidates(createdBefore: number): string[] {

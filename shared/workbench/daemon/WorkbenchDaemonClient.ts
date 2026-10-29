@@ -163,6 +163,11 @@ class WorkbenchDaemonClient {
       end: (params: WorkbenchDaemonParams<"thread/vis/end">) => this.request("thread/vis/end", params),
       control: (params: WorkbenchDaemonParams<"thread/vis/control">) => this.request("thread/vis/control", params),
     },
+    components: {
+      render: (params: WorkbenchDaemonParams<"thread/components/render">) => this.request("thread/components/render", params),
+      styles: (params: WorkbenchDaemonParams<"thread/components/styles">, options?: WorkbenchDaemonRequestOptions) =>
+        this.request("thread/components/styles", params, options),
+    },
     skills: {
       read: (params: WorkbenchDaemonParams<"thread/skills/read">) => this.request("thread/skills/read", params),
       deactivate: (params: WorkbenchDaemonParams<"thread/skills/deactivate">) => this.request("thread/skills/deactivate", params),

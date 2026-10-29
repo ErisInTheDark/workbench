@@ -6,6 +6,18 @@ import { test } from "node:test";
 
 import { isThreadMarkdownSectionBreak, parseBlocks, parseInlineMarkdown, parseThreadMarkdownSections } from "./markdown-parse";
 
+test("thread component markup is recognized without interpreting fenced examples", () => {
+  const markup = '<TrelloCard labels={[1, 3, 4]} content="cool card" />';
+  const blocks = parseBlocks(`${markup}\n\n\`\`\`md\n${markup}\n\`\`\``, { profile: "thread" });
+  assert.equal(blocks[0]?.type, "component");
+  assert.equal(blocks[1]?.type, "code");
+});
+
+test("an unfinished multiline component does not flash as raw streamed text", () => {
+  const blocks = parseBlocks("before\n\n<TrelloCard\n  labels={[1, 3]}", { profile: "thread", partial: true });
+  assert.deepEqual(blocks.map(block => block.type), ["paragraph"]);
+});
+
 test("attachment mentions are not filesystem links and code examples remain literal", () => {
   const nodes = parseInlineMarkdown("#[attach:2] #[attach:removed] `#[attach:3]`", { profile: "thread" });
   assert.deepEqual(nodes.filter(node => node.type !== "text").map(node => node.type), [
@@ -80,6 +92,13 @@ test("a fence opened on a list item's first line is a code child that closes at 
   if (blocks[0]?.type !== "ul") return;
   assert.equal(blocks[0].items[0]?.text, "");
   assert.deepEqual(blocks[0].items[0]?.children, [{ type: "code", language: "ts", text: "event?(data: string): void" }]);
+});
+
+test("nested component source stays identical to the message while its body contains inline block tags", () => {
+  const source = "<FirstComponent>\nbefore <SecondComponent /> after\n</FirstComponent>";
+  const block = parseBlocks(source, { profile: "thread" })[0];
+  assert.equal(block?.type, "component");
+  if (block?.type === "component") assert.equal(block.text, source);
 });
 
 test("thread plans, notices and disclosures close after a list item fence", () => {

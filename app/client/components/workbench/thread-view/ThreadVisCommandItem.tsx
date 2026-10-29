@@ -48,6 +48,7 @@ const LABELS: Record<WorkbenchVisOperation["action"], StepLabels> = {
   read: stepLabels("Reading answers from", "Read answers from", "Failed to read answers from"),
   snapshot: stepLabels("Checking vis structure", "Checked vis structure", "Failed to check vis structure"),
   screenshot: stepLabels("Checking vis appearance", "Checked vis appearance", "Failed to check vis appearance"),
+  test: stepLabels("Testing", "Tested", "Failed to test"),
 };
 
 /** One vis step: the vis glyph (as the status row shows live vis), what happened to which file, then progress. */
@@ -102,7 +103,7 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
 }) {
   const result = parseVisSessionResult(output);
   const step = { action: operation.action, durationMs, path: operation.path, state: outcome };
-  const screenshot = operation.action === "screenshot" && outcome === "completed" ? parseVisScreenshotImage(output) : null;
+  const screenshot = (operation.action === "screenshot" || operation.action === "test") && outcome === "completed" ? parseVisScreenshotImage(output) : null;
   if (screenshot) return <VisStep {...step} renderContent={() => <ThreadUserImage alt={`Screenshot of ${operation.path}`} src={screenshot} />} />;
   if ((operation.action === "read" || operation.action === "snapshot") && outcome === "completed") {
     return <VisStep {...step} renderContent={() => <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[0.8em] text-fg/muted">{output.trim()}</pre>} />;

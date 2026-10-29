@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - transcriptAssetContent: daemon-only immutable image bytes.
+ * - transcriptAssetContent: daemon-only immutable transcript asset bytes.
  * - transcriptAssetAddresses: thread-owned compatibility image addresses.
  * - transcriptAssetContentSchemaHistory: asset content installation history.
  */

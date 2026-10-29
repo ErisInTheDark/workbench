@@ -2,11 +2,14 @@
  * Exports:
  * - createSvgCodeBlockPreviewSrcDoc: build the sandboxed SVG preview document and its content policy.
  * - ThreadRenderOptions: parse options plus the live reveal cursor that animates newly streamed text and framed blocks in document order, the frontier caret, and per-paragraph holding.
+ * - ThreadComponentContext: message identity and source spans for native component rendering.
+ * - ThreadComponentRenderer: the message-owned native component renderer.
  * - renderThreadMarkdown: render parsed markdown, inline content (including icon and colour markup) and interactive code headers; top-level section breaks host section-action slots; partial text renders its stream frontier.
  * - renderThreadInlineMarkdown: render inline markdown without a block container.
  */
 
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useState, type ComponentType, type ReactNode } from "react";
+import { resolveThreadComponentSource, type ThreadComponentSource } from "workbench-shared/workbench/thread/thread-component-markup";
 
 import {
   parseCommentLine,
@@ -85,12 +88,26 @@ interface ThreadCodeBlockHeader {
 
 /** Parse options plus the live reveal cursor; `partial` only ever reaches the block and inline text at the stream frontier. */
 export type ThreadRenderOptions = MarkdownParseOptions & {
+  componentContext?: ThreadComponentContext;
+  componentCursor?: { text: string; offset: number };
+  componentRenderer?: ThreadComponentRenderer;
   /** The stream frontier draws a typewriter caret after its last visible character. */
   caret?: boolean;
   /** Per-paragraph reveal: partial text shows only complete blocks (see holdStreamingBlocks). */
   holdIncompleteBlocks?: boolean;
   reveal?: MarkdownRevealCursor;
 };
+
+export interface ThreadComponentContext {
+  threadId: string;
+  itemId: string;
+  sourceText: string;
+  sources?: readonly ThreadComponentSource[];
+}
+
+export type ThreadComponentRenderer = ComponentType<{
+  threadId: string; itemId: string; sourceText: string; markup: string; markdownOptions?: ThreadRenderOptions;
+}>;
 
 function settledOptions (options: ThreadRenderOptions): ThreadRenderOptions {
   return options.partial || options.caret ? { ...options, caret: false, partial: false } : options;
@@ -856,6 +873,23 @@ function renderThreadBlock (
   sectionActions?: ReactNode,
 ) {
   switch (block.type) {
+    case "component":
+      if (options.componentContext && options.componentRenderer) {
+        const context = options.componentContext;
+        const Renderer = options.componentRenderer;
+        let itemId = context.itemId;
+        let sourceText = context.sourceText;
+        if (context.sources && options.componentCursor) {
+          const position = options.componentCursor.text.indexOf(block.text, options.componentCursor.offset);
+          const source = position < 0 ? null : resolveThreadComponentSource(context.sources, position, position + block.text.length);
+          if (!source) return <p className={BLOCK_SPACING_CLASS} key={keyPrefix}>{block.text}</p>;
+          options.componentCursor.offset = position + block.text.length;
+          itemId = source.itemId;
+          sourceText = source.sourceText;
+        }
+        return <Renderer threadId={context.threadId} itemId={itemId} sourceText={sourceText} key={keyPrefix} markup={block.text} markdownOptions={settledOptions(options)} />;
+      }
+      return <p className={BLOCK_SPACING_CLASS} key={keyPrefix}>{block.text}</p>;
     case "list-break":
       return Array.from(
         { length: Math.max(1, block.count) },
@@ -925,6 +959,7 @@ export function renderThreadMarkdown (
 ) {
   const threadOptions = {
     ...options,
+    ...(options.componentContext?.sources ? { componentCursor: { text: markdown.replaceAll("\r\n", "\n"), offset: 0 } } : {}),
     profile: "thread",
   } satisfies ThreadRenderOptions;
   let sectionBreakIndex = 0;

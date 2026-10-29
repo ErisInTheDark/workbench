@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import type { WorkbenchComposerInputDraft, WorkbenchProjectRoot } from "workbench-shared/types";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -22,6 +22,7 @@ import { useThreads } from "../use-threads";
 import { useTranscript } from "../use-transcript";
 import type DraftSessionController from "./DraftSessionController";
 import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
+import ThreadComponentStyles from "./ThreadComponentStyles";
 import { ThreadStoreGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import getThreadGitArcProposalPresentation from "./thread-git-arc-presentation";
@@ -121,6 +122,8 @@ export default memo(function ThreadViewContent ({
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
   const active = useThread(projectId, activeTarget, "view");
   const activeThread = active.head;
+  const styleId = useId();
+  const styleScope = `thread-${Array.from(styleId, character => character.codePointAt(0)!.toString(16)).join("-")}`;
   const activeTurns = useTranscript.turns(active.store);
   const threadScrollViewport = useThreadScrollViewportContext();
   const [checkpointCommitActions] = useState(() => new ThreadCheckpointCommitActions());
@@ -257,6 +260,7 @@ export default memo(function ThreadViewContent ({
       skills={workbenchSkills}
       workspaceRoots={workspaceFileLinkRoots}
     >
+      <ThreadComponentStyles key={activeThreadId} threadId={activeThreadId} skills={activeThread?.skills ?? []} scope={styleScope}>
       <ThreadStoreGitArcObservationProvider thread={active}>
       <ThreadGitArcPresentationContext.Provider value={{
         gitArcPlan: active.entry?.gitArcPlan ?? null,
@@ -269,6 +273,7 @@ export default memo(function ThreadViewContent ({
       <>
         <div
           ref={threadViewRef}
+          data-thread-component-style={styleScope}
           data-thread-history-above={activeTurns.canLoadOlder ? "true" : undefined}
           data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
           data-thread-project-file-link-boundary="true"
@@ -366,6 +371,7 @@ export default memo(function ThreadViewContent ({
       </>
       </ThreadGitArcPresentationContext.Provider>
       </ThreadStoreGitArcObservationProvider>
+      </ThreadComponentStyles>
     </ContextualProjectProvider>
     </ThreadScrollViewportContext.Provider>
     </WorkbenchThreadDisplaySettingsContext.Provider>

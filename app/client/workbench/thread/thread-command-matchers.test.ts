@@ -198,6 +198,7 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "vis_read":
     case "vis_snapshot":
     case "vis_screenshot": return { path: "mockups/chart.html" };
+    case "vis_test": return { markup: '<Card content="hello" />' };
     case "task_completed":
     case "task_blocked": return {};
     case "message_wait":
@@ -388,6 +389,16 @@ test("MCP server CLI and MCP calls read as their intent, and enable requests lea
     argumentsValue: { server: "wb", tool: "mcp_authorize", arguments: { server: "eris", url: "https://accounts.example.test/auth", reason: "Sign in" } },
     server: "wb", tool: "mcp_call",
   })?.rendering.result.omitFromDisplay, true);
+});
+
+test("vis markup checks use the vis presentation", () => {
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: { markup: '<TrelloCard labels={[1, 3]} content="hello" />' },
+    server: "wb",
+    tool: "vis_test",
+  });
+  assert.ok(route?.kind === "specialized" && route.operation.kind === "vis");
+  assert.equal(route.operation.operation.action, "test");
 });
 
 test("mcp_call on server wb presents as the deferred Workbench tool it ran", () => {

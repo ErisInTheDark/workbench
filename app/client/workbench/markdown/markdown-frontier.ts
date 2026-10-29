@@ -5,6 +5,7 @@
  */
 
 import { THREAD_INLINE_HTML_TAG_NAMES } from "./inline-html-tags";
+import { readThreadComponentMarkup } from "workbench-shared/workbench/thread/thread-component-markup";
 
 const FRONTIER_TAG_NAMES = [
   ...THREAD_INLINE_HTML_TAG_NAMES,
@@ -39,6 +40,7 @@ function couldBecomeAutolink(word: string) {
 
 function couldBecomeTag(rest: string) {
   if (PARTIAL_COMMENT.test(rest)) return true;
+  if (/^<[A-Z][A-Za-z0-9_]*(?:\s[\s\S]*)?$/u.test(rest) && !readThreadComponentMarkup(rest)) return true;
   const match = PARTIAL_TAG.exec(rest);
   if (!match) return false;
   const name = match[1]!.toLowerCase();
@@ -62,8 +64,16 @@ function firstMatchingStart(text: string, marker: string, from: number, matches:
 export function findHeldInlineFrontierStart(text: string) {
   const lineStart = text.lastIndexOf("\n") + 1;
   const wordStart = Math.max(lineStart, ...[" ", "\t"].map(space => text.lastIndexOf(space) + 1));
+  let componentEndsHere = false;
+  for (let index = text.indexOf("<", lineStart); index !== -1; index = text.indexOf("<", index + 1)) {
+    const component = readThreadComponentMarkup(text, index);
+    if (component?.end === text.length && wordStart >= index) {
+      componentEndsHere = true;
+      break;
+    }
+  }
   const candidates = [
-    wordStart < text.length && couldBecomeAutolink(text.slice(wordStart)) ? wordStart : null,
+    !componentEndsHere && wordStart < text.length && couldBecomeAutolink(text.slice(wordStart)) ? wordStart : null,
     firstMatchingStart(text, "<", lineStart, couldBecomeTag),
     firstMatchingStart(text, "[", lineStart, rest => PARTIAL_LINK.test(rest)),
     firstMatchingStart(text, "#", lineStart, rest => PARTIAL_MENTION.test(rest)),

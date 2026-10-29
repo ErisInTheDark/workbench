@@ -1,7 +1,7 @@
 /* No production exports. Protect literal argument quoting into `wb vis render`, and that only one delivery per open run is accepted. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { VisRenderRuns, visShellCommand } from "./vis-project-command";
+import { VisRenderRuns, runVisCommand, visShellCommand } from "./vis-project-command";
 
 test("arguments are quoted so shell syntax inside them is never interpreted, and output pipes into wb vis render", () => {
   const windowsCommand = visShellCommand(
@@ -23,4 +23,22 @@ test("a run accepts one delivery while open, and nothing after it closes", () =>
   assert.equal(run.take(), "css");
   run.close();
   assert.equal(runs.accept(run.runId, "late"), false);
+});
+
+test("command results use the delivery route instead of bounded shell output", async () => {
+  const runs = new VisRenderRuns();
+  const payload = "x".repeat(2 * 1024 * 1024);
+  let runId = "";
+  const result = await runVisCommand({
+    command: ["node", "builder.mjs"], cwd: ".", label: "component", runs,
+    signal: new AbortController().signal,
+    powerShellExecutable: async () => "pwsh",
+    run: async ({ command }) => {
+      runId = /--run '([^']+)'/u.exec(command.at(-1) ?? "")?.[1] ?? "";
+      assert.equal(runs.accept(runId, payload), true);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.equal(result, payload);
+  assert.equal(runs.accept(runId, "late"), false);
 });

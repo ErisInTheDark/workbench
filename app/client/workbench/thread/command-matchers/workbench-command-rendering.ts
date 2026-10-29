@@ -67,6 +67,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "vis_read",
   "vis_snapshot",
   "vis_screenshot",
+  "vis_test",
   "request_user_input",
   "message_agent",
   // Former name of `message_agent`; keeps earlier calls rendering.
@@ -190,7 +191,7 @@ export interface WorkbenchFeedbackOperation {
 }
 
 /** A vis session moment, answer read or browser check; CLI and MCP calls name the file the same way. */
-export const WORKBENCH_VIS_ACTIONS = ["start", "end", "read", "snapshot", "screenshot"] as const;
+export const WORKBENCH_VIS_ACTIONS = ["start", "end", "read", "snapshot", "screenshot", "test"] as const;
 export interface WorkbenchVisOperation {
   action: typeof WORKBENCH_VIS_ACTIONS[number];
   path: string;
@@ -830,12 +831,15 @@ export function getWorkbenchCommandRoute(
     case "vis_end":
     case "vis_read":
     case "vis_snapshot":
-    case "vis_screenshot": {
-      const path = readString(args.path)?.trim();
+    case "vis_screenshot":
+    case "vis_test": {
       const action = WORKBENCH_VIS_ACTIONS.find(action => name === `vis_${action}`)!;
+      const path = action === "test"
+        ? (readString(args.markup)?.trim() || readString(args.path)?.trim()) && "component markup"
+        : readString(args.path)?.trim();
       // Browser checks are routine enough to group; the stat names them in the block summary.
-      const stats = action === "snapshot" || action === "screenshot" ? { visChecks: 1 } : undefined;
-      const ongoing = { end: "Ending vis", read: "Reading vis", screenshot: "Checking vis", snapshot: "Checking vis", start: "Showing vis" }[action];
+      const stats = action === "snapshot" || action === "screenshot" || action === "test" ? { visChecks: 1 } : undefined;
+      const ongoing = { end: "Ending vis", read: "Reading vis", screenshot: "Checking vis", snapshot: "Checking vis", start: "Showing vis", test: "Testing" }[action];
       return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action, path } }, ongoing, stats) : null;
     }
     case "mcp_tools": {

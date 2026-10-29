@@ -12,7 +12,7 @@ import { collectPlaintextAbsoluteFileLinkPaths } from "../../workbench/markdown/
 import type { InlineMentionHighlightSources } from "../../workbench/thread/inline-mention-highlights";
 import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import MarkdownRevealTimeline from "../../workbench/markdown/MarkdownRevealTimeline";
-import { renderThreadMarkdown } from "../workbench/thread-view/thread-markdown-render";
+import { renderThreadMarkdown, type ThreadComponentContext, type ThreadComponentRenderer } from "../workbench/thread-view/thread-markdown-render";
 import { useWorkbenchDaemonClient } from "../workbench/WorkbenchWorkspaceContext";
 import { useProject } from "../workbench/use-projects";
 import ThreadAnimationStyleContext from "../workbench/thread-view/ThreadAnimationStyleContext";
@@ -276,12 +276,16 @@ function useShownText(markdown: string, live: boolean, streaming: boolean, conte
 /** Links and mentions resolve against the surrounding contextual project; outside one, markdown renders without project links. */
 export default memo(function MarkdownRender ({
   className,
+  componentContext,
+  componentRenderer,
   cwd,
   live = false,
   markdown,
   streaming = false,
 }: {
   className?: string;
+  componentContext?: ThreadComponentContext;
+  componentRenderer?: ThreadComponentRenderer;
   /** The directory this text's relative paths came from, when it differs from the contextual project's (a command's own cwd). */
   cwd?: string;
   /** Text presented from a live source: newly visible text fades in. */
@@ -305,16 +309,23 @@ export default memo(function MarkdownRender ({
     threadCwdPath,
     workspaceRoots: resolvedWorkspaceRoots,
   };
-  const cacheKey = getMarkdownCacheKey({ ...keyFacts, markdown });
-  const contextKey = getMarkdownCacheKey({ ...keyFacts, markdown: "" });
+  const componentKey = JSON.stringify(componentContext ? [
+    componentContext.threadId, componentContext.itemId,
+    componentContext.sources?.map(source => [source.itemId, source.start, source.end]),
+  ] : null);
+  const componentSource = componentContext?.sourceText ?? "";
+  const cacheKey = `${getMarkdownCacheKey({ ...keyFacts, markdown })}|${componentKey}|${componentSource}`;
+  const contextKey = `${getMarkdownCacheKey({ ...keyFacts, markdown: "" })}|${componentKey}`;
   const renderOptions = useMemo(() => ({
+    componentContext,
+    componentRenderer,
     inlineMentionSources: project?.mentions,
     projectFilePaths: project?.filePaths,
     projectId: project?.id,
     projectRootPath: project?.rootPath,
     threadCwdPath,
     workspaceRoots: resolvedWorkspaceRoots,
-  }), [project, resolvedWorkspaceRoots, threadCwdPath]);
+  }), [componentKey, componentSource, componentRenderer, project, resolvedWorkspaceRoots, threadCwdPath]);
   const { partial, timeline } = useShownText(markdown, live, streaming, contextKey);
   const animationStyle = useContext(ThreadAnimationStyleContext);
   const caret = streaming && animationStyle.caret;

@@ -19,6 +19,14 @@ test("partial tags that could still become known tags stay hidden", () => {
   assert.equal(held('<icon type="x"> '), null);
 });
 
+test("partial component tags stay hidden until their invocation is complete", () => {
+  for (const tail of ["<Trello", "<TrelloCard labels={[1, 3]", '<TrelloCard content="hello" /']) {
+    assert.equal(held(`before ${tail}`), tail);
+    assert.equal(isHeldFrontierLine(tail), true);
+  }
+  assert.equal(held('<TrelloCard content="hello" />'), null);
+});
+
 test("links and file mentions stay hidden until they close", () => {
   for (const tail of ["[some label", "[label]", "[label](https://exa", "#", "#[app/client/Fo"]) {
     assert.equal(held(`see ${tail}`), tail, tail);

@@ -8,6 +8,7 @@ import path from "node:path";
 import { stripWorkbenchInstructionFrontmatter } from "../lib/workbench-library";
 import { createManagedThreadFilter } from "../lib/workbench/instructions/workbench-managed-thread-instructions";
 import { renderWorkbenchSkillContent } from "../lib/workbench/instructions/skill-rendering";
+import { formatSkillComponentHints } from "../lib/workbench/skills/skill-components";
 
 interface WorkbenchSkillControllerOptions {
   listSkills: (projectRoot: string) => Promise<readonly WorkbenchSkillDefinition[]>;
@@ -53,7 +54,7 @@ export default class WorkbenchSkillController {
         threadId: request.threadId,
       }, this.options.readLocalCapabilities);
       signal.throwIfAborted();
-      const rendered = filter(body, skill.path)?.trim() ?? "";
+      const rendered = `${filter(body, skill.path)?.trim() ?? ""}${formatSkillComponentHints(skill.content)}`.trim();
       if (recordLoad) {
         await this.options.onLoaded?.({ threadId: request.threadId, path: skill.path }).catch((error: unknown) => {
           const detail = error instanceof Error ? error.message : "unknown error";

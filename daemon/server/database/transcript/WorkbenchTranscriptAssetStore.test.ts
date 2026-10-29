@@ -13,6 +13,43 @@ import WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptAssetStore from "./WorkbenchTranscriptAssetStore.ts";
 
+test("a rendered component is retained with its owning message and cannot be replaced", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(testProjectIds.project);
+    database.prepare("INSERT INTO workbench_harnesses(id) VALUES ('codex')").run();
+    database.prepare(`INSERT INTO workbench_threads
+      (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+      VALUES ('thread', ?, '/project', 'thread', 1, 1, 1, 1)`).run(testProjectIds.project);
+    database.prepare(`INSERT INTO thread_turns
+      (id, thread_id, turn_index, harness_id, native_location, native_thread_id, state, created_at)
+      VALUES ('turn', 'thread', 0, 'codex', '/project', 'thread', 'completed', 1)`).run();
+    database.prepare("INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES ('item', 'thread')").run();
+    database.prepare(`INSERT INTO thread_items
+      (id, public_id, thread_id, turn_id, item_position, type, created_at, updated_at)
+      VALUES (1, 'item', 'thread', 'turn', 0, 'assistantMessage', 1, 1)`).run();
+    const markup = '<Card content="hello" />';
+    const secondMarkup = '<Card content="again" />';
+    database.prepare(`INSERT INTO thread_item_assistant_messages(item_id, state, phase, text)
+      VALUES (1, 'completed', 'commentary', ?)`).run(`${markup}\n${secondMarkup}`);
+    const store = new WorkbenchTranscriptAssetStore(database);
+    const target = { threadId: "thread", itemId: "item", markup };
+    const original = { $workbench: "element" as const, type: "div", props: { children: "original" } };
+    const changed = { $workbench: "element" as const, type: "div", props: { children: "changed" } };
+    assert.deepEqual(store.writeComponent(target, original), original);
+    assert.deepEqual(store.writeComponent(target, changed), original);
+    assert.deepEqual(store.readComponent(target), original);
+    assert.deepEqual(store.writeComponent({ ...target, markup: secondMarkup }, changed), changed);
+    assert.equal(store.readComponent({ ...target, threadId: "other" }), null);
+    database.prepare("DELETE FROM thread_items WHERE id = 1").run();
+    assert.equal(database.prepare("SELECT COUNT(*) FROM transcript_asset_refs").pluck().get(), 0);
+  } finally {
+    database.close();
+  }
+});
+
 test("immutable image bytes cross the worker, deduplicate, reopen and remain thread scoped", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-image-blob-");
   const root = temporary.path;

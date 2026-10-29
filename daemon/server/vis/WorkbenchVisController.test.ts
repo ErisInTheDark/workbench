@@ -7,6 +7,8 @@ import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDire
 import type { VisControls } from "workbench-shared/workbench/vis/vis-contract";
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
 import WorkbenchVisController from "./WorkbenchVisController";
+import WorkbenchComponentsController from "../skills/WorkbenchComponentsController";
+import { compileSkillStyles, compileSkillTemplate, renderSkillComponent, renderSkillComponentPreview } from "../../../scripts/skill-component-build.mts";
 
 function gate() {
   let open!: () => void;
@@ -52,21 +54,28 @@ async function fixture(context: TestContext) {
   const browse = {
     calls: [] as string[],
     controls: [] as VisControls[],
+    failure: null as Error | null,
+    stopFailure: null as Error | null,
     open: async (target: { sessionId: string; document: string }) => { browse.calls.push(`open ${target.document}`); },
     inspect: async (target: { document: string; controls: VisControls }, kind: "snapshot" | "screenshot") => {
       browse.calls.push(`${kind} ${target.document}`);
       browse.controls.push(target.controls);
+      if (browse.failure) throw browse.failure;
       return `${kind} of ${target.document}`;
     },
     refresh: async (target: { document: string; controls: VisControls }) => {
       browse.calls.push(`refresh ${target.document}`);
       browse.controls.push(target.controls);
     },
-    end: async (target: { sessionId: string }) => { browse.calls.push(`end ${target.sessionId}`); },
+    end: async (target: { sessionId: string }) => {
+      browse.calls.push(`end ${target.sessionId}`);
+      if (browse.stopFailure) throw browse.stopFailure;
+    },
   };
-  const create = (): WorkbenchVisController => {
+  const create = (componentPreview?: (threadId: string, markup: string, signal: AbortSignal) => Promise<string>): WorkbenchVisController => {
     const controller: WorkbenchVisController = new WorkbenchVisController({
       store,
+      ...(componentPreview ? { componentPreview } : {}),
       resolveRoot: async () => root,
       runCommand: () => async ({ command, cwd }) => {
         css.commands.push(command);
@@ -106,6 +115,106 @@ function until(controller: WorkbenchVisController, accept: (session: ReturnType<
 }
 
 const CONFIG = JSON.stringify({ vis: { css: { command: ["css", "{file}", "{input}"], input: "@source \"{file}\";" } } });
+
+test("markup tests screenshot the rendered component and always close their temporary browser", async context => {
+  const f = await fixture(context);
+  const controller = f.create(async (_threadId, markup) => `<p>${markup}</p>`);
+  const input = { threadId: "thread", cwd: f.root, markup: "<Card />" };
+  assert.equal(await controller.testMarkup(input), "screenshot of <p><Card /></p>");
+  assert.equal(f.sessions.size, 0);
+  assert.match(f.browse.calls.at(-1)!, /^end /u);
+  f.browse.failure = new Error("screenshot failed");
+  await assert.rejects(controller.testMarkup(input), /screenshot failed/u);
+  assert.match(f.browse.calls.at(-1)!, /^end /u);
+});
+
+test("markup tests retain screenshot and cleanup failures together", async context => {
+  const f = await fixture(context);
+  const controller = f.create(async () => "<p>component</p>");
+  f.browse.failure = new Error("screenshot failed");
+  f.browse.stopFailure = new Error("cleanup failed");
+  await assert.rejects(
+    controller.testMarkup({ threadId: "thread", cwd: f.root, markup: "<Card />" }),
+    error => error instanceof AggregateError && error.errors.some(item => item.message === "screenshot failed")
+      && error.errors.some(item => item.message === "cleanup failed"),
+  );
+});
+
+test("vis markup test renders the active skill's real template and kit nodes", async context => {
+  const f = await fixture(context);
+  const folder = path.join(f.root, "skill");
+  await mkdir(folder);
+  const skillPath = path.join(folder, "SKILL.md");
+  const content = "---\nname: cards\nworkbench_components:\n  - Card.tsx\n---\n";
+  await writeFile(skillPath, content);
+  await writeFile(path.join(folder, "Card.tsx"), `import { Options, Option } from "workbench/kit";
+    export default function Card({ labels, content }: { labels: number[], content: string }) {
+      return <div><span>{labels.join(",")}</span><Options label="pick"><Option title="one">{content}</Option></Options></div>
+    }`);
+  const components = new WorkbenchComponentsController({
+    skills: async () => [{ path: skillPath, relativePath: "skill/SKILL.md", name: "cards", description: "", content }],
+    compile: async (file, _threadId, _signal, root) => await compileSkillTemplate(file, root),
+    compileStyles: async (files, _threadId, root) => await compileSkillStyles(files, root),
+    evaluate: async (compiled, name, markup) => await renderSkillComponent(compiled, name, markup),
+    preview: async result => await renderSkillComponentPreview(result),
+    read: async () => null,
+    write: async (_target, tree) => tree,
+  });
+  const controller = f.create((threadId, markup, signal) => components.previewMarkup(threadId, markup, signal));
+  const output = await controller.testMarkup({
+    threadId: "thread", cwd: f.root, markup: '<Card labels={[1, 3, 4]} content="cool card" />',
+  });
+  assert.equal(output.includes("1,3,4"), true);
+  assert.equal(output.includes("cool card"), true);
+  assert.match(f.browse.calls.at(-1)!, /^end /u);
+  await assert.rejects(controller.testMarkup({ threadId: "thread", cwd: f.root, markup: "<Missing />" }), /active/i);
+});
+
+test("vis markup renders nested skill components and markdown as children", async context => {
+  const f = await fixture(context);
+  const folder = path.join(f.root, "skill");
+  await mkdir(folder);
+  const skillPath = path.join(folder, "SKILL.md");
+  const content = "---\nname: cards\nworkbench_components:\n  - FirstComponent.tsx\n  - SecondComponent.tsx\n---\n";
+  await writeFile(skillPath, content);
+  await writeFile(path.join(folder, "FirstComponent.tsx"), "export default function First({ children }) { return <section>{children}</section>; }");
+  await writeFile(path.join(folder, "SecondComponent.tsx"), "export default function Second() { return <div>nested card</div>; }");
+  let active = true;
+  const saved = new Map<string, import("workbench-shared/workbench/thread/thread-component-tree").ThreadComponentNode>();
+  const components = new WorkbenchComponentsController({
+    skills: async () => active ? [{ path: skillPath, relativePath: "skill/SKILL.md", name: "cards", description: "", content }] : [],
+    compile: async (file, _threadId, _signal, root) => await compileSkillTemplate(file, root),
+    compileStyles: async (files, _threadId, root) => await compileSkillStyles(files, root),
+    evaluate: async (compiled, name, markup) => await renderSkillComponent(compiled, name, markup),
+    preview: async result => await renderSkillComponentPreview(result),
+    read: async target => saved.get(target.markup) ?? null,
+    write: async (target, tree) => { saved.set(target.markup, tree); return tree; },
+  });
+  const controller = f.create((threadId, markup, signal) => components.previewMarkup(threadId, markup, signal));
+  const output = await controller.testMarkup({
+    threadId: "thread", cwd: f.root,
+    markup: "<FirstComponent>\n<SecondComponent />\n\n**markdown**\n</FirstComponent>",
+  });
+  assert.equal(output.includes("nested card"), true);
+  assert.equal(output.includes("<strong>markdown</strong>"), true);
+  const notice = await controller.testMarkup({
+    threadId: "thread", cwd: f.root,
+    markup: '<FirstComponent>\n<notice title="inside" color="blue">\n<SecondComponent />\n</notice>\n\n```tsx\n<Missing />\n```\n</FirstComponent>',
+  });
+  assert.equal(notice.includes("nested card"), true);
+  assert.equal(notice.includes("data-thread-notice"), true);
+  await assert.rejects(controller.testMarkup({
+    threadId: "thread", cwd: f.root, markup: "<FirstComponent>\n<Missing />\n</FirstComponent>",
+  }), /No active skill exposes component Missing/u);
+  const markup = "<FirstComponent>\n<SecondComponent />\n\n**markdown**\n</FirstComponent>";
+  const target = { threadId: "thread", itemId: "message", markup };
+  const shown = await components.renderMessage(target);
+  active = false;
+  assert.deepEqual((await components.renderMessage(target)).tree, shown.tree);
+  const retained = await renderSkillComponentPreview({ tree: shown.tree, css: "" });
+  assert.equal(retained.includes("nested card"), true);
+  assert.equal(retained.includes("<strong>markdown</strong>"), true);
+});
 
 test("a change keeps the last render while one is in flight, and a burst of changes renders once more", async context => {
   const f = await fixture(context);

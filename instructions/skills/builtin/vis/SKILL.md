@@ -11,6 +11,7 @@ Commands are CLI-only (`wb vis --help`); run them through your shell.
 - Write file in cwd project (`.html`, `.svg`, `.tsx`, `.jsx`). Gitignored location (e.g. `.workbench/`) unless user wants it kept.
 - One live session per file. End sessions when done; settling ends leftovers.
 - Start snapshot and end snapshot appear in transcript. User may end session themselves.
+- `wb vis test --markup '<Component ... />'` screenshots active skill-component markup or returns an error.
 
 ## Pick a context (`--project`)
 

@@ -3,6 +3,7 @@
  * - VisCommandRunner: runs one shell command as a thread, inside that thread's sandbox.
  * - VisRenderRuns: hands out run ids and collects what `wb vis render` delivers for them.
  * - visShellCommand: pipe a quoted argument vector into `wb vis render` through the user's login shell.
+ * - VisCommandInput/runVisCommand: capture one sandboxed command's full result through the vis delivery route.
  * - VisBuildContext/WORKBENCH_KIT_VIS_CONFIG: where a session's commands run, and Workbench's own kit commands.
  * - compileVisCss/buildVisDocument: run a context's `vis.css` or `vis.build` command for one file.
  */
@@ -17,6 +18,16 @@ export type VisCommandRunner = (
   request: { command: string[]; cwd: string },
   signal: AbortSignal,
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+export interface VisCommandInput {
+  command: readonly string[];
+  cwd: string;
+  label: string;
+  run: VisCommandRunner;
+  runs: VisRenderRuns;
+  signal: AbortSignal;
+  powerShellExecutable?(): Promise<string>;
+}
 
 /**
  * A project command's result never travels back as command output, which agent shells bound for transcripts.
@@ -64,6 +75,27 @@ export function visShellCommand(
 function bounded(text: string) {
   const trimmed = text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/gu, "").trim();
   return trimmed.length > 1_200 ? `${trimmed.slice(0, 1_200)}…` : trimmed;
+}
+
+export async function runVisCommand(input: VisCommandInput): Promise<string> {
+  input.signal.throwIfAborted();
+  const render = input.runs.open();
+  try {
+    const powerShellExecutable = process.platform === "win32"
+      ? await (input.powerShellExecutable ?? (async () => "pwsh"))()
+      : undefined;
+    const result = await input.run({
+      command: visShellCommand(input.command, render.runId, process.platform, process.env.SHELL, powerShellExecutable),
+      cwd: input.cwd,
+    }, input.signal);
+    input.signal.throwIfAborted();
+    if (result.exitCode !== 0) throw new Error(`The ${input.label} command exited with code ${result.exitCode}.\n${bounded(result.stderr || result.stdout)}`);
+    const content = render.take();
+    if (content === null) throw new Error(`The ${input.label} command finished, but its output never reached wb vis render.\n${bounded(result.stderr || result.stdout)}`);
+    return content;
+  } finally {
+    render.close();
+  }
 }
 
 /**
@@ -117,26 +149,16 @@ async function runProjectCommand(kind: "css" | "build", input: ProjectCommandInp
   const configured = await readCommand(input.context, kind);
   input.signal.throwIfAborted();
   const expanded = expandVisProjectCommand(configured, { file: input.file, root: input.context.rootPath, input: input.scratchPath });
-  const render = input.runs.open();
   try {
     if (expanded.input !== null) {
       await mkdir(path.dirname(input.scratchPath), { recursive: true });
       await writeFile(input.scratchPath, expanded.input, "utf8");
     }
-    const powerShellExecutable = process.platform === "win32"
-      ? await (input.powerShellExecutable ?? (async () => "pwsh"))()
-      : undefined;
-    const result = await input.run({
-      command: visShellCommand(expanded.command, render.runId, process.platform, process.env.SHELL, powerShellExecutable),
-      cwd: input.context.rootPath,
-    }, input.signal);
-    const label = kind === "css" ? "CSS" : "build";
-    if (result.exitCode !== 0) throw new Error(`The ${label} command exited with code ${result.exitCode}.\n${bounded(result.stderr || result.stdout)}`);
-    const content = render.take();
-    if (content === null) throw new Error(`The ${label} command finished, but its output never reached wb vis render.\n${bounded(result.stderr || result.stdout)}`);
-    return content;
+    return await runVisCommand({
+      command: expanded.command, cwd: input.context.rootPath, label: kind === "css" ? "CSS" : "build",
+      run: input.run, runs: input.runs, signal: input.signal, powerShellExecutable: input.powerShellExecutable,
+    });
   } finally {
-    render.close();
     if (expanded.input !== null) await rm(input.scratchPath, { force: true });
   }
 }

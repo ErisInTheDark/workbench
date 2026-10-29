@@ -6,7 +6,7 @@
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
  * - parseWorkbenchFeedbackCommand: parse one titled feedback report for its dedicated disclosure.
- * - parseWorkbenchVisCommand: parse `wb vis start|end|read|snapshot|screenshot <path>` for its vis item.
+ * - parseWorkbenchVisCommand: parse vis file commands and markup tests for their vis item.
  * - parseWorkbenchTodoCommand: parse `wb todo` list, add and remove calls for their todo row.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb help requests (before any command's own matcher), toc, rm,
@@ -84,6 +84,10 @@ export function parseWorkbenchVisCommand(command: string): WorkbenchVisOperation
   if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "vis") return null;
   const action = tokens[2];
   const rest = tokens.slice(3);
+  if (action === "test") {
+    return rest.length === 2 && rest[0] === "--markup" && rest[1]?.trim()
+      ? { action: "test", path: "component markup" } : null;
+  }
   const projectAt = action === "start" ? rest.indexOf("--project") : -1;
   const paths = rest.filter((token, index) => token !== "--" && (projectAt < 0 || (index !== projectAt && index !== projectAt + 1)));
   const known = WORKBENCH_VIS_ACTIONS.find(candidate => candidate === action);

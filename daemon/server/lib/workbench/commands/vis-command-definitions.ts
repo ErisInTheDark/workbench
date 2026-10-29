@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchVisRequestSchema: validate one managed caller's vis session start, end, control state read or browser check.
- * - WORKBENCH_VIS_COMMANDS: `wb vis start|end|read|snapshot|screenshot`, deferred: most threads never use vis, so its
+ * - WorkbenchVisRequestSchema: validate a managed caller's vis session or component markup check.
+ * - WORKBENCH_VIS_COMMANDS: `wb vis start|end|read|snapshot|screenshot|test`, deferred: most threads never use vis, so its
  *   tools stay out of every thread's preloaded MCP list and the /vis skill teaches them when needed.
  */
 import { z } from "zod";
@@ -13,12 +13,15 @@ const visPath = z.string().trim().min(1).max(1_000);
 const caller = { cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1) };
 const visProject = z.string().trim().min(1).max(1_000);
 type VisAction = "start" | "end" | "read" | "snapshot" | "screenshot";
-export const WorkbenchVisRequestSchema = z.object({
-  action: z.enum(["start", "end", "read", "snapshot", "screenshot"]), path: visPath, project: visProject.optional(), ...caller,
-}).strict();
+const markup = z.string().trim().min(1).max(16_000);
+export const WorkbenchVisRequestSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.enum(["start", "end", "read", "snapshot", "screenshot"]), path: visPath, project: visProject.optional(), ...caller }).strict(),
+  z.object({ action: z.literal("test"), markup, ...caller }).strict(),
+]);
 
 const inputSchema = z.object({ path: visPath }).strict();
 const startInputSchema = z.object({ path: visPath, project: visProject.optional() }).strict();
+const testInputSchema = z.object({ markup }).strict();
 
 function parsePath(args: readonly string[]) {
   const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths([...args], { values: [] }), { trailing: true });
@@ -61,8 +64,22 @@ const start = defineWorkbenchAgentCommand({
   buildRequest: (input, context) => postWorkbenchAgentCommand("/internal/vis", { action: "start", ...input, ...managedWorkbenchAgentCommandBody(context) }),
 });
 
+const test = defineWorkbenchAgentCommand({
+  words: ["vis", "test"],
+  usage: "wb vis test --markup <markup>",
+  description: "Test active skill component markup and receive a screenshot or error.",
+  effects: { readOnly: true },
+  helpGroups: ["vis"],
+  mcpDeferred: true,
+  mcpWorkdir: true,
+  inputSchema: testInputSchema,
+  parseCliArgs: args => ({ markup: new WorkbenchAgentCommandFlags([...args], { values: ["--markup"] }).required("--markup") }),
+  buildRequest: (input, context) => postWorkbenchAgentCommand("/internal/vis", { action: "test", ...input, ...managedWorkbenchAgentCommandBody(context) }),
+});
+
 export const WORKBENCH_VIS_COMMANDS = [
   start,
+  test,
   visCommand("end", "End a live vis session and snapshot its final content.", false),
   visCommand("read", "Read a vis file's synced control state (tab picks and other controls the user set), by control id.", true),
   visCommand("snapshot", "Accessibility snapshot of a live vis's current render, from its headless browser.", true),

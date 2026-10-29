@@ -21,6 +21,7 @@
  * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry (including whole accepted-commit ref reads); actions route by thread unless they name another route.
  */
 import { z } from "zod";
+import { ThreadComponentRenderSchema, ThreadComponentStyleSchema } from "./thread-component-tree";
 import type {
   ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry, WorkbenchThreadContextEntryScope, WorkbenchPendingUserInputRequest,
@@ -261,6 +262,13 @@ export const workbenchThreadActions = {
   "thread/vis/control": {
     params: WorkbenchThreadTargetSchema.extend({ sessionId: z.uuid(), controlId: VisControlIdSchema, value: VisControlValueSchema }),
     result: ok,
+  },
+  "thread/components/render": {
+    params: WorkbenchThreadTargetSchema.extend({ itemId: z.string().min(1), markup: z.string().min(1).max(16_000) }),
+    result: ThreadComponentRenderSchema,
+  },
+  "thread/components/styles": {
+    params: WorkbenchThreadTargetSchema, result: z.object({ styles: z.array(ThreadComponentStyleSchema) }).strict(),
   },
   "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },
   "thread/skills/deactivate": { params: WorkbenchThreadTargetSchema.extend({ path: z.string().min(1) }), result: skillsResult },

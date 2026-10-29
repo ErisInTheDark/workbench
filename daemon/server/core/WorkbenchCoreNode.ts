@@ -302,7 +302,7 @@ function createWorkbenchCoreFeature(
     continuations,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadStateFeature, state: threadStateController,
-    skills: facts.skills, goals: facts.goals, todos: facts.todos, addressedFeedback: facts.addressedFeedback, vis,
+    skills: facts.skills, components: facts.components, goals: facts.goals, todos: facts.todos, addressedFeedback: facts.addressedFeedback, vis,
     readSkills: threadId => facts.readThreadSkills(threadId),
     warn: message => logThreadStateWarning(message),
   });
@@ -596,7 +596,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   },
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   // Git subprocesses spawn from this worker so process creation never blocks the daemon event loop.
-  entries: [path.join(__dirname, "..", "lib", "workbench", "git", "git-process-worker-bootstrap.mjs")],
+  entries: [
+    path.join(__dirname, "..", "lib", "workbench", "git", "git-process-worker-bootstrap.mjs"),
+    path.join(__dirname, "..", "..", "..", "scripts", "skill-component-build.mts"),
+    path.join(__dirname, "..", "..", "..", "scripts", "vis-build.mts"),
+  ],
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
   requires: ["database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity", "turnRecovery", "threadTransitions"],

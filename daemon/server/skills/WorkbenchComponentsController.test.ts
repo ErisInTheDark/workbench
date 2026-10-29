@@ -1,0 +1,145 @@
+/* No production exports. Protect active skill resolution and immutable shown results. */
+import assert from "node:assert/strict";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { test } from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import WorkbenchComponentsController, { type WorkbenchComponentTarget } from "./WorkbenchComponentsController";
+
+test("a shown component keeps its result when the skill is deactivated", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("components-controller-");
+  context.after(() => temporary.dispose());
+  const folder = join(temporary.path, "cards");
+  await mkdir(folder);
+  const skillPath = join(folder, "SKILL.md");
+  await writeFile(join(folder, "TrelloCard.tsx"), "export default () => null");
+  const content = "---\nname: cards\nworkbench_components:\n  - TrelloCard.tsx\n---\n";
+  await writeFile(skillPath, content);
+  let active = true;
+  const stored = new Map<string, import("workbench-shared/workbench/thread/thread-component-tree").ThreadComponentNode>();
+  const key = (target: WorkbenchComponentTarget) => `${target.threadId}:${target.itemId}:${target.markup}`;
+  const controller = new WorkbenchComponentsController({
+    skills: async () => active ? [{ path: skillPath, relativePath: "cards/SKILL.md", name: "cards", description: "", content }] : [],
+    compile: async file => ({ code: "compiled", inputs: [file] }),
+    compileStyles: async files => ({ css: "", inputs: files }),
+    evaluate: async () => ({ $workbench: "element", type: "div", props: { children: "original" } }),
+    preview: async result => JSON.stringify(result.tree),
+    read: async target => stored.get(key(target)) ?? null,
+    write: async (target, tree) => {
+      stored.set(key(target), tree);
+      return tree;
+    },
+  });
+  const target = { threadId: "thread", itemId: "item", markup: '<TrelloCard content="one" />' };
+  const first = await controller.renderMessage(target);
+  active = false;
+  assert.deepEqual((await controller.renderMessage(target)).tree, first.tree);
+  await assert.rejects(controller.previewMarkup("thread", target.markup), /active/i);
+});
+
+test("testing reuses a compiled template until its source changes", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("components-cache-");
+  context.after(() => temporary.dispose());
+  const file = join(temporary.path, "Card.tsx");
+  const skillPath = join(temporary.path, "SKILL.md");
+  const content = "---\nworkbench_components:\n  - Card.tsx\n---\n";
+  await writeFile(skillPath, content);
+  await writeFile(file, "first");
+  let builds = 0;
+  const controller = new WorkbenchComponentsController({
+    skills: async () => [{ path: skillPath, relativePath: "SKILL.md", name: "cards", description: "", content }],
+    compile: async input => {
+      builds += 1;
+      return { code: await readFile(input, "utf8"), inputs: [input] };
+    },
+    compileStyles: async files => ({ css: "", inputs: files }),
+    evaluate: async compiled => ({ $workbench: "element", type: "div", props: { children: compiled.code } }),
+    preview: async result => JSON.stringify(result.tree),
+    read: async () => null,
+    write: async (_target, tree) => tree,
+  });
+  const target = { threadId: "thread", itemId: "item", markup: "<Card />" };
+  assert.equal((await controller.renderMessage(target)).tree.props.children, "first");
+  assert.match(await controller.previewMarkup("thread", "<Card />"), /first/u);
+  assert.equal((await controller.renderMessage(target)).tree.props.children, "first");
+  assert.equal(builds, 1);
+  await writeFile(file, "second");
+  assert.equal((await controller.renderMessage(target)).tree.props.children, "second");
+  assert.equal(builds, 2);
+});
+
+test("a missing unrelated component does not block a valid component", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("components-missing-");
+  context.after(() => temporary.dispose());
+  const file = join(temporary.path, "Card.tsx");
+  const skillPath = join(temporary.path, "SKILL.md");
+  const content = "---\nworkbench_components:\n  - Missing.tsx\n  - Card.tsx\n---\n";
+  await writeFile(skillPath, content);
+  await writeFile(file, "card");
+  const controller = new WorkbenchComponentsController({
+    skills: async () => [{ path: skillPath, relativePath: "SKILL.md", name: "cards", description: "", content }],
+    compile: async input => ({ code: "card", inputs: [input] }),
+    compileStyles: async files => ({ css: "", inputs: files }),
+    evaluate: async () => ({ $workbench: "element", type: "div", props: { children: "valid" } }),
+    read: async () => null,
+    write: async (_target, result) => result,
+  });
+  const target = { threadId: "thread", itemId: "item", markup: "<Card />" };
+  assert.equal((await controller.renderMessage(target)).tree.props.children, "valid");
+  assert.equal((await controller.styles("thread")).length, 1);
+  await assert.rejects(controller.renderMessage({ ...target, markup: "<Missing />" }));
+});
+
+test("a template whose body names its own invocation fails instead of recursing forever", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("components-recursion-");
+  context.after(() => temporary.dispose());
+  const skillPath = join(temporary.path, "SKILL.md");
+  const content = "---\nworkbench_components:\n  - Loop.tsx\n---\n";
+  await writeFile(skillPath, content);
+  await writeFile(join(temporary.path, "Loop.tsx"), "loop");
+  let evaluations = 0;
+  const controller = new WorkbenchComponentsController({
+    skills: async () => [{ path: skillPath, relativePath: "SKILL.md", name: "loop", description: "", content }],
+    compile: async file => ({ code: "loop", inputs: [file] }),
+    compileStyles: async files => ({ css: "", inputs: files }),
+    evaluate: async () => {
+      evaluations += 1;
+      return { $workbench: "element", type: "workbench:markdown", props: { source: "<Loop />", components: { "<Loop />": null } } };
+    },
+    read: async () => null,
+    write: async (_target, tree) => tree,
+  });
+  await assert.rejects(controller.renderMessage({ threadId: "thread", itemId: "item", markup: "<Loop />" }), /nest deeper/u);
+  assert.ok(evaluations < 20);
+});
+
+test("one active skill shares its stylesheet across simultaneous requests and drops it on deactivation", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("skill-styles-owner-");
+  context.after(() => temporary.dispose());
+  const skillPath = join(temporary.path, "SKILL.md");
+  const first = join(temporary.path, "First.tsx");
+  const second = join(temporary.path, "Second.tsx");
+  const content = "---\nworkbench_components:\n  - First.tsx\n  - Second.tsx\n---\n";
+  await writeFile(skillPath, content);
+  await writeFile(first, "first");
+  await writeFile(second, "second");
+  let active = true;
+  let builds = 0;
+  const controller = new WorkbenchComponentsController({
+    skills: async () => active ? [{ path: skillPath, relativePath: "SKILL.md", name: "cards", description: "", content }] : [],
+    compile: async file => ({ code: "compiled", inputs: [file] }),
+    compileStyles: async files => { builds += 1; return { css: (await Promise.all(files.map(file => readFile(file, "utf8")))).join(" "), inputs: files }; },
+    evaluate: async () => ({ $workbench: "element", type: "div", props: {} }),
+    read: async () => null,
+    write: async (_target, result) => result,
+  });
+  const [one, two] = await Promise.all([controller.styles("thread"), controller.styles("thread")]);
+  assert.equal(builds, 1);
+  assert.deepEqual(one, two);
+  assert.match(one[0]!.css, /first second/u);
+  await writeFile(second, "changed");
+  assert.match((await controller.styles("thread"))[0]!.css, /first changed/u);
+  assert.equal(builds, 2);
+  active = false;
+  assert.deepEqual(await controller.styles("thread"), []);
+});

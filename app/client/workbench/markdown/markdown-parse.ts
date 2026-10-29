@@ -24,6 +24,8 @@ import {
     type InlineMentionHighlightSources,
 } from "../thread/inline-mention-highlights";
 import { attachmentReferences } from "workbench-shared/workbench/thread/attachment-references";
+import { readThreadComponentMarkup } from "workbench-shared/workbench/thread/thread-component-markup";
+import { createCodeFenceTracker, isCodeFenceCloseLine, parseCodeFenceOpenLine, parseListLine, type ParsedCodeFenceOpenLine } from "workbench-shared/workbench/thread/markdown-code-fences";
 import {
     isBlockCommentLine,
     readCommentRun,
@@ -66,6 +68,7 @@ export interface ParsedTableCell {
 
 export type ParsedBlock =
   | { type: "heading"; level: number; text: string }
+  | { type: "component"; name: string; text: string }
   | { type: "blockquote"; text: string }
   | { type: "plan"; text: string }
   | { type: "notice"; color: string; source: string; text: string; title: string }
@@ -258,8 +261,8 @@ export function getThreadStateChangeTagText(markdown: string) {
   return match ? match[0] : null;
 }
 
-function isolateThreadBlockTagsInPlainText(line: string, startIndex: number, endIndex: number) {
-  return line.slice(startIndex, endIndex).replace(THREAD_BLOCK_TAG_BOUNDARY_PATTERN, (match, ...args: unknown[]) => {
+function isolateThreadBlockTagsInPlainText(line: string, startIndex: number, endIndex: number, partial: boolean) {
+  const text = line.slice(startIndex, endIndex).replace(THREAD_BLOCK_TAG_BOUNDARY_PATTERN, (match, ...args: unknown[]) => {
     const offset = typeof args[args.length - 2] === "number" ? args[args.length - 2] as number : 0;
     const matchStart = startIndex + offset;
     const matchEnd = matchStart + match.length;
@@ -268,9 +271,32 @@ function isolateThreadBlockTagsInPlainText(line: string, startIndex: number, end
 
     return `${prefix}${match}${suffix}`;
   });
+  let result = "";
+  let index = 0;
+  while (index < text.length) {
+    const start = text.indexOf("<", index);
+    if (start < 0) return result + text.slice(index);
+    const component = readThreadComponentMarkup(text, start);
+    if (!component) {
+      if (partial && /^<[A-Z][A-Za-z0-9_]*(?:\s|$)/u.test(text.slice(start))) {
+        result += text.slice(index, start);
+        if (result && !result.endsWith("\n")) result += "\n";
+        return result + text.slice(start);
+      }
+      result += text.slice(index, start + 1);
+      index = start + 1;
+      continue;
+    }
+    result += text.slice(index, start);
+    if (result && !result.endsWith("\n")) result += "\n";
+    result += component.source;
+    if (component.end < text.length && text[component.end] !== "\n") result += "\n";
+    index = component.end;
+  }
+  return result;
 }
 
-function normalizeThreadBlockTagLineBoundaries(line: string) {
+function normalizeThreadBlockTagLineBoundaries(line: string, partial: boolean) {
   let normalizedLine = "";
   let plainTextStartIndex = 0;
   let index = 0;
@@ -288,13 +314,13 @@ function normalizeThreadBlockTagLineBoundaries(line: string) {
       continue;
     }
 
-    normalizedLine += isolateThreadBlockTagsInPlainText(line, plainTextStartIndex, index);
+    normalizedLine += isolateThreadBlockTagsInPlainText(line, plainTextStartIndex, index, partial);
     normalizedLine += line.slice(index, closeIndex + fenceLength);
     index = closeIndex + fenceLength;
     plainTextStartIndex = index;
   }
 
-  normalizedLine += isolateThreadBlockTagsInPlainText(line, plainTextStartIndex, line.length);
+  normalizedLine += isolateThreadBlockTagsInPlainText(line, plainTextStartIndex, line.length, partial);
   return normalizedLine;
 }
 
@@ -305,10 +331,30 @@ export function normalizeThreadBlockTagBoundaries(markdown: string, options: Mar
 
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const isFencedLine = createCodeFenceTracker();
-
-  return lines
-    .map((line) => isFencedLine(line) ? line : normalizeThreadBlockTagLineBoundaries(line))
-    .join("\n");
+  const normalized: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (isFencedLine(line)) {
+      normalized.push(line);
+      continue;
+    }
+    const leading = line.length - line.trimStart().length;
+    const component = /^<[A-Z]/u.test(line.slice(leading))
+      ? readThreadComponentMarkup(lines.slice(index).join("\n"), leading) : null;
+    if (component && component.source.includes("\n")) {
+      normalized.push(component.source);
+      const consumed = component.source.split("\n").length;
+      for (let offset = 1; offset < consumed; offset += 1) isFencedLine(lines[index + offset]!);
+      const remainder = lines[index + consumed - 1]!.slice(
+        component.source.length - component.source.lastIndexOf("\n") - 1,
+      );
+      if (remainder) normalized.push(normalizeThreadBlockTagLineBoundaries(remainder, Boolean(options.partial)));
+      index += consumed - 1;
+      continue;
+    }
+    normalized.push(normalizeThreadBlockTagLineBoundaries(line, Boolean(options.partial)));
+  }
+  return normalized.join("\n");
 }
 
 export function formatThreadStateChangeMode(mode: string) {
@@ -961,53 +1007,6 @@ function stripIndent(line: string, indent: number) {
   return line.slice(index);
 }
 
-interface ParsedCodeFenceOpenLine {
-  fenceLength: number;
-  indent: string;
-  language: string;
-}
-
-function parseCodeFenceOpenLine(line: string): ParsedCodeFenceOpenLine | null {
-  const match = line.match(/^( {0,3})(`{3,})(.*)$/);
-  // CommonMark: a backtick fence's info string cannot contain backticks, so such lines are inline code instead.
-  if (!match || match[3].includes("`")) {
-    return null;
-  }
-
-  return {
-    fenceLength: match[2].length,
-    indent: match[1],
-    language: match[3].trim(),
-  };
-}
-
-/** A list item whose first line opens a fence; its body and closer sit at the item's content indent. */
-function parseListItemCodeFenceOpenLine(line: string): ParsedCodeFenceOpenLine | null {
-  const listLine = parseListLine(line);
-  const opener = listLine && parseCodeFenceOpenLine(listLine.text);
-  return opener ? { ...opener, indent: " ".repeat(listLine.contentIndent) } : null;
-}
-
-function isCodeFenceCloseLine(line: string, opener: ParsedCodeFenceOpenLine) {
-  const match = line.match(/^( *)(`{3,})[ \t]*$/);
-  return !!match && match[1] === opener.indent && match[2].length >= opener.fenceLength;
-}
-
-/** Feeds raw lines in order; true when a line opens, continues or closes fenced code, top-level or list-item. */
-function createCodeFenceTracker() {
-  let opener: ParsedCodeFenceOpenLine | null = null;
-  const feed = (line: string) => {
-    if (opener) {
-      if (isCodeFenceCloseLine(line, opener)) opener = null;
-      return true;
-    }
-
-    opener = parseCodeFenceOpenLine(line) ?? parseListItemCodeFenceOpenLine(line);
-    return opener !== null;
-  };
-  return Object.assign(feed, { isOpen: () => opener !== null });
-}
-
 const TABLE_ROW_LINE = /^\s*\|/;
 const FENCE_CLOSER_PREFIX_LINE = /^\s*`+\s*$/;
 
@@ -1087,26 +1086,6 @@ function collectCodeFenceLines(
   return {
     codeLines,
     nextIndex: index,
-  };
-}
-
-function parseListLine(line: string) {
-  const expandedLine = line.replaceAll("\t", "  ");
-  const match = expandedLine.match(/^(\s*)([-*+]|\d+[.)])(?:(\s+)(.*))?$/);
-  if (!match) {
-    return null;
-  }
-
-  const markerIndent = match[1].length;
-  const marker = match[2];
-  const markerSpacing = match[3] ?? " ";
-
-  return {
-    contentIndent: markerIndent + marker.length + markerSpacing.length,
-    indent: markerIndent,
-    marker,
-    text: match[4] ?? "",
-    type: (/^\d+[.)]$/.test(marker) ? "ol" : "ul") as "ol" | "ul",
   };
 }
 
@@ -1691,6 +1670,22 @@ function parseBlocksFromLines(
       continue;
     }
 
+    if (!isEditorProfile(options) && /^<\s*[A-Z]/u.test(line.trimStart())) {
+      const source = lines.slice(index).join("\n");
+      const leading = source.length - source.trimStart().length;
+      const component = readThreadComponentMarkup(source, leading);
+      if (component) {
+        maybePushCommentBreak(blocks, blankLineCount, "component");
+        maybePushStandardBreak(blocks, blankLineCount, "component");
+        blankLineCount = 0;
+        // Boundary normalization already moved any text after the invocation onto its own line.
+        index += source.slice(0, component.end).split("\n").length;
+        blocks.push({ type: "component", name: component.name, text: component.source });
+        continue;
+      }
+      if (options.partial) break;
+    }
+
     const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
     if (headingMatch) {
       maybePushCommentBreak(blocks, blankLineCount, "heading");
@@ -1776,6 +1771,7 @@ function parseBlocksFromLines(
       && !isThreadNoticeOpenLine(lines[index], options)
       && !((options.profile ?? "editor") === "thread" && THREAD_DETAILS_OPEN_LINE_PATTERN.test(lines[index].trim()))
       && !parseCodeFenceOpenLine(lines[index])
+      && !(!isEditorProfile(options) && /^<\s*[A-Z]/u.test(lines[index].trimStart()))
       && !/^(#{1,6})\s+/.test(lines[index])
       && !/^>\s?/.test(lines[index])
       && !parseTableBlock(lines, index, options)
