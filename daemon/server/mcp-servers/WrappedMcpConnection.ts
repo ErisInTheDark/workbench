@@ -5,13 +5,24 @@
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServerConnectionPort, McpServerTool } from "./McpServerConnection";
-import { detectMcpWrapper, MCP_WRAPPERS, type McpWrapper, type McpWrapperSession } from "./wrappers/mcp-wrapper";
+import { detectMcpWrapper, MCP_WRAPPERS, type McpWrapper, type McpWrapperPorts, type McpWrapperSession } from "./wrappers/mcp-wrapper";
+import { fetchPublicHttps, readBoundedBody } from "../lib/public-https-fetch";
+
+const MAX_WRAPPER_FILE_BYTES = 20 * 1024 * 1024;
+
+async function downloadWrapperFile(url: string, signal: AbortSignal) {
+  return await readBoundedBody((await fetchPublicHttps(url, signal)).response, MAX_WRAPPER_FILE_BYTES);
+}
 
 export default class WrappedMcpConnection implements McpServerConnectionPort {
   /** Kept per wrapper, so a session (and its server-side session id) survives catalogue re-reads. */
   #session: { wrapper: McpWrapper; session: McpWrapperSession } | null = null;
 
-  constructor(private readonly inner: McpServerConnectionPort, private readonly wrappers: readonly McpWrapper[] = MCP_WRAPPERS) {}
+  constructor(
+    private readonly inner: McpServerConnectionPort,
+    private readonly wrappers: readonly McpWrapper[] = MCP_WRAPPERS,
+    private readonly download: McpWrapperPorts["download"] = downloadWrapperFile,
+  ) {}
 
   async listTools(signal?: AbortSignal): Promise<McpServerTool[]> {
     const tools = await this.inner.listTools(signal);
@@ -40,7 +51,10 @@ export default class WrappedMcpConnection implements McpServerConnectionPort {
     const wrapper = detectMcpWrapper(tools, this.wrappers);
     if (!wrapper) return this.#session = null;
     if (this.#session?.wrapper !== wrapper) {
-      this.#session = { wrapper, session: wrapper.open((name, args, signal) => this.inner.callTool(name, args, signal)) };
+      this.#session = { wrapper, session: wrapper.open({
+        call: (name, args, signal) => this.inner.callTool(name, args, signal),
+        download: this.download,
+      }) };
     }
     return this.#session;
   }

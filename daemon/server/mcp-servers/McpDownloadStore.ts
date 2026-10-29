@@ -6,10 +6,8 @@
  *   and private addresses (re-checked on every redirect), caps size, and deletes a thread's downloads when it settles.
  */
 import { randomUUID } from "node:crypto";
-import { lookup as dnsLookup } from "node:dns/promises";
 import { createWriteStream } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
-import { BlockList, isIP } from "node:net";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -19,6 +17,7 @@ import {
   type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 import { mcpDownloads } from "../lib/workbench/database/schema/mcp-server-schema";
+import { fetchPublicHttps, type PublicHttpsFetchPorts } from "../lib/public-https-fetch";
 
 export interface McpDownload {
   name: string;
@@ -27,7 +26,7 @@ export interface McpDownload {
   bytes: number;
 }
 
-export interface McpDownloadStoreOptions {
+export interface McpDownloadStoreOptions extends PublicHttpsFetchPorts {
   directory: string;
   database: {
     executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<{ changes: number }>;
@@ -42,34 +41,15 @@ export interface McpDownloadStoreOptions {
   onError(error: unknown): void;
   maxBytes?: number;
   now?: () => number;
-  fetch?: (url: string, init: RequestInit) => Promise<Response>;
-  /** Every address a host resolves to. */
-  lookup?: (host: string) => Promise<string[]>;
 }
 
 const MAX_BYTES = 50 * 1024 * 1024;
-const MAX_REDIRECTS = 5;
 const NAME_LIMIT = 120;
 
 const EXTENSIONS: Record<string, string> = {
   "text/html": "html", "text/markdown": "md", "text/plain": "txt", "text/csv": "csv", "application/json": "json",
   "application/pdf": "pdf", "image/png": "png", "image/jpeg": "jpg", "application/zip": "zip",
 };
-
-const PRIVATE = new BlockList();
-for (const [network, prefix] of [
-  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12],
-  ["192.0.0.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["224.0.0.0", 4], ["240.0.0.0", 4],
-] as const) PRIVATE.addSubnet(network, prefix, "ipv4");
-for (const [network, prefix] of [["::", 128], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]] as const) {
-  PRIVATE.addSubnet(network, prefix, "ipv6");
-}
-
-function isPrivate(address: string) {
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/iu.exec(address)?.[1];
-  if (mapped) return PRIVATE.check(mapped, "ipv4");
-  return PRIVATE.check(address, isIP(address) === 6 ? "ipv6" : "ipv4");
-}
 
 function sanitize(name: string) {
   const base = name.split(/[\\/]/u).pop() ?? "";
@@ -136,7 +116,7 @@ export default class McpDownloadStore {
 
   /** `suggestedName` (e.g. a document title the server reported) wins over names derived from the response. */
   async download(threadId: string, link: string, suggestedName: string | undefined, signal: AbortSignal): Promise<McpDownload> {
-    const { response, url } = await this.#fetch(new URL(link), signal);
+    const { response, url } = await fetchPublicHttps(link, signal, this.options);
     const maxBytes = this.options.maxBytes ?? MAX_BYTES;
     const declared = Number(response.headers.get("content-length"));
     if (Number.isFinite(declared) && declared > maxBytes) throw new Error(`The file is larger than ${maxBytes} bytes.`);
@@ -176,34 +156,6 @@ export default class McpDownloadStore {
   #track(release: Promise<void>) {
     const tracked = release.catch(error => this.options.onError(error)).finally(() => this.#releases.delete(tracked));
     this.#releases.add(tracked);
-  }
-
-  /** Follows redirects itself so every hop's host is checked before it is contacted. */
-  async #fetch(start: URL, signal: AbortSignal) {
-    let url = start;
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-      if (url.protocol !== "https:") throw new Error("Only https links can be downloaded.");
-      await this.#assertPublic(url.hostname);
-      const response = await (this.options.fetch ?? fetch)(url.href, { redirect: "manual", signal });
-      const location = response.headers.get("location");
-      if (response.status >= 300 && response.status < 400 && location) {
-        await response.body?.cancel();
-        url = new URL(location, url);
-        continue;
-      }
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`The download answered HTTP ${response.status}.`);
-      }
-      return { response, url };
-    }
-    throw new Error(`The download redirected more than ${MAX_REDIRECTS} times.`);
-  }
-
-  async #assertPublic(hostname: string) {
-    const host = hostname.replace(/^\[|\]$/gu, "");
-    const addresses = isIP(host) ? [host] : await (this.options.lookup ?? (async name => (await dnsLookup(name, { all: true })).map(entry => entry.address)))(host);
-    if (!addresses.length || addresses.some(isPrivate)) throw new Error(`${hostname} resolves to a local or private address.`);
   }
 
   #name(suggested: string | undefined, response: Response, url: URL, contentType: string) {

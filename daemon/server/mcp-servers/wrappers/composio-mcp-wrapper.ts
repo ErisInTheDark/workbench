@@ -1,16 +1,19 @@
 /*
  * Exports:
  * - default composioMcpWrapper: unwraps Composio's meta tools (search, schemas, multi-execute) into its inner app tools,
- *   keeping Composio's session id and turning "no active connection" failures into a sign-in link for the user.
+ *   keeping Composio's session id, turning "no active connection" failures into a sign-in link for the user, and fetching
+ *   back replies Composio moved to its sandbox.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServerTool } from "../McpServerConnection";
-import type { McpWrapper, McpWrapperRawCall, McpWrapperSession } from "./mcp-wrapper";
+import type { McpWrapper, McpWrapperPorts, McpWrapperRawCall, McpWrapperSession } from "./mcp-wrapper";
 
 const SEARCH = "COMPOSIO_SEARCH_TOOLS";
 const SCHEMAS = "COMPOSIO_GET_TOOL_SCHEMAS";
 const EXECUTE = "COMPOSIO_MULTI_EXECUTE_TOOL";
 const CONNECT = "COMPOSIO_MANAGE_CONNECTIONS";
+const WORKBENCH = "COMPOSIO_REMOTE_WORKBENCH";
+const FILE_URL_MARKER = "WB_FILE_URL=";
 const NO_CONNECTION = /No active connection found for toolkit\(s\) ([^.]+?) in this session/u;
 
 type Json = Record<string, unknown>;
@@ -31,6 +34,16 @@ function envelope(result: CallToolResult) {
   return null;
 }
 
+/** The marked link the upload cell printed, wherever Composio nests its output. */
+function findFileUrl(value: unknown): string | null {
+  if (typeof value === "string") {
+    return new RegExp(`${FILE_URL_MARKER}(https://\\S+)`, "u").exec(value)?.[1] ?? null;
+  }
+  if (Array.isArray(value)) return value.map(findFileUrl).find(Boolean) ?? null;
+  const object = record(value);
+  return object ? Object.values(object).map(findFileUrl).find(Boolean) ?? null : null;
+}
+
 function text(value: unknown, isError: boolean): CallToolResult {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }], isError };
 }
@@ -48,8 +61,13 @@ function toolFromSchema(entry: unknown): McpServerTool | null {
 
 class ComposioSession implements McpWrapperSession {
   #sessionId: string | null = null;
+  private readonly raw: McpWrapperRawCall;
+  readonly #download: McpWrapperPorts["download"];
 
-  constructor(private readonly raw: McpWrapperRawCall) {}
+  constructor(ports: McpWrapperPorts) {
+    this.raw = ports.call;
+    this.#download = ports.download;
+  }
 
   async search(query: string, signal: AbortSignal) {
     const data = record(envelope(await this.raw(SEARCH, {
@@ -88,10 +106,47 @@ class ComposioSession implements McpWrapperSession {
     const first = record(Array.isArray(data?.results) ? data.results[0] : null);
     if (!first) return result;
     const response = record(first.response);
-    if (response) return text(response, response.successful === false);
+    if (response) {
+      const file = record(data?.remote_file_info)?.file_path;
+      if (!("data_preview" in response) || typeof file !== "string") return text(response, response.successful === false);
+      try {
+        const full = await this.#offloaded(file, name, signal);
+        return text(full, full.successful === false);
+      } catch (error) {
+        signal.throwIfAborted();
+        const reason = error instanceof Error ? error.message : String(error);
+        return {
+          content: [...text(response, false).content, { type: "text", text: `Composio truncated this reply and the full data could not be retrieved: ${reason}` }],
+          isError: response.successful === false,
+        };
+      }
+    }
     const error = typeof first.error === "string" ? first.error : "The tool failed.";
     const toolkits = [...(NO_CONNECTION.exec(error)?.[1] ?? "").matchAll(/'([^']+)'/gu)].map(match => match[1]!);
     return toolkits.length ? await this.#connect(error, toolkits, signal) : text(error, true);
+  }
+
+  /**
+   * Composio moves large replies into its remote sandbox and answers with a preview. Its sandbox can publish a file as a
+   * download link, which carries the full reply without passing through inline size limits.
+   */
+  async #offloaded(file: string, tool: string, signal: AbortSignal): Promise<Json> {
+    const upload = await this.raw(WORKBENCH, {
+      code_to_execute: [
+        `result, error = upload_local_file(${JSON.stringify(file)})`,
+        `print(error if error else "${FILE_URL_MARKER}" + (result.get("s3_url") or result.get("data", {}).get("s3_url") or ""))`,
+      ].join("\n"),
+      ...this.#session(),
+    }, signal);
+    const url = findFileUrl(envelope(upload));
+    if (!url) throw new Error("Composio's sandbox did not return a download link.");
+    const parsed: unknown = JSON.parse((await this.#download(url, signal)).toString("utf8"));
+    const results = record(parsed)?.results;
+    const entries = (Array.isArray(results) ? results : [parsed]).map(record);
+    const entry = entries.find(candidate => candidate?.tool_slug === tool) ?? entries[0];
+    const response = record(entry?.response) ?? entry;
+    if (!response || !("data" in response)) throw new Error("The saved reply has an unrecognised shape.");
+    return response;
   }
 
   /** Start the missing connections, so the failure carries the links the user must open. */
@@ -126,7 +181,7 @@ class ComposioSession implements McpWrapperSession {
 const composioMcpWrapper: McpWrapper = {
   id: "composio",
   detect: tools => [SEARCH, SCHEMAS, EXECUTE].every(name => tools.some(tool => tool.name === name)),
-  open: raw => new ComposioSession(raw),
+  open: ports => new ComposioSession(ports),
 };
 
 export default composioMcpWrapper;

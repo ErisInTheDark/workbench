@@ -28,12 +28,12 @@ let opened = 0;
 const wrapper: McpWrapper = {
   id: "meta",
   detect: tools => tools.some(entry => entry.name === "META_EXECUTE"),
-  open: raw => {
+  open: ports => {
     opened += 1;
     return {
       search: async () => [tool("INNER")],
       describe: async names => names.map(tool),
-      call: async (name, args, abort) => raw("META_EXECUTE", { name, args }, abort),
+      call: async (name, args, abort) => ports.call("META_EXECUTE", { name, args }, abort),
     };
   },
 };

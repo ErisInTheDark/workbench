@@ -12,16 +12,37 @@ const signal = () => new AbortController().signal;
 const DOWNLOAD_SCHEMA = { type: "object", required: ["fileId"], properties: { fileId: { type: "string" }, mime_type: { type: "string" } } };
 const REVISIONS_SCHEMA = { type: "object", required: ["fileId"], properties: { fileId: { type: "string" } } };
 
-function fake(replies: Record<string, (args: Record<string, unknown>) => CallToolResult>) {
+function fake(
+  replies: Record<string, (args: Record<string, unknown>) => CallToolResult>,
+  files: Record<string, string> = {},
+) {
   const calls: { name: string; args: Record<string, unknown> }[] = [];
-  const session = composioMcpWrapper.open(async (name, args) => {
-    calls.push({ name, args });
-    const answer = replies[name];
-    if (!answer) throw new Error(`unexpected ${name}`);
-    return answer(args);
+  const downloads: string[] = [];
+  const session = composioMcpWrapper.open({
+    call: async (name, args) => {
+      calls.push({ name, args });
+      const answer = replies[name];
+      if (!answer) throw new Error(`unexpected ${name}`);
+      return answer(args);
+    },
+    download: async url => {
+      downloads.push(url);
+      const file = files[url];
+      if (file === undefined) throw new Error(`no file at ${url}`);
+      return Buffer.from(file);
+    },
   });
-  return { session, calls };
+  return { session, calls, downloads };
 }
+
+/** Trimmed from a real reply whose full data Composio moved to its sandbox. */
+const offloaded = () => reply({ successful: true, data: {
+  results: [{ response: { successful: true, data_preview: { cards: ["...45 more items"] }, structure_info: { note: "structure" } }, tool_slug: "TRELLO_GET_SEARCH", index: 0 }],
+  session: { id: "nice" },
+  remote_file_info: { message: "Complete response was large (9298 tokens).", file_path: "/mnt/files/mex/mass.json", filename: "mass.json" },
+} });
+const FULL = { successful: true, data: { cards: [{ id: "a" }, { id: "b" }] } };
+const uploaded = (url: string) => () => reply({ successful: true, data: { stdout: `WB_FILE_URL=${url}\n`, stderr: "" } });
 
 test("Composio is recognised by its search, schema and execute meta tools", () => {
   const tools = ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS", "COMPOSIO_MULTI_EXECUTE_TOOL"]
@@ -92,6 +113,36 @@ test("a call returns the inner tool's own response, failing when it reports fail
   assert.deepEqual(JSON.parse((ok.content[0] as { text: string }).text), { successful: true, data: { s3url: "https://files.example.test/x" } });
   assert.deepEqual(calls[0]?.args, { tools: [{ tool_slug: "OK", arguments: { fileId: "1" } }], sync_response_to_workbench: false });
   assert.equal((await session.call("BAD", {}, signal())).isError, true);
+});
+
+test("a reply Composio moved to its sandbox is fetched back in full", async () => {
+  const url = "https://files.example.test/mass.json?sig=1&x=2";
+  const { session, calls, downloads } = fake({
+    COMPOSIO_MULTI_EXECUTE_TOOL: offloaded,
+    COMPOSIO_REMOTE_WORKBENCH: uploaded(url),
+  }, { [url]: JSON.stringify({ results: [{ response: FULL, tool_slug: "TRELLO_GET_SEARCH", index: 0 }] }) });
+  const result = await session.call("TRELLO_GET_SEARCH", { query: "x" }, signal());
+  assert.equal(result.isError, false);
+  assert.deepEqual(result.content.map(part => JSON.parse((part as { text: string }).text)), [FULL]);
+  assert.equal(calls[1]?.args.session_id, "nice");
+  assert.match(String(calls[1]?.args.code_to_execute), /"\/mnt\/files\/mex\/mass\.json"/u);
+  assert.deepEqual(downloads, [url]);
+});
+
+test("an offloaded reply that cannot be fetched back keeps the preview and says so", async () => {
+  for (const workbench of [
+    () => reply({ successful: false, error: "sandbox unavailable" }, true),
+    uploaded("https://files.example.test/missing.json"),
+    uploaded("https://files.example.test/odd.json"),
+  ]) {
+    const { session } = fake({ COMPOSIO_MULTI_EXECUTE_TOOL: offloaded, COMPOSIO_REMOTE_WORKBENCH: workbench },
+      { "https://files.example.test/odd.json": "[1, 2]" });
+    const result = await session.call("TRELLO_GET_SEARCH", {}, signal());
+    assert.equal(result.isError, false);
+    const [preview, note] = result.content.map(part => (part as { text: string }).text);
+    assert.ok(JSON.parse(preview!).data_preview);
+    assert.match(note!, /truncated this reply and the full data could not be retrieved/u);
+  }
 });
 
 test("a call without an active connection starts it and returns the sign-in link", async () => {
