@@ -13,6 +13,7 @@
  * - GitArcCollisionError: conflicting ownership rejection.
  * - findGitArcCollisions: detect overlapping live sibling claims.
  * - getGitArcLiveClaimPaths: derive live claims from arc lifecycle.
+ * - listGitArcUnclaimedPaths: changed paths no live claim covers; none on machine repositories.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { GitArcSavedStashSchema, type GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
@@ -73,6 +74,18 @@ export function getGitArcLiveClaimPaths(entry: Pick<GitArcRegistryEntry, "claime
   if (entry.phase === "resolved" || entry.phase === "stashed") return [];
   if (entry.phase === "plan") return entry.retainedArc?.claimedPaths ?? entry.claimedPaths;
   return entry.claimedPaths;
+}
+
+/** Unclaimed machine changes are the machine itself, never someone's work, so machine repositories have none. */
+export function listGitArcUnclaimedPaths(
+  repository: Pick<WorkbenchGitRepository, "machine">,
+  changedPaths: readonly string[],
+  entries: readonly GitArcRegistryEntry[],
+  excludedPaths: readonly string[] = [],
+) {
+  if (repository.machine) return [];
+  const excluded = new GitArcPathSet([...excludedPaths, ...entries.flatMap(getGitArcLiveClaimPaths)]);
+  return changedPaths.filter(candidate => !excluded.overlaps(candidate));
 }
 
 export interface GitArcCollision {

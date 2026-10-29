@@ -1,10 +1,12 @@
 /*
- * Exports: none. Tests protect canonical Git arc ownership, orphan hiding, and raw-row preservation.
+ * Exports: none. Tests protect canonical Git arc ownership, unclaimed paths, orphan hiding, and raw-row preservation.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import GitArcRegistry, { getGitArcLiveClaimPaths, REGISTRY_REF, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, {
+  getGitArcLiveClaimPaths, listGitArcUnclaimedPaths, REGISTRY_REF, type GitArcRegistryEntry,
+} from "./GitArcRegistry";
 import type WorkbenchGitRepository from "./WorkbenchGitRepository";
 import type { GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
@@ -28,6 +30,13 @@ function input(threadId: string, claimedPaths: string[]): Omit<GitArcRegistryEnt
   const { updatedAt: _updatedAt, ...value } = entry(threadId, claimedPaths);
   return value;
 }
+
+test("unclaimed paths exclude live claims in projects and never exist on machines", () => {
+  const entries = [entry("owner", ["src"]), { ...entry("stashed", ["stashed.ts"]), phase: "stashed" as const }];
+  const changed = ["src/owned.ts", "stashed.ts", "loose.ts", "excluded.ts"];
+  assert.deepEqual(listGitArcUnclaimedPaths({ machine: false }, changed, entries, ["excluded.ts"]), ["stashed.ts", "loose.ts"]);
+  assert.deepEqual(listGitArcUnclaimedPaths({ machine: true }, changed, entries), []);
+});
 
 test("stashed entries retain their complete path set without exposing live claims", () => {
   const stashed = { ...entry("stashed", ["one.ts", "two.ts"]), phase: "stashed" as const };

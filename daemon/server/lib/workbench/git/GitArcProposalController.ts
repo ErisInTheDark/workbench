@@ -24,7 +24,7 @@ import {
 } from "./git-arc-thread-identity";
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
-import GitArcRegistry, { REGISTRY_REF, getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { REGISTRY_REF, getGitArcLiveClaimPaths, listGitArcUnclaimedPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcStackController, { type GitArcStackStatusResolver } from "./GitArcStackController";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitCheckpointStore, {
@@ -1418,8 +1418,7 @@ export default class GitArcProposalController {
       repository.listAllChangedPaths(snapshot.head, snapshot.tree),
       this.registry(repository).list(),
     ]);
-    const excluded = new GitArcPathSet([...excludedPaths, ...entries.flatMap(getGitArcLiveClaimPaths)]);
-    return changedPaths.filter(candidate => !excluded.overlaps(candidate));
+    return listGitArcUnclaimedPaths(repository, changedPaths, entries, excludedPaths);
   }
 
   async getProposal({ cwd, harness: rawHarness, includeNewer, includeUnclaimed, proposalId, threadId }: ArcIdentityInput & { includeNewer: boolean; includeUnclaimed?: boolean; proposalId: string }) {

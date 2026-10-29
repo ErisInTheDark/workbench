@@ -32,6 +32,7 @@ import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
 import GitArcRegistry, {
   findGitArcCollisions,
   getGitArcLiveClaimPaths,
+  listGitArcUnclaimedPaths,
   GitArcCollisionError,
   type GitArcCollision,
   type GitArcRegistryEntry,
@@ -942,7 +943,6 @@ export default class WorkbenchGitCheckpointController {
       const savedPaths = current?.savedStash?.paths ?? (current?.phase === "stashed" ? current.claimedPaths : []);
       const dirt = await repository.listAllChangedPaths(head, tree);
       const dirtPaths = new GitArcPathSet(dirt);
-      const allClaims = new GitArcPathSet(entries.flatMap(getGitArcLiveClaimPaths));
       const lifecycle = current?.phase === "plan" ? current.retainedArc : current;
       const { proposedPaths, status: proposals } = await this.proposals.readStatusProposals({ ...input, threadId: owner?.threadId ?? input.threadId },
         lifecycle?.proposalIds ?? (current?.proposalId ? [current.proposalId] : []), repository, inspection);
@@ -954,7 +954,7 @@ export default class WorkbenchGitCheckpointController {
         cleanClaims: claims.filter(claim => !dirtPaths.overlaps(claim)),
         baselineClaims: ownership.baselineClaims,
         stashedClaims: savedPaths,
-        unclaimedDirt: dirt.filter(file => !allClaims.overlaps(file)),
+        unclaimedDirt: listGitArcUnclaimedPaths(repository, dirt, entries),
         recovery: [], unavailableRecovery: [],
       };
       if (claims.length && current?.phase === "active") {
@@ -1233,8 +1233,7 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(async () => {
       const inspection = existingInspection ?? await this.createInspectionSnapshot(cwd, signal);
       const changedPaths = await inspection.repository.listAllChangedPaths(inspection.head, inspection.tree, signal);
-      const liveClaims = new GitArcPathSet(inspection.entries.flatMap((entry) => getGitArcLiveClaimPaths(entry)));
-      const unclaimedPaths = changedPaths.filter((candidate) => !liveClaims.overlaps(candidate));
+      const unclaimedPaths = listGitArcUnclaimedPaths(inspection.repository, changedPaths, inspection.entries);
       signal?.throwIfAborted();
       return await inspection.repository.listPathsModifiedSince(unclaimedPaths, modifiedSince);
     });

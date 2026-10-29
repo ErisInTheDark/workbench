@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests cover machine baseline absorption: unowned requested paths take disk content as HEAD,
- * while owned and adopted work never moves with HEAD.
+ * while owned and adopted work never moves with HEAD; and known paths shrink to what arcs still reference.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -52,4 +52,29 @@ test("absorption takes unowned disk content and leaves owned and adopted work as
   const head = await repository.headOrNull();
   assert.deepEqual(await absorbMachineBaseline(repository, [owner], request), []);
   assert.equal(await repository.headOrNull(), head);
+});
+
+test("whole-worktree snapshots stop walking requested paths no arc references any more", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-baseline-");
+  context.after(async () => await temporary.dispose());
+  const drive = path.join(temporary.path, "drive");
+  await fs.mkdir(path.join(drive, "store"), { recursive: true });
+  await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
+  const repository = new WorkbenchGitRepository(drive);
+  const owner: GitArcRegistryEntry = {
+    checkpointCommit: "0".repeat(40), claimedPaths: ["store"], harness: "codex", intentDescription: "", intentName: "Owner",
+    phase: "active", threadId: "owner", updatedAt: "",
+  };
+  await absorbMachineBaseline(repository, [owner], { paths: ["store"], adoptPaths: [] });
+  await fs.writeFile(path.join(drive, "store", "blob.bin"), "backup\n", "utf8");
+  await fs.writeFile(path.join(drive, "other.txt"), "other\n", "utf8");
+  const snapshotPaths = async () => {
+    const { head, tree } = await repository.writeWorktreeSnapshot();
+    return await repository.listAllChangedPaths(head, tree);
+  };
+
+  await absorbMachineBaseline(repository, [owner], { paths: ["other.txt"], adoptPaths: [] });
+  assert.deepEqual(await snapshotPaths(), ["store/blob.bin"]);
+  await absorbMachineBaseline(repository, [{ ...owner, claimedPaths: [], phase: "resolved" }], { paths: ["other.txt"], adoptPaths: [] });
+  assert.deepEqual(await snapshotPaths(), []);
 });

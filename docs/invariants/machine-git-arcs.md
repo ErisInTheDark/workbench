@@ -1,5 +1,5 @@
 - Machine Git state lives under the data root; never write Git files onto the machine.
-- Machine repos track only arc-scoped paths. Whole-worktree reads cover tracked files and paths any arc has requested, and never walk other untracked machine directories.
+- Machine repos track only arc-scoped paths. Whole-worktree reads cover tracked files and paths arcs currently reference (scope, stash or claim loss), and never walk other untracked machine directories. Machine repos report no unclaimed dirt.
 - Publishing or acquiring machine paths first absorbs disk content of requested paths no arc scopes into HEAD; adopted paths are never absorbed.
 - New live ownership of machine paths requires approval through the thread's approval mode, outside any Git transition; arc writes touch only owned paths, historical full restores only the arc's own scope, and ignore rules never waive machine claims. Machine Git never converts line endings.
 - Claims are the daemon thread's write permission: patch approvals wholly inside its claims auto-allow, and daemon Codex turns run `on-request` so out-of-sandbox patches can ask instead of failing.

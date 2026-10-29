@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - absorbMachineBaseline: record requested paths as known, then fast-forward a machine worktree's HEAD over the disk
- *   content of requested paths no arc scopes.
+ * - absorbMachineBaseline: reset known paths to requested plus arc-referenced paths, then fast-forward a machine
+ *   worktree's HEAD over the disk content of requested paths no arc scopes.
  * A machine repository only knows files arcs have touched, so its HEAD is "the machine as last seen". Before scope is
  * published or acquired, unowned requested paths take their current disk content as baseline: claiming an existing
  * file then diffs only the agent's edit, and outside changes never masquerade as unclaimed dirt. Paths any arc scopes
@@ -10,8 +10,9 @@
  */
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 
+import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import type { GitArcRegistryEntry } from "./GitArcRegistry";
-import { recordMachineKnownPaths } from "./machine-git-worktrees";
+import { replaceMachineKnownPaths } from "./machine-git-worktrees";
 import type WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 const BASELINE_MESSAGE = "machine baseline";
@@ -23,6 +24,25 @@ function scopedPaths(entry: GitArcRegistryEntry) {
   return [...owned, ...entry.activeClaimedPaths ?? [], ...stashed];
 }
 
+/** Every path an entry references: guards, plan paths, active and retained claims, saved stash. */
+function referencedPaths(entry: GitArcRegistryEntry) {
+  return [
+    ...entry.claimedPaths, ...entry.activeClaimedPaths ?? [], ...entry.retainedArc?.claimedPaths ?? [],
+    ...entry.retainedArc?.activeClaimedPaths ?? [], ...entry.savedStash?.paths ?? [],
+  ];
+}
+
+/** Requested paths plus everything arcs still reference, lost claims included, so stale requests stop being walked. */
+async function knownPaths(
+  repository: WorkbenchGitRepository,
+  entries: readonly GitArcRegistryEntry[],
+  request: { paths: readonly string[]; adoptPaths: readonly string[] },
+) {
+  const losses = new GitArcClaimLossStore(repository);
+  const lost = await Promise.all(entries.map(async entry => (await losses.read(entry))?.paths ?? []));
+  return [...request.paths, ...request.adoptPaths, ...entries.flatMap(referencedPaths), ...lost.flat()];
+}
+
 /** Returns the absorbed repository paths; HEAD moves only when at least one differed. */
 export async function absorbMachineBaseline(
   repository: WorkbenchGitRepository,
@@ -30,7 +50,7 @@ export async function absorbMachineBaseline(
   request: { paths: readonly string[]; adoptPaths: readonly string[] },
 ) {
   if (!repository.machine || !request.paths.length) return [];
-  await recordMachineKnownPaths(repository.root, [...request.paths, ...request.adoptPaths]);
+  await replaceMachineKnownPaths(repository.root, await knownPaths(repository, entries, request));
   const head = await repository.headOrNull();
   const owned = new GitArcPathSet(entries.flatMap(scopedPaths));
   const adopted = new GitArcPathSet(request.adoptPaths);

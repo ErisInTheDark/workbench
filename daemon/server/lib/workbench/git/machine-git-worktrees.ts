@@ -4,8 +4,8 @@
  * - machineGitEnvironment: GIT_DIR/GIT_WORK_TREE plus no line ending conversion for an exact registered machine worktree root, else none.
  * - isMachineGitWorktree: whether a root is a registered machine worktree.
  * - ensureMachineGitWorktree: create (once) and register a machine worktree's internal Git dir with an empty root commit.
- * - readMachineKnownPaths: repository paths any arc has requested on a machine worktree.
- * - recordMachineKnownPaths: remember requested paths so snapshots include them once they exist, though untracked.
+ * - readMachineKnownPaths: repository paths arcs reference on a machine worktree.
+ * - replaceMachineKnownPaths: set the referenced paths snapshots include once they exist, though untracked.
  * - listMachineGitWorktreeRoots: filesystem roots that already have machine Git dirs under a base.
  * - pruneMachineGitObjects: delete a machine Git dir's unreachable objects and stale temporary packs past the grace.
  * - pruneMachineGitObjectsIfDue: prune at most once per interval per root; failures warn, never fail the caller.
@@ -133,7 +133,7 @@ function knownPathsFile(root: string) {
   return gitDir ? path.join(gitDir, "info", KNOWN_PATHS_FILE) : null;
 }
 
-/** Repository paths any arc has requested on a machine worktree; untracked ones still belong in snapshots. */
+/** Repository paths arcs reference on a machine worktree; untracked ones still belong in snapshots. */
 export async function readMachineKnownPaths(root: string) {
   const file = knownPathsFile(root);
   if (!file) return [];
@@ -145,16 +145,14 @@ export async function readMachineKnownPaths(root: string) {
   }
 }
 
-export async function recordMachineKnownPaths(root: string, paths: readonly string[]) {
+export async function replaceMachineKnownPaths(root: string, paths: readonly string[]) {
   const file = knownPathsFile(root);
-  if (!file || !paths.length) return;
-  const known = new Set(await readMachineKnownPaths(root));
-  const before = known.size;
-  for (const candidate of paths) known.add(candidate);
-  if (known.size === before) return;
+  if (!file) return;
+  const contents = [...new Set(paths)].sort((left, right) => left.localeCompare(right)).join("\0");
+  if ((await readMachineKnownPaths(root)).join("\0") === contents) return;
   await fs.mkdir(path.dirname(file), { recursive: true });
   const staging = `${file}.${randomUUID()}`;
-  await fs.writeFile(staging, [...known].sort((left, right) => left.localeCompare(right)).join("\0"), "utf8");
+  await fs.writeFile(staging, contents, "utf8");
   await fs.rename(staging, file);
 }
 

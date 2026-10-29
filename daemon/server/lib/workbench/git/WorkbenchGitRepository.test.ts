@@ -15,7 +15,7 @@ import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGitRepository";
 import parseGitFileChangeOutput from "./git-file-change-output";
-import { ensureMachineGitWorktree, recordMachineKnownPaths } from "./machine-git-worktrees";
+import { ensureMachineGitWorktree, replaceMachineKnownPaths } from "./machine-git-worktrees";
 import { THREAD_GIT_BASE_FIXTURE, UNBORN_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 const execFileAsync = promisify(execFile);
@@ -764,13 +764,13 @@ test("a fresh machine worktree with nothing tracked snapshots its empty baseline
   assert.deepEqual(await repository.listTreePaths(snapshot.tree), []);
 });
 
-test("machine snapshots include untracked files at paths an arc requested, and no other untracked files", async context => {
+test("machine snapshots include untracked files at paths arcs reference, and no other untracked files", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-known-");
   context.after(async () => await temporary.dispose());
   const drive = path.join(temporary.path, "drive");
   await fs.mkdir(path.join(drive, "notes"), { recursive: true });
   await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
-  await recordMachineKnownPaths(drive, ["notes/fresh.txt", "made"]);
+  await replaceMachineKnownPaths(drive, ["notes/fresh.txt", "made"]);
   await fs.mkdir(path.join(drive, "made"), { recursive: true });
   await fs.writeFile(path.join(drive, "notes", "fresh.txt"), "new\n", "utf8");
   await fs.writeFile(path.join(drive, "made", "inner.txt"), "inner\n", "utf8");
@@ -799,7 +799,7 @@ test("machine worktrees list links and junctions as leaves, never walking, diffi
   await fs.symlink(target, path.join(drive, "repo", "node_modules", "pkg"), linkType);
   await ensureMachineGitWorktree(drive, path.join(temporary.path, "machine-git"));
   const scopes = ["linked", "folder", "repo/node_modules"];
-  await recordMachineKnownPaths(drive, scopes);
+  await replaceMachineKnownPaths(drive, scopes);
   const repository = new WorkbenchGitRepository(drive);
   const run = repository.run.bind(repository);
   const pathspecs: string[] = [];
