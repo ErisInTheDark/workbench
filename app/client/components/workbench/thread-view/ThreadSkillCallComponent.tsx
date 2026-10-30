@@ -2,7 +2,7 @@
  * Exports:
  * - default ThreadSkillCallComponent: one settled MCP call's skill component, rendered once by the daemon and kept, given
  *   the call (and any props its matcher added); the call's own details show instead when it cannot render.
- * - ThreadSkillComponentPreview/ThreadSkillComponentPreviewContext: a vis preview's own drawing of call components.
+ * - ThreadSkillComponentPreview/ThreadSkillComponentPreviewContext: a vis preview's own drawing of call and inline components.
  */
 "use client";
 
@@ -34,9 +34,12 @@ function readCall(item: CallItem, skill: ThreadCommandSkillMcp): SkillMcpCall {
 
 type SkillCallComponentProps = { fallback: ReactNode; item: CallItem; skill: ThreadCommandSkillMcp & { component: string } };
 
-/** Draws a call's skill component in place of the daemon's kept render; only vis previews provide one. */
+/**
+ * Draws a skill component in place of the daemon's kept render: a call's own (given the call) or one inline in its line.
+ * Only vis previews provide one.
+ */
 export type ThreadSkillComponentPreview = (input: {
-  component: string; props: Record<string, unknown> & { call: SkillMcpCall }; fallback: ReactNode;
+  component: string; props: Record<string, unknown>; fallback: ReactNode; inline?: boolean;
 }) => ReactNode;
 export const ThreadSkillComponentPreviewContext = createContext<ThreadSkillComponentPreview | null>(null);
 

@@ -43,6 +43,13 @@ test("a call's skill component is kept once per call and component, so a later r
     assert.deepEqual(store.writeCallComponent(target, first), first);
     assert.deepEqual(store.writeCallComponent(target, expired), first);
     assert.deepEqual(store.writeCallComponent({ ...target, component: "BuildCard" }, expired), expired);
+    // A line's inline components keep a slot each, apart from the call's own component and from each other.
+    const bug = { $workbench: "element" as const, type: "span", props: { children: "Bug" } };
+    const internal = { $workbench: "element" as const, type: "span", props: { children: "Internal" } };
+    assert.deepEqual(store.writeCallComponent({ ...target, slot: "{\"name\":\"Bug\"}" }, bug), bug);
+    assert.deepEqual(store.writeCallComponent({ ...target, slot: "{\"name\":\"Internal\"}" }, internal), internal);
+    assert.deepEqual(store.readCallComponent({ ...target, slot: "{\"name\":\"Bug\"}" }), bug);
+    assert.deepEqual(store.readCallComponent(target), first);
     assert.throws(() => store.writeCallComponent({ ...target, itemId: "missing" }, first), /not in this thread/u);
     database.prepare("DELETE FROM thread_items WHERE id = 1").run();
     assert.equal(database.prepare("SELECT COUNT(*) FROM transcript_asset_refs").pluck().get(), 0);

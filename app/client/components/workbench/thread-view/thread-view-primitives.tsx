@@ -19,6 +19,7 @@ import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import { ArrowRightIcon, HourglassIcon, ShieldCheckIcon, ShieldCogCornerIcon, ShieldMinusIcon, ShieldQuestionIcon, WeightIcon } from "../workbench-icons";
 import ThreadInlineCode from "./ThreadInlineCode";
+import { useThreadSkillInlineParts } from "./ThreadSkillInlineParts";
 import ThreadSummaryText from "./ThreadSummaryText";
 
 const THREAD_SKILL_MENTION_CLASS = `
@@ -164,10 +165,15 @@ function ThreadCommandStageParts ({
   /** Code reads as plain monospace text instead of a chip, as an unmatched command's own text does. */
   plainCode: boolean;
 }) {
+  const drawSkillComponent = useThreadSkillInlineParts(parts);
   return (
     <>
       {parts.map((part, index) => (
-        part.type === "separator" ? null : part.type === "skill" ? (
+        part.type === "separator" ? null : part.type === "skillComponent" ? (
+          <span key={`skill-component:${part.component}:${index}`} className="contents">
+            {drawSkillComponent(part, <ThreadSummaryText text={part.text} />)}
+          </span>
+        ) : part.type === "skill" ? (
           <span
             key={`skill:${part.path}:${index}`}
             className={THREAD_SKILL_MENTION_CLASS}

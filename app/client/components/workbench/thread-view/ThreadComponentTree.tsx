@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadComponentTree: draw one rendered skill-component tree once its skill styles are loaded, falling back to
- *   given content if drawing throws.
+ * - default ThreadComponentTree: draw one rendered skill-component tree once its skill styles are loaded, as a block or
+ *   inline in a line, falling back to given content if drawing throws.
  * - useThreadComponentRender: request one stored or fresh component render and load its styles, keyed by its target.
  */
 "use client";
@@ -56,14 +56,19 @@ export function useThreadComponentRender({ key, ready, refreshKey, request }: {
   return state.key === key ? state : { key, result: null, error: null };
 }
 
-export default function ThreadComponentTree({ fallback, options, tree }: {
-  fallback: ReactNode; options?: ThreadRenderOptions; tree: ThreadComponentRender["tree"];
+export default function ThreadComponentTree({ fallback, inline = false, options, tree }: {
+  fallback: ReactNode;
+  /** Flows within a line of text, as a component drawn inside a call's summary. */
+  inline?: boolean;
+  options?: ThreadRenderOptions;
+  tree: ThreadComponentRender["tree"];
 }) {
+  const Wrapper = inline ? "span" : "div";
   return (
     <RenderBoundary fallback={fallback}>
-      <div data-wb-component="true">
+      <Wrapper className={inline ? "inline-flex min-w-0 items-center align-middle" : undefined} data-wb-component="true">
         <ComponentTree tree={tree} options={options} />
-      </div>
+      </Wrapper>
     </RenderBoundary>
   );
 }

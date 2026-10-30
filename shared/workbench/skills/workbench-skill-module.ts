@@ -12,4 +12,5 @@ export const WORKBENCH_SKILL_MODULE_SOURCE = `
   export const primary = value => ({ primary: String(value) });
   export const path = value => ({ path: String(value) });
   export const thread = value => ({ thread: String(value) });
+  export const component = (name, props, text) => ({ component: String(name), props: props ?? {}, text: String(text) });
 `;

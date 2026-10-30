@@ -6,6 +6,7 @@
  * - compileSkillMcpMatchers: bundle one skill's MCP matcher files into one sandbox-ready script and identify its input files.
  * - renderSkillComponent: render an invocation into native component nodes; its body lists nested invocations to resolve.
  * - renderSkillComponentProps: render a template straight from props, as an MCP call's component.
+ * - renderSkillComponentPropsList: several renders from props in one run, as a call's component or its line's inline ones.
  * - renderSkillComponentPreview: render native component nodes as a screenshot document.
  */
 import { spawn } from "node:child_process";
@@ -273,6 +274,18 @@ export function renderSkillComponentProps(compiled: CompiledSkillComponent, prop
   `), "component-props.cjs");
 }
 
+/** Several renders straight from props in one run, each from its named component, in request order. */
+export function renderSkillComponentPropsList(
+  components: Readonly<Record<string, CompiledSkillComponent>>,
+  renders: readonly { component: string; props: Readonly<Record<string, unknown>> }[],
+): ThreadComponentNode[] {
+  return renders.map(({ component, props }) => {
+    const compiled = components[component];
+    if (!compiled) throw new Error(`No compiled component ${component} was given.`);
+    return renderSkillComponentProps(compiled, props);
+  });
+}
+
 export async function renderSkillComponent(
   compiled: CompiledSkillComponent, name: string, markup: string, results: Readonly<Record<string, unknown>> = {},
 ): Promise<ThreadComponentNode> {
@@ -348,7 +361,7 @@ async function main() {
   } else if (action === "render-props" && file) {
     const parsed = SkillMcpComponentRenderInputSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
     if (!parsed.success) throw new Error("Component props render input is invalid.");
-    process.stdout.write(JSON.stringify(renderSkillComponentProps(parsed.data.compiled, parsed.data.props)));
+    process.stdout.write(JSON.stringify(renderSkillComponentPropsList(parsed.data.components, parsed.data.renders)));
   } else if (action === "matchers" && file) {
     const parsed = ThreadComponentStyleBuildSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
     if (!parsed.success) throw new Error("Invalid MCP matcher build.");

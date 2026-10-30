@@ -41,10 +41,16 @@ export default function ThreadPreview({ components = {}, items, matchers = [] }:
     try { return { thread: createThreadRenderFixture([...items]), error: null }; }
     catch (error) { return { thread: null, error: error instanceof Error ? error.message : String(error) }; }
   }, [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const preview = useMemo<ThreadSkillComponentPreview>(() => ({ component, fallback, props }) => {
+  const preview = useMemo<ThreadSkillComponentPreview>(() => ({ component, fallback, inline, props }) => {
     const Component = components[component];
-    if (!Component) return <><Problem>{`${component} isn't in ThreadPreview's components.`}</Problem>{fallback}</>;
-    return <div data-wb-component="true">{createElement(Component, props)}</div>;
+    if (!Component) {
+      return inline
+        ? <span className="text-danger" title={`${component} isn't in ThreadPreview's components.`}>{fallback}</span>
+        : <><Problem>{`${component} isn't in ThreadPreview's components.`}</Problem>{fallback}</>;
+    }
+    return inline
+      ? <span className="inline-flex min-w-0 items-center align-middle" data-wb-component="true">{createElement(Component, props)}</span>
+      : <div data-wb-component="true">{createElement(Component, props)}</div>;
   }, [components]);
   return (
     <ThreadTextPresentationContext value={text}>

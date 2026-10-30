@@ -81,8 +81,18 @@ export interface CommandThreadDisplayPart {
   type: "thread";
 }
 
+/** One of a skill's components, drawn inline once rendered; `text` stands in until then and in plain-text lines. */
+export interface CommandSkillComponentDisplayPart {
+  component: string;
+  props: Record<string, JsonValue>;
+  skillPath: string;
+  text: string;
+  type: "skillComponent";
+}
+
 export type ThreadCommandDisplayPart =
   | CommandTextDisplayPart
+  | CommandSkillComponentDisplayPart
   | CommandSkillDisplayPart
   | CommandThreadDisplayPart
   | CommandPathDisplayPart

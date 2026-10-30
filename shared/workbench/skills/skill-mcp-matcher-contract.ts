@@ -54,12 +54,15 @@ export const SkillMcpCallSchema = z.object({
 export type SkillMcpCall = z.infer<typeof SkillMcpCallSchema>;
 
 const text = z.string().max(500);
+const componentName = z.string().regex(/^[A-Z][A-Za-z0-9_]*$/u);
 export const SkillMcpPartSchema = z.union([
   text,
   z.object({ code: text }).strict(),
   z.object({ primary: text }).strict(),
   z.object({ path: text }).strict(),
   z.object({ thread: text }).strict(),
+  /** One of the skill's components drawn inline; `text` stands in until it renders and wherever a line is plain text. */
+  z.object({ component: componentName, props: z.record(z.string(), jsonValue).optional(), text: text.min(1) }).strict(),
 ]);
 export type SkillMcpPart = z.infer<typeof SkillMcpPartSchema>;
 
@@ -91,7 +94,7 @@ export const SkillMcpPresentationSchema = z.object({
   icon: SkillMcpIconSchema.optional(),
   chip: z.object({ id: familyId, verb: z.string().min(1).max(32), icon: SkillMcpIconSchema }).strict().optional(),
   display: SkillMcpDisplaySchema.default("step"),
-  component: z.string().regex(/^[A-Z][A-Za-z0-9_]*$/u).optional(),
+  component: componentName.optional(),
   props: z.record(z.string(), jsonValue).optional(),
 }).strict();
 export type SkillMcpPresentation = z.infer<typeof SkillMcpPresentationSchema>;
@@ -116,7 +119,8 @@ export type SkillMcpMatcherCompilation = z.infer<typeof SkillMcpMatcherCompilati
 export const SkillMcpComponentPropsSchema = z.record(z.string(), jsonValue)
   .refine(props => JSON.stringify(props).length <= SKILL_MCP_MATCHER_LIMITS.componentPropsChars, "Component props are too large.");
 
+/** One run rendering a skill's components straight from props: a call's own component, or its line's inline ones. */
 export const SkillMcpComponentRenderInputSchema = z.object({
-  compiled: ThreadCompiledComponentSchema,
-  props: SkillMcpComponentPropsSchema,
+  components: z.record(componentName, ThreadCompiledComponentSchema),
+  renders: z.array(z.object({ component: componentName, props: SkillMcpComponentPropsSchema }).strict()).min(1).max(16),
 }).strict();

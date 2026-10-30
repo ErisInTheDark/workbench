@@ -9,7 +9,7 @@ import { projectRoot } from "../shared/project-root";
 import loadQuickJS from "../daemon/server/skills/load-quickjs";
 import SkillMcpMatcherRuntime from "../shared/workbench/skills/SkillMcpMatcherRuntime";
 import {
-  compileSkillMcpMatchers, compileSkillStyles, compileSkillTemplate, renderSkillComponent, renderSkillComponentPreview, renderSkillComponentProps,
+  compileSkillMcpMatchers, compileSkillStyles, compileSkillTemplate, renderSkillComponent, renderSkillComponentPreview, renderSkillComponentProps, renderSkillComponentPropsList,
 } from "./skill-component-build.mts";
 
 test("skill styles include template utilities without recompiling unrelated kit utilities", async context => {
@@ -198,4 +198,22 @@ test("a call component renders straight from the call props it is given", async 
   await writeFile(file, "export default function BuildList({ call }: { call: { result: { id: number }[] } }) { return <ul>{call.result.map(build => <li>{build.id}</li>)}</ul> }");
   const tree = renderSkillComponentProps(await compileSkillTemplate(file), { call: { result: [{ id: 23611 }] } });
   assert.match(JSON.stringify(tree), /23611/u);
+});
+
+test("one run renders a line's inline components in order, each from its own component", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("skill-inline-components-");
+  context.after(() => temporary.dispose());
+  await writeFile(join(temporary.path, "Label.tsx"), "export default function Label({ name }: { name: string }) { return <b>label:{name}</b> }");
+  await writeFile(join(temporary.path, "Member.tsx"), "export default function Member({ name }: { name: string }) { return <i>member:{name}</i> }");
+  const components = {
+    Label: await compileSkillTemplate(join(temporary.path, "Label.tsx")),
+    Member: await compileSkillTemplate(join(temporary.path, "Member.tsx")),
+  };
+  const trees = renderSkillComponentPropsList(components, [
+    { component: "Member", props: { name: "Chiri" } }, { component: "Label", props: { name: "Bug" } },
+  ]);
+  assert.deepEqual(trees.map(tree => tree.type), ["i", "b"]);
+  assert.match(JSON.stringify(trees[0]), /Chiri/u);
+  assert.match(JSON.stringify(trees[1]), /Bug/u);
+  assert.throws(() => renderSkillComponentPropsList(components, [{ component: "Card", props: {} }]), /No compiled component Card/u);
 });

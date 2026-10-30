@@ -82,6 +82,13 @@ test("skills may draw their own icons, but only as path data in a numeric box", 
   }
 });
 
+test("an inline component part needs its stand-in text", () => {
+  const part = { component: "TrelloLabel", props: { name: "Bug", color: "#f87168" }, text: "Bug" };
+  assert.equal(readSkillMcpPresentation(JSON.stringify({ verb: ["A", "B"], summary: [part] })).kind, "matched");
+  assert.equal(readSkillMcpPresentation(JSON.stringify({ verb: ["A", "B"], summary: [{ ...part, text: "" }] })).kind, "failed");
+  assert.equal(readSkillMcpPresentation(JSON.stringify({ verb: ["A", "B"], summary: [{ component: "TrelloLabel" }] })).kind, "failed");
+});
+
 test("a bundle without a matcher export reports a load failure", () => {
   const matchers = runtime([{ ...bundle("empty", ""), code: "var __wbSkillMcpMatchers = { default: 4 };" }]);
   assert.match(matchers.report(call).failures[0]!.message, /failed to load: .*defineMcpMatcher/u);

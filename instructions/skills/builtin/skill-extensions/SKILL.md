@@ -45,7 +45,7 @@ export default defineMcpMatcher(call => {
 });
 ```
 
-Contract (`workbench-skill` exports only `defineMcpMatcher`, `code`, `primary`, `path`, `thread`; write the types inline if wanted):
+Contract (`workbench-skill` exports only `defineMcpMatcher`, `code`, `primary`, `path`, `thread`, `component(name, props, text)`; write the types inline if wanted):
 
 ```ts
 interface Call {
@@ -57,7 +57,7 @@ interface Call {
 }
 interface Presentation {
   verb: [running: string, done: string];             // line = verb + summary parts, one space apart
-  summary?: (string | { code } | { primary } | { path } | { thread })[];
+  summary?: (string | { code } | { primary } | { path } | { thread } | { component; props?; text })[];
   icon?: Icon;                                       // row/card icon; default chip icon, else terminal
   chip?: { id: string; verb: string; icon: Icon };
   display?: "step" | "hidden" | { card: string; open?: boolean }; // default "step"
@@ -70,6 +70,7 @@ type Icon = "terminal" | "file" | "search" | "book" | "folder" | "eye" | "git" |
 
 - Return `null` to leave a call to the next active skill, then the generic summary. First non-null wins, in skill catalogue order.
 - `step`: a row inside the activity card, counted under its chip (else exec). `{ card }`: its own card outside activity cards; back-to-back cards of one family stitch into one. `hidden`: not drawn.
+- Summary `{ component }` parts draw one of this skill's components inline in the line (pills, avatars: keep them small), rendered once per props and kept; `text` shows until then and wherever the line is plain text. At most 16 per line.
 - `component` renders once the call completes, with props `{ ...props, call }`; with `keep`, `call.result` is the kept result. The first render is kept, so result expiry never blanks it.
 - Matchers run synchronously in a QuickJS sandbox in the browser: no DOM, network, timers or packages; imports only relative files and `workbench-skill`. Matcher code gets 25ms per call, after the call is loaded; a matcher that overruns or runs out of memory is switched off until the thread's matchers reload. Keep them pure and fast; branch on presentation-relevant facts only.
 - `result` text that isn't bare JSON (e.g. wrapped in marker lines) stays a string. Decide from server/tool/arguments first, keep summaries light, and parse big results in the component, which has no deadline.

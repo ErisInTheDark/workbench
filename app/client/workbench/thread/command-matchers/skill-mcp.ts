@@ -84,11 +84,11 @@ export function matchSkillMcpCall(runtime: SkillMcpMatchers, call: SkillMcpCall,
   return match;
 }
 
-function toDisplayPart(part: SkillMcpPart): ThreadCommandDisplayPart {
-  if (typeof part === "string") return CommandMatcher.Text(part);
+function toDisplayPart(part: Exclude<SkillMcpPart, string>, skillPath: string): ThreadCommandDisplayPart {
   if ("code" in part) return CommandMatcher.Code(part.code);
   if ("primary" in part) return { text: part.primary, type: "text", variant: "primary" };
   if ("path" in part) return CommandMatcher.Path({ path: part.path });
+  if ("component" in part) return { component: part.component, props: part.props ?? {}, skillPath, text: part.text, type: "skillComponent" };
   return CommandMatcher.Thread(part.thread);
 }
 
@@ -96,18 +96,18 @@ function toDisplayPart(part: SkillMcpPart): ThreadCommandDisplayPart {
  * The verb, then each part. Rows space parts with a flex gap, so text carries its own edge spaces only for the line's
  * text form, as built-in matchers' `"Ran "` does; a separate space part would double the gap.
  */
-function line(verb: string, parts: readonly SkillMcpPart[]) {
+function line(verb: string, parts: readonly SkillMcpPart[], skillPath: string) {
   const all = [verb, ...parts];
   return all.map((part, index): ThreadCommandDisplayPart => typeof part === "string"
     ? CommandMatcher.Text(`${index && typeof all[index - 1] !== "string" ? " " : ""}${part}${index < all.length - 1 ? " " : ""}`)
-    : toDisplayPart(part));
+    : toDisplayPart(part, skillPath));
 }
 
 export function getSkillMcpMatcherResult(match: SkillMcpMatch, invocation: SkillMcpInvocation): CommandMatcherResult {
   const { presentation, skillName, skillPath } = match;
   return CommandMatcher.Result({
     omitFromDisplay: presentation.display === "hidden",
-    ongoingSummaryParts: line(presentation.verb[0], presentation.summary),
+    ongoingSummaryParts: line(presentation.verb[0], presentation.summary, skillPath),
     remainingCommand: null,
     skillMcp: {
       call: invocation,
@@ -120,6 +120,6 @@ export function getSkillMcpMatcherResult(match: SkillMcpMatch, invocation: Skill
       skillPath,
     },
     stop: true,
-    summaryParts: line(presentation.verb[1], presentation.summary),
+    summaryParts: line(presentation.verb[1], presentation.summary, skillPath),
   });
 }

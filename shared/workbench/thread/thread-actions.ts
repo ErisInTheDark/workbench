@@ -279,6 +279,14 @@ export const workbenchThreadActions = {
     }),
     result: ThreadComponentRenderSchema,
   },
+  /** The skill components one call's line draws inline, each rendered once per props and kept on the call's item. */
+  "thread/components/render-inline": {
+    params: WorkbenchThreadTargetSchema.extend({
+      itemId: z.string().min(1), skillPath: z.string().min(1),
+      parts: z.array(z.object({ component: z.string().regex(/^[A-Z][A-Za-z0-9_]*$/u), props: SkillMcpComponentPropsSchema }).strict()).min(1).max(16),
+    }),
+    result: z.object({ renders: z.array(ThreadComponentRenderSchema) }).strict(),
+  },
   /** The thread's active skills' compiled MCP matchers, in catalogue order, and why any failed to compile. */
   "thread/components/matchers": {
     params: WorkbenchThreadTargetSchema, result: SkillMcpMatcherCompilationSchema,

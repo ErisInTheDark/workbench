@@ -24,6 +24,7 @@ import ThreadCommandDetailRows from "../ThreadCommandDetailRows";
 import ThreadContextCommandItem from "../ThreadContextCommandItem";
 import ThreadDynamicToolCallItem from "../ThreadDynamicToolCallItem";
 import ThreadMcpToolCallItem from "../ThreadMcpToolCallItem";
+import { ThreadSkillItemContext } from "../ThreadSkillInlineParts";
 import ThreadSleepItem from "../ThreadSleepItem";
 import ThreadStatusCommandItem from "../ThreadStatusCommandItem";
 import ThreadTitleCommandItem from "../ThreadTitleCommandItem";
@@ -89,15 +90,13 @@ export function ThreadRegularCommandItem ({
   item: CommandSequenceItem;
   itemTimeline: Timeline;
 }) {
-  if (item.type === "mcpToolCall") return <ThreadMcpItem item={item} itemTimeline={itemTimeline} />;
-  if (item.type === "dynamicToolCall") {
-    return <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />;
-  }
   return (
-    <ThreadCommandExecutionDetails
-      activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
-      item={item}
-    />
+    // Skill components drawn inline in the call's line are kept on this item.
+    <ThreadSkillItemContext value={item.id}>
+      {item.type === "mcpToolCall" ? <ThreadMcpItem item={item} itemTimeline={itemTimeline} />
+        : item.type === "dynamicToolCall" ? <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />
+          : <ThreadCommandExecutionDetails activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />}
+    </ThreadSkillItemContext>
   );
 }
 

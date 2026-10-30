@@ -197,6 +197,7 @@ test("a call component renders only from its active skill, once, with the result
   let active = skills;
   const stored = new Map<string, import("workbench-shared/workbench/thread/thread-component-tree").ThreadComponentNode>();
   const rendered: unknown[] = [];
+  const runs: string[][] = [];
   const controller = new WorkbenchComponentsController({
     skills: async () => active,
     compile: async file => ({ code: "compiled", inputs: [file] }),
@@ -210,10 +211,16 @@ test("a call component renders only from its active skill, once, with the result
         if ((await readFile(files[0]!, "utf8")) === "broken") throw new Error("Unexpected token");
         return { code: "var __wbSkillMcpMatchers = { default: [] };", inputs: [...files] };
       },
-      renderProps: async (_compiled, props) => { rendered.push(props); return { $workbench: "element", type: "div", props: { children: JSON.stringify(props) } }; },
+      renderProps: async (_compiled, renders) => {
+        runs.push(renders.map(({ component }) => component));
+        return renders.map(({ props }) => {
+          rendered.push(props);
+          return { $workbench: "element" as const, type: "div", props: { children: JSON.stringify(props) } };
+        });
+      },
       quickjs: async () => { throw new Error("Not needed."); },
-      read: async target => stored.get(`${target.itemId}:${target.component}`) ?? null,
-      write: async (target, tree) => { stored.set(`${target.itemId}:${target.component}`, tree); return tree; },
+      read: async target => stored.get(`${target.itemId}:${target.component}:${target.slot ?? ""}`) ?? null,
+      write: async (target, tree) => { stored.set(`${target.itemId}:${target.component}:${target.slot ?? ""}`, tree); return tree; },
     },
   });
 
@@ -227,6 +234,17 @@ test("a call component renders only from its active skill, once, with the result
   assert.deepEqual(rendered, [{ call: { ...call, result: { builds: [{ id: 23611 }] } } }]);
   assert.deepEqual((await controller.renderCall({ ...target, props: { call: { ...call, result: null } } })).tree, first.tree);
   assert.equal(rendered.length, 1);
+
+  // A line's inline components: kept per props, and only the missing ones render, together in one run.
+  const line = { threadId: "thread", itemId: "call", skillPath: skills[1]!.path };
+  const bug = { component: "BuildList", props: { name: "Bug" } };
+  const internal = { component: "BuildList", props: { name: "Internal" } };
+  const firstLine = await controller.renderInline({ ...line, parts: [bug] });
+  const secondLine = await controller.renderInline({ ...line, parts: [internal, bug] });
+  assert.deepEqual(secondLine[1]!.tree, firstLine[0]!.tree);
+  assert.deepEqual(runs.slice(1), [["BuildList"], ["BuildList"]]);
+  assert.deepEqual(rendered.slice(1), [{ name: "Bug" }, { name: "Internal" }]);
+  assert.deepEqual((await controller.renderCall({ ...target, props: { call } })).tree, first.tree, "the call's own component keeps its slot");
 
   active = [skills[0]!];
   await assert.rejects(controller.renderCall({ ...target, itemId: "later", props: { call } }), /not active in this thread/u);

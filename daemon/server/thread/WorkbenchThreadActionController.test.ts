@@ -44,7 +44,7 @@ function fixture(providerWarning?: string) {
   /** What the stop had done by the time each virtual-steer release ran. */
   const releases: string[] = [];
   const owners: WorkbenchThreadActionOwners = {
-    components: { matchers: unused, renderCall: unused, renderMessage: unused, styles: unused },
+    components: { matchers: unused, renderCall: unused, renderInline: unused, renderMessage: unused, styles: unused },
     questionnaireSteers: {
       hold: async () => false,
       release: async threadId => { releases.push(`${threadId}:${stopOrder.join(",")}`); },

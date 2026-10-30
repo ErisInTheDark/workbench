@@ -4,7 +4,7 @@
  * - TranscriptAssetRead: compatibility address and optional expected thread owner.
  * - TranscriptAssetContent: immutable image metadata and bytes.
  * - TranscriptComponentTarget: one component invocation owned by a transcript item.
- * - TranscriptCallComponentTarget: one skill component an MCP call item shows.
+ * - TranscriptCallComponentTarget: one skill component an MCP call item shows, as its body or inline in its line.
  * - default WorkbenchTranscriptAssetStore: own atomic immutable content (images, message and call component renders), thread-scoped addresses, read-only reachability prefiltering, and per-digest orphan collection.
  */
 import { createHash } from "node:crypto";
@@ -47,6 +47,8 @@ export interface TranscriptCallComponentTarget {
   itemId: string;
   skillPath: string;
   component: string;
+  /** Tells apart the components a call's line draws inline; absent for the call's own component. */
+  slot?: string;
 }
 
 const extensions = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" } as const;
@@ -153,7 +155,7 @@ export default class WorkbenchTranscriptAssetStore {
     return this.database.transaction(() => this.#readCallComponent(target))();
   }
 
-  /** A call component is kept once per item, skill and component: later renders (an expired result) never replace it. */
+  /** A call component is kept once per item, skill, component and slot: later renders (an expired result) never replace it. */
   writeCallComponent(target: TranscriptCallComponentTarget, tree: ThreadComponentNode): ThreadComponentNode {
     return this.database.transaction(() => {
       const existing = this.#readCallComponent(target);
@@ -172,7 +174,8 @@ export default class WorkbenchTranscriptAssetStore {
   }
 
   #callComponentRole(target: TranscriptCallComponentTarget) {
-    return `call-component:${createHash("sha256").update(`${target.skillPath}\0${target.component}`).digest("hex")}`;
+    const identity = `${target.skillPath}\0${target.component}${target.slot === undefined ? "" : `\0${target.slot}`}`;
+    return `call-component:${createHash("sha256").update(identity).digest("hex")}`;
   }
 
   #threadItem(threadId: string, publicId: string): number | null {

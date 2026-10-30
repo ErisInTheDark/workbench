@@ -249,8 +249,11 @@ export default class WorkbenchThreadFactsFeature {
           if (!parsed.success) throw new Error("MCP matcher compiler returned invalid output.");
           return parsed.data;
         }),
-        renderProps: async (compiled, props, threadId, signal) => await withComponentInput({ compiled, props }, async file =>
-          readThreadComponentTree(await executeComponent(threadId, ["render-props", file], signal), { remoteImages: true })),
+        renderProps: async (components, renders, threadId, signal) => await withComponentInput({ components, renders }, async file => {
+          const output = await executeComponent(threadId, ["render-props", file], signal);
+          if (!Array.isArray(output)) throw new Error("Component render returned invalid output.");
+          return output.map(tree => readThreadComponentTree(tree, { remoteImages: true }));
+        }),
         quickjs: loadQuickJS,
         read: target => database.readTranscriptCallComponent(target),
         write: (target, result) => database.writeTranscriptCallComponent(target, result),

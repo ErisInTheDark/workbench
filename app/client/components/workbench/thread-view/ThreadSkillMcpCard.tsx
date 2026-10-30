@@ -17,6 +17,7 @@ import ThreadCard from "./ThreadCard";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import { getMcpCallOutcome, ThreadMcpCallDetails } from "./ThreadMcpToolCallItem";
 import ThreadSkillCallComponent from "./ThreadSkillCallComponent";
+import { ThreadSkillItemContext } from "./ThreadSkillInlineParts";
 import { getCommandIcon } from "./thread-activity-chips";
 import type { CommandSequenceItem } from "./thread-render-blocks";
 import { ThreadCommandSummary } from "./thread-view-primitives";
@@ -64,13 +65,15 @@ function SkillCard({ durationMs, item, itemTimeline, open }: {
     ? <ThreadSkillCallComponent fallback={details} item={item} skill={{ ...skill, component: skill.component }} />
     : null;
   return (
-    <ThreadCard
-      defaultOpen={open}
-      icon={createElement(getCommandIcon(display.summaryStats, skill.icon), { size: 16 })}
-      iconClassName={outcome === "failed" ? "text-danger" : undefined}
-      progress={{ durationMs, state: outcome }}
-      renderContent={() => component ?? details}
-      summary={<ThreadCommandSummary danger={outcome === "failed"} display={getThreadCommandOutcomeDisplay(display, outcome)} line />}
-    />
+    <ThreadSkillItemContext value={item.id}>
+      <ThreadCard
+        defaultOpen={open}
+        icon={createElement(getCommandIcon(display.summaryStats, skill.icon), { size: 16 })}
+        iconClassName={outcome === "failed" ? "text-danger" : undefined}
+        progress={{ durationMs, state: outcome }}
+        renderContent={() => component ?? details}
+        summary={<ThreadCommandSummary danger={outcome === "failed"} display={getThreadCommandOutcomeDisplay(display, outcome)} line />}
+      />
+    </ThreadSkillItemContext>
   );
 }
