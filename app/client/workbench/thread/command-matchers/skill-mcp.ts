@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - SkillMcpInvocation/readSkillMcpInvocation: the external MCP call a direct call or wb `mcp_call` makes, never a wb tool.
- * - readSkillMcpCallOutcome/readSkillMcpTextResult: an MCP call item's status, error and result as a matcher sees them;
- *   text answers that are JSON read as JSON.
+ * - readSkillMcpItemCall/readSkillMcpCallOutcome/readSkillMcpTextResult: an MCP call item's call, and its status, error and
+ *   result, as a matcher sees them; text answers that are JSON read as JSON.
  * - matchSkillMcpCall: ask the active skills' matchers about one call, once per runtime and call identity.
  * - getSkillMcpMatcherResult: turn a skill presentation into a command matcher result carrying its skill rendering.
  */
@@ -40,6 +40,12 @@ export function readSkillMcpTextResult(text: string): JsonValue {
   catch { return text; }
 }
 
+/** The call an MCP call item puts to skill matchers, or null for Workbench's own tools. */
+export function readSkillMcpItemCall(item: McpToolCallItem): SkillMcpCall | null {
+  const invocation = readSkillMcpInvocation(item.server, item.tool, item.arguments);
+  return invocation ? { ...invocation, ...readSkillMcpCallOutcome(item) } : null;
+}
+
 export function readSkillMcpCallOutcome(item: Pick<McpToolCallItem, "error" | "result" | "status">): Pick<SkillMcpCall, "error" | "result" | "status"> {
   const status = item.status === "inProgress" ? "inProgress" : item.status === "completed" && !item.error ? "completed" : "failed";
   const structured = item.result?.structuredContent;
@@ -69,7 +75,7 @@ export function matchSkillMcpCall(runtime: SkillMcpMatchers, call: SkillMcpCall,
   }
   if (identity) {
     if (caches.byIdentity.has(identity)) return caches.byIdentity.get(identity) ?? null;
-    const match = runtime.match(call);
+    const match = runtime.match(call, { identity });
     caches.byIdentity.set(identity, match);
     return match;
   }

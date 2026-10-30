@@ -54,6 +54,7 @@ interface Call {
   status: "inProgress" | "completed" | "failed" | null; // null: `wb mcp call`, matched from its command text alone
   error: string | null;
   result: Json | null;                                // structured content, else text (JSON text parsed); null while running or expired
+  memory: Record<string, Json>;                       // what this skill's matchers remembered in earlier loaded calls
 }
 interface Presentation {
   verb: [running: string, done: string];             // line = verb + summary parts, one space apart
@@ -63,6 +64,7 @@ interface Presentation {
   display?: "step" | "hidden" | { card: string; open?: boolean }; // default "step"
   component?: string;                                // one of this skill's components
   props?: Record<string, Json>;                      // extra props for it
+  remember?: Record<string, Json>;                   // facts later calls read as call.memory; last write wins
 }
 type Icon = "terminal" | "file" | "search" | "book" | "folder" | "eye" | "git" | "arc" | "skill" | "browser" | "web" | "image"
   | { svg: { paths: string[]; viewBox?: string; mode?: "stroke" | "fill" } }; // single colour; brand glyphs: mode "fill"
@@ -73,6 +75,7 @@ type Icon = "terminal" | "file" | "search" | "book" | "folder" | "eye" | "git" |
 - Summary `{ component }` parts draw one of this skill's components inline in the line (pills, avatars: keep them small), rendered once per props and kept; `text` shows until then and wherever the line is plain text. At most 16 per line.
 - `component` renders once the call completes, with props `{ ...props, call }`; with `keep`, `call.result` is the kept result. The first render is kept, so result expiry never blanks it.
 - Matchers run synchronously in a QuickJS sandbox in the browser: no DOM, network, timers or packages; imports only relative files and `workbench-skill`. Matcher code gets 25ms per call, after the call is loaded; a matcher that overruns or runs out of memory is switched off until the thread's matchers reload. Keep them pure and fast; branch on presentation-relevant facts only.
+- Memory folds over the thread's loaded calls in transcript order, per skill, capped at 64KB (oldest keys leave first); earlier history loading in reruns only later calls whose memory changed. Always draw a fallback for a missing fact (e.g. `card ? primary(card.name) : code(id)`).
 - `result` text that isn't bare JSON (e.g. wrapped in marker lines) stays a string. Decide from server/tool/arguments first, keep summaries light, and parse big results in the component, which has no deadline.
 - Matchers reload when the thread's active skills change; the transcript redraws with the new presentation.
 - Mock before building: a kit vis importing `ThreadPreview` from `workbench/kit/thread` with this skill's matchers and components shows the real transcript.

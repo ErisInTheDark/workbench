@@ -89,6 +89,14 @@ test("an inline component part needs its stand-in text", () => {
   assert.equal(readSkillMcpPresentation(JSON.stringify({ verb: ["A", "B"], summary: [{ component: "TrelloLabel" }] })).kind, "failed");
 });
 
+test("each skill's matchers read only their own memory", () => {
+  const reader = (name: string) => bundle(name, `call => call.tool === "${name}" ? { verb: ["A", "B"], summary: [JSON.stringify(call.memory)] } : null`);
+  const matchers = runtime([reader("first"), reader("second")]);
+  const memory = new Map([["/skills/first/SKILL.md", { card: "Fix" }]]);
+  assert.deepEqual(matchers.match({ ...call, tool: "first" }, { memory })?.presentation.summary, ["{\"card\":\"Fix\"}"]);
+  assert.deepEqual(matchers.match({ ...call, tool: "second" }, { memory })?.presentation.summary, ["{}"]);
+});
+
 test("a bundle without a matcher export reports a load failure", () => {
   const matchers = runtime([{ ...bundle("empty", ""), code: "var __wbSkillMcpMatchers = { default: 4 };" }]);
   assert.match(matchers.report(call).failures[0]!.message, /failed to load: .*defineMcpMatcher/u);

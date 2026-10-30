@@ -4,6 +4,7 @@
  * - SkillMcpIconSchema/SkillMcpIcon: a skill's chip or row icon: a built-in name or a single-colour svg drawing.
  * - SKILL_MCP_MATCHER_LIMITS: per-call deadline, runtime memory and output bounds for sandboxed matchers.
  * - SkillMcpCallSchema/SkillMcpCall: one MCP call as a matcher sees it.
+ * - SkillMcpMemory: what one skill's matchers remembered in earlier calls.
  * - SkillMcpPartSchema/SkillMcpPart: one summary part a matcher returns.
  * - SkillMcpDisplaySchema/SkillMcpDisplay: where a matched call draws: a run step, hidden, or a stitched card.
  * - SkillMcpPresentationSchema/SkillMcpPresentation: everything one matcher says about one call.
@@ -33,6 +34,8 @@ export const SKILL_MCP_MATCHER_LIMITS = {
   outputChars: 32_000,
   bundleChars: 2 * 1024 * 1024,
   componentPropsChars: 4 * 1024 * 1024,
+  /** One skill's remembered facts in one thread; the oldest keys leave first. */
+  memoryChars: 64_000,
 } as const;
 
 const jsonValue: z.ZodType<JsonValue> = z.lazy(() => z.union([
@@ -52,6 +55,9 @@ export const SkillMcpCallSchema = z.object({
   result: jsonValue.nullable(),
 }).strict();
 export type SkillMcpCall = z.infer<typeof SkillMcpCallSchema>;
+
+/** What one skill's matchers remembered in earlier calls; matchers read it as `call.memory`. */
+export type SkillMcpMemory = Readonly<Record<string, JsonValue>>;
 
 const text = z.string().max(500);
 const componentName = z.string().regex(/^[A-Z][A-Za-z0-9_]*$/u);
@@ -96,6 +102,8 @@ export const SkillMcpPresentationSchema = z.object({
   display: SkillMcpDisplaySchema.default("step"),
   component: componentName.optional(),
   props: z.record(z.string(), jsonValue).optional(),
+  /** Facts later calls' matchers of this skill read as `call.memory`; last write wins. */
+  remember: z.record(z.string().min(1).max(200), jsonValue).optional(),
 }).strict();
 export type SkillMcpPresentation = z.infer<typeof SkillMcpPresentationSchema>;
 

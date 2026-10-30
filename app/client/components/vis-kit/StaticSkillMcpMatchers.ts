@@ -5,7 +5,9 @@
  *   presentation contract as the QuickJS runtime; failures are kept for the page to show. Never used in the app realm.
  */
 import type { SkillMcpCall } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
-import { readSkillMcpPresentation, type SkillMcpMatch, type SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
+import {
+  readSkillMcpPresentation, serializeSkillMcpCall, type SkillMcpMatch, type SkillMcpMatchers, type SkillMcpMatchOptions,
+} from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 
 export type SkillMcpMatcherFunction = (call: SkillMcpCall) => unknown;
 
@@ -22,11 +24,12 @@ export default class StaticSkillMcpMatchers implements SkillMcpMatchers {
     this.#matchers = matchers;
   }
 
-  /** The first matcher presenting the call, as the runtime answers: calls arrive as plain JSON, answers must serialize. */
-  match(call: SkillMcpCall): SkillMcpMatch | null {
+  /** The first matcher presenting the call, as the runtime answers: calls arrive as plain JSON with their memory, answers must serialize. */
+  match(call: SkillMcpCall, { memory }: SkillMcpMatchOptions = {}): SkillMcpMatch | null {
+    const input = serializeSkillMcpCall(call)(memory?.get(PREVIEW_SKILL.skillPath));
     for (const [index, matcher] of this.#matchers.entries()) {
       let serialized: string | undefined;
-      try { serialized = JSON.stringify(matcher(JSON.parse(JSON.stringify(call)) as SkillMcpCall)) ?? undefined; }
+      try { serialized = JSON.stringify(matcher(JSON.parse(input) as SkillMcpCall)) ?? undefined; }
       catch (error) {
         this.#fail(`Matcher ${index + 1} threw: ${error instanceof Error ? error.message : String(error)}`);
         continue;

@@ -3,7 +3,9 @@
  * - SkillMcpMatch: the first skill presentation for one call.
  * - SkillMcpMatchFailure: why one skill's matcher could not answer.
  * - SkillMcpMatchReport: every skill's outcome for one call, for authoring tools.
+ * - SkillMcpMatchOptions: each skill's memory and the call's item for one match.
  * - SkillMcpMatchers: what presenting calls needs from a thread's matchers, however they run.
+ * - serializeSkillMcpCall: a call serialised once, then given each skill's own memory.
  * - readSkillMcpPresentation: hold a matcher's serialized answer to the presentation contract.
  * - default SkillMcpMatcherRuntime: run active skills' compiled MCP matchers synchronously inside QuickJS, each skill in
  *   its own runtime with a memory cap and a deadline on matcher code, apart from loading the call; the QuickJS module
@@ -13,7 +15,7 @@ import { shouldInterruptAfterDeadline, type QuickJSContext, type QuickJSHandle, 
 import { z } from "zod";
 import {
   SKILL_MCP_MATCHER_LIMITS, SkillMcpPresentationSchema,
-  type SkillMcpCall, type SkillMcpMatcherBundle, type SkillMcpPresentation,
+  type SkillMcpCall, type SkillMcpMatcherBundle, type SkillMcpMemory, type SkillMcpPresentation,
 } from "./skill-mcp-matcher-contract";
 
 export interface SkillMcpMatch {
@@ -33,11 +35,26 @@ export interface SkillMcpMatchReport {
   failures: SkillMcpMatchFailure[];
 }
 
+export interface SkillMcpMatchOptions {
+  /** Each skill's memory by skill path; a skill without one reads an empty memory. */
+  memory?: ReadonlyMap<string, SkillMcpMemory>;
+  /** The call's item, for matchers that know calls by where they sit in a transcript. */
+  identity?: object;
+}
+
 /** What presenting MCP calls needs from a thread's matchers: an identity for caching, and the first match for a call. */
 export interface SkillMcpMatchers {
-  /** Changes exactly when the matchers do. */
+  /** Changes exactly when the matchers (or what they remember) do. */
   readonly key: string;
-  match(call: SkillMcpCall): SkillMcpMatch | null;
+  match(call: SkillMcpCall, options?: SkillMcpMatchOptions): SkillMcpMatch | null;
+}
+
+const EMPTY_MEMORY: SkillMcpMemory = {};
+
+/** The call as one skill's matchers read it, with that skill's memory; serialised once and extended per skill. */
+export function serializeSkillMcpCall(call: SkillMcpCall) {
+  const json = JSON.stringify(call);
+  return (memory: SkillMcpMemory | undefined) => `${json.slice(0, -1)},"memory":${JSON.stringify(memory ?? EMPTY_MEMORY)}}`;
 }
 
 /**
@@ -107,17 +124,17 @@ export default class SkillMcpMatcherRuntime implements SkillMcpMatchers {
   get size() { return this.#bundles.length; }
 
   /** The first active skill presenting this call, or null when none does or every matcher failed. */
-  match(call: SkillMcpCall): SkillMcpMatch | null {
-    return this.report(call).match;
+  match(call: SkillMcpCall, options: SkillMcpMatchOptions = {}): SkillMcpMatch | null {
+    return this.report(call, options).match;
   }
 
   /** Every skill's outcome up to the first match; a disposed runtime (replaced while a render still held it) presents nothing. */
-  report(call: SkillMcpCall): SkillMcpMatchReport {
+  report(call: SkillMcpCall, { memory }: SkillMcpMatchOptions = {}): SkillMcpMatchReport {
     if (this.#disposed) return { failures: [], match: null };
-    const input = JSON.stringify(call);
+    const input = serializeSkillMcpCall(call);
     const failures: SkillMcpMatchFailure[] = [];
     for (const [index, bundle] of this.#bundles.entries()) {
-      const outcome = this.#run(index, input);
+      const outcome = this.#run(index, input(memory?.get(bundle.skillPath)));
       if (outcome.kind === "none") continue;
       if (outcome.kind === "failed") {
         const failure = { skillName: bundle.skillName, skillPath: bundle.skillPath, message: outcome.message };

@@ -1,11 +1,11 @@
 /*
  * Exports:
  * - default ThreadTranscriptProjection: render canonical SQLite transcript turns through the one turn renderer, providing the
- *   transcript scope and the thread's working directory to its items.
+ *   transcript scope, the thread's working directory, and skill matchers that remember across the loaded calls.
  */
 "use client";
 
-import { Fragment, useMemo, type Ref } from "react";
+import { Fragment, useMemo, useRef, type Ref } from "react";
 
 import type {
   ThreadPayload,
@@ -16,7 +16,10 @@ import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/t
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import SkillMcpMemoryMatchers from "../../../workbench/skills/SkillMcpMemoryMatchers";
+import { readSkillMcpItemCall } from "../../../workbench/thread/command-matchers/skill-mcp";
 import ContextualProjectProvider from "../ContextualProjectProvider";
+import { useProject } from "../use-projects";
 import { TranscriptScopeContext, type TranscriptScope } from "../use-transcript";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
@@ -86,6 +89,17 @@ export default function ThreadTranscriptProjection({
     () => mergeAdjacentTurnSegments(projection.display.segments),
     [projection.display.segments],
   );
+  const baseMatchers = useProject.contextual()?.matcherContext.skillMcpMatchers ?? null;
+  const previousMatchers = useRef<SkillMcpMemoryMatchers | null>(null);
+  // Each refold lends the last one its answers, so only calls whose remembered facts changed match again.
+  const skillMcpMatchers = useMemo(() => {
+    if (!baseMatchers) return null;
+    const calls = projection.display.segments.flatMap(segment => segment.items.flatMap(item => {
+      const call = item.type === "mcpToolCall" ? readSkillMcpItemCall(item) : null;
+      return call ? [{ identity: item, call }] : [];
+    }));
+    return previousMatchers.current = new SkillMcpMemoryMatchers(baseMatchers, calls, previousMatchers.current);
+  }, [baseMatchers, projection.display.segments]);
   const threadId = projection.thread.id;
   const scope = useMemo<TranscriptScope>(
     () => ({ relatedThreadsById, subagents, threadId }),
@@ -93,7 +107,7 @@ export default function ThreadTranscriptProjection({
   );
 
   return (
-    <ContextualProjectProvider cwd={projection.thread.projectRoot}>
+    <ContextualProjectProvider cwd={projection.thread.projectRoot} skillMcpMatchers={skillMcpMatchers ?? undefined}>
     <TranscriptScopeContext.Provider value={scope}>
       {canLoadPreviousTurn ? (
         <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
