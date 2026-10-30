@@ -228,6 +228,7 @@ export default class WorkbenchBrowseSessionController {
     const executionContext = await this.runtime.resolveExecutionContext({
       cwd: request.cwd ?? null,
       projectId: request.projectId ?? null,
+      threadId: request.threadId ?? null,
     });
     const includeRuntime = request.includeRuntime !== false;
     const records = request.threadId
@@ -290,6 +291,7 @@ export default class WorkbenchBrowseSessionController {
     const projectContext = await this.runtime.resolveExecutionContext({
       cwd: request.cwd ?? null,
       projectId: request.projectId ?? null,
+      threadId: request.threadId ?? null,
     });
     const existing = (await this.registry.list()).find((session) => session.name === request.session) ?? null;
     if (existing?.projectId && projectContext.projectId && existing.projectId !== projectContext.projectId) {

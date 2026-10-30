@@ -54,7 +54,8 @@ export interface WorkbenchSubagentQueueHandoff {
 }
 
 export interface WorkbenchSubagentQueuePorts {
-  resolveProjectFromCwd(cwd: string): Promise<ProjectId>;
+  /** The caller breaks ties between projects sharing the root containing cwd. */
+  resolveProjectFromCwd(cwd: string, callerThreadId: string): Promise<ProjectId>;
   resolveThreadId(threadId: string, projectId: ProjectId): Promise<WorkbenchThreadId>;
   listRelationships(projectId: ProjectId): Promise<readonly WorkbenchSubagentRelationship[]>;
   readLifecycle(projectId: ProjectId, threadId: WorkbenchThreadId): Promise<WorkbenchThreadLifecycle | null>;
@@ -168,7 +169,7 @@ export default class WorkbenchSubagentQueueController {
   }
 
   private async resolveCaller(callerThreadId: string, cwd: string): Promise<QueueCaller> {
-    const projectId = await this.ports.resolveProjectFromCwd(cwd);
+    const projectId = await this.ports.resolveProjectFromCwd(cwd, callerThreadId);
     const threadId = await this.ports.resolveThreadId(callerThreadId, projectId);
     const relationship = (await this.ports.listRelationships(projectId)).find(record => record.threadId === threadId);
     return relationship

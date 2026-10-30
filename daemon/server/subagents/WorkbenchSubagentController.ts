@@ -242,7 +242,9 @@ export default class WorkbenchSubagentController {
   /** Replace caller-supplied thread references in `params` with canonical thread ids of the caller's project. */
   private async canonicalParams(params: Record<string, unknown>) {
     if (!this.identities) return params;
-    const { project } = await this.resolveProjectFromCwd(requiredString(params, "cwd"), { endpointName: "Workbench subagent" });
+    const { project } = await this.resolveProjectFromCwd(requiredString(params, "cwd"), {
+      endpointName: "Workbench subagent", ownerThreadId: typeof params.callerThreadId === "string" ? params.callerThreadId : null,
+    });
     const canonicalId = async (threadId: string, remoteAllowed = false) => {
       const identity = await this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.id });
       // Children in other folders or on other daemons are named by their own ids; ownership checks them against relationships.
@@ -281,7 +283,7 @@ export default class WorkbenchSubagentController {
     if (!nativeHarness) throw new Error(`${label} has no native execution.`);
     const harness = WorkbenchHarnessSchema.parse(nativeHarness);
     const thread = await this.provider(harness).threads.read(identity.threadId);
-    const threadProject = await this.resolveProjectFromCwd(thread.cwd, { endpointName: label });
+    const threadProject = await this.resolveProjectFromCwd(thread.cwd, { endpointName: label, ownerThreadId: identity.threadId });
     if (threadProject.project.id === project.id) return { harness, thread, threadId: identity.threadId };
     throw new Error(`${label} does not belong to this cwd project.`);
   }
@@ -298,7 +300,7 @@ export default class WorkbenchSubagentController {
   ) {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
-    const resolvedProject = requestedProject ?? await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
+    const resolvedProject = requestedProject ?? await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent", ownerThreadId: callerThreadId });
     const caller = await this.resolveThreadHarness(
       callerThreadId,
       cwd,
@@ -311,8 +313,8 @@ export default class WorkbenchSubagentController {
 
   private async list(params: Record<string, unknown>) {
     const cwd = requiredString(params, "cwd");
-    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent list" });
     const parentThreadId = this.readThreadId(params, typeof params.parentThreadId === "string" ? "parentThreadId" : "callerThreadId");
+    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent list", ownerThreadId: parentThreadId });
     const relationships = (await this.subagentStore.list({ parentThreadId, projectId: project.project.id })).subagents;
     const remoteRows = this.remote && relationships.some(record => record.location)
       ? await this.remote.read(await this.remoteCaller(params), relationships, this.lifetime.signal) : new Map<WorkbenchThreadId, RemoteChildRow>();
@@ -342,7 +344,9 @@ export default class WorkbenchSubagentController {
       return { folder: { hostname: target.hostname, rootPath: target.rootPath }, profiles };
     }
     const cwd = requiredString(params, "cwd");
-    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent profiles" });
+    const project = await this.resolveProjectFromCwd(cwd, {
+      endpointName: "Workbench subagent profiles", ownerThreadId: typeof params.callerThreadId === "string" ? params.callerThreadId : null,
+    });
     const profiles = (await this.profileStore.read()).profiles.filter((profile) => profile.scope.kind === "global" || profile.scope.projectId === project.project.id);
     return { profiles };
   }
@@ -455,7 +459,7 @@ export default class WorkbenchSubagentController {
   private async ownedRecords(params: Record<string, unknown>) {
     const callerThreadId = this.readThreadId(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
-    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
+    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent", ownerThreadId: callerThreadId });
     // canonicalParams already resolved local ids; a remote child's id is checked against relationships below.
     const threadIds = Array.isArray(params.threadIds) || typeof params.threadId === "string"
       ? requiredThreadIds(params).map(threadId => ThreadReferenceSchema.parse(threadId) as unknown as WorkbenchThreadId) : [];

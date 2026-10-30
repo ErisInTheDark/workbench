@@ -6,7 +6,7 @@
  */
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
-import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
+import type { AgentEndpointProjectResolver } from "../lib/workbench/project/agent-endpoint-project";
 import type { JsonRpcRequest, JsonRpcResponse } from "../bridge-types";
 import type WorkbenchComposerProfileStore from "../store/WorkbenchComposerProfileStore";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
@@ -23,7 +23,7 @@ export interface WorkbenchSubagentFeatureContext {
   liveApprovals: NonNullable<WorkbenchSubagentControllerOptions["liveApprovals"]>;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: WorkbenchComposerProfileStore;
-  resolveProjectFromCwd(cwd: string | null | undefined, options?: { endpointName?: string }): Promise<AgentEndpointProjectResolution>;
+  resolveProjectFromCwd: AgentEndpointProjectResolver;
   persistence: WorkbenchSubagentPersistence;
   stopThread: WorkbenchSubagentControllerOptions["stopThread"];
   queueReleaseNote: NonNullable<WorkbenchSubagentControllerOptions["queueReleaseNote"]>;

@@ -112,6 +112,10 @@ test("Git arc mutations and state callbacks share the canonical Workbench owner"
     },
     refreshThreadGitArcState: async (_projectId, _harness, threadId) => { refreshed.push(threadId); },
     resolveProjectFromCwd: async () => ({ cwd: native.nativeLocation, project: { id: parent.projectId } }),
+    resolveProjectById: async projectId => ({
+      id: projectId, kind: "git", root: native.nativeLocation, rootPath: native.nativeLocation,
+      roots: [{ id: projectId, name: projectId, root: native.nativeLocation, rootPath: native.nativeLocation }],
+    }),
     transitions: {
       run: async (_key, operation) => operation(),
       ownership: async (_threadIds, operation) => await operation(),
@@ -154,16 +158,16 @@ test("Git arc mutations and state callbacks share the canonical Workbench owner"
       pruned.push(...identities.map(identity => identity.threadId));
       return { deferredIdentities: [], prunedRefCount: 0, registryEntryRemoved: false };
     };
-    assert.equal((await feature.findLifecycleState(native.nativeLocation, "codex", parent.threadId))?.threadId, parent.threadId);
-    assert.equal((await feature.findPlanState(native.nativeLocation, "codex", parent.threadId))?.threadId, parent.threadId);
+    assert.equal((await feature.findLifecycleState(parent.projectId, "codex", parent.threadId))?.threadId, parent.threadId);
+    assert.equal((await feature.findPlanState(parent.projectId, "codex", parent.threadId))?.threadId, parent.threadId);
     assert.equal(await feature.hasLiveClaims(native.nativeLocation, "codex", parent.threadId), true);
-    const [listedLifecycle] = await feature.listLifecycleStates(native.nativeLocation);
-    const [listedPlan] = await feature.listPlanStates(native.nativeLocation);
+    const [listedLifecycle] = await feature.listLifecycleStates(parent.projectId);
+    const [listedPlan] = await feature.listPlanStates(parent.projectId);
     assert.equal(listedLifecycle?.threadId, parent.threadId);
     assert.equal(listedLifecycle?.members[0]?.threadId, parent.threadId);
     assert.equal(listedPlan?.threadId, parent.threadId);
     assert.equal(listedPlan?.members[0]?.threadId, parent.threadId);
-    await feature.pruneThreadHistories(native.nativeLocation, [{ harness: "codex", threadId: parent.threadId }]);
+    await feature.pruneThreadHistories(parent.projectId, [{ harness: "codex", threadId: parent.threadId }]);
     assert.deepEqual(pruned, [parent.threadId]);
   } finally {
     feature.dispose();

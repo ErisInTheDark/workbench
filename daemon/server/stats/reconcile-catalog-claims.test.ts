@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { reconcileCatalogClaims } from "./reconcile-catalog-claims.ts";
 
-const project = (id: string, ...roots: string[]) => ({ id, rootPath: roots[0]!, roots: roots.map((rootPath) => ({ rootPath })) });
+const project = (id: string, ...roots: string[]) => ({ id, roots: roots.map((rootPath) => ({ rootPath })) });
 
 test("projects without a usable checkout are skipped silently while failing checkouts still report", async () => {
   const reconciled: string[] = [];
@@ -12,14 +12,14 @@ test("projects without a usable checkout are skipped silently while failing chec
   await reconcileCatalogClaims({
     isCheckout: async (rootPath) => rootPath !== "gone" && rootPath !== "broken",
     projects: [project("deleted", "gone"), project("broken-git", "broken"), project("healthy", "ok"), project("failing", "bad"), project("workspace", "gone", "ok-root")],
-    reconcile: async (rootPath) => {
-      if (rootPath === "bad") throw new Error("reconcile failed");
-      reconciled.push(rootPath);
+    reconcile: async (projectId) => {
+      if (projectId === "failing") throw new Error("reconcile failed");
+      reconciled.push(projectId);
     },
     reportFailure: (projectId, error) => failures.push(`${projectId}: ${(error as Error).message}`),
     signal: new AbortController().signal,
   });
-  assert.deepEqual(reconciled, ["ok", "gone"], "a workspace with any live root still reconciles");
+  assert.deepEqual(reconciled, ["healthy", "workspace"], "a workspace with any live root still reconciles");
   assert.deepEqual(failures, ["failing: reconcile failed"]);
 });
 

@@ -21,7 +21,6 @@ import type { WorkbenchProviderObservation } from "workbench-shared/workbench/pr
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchAgentContextController from "../agent/WorkbenchAgentContextController";
-import type { WorkbenchGitArcActiveClaim } from "../git/WorkbenchGitArcFeature";
 import type WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchObservedThreadEntry, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
@@ -33,6 +32,7 @@ import type { createWorktreeGitTransitions } from "../git/worktree-git-transitio
 import type { DaemonTranscriptRegistration } from "../daemon-runtime-objects";
 import { isPathWithinRoot } from "../lib/project-paths";
 import type { NativeTranscriptIdentityOwners } from "../transcript/thread-identity-transcript-mapping";
+import type { AgentEndpointProjectResolverOptions } from "../lib/workbench/project/agent-endpoint-project";
 
 interface ProjectRecord { id: ProjectId; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
@@ -51,22 +51,6 @@ function projectGitArc(state: GitArcLifecycleState | undefined) {
   return WorkbenchGitArcLifecycleStateSchema.parse(gitArc);
 }
 
-function legacyGitArc(claim: WorkbenchGitArcActiveClaim) {
-  return {
-    checkpointCommit: claim.checkpointCommit,
-    claimedPaths: claim.claimedPaths,
-    harness: claim.harness,
-    intentDescription: claim.intentDescription,
-    intentName: claim.intentName,
-    phase: "active" as const,
-    proposals: claim.proposalId && (claim.proposalStatus === "proposed" || claim.proposalStatus === "committed")
-      ? [{ proposalId: claim.proposalId, status: claim.proposalStatus }]
-      : [],
-    threadId: claim.threadId,
-    updatedAt: claim.updatedAt,
-  };
-}
-
 export interface WorkbenchThreadStateFeatureContext {
   agentContext?: Pick<WorkbenchAgentContextController, "publish">;
   identities: NativeTranscriptIdentityOwners;
@@ -76,20 +60,19 @@ export interface WorkbenchThreadStateFeatureContext {
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
   recordComposerModelUsage?: (harness: WorkbenchHarness, modelId: string, at: number) => Promise<void>;
   database: WorkbenchThreadStateStoreDatabase;
+  /** Keyed by project id: one root can belong to several projects, so a root path cannot name the project. */
   gitArcs: {
-    findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcActiveClaim | null>;
-    blocksThreadSettlement?(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<boolean>;
-    findLifecycleState?(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<GitArcLifecycleState | null>;
-    findPlanState?(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<GitArcPlanState | null>;
-    listActiveClaims(cwd: string): Promise<WorkbenchGitArcActiveClaim[]>;
-    listLifecycleStates?(cwd: string): Promise<Array<GitArcLifecycleState>>;
-    listPlanStates?(cwd: string): Promise<Array<GitArcPlanState>>;
-    pruneThreadHistories?(cwd: string, identities: ReadonlyArray<{
+    blocksThreadSettlement(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<boolean>;
+    findLifecycleState(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<GitArcLifecycleState | null>;
+    findPlanState(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<GitArcPlanState | null>;
+    listLifecycleStates(projectId: ProjectId): Promise<Array<GitArcLifecycleState>>;
+    listPlanStates(projectId: ProjectId): Promise<Array<GitArcPlanState>>;
+    pruneThreadHistories?(projectId: ProjectId, identities: ReadonlyArray<{
       durableProposalIds?: Array<{ proposalIds: string[]; rootId: string }>;
       harness: WorkbenchHarness;
       threadId: WorkbenchThreadId;
     }>): Promise<{ deferredIdentities: Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }> }>;
-    readCommitTimes?(cwd: string, requests: ReadonlyArray<{ commitShas: string[]; rootId: string }>): Promise<ReadonlyMap<string, string>>;
+    readCommitTimes?(projectId: ProjectId, requests: ReadonlyArray<{ commitShas: string[]; rootId: string }>): Promise<ReadonlyMap<string, string>>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
   /** Thread-owned work that still keeps the thread from settling, if any. */
@@ -103,7 +86,7 @@ export interface WorkbenchThreadStateFeatureContext {
   /** Deletes expired settled threads' vis sessions and snapshots. */
   pruneThreadVis?(threadIds: readonly WorkbenchThreadId[]): Promise<void>;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
-  resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
+  resolveProjectFromCwd(cwd: string, options?: AgentEndpointProjectResolverOptions): Promise<ProjectResolution>;
   transitions: Pick<ReturnType<typeof createWorktreeGitTransitions>, "run" | "ownership">;
   /** The process lock manager the Git transitions use, shared by thread-state queues. */
   locks?: Pick<WorkbenchThreadTransitionCoordinator, "exclusive" | "holds">;
@@ -214,7 +197,7 @@ export default class WorkbenchThreadStateFeature {
           // A vanished project's Git history went with its worktree.
           const project = await this.resolveReconcilableProject(projectId);
           if (!project) return [];
-          const result = await context.gitArcs.pruneThreadHistories!(project.rootPath, identities);
+          const result = await context.gitArcs.pruneThreadHistories!(project.id, identities);
           const deferred = new Set(result.deferredIdentities.map(({ harness, threadId }) => `${harness}:${threadId}`));
           return identities.filter(({ harness, threadId }) => deferred.has(`${harness}:${threadId}`));
         },
@@ -222,8 +205,7 @@ export default class WorkbenchThreadStateFeature {
       ...(context.gitArcs.readCommitTimes ? {
         readGitCommitTimes: async (projectId, requests) => {
           if (!this.projectCatalogued(projectId)) return new Map();
-          const project = await context.resolveProjectById(projectId);
-          return await context.gitArcs.readCommitTimes!(project.rootPath, requests);
+          return await context.gitArcs.readCommitTimes!(projectId, requests);
         },
       } : {}),
       reconcileProject: (projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot),
@@ -236,29 +218,15 @@ export default class WorkbenchThreadStateFeature {
       },
       resolveGitArc: async (projectId, harness, threadId) => {
         if (!this.projectCatalogued(projectId)) return null;
-        const project = await context.resolveProjectById(projectId);
-        const state = context.gitArcs.findLifecycleState
-          ? await context.gitArcs.findLifecycleState(project.rootPath, harness, threadId)
-          : await context.gitArcs.findActiveClaim(project.rootPath, harness, threadId).then((claim) => claim ? legacyGitArc(claim) : null);
-        return projectGitArc(state ?? undefined);
+        return projectGitArc(await context.gitArcs.findLifecycleState(projectId, harness, threadId) ?? undefined);
       },
       resolveGitArcPlan: async (projectId, harness, threadId) => {
-        if (!this.projectCatalogued(projectId) || !context.gitArcs.findPlanState) return null;
-        const project = await context.resolveProjectById(projectId);
-        const state = await context.gitArcs.findPlanState(project.rootPath, harness, threadId);
-        return projectGitArcPlan(state ?? undefined);
+        if (!this.projectCatalogued(projectId)) return null;
+        return projectGitArcPlan(await context.gitArcs.findPlanState(projectId, harness, threadId) ?? undefined);
       },
-      hasGitArcBlockingSettlement: async (projectId, harness, threadId) => {
-        if (!this.projectCatalogued(projectId)) return false;
-        const project = await context.resolveProjectById(projectId);
-        if (context.gitArcs.blocksThreadSettlement) {
-          return await context.gitArcs.blocksThreadSettlement(project.rootPath, harness, threadId);
-        }
-        const state = context.gitArcs.findLifecycleState
-          ? await context.gitArcs.findLifecycleState(project.rootPath, harness, threadId)
-          : await context.gitArcs.findActiveClaim(project.rootPath, harness, threadId);
-        return Boolean(state && (state.claimedPaths.length || ("phase" in state && state.phase === "stashed")));
-      },
+      hasGitArcBlockingSettlement: async (projectId, harness, threadId) => (
+        this.projectCatalogued(projectId) && await context.gitArcs.blocksThreadSettlement(projectId, harness, threadId)
+      ),
       ...(context.settlementHold ? { settlementHold: (threadId: WorkbenchThreadId) => context.settlementHold!(threadId) } : {}),
       runGitArcOwnershipTransition: async (threadId, operation) => await context.transitions.ownership([threadId], operation),
       threadStateStore: new WorkbenchThreadStateStore(context.database),
@@ -340,7 +308,7 @@ export default class WorkbenchThreadStateFeature {
         const cwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
         const callerThreadId = typeof params.callerThreadId === "string" ? params.callerThreadId.trim() : "";
         if (!cwd || !callerThreadId) throw new Error("A managed Workbench thread identity and cwd are required.");
-        const resolved = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Workbench thread status" });
+        const resolved = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Workbench thread status", ownerThreadId: callerThreadId });
         const identity = await this.context.identities.threads.resolve({
           threadId: ThreadReferenceSchema.parse(callerThreadId), projectId: resolved.project.id,
         });
@@ -570,10 +538,8 @@ export default class WorkbenchThreadStateFeature {
     const readGitArcSnapshot = async (): Promise<WorkbenchThreadGitArcSnapshot> => {
       if (!this.projectCatalogued(projectId)) return { arcs: [], plans: [] };
       const [gitArcs, gitArcPlans] = await Promise.all([
-        this.context.gitArcs.listLifecycleStates
-          ? this.context.gitArcs.listLifecycleStates(project.rootPath)
-          : this.context.gitArcs.listActiveClaims(project.rootPath).then((claims) => claims.map(legacyGitArc)),
-        this.context.gitArcs.listPlanStates?.(project.rootPath) ?? Promise.resolve([]),
+        this.context.gitArcs.listLifecycleStates(project.id),
+        this.context.gitArcs.listPlanStates(project.id),
       ]);
       return {
         arcs: gitArcs.map((state) => ({
@@ -688,14 +654,14 @@ export default class WorkbenchThreadStateFeature {
     const callerThreadId = typeof params.callerThreadId === "string" ? params.callerThreadId.trim() : "";
     const cwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
     if (!callerThreadId || !cwd) throw new Error("A managed Workbench thread identity and cwd are required.");
-    const requestedProject = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Workbench managed thread" });
+    const requestedProject = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Workbench managed thread", ownerThreadId: callerThreadId });
     const identity = await this.context.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse(callerThreadId), projectId: requestedProject.project.id });
     if (!identity?.bindings.length) throw new Error("The managed thread has no admitted native execution.");
     const harness = WorkbenchHarnessSchema.parse(identity.bindings[0].harness);
     const threadId = identity.threadId;
     const thread = await this.provider(harness).threads.read(threadId);
     if (thread.isDraft !== false || thread.id !== threadId) throw new Error("The managed thread metadata returned a different identity.");
-    const actualProject = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Workbench managed thread" });
+    const actualProject = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Workbench managed thread", ownerThreadId: threadId });
     if (actualProject.project.id === requestedProject.project.id) return { cwd, harness, projectId: requestedProject.project.id, thread };
     throw new Error("The managed thread does not belong to this cwd project.");
   }

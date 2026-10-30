@@ -66,8 +66,8 @@ export default class WorkbenchInteractionsFeature {
         const harness = await lookup.harness(threadId);
         if (harness) await agentContext.collect({ harness, threadId }, "answer", signal);
       },
-      ...createWorkbenchQuestionnaireStatePorts({ threads: identities, items: ports.transcriptIdentity }, threadState.controller, async cwd => {
-        const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Questionnaire" });
+      ...createWorkbenchQuestionnaireStatePorts({ threads: identities, items: ports.transcriptIdentity }, threadState.controller, async (cwd, threadId) => {
+        const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Questionnaire", ownerThreadId: threadId });
         return ProjectIdSchema.parse(resolved.project.id);
       }),
       logError: (message) => {

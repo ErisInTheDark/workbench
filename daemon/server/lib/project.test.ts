@@ -122,6 +122,15 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   assert.equal(projects.some(project => project.rootPath === storeOnlyRootPath), false,
     "a checkout reachable only through a hidden tool folder must not become a project");
 
+  // The git and workspace projects share one root; only the owner's project breaks that tie.
+  const unowned = await resolveAgentEndpointProjectFromProjects(projects, canonicalProjectRoot);
+  for (const owner of [gitProject, workspaceProject]) {
+    const owned = await resolveAgentEndpointProjectFromProjects(projects, canonicalProjectRoot, { ownerProjectId: async () => owner.id });
+    assert.equal(owned.project.id, owner.id);
+  }
+  const foreignOwner = await resolveAgentEndpointProjectFromProjects(projects, canonicalProjectRoot, { ownerProjectId: async () => directProject.id });
+  assert.equal(foreignOwner.project.id, unowned.project.id);
+
   const agentProject = await resolveAgentEndpointProjectFromProjects(projects, indirectProjectRoot);
   assert.equal(agentProject.project.id, directProject.id);
   assert.equal(normalizePath(agentProject.project.rootPath), normalizePath(await fs.realpath(directProjectRoot)));

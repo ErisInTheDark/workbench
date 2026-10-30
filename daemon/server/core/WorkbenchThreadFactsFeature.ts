@@ -262,7 +262,7 @@ export default class WorkbenchThreadFactsFeature {
       matcherTest: (threadId, call, signal) => this.components.testMatcher(threadId, call, signal),
       resolveRoot: async session => {
         try {
-          return (await projectCatalog.resolveAgentEndpointProjectFromCwd(session.cwd, { endpointName: "Vis session" })).root.rootPath;
+          return (await projectCatalog.resolveAgentEndpointProjectFromCwd(session.cwd, { endpointName: "Vis session", ownerThreadId: session.threadId })).root.rootPath;
         } catch {
           // Expected when the project left the catalogue; its session simply stops being live here.
           return null;

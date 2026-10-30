@@ -117,7 +117,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const identity: WorkbenchBrowseIdentityPort = {
       nativeTarget: async (request) => {
         const project = request.cwd
-          ? await projects.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Browse" }) : null;
+          ? await projects.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Browse", ownerThreadId: request.threadId }) : null;
         const thread = await harnesses.resolveThreadIdentity({
           threadId: ThreadReferenceSchema.parse(request.threadId),
           ...(project ? { projectId: project.project.id } : request.projectId ? { projectId: ProjectIdSchema.parse(request.projectId) } : {}),

@@ -3,9 +3,9 @@
  * - WorkbenchGitArcFeatureOptions: project resolution, canonical thread callbacks, and stable transition ports.
  * - WorkbenchGitArcLifecycleState: public lifecycle with canonical owner and member identities.
  * - WorkbenchGitArcPlanState: public plan with canonical owner and member identities.
- * - WorkbenchGitArcActiveClaim: public claim with a canonical thread owner.
  * - default WorkbenchGitArcFeature: own Git arc dispatch, canonical identity ingress and registry owner resolution, nested
- *   worktree and machine roots, machine claim approval, proposal diff lifecycle, and waits on claim mutations.
+ *   worktree and machine roots, machine claim approval, proposal diff lifecycle, and waits on claim mutations. Thread-state
+ *   reads name their project by id; cwd requests resolve shared roots toward the acting thread's project.
  */
 import type http from "node:http";
 import path from "node:path";
@@ -17,7 +17,7 @@ import { isMachineGitWorktree } from "../lib/workbench/git/machine-git-worktrees
 import { isMachineGitArcRoot, withMachineGitArcRoots } from "./machine-git-arc-roots";
 import GitArcAcceptanceProgress, { type GitArcAcceptance } from "./GitArcAcceptanceProgress";
 
-import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcDurableProposalReader } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import WorkbenchGitCheckpointController, { type GitArcDurableProposalReader } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import GitObjectReadSession from "../lib/workbench/git/GitObjectReadSession";
 import GitClaimHistoryReader from "../lib/workbench/git/GitClaimHistoryReader";
 import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
@@ -49,6 +49,7 @@ import type { WorkbenchAgentContextTarget } from "../agent/WorkbenchAgentContext
 import type WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
 import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
+import type { ResolvedProject } from "../lib/project";
 import type { WorkbenchThreadClaimContext } from "../thread/WorkbenchThreadStateController";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import WorkbenchWorkspaceGitArcController, { WorkspaceGitArcMemberError, type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
@@ -95,7 +96,10 @@ export interface WorkbenchGitArcFeatureOptions {
   reloadScopeProjectRoot?: string;
   /** Catalogue projects whose linked worktrees nested in a project root join its arc; absent means none join. */
   listCatalogProjects?(): Promise<readonly NestedGitWorktreeCatalogProject[]>;
-  resolveProjectFromCwd(cwd: string): Promise<AgentEndpointProjectResolution | { cwd: string; project: { id: ProjectId } }>;
+  /** The owner thread's project wins when several catalogued projects share the root containing cwd. */
+  resolveProjectFromCwd(cwd: string, ownerThreadId?: string): Promise<AgentEndpointProjectResolution | { cwd: string; project: { id: ProjectId } }>;
+  /** Thread-state reads name their project; a root path could belong to several projects. */
+  resolveProjectById(projectId: ProjectId): Promise<ResolvedProject>;
   /** Daemon-project machine roots; defaults to this machine's filesystem roots. */
   withMachineRoots?(resolution: AgentEndpointProjectResolution, requestPaths: readonly string[]): Promise<AgentEndpointProjectResolution>;
   /** The thread's approval mode deciding new machine claims; absent rejects them. */
@@ -119,7 +123,6 @@ type PublicGitState<T extends { threadId: string; members: Array<{ threadId: str
   };
 export type WorkbenchGitArcLifecycleState = PublicGitState<WorkspaceGitArcLifecycleState> & Pick<ObservedGitArcLifecycleState, "acceptance">;
 export type WorkbenchGitArcPlanState = PublicGitState<WorkspaceGitArcPlanState>;
-export type WorkbenchGitArcActiveClaim = PublicGitOwner<GitArcActiveClaim>;
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "arcAdoptSource",
@@ -271,12 +274,12 @@ export default class WorkbenchGitArcFeature {
     // Machine worktrees belong to no catalogue location; only daemon-project threads may own their arcs.
     if (isMachineGitWorktree(input.repositoryRoot)) {
       const identity = await this.options.identities.resolve({ harness, threadId: ThreadReferenceSchema.parse(input.threadId) });
-      if (!identity || (await this.resolveCatalogProject(identity.projectRoot)).project.kind !== "daemon") return null;
+      if (!identity || (await this.resolveCatalogProject(identity.projectRoot, identity.threadId)).project.kind !== "daemon") return null;
       return await this.options.identities.resolveGitArcThreadIdentity({
         harness, projectId: identity.projectId, repositoryRoot: identity.projectRoot, threadId: input.threadId,
       });
     }
-    const project = await this.resolveCatalogProject(input.repositoryRoot);
+    const project = await this.resolveCatalogProject(input.repositoryRoot, input.threadId);
     // Scoped lookups reject threads of other projects, so the owner's own project picks the binding location.
     const identity = await this.options.identities.resolve({ harness, threadId: ThreadReferenceSchema.parse(input.threadId) });
     if (!identity) return null;
@@ -292,8 +295,19 @@ export default class WorkbenchGitArcFeature {
   }
 
   /** The Git arc's view of a project: catalogue roots plus catalogued linked worktrees nested inside them. */
-  private async resolveProject(cwd: string, requestPaths: readonly string[] = []): Promise<AgentEndpointProjectResolution> {
-    const project = await this.resolveCatalogProject(cwd);
+  private async resolveProject(cwd: string, ownerThreadId?: string, requestPaths: readonly string[] = []): Promise<AgentEndpointProjectResolution> {
+    return await this.withArcRoots(await this.resolveCatalogProject(cwd, ownerThreadId), requestPaths);
+  }
+
+  private async resolveProjectById(projectId: ProjectId): Promise<AgentEndpointProjectResolution> {
+    const project = await this.options.resolveProjectById(projectId);
+    const cwd = path.resolve(project.rootPath);
+    const root = project.roots.find(candidate => path.resolve(candidate.rootPath) === cwd) ?? project.roots[0];
+    if (!root) throw new Error("The project has no roots.");
+    return await this.withArcRoots({ cwd, project, root });
+  }
+
+  private async withArcRoots(project: AgentEndpointProjectResolution, requestPaths: readonly string[] = []) {
     if (project.project.kind === "daemon") return await (this.options.withMachineRoots ?? withMachineGitArcRoots)(project, requestPaths);
     const catalog = await this.options.listCatalogProjects?.();
     return catalog ? await withNestedGitWorktreeRoots(project, catalog) : project;
@@ -362,8 +376,8 @@ export default class WorkbenchGitArcFeature {
     }
   }
 
-  private async resolveCatalogProject(cwd: string): Promise<AgentEndpointProjectResolution> {
-    const resolved = await this.options.resolveProjectFromCwd(cwd);
+  private async resolveCatalogProject(cwd: string, ownerThreadId?: string): Promise<AgentEndpointProjectResolution> {
+    const resolved = await this.options.resolveProjectFromCwd(cwd, ownerThreadId);
     if ("root" in resolved && "roots" in resolved.project) return resolved;
     const root = { id: resolved.project.id, name: resolved.project.id, root: resolved.cwd, rootPath: resolved.cwd };
     return {
@@ -373,36 +387,23 @@ export default class WorkbenchGitArcFeature {
     };
   }
 
-  async findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcActiveClaim | null> {
-    const project = await this.resolveProject(cwd);
-    const owner = await this.gitThreadIdentity(project, harness, threadId);
-    const claim = await this.controller.findActiveClaim({ cwd, ...owner });
-    return claim ? { ...claim, threadId: WorkbenchThreadIdSchema.parse(claim.threadId) } : null;
-  }
-
   async checkActiveClaimPaths(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId, paths: readonly string[]) {
-    const project = await this.resolveProject(cwd);
+    const project = await this.resolveProject(cwd, threadId);
     const owner = await this.gitThreadIdentity(project, harness, threadId);
     return await this.workspaceController.checkActiveClaimPaths(project, owner.harness, owner.threadId, paths);
-  }
-
-  async listActiveClaims(cwd: string): Promise<WorkbenchGitArcActiveClaim[]> {
-    const project = await this.resolveProject(cwd);
-    const claims = await this.controller.listActiveClaims({ cwd });
-    return claims.map(claim => ({ ...claim, threadId: WorkbenchThreadIdSchema.parse(claim.threadId) }));
   }
 
   async listReloadScopeClaims(_cwd: string) {
     return [];
   }
 
-  async pruneThreadHistories(cwd: string, identities: ReadonlyArray<{
+  async pruneThreadHistories(projectId: ProjectId, identities: ReadonlyArray<{
     durableProposalIds?: Array<{ proposalIds: string[]; rootId: string }>;
     harness: WorkbenchHarness;
     threadId: WorkbenchThreadId;
   }>) {
     if (!identities.length) return { deferredIdentities: [] as Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>, prunedRefCount: 0, registryEntryRemoved: false };
-    const project = await this.resolveProject(cwd);
+    const project = await this.resolveProjectById(projectId);
     const resolved = await Promise.all(identities.map(async ({ durableProposalIds, harness, threadId }) => {
       const identity = await this.options.identities.resolveGitArcThreadIdentity({
         harness, projectId: project.project.id, repositoryRoot: project.cwd, threadId,
@@ -421,13 +422,13 @@ export default class WorkbenchGitArcFeature {
     };
   }
 
-  async readCommitTimes(cwd: string, requests: ReadonlyArray<{ commitShas: string[]; rootId: string }>) {
+  async readCommitTimes(projectId: ProjectId, requests: ReadonlyArray<{ commitShas: string[]; rootId: string }>) {
     if (!requests.length) return new Map<string, string>();
-    return await this.workspaceController.readCommitTimes(await this.resolveProject(cwd), requests);
+    return await this.workspaceController.readCommitTimes(await this.resolveProjectById(projectId), requests);
   }
 
-  async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcLifecycleState | null> {
-    const project = await this.resolveProject(cwd);
+  async findLifecycleState(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcLifecycleState | null> {
+    const project = await this.resolveProjectById(projectId);
     const owner = await this.gitThreadIdentity(project, harness, threadId);
     const state = await this.workspaceController.findLifecycleState(project, owner.harness, owner.threadId);
     if (!state) return null;
@@ -444,40 +445,40 @@ export default class WorkbenchGitArcFeature {
   }
 
   async hasLiveClaims(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
-    const project = await this.resolveProject(cwd);
+    const project = await this.resolveProject(cwd, threadId);
     const owner = await this.gitThreadIdentity(project, harness, threadId);
     return await this.workspaceController.hasLiveClaims(project, owner.harness, owner.threadId);
   }
 
-  async blocksThreadSettlement(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
-    const project = await this.resolveProject(cwd);
+  async blocksThreadSettlement(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
+    const project = await this.resolveProjectById(projectId);
     const owner = await this.gitThreadIdentity(project, harness, threadId);
     return await this.workspaceController.blocksThreadSettlement(project, owner.harness, owner.threadId);
   }
 
-  async listLifecycleStates(cwd: string): Promise<WorkbenchGitArcLifecycleState[]> {
-    const project = await this.resolveProject(cwd);
+  async listLifecycleStates(projectId: ProjectId): Promise<WorkbenchGitArcLifecycleState[]> {
+    const project = await this.resolveProjectById(projectId);
     return (await this.workspaceController.listLifecycleStates(project)).map(state => this.publicState(state));
   }
 
-  async reconcileClaimSnapshots(cwd: string) {
+  async reconcileClaimSnapshots(projectId: ProjectId) {
     if (!this.options.observeClaimSnapshot) return;
-    const project = await this.resolveProject(cwd);
+    const project = await this.resolveProjectById(projectId);
     const observedAt = Date.now();
     for (const state of await this.workspaceController.listLifecycleStates(project)) {
       this.emitClaimSnapshot(project, state.harness as WorkbenchHarness, state.threadId, state, observedAt);
     }
   }
 
-  async findPlanState(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcPlanState | null> {
-    const project = await this.resolveProject(cwd);
+  async findPlanState(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcPlanState | null> {
+    const project = await this.resolveProjectById(projectId);
     const owner = await this.gitThreadIdentity(project, harness, threadId);
     const state = await this.workspaceController.findPlanState(project, owner.harness, owner.threadId);
     return state ? this.publicState(state) : null;
   }
 
-  async listPlanStates(cwd: string): Promise<WorkbenchGitArcPlanState[]> {
-    const project = await this.resolveProject(cwd);
+  async listPlanStates(projectId: ProjectId): Promise<WorkbenchGitArcPlanState[]> {
+    const project = await this.resolveProjectById(projectId);
     return (await this.workspaceController.listPlanStates(project)).map(state => this.publicState(state));
   }
 
@@ -496,7 +497,7 @@ export default class WorkbenchGitArcFeature {
     const parsed = GitCheckpointRequestSchema.safeParse(input);
     if (!parsed.success) return failureResponse(createGitArcFailureFromError("unknown", parsed.error));
     try {
-      const project = await this.resolveProject(parsed.data.cwd, requestPathHints(parsed.data));
+      const project = await this.resolveProject(parsed.data.cwd, parsed.data.threadId, requestPathHints(parsed.data));
       const identity = await this.options.identities.resolveGitArcThreadIdentity({
         harness: parsed.data.harness,
         projectId: project.project.id,

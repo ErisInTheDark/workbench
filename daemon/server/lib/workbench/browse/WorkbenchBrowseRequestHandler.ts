@@ -693,6 +693,7 @@ async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionConte
   const projectExecution = await execution.runtime.resolveExecutionContext({
     cwd: scriptRequest.cwd,
     projectId: null,
+    threadId: scriptRequest.threadId,
   });
   const source = await readBrowseMarkdownSource(scriptRequest, projectExecution);
   const scripts = await Promise.all(source.commandScripts.map(async (commandScript) =>

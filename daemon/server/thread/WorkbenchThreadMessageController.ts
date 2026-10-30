@@ -106,7 +106,7 @@ export default class WorkbenchThreadMessageController {
   async wait(value: object, signal: AbortSignal, invocationSignal = signal) {
     const request = WorkbenchMessageWaitRequestSchema.parse(value);
     signal.throwIfAborted();
-    const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message wait" });
+    const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message wait", ownerThreadId: request.callerThreadId });
     const caller = await this.resolveThread(request.callerThreadId, "Workbench message wait caller", requestedProject.project);
     let senderThreadIds: WorkbenchThreadId[] = [];
     if (!this.waits.hasWait(request.waitId)) {
@@ -188,7 +188,7 @@ export default class WorkbenchThreadMessageController {
     if (!nativeHarness) throw new Error(`${label} has no native execution.`);
     const harness = WorkbenchHarnessSchema.parse(nativeHarness);
     const thread = await this.options.provider(harness).threads.read(identity.threadId);
-    const { project } = await this.options.resolveProjectFromCwd(thread.cwd, { endpointName: label });
+    const { project } = await this.options.resolveProjectFromCwd(thread.cwd, { endpointName: label, ownerThreadId: identity.threadId });
     if (requiredProject && project.id !== requiredProject.id) throw new Error(`${label} does not belong to this cwd project.`);
     return { harness, projectId: project.id, thread, threadId: identity.threadId };
   }
@@ -243,7 +243,7 @@ export default class WorkbenchThreadMessageController {
   }
 
   private async sendOwned(request: WorkbenchThreadMessageRequest) {
-    const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message" });
+    const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message", ownerThreadId: request.callerThreadId });
     const caller = await this.resolveThread(request.callerThreadId, "Workbench message caller", requestedProject.project);
     const relationships = (await this.options.listSubagents(caller.projectId)).subagents;
     const callerName = caller.thread.name?.trim() || caller.thread.agentNickname?.trim() || "agent";

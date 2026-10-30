@@ -5,6 +5,7 @@
  */
 import path from "node:path";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
 import { resolveGitDirectory } from "../lib/git";
@@ -49,7 +50,7 @@ export default class WorkbenchCoreStatsFeature {
         reconcile: async (signal) => await reconcileCatalogClaims({
           isCheckout: async (rootPath) => Boolean(await resolveGitDirectory(rootPath)),
           projects: projectCatalog.getCurrentSnapshot().data,
-          reconcile: async (rootPath) => await gitArc.reconcileClaimSnapshots(rootPath),
+          reconcile: async (projectId) => await gitArc.reconcileClaimSnapshots(ProjectIdSchema.parse(projectId)),
           reportFailure: (projectId, error) => stats.reportCaptureFailure(null, `claim reconciliation for project ${projectId}`, error),
           signal,
         }),

@@ -18,6 +18,7 @@ import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "workbench
 import {
   resolveAgentEndpointProjectFromProjects,
   type AgentEndpointProjectResolution,
+  type AgentEndpointProjectResolverOptions,
 } from "../lib/workbench/project/agent-endpoint-project";
 import { logError as defaultLogError } from "../process-helpers";
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
@@ -46,7 +47,7 @@ interface ProjectCatalogSnapshot {
 type ResolveProjectFromCatalog = (
   projects: readonly WorkbenchProjectOption[],
   cwd: string | null | undefined,
-  options?: { endpointName?: string; excludedRootPaths?: readonly string[] },
+  options?: { endpointName?: string; excludedRootPaths?: readonly string[]; ownerProjectId?: () => Promise<ProjectId | null> },
 ) => Promise<AgentEndpointProjectResolution>;
 
 type ResolveProjectByIdFromCatalog = typeof resolveProjectRootFromProjects;
@@ -66,6 +67,8 @@ export interface WorkbenchProjectCatalogControllerOptions {
   settings?: Pick<WorkbenchServerSettings, "readProjectDiscoveryRoots" | "replaceProjectDiscoveryRoots">;
   resolveProjectByIdFromCatalog?: ResolveProjectByIdFromCatalog;
   resolveProjectFromCatalog?: ResolveProjectFromCatalog;
+  /** The stored project of a thread reference, which breaks cwd ties between projects sharing a root. */
+  resolveThreadProjectId?: (threadReference: string) => Promise<ProjectId | null>;
 }
 
 function sanitizeRefreshError(error: unknown) {
@@ -218,6 +221,7 @@ export default class WorkbenchProjectCatalogController {
   private updateQueue = Promise.resolve();
   private readonly resolveProjectByIdFromCatalog: ResolveProjectByIdFromCatalog;
   private readonly resolveProjectFromCatalog: ResolveProjectFromCatalog;
+  private readonly resolveThreadProjectId?: (threadReference: string) => Promise<ProjectId | null>;
 
   constructor({
     initialProjects,
@@ -233,7 +237,9 @@ export default class WorkbenchProjectCatalogController {
     settings,
     resolveProjectByIdFromCatalog = resolveProjectRootFromProjects,
     resolveProjectFromCatalog = resolveAgentEndpointProjectFromProjects,
+    resolveThreadProjectId,
   }: WorkbenchProjectCatalogControllerOptions) {
+    this.resolveThreadProjectId = resolveThreadProjectId;
     this.persistence = persistence;
     this.pinnedProjectRoots = [...pinnedProjectRoots];
     this.settings = settings;
@@ -479,14 +485,19 @@ export default class WorkbenchProjectCatalogController {
 
   async resolveAgentEndpointProjectFromCwd(
     cwd: string | null | undefined,
-    options: { endpointName?: string } = {},
+    { endpointName = "Agent endpoint", ownerThreadId }: AgentEndpointProjectResolverOptions = {},
   ) {
     this.assertActive();
     const generation = this.catalogGeneration;
     const { catalog, refresh, refreshed } = await this.readCatalogForResolution();
     this.assertActive();
-    const endpointName = options.endpointName ?? "Agent endpoint";
-    const key = `${endpointName.length}:${endpointName}${cwd ?? ""}`;
+    const owner = ownerThreadId?.trim() || null;
+    const key = `${endpointName.length}:${endpointName}${owner ? `${owner.length}:${owner}` : "-"}${cwd ?? ""}`;
+    const resolveThreadProjectId = this.resolveThreadProjectId;
+    const options = {
+      endpointName,
+      ...(owner && resolveThreadProjectId ? { ownerProjectId: () => resolveThreadProjectId(owner) } : {}),
+    };
     const cached = generation === this.catalogGeneration ? this.cwdResolutions.get(key) : undefined;
     if (cached) {
       const result = await cached;

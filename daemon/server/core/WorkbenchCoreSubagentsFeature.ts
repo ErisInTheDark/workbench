@@ -143,8 +143,8 @@ export default class WorkbenchCoreSubagentsFeature {
     }, ports.messageWaitHandoff);
     // Its lifecycle listener registers here, after thread state and before any subagent wait subscribes at request time.
     this.queues = new WorkbenchSubagentQueueController({
-      resolveProjectFromCwd: async cwd => (
-        await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent queue" })
+      resolveProjectFromCwd: async (cwd, callerThreadId) => (
+        await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent queue", ownerThreadId: callerThreadId })
       ).project.id,
       resolveThreadId: async (threadId, projectId) => {
         const identity = await identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId });

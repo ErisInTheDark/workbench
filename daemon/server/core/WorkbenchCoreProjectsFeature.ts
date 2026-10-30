@@ -2,7 +2,7 @@
  * Exports:
  * - default WorkbenchCoreProjectsFeature: build the core generation's settings, project catalogue, snapshots, search, project store and project files.
  */
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonDatabaseRegistration } from "../daemon-runtime-objects";
 import type { WorkbenchProjectStartup } from "../database/project/workbench-project-persistence";
@@ -34,6 +34,9 @@ export default class WorkbenchCoreProjectsFeature {
       pinnedProjectRoots: [context.legacyMigrationProjectRoot],
       persistence: database,
       settings: this.settings,
+      resolveThreadProjectId: async (threadReference) => (
+        await database.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadReference) })
+      )?.projectId ?? null,
     });
     const snapshot = this.snapshot = new WorkbenchProjectSnapshotController({
       observeProject: (projectId) => { void catalog.observeProjectIcon(ProjectIdSchema.parse(projectId)); },

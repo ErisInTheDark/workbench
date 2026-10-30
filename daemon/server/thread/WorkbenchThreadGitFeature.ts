@@ -58,7 +58,7 @@ export interface WorkbenchThreadGitFeatureOptions {
   identities: WorkbenchThreadIdentityController;
   createThreadGit?: (options: { cwd: string; targetWorktree?: string; threadId: WorkbenchThreadId }) => Promise<ThreadGitPort>;
   selectionStore?: Pick<WorkbenchDatabaseController, "executeThreadGitSelection" | "findThreadGitCommitOwners" | "readThreadStateProject">;
-  resolveProjectFromCwd(cwd: string): Promise<{ cwd: string; project?: { id: ProjectId } }>;
+  resolveProjectFromCwd(cwd: string, ownerThreadId?: string): Promise<{ cwd: string; project?: { id: ProjectId } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "read" | "run">;
   /** `wb git integrate`: live claims per thread, and re-running a blocked check whenever claims change. */
   integrations?: {
@@ -206,7 +206,7 @@ export default class WorkbenchThreadGitFeature {
       const cwd = readString(body.cwd);
       const targetWorktree = readString(body.targetWorktree) || undefined;
       if (!action) throw new Error("A valid thread Git action is required.");
-      const resolved = await this.options.resolveProjectFromCwd(cwd);
+      const resolved = await this.options.resolveProjectFromCwd(cwd, readString(body.threadId) || undefined);
       if (action === "integrate") return await this.integrate(body, resolved, ports);
       if (action === "thread") {
         const commitish = readString(body.commit);

@@ -86,11 +86,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const projectStore = build.get("projectStore");
     const stats = build.get("stats");
     const threadIdentity = build.get("threadIdentity");
+    /** The calling thread and the cwd project it acts in. */
     const nativeTarget = async (threadId: string, cwd: string, harness?: string) => {
-      const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench command" });
-      const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, ...(harness ? { harness: WorkbenchHarnessSchema.parse(harness) } : {}) });
+      const resolution = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench command", ownerThreadId: threadId });
+      const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId), projectId: resolution.project.id, ...(harness ? { harness: WorkbenchHarnessSchema.parse(harness) } : {}) });
       if (!identity?.bindings[0]) throw new Error("The managed thread has no native execution in this project.");
-      return { identity, binding: identity.bindings[0] };
+      return { identity, binding: identity.bindings[0], resolution };
     };
     const claimStats = new WorkbenchClaimStatsController({
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Claim statistics" }),
@@ -106,8 +107,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     });
     const feedback = new WorkbenchFeedbackCommandController({
       resolveCaller: async ({ cwd, harness, threadId }, signal) => {
-        const { identity, binding } = await nativeTarget(threadId, cwd, harness);
-        const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Agent feedback" });
+        const { identity, binding, resolution: { project } } = await nativeTarget(threadId, cwd, harness);
         signal.throwIfAborted();
         const callerHarness = WorkbenchHarnessSchema.parse(binding.harness);
         const profile = await threadState.controller.readComposerProfileTarget({
@@ -133,7 +133,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     });
     /** The local managed thread behind an outbound networked command. */
     const networkCaller = async (threadId: string, cwd: string): Promise<NetworkCaller> => {
-      const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Agent networking" });
+      const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Agent networking", ownerThreadId: threadId });
       const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.id });
       if (!identity) throw new Error("The managed thread has no admitted identity in this project.");
       const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
@@ -187,8 +187,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const transcript = build.get("transcript");
     const reloadDirt = build.get("reloadDirt");
     const resolveSkillRequest = async (request: { cwd: string; harness: WorkbenchHarness; name: string; threadId: string }) => {
-      const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
-      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Workbench skill" });
+      const { identity, resolution: resolved } = await nativeTarget(request.threadId, request.cwd, request.harness);
       const profile = await threadState.controller.readComposerProfileTarget({
         harness: request.harness,
         kind: "thread",
@@ -217,8 +216,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     });
     const proofOfWork = new WorkbenchProofOfWorkController({
       resolveCaller: async ({ cwd, harness, threadId }, signal) => {
-        const { identity } = await nativeTarget(threadId, cwd, harness);
-        const { root } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Proof of work" });
+        const { identity, resolution: { root } } = await nativeTarget(threadId, cwd, harness);
         signal.throwIfAborted();
         return { threadId: identity.threadId, projectRoot: root.rootPath };
       },
@@ -434,8 +432,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const mcpServers = build.get("mcpServers");
         /** The managed thread behind the request and the project it works in, which decides the project servers it sees. */
         const resolveCaller = async (target: { threadId: string; cwd: string; harness: string }) => {
-          const { identity } = await nativeTarget(target.threadId, target.cwd, target.harness);
-          const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(target.cwd, { endpointName: "MCP servers" });
+          const { identity, resolution: { project } } = await nativeTarget(target.threadId, target.cwd, target.harness);
           return { identity, mcp: { threadId: identity.threadId, cwd: target.cwd, projectId: project.id } };
         };
         /** Unmanaged callers have no thread and see global servers only. */
@@ -489,8 +486,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const parsed = conformToZodSchema(WorkbenchVisRequestSchema, body);
         if (!parsed.success) return new Response("Invalid vis arguments.\n", { headers: { "Content-Type": "text/plain; charset=utf-8" }, status: 400 });
         const request = parsed.data;
-        const { identity, binding } = await nativeTarget(request.threadId, request.cwd, request.harness);
-        const { project, root } = await projectCatalog.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Vis session" });
+        const { identity, binding, resolution: { project, root } } = await nativeTarget(request.threadId, request.cwd, request.harness);
         signal.throwIfAborted();
         const vis = build.get("vis");
         const text = (kind: "start" | "end", result: { sessionId: string; path: string; failure: string | null }) =>

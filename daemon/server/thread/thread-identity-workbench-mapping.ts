@@ -23,7 +23,8 @@ import type { WorkbenchQuestionnaireControllerOptions } from "../interactions/Wo
 export function createWorkbenchQuestionnaireStatePorts(
   owners: NativeTranscriptIdentityOwners,
   state: Pick<WorkbenchThreadStateController, "getCanonicalThreadEntry" | "setPendingQuestionnaire" | "clearPendingQuestionnaire" | "subscribe">,
-  resolveProject: (cwd: string) => Promise<ProjectId>,
+  /** The cwd project the questionnaire caller acts in; the caller breaks ties between projects sharing a root. */
+  resolveProject: (cwd: string, callerThreadId: string) => Promise<ProjectId>,
 ): Pick<WorkbenchQuestionnaireControllerOptions, "clearPending" | "publishPending" | "resolveThread" | "subscribePending"> {
   const { threads, items } = owners;
   const resolveThread = async (threadId: WorkbenchThreadId, projectId?: ProjectId) => {
@@ -55,7 +56,7 @@ export function createWorkbenchQuestionnaireStatePorts(
       await state.setPendingQuestionnaire(thread.projectId, thread.threadId, canonical);
     },
     resolveThread: async (cwd, threadId) => {
-      const projectId = await resolveProject(cwd);
+      const projectId = await resolveProject(cwd, threadId);
       const thread = await resolveThread(threadId, projectId);
       const entry = await state.getCanonicalThreadEntry(projectId, thread.threadId);
       if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire caller has no stored thread in this cwd project.");

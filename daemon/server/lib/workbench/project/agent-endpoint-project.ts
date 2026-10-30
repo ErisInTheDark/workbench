@@ -1,7 +1,9 @@
 /*
  * Exports:
  * - AgentEndpointProjectResolution: validated cwd, project, and owning root.
- * - resolveAgentEndpointProjectFromProjects: resolve cwd against a supplied catalogue without admitting excluded checkouts.
+ * - resolveAgentEndpointProjectFromProjects: resolve cwd against a supplied catalogue without admitting excluded checkouts;
+ *   an owner project breaks ties between projects sharing the deepest matching root.
+ * - AgentEndpointProjectResolverOptions: endpoint label and the thread whose project wins shared-root ties.
  * - AgentEndpointProjectResolver: catalogue-owned cwd resolution port.
  */
 import fs from "node:fs/promises";
@@ -10,6 +12,7 @@ import path from "node:path";
 import { resolveDiscoveredProject, type ResolvedProject } from "../../project";
 import { normalizeRelativePath } from "../../project-paths";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { ProjectId } from "workbench-shared/workbench/identity";
 import { isLinkedGitWorktree, resolveGitDirectory } from "../../git";
 
 export interface AgentEndpointProjectResolution {
@@ -18,9 +21,15 @@ export interface AgentEndpointProjectResolution {
   root: ResolvedProject["roots"][number];
 }
 
+export interface AgentEndpointProjectResolverOptions {
+  endpointName?: string;
+  /** The thread acting at cwd; its project wins when several projects share the deepest root containing cwd. */
+  ownerThreadId?: string | null;
+}
+
 export type AgentEndpointProjectResolver = (
   cwd: string | null | undefined,
-  options?: { endpointName?: string },
+  options?: AgentEndpointProjectResolverOptions,
 ) => Promise<AgentEndpointProjectResolution>;
 
 function normalizeComparablePath(filePath: string) {
@@ -59,7 +68,11 @@ async function isCwdWithinRoot(cwd: string, rootPath: string) {
   );
 }
 
-async function findProjectMatchForCwd(projects: readonly WorkbenchProjectOption[], cwd: string) {
+async function findProjectMatchForCwd(
+  projects: readonly WorkbenchProjectOption[],
+  cwd: string,
+  ownerProjectId: (() => Promise<ProjectId | null>) | undefined,
+) {
   const matches: Array<{ project: WorkbenchProjectOption; rootPath: string }> = [];
   for (const project of projects) {
     for (const root of project.roots) {
@@ -72,7 +85,12 @@ async function findProjectMatchForCwd(projects: readonly WorkbenchProjectOption[
     }
   }
 
-  return matches.sort((left, right) => right.rootPath.length - left.rootPath.length)[0] ?? null;
+  const [deepest, ...rest] = matches.sort((left, right) => right.rootPath.length - left.rootPath.length);
+  if (!deepest) return null;
+  const tied = rest.filter(match => match.rootPath.length === deepest.rootPath.length);
+  if (!tied.length || !ownerProjectId) return deepest;
+  const owner = await ownerProjectId();
+  return [deepest, ...tied].find(match => match.project.id === owner) ?? deepest;
 }
 
 async function findOwningResolvedRoot(project: ResolvedProject, cwd: string) {
@@ -87,7 +105,12 @@ async function findOwningResolvedRoot(project: ResolvedProject, cwd: string) {
 export async function resolveAgentEndpointProjectFromProjects(
   projects: readonly WorkbenchProjectOption[],
   cwd: string | null | undefined,
-  { endpointName = "Agent endpoint", excludedRootPaths = [] }: { endpointName?: string; excludedRootPaths?: readonly string[] } = {},
+  { endpointName = "Agent endpoint", excludedRootPaths = [], ownerProjectId }: {
+    endpointName?: string;
+    excludedRootPaths?: readonly string[];
+    /** Read only when projects tie on the deepest root, so unambiguous resolutions never look up the owner. */
+    ownerProjectId?: () => Promise<ProjectId | null>;
+  } = {},
 ): Promise<AgentEndpointProjectResolution> {
   const requestedCwd = typeof cwd === "string" ? cwd.trim() : "";
   if (!requestedCwd) {
@@ -110,7 +133,7 @@ export async function resolveAgentEndpointProjectFromProjects(
     if (parent === ancestor) break;
     ancestor = parent;
   }
-  const projectMatch = await findProjectMatchForCwd(projects, resolvedCwd);
+  const projectMatch = await findProjectMatchForCwd(projects, resolvedCwd, ownerProjectId);
   if (!projectMatch) {
     throw new Error(`${endpointName} cwd must be inside a discovered Workbench project.`);
   }

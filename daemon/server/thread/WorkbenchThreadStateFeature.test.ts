@@ -28,6 +28,14 @@ const passthroughTransitions = {
   run: async <T>(_key: string, operation: () => Promise<T>) => await operation(),
   ownership: async <T>(_threadIds: readonly string[], operation: () => Promise<T>) => await operation(),
 };
+/** A project whose repositories hold no Git arcs. */
+const noGitArcs = {
+  blocksThreadSettlement: async () => false,
+  findLifecycleState: async () => null,
+  findPlanState: async () => null,
+  listLifecycleStates: async () => [],
+  listPlanStates: async () => [],
+};
 const storedRecordDefaults = {
   gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, settledAt: null,
 };
@@ -182,8 +190,11 @@ test("project reads reject unknown owners before loading or writing state", asyn
       aliases: [{ alias: "old/project", projectId }],
     }),
     gitArcs: {
-      findActiveClaim: async () => { throw new Error("Non-worktree threads must not read Git."); },
-      listActiveClaims: async () => { throw new Error("Non-worktree projects must not read Git."); },
+      blocksThreadSettlement: async () => { throw new Error("Non-worktree threads must not read Git."); },
+      findLifecycleState: async () => { throw new Error("Non-worktree threads must not read Git."); },
+      findPlanState: async () => { throw new Error("Non-worktree threads must not read Git."); },
+      listLifecycleStates: async () => { throw new Error("Non-worktree projects must not read Git."); },
+      listPlanStates: async () => { throw new Error("Non-worktree projects must not read Git."); },
     },
     listSubagents: async () => ({ subagents: [] }),
     harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
@@ -231,11 +242,7 @@ test("Workbench Library threads project their Git arc proposals", async () => {
       ...discoveredProject("C:/library"),
       data: [{ ...discoveredProject("C:/library").data[0]!, kind: "workbench-library" }],
     }),
-    gitArcs: {
-      findActiveClaim: async () => null,
-      findLifecycleState: async () => lifecycle,
-      listActiveClaims: async () => [],
-    },
+    gitArcs: { ...noGitArcs, findLifecycleState: async () => lifecycle },
     listSubagents: async () => ({ subagents: [] }),
     harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
     resolveProjectById: async () => ({ id: projectId, rootPath: "C:/library" }),
@@ -283,7 +290,7 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     } },
     database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/workspace" }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     listSubagents: async () => ({ subagents: [] }),
     interruptRetainingQuestionnaire: async (_threadId: string, requestKey: string, interrupt: () => Promise<boolean>) => {
       await state.beforeRelease();
@@ -550,7 +557,7 @@ test("a launched thread keeps its launch and first-message name through untitled
   const feature = createFeature({
     database,
     getProjectCatalog: () => discoveredProject("C:/project"),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     listSubagents: async () => ({ subagents: [] }),
     harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
     resolveProjectById: async () => ({ id: projectId, rootPath: "C:/project" }),
@@ -644,7 +651,7 @@ test("provider notification observation returns the persisted lifecycle result",
   const feature = createFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
     listSubagents: async () => ({ subagents: [] }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
@@ -686,7 +693,7 @@ test("settlement succeeds when the thread's project worktree is gone", async () 
   const feature = createFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
     listSubagents: async () => ({ subagents: [] }),
     // The project folder is gone, so its worktree cannot be resolved.
@@ -726,11 +733,7 @@ test("settlement waits only on Git ownership of the settling thread, never on un
   const feature = createFeature({
     database,
     getProjectCatalog: () => discoveredProject(storageRoot),
-    gitArcs: {
-      blocksThreadSettlement: async () => transferredClaims,
-      findActiveClaim: async () => null,
-      listActiveClaims: async () => [],
-    },
+    gitArcs: { ...noGitArcs, blocksThreadSettlement: async () => transferredClaims },
     harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
     listSubagents: async () => ({ subagents: [] }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
@@ -798,7 +801,7 @@ test("creation installs captured settings before first admission and refreshes o
     const feature = createFeature({
       database,
       getProjectCatalog: () => ({ data: [], rootPath: "C:/workspace" }),
-      gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+      gitArcs: noGitArcs,
       harnesses: createHarnesses(async () => ({ id: 0, result: { data: [], nextCursor: null } })),
       listSubagents: async () => ({ subagents: [] }),
       readComposerProfiles: async () => {
@@ -897,7 +900,7 @@ test("MCP admission consumes translated metadata without additional provider rea
   const feature = createFeature({
     database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     harnesses: createHarnesses(async (_harness, request) => {
       requests.push(request);
       return {
@@ -981,7 +984,7 @@ for (const foreignPage of ["first", "last"] as const) {
     const feature = createFeature({
       database,
       getProjectCatalog: () => ({ data: [], rootPath: "C:/" }),
-      gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+      gitArcs: noGitArcs,
       harnesses: createHarnesses(async (harness, request) => {
         if (request.method === "thread/read") return { id: request.id ?? null, result: { thread: local } };
         await releaseListing.promise;
@@ -1070,7 +1073,7 @@ test("a relationship committed during provider pagination remains a subagent aft
   const feature = createFeature({
     database: createThreadStateDatabase(storageRoot, [["child", "codex"], ["parent", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/read") {
         return { id: request.id ?? null, result: { thread: providerThread(storageRoot, "child", { name: "Child", updatedAt: 2 }) } };
@@ -1107,7 +1110,7 @@ test("a project gone from the catalogue reconciles quietly as stored, without as
   const feature = createFeature({
     database: createThreadStateDatabase(temporary.path, [["child", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: temporary.path }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     harnesses: createHarnesses(async (harness, request) => {
       providerCalls.push(`${harness}:${request.method}`);
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
@@ -1141,18 +1144,6 @@ test("provider reconciliation publishes its first page before deeper history and
   const codexRequests: Array<Record<string, unknown>> = [];
   let releaseCodexNext: () => void = () => {};
   const codexNextGate = new Promise<void>((resolve) => { releaseCodexNext = resolve; });
-  const activeClaim = {
-    checkpointCommit: "a".repeat(40),
-    claimedPaths: ["one.txt"],
-    harness: "codex" as const,
-    intentDescription: "Keep the parent claim visible.",
-    intentName: "parent claim",
-    proposalId: "proposal-one",
-    proposalStatus: "proposed" as const,
-    reloadScopes: ["server:mcp" as const],
-    threadId: fixtureIdentityValues.WorkbenchThreadId.parent,
-    updatedAt: "2026-08-19T00:00:00.000Z",
-  };
   const lifecycleState = {
     checkpointCommit: "a".repeat(40),
     claimedPaths: ["one.txt"],
@@ -1180,10 +1171,9 @@ test("provider reconciliation publishes its first page before deeper history and
   };
   let lifecycleListCalls = 0;
   const gitArcs = {
-    findActiveClaim: async () => activeClaim,
+    blocksThreadSettlement: async () => true,
     findLifecycleState: async () => lifecycleState,
     findPlanState: async () => planState,
-    listActiveClaims: async () => [activeClaim],
     listLifecycleStates: async () => { lifecycleListCalls += 1; return [lifecycleState]; },
     listPlanStates: async () => [planState],
   };
@@ -1315,7 +1305,7 @@ test("deep provider pages serialize across projects while both newest pages star
   const feature = createFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     listSubagents: async () => ({ subagents: [] }),
     harnesses: createHarnesses(async (harness, request) => {
       const params = request.params as { cursor?: string | null; cwd: string };
@@ -1357,7 +1347,7 @@ test("managed title commands use the workbench-recorded title as the mutation pr
   const feature = createFeature({
     database: createThreadStateDatabase("C:/workspace", [["thread-one", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     listSubagents: async () => ({ subagents: [] }),
     harnesses: createHarnesses(async (harness, request) => {
       requests.push({ harness, method: request.method ?? "<no method>", params: request.params });
@@ -1525,11 +1515,7 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
   const feature = createFeature({
     database: createThreadStateDatabase(),
     getProjectCatalog: () => discoveredProject("C:/workspace"),
-    gitArcs: {
-      findActiveClaim: async () => null,
-      listActiveClaims: async () => [],
-      listLifecycleStates: async () => { throw new Error("Git snapshot exploded."); },
-    },
+    gitArcs: { ...noGitArcs, listLifecycleStates: async () => { throw new Error("Git snapshot exploded."); } },
     listSubagents: async () => ({ subagents: [] }),
     log: (message) => logs.push(message),
     harnesses: createHarnesses(async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); }),
@@ -1566,16 +1552,14 @@ test("expired settled threads reach repository retention through the feature bou
     }],
     version: 3,
   });
-  const pruned: Array<{ cwd: string; identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }> }> = [];
+  const pruned: Array<{ projectId: string; identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }> }> = [];
   const feature = createFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: {
-      findActiveClaim: async () => null,
-      listActiveClaims: async () => [],
-      listLifecycleStates: async () => [],
-      pruneThreadHistories: async (cwd, identities) => {
-        pruned.push({ cwd, identities });
+      ...noGitArcs,
+      pruneThreadHistories: async (projectId, identities) => {
+        pruned.push({ projectId, identities });
         return { deferredIdentities: [] };
       },
     },
@@ -1588,7 +1572,7 @@ test("expired settled threads reach repository retention through the feature bou
 
   await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => pruned.length === 1, "Expired thread did not reach Git retention through the feature.");
-  assert.deepEqual(pruned, [{ cwd: "C:/workspace", identities: [identity] }]);
+  assert.deepEqual(pruned, [{ projectId: fixtureIdentityValues.ProjectId.project, identities: [identity] }]);
   await feature.dispose();
   await temporary.dispose();
 });
@@ -1600,11 +1584,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
   let resolved = false;
   let secondPageStarted = false;
   let transitionCount = 0;
-  const activeClaim = {
-    checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], harness: "codex" as const,
-    intentDescription: "", intentName: "settle projection", proposalId: "proposal-one",
-    proposalStatus: "proposed" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"), updatedAt: "2026-08-23T00:00:00.000Z",
-  };
+  const activeClaim = { checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], updatedAt: "2026-08-23T00:00:00.000Z" };
   const lifecycleState = () => ({
     checkpointCommit: resolved ? "b".repeat(40) : activeClaim.checkpointCommit,
     claimedPaths: resolved ? [] : activeClaim.claimedPaths,
@@ -1637,10 +1617,9 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     database: createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]),
     getProjectCatalog: () => discoveredProject(storageRoot),
     gitArcs: {
-      findActiveClaim: async () => resolved ? null : activeClaim,
+      blocksThreadSettlement: async () => !resolved,
       findLifecycleState: async () => lifecycleState(),
       findPlanState: async () => resolved ? null : planState,
-      listActiveClaims: async () => resolved ? [] : [activeClaim],
       listLifecycleStates: async () => [lifecycleState()],
       listPlanStates: async () => resolved ? [] : [planState],
     },
@@ -1759,7 +1738,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
   const feature = createFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     listSubagents: async () => ({ subagents: [] }),
     harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/turns/list") {
@@ -1814,7 +1793,7 @@ test("observed title mutations update the provider and published sidebar togethe
   const feature = createFeature({
     database: createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    gitArcs: noGitArcs,
     listSubagents: async () => ({ subagents: [] }),
     onProject: snapshot => { publications.push(snapshot); },
     harnesses: createHarnesses(async (harness, request) => {

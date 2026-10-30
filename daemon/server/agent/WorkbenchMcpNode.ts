@@ -70,7 +70,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         threadId: request.caller.threadId, turnId: request.turnId, itemId: request.itemId, subject: request.subject,
       }, signal),
       isSubagentCaller: async caller => {
-        const project = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(caller.cwd, { endpointName: "MCP tool audience" });
+        const project = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(caller.cwd, { endpointName: "MCP tool audience", ownerThreadId: caller.threadId });
         const identity = threadIdentity.knownThread(caller.threadId);
         if (identity.projectId !== project.project.id) throw new Error("MCP caller ownership does not match its working directory.");
         return (await threadState.controller.getCanonicalThreadEntry(project.project.id, caller.threadId))?.entryKind === "subagent";

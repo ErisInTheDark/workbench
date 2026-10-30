@@ -18,9 +18,7 @@ import { appRoot } from "../../project-root";
 import type { ResolvedProject } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import { killProcessTreeAsync, logError, lowerAgentProcessPriority } from "../../../process-helpers";
-import {
-  type AgentEndpointProjectResolution,
-} from "../project/agent-endpoint-project";
+import type { AgentEndpointProjectResolver } from "../project/agent-endpoint-project";
 import type { WorkbenchBrowseAgentCommand } from "./actions/browse-action-registry";
 import type { BrowseJsonValue, BrowseRuntimeRequest } from "./actions/session-actions";
 import WorkbenchBrowseDaemonClient, {
@@ -37,10 +35,7 @@ export interface WorkbenchBrowseExecutionContext {
   workspaceRootPaths: string[];
 }
 
-export type WorkbenchBrowseProjectResolver = (
-  cwd: string | null | undefined,
-  options?: { endpointName?: string },
-) => Promise<AgentEndpointProjectResolution>;
+export type WorkbenchBrowseProjectResolver = AgentEndpointProjectResolver;
 
 export type WorkbenchBrowseProjectIdResolver = (
   projectId?: string | null,
@@ -163,9 +158,11 @@ export default class WorkbenchBrowseRuntime {
     await this.client.initialize();
   }
 
-  async resolveExecutionContext(request: Pick<WorkbenchBrowseCommandRequest, "cwd" | "projectId">): Promise<WorkbenchBrowseExecutionContext> {
+  async resolveExecutionContext(
+    request: Pick<WorkbenchBrowseCommandRequest, "cwd" | "projectId"> & { threadId?: string | null },
+  ): Promise<WorkbenchBrowseExecutionContext> {
     if (request.cwd) {
-      const resolution = await this.resolveProjectFromCwd(request.cwd, { endpointName: "Browse" });
+      const resolution = await this.resolveProjectFromCwd(request.cwd, { endpointName: "Browse", ownerThreadId: request.threadId ?? null });
       return {
         cwd: resolution.cwd,
         owningRootPath: resolution.root.root,
