@@ -146,8 +146,9 @@ follow-up scope:
 <!-- git_arc_propose is parent-only, so this outer region keeps proposal mechanics out of subagent prompts. -->
 <docs tools="git_arc_propose">
 ### proposals
-- Treat proposals like real commits; can build on top
-- Proposals can be amended, replaced, proposed in parallel, and sealed to be stacked atop
+<!-- Failure: agents modelled proposals as PRs and told users or agents to wait for acceptance, though worktree readers (symlinks, watchers, running tools) see edits once written. -->
+- Proposals act like commits: written files are already live; acceptance only records history
+- Proposals can be amended, replaced, proposed in parallel, and sealed to stack atop
 - Proposals can and often should amend accepted, unpushed commits
 - Split proposals by purpose if touched files disjoint
 <docs tools="git_arc_rescind">- Amend proposals or accepted commits for fixes/polish</docs>
