@@ -3,11 +3,14 @@
  * - VisBridge: the `window.wb` object Workbench injects into every vis frame.
  * - useVisState: state the user sets in a vis, synced by id: it survives the agent's edits and `wb vis read` returns it.
  */
+import type { VisAudience } from "workbench-shared/workbench/vis/vis-frame";
 import { useControlState, type ControlStateStore } from "../ui/control-state";
 
 export interface VisBridge {
   /** The file's synced control state; `set` only reaches Workbench while the user has the vis focused. */
   state: ControlStateStore;
+  /** `agent` in the agent's headless checks, which may show more than the user's card does. */
+  audience: VisAudience;
 }
 
 declare global {

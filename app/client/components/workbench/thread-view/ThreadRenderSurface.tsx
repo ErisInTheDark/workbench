@@ -1,18 +1,22 @@
 /*
  * Exports:
- * - default ThreadRenderSurface: render standalone transcripts and their live verb inside the shared scroll owner.
+ * - default ThreadRenderSurface: render standalone transcripts and their live verb inside the shared scroll owner,
+ *   optionally with every activity run, step and card open.
  */
 "use client";
 
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { ThreadPayload, WorkbenchProjectRoot } from "workbench-shared/types";
 import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import ContextualProjectProvider from "../ContextualProjectProvider";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
+import ThreadActivityRunController from "./ThreadActivityRunController";
+import ThreadExpandedContext from "./ThreadExpandedContext";
 import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
+import { ThreadScrollViewportContext, useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import ThreadStatusRow from "./ThreadStatusRow";
 import { getLiveThreadVerb } from "./thread-live-activity";
 import type { ThreadRenderContext, ThreadRenderFlags } from "./thread-render-lab-options";
@@ -33,6 +37,17 @@ function createThreadProjectRoots(cwd: string | undefined): WorkbenchProjectRoot
   }];
 }
 
+/** Inside the viewport, so its run controller replaces the viewport's own with one that opens every run. */
+function ExpandedRuns({ children }: { children: ReactNode }) {
+  const context = useThreadScrollViewportContext();
+  const [activityRuns] = useState(() => new ThreadActivityRunController({ defaultOpen: true }));
+  return (
+    <ThreadExpandedContext value>
+      <ThreadScrollViewportContext.Provider value={{ ...context, activityRuns }}>{children}</ThreadScrollViewportContext.Provider>
+    </ThreadExpandedContext>
+  );
+}
+
 /** Every transcript, stored or pasted, renders through the one canonical projection renderer. */
 export default function ThreadRenderSurface({
   className = "",
@@ -44,8 +59,11 @@ export default function ThreadRenderSurface({
   flags = {},
   presentationSource: suppliedPresentationSource,
   skillMcpMatchers,
+  expanded = false,
 }: {
   className?: string;
+  /** Every activity run, step and card starts open, for previews nobody can click. */
+  expanded?: boolean;
   /** Skill matchers presenting the transcript's MCP calls. */
   skillMcpMatchers?: SkillMcpMatchers | null;
   emptyMessage?: string;
@@ -86,6 +104,18 @@ export default function ThreadRenderSurface({
   const style = {
     fontSize: `${fontSizeRem}rem`,
   } satisfies CSSProperties;
+  const transcript = projection && !transcriptExpired ? (
+    <ThreadTranscriptProjection
+      projection={projection}
+      liveTurnId={liveTurn?.id ?? null}
+      canLoadPreviousTurn={false}
+      historySentinelRef={null}
+      presentationSource={presentationSource}
+      relatedThreadsById={context.relatedThreadsById ?? {}}
+      subagents={context.subagents ?? []}
+      hiddenReasoningStep={context.hiddenReasoningStep}
+    />
+  ) : null;
 
   return (
     <ContextualProjectProvider
@@ -109,18 +139,8 @@ export default function ThreadRenderSurface({
           {sql.loading ? "Loading..." : "Load older turns"}
         </button>
       ) : null}
-      {projection && !transcriptExpired ? (
-        <ThreadTranscriptProjection
-          projection={projection}
-          liveTurnId={liveTurn?.id ?? null}
-          canLoadPreviousTurn={false}
-          historySentinelRef={null}
-          presentationSource={presentationSource}
-          relatedThreadsById={context.relatedThreadsById ?? {}}
-          subagents={context.subagents ?? []}
-          hiddenReasoningStep={context.hiddenReasoningStep}
-        />
-      ) : <p className="text-fg/muted">{transcriptExpired ? "Transcript expired 3 days after settlement." : emptyMessage}</p>}
+      {transcript ? (expanded ? <ExpandedRuns>{transcript}</ExpandedRuns> : transcript)
+        : <p className="text-fg/muted">{transcriptExpired ? "Transcript expired 3 days after settlement." : emptyMessage}</p>}
       {flags.showLiveActivity !== false && liveVerb ? <ThreadStatusRow liveVerb={liveVerb} /> : null}
     </div>
     <ThreadScrollViewportEnd />

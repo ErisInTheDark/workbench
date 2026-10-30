@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - frameVisDocument: prepend the no-network content policy and the `window.wb` bridge, seeded with the file's synced
- *   control state and the app's palette, to a rendered vis document.
+ *   control state, the app's palette and who is looking (VisAudience), to a rendered vis document.
  * - visFrameControlsMessage: the card's message relaying the file's control state into a running frame.
  * - visFrameThemeMessage: the card's message repainting a running frame in the app's palette.
  * - acceptVisFrameControl: the control change a frame message may forward to Workbench, or null.
@@ -28,7 +28,7 @@ const CONTENT_POLICY = `<meta http-equiv="Content-Security-Policy" content="defa
  * an unchanged control keeps its identity for React's external-store reads. Embedded pages also report their content
  * height, since the opaque-origin frame cannot be measured from outside.
  */
-const BRIDGE_SCRIPT = (initial: string, theme: WorkbenchTheme | null) => `<script>(function(){function post(m){parent.postMessage(m,"*");}`
+const BRIDGE_SCRIPT = (initial: string, theme: WorkbenchTheme | null, audience: VisAudience) => `<script>(function(){function post(m){parent.postMessage(m,"*");}`
   + `var root=document.documentElement;function theme(name){if(root&&typeof name==="string"&&/^[a-z-]{1,32}$/.test(name))root.setAttribute("data-workbench-theme",name);}`
   + `theme(${JSON.stringify(theme)});`
   + `var has=Object.prototype.hasOwnProperty;var values=${initial};var listeners=[];`
@@ -40,7 +40,7 @@ const BRIDGE_SCRIPT = (initial: string, theme: WorkbenchTheme | null) => `<scrip
   + `if(json.length>${VIS_MAX_CONTROL_VALUE_LENGTH})throw new RangeError("wb.state.set is limited to ${VIS_MAX_CONTROL_VALUE_LENGTH} characters of JSON.");`
   + `var next=Object.assign({},values);next[id]=JSON.parse(json);values=next;notify();post({kind:"${CONTROL_KIND}",id:id,value:json});},`
   + `subscribe:function(listener){listeners.push(listener);return function(){listeners=listeners.filter(function(other){return other!==listener;});};}`
-  + `});window.wb=Object.freeze({state:state});`
+  + `});window.wb=Object.freeze({state:state,audience:${JSON.stringify(audience)}});`
   + `window.addEventListener("message",function(event){var data=event.data;if(event.source!==parent||!data)return;`
   + `if(data.kind==="${THEME_KIND}"){theme(data.theme);return;}`
   + `if(data.kind!=="${CONTROLS_KIND}"||!data.controls||typeof data.controls!=="object")return;`
@@ -60,11 +60,18 @@ function controlsLiteral(controls: VisControls) {
   return `{${Object.entries(controls).map(([id, value]) => `${JSON.stringify(id)}:${value}`).join(",")}}`.replaceAll("<", "\\u003c");
 }
 
-/** The policy and bridge must come before anything the document runs, but after a doctype, which must stay first. */
-/** `theme` paints the page in the app's palette from its first frame; without one the page keeps the default palette. */
-export function frameVisDocument(document: string, controls: VisControls, theme: WorkbenchTheme | null = null) {
+/** Who looks at a framed page: the user's card, or the agent's headless checks. */
+export type VisAudience = "user" | "agent";
+
+/**
+ * The policy and bridge must come before anything the document runs, but after a doctype, which must stay first.
+ * `theme` paints the page in the app's palette from its first frame; without one the page keeps the default palette.
+ */
+export function frameVisDocument(document: string, controls: VisControls, { audience = "user", theme = null }: {
+  audience?: VisAudience; theme?: WorkbenchTheme | null;
+} = {}) {
   const doctype = /^\s*<!doctype[^>]*>/iu.exec(document);
-  const head = `${CONTENT_POLICY}${BRIDGE_SCRIPT(controlsLiteral(controls), theme)}`;
+  const head = `${CONTENT_POLICY}${BRIDGE_SCRIPT(controlsLiteral(controls), theme, audience)}`;
   return doctype ? `${doctype[0]}${head}${document.slice(doctype[0].length)}` : `${head}${document}`;
 }
 

@@ -2,17 +2,19 @@
  * Exports:
  * - ThreadStepProgress: a step's state and timing, which the row turns into a spinner or a (live) duration.
  * - default ThreadStepRow: one step of work as a single line: kind icon, what happened (a tensed label and its subject, or a
- *   custom summary), then trailing meta ending in the step's progress; a step with detail opens it on tap. Its lead and
+ *   custom summary), then trailing meta ending in the step's progress; a step with detail opens it on tap (or starts open
+ *   under ThreadExpandedContext). Its lead and
  *   meta are marked `data-thread-step-part` for entry motion; while in progress its words shimmer at medium weight.
  */
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useContext, type ReactNode } from "react";
 
 import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { LoaderIcon } from "../workbench-icons";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadExpandedContext from "./ThreadExpandedContext";
 import { isFailedStep, type StepState } from "./thread-step";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 
@@ -82,6 +84,7 @@ export default function ThreadStepRow({
   /** A custom line, for steps whose summary is not a label and subject. */
   summary?: ReactNode;
 }) {
+  const expanded = useContext(ThreadExpandedContext);
   const failed = progress ? isFailedStep(progress.state) : false;
   const isLive = live || progress?.state === "inProgress";
   const shownMeta = [...meta ?? [], progress ? <Progress key="progress" progress={progress} /> : null]
@@ -127,7 +130,7 @@ export default function ThreadStepRow({
     <Disclosure
       className={ROW_CLASS}
       contentClassName={bodyInset ? "mt-1.5 space-y-2 pl-6" : "mt-1 space-y-2"}
-      defaultOpen={defaultOpen}
+      defaultOpen={defaultOpen || expanded}
       hideChevron
       keepMounted={keepMounted}
       leading={marker}

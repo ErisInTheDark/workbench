@@ -4,13 +4,14 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cloneElement, createElement, type ComponentProps, type ReactElement } from "react";
+import { createElement, type ComponentProps, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-command-matchers";
 import ThreadTestTurn from "./thread-view-test-render";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
+import ThreadExpandedContext from "./ThreadExpandedContext";
 import ThreadStepRow from "./ThreadStepRow";
 import ContextualProjectProvider from "../ContextualProjectProvider";
 
@@ -18,7 +19,7 @@ type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
 function renderOpenedMcp(props: Parameters<typeof ThreadMcpToolCallItem>[0]) {
   const row = ThreadMcpToolCallItem(props) as ReactElement<ComponentProps<typeof ThreadStepRow>>;
-  return renderToStaticMarkup(cloneElement(ThreadStepRow(row.props), { open: true }));
+  return renderToStaticMarkup(createElement(ThreadExpandedContext, { value: true }, createElement(ThreadStepRow, row.props)));
 }
 
 function makeItem(overrides: Partial<McpItem> = {}): McpItem {

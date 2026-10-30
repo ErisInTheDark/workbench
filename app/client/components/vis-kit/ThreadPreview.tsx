@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default ThreadPreview: a real Workbench transcript inside a vis page, from render-lab shorthand items; MCP calls are
- *   presented by the given skill matcher functions and draw the given skill components, as the app would.
+ *   presented by the given skill matcher functions and draw the given skill components, as the app would. The agent's
+ *   headless checks see every run, step and card open.
  */
 "use client";
 
@@ -52,7 +53,13 @@ export default function ThreadPreview({ components = {}, items, matchers = [] }:
           {fixture.error ? <Problem>{fixture.error}</Problem> : null}
           {failures.map(failure => <Problem key={failure}>{failure}</Problem>)}
           <ThreadRenderLabBoundary key={itemsKey} revision={0}>
-            <ThreadRenderSurface presentationSource={PRESENTATION_SOURCE} skillMcpMatchers={skillMcpMatchers} thread={fixture.thread} />
+            <ThreadRenderSurface
+              // The agent's headless checks cannot click rows open, so they see every body; the user's card stays as the app.
+              expanded={typeof window !== "undefined" && window.wb?.audience === "agent"}
+              presentationSource={PRESENTATION_SOURCE}
+              skillMcpMatchers={skillMcpMatchers}
+              thread={fixture.thread}
+            />
           </ThreadRenderLabBoundary>
         </ThreadSkillComponentPreviewContext>
       </ThreadItemActionsContext.Provider>

@@ -142,7 +142,7 @@ export default class WorkbenchVisBrowse {
   #writePage(target: VisBrowseTarget) {
     return this.#queuePage(target.sessionId, async () => {
       await mkdir(this.#directory, { recursive: true });
-      await writeFile(this.#page(target.sessionId), frameVisDocument(target.document, target.controls));
+      await writeFile(this.#page(target.sessionId), frameVisDocument(target.document, target.controls, { audience: "agent" }));
     });
   }
 

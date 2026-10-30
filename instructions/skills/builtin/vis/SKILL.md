@@ -38,7 +38,7 @@ Project context without needed `.wb.json` command fails with a clear error: conf
   - options: `Options label id?` wrapping direct `Option title value?` children (children = that option's preview)
   - Workbench UI: `Disclosure`, `MarkdownRender`, `IconButton`, `PrimaryButton`, `RadioRow`, `Tooltip`, `PressDragMenu`, `PressDragSlider`, `StepSlider`, `OptionCards`/`OptionCard`, `FormSection`, `Tabs`/`Tab`, `ShareList`, `Sparkline`, `StreamChart`, `LineChart`, `Skeleton`, all icons (`XIcon`, ...)
   - state: `useVisState(id, initial)`
-- Transcript (`workbench/kit/thread`): `ThreadPreview items matchers? components?`, real Workbench transcript from render-lab shorthand items (command strings, `{ type: "userMessage" | "agentMessage", text }`, `{ type: "mcpToolCall", server, tool, arguments, result?, status?, error? }`); pass a skill's matcher files and components to preview its MCP calls
+- Transcript (`workbench/kit/thread`): `ThreadPreview items matchers? components?`, real Workbench transcript from render-lab shorthand items (command strings, `{ type: "userMessage" | "agentMessage", text }`, `{ type: "mcpToolCall", server, tool, arguments, result?, status?, error? }`); pass a skill's matcher files and components to preview its MCP calls. Your screenshots/snapshots show every card and step open; the user's view stays collapsed like the app
 - Project context (Workbench): `Options`, `Option`, `useVisState` from `app/client/components/vis-kit`.
 
 ## Show options

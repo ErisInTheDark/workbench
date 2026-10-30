@@ -70,7 +70,7 @@ export default function ThreadVisFrame({
   const themeRef = useRef(theme);
   themeRef.current = theme;
   // State and palette are seeded once per document; later changes reach the running page as messages, so they never reload it.
-  const source = useMemo(() => frameVisDocument(document, currentRef.current, themeRef.current), [document]);
+  const source = useMemo(() => frameVisDocument(document, currentRef.current, { theme: themeRef.current }), [document]);
   useEffect(() => {
     frameRef.current?.contentWindow?.postMessage(visFrameThemeMessage(theme), "*");
   }, [theme]);
