@@ -40,7 +40,7 @@ import {
   openCodeContentSource, openCodeItemSource, type OpenCodeTranscriptSource,
 } from "./open-code-source-id";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../provider-execution";
-import { isOpenCodeCommentaryToolName, isOpenCodeWorkbenchToolName } from "./opencode-workbench-rpc";
+import { recordedOpenCodeToolKind } from "./open-code-tool-kind";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 
 export interface OpenCodeTranscriptOwners {
@@ -262,10 +262,10 @@ function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
         item: { type: "reasoning", id: assistant.id, summary: [part.text], content: [] },
       }];
     }
-    // Workbench records direct wb tool calls itself, as the live path does.
-    if (isOpenCodeWorkbenchToolName(part.name)) return [];
     const state = part.state;
-    if (isOpenCodeCommentaryToolName(part.name)) {
+    const kind = recordedOpenCodeToolKind(part.name, state.status);
+    if (kind === "workbench") return [];
+    if (kind === "commentary") {
       const text = typeof state.input === "object" ? state.input.text : undefined;
       return [{
         kind: "item",

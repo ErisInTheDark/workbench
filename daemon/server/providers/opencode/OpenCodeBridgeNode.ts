@@ -106,7 +106,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           }
         },
       }),
-      onConnected: ({ signal, wasTouched }) => events.reconcileConnection(signal, wasTouched),
+      reconcile: ({ signal, wasTouched, sessionID }) => events.reconcileConnection(signal, wasTouched, sessionID),
       onEvent: async event => {
         if (String(event.type) === "rpc.workbench.patchPreview") {
           const parsed = OpenCodePatchObservationSchema.safeParse("data" in event ? event.data : undefined);

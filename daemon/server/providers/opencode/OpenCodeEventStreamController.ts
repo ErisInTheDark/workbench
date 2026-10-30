@@ -1,14 +1,15 @@
 /*
  * Exports:
- * - OpenCodeEventStreamControllerOptions: provider event stream and reconnect ports.
- * - default OpenCodeEventStreamController: own one reconnecting OpenCode event subscription.
+ * - OpenCodeEventStreamControllerOptions: provider event stream, activity baseline and reconnect ports.
+ * - default OpenCodeEventStreamController: own one reconnecting OpenCode event subscription; a session's event failure rebaselines only that session.
  */
 import type { OpenCodeEvent } from "@opencode/client";
 
 export interface OpenCodeEventStreamControllerOptions {
   subscribe(signal: AbortSignal): AsyncIterable<OpenCodeEvent>;
   onEvent(event: OpenCodeEvent): Promise<void>;
-  onConnected(input: { signal: AbortSignal; wasTouched(sessionID: string): boolean }): Promise<void>;
+  /** Baseline native activity: every session after connecting, or `sessionID` alone after its event failed. */
+  reconcile(input: { signal: AbortSignal; wasTouched(sessionID: string): boolean; sessionID?: string }): Promise<void>;
   waitBeforeRetry(signal: AbortSignal): Promise<void>;
   warn(message: string): void;
 }
@@ -88,18 +89,39 @@ export default class OpenCodeEventStreamController {
         if (this.readyConnection === connection.signal) this.readyConnection = null;
         for (const waiter of this.readiness) waiter.reject(new Error("OpenCode event connection ended before readiness."));
       }, { once: true });
-      let touched = new Set<string>();
+      /** Sessions with newer events than each running snapshot; a fenced snapshot must not apply over them. */
+      const fences = new Set<Set<string>>();
+      const rebaselining = new Set<string>();
       let connected = false;
       let queued = 0;
       let work = Promise.resolve();
+      const rebaseline = (sessionID: string) => {
+        if (rebaselining.has(sessionID)) return;
+        rebaselining.add(sessionID);
+        this.pendingEvents++;
+        work = work.then(async () => {
+          const observed = new Set<string>();
+          fences.add(observed);
+          try {
+            if (connection.signal.aborted) return;
+            await this.options.reconcile({ signal: connection.signal, wasTouched: id => observed.has(id), sessionID });
+          } catch (error) {
+            if (!connection.signal.aborted) this.options.warn(`OpenCode session rebaseline failed (${this.errorName(error)}).`);
+          } finally {
+            fences.delete(observed);
+            rebaselining.delete(sessionID);
+            this.pendingEvents--;
+          }
+        });
+      };
       try {
         for await (const event of this.options.subscribe(connection.signal)) {
           if (connection.signal.aborted) break;
           if (event.type === "server.connected") {
             connected = true;
             const observed = new Set<string>();
-            touched = observed;
-            const baseline = this.options.onConnected({
+            fences.add(observed);
+            const baseline = this.options.reconcile({
               signal: connection.signal,
               wasTouched: sessionID => observed.has(sessionID),
             }).then(() => {
@@ -112,6 +134,7 @@ export default class OpenCodeEventStreamController {
                 connection.abort(new Error("OpenCode activity reconciliation failed."));
               }
             }).finally(() => {
+              fences.delete(observed);
               this.baselines.delete(baseline);
             });
             this.baselines.add(baseline);
@@ -121,7 +144,9 @@ export default class OpenCodeEventStreamController {
           if (!connected) throw new Error("OpenCode event stream did not start with server.connected.");
           const sessionID = "data" in event && event.data && "sessionID" in event.data
             ? event.data.sessionID : null;
-          if (typeof sessionID === "string" && supersedesActivitySnapshot(event)) touched.add(sessionID);
+          if (typeof sessionID === "string" && supersedesActivitySnapshot(event)) {
+            for (const fence of fences) fence.add(sessionID);
+          }
           if (++queued > 4096) throw new Error("OpenCode event reconciliation queue exceeded capacity.");
           this.pendingEvents++;
           work = work.then(async () => {
@@ -131,7 +156,9 @@ export default class OpenCodeEventStreamController {
             } catch (error) {
               if (!connection.signal.aborted) {
                 this.options.warn(`OpenCode event reconciliation failed (${this.errorName(error)}).`);
-                connection.abort(new Error("OpenCode event reconciliation failed."));
+                // Other sessions keep their stream; only a session-less failure needs a fresh connection baseline.
+                if (typeof sessionID === "string") rebaseline(sessionID);
+                else connection.abort(new Error("OpenCode event reconciliation failed."));
               }
             } finally {
               queued--;

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect OpenCode stream recovery, snapshot fencing, and disposal.
+ * No production exports. Tests protect OpenCode stream recovery, per-session failure isolation, snapshot fencing, and disposal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -25,7 +25,7 @@ test("connection readiness waits for reconciliation and retires on disconnect", 
     subscribe: () => ({
       async *[Symbol.asyncIterator]() { yield connected; await end.promise; },
     }),
-    onConnected: async () => { entered.resolve(); await baseline.promise; },
+    reconcile: async () => { entered.resolve(); await baseline.promise; },
     onEvent: async () => {},
     waitBeforeRetry: signal => new Promise<void>(resolve => {
       signal.addEventListener("abort", () => resolve(), { once: true });
@@ -62,7 +62,7 @@ test("failed connection, caller cancellation and disposal reject readiness witho
           })]);
         },
       }),
-      onConnected: async () => {},
+      reconcile: async () => {},
       onEvent: async () => {},
       waitBeforeRetry: signal => new Promise<void>(resolve => {
         signal.addEventListener("abort", () => resolve(), { once: true });
@@ -110,7 +110,7 @@ test("reconnects an ended daemon event stream and fences a connection snapshot b
       };
     },
     onEvent: async event => { if (event.type === "session.execution.started") firstEvent.resolve(); },
-    onConnected: async ({ wasTouched }) => {
+    reconcile: async ({ wasTouched }) => {
       if (connections === 1) {
         await baselineRelease.promise;
         firstBaseline.resolve({ changed: wasTouched("session"), unrelated: wasTouched("unrelated") });
@@ -147,7 +147,7 @@ test("ephemeral status and usage events fence an older connection activity snaps
       },
     }),
     onEvent: async () => {},
-    onConnected: async ({ wasTouched }) => {
+    reconcile: async ({ wasTouched }) => {
       await baselineRelease.promise;
       observed.resolve({ busy: wasTouched("session"), usage: wasTouched("usage-session") });
     },
@@ -161,28 +161,76 @@ test("ephemeral status and usage events fence an older connection activity snaps
   await controller.dispose();
 });
 
-test("event reconciliation failure reconnects instead of leaving a dead subscription", async () => {
+test("a session's event failure rebaselines only that session, fenced by its newer events, and keeps the connection", async () => {
   let connections = 0;
-  const reconnected = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const newer = Promise.withResolvers<void>();
+  const outcome = Promise.withResolvers<void>();
+  const rebaselines: { sessionID: string; touched: boolean }[] = [];
+  const delivered: string[] = [];
   const warnings: string[] = [];
   const controller = new OpenCodeEventStreamController({
     subscribe: signal => ({
       async *[Symbol.asyncIterator]() {
         connections++;
+        const aborted = new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+        if (connections > 1) {
+          outcome.resolve();
+          await aborted;
+          return;
+        }
         yield connected;
-        if (connections === 1) yield busy;
-        await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+        yield busy;
+        await Promise.race([entered.promise, aborted]);
+        yield started;
+        yield unrelatedStatus;
+        newer.resolve();
+        await aborted;
       },
     }),
-    onConnected: async () => { if (connections === 2) reconnected.resolve(); },
-    onEvent: async () => { throw new Error("private event payload"); },
+    reconcile: async ({ wasTouched, sessionID }) => {
+      if (!sessionID) return;
+      entered.resolve();
+      await newer.promise;
+      rebaselines.push({ sessionID, touched: wasTouched(sessionID) });
+    },
+    onEvent: async event => {
+      if (event.id === "busy") throw new Error("private event payload");
+      delivered.push(event.id);
+      if (event.id === "other") outcome.resolve();
+    },
     waitBeforeRetry: async () => {},
     warn: message => { warnings.push(message); },
   });
   controller.start();
-  await reconnected.promise;
-  assert.equal(connections, 2);
+  await outcome.promise;
+  assert.equal(connections, 1);
+  assert.deepEqual(rebaselines, [{ sessionID: "session", touched: true }]);
+  assert.deepEqual(delivered, ["started", "other"]);
   assert.ok(warnings.some(message => message.includes("event reconciliation failed")));
   assert.equal(warnings.some(message => message.includes("private event payload")), false);
+  await controller.dispose();
+});
+
+test("a connection-level event failure reconnects instead of leaving a dead subscription", async () => {
+  let connections = 0;
+  const reconnected = Promise.withResolvers<void>();
+  const controller = new OpenCodeEventStreamController({
+    subscribe: signal => ({
+      async *[Symbol.asyncIterator]() {
+        connections++;
+        yield connected;
+        if (connections === 1) yield { type: "model.updated", data: {}, id: "model" } as OpenCodeEvent;
+        await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      },
+    }),
+    reconcile: async () => { if (connections === 2) reconnected.resolve(); },
+    onEvent: async () => { throw new Error("catalogue failed"); },
+    waitBeforeRetry: async () => {},
+    warn: () => {},
+  });
+  controller.start();
+  await reconnected.promise;
+  assert.equal(connections, 2);
   await controller.dispose();
 });

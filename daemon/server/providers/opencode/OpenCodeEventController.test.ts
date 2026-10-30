@@ -423,6 +423,45 @@ test("connection reconciliation restores active work and settles missed terminal
   assert.deepEqual(projects, [projectId]);
 });
 
+test("connection reconciliation isolates one session's failure and scopes single-session rebaselines", async t => {
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (message: string) => { warnings.push(message); });
+  const calls: string[] = [];
+  const scopes: (string | undefined)[] = [];
+  let poisoned = true;
+  const projectId = ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003");
+  const fact = (sessionID: string) => ({
+    sessionID, threadId, projectId, turn: turn("inProgress"), active: false, outcome: "succeeded" as const, idleAt: 4, maintenance: false,
+  });
+  const controller = new OpenCodeEventController({
+    threads: {
+      ...executionLifecycle,
+      reconcileActivity: async (_signal: AbortSignal, _touched: unknown, sessionID?: string) => {
+        scopes.push(sessionID);
+        return sessionID ? [fact(sessionID)] : [fact("poisoned"), fact("healthy")];
+      },
+      markExecutionSettled: (sessionID: string) => { calls.push(`settled:${sessionID}`); },
+    } as never,
+    transcript: {
+      appendText: () => undefined, recordItem: async () => "item" as never, recordCompaction: async () => undefined,
+      recordTurnState: async () => {
+        if (!poisoned) return;
+        poisoned = false;
+        throw new Error("settlement failed");
+      },
+    },
+    observe: async () => undefined,
+    broadcast: notification => { if (notification.method === "models/updated") calls.push("models/updated"); },
+  });
+  await controller.reconcileConnection(new AbortController().signal, () => false);
+  assert.deepEqual(calls, ["models/updated", "settled:healthy"]);
+  assert.ok(warnings.some(message => message.includes("session poisoned") && message.includes("settlement failed")));
+  calls.length = 0;
+  await controller.reconcileConnection(new AbortController().signal, () => false, "healthy");
+  assert.deepEqual(calls, ["settled:healthy"]);
+  assert.deepEqual(scopes, [undefined, "healthy"]);
+});
+
 test("terminal reconciliation uses one snapshot and never settles a newer user turn", async () => {
   let current = turnId;
   const entered = Promise.withResolvers<void>();

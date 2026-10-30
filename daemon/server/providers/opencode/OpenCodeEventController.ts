@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - OpenCodeEventControllerOptions: provider-local event, transcript, and lifecycle ports.
- * - default OpenCodeEventController: translate OpenCode events (commentary-tool input as exact commentary; synthetic hint deliveries as no user intent) into direct live facts, compaction reports, and one terminal canonical settlement.
+ * - default OpenCodeEventController: translate OpenCode events (commentary-tool input as exact commentary; synthetic hint deliveries as no user intent) into direct live facts, compaction reports, and one terminal canonical settlement; apply per-session activity baselines.
  */
 import type { OpenCodeEvent, SessionInfo, SessionToolFailed, SessionToolSuccess } from "@opencode/client";
 import type { WorkbenchProviderObservation, WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
@@ -13,10 +13,11 @@ import {
 import { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { openCodeContentSource, openCodeItemSource } from "./open-code-source-id";
-import {
-  isOpenCodeWorkbenchToolName, OPENCODE_COMMENTARY_TOOL_NAME, type OpenCodePatchObservation,
-} from "./opencode-workbench-rpc";
+import type { OpenCodePatchObservation } from "./opencode-workbench-rpc";
+import { describeErrorCauseChain } from "workbench-shared/process/error-cause-chain";
+import { openCodeToolKind } from "./open-code-tool-kind";
 import type OpenCodeThreadOperations from "./OpenCodeThreadOperations";
+import type { OpenCodeNativeActivity } from "./OpenCodeThreadOperations";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadContextRolloverController from "../../turn/WorkbenchThreadContextRolloverController";
 
@@ -41,7 +42,9 @@ export interface OpenCodeEventControllerOptions {
       maintenance?: boolean;
     }>;
     syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
-    reconcileActivity?(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): ReturnType<OpenCodeThreadOperations["reconcileActivity"]>;
+    reconcileActivity?(
+      signal: AbortSignal, wasTouched: (sessionID: string) => boolean, sessionID?: string,
+    ): ReturnType<OpenCodeThreadOperations["reconcileActivity"]>;
   } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "observeCompaction">;
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordCompaction" | "recordItem" | "recordTurnState">
     & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
@@ -59,12 +62,12 @@ type DynamicToolItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
 /** Direct wb tools reach Workbench through MCP, which records them; their native part would duplicate that item. */
 function isWorkbenchRecorded(tool: ToolState | undefined) {
-  return tool !== undefined && isOpenCodeWorkbenchToolName(tool.name);
+  return tool !== undefined && openCodeToolKind(tool.name) === "workbench";
 }
 
 /** Commentary tool input is the agent's exact user-visible message, not a tool call. */
 function commentaryText(tool: ToolState | undefined) {
-  if (tool?.name !== OPENCODE_COMMENTARY_TOOL_NAME) return null;
+  if (!tool || openCodeToolKind(tool.name) !== "commentary") return null;
   const input = tool.input;
   const text = input && typeof input === "object" && !Array.isArray(input) ? input.text : undefined;
   return typeof text === "string" ? text : "";
@@ -111,41 +114,54 @@ export default class OpenCodeEventController {
     this.syntheticInbox.clear();
   }
 
-  async reconcileConnection(signal: AbortSignal, wasTouched: (sessionID: string) => boolean) {
+  /** Baseline every session after connecting, or one `sessionID` after its event failed; one session's failure never stops another's. */
+  async reconcileConnection(signal: AbortSignal, wasTouched: (sessionID: string) => boolean, sessionID?: string) {
     if (!this.options.threads.reconcileActivity) throw new Error("OpenCode activity reconciliation is unavailable.");
-    this.announceModelCatalogChange();
-    for (const fact of await this.options.threads.reconcileActivity(signal, wasTouched)) {
+    if (!sessionID) this.announceModelCatalogChange();
+    for (const fact of await this.options.threads.reconcileActivity(signal, wasTouched, sessionID)) {
       signal.throwIfAborted();
-      if (wasTouched(fact.sessionID) || fact.maintenance || !fact.turn) continue;
-      const turnId = WorkbenchTurnIdSchema.parse(fact.turn.id);
-      if (fact.active) {
-        this.options.threads.markExecutionStarted(fact.sessionID);
-        await this.options.observe({
-          projectId: fact.projectId, turnStarted: null, displayLabel: null,
-          lifecycle: { threadId: fact.threadId, event: { kind: "acceptedIntent", turnId } },
-        });
-        this.broadcastThreadStatus(fact.threadId, { activeFlags: [], type: "active" });
-        this.broadcastTurn("turn/started", fact.threadId, fact.turn);
-        continue;
+      try {
+        await this.applyActivity(fact, wasTouched);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        console.warn(`[opencode] activity reconciliation failed for session ${fact.sessionID}: ${describeErrorCauseChain(error, 500)}`);
       }
-      const status = fact.outcome === "succeeded" ? "completed"
-        : fact.outcome === "failed" ? "failed"
-          : fact.outcome === "interrupted" ? "interrupted"
-            : fact.turn.status === "inProgress" ? "interrupted" : fact.turn.status;
-      if (fact.turn.status === "inProgress") {
-        await this.options.transcript.recordTurnState({
-          threadId: fact.threadId, turnId, state: status, observedAt: fact.idleAt ?? Date.now(),
-        });
-      }
-      if (wasTouched(fact.sessionID)) continue;
-      this.options.threads.markExecutionSettled(fact.sessionID);
+    }
+  }
+
+  private async applyActivity(
+    fact: OpenCodeNativeActivity,
+    wasTouched: (sessionID: string) => boolean,
+  ) {
+    if (wasTouched(fact.sessionID) || fact.maintenance || !fact.turn) return;
+    const turnId = WorkbenchTurnIdSchema.parse(fact.turn.id);
+    if (fact.active) {
+      this.options.threads.markExecutionStarted(fact.sessionID);
       await this.options.observe({
         projectId: fact.projectId, turnStarted: null, displayLabel: null,
-        lifecycle: { threadId: fact.threadId, event: { kind: "turnCompleted", turnId, status } },
+        lifecycle: { threadId: fact.threadId, event: { kind: "acceptedIntent", turnId } },
       });
-      this.broadcastTurn("turn/completed", fact.threadId, { ...fact.turn, status });
-      this.broadcastThreadStatus(fact.threadId, { type: "idle" });
+      this.broadcastThreadStatus(fact.threadId, { activeFlags: [], type: "active" });
+      this.broadcastTurn("turn/started", fact.threadId, fact.turn);
+      return;
     }
+    const status = fact.outcome === "succeeded" ? "completed"
+      : fact.outcome === "failed" ? "failed"
+        : fact.outcome === "interrupted" ? "interrupted"
+          : fact.turn.status === "inProgress" ? "interrupted" : fact.turn.status;
+    if (fact.turn.status === "inProgress") {
+      await this.options.transcript.recordTurnState({
+        threadId: fact.threadId, turnId, state: status, observedAt: fact.idleAt ?? Date.now(),
+      });
+    }
+    if (wasTouched(fact.sessionID)) return;
+    this.options.threads.markExecutionSettled(fact.sessionID);
+    await this.options.observe({
+      projectId: fact.projectId, turnStarted: null, displayLabel: null,
+      lifecycle: { threadId: fact.threadId, event: { kind: "turnCompleted", turnId, status } },
+    });
+    this.broadcastTurn("turn/completed", fact.threadId, { ...fact.turn, status });
+    this.broadcastThreadStatus(fact.threadId, { type: "idle" });
   }
 
   async accept(event: OpenCodeEvent) {
@@ -296,7 +312,7 @@ export default class OpenCodeEventController {
       case "session.tool.input.started": {
         const active = await this.active(sessionID);
         this.setTool(sessionID, event.data.id, { active, input: "", name: event.data.name, startedAt: event.created });
-        if (isOpenCodeWorkbenchToolName(event.data.name) || event.data.name === OPENCODE_COMMENTARY_TOOL_NAME) return;
+        if (openCodeToolKind(event.data.name) !== "tool") return;
         await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
         return;
       }

@@ -6,6 +6,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
+import { describeErrorCauseChain } from "workbench-shared/process/error-cause-chain";
 import type { SessionInboxInfo, SessionInfo, SessionMessageInfo, SessionMessageUser } from "@opencode/client";
 import {
   NativeThreadIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema,
@@ -793,7 +794,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     };
   }
 
-  async reconcileActivity(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): Promise<OpenCodeNativeActivity[]> {
+  /** Native activity of every candidate session, or only `only`; a session whose read fails is skipped so others still recover. */
+  async reconcileActivity(
+    signal: AbortSignal, wasTouched: (sessionID: string) => boolean, only?: string,
+  ): Promise<OpenCodeNativeActivity[]> {
     signal.throwIfAborted();
     const client = await this.options.acquire();
     const active = await client.session.active({ signal });
@@ -802,8 +806,14 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       signal.throwIfAborted();
       const turnId = getWorkbenchLifecycleTurnId(record.lifecycle);
       if (!turnId) continue;
-      const { binding } = await this.native(record.identity.threadId);
-      durableWorking.set(binding.nativeThreadId, turnId);
+      try {
+        const { binding } = await this.native(record.identity.threadId);
+        durableWorking.set(binding.nativeThreadId, turnId);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        console.warn(`[opencode] working thread ${record.identity.threadId} has no native session to reconcile: ${
+          describeErrorCauseChain(error, 500)}`);
+      }
     }
     const candidates = new Set([
       ...Object.keys(active),
@@ -814,44 +824,61 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const observations: OpenCodeNativeActivity[] = [];
     for (const sessionID of candidates) {
       signal.throwIfAborted();
-      if (wasTouched(sessionID)) continue;
-      if (!this.executions.has(sessionID) && !this.sessions.has(sessionID)) {
-        const session = await client.session.get({ sessionID }, { signal });
-        const admitted = this.options.identities.findNativeThread({
-          harness: "opencode",
-          nativeLocation: session.location.directory,
-          nativeThreadId: NativeThreadIdSchema.parse(sessionID),
-        });
-        if (!admitted || wasTouched(sessionID)) continue;
+      if (only !== undefined && sessionID !== only) continue;
+      try {
+        const observation = await this.sessionActivity(client, sessionID, Boolean(active[sessionID]),
+          durableWorking.get(sessionID), signal, wasTouched);
+        if (observation) observations.push(observation);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        console.warn(`[opencode] activity reconciliation failed for session ${sessionID}: ${describeErrorCauseChain(error, 500)}`);
       }
-      const nativeActive = Boolean(active[sessionID]);
-      const identity = await this.syncNative(sessionID, signal);
-      if (wasTouched(sessionID)) continue;
-      const turn = (await this.read(identity.threadId)).turns.at(-1) ?? null;
-      if (wasTouched(sessionID)) continue;
-      const durableTurnId = durableWorking.get(sessionID);
-      if (!nativeActive && durableTurnId && turn?.id !== durableTurnId) continue;
-      let inbox = !nativeActive ? await client.session.inbox.list({ sessionID }, { signal }) : [];
-      const interruptedRoot = !nativeActive && durableTurnId === turn?.id
-        && turn?.status === "interrupted" && identity.outcome === "interrupted";
-      if (interruptedRoot && durableTurnId && inbox.length) {
-        inbox = await this.retireInterruptedRoot(
-          client, sessionID, identity.threadId, durableTurnId, inbox, signal, wasTouched,
-        );
-      }
-      if (wasTouched(sessionID)) continue;
-      const pending = !nativeActive && (this.execution(sessionID).admission !== null
-        || this.pendingSteerSessions.has(sessionID) || inbox.some(isManagedWorkbenchPrompt));
-      if (pending || wasTouched(sessionID)) continue;
-      if (interruptedRoot && Boolean((await client.session.active({ signal }))[sessionID])) continue;
-      observations.push({
-        sessionID, threadId: identity.threadId, projectId: identity.projectId, turn,
-        active: nativeActive && turn?.status === "inProgress",
-        outcome: identity.outcome, idleAt: identity.idleAt,
-        maintenance: identity.maintenance && !interruptedRoot,
-      });
     }
     return observations;
+  }
+
+  private async sessionActivity(
+    client: WorkbenchOpenCodeClient,
+    sessionID: string,
+    nativeActive: boolean,
+    durableTurnId: WorkbenchTurnId | undefined,
+    signal: AbortSignal,
+    wasTouched: (sessionID: string) => boolean,
+  ): Promise<OpenCodeNativeActivity | null> {
+    if (wasTouched(sessionID)) return null;
+    if (!this.executions.has(sessionID) && !this.sessions.has(sessionID)) {
+      const session = await client.session.get({ sessionID }, { signal });
+      const admitted = this.options.identities.findNativeThread({
+        harness: "opencode",
+        nativeLocation: session.location.directory,
+        nativeThreadId: NativeThreadIdSchema.parse(sessionID),
+      });
+      if (!admitted || wasTouched(sessionID)) return null;
+    }
+    const identity = await this.syncNative(sessionID, signal);
+    if (wasTouched(sessionID)) return null;
+    const turn = (await this.read(identity.threadId)).turns.at(-1) ?? null;
+    if (wasTouched(sessionID)) return null;
+    if (!nativeActive && durableTurnId && turn?.id !== durableTurnId) return null;
+    let inbox = !nativeActive ? await client.session.inbox.list({ sessionID }, { signal }) : [];
+    const interruptedRoot = !nativeActive && durableTurnId === turn?.id
+      && turn?.status === "interrupted" && identity.outcome === "interrupted";
+    if (interruptedRoot && durableTurnId && inbox.length) {
+      inbox = await this.retireInterruptedRoot(
+        client, sessionID, identity.threadId, durableTurnId, inbox, signal, wasTouched,
+      );
+    }
+    if (wasTouched(sessionID)) return null;
+    const pending = !nativeActive && (this.execution(sessionID).admission !== null
+      || this.pendingSteerSessions.has(sessionID) || inbox.some(isManagedWorkbenchPrompt));
+    if (pending || wasTouched(sessionID)) return null;
+    if (interruptedRoot && Boolean((await client.session.active({ signal }))[sessionID])) return null;
+    return {
+      sessionID, threadId: identity.threadId, projectId: identity.projectId, turn,
+      active: nativeActive && turn?.status === "inProgress",
+      outcome: identity.outcome, idleAt: identity.idleAt,
+      maintenance: identity.maintenance && !interruptedRoot,
+    };
   }
 
   private async retireInterruptedRoot(

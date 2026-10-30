@@ -737,15 +737,23 @@ test("history replays current and pre-rename commentary-tool input as exact comm
         type: "tool", id: "message-2", name: "mcp__user__message",
         state: { status: "completed", input: { text: "older session" }, output: "", content: [{ type: "text", text: "Message delivered to user." }] },
         time: { created: 3, ran: 3, completed: 3 },
+      } as never, {
+        type: "tool", id: "message-3", name: "mcp__user__message",
+        state: {
+          status: "error", input: { text: "refused" },
+          error: { message: "Native OpenCode tool mcp__user__message is unavailable in a managed Workbench session." },
+        },
+        time: { created: 3, ran: 3, completed: 3 },
       } as never],
       time: { created: 3, completed: 3 },
     },
   ], { id: "00000000-0000-4000-8000-000000000010", rootPath: "C:/repo" }, { settleUsage: true });
   const items = recorded.flatMap(entry => entry.kind === "item" ? [entry.item] : []);
-  assert.deepEqual(items.map(item => item.type), ["userMessage", "agentMessage", "agentMessage"]);
-  assert.deepEqual(items.slice(1).map(item => item.type === "agentMessage" ? [item.text, item.phase] : null), [
+  assert.deepEqual(items.map(item => item.type), ["userMessage", "agentMessage", "agentMessage", "dynamicToolCall"]);
+  assert.deepEqual(items.slice(1, 3).map(item => item.type === "agentMessage" ? [item.text, item.phase] : null), [
     ["**on it**", "commentary"], ["older session", "commentary"],
   ]);
+  assert.equal(items[3]?.type === "dynamicToolCall" ? items[3].status : null, "failed");
   assert.doesNotMatch(JSON.stringify(recorded), /Plain text output is not shown/u);
 });
 

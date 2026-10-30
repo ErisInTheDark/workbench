@@ -1382,6 +1382,7 @@ test("connection recovery includes a persisted working OpenCode thread after its
   assert.equal(facts[0]?.active, false);
   assert.equal(facts[0]?.projectId, projectId);
   assert.equal(facts[0]?.turn?.id, turnId);
+  assert.deepEqual(await owner.reconcileActivity(new AbortController().signal, () => false, "other-session"), []);
   assert.deepEqual(await owner.reconcileActivity(new AbortController().signal, id => id === nativeThreadId), []);
   pending = true;
   assert.deepEqual(await owner.reconcileActivity(new AbortController().signal, () => false), []);
@@ -1390,7 +1391,9 @@ test("connection recovery includes a persisted working OpenCode thread after its
   assert.deepEqual(await owner.reconcileActivity(new AbortController().signal, () => false), []);
 });
 
-test("connection recovery retires only the interrupted turn's undelivered queue item after compaction", async () => {
+test("connection recovery retires only the interrupted turn's undelivered queue item after compaction", async t => {
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (message: string) => { warnings.push(message); });
   const cancelled: string[] = [];
   let failCancel = false;
   const queued = {
@@ -1430,7 +1433,9 @@ test("connection recovery retires only the interrupted turn's undelivered queue 
   assert.equal(facts[0]?.turn?.id, turnId);
   inbox = [queued];
   failCancel = true;
-  await assert.rejects(owner.reconcileActivity(new AbortController().signal, () => false), /native cancel failed/u);
+  // One session's failure must not reject the connection-wide reconciliation.
+  assert.deepEqual(await owner.reconcileActivity(new AbortController().signal, () => false), []);
+  assert.ok(warnings.some(message => message.includes(nativeThreadId) && message.includes("native cancel failed")));
 });
 
 test("native idle history prevents a stale active snapshot from reopening a turn", async () => {
