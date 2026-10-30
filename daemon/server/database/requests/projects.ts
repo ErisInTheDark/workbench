@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - projectRequests: database requests for the project catalogue, project identity and icons, thread launches, the project store and search.
+ * - projectRequests: database requests for the project catalogue, inaccessible-project merges, project identity and icons, thread
+ *   launches, the project store and search.
  */
 import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchThreadLaunchLocation, WorkbenchThreadLaunchRequest, WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
@@ -20,6 +21,13 @@ export const projectRequests = {
   }),
   reconcileProjectCatalog: defineDatabaseRequest({
     run: ({ projects }, discovery: WorkbenchProjectDiscovery) => projects.reconcile(discovery),
+  }),
+  readInaccessibleProjects: defineDatabaseRequest({
+    read: "core",
+    run: ({ projects }) => projects.readInaccessible(),
+  }),
+  mergeProjects: defineDatabaseRequest({
+    run: ({ projects }, sourceId: string, targetId: string) => projects.merge(sourceId, targetId),
   }),
   readProjectAliases: defineDatabaseRequest({
     read: "core",

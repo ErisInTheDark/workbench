@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchProjectThreadStateOptions: initial durable and lifecycle facts for one project.
  * - default WorkbenchProjectThreadState: own one project's stores, revision, reconciliation lifecycle, and what storage last
- *   durably holds, so a failed write restores it.
+ *   durably holds, so a failed write restores it; admit stored entries it lacks.
  */
 
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -94,6 +94,26 @@ export default class WorkbenchProjectThreadState {
     staged.#writeQueue = this.#writeQueue;
     staged.#durable = this.#durable;
     return staged;
+  }
+
+  /** Adds stored drafts and entries this state lacks, such as threads a project merge moved here; returns whether any were added. */
+  admitStored(
+    drafts: Iterable<readonly [string, WorkbenchThreadDraft]>,
+    entries: Iterable<readonly [string, WorkbenchThreadStateEntry]>,
+  ) {
+    let added = false;
+    for (const [draftId, draft] of drafts) {
+      if (this.drafts.has(draftId)) continue;
+      this.drafts.set(draftId, draft);
+      added = true;
+    }
+    for (const [key, entry] of entries) {
+      if (this.entries.has(key)) continue;
+      this.entries.set(key, entry);
+      this.#durable.entries.set(key, entry);
+      added = true;
+    }
+    return added;
   }
 
   changedEntryKeys(previous: ReadonlyMap<string, WorkbenchThreadStateEntry>) {

@@ -230,6 +230,8 @@ function createController(options: {
       readLocations: async () => ({ data: [] }),
       readDiscoverySettings: async () => ({ paths: [] }),
       updateDiscoverySettings: async paths => ({ accepted: true, paths: [...paths] }),
+      readInaccessibleProjects: async () => ({ data: [], targets: [] }),
+      mergeProject: async () => ({ threadCount: 0 }),
       resolveProjectById: async (projectId) => {
         if (projectId === options.rejectProjectId) throw new Error("Unknown project.");
         return { id: ProjectIdSchema.parse(options.canonicalProjectId ?? projectId), kind: "git", root: "", rootPath: "", roots: [] };

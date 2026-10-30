@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - default WorkbenchProjectRepository: own project parents, historical location admission, aliases, catalogue reconciliation
- *   (marking projects a complete discovery misses, so retained startup catalogues skip them, and retiring ones gone from disk
- *   across two scans with no unarchived threads), and icon settlement.
+ *   (marking projects a complete discovery misses, so retained startup catalogues skip them, and for ones gone from disk
+ *   across two scans, merging into their one present same-identity successor or else retiring them with no unarchived
+ *   threads), inaccessible-project reads and merges, and icon settlement.
  * - FIXED_PROJECT_IDS: kinds catalogued under a fixed id equal to the kind, exempt from uuid conversion.
  */
 import { randomUUID } from "node:crypto";
@@ -15,9 +16,17 @@ import { REMOVED_PROJECTS_ID, WorkbenchProjectIconSchema, WorkbenchProjectOption
 import type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
 import { nativeLocationKey } from "../thread-identity/native-location-key.ts";
 import { projectLocationKey } from "../../lib/workbench/project/project-location-discovery.ts";
-import type { WorkbenchProjectAlias, WorkbenchProjectCandidate, WorkbenchProjectDiscovery, WorkbenchProjectStartup, WorkbenchProjectIconSettlement } from "./workbench-project-persistence.ts";
+import type {
+  WorkbenchInaccessibleProject, WorkbenchProjectAlias, WorkbenchProjectCandidate, WorkbenchProjectDiscovery, WorkbenchProjectIconSettlement,
+  WorkbenchProjectMerge, WorkbenchProjectReconciliation, WorkbenchProjectStartup,
+} from "./workbench-project-persistence.ts";
+import { PROJECT_REFERENCES } from "./project-references.ts";
 
 const uuid = z.string().uuid();
+type ProjectRow = ProjectSchemaRows["projects"];
+type RootRow = ProjectSchemaRows["roots"];
+type MergeableKind = "git" | "workspace";
+const isMergeable = (row: ProjectRow): row is ProjectRow & { kind: MergeableKind } => row.kind === "git" || row.kind === "workspace";
 /** Kinds catalogued once per daemon under a fixed id equal to the kind, outside every discovery folder. */
 export const FIXED_PROJECT_IDS: ReadonlySet<string> = new Set(["workbench-library", "daemon"]);
 
@@ -137,34 +146,149 @@ export default class WorkbenchProjectRepository {
     `).get(projectId)) return false;
     try {
       this.database.transaction(() => {
-        const ids = { project: projectId, removed: REMOVED_PROJECTS_ID };
-        const run = (statement: string) => this.database.prepare(statement).run(ids);
-        run("INSERT OR IGNORE INTO workbench_projects(id, kind) VALUES (@removed, 'historical')");
-        for (const table of [
-          "workbench_threads", "thread_tool_daily_aggregates", "workbench_subagent_relationships",
-          "workbench_thread_vis_sessions", "workbench_agent_feedback",
-        ]) run(`UPDATE ${table} SET project_id = @removed WHERE project_id = @project`);
-        // Import receipts keep their provider thread already counted; a duplicate under the owner is the same receipt.
-        run("UPDATE OR IGNORE thread_usage_imports SET project_id = @removed WHERE project_id = @project");
-        run("DELETE FROM workbench_sidebar_layouts WHERE id IN (SELECT layout_id FROM workbench_sidebar_project_layouts WHERE project_id = @project)");
-        for (const [table, column] of [
-          ["thread_usage_imports", "project_id"], ["git_claim_sessions", "project_id"],
-          ["git_claim_thread_file_days", "project_id"], ["git_claim_imports", "project_id"],
-          ["workbench_thread_drafts", "project_id"], ["workbench_project_thread_profiles", "project_id"],
-          ["workbench_composer_profiles", "scope_project_id"], ["codex_sandbox_network_project_overrides", "project_id"],
-          ["workbench_browse_sessions", "project_id"], ["workbench_thread_launches", "project_id"],
-          ["workbench_search_documents", "project_id"], ["workbench_project_aliases", "project_id"],
-        ] as const) run(`DELETE FROM ${table} WHERE ${column} = @project`);
-        run("UPDATE workbench_projects SET icon_root_id = NULL, icon_path = NULL, icon_checked_at = NULL WHERE id = @project");
-        run("DELETE FROM workbench_project_roots WHERE project_id = @project");
-        // Approval rules and the project store cascade with the project row.
-        run("DELETE FROM workbench_projects WHERE id = @project");
+        this.database.prepare("INSERT OR IGNORE INTO workbench_projects(id, kind) VALUES (?, 'historical')").run(REMOVED_PROJECTS_ID);
+        this.dissolve(projectId, REMOVED_PROJECTS_ID, "retire");
       })();
       return true;
     } catch (error) {
       console.warn(`[projects] vanished project ${projectId} stays hidden; retiring it failed: ${
         (error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
       return false;
+    }
+  }
+
+  /**
+   * Folds an inaccessible project (missed by a complete scan, every root gone from disk) into a present Git or workspace
+   * project: its threads move onto the matching target roots, references follow PROJECT_REFERENCES, and its id and addresses
+   * become aliases of the target. A root still on disk could hold checkout-bound state, so such a source is rejected.
+   */
+  merge(sourceId: string, targetId: string): WorkbenchProjectMerge {
+    return this.fold(sourceId, targetId, false);
+  }
+
+  /** A target this reconciliation just discovered is present even before its retained `missing_since` clears. */
+  private fold(sourceId: string, targetId: string, targetDiscovered: boolean): WorkbenchProjectMerge {
+    return this.database.transaction(() => {
+      const read = (id: string) => this.database.prepare("SELECT * FROM workbench_projects WHERE id = ?").get(id) as ProjectRow | undefined;
+      const source = read(sourceId);
+      const target = read(targetId);
+      if (!source || !target || source.id === target.id) throw new Error("Merging needs two different retained projects.");
+      if (!isMergeable(source) || !isMergeable(target)) throw new Error("Only Git and workspace projects can merge.");
+      const sourceRoots = this.rootsOf(source.id);
+      const targetRoots = this.rootsOf(target.id);
+      if (source.missing_since === null || sourceRoots.some(root => this.folderExists(root.root_path))) {
+        throw new Error("Only a project whose folders are all gone can merge into another.");
+      }
+      if ((!targetDiscovered && target.missing_since !== null) || !targetRoots.length) throw new Error("The merge target is not available.");
+      const targetRootFor = (root: RootRow | undefined) => targetRoots.find(next => next.root_id === root?.root_id)
+        ?? targetRoots.find(next => next.root_index === root?.root_index) ?? targetRoots[0]!;
+      const threads = this.database.prepare("SELECT id, project_root FROM workbench_threads WHERE project_id = ? ORDER BY id")
+        .all(source.id) as Array<{ id: string; project_root: string }>;
+      const moveRoot = this.database.prepare("UPDATE workbench_threads SET project_root = ? WHERE id = ?");
+      for (const thread of threads) moveRoot.run(this.relocate(thread.project_root, sourceRoots, targetRootFor), thread.id);
+      this.dissolve(source.id, target.id, "merge", {
+        roots: new Map(sourceRoots.map(root => [root.root_id, targetRootFor(root).root_id])),
+        fallback: targetRoots[0]!.root_id,
+      });
+      this.retainAlias(source.id, ProjectIdSchema.parse(target.id));
+      if (source.identity_key) this.retainAvailableAlias(source.identity_key, ProjectIdSchema.parse(target.id));
+      return {
+        sourceId: ProjectIdSchema.parse(source.id), targetId: ProjectIdSchema.parse(target.id),
+        threadIds: threads.map(thread => thread.id),
+      };
+    })();
+  }
+
+  /** Git and workspace projects gone from disk since a complete scan that still own threads. */
+  readInaccessible(): WorkbenchInaccessibleProject[] {
+    const rows = this.database.prepare(
+      "SELECT * FROM workbench_projects WHERE kind IN ('git', 'workspace') AND missing_since IS NOT NULL ORDER BY name, id",
+    ).all() as ProjectRow[];
+    const countThreads = this.database.prepare("SELECT count(*) FROM workbench_threads WHERE project_id = ?").pluck();
+    return rows.flatMap(row => {
+      const roots = this.rootsOf(row.id);
+      if (!isMergeable(row) || roots.some(root => this.folderExists(root.root_path))) return [];
+      const threadCount = countThreads.get(row.id) as number;
+      return threadCount ? [{
+        id: ProjectIdSchema.parse(row.id), kind: row.kind, name: row.name ?? roots[0]?.name ?? row.id,
+        identityKey: row.identity_key ? ProjectIdentityKeySchema.parse(row.identity_key) : null,
+        rootPaths: roots.map(root => root.root_path), threadCount,
+      }] : [];
+    });
+  }
+
+  private rootsOf(projectId: string) {
+    return this.database.prepare("SELECT * FROM workbench_project_roots WHERE project_id = ? ORDER BY root_index").all(projectId) as RootRow[];
+  }
+
+  /** The same location under the target root matching the source root containing it; anything outside lands on the target's primary root. */
+  private relocate(location: string, sourceRoots: readonly RootRow[], targetRootFor: (root: RootRow | undefined) => RootRow) {
+    const key = nativeLocationKey(location);
+    const containing = [...sourceRoots].sort((left, right) => right.root_path.length - left.root_path.length).find(root => {
+      const rootKey = nativeLocationKey(root.root_path);
+      return key === rootKey || key.startsWith(`${rootKey}${path.sep}`);
+    });
+    const target = targetRootFor(containing);
+    if (!containing) return target.root_path;
+    const suffix = location.replaceAll("\\", "/").slice(containing.root_path.replaceAll("\\", "/").replace(/\/+$/u, "").length);
+    return `${target.root_path.replace(/[\\/]+$/u, "")}${suffix}`;
+  }
+
+  /** Applies one PROJECT_REFERENCES phase moving `projectId`'s rows to `destination`, then deletes the project row. */
+  private dissolve(projectId: string, destination: string, phase: "retire" | "merge",
+    rootRemap?: { roots: ReadonlyMap<string, string>; fallback: string }) {
+    const ids: Record<string, string> = { project: projectId, destination };
+    this.database.prepare("UPDATE workbench_projects SET icon_root_id = NULL, icon_path = NULL, icon_checked_at = NULL WHERE id = @project").run(ids);
+    for (const reference of PROJECT_REFERENCES) {
+      const { table, column, rootColumn } = reference;
+      const run = (statement: string, values: Record<string, string> = ids) => this.database.prepare(statement).run(values);
+      const disposition = reference[phase];
+      switch (disposition) {
+        case "move":
+        case "merge": {
+          const values: Record<string, string> = { ...ids };
+          let assignments = `${column} = @destination`;
+          if (rootColumn && rootRemap) {
+            values.fallbackRoot = rootRemap.fallback;
+            const cases = [...rootRemap.roots].map(([from, to], index) => {
+              values[`from${index}`] = from;
+              values[`to${index}`] = to;
+              return `WHEN @from${index} THEN @to${index}`;
+            }).join(" ");
+            assignments += `, ${rootColumn} = CASE ${rootColumn} ${cases} ELSE @fallbackRoot END`;
+          }
+          run(`UPDATE${disposition === "merge" ? " OR IGNORE" : ""} ${table} SET ${assignments} WHERE ${column} = @project`, values);
+          if (disposition === "merge") run(`DELETE FROM ${table} WHERE ${column} = @project`);
+          break;
+        }
+        case "delete":
+          run(`DELETE FROM ${table} WHERE ${column} = @project`);
+          break;
+        case "deleteLayout":
+          run(`DELETE FROM workbench_sidebar_layouts WHERE id IN (SELECT layout_id FROM ${table} WHERE ${column} = @project)`);
+          break;
+        case "keep":
+          break;
+      }
+    }
+    this.database.prepare("DELETE FROM workbench_projects WHERE id = @project").run(ids);
+  }
+
+  /** The one present project of the same kind sharing a vanished project's identity, if exactly one exists. */
+  private vanishedSuccessor(vanished: ProjectRow, candidates: readonly ProjectRow[], isPresent: (row: ProjectRow) => boolean) {
+    if (!vanished.identity_key) return null;
+    const matches = candidates.filter(row => row.id !== vanished.id && row.kind === vanished.kind
+      && row.identity_key === vanished.identity_key && isPresent(row));
+    return matches.length === 1 ? matches[0]! : null;
+  }
+
+  private mergeVanished(source: ProjectRow, target: ProjectRow): WorkbenchProjectMerge | null {
+    try {
+      return this.fold(source.id, target.id, true);
+    } catch (error) {
+      console.warn(`[projects] vanished project ${source.id} could not merge into ${target.id}: ${
+        (error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
+      return null;
     }
   }
 
@@ -225,7 +349,7 @@ export default class WorkbenchProjectRepository {
     };
   }
 
-  reconcile(discovery: WorkbenchProjectDiscovery): WorkbenchProjectStartup {
+  reconcile(discovery: WorkbenchProjectDiscovery): WorkbenchProjectReconciliation {
     const parsed = discovery.data.map(candidate => ({
       ...candidate,
       identityKey: ProjectIdentityKeySchema.parse(candidate.identityKey),
@@ -261,19 +385,31 @@ export default class WorkbenchProjectRepository {
           return a < b ? -1 : a > b ? 1 : 0;
         })[0]!;
       });
+      const merges: WorkbenchProjectMerge[] = [];
       if (discovery.complete) {
         const present = new Set(selected.map(projectLocationKey));
-        for (const previous of retainedProjects) {
-          if (previous.kind !== "git" && previous.kind !== "workspace") continue;
-          const roots = retainedRoots.get(previous.id) ?? [];
-          if (present.has(projectLocationKey({
-            kind: previous.kind,
+        const isPresent = (row: ProjectRow) => {
+          const roots = retainedRoots.get(row.id) ?? [];
+          return present.has(projectLocationKey({
+            kind: row.kind,
             rootPath: roots[0]?.root_path ?? "",
             roots: roots.map(root => ({ rootPath: root.root_path })),
-          }))) continue;
+          }));
+        };
+        for (const previous of retainedProjects) {
+          if (previous.kind !== "git" && previous.kind !== "workspace") continue;
+          if (isPresent(previous)) continue;
+          const roots = retainedRoots.get(previous.id) ?? [];
           // Missed by an earlier complete scan too, with every folder gone from disk: one hiccup cannot get here.
-          if (previous.missing_since !== null && !roots.some(root => this.folderExists(root.root_path))
-            && this.retireVanished(previous.id)) continue;
+          if (previous.missing_since !== null && !roots.some(root => this.folderExists(root.root_path))) {
+            const successor = this.vanishedSuccessor(previous, retainedProjects, isPresent);
+            const merged = successor ? this.mergeVanished(previous, successor) : null;
+            if (merged) {
+              merges.push(merged);
+              continue;
+            }
+            if (this.retireVanished(previous.id)) continue;
+          }
           this.database.prepare("UPDATE workbench_projects SET icon_source_key = ?, missing_since = COALESCE(missing_since, ?) WHERE id = ?")
             .run(randomUUID(), Date.now(), previous.id);
         }
@@ -378,7 +514,10 @@ export default class WorkbenchProjectRepository {
         checkedAt,
       });
       }
-      return { catalog, aliases: this.readAliases(), rootPath: discovery.rootPath, discoveryRoots: discovery.discoveryRoots, excludedRootPaths: [...excludedRootPaths] };
+      return {
+        catalog, aliases: this.readAliases(), rootPath: discovery.rootPath, discoveryRoots: discovery.discoveryRoots,
+        excludedRootPaths: [...excludedRootPaths], ...(merges.length ? { merges } : {}),
+      };
     })();
   }
 

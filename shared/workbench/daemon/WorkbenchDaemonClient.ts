@@ -297,6 +297,11 @@ class WorkbenchDaemonClient {
     update: (params: WorkbenchDaemonParams<"project/discovery-settings/update">) => this.request("project/discovery-settings/update", params),
   };
 
+  readonly projectMerging = {
+    readInaccessible: () => this.request("project/inaccessible/read", {}),
+    merge: (params: WorkbenchDaemonParams<"project/merge">) => this.request("project/merge", params),
+  };
+
   readonly projectCreation = {
     listFolders: (params: WorkbenchDaemonParams<"project/folders/list">) => this.request("project/folders/list", params),
     create: (params: WorkbenchDaemonParams<"project/create">) => this.request("project/create", params),

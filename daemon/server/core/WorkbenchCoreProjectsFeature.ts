@@ -33,6 +33,7 @@ export default class WorkbenchCoreProjectsFeature {
       // The daemon's own checkout always has a project, so wb feedback and Workbench threads have an owner.
       pinnedProjectRoots: [context.legacyMigrationProjectRoot],
       persistence: database,
+      merging: database,
       settings: this.settings,
       resolveThreadProjectId: async (threadReference) => (
         await database.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadReference) })

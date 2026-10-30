@@ -2,7 +2,8 @@
  * Exports:
  * - default WorkbenchCoreNode: own the core generation's lifecycle (start, drain, reload handoff, dispose order) and registrations, wiring the
  *   feature clusters under ./core with the provider dispatcher, thread state, thread summaries, the thread busy lease, thread actions, launches, daemon requests,
- *   MCP servers, browse cleanup and the MCP registry's undelivered-message read, plus supervisor registrations and direct child declarations (including provider runtime installs).
+ *   MCP servers, browse cleanup and the MCP registry's undelivered-message read, project-merge absorption into thread identity and
+ *   state, plus supervisor registrations and direct child declarations (including provider runtime installs).
  * Local helpers: construct reloadable modules and the core feature lifecycle.
  */
 import path from "node:path";
@@ -210,6 +211,14 @@ function createWorkbenchCoreFeature(
     pruneThreadVis: threadIds => vis.prune(threadIds),
   });
   const threadStateController = threadStateFeature.controller;
+  projectCatalog.subscribeMerges(merges => {
+    void (async () => {
+      for (const merge of merges) {
+        await threadIdentity.refreshThreads(merge.threadIds.map(threadId => WorkbenchThreadIdSchema.parse(threadId)));
+        await threadStateController.absorbMergedProject(merge.sourceId, merge.targetId);
+      }
+    })().catch(error => logThreadStateWarning(`project merge absorption failed: ${error instanceof Error ? error.message : String(error)}`));
+  });
   threadSummaries = new WorkbenchThreadSummaryIndex({
     resolveProject: async threadId => (await lookup.identity(threadId))?.projectId ?? null,
     peekProject: projectId => threadStateController.peekProject(projectId),

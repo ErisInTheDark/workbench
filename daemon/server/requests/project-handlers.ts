@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - projectRequestHandlers: daemon handlers for project trees, files, stores, discovery, creation, file indexes, working trees,
+ * - projectRequestHandlers: daemon handlers for project trees, files, stores, discovery, inaccessible-project merges, creation,
+ *   file indexes, working trees,
  *   commit and stash reads, ref moves, upstream pushes and pulls, search,
  *   native file actions, and the agent and skill catalogues.
  */
@@ -10,6 +11,7 @@ import { GitPullRequestSchema, GitPushRequestSchema } from "workbench-shared/wor
 import { GitObjectFileRequestSchema, GitObjectRequestSchema, GitRefMutationSchema } from "workbench-shared/workbench/git/git-object-contracts";
 import { ProjectCreateRequestSchema, ProjectFolderListRequestSchema } from "workbench-shared/workbench/project/project-creation";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
+import { ProjectMergeRequestSchema } from "workbench-shared/workbench/project/project-merge";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
 import { WorkbenchProjectStateRequestSchema } from "workbench-shared/workbench/project/project-state";
 import { ProjectStoreReadRequestSchema, ProjectStoreUpdateRequestSchema } from "workbench-shared/workbench/project/project-store";
@@ -94,6 +96,12 @@ export const projectRequestHandlers = defineDaemonRequestHandlers({
     const parsed = ProjectDiscoverySettingsUpdateSchema.safeParse(params);
     if (!parsed.success) throw new InvalidParamsError("Invalid project discovery settings.");
     return await owners.projects.updateDiscoverySettings(parsed.data.paths);
+  },
+  "project/inaccessible/read": async (_params, { owners }) => await owners.projects.readInaccessibleProjects(),
+  "project/merge": async (params, { owners }) => {
+    const parsed = ProjectMergeRequestSchema.safeParse(params);
+    if (!parsed.success) throw new InvalidParamsError("A source and target project are required to merge.");
+    return await owners.projects.mergeProject(parsed.data.sourceId, parsed.data.targetId);
   },
   "project/folders/list": async (params, context) => {
     const creation = projectCreation(context);

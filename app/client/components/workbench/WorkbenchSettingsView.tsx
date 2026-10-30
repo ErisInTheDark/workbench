@@ -22,6 +22,7 @@ import WorkbenchBrowseCapabilitySetting from "./WorkbenchBrowseCapabilitySetting
 import WorkbenchInstallationSettings from "./WorkbenchInstallationSettings";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
+import WorkbenchInaccessibleProjectSettings from "./WorkbenchInaccessibleProjectSettings";
 import WorkbenchProjectLocationMenu from "./WorkbenchProjectLocationMenu";
 import WorkbenchProviderSettings from "./WorkbenchProviderSettings";
 import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
@@ -64,6 +65,7 @@ const machinePages: { id: MachinePage; label: string; sections: Section[] }[] = 
   ] },
   { id: "projects", label: "Projects", sections: [
     { id: "settings-discovery", label: "Discovery" },
+    { id: "settings-inaccessible-projects", label: "Inaccessible projects" },
     { id: "settings-folder", label: "Folder" },
     { id: "settings-folder-network", label: "Network access" },
     { id: "settings-environment", label: "Environment" },
@@ -284,6 +286,12 @@ export default function WorkbenchSettingsView({
         <FormSection id="settings-discovery" title="Discovery">
           {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>
             <WorkbenchProjectDiscoverySettings onSaved={() => onGitRootsSaved(id)} />
+          </WorkbenchOperationsContext.Provider>)}
+        </FormSection>
+        <FormSection id="settings-inaccessible-projects" title="Inaccessible projects"
+          description="Projects whose folders are gone but still own threads. Merging moves their threads into another project.">
+          {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>
+            <WorkbenchInaccessibleProjectSettings />
           </WorkbenchOperationsContext.Provider>)}
         </FormSection>
         <div id="settings-folder" className="mt-8 flex scroll-mt-24 flex-wrap items-center gap-x-2 gap-y-1 border-t border-fg/10 pt-6">

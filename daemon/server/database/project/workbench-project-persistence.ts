@@ -7,7 +7,11 @@
  * - WorkbenchProjectIconSettlement: source-fenced positive or negative icon result.
  * - WorkbenchProjectPreparation: current structural evidence for startup.
  * - WorkbenchProjectStartup: reconciled startup catalogue and retained identity evidence.
+ * - WorkbenchProjectMerge: one inaccessible project folded into a present one, with the threads it moved.
+ * - WorkbenchProjectReconciliation: a reconciled catalogue plus the merges that reconciliation performed.
+ * - WorkbenchInaccessibleProject: a project gone from disk that still owns threads.
  * - WorkbenchProjectPersistence: typed project operations across the database worker.
+ * - WorkbenchProjectMergePersistence: inaccessible-project reads and merges across the database worker.
  */
 import type { WorkbenchProjectAlias, WorkbenchProjectIcon, WorkbenchProjectOption } from "workbench-shared/types";
 export type { WorkbenchProjectAlias } from "workbench-shared/types";
@@ -40,6 +44,25 @@ export interface WorkbenchProjectStartup {
   discoveryRoots?: string[];
 }
 
+export interface WorkbenchProjectMerge {
+  sourceId: ProjectId;
+  targetId: ProjectId;
+  threadIds: string[];
+}
+
+export interface WorkbenchProjectReconciliation extends WorkbenchProjectStartup {
+  merges?: WorkbenchProjectMerge[];
+}
+
+export interface WorkbenchInaccessibleProject {
+  id: ProjectId;
+  kind: "git" | "workspace";
+  name: string;
+  identityKey: ProjectIdentityKey | null;
+  rootPaths: string[];
+  threadCount: number;
+}
+
 export interface WorkbenchProjectCacheRecord {
   project: WorkbenchProjectOption;
   identityKey?: ProjectIdentityKey;
@@ -57,8 +80,13 @@ export interface WorkbenchProjectIconSettlement {
 
 export interface WorkbenchProjectPersistence {
   readRetainedProjectCatalog(discoveryRoots: readonly string[]): Promise<WorkbenchProjectStartup>;
-  reconcileProjectCatalog(discovery: WorkbenchProjectDiscovery): Promise<WorkbenchProjectStartup>;
+  reconcileProjectCatalog(discovery: WorkbenchProjectDiscovery): Promise<WorkbenchProjectReconciliation>;
   readProjectAliases(): Promise<WorkbenchProjectAlias[]>;
   resolveProjectIdentity(projectId: string): Promise<ProjectId>;
   settleProjectIcon(settlement: WorkbenchProjectIconSettlement): Promise<boolean>;
+}
+
+export interface WorkbenchProjectMergePersistence {
+  readInaccessibleProjects(): Promise<WorkbenchInaccessibleProject[]>;
+  mergeProjects(sourceId: string, targetId: string): Promise<WorkbenchProjectMerge>;
 }

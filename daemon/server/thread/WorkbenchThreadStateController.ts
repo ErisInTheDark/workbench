@@ -6,7 +6,7 @@
  * - WorkbenchThreadGitArcSnapshot: project Git arc projection.
  * - WorkbenchThreadClaimContext: thread-owned claim context.
  * - WorkbenchObservedLifecycleEvent: identity-owned provider lifecycle input.
- * - default WorkbenchThreadStateController: coordinate admission, provider observation, cross-project operations, publication, owned project stores, and on-demand accepted-commit refs and details.
+ * - default WorkbenchThreadStateController: coordinate admission, provider observation, cross-project operations, publication, owned project stores, project-merge absorption, and on-demand accepted-commit refs and details.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { createHash } from "node:crypto";
@@ -1444,20 +1444,7 @@ export default class WorkbenchThreadStateController {
       if (this.projects.has(projectId)) return;
       const stored = await this.loadProjectStorage(projectId);
       this.assertActive();
-      const drafts = new Map<string, WorkbenchThreadDraft>();
-      const entries = new Map<string, WorkbenchThreadStateEntry>();
-      for (const storedDraft of stored.drafts) {
-        const { pinned, snoozed, ...draft } = storedDraft;
-        drafts.set(draft.draftId, draft);
-        entries.set(`draft:${draft.draftId}`, projectWorkbenchThreadDraft(draft, {
-          archived: false,
-          pinned: pinned === true,
-          snoozed: snoozed === true,
-        }));
-      }
-      for (const record of stored.records) {
-        entries.set(entryKey(record), record);
-      }
+      const { drafts, entries } = this.storedEntries(stored);
       const state = new WorkbenchProjectThreadState({
         displayOrder: stored.displayOrder ?? {},
         drafts,
@@ -1480,6 +1467,48 @@ export default class WorkbenchThreadStateController {
     const loaded = this.projects.get(projectId);
     if (!loaded) throw new Error(`Project state failed to load: ${projectId}`);
     return loaded;
+  }
+
+  private storedEntries(stored: StoredProjectState) {
+    const drafts = new Map<string, WorkbenchThreadDraft>();
+    const entries = new Map<string, WorkbenchThreadStateEntry>();
+    for (const storedDraft of stored.drafts) {
+      const { pinned, snoozed, ...draft } = storedDraft;
+      drafts.set(draft.draftId, draft);
+      entries.set(`draft:${draft.draftId}`, projectWorkbenchThreadDraft(draft, {
+        archived: false,
+        pinned: pinned === true,
+        snoozed: snoozed === true,
+      }));
+    }
+    for (const record of stored.records) {
+      entries.set(entryKey(record), record);
+    }
+    return { drafts, entries };
+  }
+
+  /**
+   * Follows a project merge that moved `sourceId`'s threads to `targetId` in storage: the source's cached state retires
+   * (its id now aliases the target), and a loaded target admits the moved entries; an unloaded target reads them on load.
+   */
+  async absorbMergedProject(sourceId: ProjectId, targetId: ProjectId) {
+    this.assertActive();
+    const source = this.projects.get(sourceId);
+    if (source) {
+      source.generation += 1;
+      source.abort?.abort();
+      this.projects.delete(sourceId);
+    }
+    if (!this.projects.has(targetId)) return;
+    await this.enqueue(`${targetId}:project:load`, async () => {
+      const target = this.projects.get(targetId);
+      if (!target) return;
+      const { drafts, entries } = this.storedEntries(await this.loadProjectStorage(targetId));
+      this.assertActive();
+      if (!target.admitStored(drafts, entries)) return;
+      this.archives.reschedule();
+      this.publish(targetId, target);
+    });
   }
 
   /** Accepted proposal ids each thread already holds in permanent commit history; unknown ids have none. */

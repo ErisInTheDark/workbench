@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchProjectCatalogControllerOptions: injected discovery, resolution, watcher, clock, logging, and TTL controls.
- * - default WorkbenchProjectCatalogController: own catalog discovery, icon assets, snapshot replay, durable CWD resolution, and invalidation.
+ * - default WorkbenchProjectCatalogController: own catalog discovery, icon assets, snapshot replay, durable CWD resolution, invalidation,
+ *   and inaccessible-project merges (manual and reconciliation-performed), announced to merge observers after the catalogue republishes.
  */
 import fs from "node:fs";
 import fileSystem from "node:fs/promises";
@@ -11,7 +12,10 @@ import path from "node:path";
 import { discoverProjectIdentities, resolveProjectRootFromProjects } from "../lib/project";
 import { isPathWithinRoot, normalizeRelativePath } from "../lib/project-paths";
 import { discoverWorkbenchProjectIcon } from "../lib/workbench/project/project-icon-discovery";
-import type { WorkbenchProjectCacheRecord, WorkbenchProjectPersistence, WorkbenchProjectStartup } from "../database/project/workbench-project-persistence";
+import type {
+  WorkbenchProjectCacheRecord, WorkbenchProjectMerge, WorkbenchProjectMergePersistence, WorkbenchProjectPersistence, WorkbenchProjectStartup,
+} from "../database/project/workbench-project-persistence";
+import type { InaccessibleProjects, ProjectMergeResult } from "workbench-shared/workbench/project/project-merge";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "workbench-shared/types";
@@ -55,6 +59,7 @@ type ResolveProjectByIdFromCatalog = typeof resolveProjectRootFromProjects;
 export interface WorkbenchProjectCatalogControllerOptions {
   initialProjects?: WorkbenchProjectStartup | (() => WorkbenchProjectStartup);
   persistence: WorkbenchProjectPersistence;
+  merging?: WorkbenchProjectMergePersistence;
   discoverProjectIdentities?: typeof discoverProjectIdentities;
   discoverIcon?: typeof discoverWorkbenchProjectIcon;
   cacheTtlMs?: number;
@@ -182,6 +187,9 @@ function isMissingFileError(error: unknown) {
 
 export default class WorkbenchProjectCatalogController {
   private readonly listeners = new Set<() => void>();
+  private readonly mergeListeners = new Set<(merges: readonly WorkbenchProjectMerge[]) => void>();
+  private readonly merging?: WorkbenchProjectMergePersistence;
+  private readonly pendingMerges: WorkbenchProjectMerge[] = [];
   private factRevision = 0;
   private refreshFailure: string | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -226,6 +234,7 @@ export default class WorkbenchProjectCatalogController {
   constructor({
     initialProjects,
     persistence,
+    merging,
     discoverProjectIdentities: discoverIdentities = discoverProjectIdentities,
     discoverIcon = discoverWorkbenchProjectIcon,
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
@@ -241,6 +250,7 @@ export default class WorkbenchProjectCatalogController {
   }: WorkbenchProjectCatalogControllerOptions) {
     this.resolveThreadProjectId = resolveThreadProjectId;
     this.persistence = persistence;
+    this.merging = merging;
     this.pinnedProjectRoots = [...pinnedProjectRoots];
     this.settings = settings;
     this.discoverIdentities = discoverIdentities;
@@ -265,6 +275,7 @@ export default class WorkbenchProjectCatalogController {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     this.listeners.clear();
+    this.mergeListeners.clear();
     const work = [
       ...this.iconWork.values(),
       ...(this.iconSweep ? [this.iconSweep] : []),
@@ -652,6 +663,63 @@ export default class WorkbenchProjectCatalogController {
     return await operation;
   }
 
+  /** Observers hear about merges once the catalogue carrying the merged aliases is current. */
+  subscribeMerges(listener: (merges: readonly WorkbenchProjectMerge[]) => void) {
+    this.assertActive();
+    this.mergeListeners.add(listener);
+    return () => { this.mergeListeners.delete(listener); };
+  }
+
+  async readInaccessibleProjects(): Promise<InaccessibleProjects> {
+    const merging = this.requireMerging();
+    const [{ catalog }, projects] = await Promise.all([this.readFreshCatalog(), merging.readInaccessibleProjects()]);
+    const targets = catalog.records.filter(record => record.project.kind === "git" || record.project.kind === "workspace");
+    return {
+      data: projects.map(project => {
+        const matches = project.identityKey ? targets.filter(record => record.project.kind === project.kind
+          && record.identityKey === project.identityKey) : [];
+        return {
+          id: project.id, name: project.name, rootPaths: project.rootPaths, threadCount: project.threadCount,
+          suggestedTargetId: matches.length === 1 ? matches[0]!.project.id : null,
+        };
+      }),
+      targets: targets.map(({ project }) => ({ id: project.id, name: project.name, rootPath: project.rootPath })),
+    };
+  }
+
+  /** Merges through the discovery update queue so a scan cannot publish between the merge and its catalogue. */
+  async mergeProject(sourceId: string, targetId: string): Promise<ProjectMergeResult> {
+    const operation = this.updateQueue.then(async (): Promise<ProjectMergeResult> => {
+      this.assertActive();
+      const merging = this.requireMerging();
+      const { catalog } = await this.readFreshCatalog();
+      if (!catalog.data.some(project => project.id === targetId && (project.kind === "git" || project.kind === "workspace"))) {
+        throw new Error("The merge target is not an available project.");
+      }
+      const merge = await merging.mergeProjects(sourceId, targetId);
+      this.invalidate();
+      await this.refreshCatalog();
+      while (this.hardStale) await this.refreshCatalog();
+      this.announceMerges([merge]);
+      return { threadCount: merge.threadIds.length };
+    });
+    this.updateQueue = operation.then(() => undefined, () => undefined);
+    return await operation;
+  }
+
+  private requireMerging() {
+    if (!this.merging) throw new Error("Project merging is unavailable.");
+    return this.merging;
+  }
+
+  private announceMerges(merges: readonly WorkbenchProjectMerge[]) {
+    if (this.disposed || !merges.length) return;
+    for (const listener of this.mergeListeners) {
+      try { listener(merges); }
+      catch (error) { this.logError(`project merge observer failed: ${sanitizeRefreshError(error)}`); }
+    }
+  }
+
   invalidate = () => {
     if (this.disposed) return;
     this.catalogExpiresAt = 0;
@@ -729,6 +797,8 @@ export default class WorkbenchProjectCatalogController {
           continue;
         }
         const reconciled = await this.persistence.reconcileProjectCatalog(discovery);
+        // Committed merges wait for a publication even if this one is superseded.
+        this.pendingMerges.push(...reconciled.merges ?? []);
         signal.throwIfAborted();
         if (this.catalogGeneration !== generation) {
           if (this.catalog) return this.catalog;
@@ -764,6 +834,7 @@ export default class WorkbenchProjectCatalogController {
         this.refreshFailure = null;
         // A recheck that found nothing new is not news; observers recompute only on real change.
         if (!areDeeplyEqual(before, this.observableFacts())) this.publishFacts();
+        this.announceMerges(this.pendingMerges.splice(0));
         this.sweepUncheckedIcons();
         return catalog;
       }

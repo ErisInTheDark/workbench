@@ -1,4 +1,4 @@
-/* No production exports. Tests protect stable project ownership, discovery evidence, vanished-project retirement and source-fenced icon settlement. */
+/* No production exports. Tests protect stable project ownership, discovery evidence, vanished-project retirement and merging, and source-fenced icon settlement. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -6,6 +6,7 @@ import { ProjectIdentityKeySchema } from "workbench-shared/workbench/identity";
 import { REMOVED_PROJECTS_ID } from "workbench-shared/workbench/project/project-state";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchProjectRepository from "./WorkbenchProjectRepository";
+import { PROJECT_REFERENCES } from "./project-references";
 import type { WorkbenchProjectCandidate, WorkbenchProjectDiscovery } from "./workbench-project-persistence";
 
 function project(rootPath = "/repo", key = "remote://example.test/owner/repo"): WorkbenchProjectCandidate {
@@ -270,11 +271,11 @@ test("the retained startup catalogue skips projects the last complete discovery 
 });
 
 /** One thread with a tool aggregate in `projectId`, archived or not. */
-function seedThread(database: Database.Database, projectId: string, threadId: string, archived: boolean) {
+function seedThread(database: Database.Database, projectId: string, threadId: string, archived: boolean, projectRoot = "/gone") {
   database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES ('codex')").run();
   database.prepare(`INSERT INTO workbench_threads
     (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
-    VALUES (?, ?, '/gone', 'thread', 1, 1, 1, 1)`).run(threadId, projectId);
+    VALUES (?, ?, ?, 'thread', 1, 1, 1, 1)`).run(threadId, projectId, projectRoot);
   database.prepare(`INSERT INTO workbench_thread_states (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
     VALUES (?, 'topLevel', 'codex', 'thread', 1, 1)`).run(threadId);
   database.prepare("INSERT INTO workbench_top_level_thread_states (thread_id, thread_kind, archived) VALUES (?, 'topLevel', ?)")
@@ -317,6 +318,71 @@ test("a vanished project stays while it has an unarchived thread or a folder sti
       assert.deepEqual(repository.readRetained(["/"]).catalog, [], `${guard} stays hidden`);
     } finally { database.close(); }
   }
+});
+
+test("a vanished project merges into its one present same-identity checkout", () => {
+  const { database, repository } = setup(rootPath => rootPath !== "/old");
+  try {
+    const oldId = repository.reconcile(discovery([project("/old")])).catalog[0]!.project.id;
+    seedThread(database, oldId, "live-thread", false, "/old");
+    seedThread(database, oldId, "nested-thread", true, "/old/crates/core");
+    const newId = repository.reconcile(discovery([project("/new")])).catalog[0]!.project.id;
+    assert.notEqual(newId, oldId);
+    const result = repository.reconcile(discovery([project("/new")]));
+    assert.deepEqual(result.merges, [{ sourceId: oldId, targetId: newId, threadIds: ["live-thread", "nested-thread"] }]);
+    assert.equal(database.prepare("SELECT 1 FROM workbench_projects WHERE id = ?").get(oldId), undefined);
+    assert.deepEqual(database.prepare("SELECT id, project_id, project_root FROM workbench_threads ORDER BY id").all(), [
+      { id: "live-thread", project_id: newId, project_root: "/new" },
+      { id: "nested-thread", project_id: newId, project_root: "/new/crates/core" },
+    ]);
+    assert.deepEqual(database.prepare("SELECT DISTINCT project_id FROM thread_tool_daily_aggregates").pluck().all(), [newId]);
+    assert.equal(repository.requireStoredReference(oldId), newId, "the merged id keeps resolving");
+    assert.deepEqual(result.catalog.map(item => item.project.id), [newId]);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("an ambiguous vanished project stays hidden until the user merges it into a chosen checkout", () => {
+  const { database, repository } = setup(rootPath => rootPath !== "/old");
+  try {
+    const oldId = repository.reconcile(discovery([project("/old")])).catalog[0]!.project.id;
+    seedThread(database, oldId, "live-thread", false, "/old");
+    const clones = [project("/first"), project("/second")];
+    repository.reconcile(discovery(clones));
+    const catalog = repository.reconcile(discovery(clones));
+    assert.equal(catalog.merges, undefined);
+    assert.deepEqual(repository.readInaccessible().map(item => [item.id, item.threadCount]), [[oldId, 1]]);
+    const secondId = catalog.catalog.find(item => item.project.rootPath === "/second")!.project.id;
+    assert.deepEqual(repository.merge(oldId, secondId).threadIds, ["live-thread"]);
+    assert.deepEqual(database.prepare("SELECT project_id, project_root FROM workbench_threads").get(), { project_id: secondId, project_root: "/second" });
+    assert.deepEqual(repository.readInaccessible(), []);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("merging refuses a project with a folder still on disk and targets that are not other present projects", () => {
+  const { database, repository } = setup(() => true);
+  try {
+    const oldId = repository.reconcile(discovery([project("/old")])).catalog[0]!.project.id;
+    seedThread(database, oldId, "live-thread", false, "/old");
+    const newId = repository.reconcile(discovery([project("/new")])).catalog[0]!.project.id;
+    repository.reconcile(discovery([project("/new")]));
+    assert.throws(() => repository.merge(oldId, newId), /folders are all gone/u);
+    assert.throws(() => repository.merge(newId, newId), /two different/u);
+    assert.throws(() => repository.merge(oldId, "00000000-0000-4000-8000-000000000000"), /two different/u);
+    assert.equal(database.prepare("SELECT project_id FROM workbench_threads").pluck().get(), oldId);
+  } finally { database.close(); }
+});
+
+test("every local project reference column has a retirement and merge disposition", () => {
+  const { database } = setup();
+  try {
+    const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").pluck().all() as string[];
+    const columns = tables.flatMap(table => (database.pragma(`table_info(${table})`) as Array<{ name: string }>)
+      .filter(column => /(?:^|_)project_id$/u.test(column.name)).map(column => `${table}.${column.name}`));
+    const covered = new Set(PROJECT_REFERENCES.map(reference => `${reference.table}.${reference.column}`));
+    assert.deepEqual(columns.filter(column => !covered.has(column)), []);
+  } finally { database.close(); }
 });
 
 test("returning to earlier roots does not admit an earlier generation's late icon result", () => {

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchThreadIdentityController: expose database-owned identity, resolve Git arc owners, and index admitted native bindings.
+ * - default WorkbenchThreadIdentityController: expose database-owned identity, resolve Git arc owners, index admitted native bindings,
+ *   and reread threads whose stored ownership changed.
  */
 import { nativeLocationKey } from "../database/thread-identity/native-location-key";
 import {
@@ -65,6 +66,16 @@ export default class WorkbenchThreadIdentityController {
     const record = await this.database.resolveThreadIdentity(input);
     this.assertActive();
     return record ? this.remember(record) : null;
+  }
+
+  /** Rereads threads whose project ownership changed underneath this cache, such as after a project merge. */
+  async refreshThreads(threadIds: readonly WorkbenchThreadId[]) {
+    for (const threadId of threadIds) {
+      this.assertActive();
+      const record = await this.database.resolveThreadIdentity({ threadId });
+      this.assertActive();
+      if (record) this.remember(record);
+    }
   }
 
   async resolveNative(input: WorkbenchNativeThreadIdentity) {

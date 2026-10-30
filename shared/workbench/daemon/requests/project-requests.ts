@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - projectDaemonRequests: daemon requests for the project catalogue, trees, files, stores, discovery, creation, search, native file
- *   actions, and the agent, skill and proof-of-work checklist catalogues.
+ * - projectDaemonRequests: daemon requests for the project catalogue, trees, files, stores, discovery, inaccessible-project merges,
+ *   creation, search, native file actions, and the agent, skill and proof-of-work checklist catalogues.
  * - WorkbenchFileWriteResult: successful save or optimistic-write conflict.
  * - WorkbenchAgentDefinitionResponse/WorkbenchSkillCatalogResponse/WorkbenchInstructionPack: agent and skill catalogue results.
  */
@@ -32,6 +32,10 @@ import {
   ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema,
   type ProjectDiscoverySettingsResult, type ProjectDiscoverySettingsUpdate,
 } from "../../project/project-discovery-settings.ts";
+import {
+  InaccessibleProjectsSchema, ProjectMergeResultSchema,
+  type InaccessibleProjects, type ProjectMergeRequest, type ProjectMergeResult,
+} from "../../project/project-merge.ts";
 import {
   WorkbenchProjectFileIndexResponseSchema,
   type WorkbenchProjectFileIndexRequest, type WorkbenchProjectFileIndexResponse,
@@ -103,6 +107,12 @@ export const projectDaemonRequests = {
   }),
   "project/discovery-settings/update": defineDaemonRequest<ProjectDiscoverySettingsUpdate, ProjectDiscoverySettingsResult>()({
     route: "installation", result: ProjectDiscoverySettingsResultSchema,
+  }),
+  "project/inaccessible/read": defineDaemonRequest<object, InaccessibleProjects>()({
+    route: "installation", result: InaccessibleProjectsSchema,
+  }),
+  "project/merge": defineDaemonRequest<ProjectMergeRequest, ProjectMergeResult>()({
+    route: "installation", result: ProjectMergeResultSchema,
   }),
   "project/folders/list": defineDaemonRequest<ProjectFolderListRequest, ProjectFolderList>()({ route: "installation", result: ProjectFolderListSchema }),
   "project/create": defineDaemonRequest<ProjectCreateRequest, ProjectCreateResult>()({ route: "installation", result: ProjectCreateResultSchema }),

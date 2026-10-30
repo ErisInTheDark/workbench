@@ -72,7 +72,9 @@ export interface WorkbenchDaemonRequestOwners {
   profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
   modelUsage: Pick<WorkbenchModelUsageStore, "read">;
   profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
-  projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "readLocations" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
+  projects: Pick<WorkbenchProjectCatalogController,
+    "readCatalog" | "readLocations" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings"
+    | "readInaccessibleProjects" | "mergeProject">;
   projectCreation?: Pick<WorkbenchProjectCreationController, "listFolders" | "create">;
   projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
   search: Pick<WorkbenchSearchController, "search">;
