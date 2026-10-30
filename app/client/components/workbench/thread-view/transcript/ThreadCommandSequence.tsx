@@ -51,7 +51,7 @@ export function ThreadMcpItem ({ itemTimeline, item }: { item: McpItem; itemTime
   const activeStartedAtMs = getActiveItemStartedAtMs(item, itemTimeline);
   const durationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
   const approval = useThreadItemApproval(item.id);
-  const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context: project?.mcpMatcherContext, server: item.server, tool: item.tool });
+  const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context: project?.mcpMatcherContext, item, server: item.server, tool: item.tool });
   const isMcpFailure = item.status === "failed" || Boolean(item.error);
   if (shouldUseWorkbenchMcpSpecializedRenderer(route, isMcpFailure) && route?.kind === "specialized" && (
     project?.cwd || route.operation.kind === "feedback" || route.operation.kind === "todo"

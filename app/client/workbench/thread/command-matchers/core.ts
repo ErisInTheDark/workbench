@@ -78,6 +78,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
       ownRow = false,
       ongoingSummaryParts,
       remainingCommand,
+      skillMcp,
       stop = false,
       summaryParts,
       summaryStats,
@@ -91,6 +92,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
         ownRow,
         ongoingSummaryParts,
         remainingCommand,
+        ...(skillMcp ? { skillMcp } : {}),
         stop,
         summaryParts,
         summaryStats,
@@ -139,6 +141,7 @@ export function runThreadCommandMatchers(
   let hideCommandOutput = false;
   let omitFromDisplay = false;
   let ownRow = false;
+  let skillMcp: CommandMatcherResult["skillMcp"];
   let remainingCommand: string | null = context.unwrappedCommand;
 
   for (let index = 0; index < MAX_MATCH_STEPS && remainingCommand; index += 1) {
@@ -185,6 +188,7 @@ export function runThreadCommandMatchers(
     hideCommandOutput ||= matchedResult.hideCommandOutput === true;
     omitFromDisplay ||= matchedResult.omitFromDisplay === true;
     ownRow ||= matchedResult.ownRow === true;
+    skillMcp ??= matchedResult.skillMcp;
 
     if (shouldRenderSummaryParts) {
       if (summaryParts.length) summaryParts.push(CommandMatcher.Separator());
@@ -228,6 +232,7 @@ export function runThreadCommandMatchers(
     ongoingSummaryParts,
     ongoingSummaryText: summarizeDisplayParts(ongoingSummaryParts),
     showShell: hadUnmatchedRemainder,
+    ...(skillMcp ? { skillMcp } : {}),
     summaryParts,
     summaryKind: "matched" as const,
     summaryStats,

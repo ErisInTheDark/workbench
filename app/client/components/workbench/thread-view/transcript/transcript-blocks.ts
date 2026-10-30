@@ -89,8 +89,11 @@ export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscr
   const flush = () => {
     if (!pending.length) return;
     entries.push(...foldCardBlocks(buildActivityRuns(
-      buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, project?.cwd, yieldedShells),
-      { browseScreenshotUrls, codeDetails, knownSkills: matchers?.knownSkills, projectRootPath: matchers?.projectRootPath, workspaceRoots: matchers?.workspaceRoots },
+      buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, project?.cwd, yieldedShells, matchers),
+      {
+        browseScreenshotUrls, codeDetails, knownSkills: matchers?.knownSkills, projectRootPath: matchers?.projectRootPath,
+        skillMcpMatchers: matchers?.skillMcpMatchers, workspaceRoots: matchers?.workspaceRoots,
+      },
     )).map(block => ({ block, kind: "block" as const })));
     pending = [];
   };

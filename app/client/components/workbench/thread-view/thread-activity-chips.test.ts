@@ -2,8 +2,12 @@
  * No production exports. Regression wards protect activity summary chip counting and order.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
+import variant from "@jitl/quickjs-wasmfile-release-sync";
+import { newQuickJSWASMModuleFromVariant } from "quickjs-emscripten-core";
 import { formatGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
+import SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { getActivityChips } from "./thread-activity-chips";
@@ -75,6 +79,22 @@ test("a step with its own renderer and no stat still counts as exec, so no step 
     wb("vis", "vis_start", { path: "mock.tsx" }),
     command("run", "node build.js"),
   ], kind: "commands" }]), [["exec", 2, null, null]]);
+});
+
+test("skill chips count their calls per skill, sit before exec, and keep those calls out of exec", async () => {
+  const code = (id: string) => `var __wbSkillMcpMatchers = { default: [call => call.server === "devops"
+    ? { verb: ["Listing", "Listed"], chip: { id: "${id}", verb: "builds", icon: "git" } } : null] };`;
+  const bundle = (name: string, source: string) => ({
+    code: source, revision: createHash("sha256").update(source).digest("hex"), skillName: name, skillPath: `/skills/${name}/SKILL.md`,
+  });
+  const runtime = new SkillMcpMatcherRuntime(await newQuickJSWASMModuleFromVariant(variant), [bundle("devops", code("builds"))]);
+  try {
+    const call = (id: string) => ({ ...wb(id, "pipelines_build", {}), server: "devops" });
+    const counted = getActivityChips([{ items: [call("one"), call("two"), command("run", "node build.js")], kind: "commands" }], { skillMcpMatchers: runtime });
+    assert.deepEqual(counted.map(chip => [chip.verb, chip.count]), [["builds", 2], ["exec", 1]]);
+  } finally {
+    runtime.dispose();
+  }
 });
 
 test("arc reads merged into a command group count as arc steps beside the commands", () => {

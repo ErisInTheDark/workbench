@@ -287,6 +287,7 @@ export default class WorkbenchFrontendCompiler {
         ".jpg": "file",
         ".png": "file",
         ".svg": "file",
+        ".wasm": "file",
       },
       logLevel: "silent",
       metafile: true,

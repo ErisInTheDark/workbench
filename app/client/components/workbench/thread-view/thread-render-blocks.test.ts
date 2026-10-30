@@ -1,8 +1,12 @@
 /*
- * No exports. Tests protect hidden control transport, final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, and dedicated CLI row visibility.
+ * No exports. Tests protect hidden control transport, final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, dedicated CLI row visibility, and skill-presented call placement.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
+import variant from "@jitl/quickjs-wasmfile-release-sync";
+import { newQuickJSWASMModuleFromVariant } from "quickjs-emscripten-core";
+import SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
@@ -17,6 +21,7 @@ import {
   buildCommandSequenceRenderSegments, buildRenderableBlocks, getRenderableBlockItems, getRenderableBlockKey, groupIncomingAgentMessageRuns,
   reuseRenderableBlocks, hasSameBlockTimeline, isHiddenCommandExecution, type CommandItem,
 } from "./thread-render-blocks";
+import { foldCardBlocks } from "./thread-card-folds";
 
 function command(id: string, text = "pwd"): CommandItem {
   return { id, type: "commandExecution", command: text, commandActions: [], cwd: "C:/repo", durationMs: 1,
@@ -610,6 +615,47 @@ test("turn-end marker replies stay hidden in every message phase without hiding 
   for (const phase of ["final_answer", "commentary", null] as const) {
     const blocks = buildRenderableBlocks([reply("answer", "done\n<wb:end />", phase), reply("end", "\n<wb:end />\n", phase)]);
     assert.deepEqual(blocks.flatMap(getRenderableBlockItems).map(item => item.id), ["answer"]);
+  }
+});
+
+test("calls a skill presents become steps, stitched same-family cards or nothing, and stay ordinary without its matchers", async () => {
+  const code = `var __wbSkillMcpMatchers = { default: [call => {
+    if (call.server !== "azure-devops") return null;
+    const verb = ["Running", "Ran"];
+    const { action } = call.arguments;
+    if (action === "list") return { verb };
+    if (action === "queue") return { verb, display: { card: "builds" } };
+    if (action === "release") return { verb, display: { card: "releases", open: true } };
+    if (action === "secret") return { verb, display: "hidden" };
+    return null;
+  }] };`;
+  const runtime = new SkillMcpMatcherRuntime(await newQuickJSWASMModuleFromVariant(variant), [{
+    code, revision: createHash("sha256").update(code).digest("hex"), skillName: "devops", skillPath: "/skills/devops/SKILL.md",
+  }]);
+  try {
+    const call = (id: string, action: string) => ({ ...mcp(id, "pipelines_build", { action }), server: "azure-devops" });
+    const items = [
+      call("list", "list"), call("queue-1", "queue"),
+      mcp("queue-2", "mcp_call", { server: "azure-devops", tool: "pipelines_build", arguments: { action: "queue" } }),
+      call("secret", "secret"), call("release", "release"), command("pwd"),
+    ];
+    const shape = (blocks: ReturnType<typeof buildRenderableBlocks>) => blocks.map(block => [
+      block.kind, getRenderableBlockItems(block).map(item => item.id),
+    ]);
+    const placed = buildRenderableBlocks(items, {}, ".", undefined, { skillMcpMatchers: runtime });
+    assert.deepEqual(shape(placed), [
+      ["commandSequence", ["list"]],
+      ["skillMcpCard", ["queue-1"]], ["skillMcpCard", ["queue-2"]], ["skillMcpCard", ["release"]],
+      ["commandSequence", ["pwd"]],
+    ]);
+    assert.deepEqual(shape(foldCardBlocks(placed)), [
+      ["commandSequence", ["list"]],
+      ["cardSequence", ["queue-1", "queue-2"]], ["skillMcpCard", ["release"]],
+      ["commandSequence", ["pwd"]],
+    ]);
+    assert.deepEqual(shape(buildRenderableBlocks(items)).map(([kind]) => kind), ["item", "item", "commandSequence", "item", "item", "commandSequence"]);
+  } finally {
+    runtime.dispose();
   }
 });
 

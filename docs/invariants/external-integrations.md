@@ -1,3 +1,4 @@
 - Keep external system details at their adapter boundary.
 - Convert external data into shared Workbench types before core code uses it.
 - Only project-scoped MCP servers receive caller identity; never send thread ids or paths to global servers.
+- Skill-provided code runs only sandboxed: components in the thread sandbox, MCP matchers in QuickJS with deadline and memory caps. Never in the client realm.

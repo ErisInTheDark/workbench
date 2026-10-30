@@ -42,7 +42,7 @@ import { assertWorkbenchSkillActivations } from "workbench-shared/workbench/thre
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 
 export interface WorkbenchThreadActionOwners {
-  components: Pick<import("../skills/WorkbenchComponentsController").default, "renderMessage" | "styles">;
+  components: Pick<import("../skills/WorkbenchComponentsController").default, "matchers" | "renderCall" | "renderMessage" | "styles">;
   /** Messages a held questionnaire keeps for its answer, released undelivered when stop dismisses it. */
   questionnaireSteers: Pick<WorkbenchQuestionnaireSteerController, "hold" | "release">;
   autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe" | "submit" | "adopt">;
@@ -242,6 +242,8 @@ export default class WorkbenchThreadActionController {
     },
     "thread/components/render": input => this.owners.components.renderMessage(input),
     "thread/components/styles": async input => ({ styles: await this.owners.components.styles(input.threadId) }),
+    "thread/components/render-call": input => this.owners.components.renderCall(input),
+    "thread/components/matchers": input => this.owners.components.matchers(input.threadId),
     "thread/skills/read": async input => ({ skills: await this.owners.skills.read(input.threadId) }),
     "thread/skills/deactivate": async input => ({ skills: await this.owners.skills.deactivate(input.threadId, input.path) }),
     "thread/steer/resend": input => this.resendSteer(input),

@@ -12,6 +12,7 @@ import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
+import { useProject } from "../use-projects";
 import { useThread } from "../use-thread";
 import { useTranscript } from "../use-transcript";
 import WorkbenchWorkspaceContext, { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
@@ -76,10 +77,11 @@ export default function ThreadViewStatus ({
   const activityTurn = loadedTurns?.at(-1) ?? null;
   // The thread's lifecycle decides liveness; a provider's turn status never does.
   const liveTurn = activityTurn && activityTurn.id === turns.liveTurnId ? activityTurn : null;
+  const skillMcpMatchers = useProject.contextual()?.matcherContext.skillMcpMatchers ?? null;
   const commandContext = useMemo(() => ({
     cwd: activeThread?.cwd || projectRootPath || ".",
-    knownSkills: skills, projectRootPath, workspaceRoots,
-  }), [activeThread?.cwd, projectRootPath, skills, workspaceRoots]);
+    knownSkills: skills, projectRootPath, skillMcpMatchers, workspaceRoots,
+  }), [activeThread?.cwd, projectRootPath, skillMcpMatchers, skills, workspaceRoots]);
   const liveVerb = useMemo(() => getLiveThreadVerb({
     context: commandContext, pendingUserInputRequest, turn: liveTurn,
   }), [commandContext, pendingUserInputRequest, liveTurn]);

@@ -10,6 +10,7 @@ import { useContext, useMemo } from "react";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { RelatedThread } from "../../../../workbench/thread/ThreadStore";
+import useThreadSkillMcpMatchers from "../../../../workbench/skills/use-thread-skill-mcp-matchers";
 import { useThread } from "../../use-thread";
 import {
   TranscriptBodiesContext, TranscriptScopeContext, TranscriptTurnContext, useTranscript,
@@ -63,10 +64,11 @@ function LiveThreadSubagentActivityWindow ({ fallbackThread, subagent }: Subagen
   );
 }
 
-/** The child's paths resolve against its own working directory. */
+/** The child's paths resolve against its own working directory, and its calls present through its own active skills. */
 function ThreadSubagentActivityWindowBody ({ thread }: { thread: RelatedThread | undefined }) {
+  const skillMcpMatchers = useThreadSkillMcpMatchers(thread?.id ?? null);
   return (
-    <ContextualProjectProvider cwd={thread?.cwd}>
+    <ContextualProjectProvider cwd={thread?.cwd} skillMcpMatchers={skillMcpMatchers}>
       <ThreadSubagentActivityTail thread={thread} />
     </ContextualProjectProvider>
   );

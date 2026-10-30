@@ -7,6 +7,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { WorkbenchShellResultSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
+import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/thread-optimistic-items";
 import {
@@ -21,6 +22,7 @@ export interface ThreadLiveCommandContext {
   cwd: string;
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
+  skillMcpMatchers?: SkillMcpMatcherRuntime | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
@@ -64,7 +66,7 @@ function runningCallVerb(item: ThreadItem, context: ThreadLiveCommandContext): s
     return (display.summaryKind === "matched" && ongoingVerb(display.ongoingSummaryText)) || UNMATCHED_VERB;
   }
   if (item.type !== "mcpToolCall" || item.error || item.status !== "inProgress") return null;
-  const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context, server: item.server, tool: item.tool });
+  const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context, item, server: item.server, tool: item.tool });
   if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) return null;
   return (route && ongoingVerb(summarizeDisplayParts(route.rendering.result.ongoingSummaryParts))) ?? UNMATCHED_VERB;
 }

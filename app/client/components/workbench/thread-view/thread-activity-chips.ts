@@ -2,11 +2,11 @@
  * Exports:
  * - ActivityChip: one counted kind of work in an activity run summary, with change totals for file chips.
  * - CommandChipContext: matcher context for summarising commands.
- * - getCommandIcon: one command step row's kind icon, from the same categories as the chips.
+ * - getCommandIcon: one command step row's kind icon, from the same categories as the chips or its skill chip.
  * - getCommandItemDisplay: one command's matcher display.
  * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order; applied arc edit sessions
- *   count as edited) then every step in some command chip (unnamed steps as exec), with Browse screenshots beside browser
- *   steps.
+ *   count as edited) then every step in some command chip (skill chips before exec, unnamed steps as exec), with Browse
+ *   screenshots beside browser steps.
  */
 import type { ComponentType } from "react";
 
@@ -20,9 +20,12 @@ import {
   getThreadCommandDisplay,
   getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
+  type ThreadCommandSkillMcp,
   type ThreadCommandSummaryDisplay,
   type ThreadCommandSummaryStats,
 } from "../../../workbench/thread/thread-command-matchers";
+import type { SkillMcpChipIcon } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
+import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary } from "workbench-shared/types";
 import {
@@ -49,6 +52,7 @@ export interface CommandChipContext {
   projectRootPath?: string;
   /** The content's working directory; MCP summaries resolve paths only when it is known. */
   cwd?: string;
+  skillMcpMatchers?: SkillMcpMatcherRuntime | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
@@ -96,8 +100,17 @@ function countChip(stats: ThreadCommandSummaryStats, key: CommandChipKey) {
   return STAT_KEYS.reduce((total, stat) => STAT_CHIPS[stat] === key ? total + stats[stat] : total, 0);
 }
 
-/** A command step row's kind icon: its first counted chip, else a terminal. */
-export function getCommandIcon(stats: ThreadCommandSummaryStats | null | undefined): ComponentType<IconProps> {
+/** Icons a skill's chip may name, so skill chips look like the built-in kinds they resemble. */
+const SKILL_CHIP_ICONS = {
+  arc: GitArcProposalIcon, book: BookIcon, browser: BrowserSessionIcon, eye: EyeIcon, file: FileTextIcon, folder: FolderClosedIcon,
+  git: GitGraphIcon, image: ImageIcon, search: SearchIcon, skill: BookBookmarkIcon, terminal: TerminalIcon, web: BookSearchIcon,
+} satisfies Record<SkillMcpChipIcon, ComponentType<IconProps>>;
+
+/** A command step row's kind icon: a skill chip's icon, else its first counted chip, else a terminal. */
+export function getCommandIcon(
+  stats: ThreadCommandSummaryStats | null | undefined, skillChip?: ThreadCommandSkillMcp["chip"],
+): ComponentType<IconProps> {
+  if (skillChip) return SKILL_CHIP_ICONS[skillChip.icon];
   return (stats && COMMAND_CHIPS.find(chip => countChip(stats, chip.key) > 0)?.Icon) || TerminalIcon;
 }
 
@@ -105,28 +118,40 @@ export function getCommandIcon(stats: ThreadCommandSummaryStats | null | undefin
 export function getCommandItemDisplay(item: CommandSequenceItem, context: CommandChipContext): ThreadCommandSummaryDisplay | null {
   if (item.type === "commandExecution") {
     return getThreadCommandDisplay({ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell,
-      knownSkills: context.knownSkills, projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots });
+      knownSkills: context.knownSkills, projectRootPath: context.projectRootPath, skillMcpMatchers: context.skillMcpMatchers,
+      workspaceRoots: context.workspaceRoots });
   }
   if (item.type === "dynamicToolCall") return getNativeToolDisplay(item, { knownSkills: context.knownSkills });
-  const mcpContext = { knownSkills: context.knownSkills, ...(context.cwd
-    ? { cwd: context.cwd, projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots } : {}) };
-  return getWorkbenchMcpCommandDisplay({ argumentsValue: item.arguments, context: mcpContext, server: item.server, tool: item.tool });
+  return getWorkbenchMcpCommandDisplay({ argumentsValue: item.arguments, context: mcpContext(context), item, server: item.server, tool: item.tool });
+}
+
+/** MCP summaries resolve paths only where the content's working directory is known. */
+function mcpContext(context: CommandChipContext) {
+  return {
+    knownSkills: context.knownSkills, skillMcpMatchers: context.skillMcpMatchers,
+    ...(context.cwd ? { cwd: context.cwd, projectRootPath: context.projectRootPath, workspaceRoots: context.workspaceRoots } : {}),
+  };
 }
 
 /**
- * What one step did: its own renderer's stats, else its matcher display's. A step nothing names counts as exec, so
- * every step lands in some chip.
+ * What one step did: a skill's own chip, else its own renderer's stats, else its matcher display's. A step nothing names
+ * counts as exec, so every step lands in some chip.
  */
-function getCommandItemStats(item: CommandSequenceItem, context: CommandChipContext): ThreadCommandSummaryStats {
+function getCommandItemCount(item: CommandSequenceItem, context: CommandChipContext): {
+  skillChip: ThreadCommandSkillMcp["chip"]; stats: ThreadCommandSummaryStats;
+} {
   // A shell wait repeats its command's line; what that command did is already counted once on its own row.
-  if (item.type === "commandExecution" && "shellWait" in item) return { ...createEmptyCommandSummaryStats(), otherCommands: 1 };
+  if (item.type === "commandExecution" && "shellWait" in item) return { skillChip: null, stats: { ...createEmptyCommandSummaryStats(), otherCommands: 1 } };
   const route = item.type === "mcpToolCall"
-    ? getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool }) : null;
+    ? getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context: mcpContext(context), item, server: item.server, tool: item.tool })
+    : null;
+  const display = route?.kind === "specialized" ? null : getCommandItemDisplay(item, context);
   const stats = mergeCommandSummaryStats(createEmptyCommandSummaryStats(), route?.kind === "specialized"
     ? route.rendering.result.summaryStats
-    : getCommandItemDisplay(item, context)?.summaryStats);
-  if (!STAT_KEYS.some(stat => stats[stat] > 0)) stats.otherCommands = 1;
-  return stats;
+    : display?.summaryStats);
+  const skillChip = display?.skillMcp?.chip ?? null;
+  if (!skillChip && !STAT_KEYS.some(stat => stats[stat] > 0)) stats.otherCommands = 1;
+  return { skillChip, stats };
 }
 
 const FILE_CHIPS = [
@@ -184,12 +209,24 @@ function fileChips(segments: readonly ActivitySegment[], edits: readonly GitArcE
 export function getActivityChips(segments: readonly ActivitySegment[], context: CommandChipContext): ActivityChip[] {
   const commands = segments.flatMap(segment => segment.kind === "commands" ? segment.items : []);
   const stats = createEmptyCommandSummaryStats();
-  for (const item of commands) mergeCommandSummaryStats(stats, getCommandItemStats(item, context));
+  const skillChips = new Map<string, ActivityChip>();
+  for (const item of commands) {
+    const counted = getCommandItemCount(item, context);
+    mergeCommandSummaryStats(stats, counted.stats);
+    const { skillChip } = counted;
+    if (!skillChip) continue;
+    const existing = skillChips.get(skillChip.key);
+    if (existing) existing.count += 1;
+    else skillChips.set(skillChip.key, { Icon: SKILL_CHIP_ICONS[skillChip.icon], count: 1, key: `skill:${skillChip.key}`, verb: skillChip.verb });
+  }
   stats.webRequests += segments.reduce((total, segment) => total + (segment.kind === "webSearch" ? segment.items.length : 0), 0);
   const commandChips = COMMAND_CHIPS.flatMap(({ Icon, key, verb }) => {
     const count = countChip(stats, key);
     const chip = count ? [{ Icon, count, key, verb }] : [];
-    return key === "browse" ? [...chip, ...screenshotChip(commands, context)] : chip;
+    if (key === "browse") return [...chip, ...screenshotChip(commands, context)];
+    // Skill chips name work more specifically than exec, so they sit just before it.
+    if (key === "exec") return [...skillChips.values(), ...chip];
+    return chip;
   });
   return [...fileChips(segments, appliedArcEdits(commands, context)), ...commandChips];
 }

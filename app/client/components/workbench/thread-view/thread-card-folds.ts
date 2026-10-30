@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - foldCardBlocks: fold the steps leading into a card into that card's history (retried arc starts, proposal lead-ins,
- *   the todo listing before a change), then stitch back-to-back cards of one family (Git arc, todo) into one card.
+ *   the todo listing before a change), then stitch back-to-back cards of one family (Git arc, todo, one skill's card family)
+ *   into one card.
  * - isCardBlock: a block drawn as one foldable card, which a later fold or stitch may absorb.
  * - getCardFoldAnchor: the card a folded or stitched block grew from.
  */
@@ -10,11 +11,13 @@ import { foldGitArcHistories, isGitArcCall } from "./thread-git-arc-retries";
 import { getRenderableBlockItems, type ThreadRenderableBlock } from "./thread-render-blocks";
 import { foldTodoLeadIns, isTodoCall } from "./thread-todo-folds";
 
-type CardFamily = "gitArc" | "todo";
+/** `gitArc`, `todo`, or a skill's own card family (namespaced by its skill path, so skills never mix). */
+type CardFamily = string;
 
 /** Which family of card a block draws; a card with history belongs to the card it opens from. */
 function getCardFamily(block: ThreadRenderableBlock): CardFamily | null {
   if (block.kind === "cardHistory") return getCardFamily(block.success);
+  if (block.kind === "skillMcpCard") return `skill:${block.family}`;
   if (isGitArcCall(block)) return "gitArc";
   if (isTodoCall(block)) return "todo";
   return null;

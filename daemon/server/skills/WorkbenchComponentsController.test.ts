@@ -173,3 +173,61 @@ test("one active skill shares its stylesheet across simultaneous requests and dr
   active = false;
   assert.deepEqual(await controller.styles("thread"), []);
 });
+
+/** Two skills: `devops` with a matcher and a call component, and `broken` whose matcher fails to compile. */
+async function callSkills(path: string) {
+  const skill = async (name: string, content: string, files: Record<string, string>) => {
+    await mkdir(join(path, name));
+    for (const [file, source] of Object.entries(files)) await writeFile(join(path, name, file), source);
+    await writeFile(join(path, name, "SKILL.md"), content);
+    return { path: join(path, name, "SKILL.md"), relativePath: `${name}/SKILL.md`, name, description: "", content };
+  };
+  return [
+    await skill("broken", "---\nworkbench_mcp_matchers: [matchers.ts]\n---\n", { "matchers.ts": "broken" }),
+    await skill("devops", "---\nworkbench_components: [BuildList.tsx]\nworkbench_mcp_matchers: [matchers.ts]\n---\n", {
+      "BuildList.tsx": "export default () => null", "matchers.ts": "fine",
+    }),
+  ];
+}
+
+test("a call component renders only from its active skill, once, with the result its call kept", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("call-components-");
+  context.after(() => temporary.dispose());
+  const skills = await callSkills(temporary.path);
+  let active = skills;
+  const stored = new Map<string, import("workbench-shared/workbench/thread/thread-component-tree").ThreadComponentNode>();
+  const rendered: unknown[] = [];
+  const controller = new WorkbenchComponentsController({
+    skills: async () => active,
+    compile: async file => ({ code: "compiled", inputs: [file] }),
+    compileStyles: async files => ({ css: "", inputs: files }),
+    evaluate: async () => { throw new Error("Message components are not rendered here."); },
+    results: async (_threadId, names) => names.includes("b23611b") ? { b23611b: { builds: [{ id: 23611 }] } } : {},
+    read: async () => null,
+    write: async (_target, tree) => tree,
+    calls: {
+      compileMatchers: async files => {
+        if ((await readFile(files[0]!, "utf8")) === "broken") throw new Error("Unexpected token");
+        return { code: "var __wbSkillMcpMatchers = { default: [] };", inputs: [...files] };
+      },
+      renderProps: async (_compiled, props) => { rendered.push(props); return { $workbench: "element", type: "div", props: { children: JSON.stringify(props) } }; },
+      quickjs: async () => { throw new Error("Not needed."); },
+      read: async target => stored.get(`${target.itemId}:${target.component}`) ?? null,
+      write: async (target, tree) => { stored.set(`${target.itemId}:${target.component}`, tree); return tree; },
+    },
+  });
+
+  const compiled = await controller.matchers("thread");
+  assert.deepEqual(compiled.bundles.map(bundle => bundle.skillName), ["devops"]);
+  assert.deepEqual(compiled.failures.map(failure => [failure.skillName, failure.message]), [["broken", "Unexpected token"]]);
+
+  const target = { threadId: "thread", itemId: "call", skillPath: skills[1]!.path, component: "BuildList" };
+  const call = { server: "azure-devops", tool: "pipelines_build", arguments: {}, keep: "b23611b", status: "completed", error: null, result: "Saved to b23611b." };
+  const first = await controller.renderCall({ ...target, props: { call } });
+  assert.deepEqual(rendered, [{ call: { ...call, result: { builds: [{ id: 23611 }] } } }]);
+  assert.deepEqual((await controller.renderCall({ ...target, props: { call: { ...call, result: null } } })).tree, first.tree);
+  assert.equal(rendered.length, 1);
+
+  active = [skills[0]!];
+  await assert.rejects(controller.renderCall({ ...target, itemId: "later", props: { call } }), /not active in this thread/u);
+});

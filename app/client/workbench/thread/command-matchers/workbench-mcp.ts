@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route wb calls, including deferred tools run through `mcp_call`, and retain dedicated Git, title, and status failure presentation.
+ * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route external calls an active skill presents, then wb
+ *   calls, including deferred tools run through `mcp_call`, and retain dedicated Git, title, and status failure presentation.
  * - getWorkbenchMcpCommandDisplay: match simple wb calls to shared summary presentation.
  * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive ordinary command presentation from wb shell evidence,
  *   including failures whose reason is only result text, the expensive mark, its recorded queue wait, its yield window and
@@ -22,6 +23,7 @@ import {
   WorkbenchShellResultSchema,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 
+import { getSkillMcpMatcherResult, matchSkillMcpCall, readSkillMcpCallOutcome, readSkillMcpInvocation } from "./skill-mcp";
 import type { CommandShell, ThreadCommandSummaryDisplay } from "./types";
 import {
   getWorkbenchCommandRoute,
@@ -35,6 +37,8 @@ import {
 interface WorkbenchMcpCommandInput {
   argumentsValue: JsonValue;
   context?: WorkbenchCommandPresentationContext;
+  /** The call's item: with active skill matchers in context, an external call routes through the skill presenting it. */
+  item?: McpToolCallItem;
   server: string;
   tool: string;
 }
@@ -235,12 +239,24 @@ function readDeferredCall(tool: string, argumentsValue: JsonValue) {
   return { arguments: inner ?? {}, tool: target };
 }
 
-export function getWorkbenchMcpCommandRoute({
-  argumentsValue,
-  context,
-  server,
-  tool,
-}: WorkbenchMcpCommandInput): WorkbenchCommandRoute | null {
+/** An active skill's presentation of an external call, as an ordinary summary route its draw mode then places. */
+function getSkillMcpCommandRoute({ argumentsValue, context, item, server, tool }: WorkbenchMcpCommandInput): WorkbenchCommandRoute | null {
+  const runtime = context?.skillMcpMatchers;
+  if (!runtime || !item) return null;
+  const invocation = readSkillMcpInvocation(server, tool, argumentsValue);
+  if (!invocation) return null;
+  const match = matchSkillMcpCall(runtime, { ...invocation, ...readSkillMcpCallOutcome(item) }, item);
+  if (!match) return null;
+  return {
+    kind: "simple",
+    rendering: { claimedBy: `skill-mcp:${match.skillPath}`, result: getSkillMcpMatcherResult(match, invocation) },
+  };
+}
+
+export function getWorkbenchMcpCommandRoute(input: WorkbenchMcpCommandInput): WorkbenchCommandRoute | null {
+  const { argumentsValue, context, server, tool } = input;
+  const skill = getSkillMcpCommandRoute(input);
+  if (skill) return skill;
   if (!isWorkbenchMcpServer(server)) return null;
   const deferred = readDeferredCall(tool, argumentsValue);
   if (deferred) {
@@ -266,11 +282,6 @@ export function shouldUseWorkbenchMcpSpecializedRenderer(
     || route.operation.kind === "mcpDownload";
 }
 
-export function getWorkbenchMcpCommandDisplay({
-  argumentsValue,
-  context,
-  server,
-  tool,
-}: WorkbenchMcpCommandInput): ThreadCommandSummaryDisplay | null {
-  return getWorkbenchCommandRouteSummaryDisplay(getWorkbenchMcpCommandRoute({ argumentsValue, context, server, tool }));
+export function getWorkbenchMcpCommandDisplay(input: WorkbenchMcpCommandInput): ThreadCommandSummaryDisplay | null {
+  return getWorkbenchCommandRouteSummaryDisplay(getWorkbenchMcpCommandRoute(input));
 }

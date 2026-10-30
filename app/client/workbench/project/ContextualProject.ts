@@ -5,6 +5,7 @@
  *   render links instead of holding the facts; one instance exists per fact content, so the instance is dependency-safe.
  */
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../markdown/markdown-links";
 import type { ProjectFilePathDisambiguationIndex } from "./project-file-path";
 import type { InlineMentionHighlightSources } from "../thread/inline-mention-highlights";
@@ -21,6 +22,8 @@ export interface ContextualProjectFacts {
   mentions?: InlineMentionHighlightSources | null;
   rootPath?: string;
   skills?: WorkbenchSkillSummary[];
+  /** The thread's active skills' MCP matchers, which present external calls their skills know. */
+  skillMcpMatchers?: SkillMcpMatcherRuntime | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
@@ -55,7 +58,10 @@ export default class ContextualProject {
   readonly #facts: ContextualProjectFacts;
   readonly #commandDisplays = new Map<string, ReturnType<typeof getThreadCommandDisplay>>();
   #matcherContext: ReturnType<ContextualProject["buildMatcherContext"]> | null = null;
-  #mcpMatcherContext: { cwd?: string; knownSkills: WorkbenchSkillSummary[]; projectRootPath?: string; workspaceRoots?: readonly WorkspaceFileLinkRoot[] } | null = null;
+  #mcpMatcherContext: {
+    cwd?: string; knownSkills: WorkbenchSkillSummary[]; projectRootPath?: string; skillMcpMatchers: SkillMcpMatcherRuntime | null;
+    workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+  } | null = null;
 
   static keyOf(facts: ContextualProjectFacts) {
     return [
@@ -65,6 +71,7 @@ export default class ContextualProject {
       facts.pathDisambiguation?.key ?? listKey(facts.filePaths, path => path),
       listKey(facts.workspaceRoots, root => `${root.id}:${root.openPathMode ?? ""}:${root.projectId ?? ""}:${root.rootPath}`),
       listKey(facts.skills, skill => `${skill.name}:${skill.path}`),
+      facts.skillMcpMatchers?.key ?? "matchers:none",
       facts.mentions?.cacheKey ?? "mentions:none",
     ].join("|");
   }
@@ -92,6 +99,7 @@ export default class ContextualProject {
     return {
       knownSkills: this.#facts.skills ?? NO_SKILLS,
       projectRootPath: this.#facts.rootPath,
+      skillMcpMatchers: this.#facts.skillMcpMatchers ?? null,
       workspaceRoots: this.#facts.workspaceRoots,
     };
   }
@@ -106,6 +114,7 @@ export default class ContextualProject {
   get mcpMatcherContext() {
     this.#mcpMatcherContext ??= {
       knownSkills: this.matcherContext.knownSkills,
+      skillMcpMatchers: this.matcherContext.skillMcpMatchers,
       ...(this.#facts.cwd ? { cwd: this.#facts.cwd, projectRootPath: this.#facts.rootPath, workspaceRoots: this.#facts.workspaceRoots } : {}),
     };
     return this.#mcpMatcherContext;
@@ -115,8 +124,7 @@ export default class ContextualProject {
     const cacheKey = JSON.stringify([input.command, input.cwd, input.shell ?? null, input.commandActions ?? []]);
     let display = this.#commandDisplays.get(cacheKey);
     if (!display) {
-      const { knownSkills, projectRootPath, workspaceRoots } = this.matcherContext;
-      display = getThreadCommandDisplay({ knownSkills, projectRootPath, workspaceRoots, ...input });
+      display = getThreadCommandDisplay({ ...this.matcherContext, ...input });
       this.#commandDisplays.set(cacheKey, display);
     }
     return display;

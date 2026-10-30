@@ -25,6 +25,7 @@ import type { ReloadableNodeBuild, ReloadableNodeLease } from "../runtime/Reload
 import WorkbenchVisBrowse from "../vis/WorkbenchVisBrowse";
 import WorkbenchVisController from "../vis/WorkbenchVisController";
 import WorkbenchComponentsController from "../skills/WorkbenchComponentsController";
+import loadQuickJS from "../skills/load-quickjs";
 import type McpDownloadStore from "../mcp-servers/McpDownloadStore";
 import { fetchPublicHttps, readBoundedBody } from "../lib/public-https-fetch";
 import { requireWorkbenchPowerShellExecutable } from "../runtime/windows-powershell-runtime";
@@ -242,10 +243,23 @@ export default class WorkbenchThreadFactsFeature {
       }),
       read: target => database.readTranscriptComponent(target),
       write: (target, result) => database.writeTranscriptComponent(target, result),
+      calls: {
+        compileMatchers: async (files, root, threadId) => await withComponentInput({ files, root }, async file => {
+          const parsed = ThreadCompiledComponentSchema.safeParse(await executeComponent(threadId, ["matchers", file]));
+          if (!parsed.success) throw new Error("MCP matcher compiler returned invalid output.");
+          return parsed.data;
+        }),
+        renderProps: async (compiled, props, threadId, signal) => await withComponentInput({ compiled, props }, async file =>
+          readThreadComponentTree(await executeComponent(threadId, ["render-props", file], signal), { remoteImages: true })),
+        quickjs: loadQuickJS,
+        read: target => database.readTranscriptCallComponent(target),
+        write: (target, result) => database.writeTranscriptCallComponent(target, result),
+      },
     });
     this.vis = new WorkbenchVisController({
       store: command => database.executeThreadVis(command),
       componentPreview: (threadId, markup, signal) => this.components.previewMarkup(threadId, markup, signal),
+      matcherTest: (threadId, call, signal) => this.components.testMatcher(threadId, call, signal),
       resolveRoot: async session => {
         try {
           return (await projectCatalog.resolveAgentEndpointProjectFromCwd(session.cwd, { endpointName: "Vis session" })).root.rootPath;

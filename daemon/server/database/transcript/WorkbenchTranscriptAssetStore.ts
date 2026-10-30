@@ -4,7 +4,8 @@
  * - TranscriptAssetRead: compatibility address and optional expected thread owner.
  * - TranscriptAssetContent: immutable image metadata and bytes.
  * - TranscriptComponentTarget: one component invocation owned by a transcript item.
- * - default WorkbenchTranscriptAssetStore: own atomic immutable content, thread-scoped addresses, read-only reachability prefiltering, and per-digest orphan collection.
+ * - TranscriptCallComponentTarget: one skill component an MCP call item shows.
+ * - default WorkbenchTranscriptAssetStore: own atomic immutable content (images, message and call component renders), thread-scoped addresses, read-only reachability prefiltering, and per-digest orphan collection.
  */
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -39,6 +40,13 @@ export interface TranscriptComponentTarget {
   threadId: string;
   itemId: string;
   markup: string;
+}
+
+export interface TranscriptCallComponentTarget {
+  threadId: string;
+  itemId: string;
+  skillPath: string;
+  component: string;
 }
 
 const extensions = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" } as const;
@@ -139,6 +147,49 @@ export default class WorkbenchTranscriptAssetStore {
       if (!retained) throw new Error("Component result could not be retained.");
       return retained;
     })();
+  }
+
+  readCallComponent(target: TranscriptCallComponentTarget): ThreadComponentNode | null {
+    return this.database.transaction(() => this.#readCallComponent(target))();
+  }
+
+  /** A call component is kept once per item, skill and component: later renders (an expired result) never replace it. */
+  writeCallComponent(target: TranscriptCallComponentTarget, tree: ThreadComponentNode): ThreadComponentNode {
+    return this.database.transaction(() => {
+      const existing = this.#readCallComponent(target);
+      if (existing) return existing;
+      const itemId = this.#threadItem(target.threadId, target.itemId);
+      if (itemId === null) throw new Error("That call is not in this thread.");
+      const digest = this.#writeComponentAsset(Buffer.from(JSON.stringify(readThreadComponentTree(tree)), "utf8"), COMPONENT_MIME_TYPE);
+      const role = this.#callComponentRole(target);
+      this.database.prepare(`INSERT OR IGNORE INTO transcript_asset_refs
+        (id, thread_id, item_id, owner_kind, role, ref_index, asset_digest, created_at)
+        VALUES (?, NULL, ?, 'item', ?, 0, ?, ?)`).run(`component:${itemId}:${role}`, itemId, role, digest, Date.now());
+      const retained = this.#readCallComponent(target);
+      if (!retained) throw new Error("Component result could not be retained.");
+      return retained;
+    })();
+  }
+
+  #callComponentRole(target: TranscriptCallComponentTarget) {
+    return `call-component:${createHash("sha256").update(`${target.skillPath}\0${target.component}`).digest("hex")}`;
+  }
+
+  #threadItem(threadId: string, publicId: string): number | null {
+    const thread = new WorkbenchThreadIdentityRepository(this.database).resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+    if (!thread) return null;
+    const item = this.database.prepare("SELECT id FROM thread_items WHERE thread_id = ? AND public_id = ?")
+      .get(thread.threadId, publicId) as { id: number } | undefined;
+    return item?.id ?? null;
+  }
+
+  #readCallComponent(target: TranscriptCallComponentTarget): ThreadComponentNode | null {
+    const itemId = this.#threadItem(target.threadId, target.itemId);
+    if (itemId === null) return null;
+    const asset = this.#readComponentAsset(itemId, this.#callComponentRole(target));
+    if (!asset) return null;
+    if (asset.mime_type !== COMPONENT_MIME_TYPE) throw new Error("Stored component asset is invalid.");
+    return readThreadComponentTree(JSON.parse(Buffer.from(asset.bytes).toString("utf8")));
   }
 
   #componentRole(markup: string) {

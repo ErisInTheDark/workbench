@@ -6,7 +6,8 @@
  *   last render and marks one in flight, and only a finished render replaces it. Live sessions survive reloads
  *   through storage and resume on start. Each session builds in its caller's project, another folder's `.wb.json`,
  *   or Workbench's kit, keeps its file's synced control state (which outlives the session), and has a headless browser
- *   agents check it in with that state, whose page follows every render.
+ *   agents check it in with that state, whose page follows every render. Also screenshots skill component markup and
+ *   MCP matcher tests in throwaway pages.
  */
 import { randomUUID } from "node:crypto";
 import { watch as watchDirectory } from "node:fs";
@@ -24,6 +25,7 @@ import {
   type VisBuildContext, type VisCommandRunner,
 } from "./vis-project-command";
 import type WorkbenchVisBrowse from "./WorkbenchVisBrowse";
+import type { SkillMcpCall } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
 
 export interface WorkbenchVisControllerOptions {
   store(command: ThreadVisCommand): Promise<ThreadVisResult>;
@@ -41,6 +43,8 @@ export interface WorkbenchVisControllerOptions {
   browse?: Pick<WorkbenchVisBrowse, "end" | "inspect" | "open" | "refresh">;
   /** Renders active skill component markup through the native component renderer. */
   componentPreview?(threadId: string, markup: string, signal: AbortSignal): Promise<string>;
+  /** Runs active skills' MCP matchers on a sample call; `preview` is its component's document, when one rendered. */
+  matcherTest?(threadId: string, call: SkillMcpCall, signal: AbortSignal): Promise<{ report: string; preview: string | null }>;
   /** Calls `onChange` whenever the file may have changed; returns a stop function. */
   watch?(file: string, onChange: () => void): () => void;
   now?(): number;
@@ -156,9 +160,27 @@ export default class WorkbenchVisController {
     cancellation.throwIfAborted();
     const document = await componentPreview(input.threadId, input.markup, cancellation);
     cancellation.throwIfAborted();
+    return await this.#screenshot({ threadId: input.threadId, cwd: input.cwd, path: "component markup", document }, cancellation);
+  }
+
+  /** How active skills' matchers present a sample call, then a screenshot of the component they name. */
+  async testMatcher(input: { threadId: string; cwd: string; call: SkillMcpCall }, signal?: AbortSignal) {
+    const { browse, matcherTest } = this.#options;
+    if (!browse || !matcherTest) throw new Error("MCP matcher testing is unavailable.");
+    const cancellation = signal ? AbortSignal.any([this.#lifetime.signal, signal]) : this.#lifetime.signal;
+    cancellation.throwIfAborted();
+    const { report, preview } = await matcherTest(input.threadId, input.call, cancellation);
+    cancellation.throwIfAborted();
+    if (preview === null) return report;
+    return `${report}\n${await this.#screenshot({ threadId: input.threadId, cwd: input.cwd, path: "call component", document: preview }, cancellation)}`;
+  }
+
+  async #screenshot(input: { threadId: string; cwd: string; path: string; document: string }, cancellation: AbortSignal) {
+    const browse = this.#options.browse;
+    if (!browse) throw new Error("Component screenshots are unavailable.");
     const target = {
       sessionId: randomUUID(), threadId: input.threadId, cwd: input.cwd,
-      path: "component markup", document, controls: {}, signal: cancellation,
+      path: input.path, document: input.document, controls: {}, signal: cancellation,
     };
     let output: string | null = null;
     let failure: Error | null = null;

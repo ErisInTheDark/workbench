@@ -3,7 +3,9 @@
  * - CompiledSkillComponent: compiled template code and dependencies.
  * - compileSkillTemplate: compile TSX and identify its input files.
  * - compileSkillStyles: compile only the utilities used by one skill's templates.
+ * - compileSkillMcpMatchers: bundle one skill's MCP matcher files into one sandbox-ready script and identify its input files.
  * - renderSkillComponent: render an invocation into native component nodes; its body lists nested invocations to resolve.
+ * - renderSkillComponentProps: render a template straight from props, as an MCP call's component.
  * - renderSkillComponentPreview: render native component nodes as a screenshot document.
  */
 import { spawn } from "node:child_process";
@@ -22,6 +24,7 @@ import { conformToZodSchema } from "../shared/workbench/zod-schema-conformer.ts"
 import { expandVariantGroupsInSource } from "../app/server/variant-group-source.ts";
 import { collectTailwindCandidates } from "./tailwind-candidates.mts";
 import { readThreadComponentMarkup } from "../shared/workbench/thread/thread-component-markup.ts";
+import { SkillMcpComponentRenderInputSchema } from "../shared/workbench/skills/skill-mcp-matcher-contract.ts";
 import { parseBlocks, type ParsedBlock } from "../app/client/workbench/markdown/markdown-parse.ts";
 
 const scriptPath = /^skill-component-build\.(?:mts|ts)$/u.test(path.basename(process.argv[1] ?? ""))
@@ -179,6 +182,108 @@ export async function compileSkillStyles(files: readonly string[], skillRoot: st
   };
 }
 
+/** The virtual module matcher files import their helpers from. */
+const SKILL_MCP_MATCHER_KIT = `
+  export function defineMcpMatcher(match) {
+    if (typeof match !== "function") throw new Error("defineMcpMatcher expects a function (call => presentation | null).");
+    return match;
+  }
+  export const code = value => ({ code: String(value) });
+  export const primary = value => ({ primary: String(value) });
+  export const path = value => ({ path: String(value) });
+  export const thread = value => ({ thread: String(value) });
+`;
+
+/**
+ * Bundle one skill's matcher files into a script that assigns their default exports, in order, to the global the
+ * sandboxed runtime reads. Imports stay inside the skill; the only bare import is `workbench-skill`.
+ */
+export async function compileSkillMcpMatchers(files: readonly string[], rootPath: string): Promise<CompiledSkillComponent> {
+  const skillRoot = await realpath(rootPath);
+  const entries = await Promise.all(files.map(file => realpath(file)));
+  const plugin: Esbuild.Plugin = {
+    name: "workbench-skill-mcp-matchers",
+    setup(build) {
+      build.onResolve({ filter: /^workbench-skill-mcp-entry$/ }, () => ({ path: "entry", namespace: "matcher" }));
+      build.onResolve({ filter: /^workbench-skill$/ }, () => ({ path: "kit", namespace: "matcher" }));
+      build.onResolve({ filter: /^[^./]/ }, args => args.namespace === "matcher" && path.isAbsolute(args.path) ? undefined : {
+        errors: [{ text: `Matchers run sandboxed and can import only relative files and "workbench-skill": ${args.path}` }],
+      });
+      build.onLoad({ filter: /.*/, namespace: "matcher" }, args => args.path === "kit"
+        ? { contents: SKILL_MCP_MATCHER_KIT, loader: "js" }
+        : {
+          contents: [
+            ...entries.map((file, index) => `import matcher${index} from ${JSON.stringify(file)};`),
+            `export default [${entries.map((_file, index) => `matcher${index}`).join(", ")}];`,
+          ].join("\n"),
+          loader: "js",
+          resolveDir: skillRoot,
+        });
+    },
+  };
+  const built = await esbuild.build({
+    absWorkingDir: root,
+    bundle: true,
+    entryPoints: ["workbench-skill-mcp-entry"],
+    format: "iife",
+    globalName: "__wbSkillMcpMatchers",
+    logLevel: "silent",
+    metafile: true,
+    platform: "neutral",
+    plugins: [plugin],
+    target: "es2022",
+    write: false,
+  });
+  const inputs: string[] = [];
+  for (const input of Object.keys(built.metafile.inputs)) {
+    if (input.startsWith("matcher:")) continue;
+    const resolved = await realpath(path.resolve(root, input));
+    const relative = path.relative(skillRoot, resolved);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`MCP matcher import escapes its skill: ${input}`);
+    }
+    inputs.push(resolved);
+  }
+  return { code: built.outputFiles[0]!.text, inputs: [...new Set([...inputs, ...entries])] };
+}
+
+/** The sandboxed program evaluating a compiled template; `body` builds `__wbResult.exports` from `__wbDefault`. */
+function templateProgram(compiled: CompiledSkillComponent, body: string) {
+  return `
+    const __wbTemplate = { exports: {} };
+    (function(module, exports) { ${compiled.code}\n })(__wbTemplate, __wbTemplate.exports);
+    const __wbDefault = __wbTemplate.exports.default;
+    if (typeof __wbDefault !== "function") throw new Error("Component must have a default function export.");
+    const __wbResult = { exports: {} };
+    ${body}
+    JSON.stringify(__wbResult.exports, (_key, value) => {
+      if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+        throw new Error("Component output contains a non-serializable function or value.");
+      }
+      return value;
+    });
+  `;
+}
+
+function runTemplateProgram(program: string, filename: string): ThreadComponentNode {
+  const serialized: unknown = new Script(program, { filename }).runInNewContext(Object.create(null), {
+    timeout: COMPONENT_EXECUTION_TIMEOUT_MS, contextCodeGeneration: { strings: false, wasm: false }, microtaskMode: "afterEvaluate",
+  });
+  if (typeof serialized !== "string") throw new Error("Component output must be a serializable element tree.");
+  return readThreadComponentTree(JSON.parse(serialized), { remoteImages: true });
+}
+
+/** Render a template straight from props, as a call's component receives its call. */
+export function renderSkillComponentProps(compiled: CompiledSkillComponent, props: Readonly<Record<string, unknown>>): ThreadComponentNode {
+  return runTemplateProgram(templateProgram(compiled, `
+    const __wbCreateElement = (type, props, ...children) => {
+      const value = { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) };
+      return typeof type === "function" ? type(value) : { $workbench: "element", type, props: value };
+    };
+    __wbResult.exports = __wbCreateElement(__wbDefault, ${JSON.stringify(props)});
+  `), "component-props.cjs");
+}
+
 export async function renderSkillComponent(
   compiled: CompiledSkillComponent, name: string, markup: string, results: Readonly<Record<string, unknown>> = {},
 ): Promise<ThreadComponentNode> {
@@ -189,12 +294,7 @@ export async function renderSkillComponent(
   const invocation = await esbuild.transform(`module.exports = (${opening});`, {
     loader: "tsx", format: "cjs", jsx: "transform", jsxFactory: "__wbCreateElement", logLevel: "silent",
   });
-  const program = `
-    const __wbTemplate = { exports: {} };
-    (function(module, exports) { ${compiled.code}\n })(__wbTemplate, __wbTemplate.exports);
-    const __wbDefault = __wbTemplate.exports.default;
-    if (typeof __wbDefault !== "function") throw new Error("Component must have a default function export.");
-    const __wbResult = { exports: {} };
+  return runTemplateProgram(templateProgram(compiled, `
     const __wbChildren = ${JSON.stringify(parsed.body === null ? null : childMarkdown(parsed.body.trim()))};
     const __wbResults = ${JSON.stringify(results)};
     const __wbResolve = value => {
@@ -216,18 +316,7 @@ export async function renderSkillComponent(
     };
     (function(module, exports, __wbCreateElement, ${name}) { ${invocation.code}\n })
       (__wbResult, __wbResult.exports, __wbCreateElement, __wbDefault);
-    JSON.stringify(__wbResult.exports, (_key, value) => {
-      if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
-        throw new Error("Component output contains a non-serializable function or value.");
-      }
-      return value;
-    });
-  `;
-  const serialized: unknown = new Script(program, { filename: "component-markup.cjs" }).runInNewContext(Object.create(null), {
-    timeout: COMPONENT_EXECUTION_TIMEOUT_MS, contextCodeGeneration: { strings: false, wasm: false }, microtaskMode: "afterEvaluate",
-  });
-  if (typeof serialized !== "string") throw new Error("Component output must be a serializable element tree.");
-  return readThreadComponentTree(JSON.parse(serialized), { remoteImages: true });
+  `), "component-markup.cjs");
 }
 
 export async function renderSkillComponentPreview(
@@ -267,10 +356,20 @@ async function main() {
     }
     const input = parsed.data;
     process.stdout.write(JSON.stringify(await renderSkillComponent(input.compiled, input.name, input.markup, input.results)));
+  } else if (action === "render-props" && file) {
+    const parsed = SkillMcpComponentRenderInputSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
+    if (!parsed.success) throw new Error("Component props render input is invalid.");
+    process.stdout.write(JSON.stringify(renderSkillComponentProps(parsed.data.compiled, parsed.data.props)));
+  } else if (action === "matchers" && file) {
+    const parsed = ThreadComponentStyleBuildSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
+    if (!parsed.success) throw new Error("Invalid MCP matcher build.");
+    process.stdout.write(JSON.stringify(await compileSkillMcpMatchers(parsed.data.files, parsed.data.root)));
   } else if (action === "preview" && file) {
     const result = readThreadComponentPreview(JSON.parse(await readFile(file, "utf8")));
     process.stdout.write(JSON.stringify(await renderSkillComponentPreview(result)));
-  } else throw new Error("Usage: skill-component-build.mts compile <file> | styles <input> | render <input> | preview <result>");
+  } else {
+    throw new Error("Usage: skill-component-build.mts compile <file> | styles <input> | render <input> | render-props <input> | matchers <input> | preview <result>");
+  }
 }
 
 if (scriptPath) {

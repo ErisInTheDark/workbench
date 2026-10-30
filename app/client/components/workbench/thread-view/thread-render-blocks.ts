@@ -4,7 +4,7 @@
  *   including the card histories and stitched cards that thread-card-folds builds.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
  * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
- * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context and calls a batch never started, and drawing each shell wait as the command it collects, even with that shell's row out of view), preserve wait folds, then give qualifying subagent coordination one outer render block.
+ * - buildRenderableBlocks: group visible provider items (hiding agent-only patch recovery context and calls a batch never started, drawing each shell wait as the command it collects, even with that shell's row out of view, and placing calls active skills present as steps, cards or nothing), preserve wait folds, then give qualifying subagent coordination one outer render block.
  * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
  * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
@@ -34,17 +34,20 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import {
   getThreadCommandDisplay, getThreadCommandExecutionOutcome, getThreadSubagentWaitMcpOutcome, getGitArcMatcherAction,
   getNativeToolDisplay,
-  getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
+  getWorkbenchCommandRouteSummaryDisplay, getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
   isNativeFileOperation, getNativeFileChanges,
   isGitArcWaitMatcherClaim, isThreadContextMatcherClaim,
   isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
   parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
   type CommandShell,
   type ThreadCommandExecutionOutcome,
+  type ThreadCommandSummaryDisplay,
   type WorkbenchSpecializedOperation,
   type WorkbenchThreadRecallOperation,
 } from "../../../workbench/thread/thread-command-matchers";
 import { parseSleepCommandMs } from "../../../workbench/thread/command-matchers/sleep-command";
+import type { CommandDisplayContext } from "../../../workbench/thread/command-matchers/types";
+import type { WorkbenchCommandPresentationContext } from "../../../workbench/thread/command-matchers/workbench-command-rendering";
 import {
   getWorkbenchMcpShellWaitCommandItem, readWorkbenchShellWaitShellId, readWorkbenchShellWaitTarget, type WorkbenchShellWaitLink,
 } from "../../../workbench/thread/command-matchers/workbench-mcp";
@@ -142,6 +145,8 @@ export type ThreadRenderableBlock =
     waits: SubagentWaitItem[];
   }
   | { kind: "commandSequence"; items: CommandSequenceItem[] }
+  /** A call an active skill draws as its own card; `family` (skill and card name) decides which neighbours it stitches with. */
+  | { family: string; items: [CommandSequenceItem]; kind: "skillMcpCard"; open: boolean }
   | { kind: "fileChangeSequence"; items: FileOperationBlockItem[] }
   | { kind: "reasoningSequence"; items: Extract<ThreadItem, { type: "reasoning" }>[] }
   | { kind: "userMessageSequence"; items: UserMessageItem[]; state: WorkbenchInputState["status"] }
@@ -485,8 +490,22 @@ function foldSubagentCoordination(blocks: ThreadRenderableBlock[]): ThreadRender
   return coalesceCommandSequences(folded);
 }
 
+/** The block a call an active skill presents claims: its own card, nothing when hidden, or null for an ordinary step. */
+function readSkillMcpPlacement(item: CommandSequenceItem, display: ThreadCommandSummaryDisplay | null): ThreadRenderableBlock | "hidden" | null {
+  const skill = display?.skillMcp;
+  if (!skill) return null;
+  if (skill.display === "hidden") return "hidden";
+  if (skill.display === "step") return null;
+  return { family: `${skill.skillPath}\0${skill.display.card}`, items: [item], kind: "skillMcpCard", open: skill.display.open === true };
+}
+
+/** Only `wb mcp call` commands can be skill-presented, so other commands skip the matcher pass. */
+const WB_MCP_CALL_COMMAND = /\bwb(?:\.cmd)?\s+mcp\s+call\b/iu;
+
 export function buildRenderableBlocks(
   items: ThreadItem[], hidden: HiddenThreadItemIds = {}, fallbackCwd = ".", yieldedShells: ThreadYieldedShells = NO_YIELDED_SHELLS,
+  /** Matcher context, so blocks place skill-presented calls exactly as their rows describe them. */
+  context: WorkbenchCommandPresentationContext & Pick<CommandDisplayContext, "projectRootPath" | "workspaceRoots"> = {},
 ): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
   const capturedGroups = new Set(items.flatMap(item =>
@@ -565,7 +584,16 @@ export function buildRenderableBlocks(
       continue;
     }
     if (item.type === "commandExecution") {
-      if (!isHiddenCommandExecution(item.command)) commands(item);
+      if (isHiddenCommandExecution(item.command)) continue;
+      const placement = context.skillMcpMatchers && WB_MCP_CALL_COMMAND.test(item.command)
+        ? readSkillMcpPlacement(item, getThreadCommandDisplay({
+          command: item.command, commandActions: item.commandActions, cwd: item.cwd, projectRootPath: context.projectRootPath,
+          skillMcpMatchers: context.skillMcpMatchers, workspaceRoots: context.workspaceRoots,
+        }))
+        : null;
+      if (placement === "hidden") continue;
+      if (placement) { flush(); blocks.push(placement); continue; }
+      commands(item);
       continue;
     }
     if (item.type === "mcpToolCall" && !isNativeFileOperation(item)) {
@@ -579,7 +607,10 @@ export function buildRenderableBlocks(
         if (!isHiddenCommandExecution(waitedCommand.command)) commands(getWorkbenchMcpShellWaitCommandItem(item, waitedCommand));
         continue;
       }
-      const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
+      const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context, item, server: item.server, tool: item.tool });
+      const placement = readSkillMcpPlacement(item, getWorkbenchCommandRouteSummaryDisplay(route));
+      if (placement === "hidden") continue;
+      if (placement) { flush(); blocks.push(placement); continue; }
       if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) continue;
       if (route?.kind === "simple") { commands(item); continue; }
       if (route?.kind === "specialized" && isRunStepMcpOperation(route.operation)) { commands(item); continue; }
@@ -640,6 +671,7 @@ type CommandContext = {
   approvalItemIds?: { has(itemId: string): boolean };
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
+  skillMcpMatchers?: CommandDisplayContext["skillMcpMatchers"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 };
 

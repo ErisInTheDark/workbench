@@ -9,6 +9,7 @@
 | Local Overlay | Gitignored `.agents.local` beside a project's `.agents`; its `skills/<name>/` replace same-named skills at every layer and its `agents/<name>.md` replace same-named project agents. `<name>.tombstone` in either folder hides `<name>` from the project |
 | Skill Load | The act of reading a skill's instruction file so the agent can apply that skill's workflow to the current task |
 | Active Skill | A skill recorded for one thread after user activation or agent Skill Load, until the user deactivates it |
+| skill MCP matcher | TS file a skill lists under `workbench_mcp_matchers`; daemon compiles it, client runs it in QuickJS to present matching MCP calls as steps, cards or hidden while the skill is active |
 | Keyed delta | Upserted/removed items plus changed field names against an observation's previous revision; see `shared/workbench/workspace/observation-patch.ts` |
 | thread status row | Row under a thread's transcript: live title plus skills, vis, Git arc and todo pills, each opening one shared animated panel area; `ThreadStatusRow`, composed by `ThreadStatusArea` |
 | activity card (activity run card, activity card status) | Tinted transcript card summarising consecutive agent work (reasoning, commands, edits, searches, sleeps) as counted chips plus duration; opens into its steps. Its status, while live, is the step actually running (else the last done) drawn as its own row under the chips. A lone step shows bare instead; `ThreadActivityRun` |

@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import { projectRoot } from "../shared/project-root";
-import { compileSkillStyles, compileSkillTemplate, renderSkillComponent, renderSkillComponentPreview } from "./skill-component-build.mts";
+import loadQuickJS from "../daemon/server/skills/load-quickjs";
+import SkillMcpMatcherRuntime from "../shared/workbench/skills/SkillMcpMatcherRuntime";
+import {
+  compileSkillMcpMatchers, compileSkillStyles, compileSkillTemplate, renderSkillComponent, renderSkillComponentPreview, renderSkillComponentProps,
+} from "./skill-component-build.mts";
 
 test("skill styles include template utilities without recompiling unrelated kit utilities", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("skill-styles-");
@@ -151,4 +155,47 @@ test("template execution cannot reach the host process through a constructor", a
   await writeFile(file, 'export default function Card() { const p = globalThis.constructor.constructor("return process")(); return <div>{p.platform}</div> }');
   const compiled = await compileSkillTemplate(file);
   await assert.rejects(renderSkillComponent(compiled, "Card", "<Card />"));
+});
+
+test("a skill's matcher files bundle into one sandboxed script that presents calls through their helpers", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("skill-matchers-");
+  context.after(() => temporary.dispose());
+  await writeFile(join(temporary.path, "words.ts"), 'export const builds = (ids: number[]) => ids.join(", ");');
+  await writeFile(join(temporary.path, "pipelines.ts"), `import { code, defineMcpMatcher } from "workbench-skill";
+    import { builds } from "./words";
+    export default defineMcpMatcher(call => call.tool === "pipelines_build"
+      ? { verb: ["Listing", "Listed"], summary: ["builds", code(builds(call.arguments.buildIds))] } : null);`);
+  await writeFile(join(temporary.path, "fallback.ts"), `import { defineMcpMatcher } from "workbench-skill";
+    export default defineMcpMatcher(() => ({ verb: ["Calling", "Called"] }));`);
+  const compiled = await compileSkillMcpMatchers([join(temporary.path, "pipelines.ts"), join(temporary.path, "fallback.ts")], temporary.path);
+  const runtime = new SkillMcpMatcherRuntime(await loadQuickJS(), [{
+    code: compiled.code, revision: "0".repeat(64), skillName: "devops", skillPath: join(temporary.path, "SKILL.md"),
+  }]);
+  try {
+    const call = { server: "azure-devops", tool: "pipelines_build", arguments: { buildIds: [1, 2] }, keep: null, status: "completed" as const, error: null, result: null };
+    assert.deepEqual(runtime.report(call), { failures: [], match: {
+      skillName: "devops", skillPath: join(temporary.path, "SKILL.md"),
+      presentation: { verb: ["Listing", "Listed"], summary: ["builds", { code: "1, 2" }], display: "step" },
+    } });
+    assert.deepEqual(runtime.match({ ...call, tool: "other" })?.presentation.verb, ["Calling", "Called"]);
+  } finally {
+    runtime.dispose();
+  }
+  assert.ok(compiled.inputs.some(input => input.endsWith("words.ts")), "helpers are watched inputs");
+});
+
+test("matchers cannot import packages or host modules", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("skill-matcher-imports-");
+  context.after(() => temporary.dispose());
+  await writeFile(join(temporary.path, "matchers.ts"), 'import { readFileSync } from "node:fs"; export default () => readFileSync;');
+  await assert.rejects(compileSkillMcpMatchers([join(temporary.path, "matchers.ts")], temporary.path), /only relative files and "workbench-skill"/u);
+});
+
+test("a call component renders straight from the call props it is given", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("skill-call-component-");
+  context.after(() => temporary.dispose());
+  const file = join(temporary.path, "BuildList.tsx");
+  await writeFile(file, "export default function BuildList({ call }: { call: { result: { id: number }[] } }) { return <ul>{call.result.map(build => <li>{build.id}</li>)}</ul> }");
+  const tree = renderSkillComponentProps(await compileSkillTemplate(file), { call: { result: [{ id: 23611 }] } });
+  assert.match(JSON.stringify(tree), /23611/u);
 });

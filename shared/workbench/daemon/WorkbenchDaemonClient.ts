@@ -176,6 +176,8 @@ class WorkbenchDaemonClient {
     },
     components: {
       render: (params: WorkbenchDaemonParams<"thread/components/render">) => this.request("thread/components/render", params),
+      renderCall: (params: WorkbenchDaemonParams<"thread/components/render-call">) => this.request("thread/components/render-call", params),
+      matchers: (params: WorkbenchDaemonParams<"thread/components/matchers">) => this.request("thread/components/matchers", params),
       styles: (params: WorkbenchDaemonParams<"thread/components/styles">, options?: WorkbenchDaemonRequestOptions) =>
         this.request("thread/components/styles", params, options),
     },

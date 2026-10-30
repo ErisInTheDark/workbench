@@ -10,9 +10,11 @@
  * - parseWorkbenchTodoCommand: parse `wb todo` list, add and remove calls for their todo row.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb help requests (before any command's own matcher), toc, rm,
- *   feedback, vis, todo, mcp, task, token, message, subagent, and reload commands.
+ *   feedback, vis, todo, mcp (external calls an active skill presents first), task, token, message, subagent, and reload
+ *   commands.
  */
-import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { CommandAction, JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import {
   WORKBENCH_FEEDBACK_TITLE_FALLBACK,
   type WorkbenchFeedbackCategory,
@@ -21,6 +23,7 @@ import {
 
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
+import { getSkillMcpMatcherResult, matchSkillMcpCall, readSkillMcpInvocation } from "./skill-mcp";
 import type { CommandMatcherDefinition } from "./types";
 import {
   getWorkbenchCommandRendering, WORKBENCH_VIS_ACTIONS,
@@ -87,6 +90,10 @@ export function parseWorkbenchVisCommand(command: string): WorkbenchVisOperation
   if (action === "test") {
     return rest.length === 2 && rest[0] === "--markup" && rest[1]?.trim()
       ? { action: "test", path: "component markup" } : null;
+  }
+  if (action === "match") {
+    const tool = readFlagValue(command, "tool")?.trim();
+    return tool ? { action: "match", path: tool } : null;
   }
   const projectAt = action === "start" ? rest.indexOf("--project") : -1;
   const paths = rest.filter((token, index) => token !== "--" && (projectAt < 0 || (index !== projectAt && index !== projectAt + 1)));
@@ -192,6 +199,22 @@ function readFlagValues(command: string, flag: string) {
 
 function readFlagValue(command: string, flag: string) {
   return readFlagValues(command, flag)[0] ?? null;
+}
+
+/**
+ * A `wb mcp call` an active skill presents. The command text is the whole invocation, so matchers see no outcome; a
+ * malformed `--arguments-json` presents nothing.
+ */
+function readSkillMcpCommandCall(runtime: SkillMcpMatcherRuntime, server: string, tool: string, argumentsJson: string | null, keep: string | null) {
+  let argumentsValue: JsonValue = {};
+  if (argumentsJson) {
+    try { argumentsValue = JSON.parse(argumentsJson) as JsonValue; }
+    catch { return null; }
+  }
+  const invocation = readSkillMcpInvocation(server, tool, argumentsValue, keep);
+  if (!invocation) return null;
+  const match = matchSkillMcpCall(runtime, { ...invocation, error: null, result: null, status: null });
+  return match ? getSkillMcpMatcherResult(match, invocation) : null;
 }
 
 function hasBooleanFlag(command: string, flag: string) {
@@ -491,7 +514,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   }),
   CommandMatcher({
     id: "workbench-cli.mcp",
-    match: ({ stage, summaryParts }) => {
+    match: ({ skillMcpMatchers, stage, summaryParts }) => {
       if (summaryParts.length) return null;
       const normalized = stage.text.trim();
       const action = /^wb(?:\.cmd)?\s+mcp\s+(tools|request|call|authorize|download)(?=\s|$)/iu.exec(normalized)?.[1]?.toLowerCase();
@@ -515,6 +538,10 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         })?.result ?? null;
       }
       const tool = readFlagValue(normalized, "tool");
+      const skill = action === "call" && server && tool && skillMcpMatchers
+        ? readSkillMcpCommandCall(skillMcpMatchers, server, tool, readFlagValue(normalized, "arguments-json"), readFlagValue(normalized, "keep"))
+        : null;
+      if (skill) return skill;
       return getWorkbenchCommandRendering(action === "call" ? "mcp_call" : "mcp_request", {
         ...server ? { server } : {}, ...tool ? { tool } : {},
       })?.result ?? null;

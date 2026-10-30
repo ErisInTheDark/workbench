@@ -2,8 +2,8 @@
  * Exports:
  * - default ThreadRenderableBlockView: one renderable block through its renderer: activity runs (their steps through the
  *   command, file, reasoning and web-search renderers), cards with history (retried arc starts, proposals with their
- *   lead-in steps, todo changes after a listing, through the same renderers), stitched cards, messages, coordination and
- *   single items. Memoised per block and timeline.
+ *   lead-in steps, todo changes after a listing, through the same renderers), skill-presented call cards, stitched cards,
+ *   messages, coordination and single items. Memoised per block and timeline.
  */
 "use client";
 
@@ -24,6 +24,7 @@ import ThreadGenericItem from "../ThreadGenericItem";
 import ThreadIncomingAgentMessageGroup from "../ThreadIncomingAgentMessageGroup";
 import ThreadMessageTimestamp from "../ThreadMessageTimestamp";
 import ThreadProofOfWorkItem from "../ThreadProofOfWorkItem";
+import ThreadSkillMcpCard from "../ThreadSkillMcpCard";
 import ThreadSleepItem from "../ThreadSleepItem";
 import ThreadToolOutputItem from "../ThreadToolOutputItem";
 import ThreadWebSearchItem, { ThreadWebSearchSequence } from "../ThreadWebSearchItem";
@@ -265,6 +266,8 @@ function ThreadRenderableBlockViewComponent ({
           ))}
         </ThreadCardGroup>
       );
+    case "skillMcpCard":
+      return <ThreadSkillMcpCard item={block.items[0]} itemTimeline={itemTimeline} open={block.open} />;
     case "subagentCoordination":
       return <ThreadSubagentCoordination block={block} itemTimeline={itemTimeline} />;
     case "agentMessageSequence":

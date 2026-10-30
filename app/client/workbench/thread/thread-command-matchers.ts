@@ -7,6 +7,7 @@
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills.
  * - ThreadCommandDetailRow/ThreadCommandDetailTarget: structured detail rows rendered inside command disclosures.
  * - ThreadCommandSummaryStats: what a command did, counted for activity chips and step icons.
+ * - ThreadCommandSkillMcp: an active skill's presentation of one MCP call (draw mode, chip, component).
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text.
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output.
@@ -96,6 +97,7 @@ import type {
     ThreadCommandDetailTarget,
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,
+    ThreadCommandSkillMcp,
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats,
 } from "./command-matchers/types";
@@ -146,6 +148,7 @@ function getCommandDisplayCacheKey({
   knownSkills,
   projectRootPath,
   shell,
+  skillMcpMatchers,
   workspaceRoots,
 }: CommandDisplayContext) {
   return [
@@ -158,6 +161,7 @@ function getCommandDisplayCacheKey({
     shell ?? "",
     getCommandDisplayContextIdentity(knownSkills),
     getCommandDisplayContextIdentity(workspaceRoots),
+    getCommandDisplayContextIdentity(skillMcpMatchers ?? undefined),
   ].join("\0");
 }
 
@@ -190,6 +194,7 @@ export type {
     ThreadCommandDetailTarget,
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,
+    ThreadCommandSkillMcp,
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats,
     WorkbenchTaskStatusCommand,
@@ -246,6 +251,7 @@ function computeThreadCommandDisplay({
   knownSkills,
   projectRootPath,
   shell: shellHint,
+  skillMcpMatchers,
   workspaceRoots,
 }: CommandDisplayContext): ThreadCommandDisplay {
   const shellResult = unwrapShellCommand(command);
@@ -259,6 +265,7 @@ function computeThreadCommandDisplay({
     projectRootPath,
     shell,
     shellGroup: getCommandShellGroup(shell),
+    skillMcpMatchers,
     unwrappedCommand: shellResult.command,
     workspaceRoots,
   };

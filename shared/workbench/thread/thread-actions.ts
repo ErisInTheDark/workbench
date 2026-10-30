@@ -22,6 +22,7 @@
  */
 import { z } from "zod";
 import { ThreadComponentRenderSchema, ThreadComponentStyleSchema } from "./thread-component-tree";
+import { SkillMcpComponentPropsSchema, SkillMcpMatcherCompilationSchema } from "../skills/skill-mcp-matcher-contract";
 import type {
   ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry, WorkbenchThreadContextEntryScope, WorkbenchPendingUserInputRequest,
@@ -269,6 +270,18 @@ export const workbenchThreadActions = {
   },
   "thread/components/styles": {
     params: WorkbenchThreadTargetSchema, result: z.object({ styles: z.array(ThreadComponentStyleSchema) }).strict(),
+  },
+  /** One call's skill component, rendered once from the props the client built and kept on the call's item. */
+  "thread/components/render-call": {
+    params: WorkbenchThreadTargetSchema.extend({
+      itemId: z.string().min(1), skillPath: z.string().min(1), component: z.string().regex(/^[A-Z][A-Za-z0-9_]*$/u),
+      props: SkillMcpComponentPropsSchema,
+    }),
+    result: ThreadComponentRenderSchema,
+  },
+  /** The thread's active skills' compiled MCP matchers, in catalogue order, and why any failed to compile. */
+  "thread/components/matchers": {
+    params: WorkbenchThreadTargetSchema, result: SkillMcpMatcherCompilationSchema,
   },
   "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },
   "thread/skills/deactivate": { params: WorkbenchThreadTargetSchema.extend({ path: z.string().min(1) }), result: skillsResult },

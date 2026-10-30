@@ -22,10 +22,13 @@
  * - CommandMatcherContext: matcher input including current stage and accumulated summary parts.
  * - CommandMatcherResult: matcher output with rendered parts, aggregate counts, and optional remaining command.
  * - CommandMatcherDefinition: shell-stage matcher definition for thread command summaries.
+ * - ThreadCommandSkillMcp: what an active skill's MCP matcher said about one call: where it draws, its chip and component.
  */
 
-import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { CommandAction, JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import type { SkillMcpChipIcon, SkillMcpDisplay } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
+import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkspaceFileLinkRoot } from "../../markdown/markdown-links";
 
 export type CommandShell =
@@ -114,6 +117,18 @@ export interface ThreadCommandDetailRow {
   target?: ThreadCommandDetailTarget | null;
 }
 
+export interface ThreadCommandSkillMcp {
+  /** The invocation the matcher saw; outcome facts come from the item when its component renders. */
+  call: { arguments: JsonValue; keep: string | null; server: string; tool: string };
+  /** A skill-named chip, keyed by its skill so two skills' chips never merge. */
+  chip: { icon: SkillMcpChipIcon; key: string; verb: string } | null;
+  component: string | null;
+  display: SkillMcpDisplay;
+  props: Record<string, JsonValue>;
+  skillName: string;
+  skillPath: string;
+}
+
 export interface ThreadCommandSummaryStats {
   browseActions: number;
   deletedPaths: number;
@@ -146,6 +161,7 @@ export interface ThreadCommandSummaryDisplay {
   ongoingSummaryText: string;
   shell: CommandShell;
   showShell: boolean;
+  skillMcp?: ThreadCommandSkillMcp;
   summaryParts: ThreadCommandDisplayPart[];
   summaryKind: "matched" | "raw";
   summaryStats: ThreadCommandSummaryStats;
@@ -165,6 +181,8 @@ export interface CommandDisplayContext {
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
   shell?: CommandShell;
+  /** Active skills' MCP matchers for the thread this content belongs to. */
+  skillMcpMatchers?: SkillMcpMatcherRuntime | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
@@ -195,6 +213,7 @@ export interface CommandMatcherResult {
   ownRow?: boolean;
   ongoingSummaryParts: ThreadCommandDisplayPart[];
   remainingCommand?: string | null;
+  skillMcp?: ThreadCommandSkillMcp;
   stop?: boolean;
   summaryParts: ThreadCommandDisplayPart[];
   summaryStats?: Partial<ThreadCommandSummaryStats>;

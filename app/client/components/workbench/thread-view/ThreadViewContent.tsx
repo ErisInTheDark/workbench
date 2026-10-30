@@ -37,6 +37,7 @@ import useThreadEntryMotion from "./use-thread-entry-motion";
 import useThreadReferenceSelection from "./use-thread-reference-selection";
 import useThreadSubagentTabs from "./use-thread-subagent-tabs";
 import useWorkbenchSkillCatalogue from "./use-workbench-skill-catalogue";
+import useThreadSkillMcpMatchers from "../../../workbench/skills/use-thread-skill-mcp-matchers";
 import useProofOfWorkCatalogue, { ThreadProofOfWorkCatalogueContext } from "./use-proof-of-work-catalogue";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
@@ -151,6 +152,7 @@ export default memo(function ThreadViewContent ({
   }), [entryMotion.activityRunController, entryMotion.controller, threadScrollViewport]);
   const [workbenchSkills, reconcileRejectedSkills] = useWorkbenchSkillCatalogue(projectId, activeThread?.harness ?? thread.harness);
   const proofOfWorkChecklists = useProofOfWorkCatalogue(projectId);
+  const skillMcpMatchers = useThreadSkillMcpMatchers(activeThread && !activeThread.isDraft ? activeThreadId : null);
   const loadedTurns = activeThread?.isDraft || activeTranscriptProjection ? activeTurns.turns : EMPTY_TURNS;
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const showDraftComposer = isDraftThreadView && loadedTurns.length === 0;
@@ -260,6 +262,7 @@ export default memo(function ThreadViewContent ({
       pathDisambiguation={projectFileIndexId === undefined ? undefined
         : { index: projectFilePathDisambiguationIndex ?? null, key: projectFileIndexId }}
       rootPath={projectRootPath}
+      skillMcpMatchers={skillMcpMatchers}
       skills={workbenchSkills}
       workspaceRoots={workspaceFileLinkRoots}
     >

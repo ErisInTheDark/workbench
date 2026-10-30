@@ -498,6 +498,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         try {
           const body = request.action === "test"
             ? await vis.testMarkup({ threadId: identity.threadId, cwd: request.cwd, markup: request.markup }, signal)
+            : request.action === "match"
+            ? await vis.testMatcher({ threadId: identity.threadId, cwd: request.cwd, call: {
+              server: request.server, tool: request.tool, arguments: request.arguments ?? {}, keep: request.keep ?? null,
+              status: request.status ?? "completed", error: request.error ?? null, result: request.result ?? null,
+            } }, signal)
             : request.action === "start"
             ? text("start", await vis.startSession({
               threadId: identity.threadId, harness: binding.harness, cwd: request.cwd, projectId: project.id, rootPath: root.rootPath,

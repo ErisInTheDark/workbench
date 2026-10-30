@@ -12,6 +12,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.309",
     "@hono/node-server": "1.19.14",
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@lydell/node-pty": "1.1.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@openai/codex": "0.163.0",
@@ -22,6 +23,7 @@
     "browse": "0.9.1",
     "eventsource-parser": "4.1.0",
     "js-tiktoken": "1.0.21",
+    "quickjs-emscripten-core": "0.32.0",
     "tsx": "4.23.13",
     "workbench-shared": "workspace:*",
     "ws": "8.21.0",

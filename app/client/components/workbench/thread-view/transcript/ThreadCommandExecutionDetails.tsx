@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - default ThreadCommandExecutionDetails: one shell command through its dedicated renderer (feedback, todo, vis, git arc,
- *   subagent, message) or as a step row opening onto its output, Browse steps and checkpoint changes; running wb shells
- *   and the waits collecting them can be stopped.
+ *   subagent, message) or as a step row opening onto its output, Browse steps, checkpoint changes or a skill's call
+ *   component; running wb shells and the waits collecting them can be stopped.
  */
 "use client";
 
@@ -53,6 +53,7 @@ import { createThreadGitArcCompareSummaryRows, createThreadGitArcDiffSummaryRows
 import ThreadGitArcItem from "../ThreadGitArcItem";
 import ThreadGitArcProposalItem from "../ThreadGitArcProposalItem";
 import ThreadGitArcWaitItem from "../ThreadGitArcWaitItem";
+import ThreadSkillCallComponent from "../ThreadSkillCallComponent";
 import ThreadStepRow from "../ThreadStepRow";
 import ThreadSubagentCreateItem from "../ThreadSubagentCreateItem";
 import ThreadSubagentTargetActionItem from "../ThreadSubagentTargetActionItem";
@@ -382,6 +383,7 @@ export default function ThreadCommandExecutionDetails ({
 
   // Running, not queued: the line shimmers and a spinner leads its duration.
   const running = commandOutcome === "inProgress" && liveShellQueue?.admittedAt !== null;
+  const skillComponent = commandDisplay.skillMcp?.component ? { ...commandDisplay.skillMcp, component: commandDisplay.skillMcp.component } : null;
   const commandDisplayView = (
     <ThreadCommandDisplay
       approval={approval}
@@ -410,6 +412,13 @@ export default function ThreadCommandExecutionDetails ({
       summaryDisplay={outcomeCommandDisplay}
     >
       {isBrowseCommand || shouldHideCommandOutput ? undefined
+        : skillComponent && commandOutcome === "completed" ? (
+          <ThreadSkillCallComponent
+            fallback={<ThreadCodeDisplay header={<ThreadCommandHeader command={item.command} surface="framed" />} output={shownOutput?.trim() || undefined} preview variant="plain" />}
+            item={item}
+            skill={skillComponent}
+          />
+        )
         : checkpointCompareChanges && commandOutcome === "completed" ? <ThreadCheckpointCompareItem changes={checkpointCompareChanges} />
           : checkpointDiff ?? undefined}
     </ThreadCommandDisplay>

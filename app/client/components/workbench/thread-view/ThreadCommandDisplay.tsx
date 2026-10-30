@@ -36,7 +36,7 @@ export default function ThreadCommandDisplay({ approval = null, command, display
 }) {
   return (
     <ThreadStepRow
-      icon={createElement(getCommandIcon(summaryDisplay.summaryStats), { size: 16 })}
+      icon={createElement(getCommandIcon(summaryDisplay.summaryStats, summaryDisplay.skillMcp?.chip), { size: 16 })}
       iconClassName={failed ? "text-danger" : undefined}
       live={live}
       meta={meta}

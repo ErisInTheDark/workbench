@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - default ThreadVisCommandItem: a vis call as one step line: a start or end opens into the document snapshotted at that
- *   moment, a state read or browser snapshot into what the agent read, and a screenshot into the image the agent saw (its
- *   delivery is transcript-hidden, so this is its only place).
+ *   moment, a state read or browser snapshot into what the agent read, a screenshot into the image the agent saw (its
+ *   delivery is transcript-hidden, so this is its only place), and an MCP matcher test into its report and component image.
  * - ThreadVisSnapshotRow: the completed start or end step over its snapshot, shared with the user's card-end item.
  */
 "use client";
@@ -49,6 +49,7 @@ const LABELS: Record<WorkbenchVisOperation["action"], StepLabels> = {
   snapshot: stepLabels("Checking vis structure", "Checked vis structure", "Failed to check vis structure"),
   screenshot: stepLabels("Checking vis appearance", "Checked vis appearance", "Failed to check vis appearance"),
   test: stepLabels("Testing", "Tested", "Failed to test"),
+  match: stepLabels("Testing MCP matchers for", "Tested MCP matchers for", "Failed to test MCP matchers for"),
 };
 
 /** One vis step: the vis glyph (as the status row shows live vis), what happened to which file, then progress. */
@@ -103,7 +104,15 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
 }) {
   const result = parseVisSessionResult(output);
   const step = { action: operation.action, durationMs, path: operation.path, state: outcome };
-  const screenshot = (operation.action === "screenshot" || operation.action === "test") && outcome === "completed" ? parseVisScreenshotImage(output) : null;
+  const screenshot = (operation.action === "screenshot" || operation.action === "test" || operation.action === "match") && outcome === "completed"
+    ? parseVisScreenshotImage(output) : null;
+  if (operation.action === "match" && outcome === "completed") {
+    // A matcher test reports what each skill said, then shows the component it named.
+    return <VisStep {...step} renderContent={() => <>
+      <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[0.8em] text-fg/muted">{output.replace(/^Image: .*$/mu, "").trim()}</pre>
+      {screenshot ? <ThreadUserImage alt={`Component for ${operation.path}`} src={screenshot} /> : null}
+    </>} />;
+  }
   if (screenshot) return <VisStep {...step} renderContent={() => <ThreadUserImage alt={`Screenshot of ${operation.path}`} src={screenshot} />} />;
   if ((operation.action === "read" || operation.action === "snapshot") && outcome === "completed") {
     return <VisStep {...step} renderContent={() => <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[0.8em] text-fg/muted">{output.trim()}</pre>} />;
