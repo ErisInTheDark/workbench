@@ -1,11 +1,13 @@
-/* No production exports. Protect the vis frame bridge: injected control state, page-set controls and parent-synced controls, which frame messages become control changes (own focused frame, bounded id and JSON) and frame heights. */
+/* No production exports. Protect the vis frame bridge: the app's palette, injected control state, page-set controls and parent-synced controls, which frame messages become control changes (own focused frame, bounded id and JSON) and frame heights. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { VIS_MAX_CONTROL_VALUE_LENGTH } from "./vis-contract";
 import {
   acceptVisFrameControl, frameVisDocument, readVisFrameHeight, VIS_FRAME_MAX_HEIGHT, VIS_FRAME_MIN_HEIGHT, visFrameControlsMessage,
+  visFrameThemeMessage,
 } from "./vis-frame";
+import type { WorkbenchTheme } from "../settings/workbench-setting-definitions";
 
 const control = (id: unknown, value: unknown) => ({ kind: "workbench-vis-control", id, value });
 const height = (value: unknown) => ({ kind: "workbench-vis-height", height: value });
@@ -13,17 +15,33 @@ const height = (value: unknown) => ({ kind: "workbench-vis-height", height: valu
 interface FakeState { get(id: string): unknown; set(id: string, value: unknown): void; subscribe(listener: () => void): () => void }
 
 /** Runs the framed document's bridge script against a fake window, as the frame would. */
-function bridge(controls: Record<string, string>) {
-  const framed = frameVisDocument("<!doctype html><p>page</p>", controls);
+function bridge(controls: Record<string, string>, theme: WorkbenchTheme | null = null) {
+  const framed = frameVisDocument("<!doctype html><p>page</p>", controls, theme);
   const scripts = [...framed.matchAll(/<script>([\s\S]*?)<\/script>/gu)].map(match => match[1]!);
   const posted: unknown[] = [];
   const parent = { postMessage: (message: unknown) => posted.push(message) };
   const handlers: Array<(event: { source: unknown; data: unknown }) => void> = [];
   const window: Record<string, unknown> = { addEventListener: (_kind: string, handler: (typeof handlers)[number]) => handlers.push(handler) };
-  for (const script of scripts) runInNewContext(script, { window, parent, document: {}, JSON, Object });
+  const attributes: Record<string, string> = {};
+  const documentElement = { setAttribute: (name: string, value: string) => { attributes[name] = value; } };
+  for (const script of scripts) runInNewContext(script, { window, parent, document: { documentElement }, JSON, Object });
   const state = (window.wb as { state: FakeState }).state;
-  return { framed, posted, state, deliver: (source: unknown, data: unknown) => handlers.forEach(handler => handler({ source, data })), parent };
+  return {
+    attributes, framed, posted, state, parent,
+    deliver: (source: unknown, data: unknown) => handlers.forEach(handler => handler({ source, data })),
+  };
 }
+
+test("a framed page paints in the app's palette from the start and follows the card's changes, never another window's", () => {
+  const { attributes, deliver, parent } = bridge({}, "magical-girl");
+  assert.equal(attributes["data-workbench-theme"], "magical-girl");
+  deliver({}, visFrameThemeMessage("winter"));
+  assert.equal(attributes["data-workbench-theme"], "magical-girl");
+  for (const theme of ["\"><script>", "", 1, "x".repeat(33)]) deliver(parent, { kind: "workbench-vis-theme", theme });
+  assert.equal(attributes["data-workbench-theme"], "magical-girl");
+  deliver(parent, visFrameThemeMessage("winter"));
+  assert.equal(attributes["data-workbench-theme"], "winter");
+});
 
 test("a framed page starts from the injected control state, which cannot break out of its script", () => {
   const { framed, state } = bridge({ tab: "\"card\"", note: JSON.stringify("</script><script>alert(1)</script>") });

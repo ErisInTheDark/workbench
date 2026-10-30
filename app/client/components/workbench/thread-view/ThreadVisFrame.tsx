@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadVisFrame: render an agent-authored document in a sandboxed frame that runs its scripts but reaches no network,
- *   with the injected `window.wb` bridge seeded from the file's synced control state; the frame takes the height its page
+ *   with the injected `window.wb` bridge seeded from the file's synced control state and painted in the app's theme; the frame takes the height its page
  *   reports, follows control state set elsewhere, and forwards its own control changes to `onControl` only while focused.
  *   Fullscreen lifts it over the whole page, with a close button, without reloading its page.
  */
@@ -10,8 +10,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { VisControls } from "workbench-shared/workbench/vis/vis-contract";
 import {
-  acceptVisFrameControl, frameVisDocument, readVisFrameHeight, visFrameControlsMessage,
+  acceptVisFrameControl, frameVisDocument, readVisFrameHeight, visFrameControlsMessage, visFrameThemeMessage,
 } from "workbench-shared/workbench/vis/vis-frame";
+import useDocumentTheme from "../../../workbench/app/use-document-theme";
 import IconButton from "../../ui/IconButton";
 import { XIcon } from "../workbench-icons";
 
@@ -19,7 +20,7 @@ const NO_CONTROLS: VisControls = {};
 
 const fullscreenClassName = `
   fixed inset-0 m-0 size-full max-h-none max-w-none overflow-y-auto border-0 p-4 md:p-6
-  bg-[var(--app-bg-solid)] text-text scrollbar-hover-reveal backdrop:bg-transparent
+  bg-canvas text-text scrollbar-hover-reveal backdrop:bg-transparent
 `;
 
 /** `className` styles the frame's box; its height follows the page's content. */
@@ -65,8 +66,14 @@ export default function ThreadVisFrame({
   const current = { ...controls, ...Object.fromEntries(pendingRef.current) };
   const currentRef = useRef(current);
   currentRef.current = current;
-  // State is seeded once per document; later changes reach the running page as messages, so picks never reload it.
-  const source = useMemo(() => frameVisDocument(document, currentRef.current), [document]);
+  const theme = useDocumentTheme();
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  // State and palette are seeded once per document; later changes reach the running page as messages, so they never reload it.
+  const source = useMemo(() => frameVisDocument(document, currentRef.current, themeRef.current), [document]);
+  useEffect(() => {
+    frameRef.current?.contentWindow?.postMessage(visFrameThemeMessage(theme), "*");
+  }, [theme]);
   /** Null until the page first reports its height. */
   const [height, setHeight] = useState<number | null>(null);
   useEffect(() => {

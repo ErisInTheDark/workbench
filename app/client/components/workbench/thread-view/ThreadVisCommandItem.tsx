@@ -35,7 +35,7 @@ function VisSnapshotContent({ sessionId, snapshotKind, threadId }: { sessionId: 
   return (
     <div className="space-y-1">
       {data.document !== null
-        ? <ThreadVisFrame className="rounded-[0.65rem] bg-fg/4" document={data.document} title={`Vis snapshot of ${data.path}`} />
+        ? <ThreadVisFrame className="rounded-[0.65rem] bg-canvas" document={data.document} title={`Vis snapshot of ${data.path}`} />
         : null}
       {data.failure ? <p className="m-0 text-[0.78em] text-fg/muted">{data.failure}</p> : null}
     </div>

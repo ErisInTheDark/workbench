@@ -1,17 +1,20 @@
 /*
  * Exports:
  * - frameVisDocument: prepend the no-network content policy and the `window.wb` bridge, seeded with the file's synced
- *   control state, to a rendered vis document.
+ *   control state and the app's palette, to a rendered vis document.
  * - visFrameControlsMessage: the card's message relaying the file's control state into a running frame.
+ * - visFrameThemeMessage: the card's message repainting a running frame in the app's palette.
  * - acceptVisFrameControl: the control change a frame message may forward to Workbench, or null.
  * - readVisFrameHeight: the clamped content height a frame message reports, or null.
  * - VIS_FRAME_MIN_HEIGHT/VIS_FRAME_MAX_HEIGHT: bounds of a reported frame height, in CSS pixels.
  */
+import type { WorkbenchTheme } from "../settings/workbench-setting-definitions";
 import { VIS_MAX_CONTROL_ID_LENGTH, VIS_MAX_CONTROL_VALUE_LENGTH, type VisControls } from "./vis-contract";
 
 const CONTROL_KIND = "workbench-vis-control";
 const CONTROLS_KIND = "workbench-vis-controls";
 const HEIGHT_KIND = "workbench-vis-height";
+const THEME_KIND = "workbench-vis-theme";
 export const VIS_FRAME_MIN_HEIGHT = 48;
 /** Pages sized from the viewport grow with every report; the cap ends that loop. */
 export const VIS_FRAME_MAX_HEIGHT = 6_000;
@@ -25,7 +28,9 @@ const CONTENT_POLICY = `<meta http-equiv="Content-Security-Policy" content="defa
  * an unchanged control keeps its identity for React's external-store reads. Embedded pages also report their content
  * height, since the opaque-origin frame cannot be measured from outside.
  */
-const BRIDGE_SCRIPT = (initial: string) => `<script>(function(){function post(m){parent.postMessage(m,"*");}`
+const BRIDGE_SCRIPT = (initial: string, theme: WorkbenchTheme | null) => `<script>(function(){function post(m){parent.postMessage(m,"*");}`
+  + `var root=document.documentElement;function theme(name){if(root&&typeof name==="string"&&/^[a-z-]{1,32}$/.test(name))root.setAttribute("data-workbench-theme",name);}`
+  + `theme(${JSON.stringify(theme)});`
   + `var has=Object.prototype.hasOwnProperty;var values=${initial};var listeners=[];`
   + `function notify(){listeners.slice().forEach(function(listener){listener();});}`
   + `var state=Object.freeze({`
@@ -36,8 +41,9 @@ const BRIDGE_SCRIPT = (initial: string) => `<script>(function(){function post(m)
   + `var next=Object.assign({},values);next[id]=JSON.parse(json);values=next;notify();post({kind:"${CONTROL_KIND}",id:id,value:json});},`
   + `subscribe:function(listener){listeners.push(listener);return function(){listeners=listeners.filter(function(other){return other!==listener;});};}`
   + `});window.wb=Object.freeze({state:state});`
-  + `window.addEventListener("message",function(event){var data=event.data;`
-  + `if(event.source!==parent||!data||data.kind!=="${CONTROLS_KIND}"||!data.controls||typeof data.controls!=="object")return;`
+  + `window.addEventListener("message",function(event){var data=event.data;if(event.source!==parent||!data)return;`
+  + `if(data.kind==="${THEME_KIND}"){theme(data.theme);return;}`
+  + `if(data.kind!=="${CONTROLS_KIND}"||!data.controls||typeof data.controls!=="object")return;`
   + `var next=Object.assign({},values);var changed=false;`
   + `Object.keys(data.controls).forEach(function(id){var json=data.controls[id];if(typeof json!=="string"||JSON.stringify(next[id])===json)return;`
   + `try{next[id]=JSON.parse(json);changed=true;}catch(error){}});if(changed){values=next;notify();}});`
@@ -55,14 +61,20 @@ function controlsLiteral(controls: VisControls) {
 }
 
 /** The policy and bridge must come before anything the document runs, but after a doctype, which must stay first. */
-export function frameVisDocument(document: string, controls: VisControls) {
+/** `theme` paints the page in the app's palette from its first frame; without one the page keeps the default palette. */
+export function frameVisDocument(document: string, controls: VisControls, theme: WorkbenchTheme | null = null) {
   const doctype = /^\s*<!doctype[^>]*>/iu.exec(document);
-  const head = `${CONTENT_POLICY}${BRIDGE_SCRIPT(controlsLiteral(controls))}`;
+  const head = `${CONTENT_POLICY}${BRIDGE_SCRIPT(controlsLiteral(controls), theme)}`;
   return doctype ? `${doctype[0]}${head}${document.slice(doctype[0].length)}` : `${head}${document}`;
 }
 
 export function visFrameControlsMessage(controls: VisControls) {
   return { kind: CONTROLS_KIND, controls };
+}
+
+/** Repaints a running page in the app's new palette without reloading it. */
+export function visFrameThemeMessage(theme: WorkbenchTheme) {
+  return { kind: THEME_KIND, theme };
 }
 
 function messageOf(data: unknown, kind: string): Record<string, unknown> | null {

@@ -78,7 +78,7 @@ function VisSessionBody({ controlFailure, fullscreen, onControl, onExitFullscree
       {controlFailure ? <p className="m-0 text-[0.74rem] text-danger" role="alert">Your choice was not saved: {controlFailure}</p> : null}
       {session.render ? (
         <ThreadVisFrame
-          className="rounded-[0.65rem] bg-fg/4"
+          className="rounded-[0.65rem] bg-canvas"
           controls={session.controls}
           document={session.render.document}
           fullscreen={fullscreen}

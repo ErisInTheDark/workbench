@@ -1,4 +1,4 @@
-/* Workbench's CSS for vis pages: the app's theme and utilities without its page backdrop, so the card's tinted frame shows through. */
+/* Workbench's CSS for vis pages: the app's theme and utilities without its page backdrop, so the frame's canvas shows through. */
 @import "../../tailwind.css";
 
 @layer base {
