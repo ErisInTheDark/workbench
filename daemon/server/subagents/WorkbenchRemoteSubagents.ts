@@ -11,7 +11,7 @@ import type { WorkbenchComposerProfile, WorkbenchHarness, WorkbenchSubagentRelat
 import {
   ThreadReferenceSchema, WorkbenchThreadIdSchema, type DaemonId, type ProjectId, type ThreadReference, type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
-import type { NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import {
   RemoteChildRowSchema, type RemoteCall, type RemoteCaller, type RemoteChildRow, type SiblingRosterEntry,
 } from "workbench-shared/workbench/network/network-remote-calls";

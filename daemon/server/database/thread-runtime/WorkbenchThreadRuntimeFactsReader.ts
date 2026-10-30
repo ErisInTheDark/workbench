@@ -9,7 +9,7 @@ import type { WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thre
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
-import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-access";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { projectWorkbenchTranscriptTurnRow } from "workbench-shared/workbench/transcript/workbench-transcript-projection";

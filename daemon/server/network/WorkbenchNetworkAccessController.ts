@@ -7,7 +7,8 @@
  */
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchUserInputResponse } from "workbench-shared/types";
-import { NetworkAccessDecision, NetworkGrant, type NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import { NetworkAccessDecision, type NetworkTarget } from "workbench-shared/workbench/network/network-access";
+import { NetworkGrant } from "workbench-shared/workbench/network/network-grants";
 import type { RelayResolveTarget } from "workbench-shared/workbench/network/network-relay-contracts";
 import type { RemoteCall } from "workbench-shared/workbench/network/network-remote-calls";
 import type WorkbenchNetworkRelayController from "./WorkbenchNetworkRelayController";

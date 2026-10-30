@@ -1157,7 +1157,7 @@ export interface WorkbenchUserInputRequest {
   mcpTool?: WorkbenchUserInputMcpToolContext | undefined;
   mcpAuthorization?: WorkbenchUserInputMcpAuthorizationContext | undefined;
   mcpConnection?: WorkbenchUserInputMcpConnectionContext | undefined;
-  networkAccess?: import("./workbench/network/network-grants.ts").WorkbenchUserInputNetworkAccessContext | undefined;
+  networkAccess?: import("./workbench/network/network-access.ts").WorkbenchUserInputNetworkAccessContext | undefined;
   questions: WorkbenchUserInputQuestion[];
 }
 

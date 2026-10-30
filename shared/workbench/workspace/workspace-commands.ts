@@ -25,7 +25,7 @@ import { ProjectLocationReferenceSchema } from "../project/project-location";
 import { DaemonIdSchema, ThreadReferenceSchema, LogicalProjectIdSchema, ThreadDisplayKeySchema } from "../identity";
 import { WorkbenchThreadStateRequestSchema, WorkbenchHomeThreadDisplayOrderSchema, type WorkbenchThreadStateRequest } from "../thread/thread-state";
 import { WorkbenchThreadDisplayOrderSchema } from "../thread/thread-display-order";
-import { NetworkTargetSchema } from "../network/network-grants";
+import { NetworkTargetSchema } from "../network/network-access";
 import { WorkbenchMessageContextSchema } from "../provider/provider-input";
 import {
   WORKBENCH_SEARCH_RESULT_LIMIT, WorkbenchSearchCorrectionSchema, WorkbenchSearchResultSchema,

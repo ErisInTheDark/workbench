@@ -4,7 +4,7 @@
  *   naming it, and ask each daemon it still reaches to drop the grants it holds there.
  */
 import type { DaemonId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-access";
 
 export interface NetworkSettlementPorts {
   revokeTargeting(threadId: WorkbenchThreadId): Promise<number>;

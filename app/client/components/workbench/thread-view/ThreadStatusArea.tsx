@@ -21,7 +21,7 @@ import LoaderIcon from "../LoaderIcon";
 import Tooltip from "../../ui/Tooltip";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import ThreadNetworkPanel from "./ThreadNetworkPill";
-import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-access";
 import { useThread } from "../use-thread";
 import {
   CheckCheckIcon, ClipboardListIcon, FlagFilledIcon, FlagIcon, GitArcIcon, GitArcProposalIcon, MegaphoneIcon, NetworkIcon, SlashIcon,

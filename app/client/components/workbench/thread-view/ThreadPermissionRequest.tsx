@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 import type {
   WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpConnectionContext, WorkbenchUserInputMcpToolContext,
 } from "workbench-shared/types";
-import type { NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import { mcpToolLabel } from "../../../workbench/mcp-tool-label";
 import { openCenteredMcpSignInPopup } from "../../../workbench/mcp-sign-in-popup";
 import MarkdownRender from "../../ui/MarkdownRender";

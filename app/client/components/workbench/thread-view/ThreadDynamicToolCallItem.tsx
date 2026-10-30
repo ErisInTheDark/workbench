@@ -36,7 +36,7 @@ import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { ThreadPermissionDecisionCard, type ThreadPermissionRequestSubject } from "./ThreadPermissionRequest";
 import { isMcpToolRequestApproved } from "workbench-shared/workbench/mcp/mcp-tool-request";
-import { NetworkTargetSchema } from "workbench-shared/workbench/network/network-grants";
+import { NetworkTargetSchema } from "workbench-shared/workbench/network/network-access";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";

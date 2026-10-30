@@ -63,7 +63,7 @@ import { WorkbenchThreadAddressedFeedbackSchema } from "./thread-addressed-feedb
 import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
 import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
-import { NetworkHistoryEntrySchema, WorkbenchUserInputNetworkAccessContextSchema } from "../network/network-grants.ts";
+import { NetworkHistoryEntrySchema, WorkbenchUserInputNetworkAccessContextSchema } from "../network/network-access.ts";
 
 import { areDeeplyEqual } from "../deep-equality.ts";
 import GitArcPathSet from "../git/GitArcPathSet.ts";

@@ -8,7 +8,7 @@
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
 import type { ThreadPayload } from "workbench-shared/types";
 import { ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-grants";
+import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-access";
 import { useNetworkReach } from "../../../workbench/network/use-network-reach";
 import { NetworkIcon } from "../workbench-icons";
 import { useThread } from "../use-thread";

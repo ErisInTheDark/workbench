@@ -6,7 +6,7 @@
 "use client";
 
 import { useState } from "react";
-import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-access";
 import IconButton from "../../ui/IconButton";
 import PrimaryButton from "../../ui/PrimaryButton";
 import { UnlinkIcon } from "../workbench-icons";

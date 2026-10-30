@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { NetworkAccessDecision, type NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import { NetworkAccessDecision, type NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import type { RemoteCallOutcome } from "workbench-shared/workbench/network/network-remote-calls";
 import WorkbenchNetworkAccessController, { NetworkDeniedError } from "./WorkbenchNetworkAccessController";
 

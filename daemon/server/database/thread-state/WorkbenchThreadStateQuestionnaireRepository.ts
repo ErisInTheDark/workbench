@@ -6,7 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { NetworkTargetSchema } from "workbench-shared/workbench/network/network-grants";
+import { NetworkTargetSchema } from "workbench-shared/workbench/network/network-access";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema,

@@ -12,7 +12,7 @@ import { WorkbenchThreadIdSchema, type WorkbenchThreadId } from "workbench-share
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { ThreadRuntime, WorkbenchThreadSettlementHold, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
-import { ThreadNetworkAccess, type NetworkHistoryEntry, type NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import { ThreadNetworkAccess, type NetworkHistoryEntry, type NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import { readThreadComponentTree, ThreadCompiledComponentSchema, ThreadCompiledStyleSchema } from "workbench-shared/workbench/thread/thread-component-tree";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { DaemonProcessContext } from "../daemon-process-context";

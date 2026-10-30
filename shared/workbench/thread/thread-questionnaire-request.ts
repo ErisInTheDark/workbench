@@ -15,7 +15,7 @@ import type {
   WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
 } from "../../types.ts";
-import type { WorkbenchUserInputNetworkAccessContext } from "../network/network-grants.ts";
+import type { WorkbenchUserInputNetworkAccessContext } from "../network/network-access.ts";
 import { getQuestionnaireTitle } from "./thread-questionnaire-transcript.ts";
 import {
   WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL,

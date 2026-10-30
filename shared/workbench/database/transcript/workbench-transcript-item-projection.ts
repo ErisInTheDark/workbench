@@ -20,7 +20,7 @@ import type { WorkbenchFileChangeItem } from "../../thread/workbench-file-change
 import { withWorkbenchInputState } from "../../thread/thread-input-item.ts";
 import type { WorkbenchToolOutput } from "../../thread/thread-tool-output.ts";
 import type { WorkbenchTranscriptSnapshot } from "./workbench-transcript-contract.ts";
-import { NetworkTargetSchema } from "../../network/network-grants.ts";
+import { NetworkTargetSchema } from "../../network/network-access.ts";
 import { conformToZodSchema } from "../../zod-schema-conformer.ts";
 
 export interface WorkbenchProjectedInteractionItem {

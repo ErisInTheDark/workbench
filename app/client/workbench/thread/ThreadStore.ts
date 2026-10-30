@@ -25,7 +25,7 @@ import type { WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thre
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
-import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-access";
 import type {
   WorkbenchBackgroundShell, WorkbenchShellOutputEntry, WorkbenchShellQueueEntry, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget,
 } from "workbench-shared/workbench/thread/thread-state";

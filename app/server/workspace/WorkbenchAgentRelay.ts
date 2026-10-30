@@ -6,9 +6,8 @@
  */
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectLocation } from "workbench-shared/types";
-import {
-  NetworkAccessDecision, NetworkGrant, type NetworkGrantCreate, type NetworkTarget,
-} from "workbench-shared/workbench/network/network-grants";
+import { NetworkAccessDecision, type NetworkTarget } from "workbench-shared/workbench/network/network-access";
+import { NetworkGrant, type NetworkGrantCreate } from "workbench-shared/workbench/network/network-grants";
 import type {
   RelayOutcome, RelayPresence, RelayRemoteSummary, RelayRequest, RelayResolved, RelayResolveTarget,
 } from "workbench-shared/workbench/network/network-relay-contracts";

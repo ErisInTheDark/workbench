@@ -1,36 +1,14 @@
 /*
  * Exports:
- * - NetworkTargetSchema/NetworkTarget: one remote thread, folder or feedback source an agent asks to network with, labelled for prompts.
  * - NetworkNeedSchema/NetworkNeed: what one relayed call requires of the target daemon's grants.
  * - NetworkGrantKindSchema/NetworkGrantKind, NetworkGrantSchema/NetworkGrant: a target daemon's inbound grant and its utilities.
  * - NetworkGrantCreateSchema/NetworkGrantCreate, NetworkGrantRevokeSchema/NetworkGrantRevoke: app-only grant writes on a target daemon.
- * - NetworkHistoryEntrySchema/NetworkHistoryEntry: a requesting thread's approved target, kept after revocation for presentation.
- * - WorkbenchUserInputNetworkAccessContextSchema/WorkbenchUserInputNetworkAccessContext: the questionnaire attachment of a network prompt.
- * - ThreadNetworkAccess: which daemons a thread is networked with and whether an app's reach can open it.
- * - NetworkAccessDecision: the approve/deny questionnaire a network prompt is stored as, and reading or writing its answer.
  */
 import { z } from "zod";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, type DaemonId, type WorkbenchThreadId } from "../identity";
+import type { NetworkTarget } from "./network-access";
 
 const label = z.string().max(512);
-
-export const NetworkTargetSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("thread"), daemonId: DaemonIdSchema, hostname: label, threadId: WorkbenchThreadIdSchema,
-    title: label, projectName: label,
-    /** The thread belongs to its daemon's own project and can run commands outside the sandbox there. */
-    daemonProject: z.boolean(),
-  }).strict(),
-  z.object({
-    kind: z.literal("folder"), daemonId: DaemonIdSchema, hostname: label, projectId: ProjectIdSchema, rootPath: label,
-  }).strict(),
-  z.object({
-    kind: z.literal("feedback"), daemonId: DaemonIdSchema, hostname: label,
-    /** Null reads the `wb` channel across all projects; a folder reads that project's channel. */
-    projectId: ProjectIdSchema.nullable(), rootPath: label.nullable(),
-  }).strict(),
-]);
-export type NetworkTarget = z.infer<typeof NetworkTargetSchema>;
 
 export const NetworkNeedSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("thread"), threadId: WorkbenchThreadIdSchema }).strict(),
@@ -54,7 +32,7 @@ export const NetworkGrantSchema = z.object({
   targetThreadId: WorkbenchThreadIdSchema.nullable(),
   /** The granted folder for `folder` grants; the feedback project, or null for all projects, for `feedback` grants. */
   targetProjectId: ProjectIdSchema.nullable(),
-  /** What the grant names, for audit lists. */
+  /** What the grant names, readable without resolving the target. */
   targetLabel: label,
   createdAt: z.number().int().nonnegative(),
 }).strict();
@@ -70,44 +48,7 @@ export const NetworkGrantRevokeSchema = z.object({
 }).strict();
 export type NetworkGrantRevoke = z.infer<typeof NetworkGrantRevokeSchema>;
 
-export const NetworkHistoryEntrySchema = z.object({
-  id: z.uuid(),
-  target: NetworkTargetSchema,
-  approvedAt: z.number().int().nonnegative(),
-  revokedAt: z.number().int().nonnegative().nullable(),
-}).strict();
-export type NetworkHistoryEntry = z.infer<typeof NetworkHistoryEntrySchema>;
-
-export const WorkbenchUserInputNetworkAccessContextSchema = z.object({ target: NetworkTargetSchema }).strict();
-export type WorkbenchUserInputNetworkAccessContext = z.infer<typeof WorkbenchUserInputNetworkAccessContextSchema>;
-
 interface Caller { daemonId: DaemonId; threadId: WorkbenchThreadId }
-
-const NETWORK_ACCESS_QUESTION_ID = "decision";
-const NETWORK_ACCESS_APPROVE = "Approve";
-const NETWORK_ACCESS_DENY = "Deny";
-
-/** The fixed decision a network prompt is stored as; apps answer it once the grant is written. */
-export namespace NetworkAccessDecision {
-  export function questions(reason: string) {
-    return [{
-      id: NETWORK_ACCESS_QUESTION_ID, header: "Agent network access", question: reason,
-      options: [
-        { label: NETWORK_ACCESS_APPROVE, description: "Let this thread reach the target." },
-        { label: NETWORK_ACCESS_DENY, description: "Keep the target out of reach." },
-      ],
-    }];
-  }
-
-  export function response(approved: boolean) {
-    return { answers: { [NETWORK_ACCESS_QUESTION_ID]: { answers: [approved ? NETWORK_ACCESS_APPROVE : NETWORK_ACCESS_DENY] } } };
-  }
-
-  export function approved(response: { answers: Record<string, { answers: string[] }> } | null | undefined) {
-    const answers = response?.answers[NETWORK_ACCESS_QUESTION_ID]?.answers ?? [];
-    return answers.length === 1 && answers[0] === NETWORK_ACCESS_APPROVE;
-  }
-}
 
 export namespace NetworkGrant {
   /** Whether any grant held by `caller` covers `need`; `thread` grants include messaging. */
@@ -148,27 +89,5 @@ export namespace NetworkGrant {
     if (left.kind === "thread" && right.kind === "thread") return left.threadId === right.threadId;
     if (left.kind === "folder" && right.kind === "folder") return left.projectId === right.projectId;
     return left.kind === "feedback" && right.kind === "feedback" && left.projectId === right.projectId;
-  }
-}
-
-export namespace ThreadNetworkAccess {
-  /**
-   * Daemons whose content a thread may hold: every approved target, revoked or not, plus a remote parent. Revocation
-   * stops new access but cannot remove what the thread already read. Same-daemon targets may appear; an app always
-   * reaches the daemon holding the thread, so they never restrict it.
-   */
-  export function daemonIds(history: readonly Pick<NetworkHistoryEntry, "target">[], parentDaemonId: DaemonId | null = null): DaemonId[] {
-    const ids = new Set(history.map(entry => entry.target.daemonId));
-    if (parentDaemonId) ids.add(parentDaemonId);
-    return [...ids].sort();
-  }
-
-  /** Networked daemons an app cannot reach; any one restricts the thread to its summary. */
-  export function missing(networkDaemonIds: readonly DaemonId[] | undefined, reach: ReadonlySet<DaemonId>) {
-    return (networkDaemonIds ?? []).filter(id => !reach.has(id));
-  }
-
-  export function isRestricted(networkDaemonIds: readonly DaemonId[] | undefined, reach: ReadonlySet<DaemonId>) {
-    return missing(networkDaemonIds, reach).length > 0;
   }
 }

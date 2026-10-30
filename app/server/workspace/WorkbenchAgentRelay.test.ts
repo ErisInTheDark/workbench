@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import type { NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import WorkbenchAgentRelay from "./WorkbenchAgentRelay";
 
 const originId = DaemonIdSchema.parse("11111111-1111-4111-8111-111111111111");

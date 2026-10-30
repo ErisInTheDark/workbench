@@ -13,7 +13,7 @@ import { z } from "zod";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "../identity";
 import { GitPeerFetchOutcomeSchema, GitPeerFetchQuestionSchema } from "../git/git-peer-contracts";
 import { LocatedThreadSummarySchema } from "../thread/thread-summary";
-import { NetworkTargetSchema } from "./network-grants";
+import { NetworkTargetSchema } from "./network-access";
 import { RemoteCallOutcomeSchema, RemoteCallSchema, RemoteCallerSchema } from "./network-remote-calls";
 
 export const RELAY_PRESENCE_METHOD = "workbench/relay/presence";

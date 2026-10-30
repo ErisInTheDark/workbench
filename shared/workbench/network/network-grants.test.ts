@@ -1,11 +1,10 @@
 /*
- * No production exports. Tests protect which inbound grants authorize which relayed needs, and when a networked thread is
- * restricted to its summary.
+ * No production exports. Tests protect which inbound grants authorize which relayed needs.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "../identity.ts";
-import { NetworkGrant, ThreadNetworkAccess, type NetworkGrant as Grant } from "./network-grants.ts";
+import { NetworkGrant, type NetworkGrant as Grant } from "./network-grants.ts";
 
 const a = DaemonIdSchema.parse("11111111-1111-4111-8111-111111111111");
 const b = DaemonIdSchema.parse("22222222-2222-4222-8222-222222222222");
@@ -50,13 +49,4 @@ test("revoking a message need leaves a full thread grant alone", () => {
   assert.equal(NetworkGrant.matchesNeed(grant({}), { kind: "message", threadId: target }), false);
   assert.equal(NetworkGrant.matchesNeed(grant({ kind: "message" }), { kind: "message", threadId: target }), true);
   assert.equal(NetworkGrant.matchesNeed(grant({}), { kind: "thread", threadId: target }), true);
-});
-
-test("a thread stays restricted for every daemon it ever reached, revoked or not, and its remote parent", () => {
-  const history = [{ target: { kind: "folder" as const, daemonId: b, hostname: "b", projectId: project, rootPath: "/p" } }];
-  const networked = ThreadNetworkAccess.daemonIds(history, a);
-  assert.deepEqual(networked, [a, b].sort());
-  assert.equal(ThreadNetworkAccess.isRestricted(networked, new Set([a])), true);
-  assert.equal(ThreadNetworkAccess.isRestricted(networked, new Set([a, b])), false);
-  assert.equal(ThreadNetworkAccess.isRestricted(undefined, new Set()), false);
 });

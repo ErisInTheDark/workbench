@@ -18,7 +18,7 @@ import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectThreadSidebars, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { LocatedThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
-import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-grants";
+import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-access";
 import {
   projectLogicalThreadRows, projectWorkbenchThreadMembership, projectWorkspaceThreadMember, type WorkbenchProjectedThreadRow,
 } from "workbench-shared/workbench/project/workbench-project-projection";

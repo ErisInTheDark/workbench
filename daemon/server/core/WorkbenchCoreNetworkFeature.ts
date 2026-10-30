@@ -5,7 +5,7 @@
  *   and ending settled threads' network access.
  */
 import type { DaemonId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import { NetworkAccessDecision } from "workbench-shared/workbench/network/network-grants";
+import { NetworkAccessDecision } from "workbench-shared/workbench/network/network-access";
 import type { RemoteCall } from "workbench-shared/workbench/network/network-remote-calls";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchQuestionnaireController from "../interactions/WorkbenchQuestionnaireController";

@@ -35,7 +35,7 @@ import Draggable from "./drag/Draggable";
 import { useWorkbenchDrag } from "./drag/workbench-drag-context";
 import { useThread } from "./use-thread";
 import { useThreads } from "./use-threads";
-import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-grants";
+import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-access";
 import { useNetworkReach } from "../../workbench/network/use-network-reach";
 import { NetworkIcon } from "./workbench-icons";
 import WorkbenchThreadComposerDropTarget from "./WorkbenchThreadComposerDropTarget";

@@ -49,7 +49,7 @@ import PrimaryButton from "../../ui/PrimaryButton";
 import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SettleThreadIcon, SnoozedThreadIcon, SquareIcon } from "../workbench-icons";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { useNetworkReach } from "../../../workbench/network/use-network-reach";
-import { NetworkAccessDecision } from "workbench-shared/workbench/network/network-grants";
+import { NetworkAccessDecision } from "workbench-shared/workbench/network/network-access";
 import { useThread } from "../use-thread";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
 import AutoCompactSendMenu from "./AutoCompactSendMenu";

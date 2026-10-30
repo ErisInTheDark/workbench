@@ -7,8 +7,9 @@
 import type Database from "better-sqlite3";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
-  NetworkGrant, NetworkHistoryEntrySchema, NetworkTargetSchema, type NetworkHistoryEntry, type NetworkTarget,
-} from "workbench-shared/workbench/network/network-grants";
+  NetworkHistoryEntrySchema, NetworkTargetSchema, type NetworkHistoryEntry, type NetworkTarget,
+} from "workbench-shared/workbench/network/network-access";
+import { NetworkGrant } from "workbench-shared/workbench/network/network-grants";
 
 export type ThreadNetworkHistoryCommand =
   | { kind: "read"; threadId: string }

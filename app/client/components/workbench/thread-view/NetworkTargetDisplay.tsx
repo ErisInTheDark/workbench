@@ -5,7 +5,7 @@
  */
 "use client";
 
-import type { NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import { createLogicalExistingThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";

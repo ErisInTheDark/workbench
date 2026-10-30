@@ -46,7 +46,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { JsonValue } from "../lib/workbench/commands/workbench-agent-command-definition";
-import type { NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import type { RelayRemoteSummary } from "workbench-shared/workbench/network/network-relay-contracts";
 import type { RemoteCall } from "workbench-shared/workbench/network/network-remote-calls";
 import type { NetworkCaller } from "../network/WorkbenchNetworkAccessController";

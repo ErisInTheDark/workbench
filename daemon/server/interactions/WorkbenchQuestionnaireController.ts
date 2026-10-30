@@ -14,7 +14,7 @@ import type {
   WorkbenchPendingUserInputRequest, WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpConnectionContext,
   WorkbenchUserInputMcpToolContext, WorkbenchUserInputResponse,
 } from "workbench-shared/types";
-import type { WorkbenchUserInputNetworkAccessContext } from "workbench-shared/workbench/network/network-grants";
+import type { WorkbenchUserInputNetworkAccessContext } from "workbench-shared/workbench/network/network-access";
 import type { WorkbenchRequestUserInputCommandInput } from "../lib/workbench/commands/questionnaire-command-definition";
 import type { WorkbenchThreadId, WorkbenchTurnId, ProjectId } from "workbench-shared/workbench/identity";
 

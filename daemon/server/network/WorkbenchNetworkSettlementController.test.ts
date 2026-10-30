@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, type DaemonId } from "workbench-shared/workbench/identity";
-import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-access";
 import WorkbenchNetworkSettlementController from "./WorkbenchNetworkSettlementController";
 
 const thread = { threadId: WorkbenchThreadIdSchema.parse("settled"), title: "settled" };
