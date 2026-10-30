@@ -94,9 +94,6 @@ export const threadDaemonRequests = {
   "network/grants/create": defineDaemonRequest<NetworkGrantCreate, { grant: NetworkGrant }>()({
     route: "app", result: z.object({ grant: NetworkGrantSchema }).strict(),
   }),
-  "network/grants/list": defineDaemonRequest<Record<string, never>, { grants: NetworkGrant[] }>()({
-    route: "app", result: z.object({ grants: z.array(NetworkGrantSchema) }).strict(),
-  }),
   "network/grants/revoke": defineDaemonRequest<NetworkGrantRevoke, { revoked: number }>()({
     route: "app", result: z.object({ revoked: z.number().int().nonnegative() }).strict(),
   }),

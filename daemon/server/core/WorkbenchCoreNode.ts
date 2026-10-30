@@ -230,9 +230,12 @@ function createWorkbenchCoreFeature(
   });
   facts.endVisOnSettlement(listener => threadStateController.subscribe(listener));
   const network = new WorkbenchCoreNetworkFeature({
+    database,
     questionnaires: () => interactions.questionnaires,
     history: facts.networkHistory,
+    warn: message => { console.warn("[network]", message.slice(0, 500)); },
   });
+  network.releaseOnSettlement(listener => threadStateController.subscribe(listener));
   const collaboration = new WorkbenchCoreSubagentsFeature({
     network, workbenchOrigin: context.localDaemonOrigin,
     database, transcript, identities: threadIdentity, lookup, projectCatalog, profileStore, threadState: threadStateFeature, facts, gitArc,
@@ -494,6 +497,7 @@ function createWorkbenchCoreFeature(
       stopShellObservation = null;
       getProcessWorkbenchAgentMcpRequestRegistry().releaseUndeliveredMessages(undeliveredMessagesOwner);
       facts.stopObserving();
+      network.stopObserving();
       unsubscribeAutoCompactSettled();
       unsubscribeTurnStarted();
       unsubscribeHeldSteers();

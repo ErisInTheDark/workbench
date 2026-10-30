@@ -10,6 +10,7 @@ import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
+import { WorkspaceThreadActionResultSchema } from "../../shared/workbench/workspace/workspace-commands";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 import FakeThreadModelServer, { type FakeThreadAction } from "./FakeThreadModelServer";
 import ProviderThreadJourney from "./ProviderThreadJourney";
@@ -216,20 +217,15 @@ test("threads on two daemons network only through the app relay and the target's
     await drained(fakes, signal);
     await settled(fakes, tJourney, "T read the reply.");
 
-    const grants = await a.workspace.listNetworkGrants();
-    const onB = grants.daemons.find(daemon => daemon.daemonId === b.daemonId)?.grants ?? [];
-    assert.ok(onB.some(grant => grant.kind === "thread" && grant.callerThreadId === tId && grant.targetThreadId === u),
-      "B must hold T's thread grant");
-    const onA = grants.daemons.find(daemon => daemon.daemonId === a.daemonId)?.grants ?? [];
-    assert.ok(onA.some(grant => grant.kind === "message" && grant.callerThreadId === u && grant.targetThreadId === tId),
-      "A must hold U's reply grant");
-
-    mark("the thread grant covers recall; revoking it makes the next recall ask again, and a denial reads nothing");
+    mark("the thread grant covers recall; settling U drops it, so the next recall asks again, and a denial reads nothing");
     fakeA.enqueue(turn({ steps: [fakeCodexTool("thread_recall", { threadId: u })], text: "Read U." }));
     await tJourney.waitTurn(await tJourney.submit("Recall U."));
     const recalled = await toolResult(tJourney, "thread_recall");
     assert.ok(recalled.includes("UNTRUSTED") && recalled.includes("Wait for a message."), "T must read U's history, marked untrusted");
-    await a.workspace.revokeNetworkGrants({ kind: "revoke", daemonId: b.daemonId, grantIds: onB.map(grant => grant.id) });
+    assert.ok(WorkspaceThreadActionResultSchema.parse(await a.workspace.rpc.requestRaw({
+      method: "workspace/thread/action", params: { threadId: u, intent: { kind: "settle" } },
+    })).accepted, "U must settle");
+    await poll(() => b.threadSummary(u, signal), summary => summary?.summary.row.lifecycle.settled === true, signal, fakes);
     fakeA.enqueue(turn({ steps: [fakeCodexTool("thread_recall", { threadId: u })], text: "Denied as expected." }));
     const again = await tJourney.submit("Recall U again.");
     const retry = await tJourney.pending("decision");

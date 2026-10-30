@@ -44,7 +44,6 @@ export interface WorkbenchNetworkPort {
     Promise<import("workbench-shared/workbench/network/network-remote-calls").RemoteCallOutcome>;
   createGrant(grant: import("workbench-shared/workbench/network/network-grants").NetworkGrantCreate):
     Promise<import("workbench-shared/workbench/network/network-grants").NetworkGrant>;
-  listGrants(): Promise<import("workbench-shared/workbench/network/network-grants").NetworkGrant[]>;
   revokeGrants(revoke: import("workbench-shared/workbench/network/network-grants").NetworkGrantRevoke): Promise<number>;
   revokeHistory(threadId: string, entryId: string): Promise<boolean>;
 }

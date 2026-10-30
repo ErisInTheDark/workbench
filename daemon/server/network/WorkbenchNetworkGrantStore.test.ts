@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests protect inbound grant durability: a repeated approval reuses its grant, callers never see each
- * other's grants, and revoking one need leaves the rest.
+ * other's grants, revoking one need leaves the rest, and a settled target takes exactly the grants naming it.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -30,7 +30,21 @@ test("approving the same target twice keeps one grant", (context) => {
   const first = store.create({ id: "33333333-3333-4333-8333-333333333333", createdAt: 1, grant: create() });
   const again = store.create({ id: "44444444-4444-4444-8444-444444444444", createdAt: 2, grant: create() });
   assert.equal(again.id, first.id);
-  assert.equal(store.list().length, 1);
+  assert.equal(store.forCaller(remote, "caller").length, 1);
+});
+
+test("a settled target takes every grant naming it, from every caller, and nothing else", (context) => {
+  const { database, store } = fixture();
+  context.after(() => database.close());
+  store.create({ id: "33333333-3333-4333-8333-333333333333", createdAt: 1, grant: create() });
+  store.create({ id: "44444444-4444-4444-8444-444444444444", createdAt: 1, grant: create({ kind: "message", callerThreadId: WorkbenchThreadIdSchema.parse("other") }) });
+  store.create({ id: "55555555-5555-4555-8555-555555555555", createdAt: 1, grant: create({ targetThreadId: WorkbenchThreadIdSchema.parse("elsewhere") }) });
+  store.create({ id: "66666666-6666-4666-8666-666666666666", createdAt: 1,
+    grant: create({ kind: "folder", targetThreadId: null, targetProjectId: ProjectIdSchema.parse("folder") }) });
+
+  assert.equal(store.revokeTargeting("target"), 2);
+  assert.deepEqual(store.forCaller(remote, "caller").map(grant => grant.targetThreadId ?? grant.targetProjectId).sort(), ["elsewhere", "folder"]);
+  assert.equal(store.forCaller(remote, "other").length, 0);
 });
 
 test("each caller reads only its own grants, and revoking a reply leaves the full grant", (context) => {

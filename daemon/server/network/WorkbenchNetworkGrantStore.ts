@@ -28,10 +28,6 @@ const COLUMNS = `id, kind, caller_daemon_id, caller_thread_id, caller_hostname, 
 export default class WorkbenchNetworkGrantStore {
   constructor(private readonly database: Database.Database) {}
 
-  list() {
-    return this.read(`SELECT ${COLUMNS} FROM workbench_network_inbound_grants ORDER BY created_at DESC`);
-  }
-
   forCaller(callerDaemonId: string, callerThreadId: string) {
     return this.read(`SELECT ${COLUMNS} FROM workbench_network_inbound_grants
       WHERE caller_daemon_id = ? AND caller_thread_id = ? ORDER BY created_at`, callerDaemonId, callerThreadId);
@@ -54,13 +50,16 @@ export default class WorkbenchNetworkGrantStore {
 
   revoke(revoke: NetworkGrantRevoke): number {
     return this.database.transaction(() => {
-      const doomed = "grantIds" in revoke
-        ? revoke.grantIds
-        : this.forCaller(revoke.callerDaemonId, revoke.callerThreadId)
-          .filter(grant => !revoke.need || NetworkGrants.matchesNeed(grant, revoke.need)).map(grant => grant.id);
+      const doomed = this.forCaller(revoke.callerDaemonId, revoke.callerThreadId)
+        .filter(grant => !revoke.need || NetworkGrants.matchesNeed(grant, revoke.need)).map(grant => grant.id);
       const remove = this.database.prepare("DELETE FROM workbench_network_inbound_grants WHERE id = ?");
       return doomed.reduce((count, grantId) => count + remove.run(grantId).changes, 0);
     })();
+  }
+
+  /** Every grant naming this daemon's `threadId` as its target, whichever thread holds it. */
+  revokeTargeting(threadId: string): number {
+    return this.database.prepare("DELETE FROM workbench_network_inbound_grants WHERE target_thread_id = ?").run(threadId).changes;
   }
 
   private read(statement: string, ...parameters: string[]) {

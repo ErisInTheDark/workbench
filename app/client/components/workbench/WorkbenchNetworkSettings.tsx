@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchNetworkSettings: app reachability status, any needed setup, then Connection, Other devices and Agent access disclosures.
+ * - WorkbenchNetworkSettings: app reachability status, any needed setup, then Connection, Other devices and Network rules disclosures.
  */
 "use client";
 import { useContext, useState } from "react";
@@ -14,7 +14,6 @@ import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import IconButton from "../ui/IconButton";
 import LoaderIcon from "./LoaderIcon";
 import WorkbenchNetworkAccessSettings from "./WorkbenchNetworkAccessSettings";
-import WorkbenchAgentNetworkGrantSettings from "./WorkbenchAgentNetworkGrantSettings";
 import WorkbenchNetworkConnectionForm from "./WorkbenchNetworkConnectionForm";
 import WorkbenchPrivateAccessWizard from "./WorkbenchPrivateAccessWizard";
 import WorkbenchQrCode from "./WorkbenchQrCode";
@@ -131,10 +130,6 @@ function NetworkSettingsContent () {
       </span>}>
       <SettingsCard label="Network rules" flush><WorkbenchNetworkAccessSettings /></SettingsCard>
     </Disclosure> : null}
-    <Disclosure id="settings-agent-access" className="scroll-mt-24 border-t border-fg/8" summaryClassName="py-2.5 text-base" contentClassName="pb-3 pl-7"
-      summary={<span className="font-medium text-text">Agent access</span>}>
-      <WorkbenchAgentNetworkGrantSettings />
-    </Disclosure>
   </section>;
 }
 

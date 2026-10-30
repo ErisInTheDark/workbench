@@ -2,7 +2,7 @@
  * Exports:
  * - default WorkbenchAgentRelay: answer daemons' agent relay requests (resolve targets, read summaries, forward calls to their target
  *   daemon, fetch peer branches) stamping each with the daemon whose connection asked; describe this app's reach to every daemon;
- *   and carry out users' network approvals and grant edits, which write grants onto the daemons that enforce them.
+ *   and carry out users' network approvals and pill revocations, which write grants onto the daemons that enforce them.
  */
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectLocation } from "workbench-shared/types";
@@ -14,7 +14,7 @@ import type {
 } from "workbench-shared/workbench/network/network-relay-contracts";
 import { ProjectFolderAddress } from "workbench-shared/workbench/project/project-folder-address";
 import type { LocatedThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
-import type { WorkspaceNetworkGrantsList, WorkspaceNetworkGrantsRequest } from "workbench-shared/workbench/workspace/workspace-commands";
+import type { WorkspaceNetworkRevoke } from "workbench-shared/workbench/workspace/workspace-commands";
 import type { GitPeerFetchOutcome, GitPeerFetchQuestion } from "workbench-shared/workbench/git/git-peer-contracts";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
@@ -125,21 +125,7 @@ export default class WorkbenchAgentRelay {
     }, this.options.signal);
   }
 
-  async grants(request: WorkspaceNetworkGrantsRequest): Promise<WorkspaceNetworkGrantsList | { revoked: number }> {
-    if (request.kind === "list") {
-      return { daemons: await Promise.all(this.options.sources.all().filter(source => source.available).map(async source => {
-        try {
-          return { daemonId: source.id, hostname: source.getSnapshot().hostname, grants: (await source.daemon.network.grants.list()).grants, failure: null };
-        } catch (error) {
-          return { daemonId: source.id, hostname: source.getSnapshot().hostname, grants: [], failure: bounded(error) };
-        }
-      })) };
-    }
-    if (request.kind === "revoke") {
-      const source = this.options.sources.get(request.daemonId);
-      if (!source?.available) throw new Error("That daemon is unavailable.");
-      return await source.daemon.network.grants.revoke({ grantIds: request.grantIds });
-    }
+  async revoke(request: WorkspaceNetworkRevoke): Promise<{ revoked: number }> {
     const target = this.options.sources.get(request.target.daemonId);
     let revoked = 0;
     await this.options.threads.withThread(request.threadId, async (source, owner) => {

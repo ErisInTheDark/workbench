@@ -8,10 +8,6 @@ import WorkbenchNetworkHistoryStore, { type ThreadNetworkHistoryCommand } from "
 import { defineDatabaseRequest } from "./define-database-request.ts";
 
 export const networkRequests = {
-  listNetworkGrants: defineDatabaseRequest({
-    read: "core",
-    run: ({ database }) => new WorkbenchNetworkGrantStore(database).list(),
-  }),
   readNetworkGrantsForCaller: defineDatabaseRequest({
     read: "core",
     run: ({ database }, caller: { daemonId: string; threadId: string }) =>
@@ -22,6 +18,9 @@ export const networkRequests = {
   }),
   revokeNetworkGrants: defineDatabaseRequest({
     run: ({ database }, revoke: NetworkGrantRevoke) => new WorkbenchNetworkGrantStore(database).revoke(revoke),
+  }),
+  revokeNetworkGrantsTargeting: defineDatabaseRequest({
+    run: ({ database }, threadId: string) => new WorkbenchNetworkGrantStore(database).revokeTargeting(threadId),
   }),
   executeThreadNetworkHistory: defineDatabaseRequest({
     run: ({ database }, command: ThreadNetworkHistoryCommand) => new WorkbenchNetworkHistoryStore(database).execute(command),

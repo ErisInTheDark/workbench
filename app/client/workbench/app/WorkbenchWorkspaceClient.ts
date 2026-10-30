@@ -3,7 +3,7 @@
  * - WorkspaceQuerySnapshot: stable received facts and app-connection-aware freshness.
  * - WorkspaceQueryHandle: caller-owned typed observation, retarget and release boundary.
  * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection, kept warm
- *   briefly after release, retargeting summary batches by id patch; approve network prompts and list or revoke network grants.
+ *   briefly after release, retargeting summary batches by id patch; approve network prompts and revoke approved network targets.
  */
 import {
   WorkspaceQuerySchema, diffThreadSummaryIds, workspaceObservationShape,
@@ -19,8 +19,8 @@ import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import {
   WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, workspaceCommandRoutes,
-  WorkspaceNetworkApproveResultSchema, WorkspaceNetworkGrantsListSchema, WorkspaceNetworkGrantsRevokeResultSchema,
-  type WorkspaceCommandMethod, type WorkspaceNetworkGrantsList, type WorkspaceNetworkGrantsRequest,
+  WorkspaceNetworkApproveResultSchema, WorkspaceNetworkRevokeResultSchema,
+  type WorkspaceCommandMethod, type WorkspaceNetworkRevoke,
 } from "workbench-shared/workbench/workspace/workspace-commands";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { DaemonId } from "workbench-shared/workbench/identity";
@@ -364,16 +364,10 @@ export default class WorkbenchWorkspaceClient {
     if (!parsed.success) throw new Error("The app returned an invalid network approval.");
   }
 
-  async listNetworkGrants(): Promise<WorkspaceNetworkGrantsList> {
-    const conformed = conformToZodSchema(WorkspaceNetworkGrantsListSchema.nullable(),
-      await this.rpc.requestRaw({ method: "workspace/network/grants", params: { kind: "list" } }), null);
-    if (!conformed.data) throw new Error("The app returned an invalid network grant list.");
-    return conformed.data;
-  }
-
-  async revokeNetworkGrants(request: Exclude<WorkspaceNetworkGrantsRequest, { kind: "list" }>) {
-    const parsed = WorkspaceNetworkGrantsRevokeResultSchema.safeParse(
-      await this.rpc.requestRaw({ method: "workspace/network/grants", params: request }));
+  /** Revokes one approved target from a thread's network pill; the app removes the target daemon's grant and marks the history entry. */
+  async revokeNetworkTarget(request: WorkspaceNetworkRevoke) {
+    const parsed = WorkspaceNetworkRevokeResultSchema.safeParse(
+      await this.rpc.requestRaw({ method: "workspace/network/revoke", params: request }));
     if (!parsed.success) throw new Error("The app returned an invalid network revocation.");
     return parsed.data.revoked;
   }

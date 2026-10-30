@@ -118,7 +118,7 @@ export default function ThreadViewStatus ({
           history: active.head.networkHistory,
           onRevoke: async target => {
             if (!workspace) throw new Error("Workbench is not connected.");
-            await workspace.revokeNetworkGrants({ kind: "revokeHistory", threadId, entryId: target.id, target: target.target });
+            await workspace.revokeNetworkTarget({ threadId, entryId: target.id, target: target.target });
           },
         } : null}
         vis={!isDraftThreadView && vis?.sessions.length ? { sessions: vis.sessions, ...visActions } : null}

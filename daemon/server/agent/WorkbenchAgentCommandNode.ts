@@ -619,7 +619,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const unregisterNetwork = build.get("daemonRequests").registerNetwork({
       execute: (params, signal) => remoteCalls.execute(params, signal),
       createGrant: grant => database.createNetworkGrant({ id: randomUUID(), createdAt: Date.now(), grant }),
-      listGrants: () => database.listNetworkGrants(),
       revokeGrants: revoke => database.revokeNetworkGrants(revoke),
       revokeHistory: async (threadId, entryId) => (await network.revokeHistory(WorkbenchThreadIdSchema.parse(threadId), entryId))
         .some(entry => entry.id === entryId && entry.revokedAt !== null),

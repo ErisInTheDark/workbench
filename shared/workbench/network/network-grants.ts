@@ -64,11 +64,10 @@ export type NetworkGrant = z.infer<typeof NetworkGrantSchema>;
 export const NetworkGrantCreateSchema = NetworkGrantSchema.omit({ id: true, createdAt: true });
 export type NetworkGrantCreate = z.infer<typeof NetworkGrantCreateSchema>;
 
-/** Grant ids, or one caller thread's grants covering `need` (every grant it holds when absent). */
-export const NetworkGrantRevokeSchema = z.union([
-  z.object({ grantIds: z.array(z.uuid()).min(1).max(256) }).strict(),
-  z.object({ callerDaemonId: DaemonIdSchema, callerThreadId: WorkbenchThreadIdSchema, need: NetworkNeedSchema.optional() }).strict(),
-]);
+/** One caller thread's grants covering `need` (every grant it holds when absent). */
+export const NetworkGrantRevokeSchema = z.object({
+  callerDaemonId: DaemonIdSchema, callerThreadId: WorkbenchThreadIdSchema, need: NetworkNeedSchema.optional(),
+}).strict();
 export type NetworkGrantRevoke = z.infer<typeof NetworkGrantRevokeSchema>;
 
 export const NetworkHistoryEntrySchema = z.object({

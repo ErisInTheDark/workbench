@@ -118,7 +118,6 @@ class WorkbenchDaemonClient {
     execute: (params: WorkbenchDaemonParams<"relay/execute">) => this.request("relay/execute", params),
     grants: {
       create: (params: WorkbenchDaemonParams<"network/grants/create">) => this.request("network/grants/create", params),
-      list: () => this.request("network/grants/list", {}),
       revoke: (params: WorkbenchDaemonParams<"network/grants/revoke">) => this.request("network/grants/revoke", params),
     },
     revokeHistory: (params: WorkbenchDaemonParams<"network/history/revoke">) => this.request("network/history/revoke", params),
