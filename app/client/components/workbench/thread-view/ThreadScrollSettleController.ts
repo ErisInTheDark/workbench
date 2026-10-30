@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadScrollSettleOptions: idle scheduling, scroll, reserve, and content-offset boundary.
+ * - ThreadScrollSettleOptions: idle scheduling, scroll position and range, reserve, and content-offset boundary.
  * - default ThreadScrollSettleController: own every reading-position correction. In flight (touch or momentum) a correction
  *   spends a reserved spacer above the content instead of writing scrollTop; at rest the reserve is refilled with one scroll.
  *   Readers are caught at the loaded top so they never scroll into the reserve.
@@ -10,6 +10,8 @@ export interface ThreadScrollSettleOptions {
   readonly schedule: (callback: () => void, delayMs: number) => () => void;
   /** Current scroll position; a main-thread stall can delay scroll events while momentum keeps moving it. */
   readonly readScrollTop: () => number;
+  /** Furthest scroll position the current layout allows. */
+  readonly readScrollMax: () => number;
   /**
    * Set the scroll position; in flight only to put a reader who crossed into the reserve back at the top. Absolute,
    * because shrinking the reserve clamps scrollTop at once, so a relative write would start from the clamped value.
@@ -58,7 +60,7 @@ export default class ThreadScrollSettleController {
 
   /**
    * Keep the reader's visual position after layout above them changed by `delta`; returns how much was applied, less
-   * than asked only when a settled scroll hits its edge. iOS ignores or halts a fling on scrollTop writes mid-gesture,
+   * than asked only when the scroll hits its edge. iOS ignores or halts a fling on scrollTop writes mid-gesture,
    * so in flight the same delta comes out of the reserve above the content instead: the new content takes the reserve's
    * place and nothing the reader sees moves.
    */
@@ -71,7 +73,11 @@ export default class ThreadScrollSettleController {
     }
     // Shrinking content first repays overflow; growth spends the reserve, and only what it cannot cover overflows.
     const repaid = delta < 0 ? Math.min(-delta, this.#overflow) : 0;
-    const remaining = delta + repaid;
+    const wanted = delta + repaid;
+    // Spending shortens the page, so past the reader's room below the bottom clamp undoes it, and the clamp reads as
+    // fresh drift: at the edge (rubber-band included) spending would feed itself for the whole fling.
+    const headroom = Math.max(0, this.#options.readScrollMax() - this.#options.readScrollTop());
+    const remaining = wanted > 0 ? Math.min(wanted, headroom) : wanted;
     const spent = remaining > 0 ? Math.min(remaining, this.#reserve) : remaining;
     const overflow = this.#overflow - repaid + remaining - spent;
     if (spent) {
@@ -82,7 +88,7 @@ export default class ThreadScrollSettleController {
       this.#overflow = overflow;
       this.#options.setContentOffset(overflow ? -overflow : 0);
     }
-    return delta;
+    return delta - (wanted - remaining);
   }
 
   touchStarted() {

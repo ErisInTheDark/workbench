@@ -17,16 +17,18 @@ function fixture(initialTarget = 0, contentHeight = 1_000_000) {
   let target = initialTarget;
   let scrollTop = 0;
   let locked = false;
-  const clamp = (top: number) => Math.min(Math.max(0, top), Math.max(0, reserve + contentHeight - CLIENT_HEIGHT));
+  const max = () => Math.max(0, reserve + offset + contentHeight - CLIENT_HEIGHT);
+  const clamp = (top: number) => Math.min(Math.max(0, top), max());
   const controller = new ThreadScrollSettleController({
     schedule: (callback) => {
       pending.add(callback);
       return () => { pending.delete(callback); };
     },
     readScrollTop: () => scrollTop,
+    readScrollMax: max,
     scrollTo: top => { scrolls.push(top - scrollTop); scrollTop = clamp(top); },
     setScrollLocked: value => { locked = value; },
-    setContentOffset: value => { offset = value; },
+    setContentOffset: value => { offset = value; scrollTop = clamp(scrollTop); },
     setReserve: value => { reserve = value; scrollTop = clamp(scrollTop); },
     readReserveTarget: () => target,
   });
@@ -37,6 +39,8 @@ function fixture(initialTarget = 0, contentHeight = 1_000_000) {
     get offset() { return offset; },
     get reserve() { return reserve; },
     setTarget(value: number) { target = value; },
+    grow(px: number) { contentHeight += px; },
+    get max() { return max(); },
     moveTo(value: number) { scrollTop = value; },
     scrollTo(value: number) { scrollTop = value; controller.scrolled(); },
     get scrollTop() { return scrollTop; },
@@ -98,6 +102,33 @@ test("growth beyond the reserve falls back to content offset and is repaid at se
   assert.equal(f.offset, 0);
   assert.equal(f.reserve, 200);
   assert.deepEqual(f.scrolls, [200, 400]);
+});
+
+test("in flight at the bottom edge a correction with no room to move spends nothing, so its own clamp cannot re-owe it", () => {
+  const reserved = fixture(1_000, 2_000);
+  reserved.moveTo(reserved.max);
+  reserved.fling();
+  assert.equal(reserved.controller.shift(30), 0);
+  assert.equal(reserved.reserve, 1_000);
+  assert.equal(reserved.scrollTop, reserved.max);
+
+  const unreserved = fixture(0, 2_000);
+  unreserved.moveTo(unreserved.max);
+  unreserved.fling();
+  assert.equal(unreserved.controller.shift(30), 0);
+  assert.equal(unreserved.offset, 0);
+  assert.equal(unreserved.scrollTop, unreserved.max);
+});
+
+test("in flight at the bottom edge growth above is still spent in full, holding the reader", () => {
+  const f = fixture(1_000, 2_000);
+  f.moveTo(f.max);
+  const top = f.scrollTop;
+  f.fling();
+  f.grow(30);
+  assert.equal(f.controller.shift(50), 30, "only the 30px of real growth has room to be held");
+  assert.equal(f.reserve, 970);
+  assert.equal(f.scrollTop, top);
 });
 
 test("the reserve is removed at rest once nothing more can arrive above", () => {

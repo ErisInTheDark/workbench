@@ -166,6 +166,10 @@ function ActiveThreadScrollViewport ({
       return () => window.clearTimeout(timer);
     },
     readScrollTop: () => viewportRef.current?.scrollTop ?? 0,
+    readScrollMax: () => {
+      const viewport = viewportRef.current;
+      return viewport ? viewport.scrollHeight - viewport.clientHeight : 0;
+    },
     scrollTo: (top) => {
       const viewport = viewportRef.current;
       if (!viewport) return;
