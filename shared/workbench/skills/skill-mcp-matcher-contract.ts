@@ -20,8 +20,10 @@ export const SKILL_MCP_CHIP_ICONS = [
 export type SkillMcpChipIcon = typeof SKILL_MCP_CHIP_ICONS[number];
 
 export const SKILL_MCP_MATCHER_LIMITS = {
-  /** One match call; a matcher answering slower is treated as stuck. */
+  /** Matcher code for one call, after the call is loaded; a matcher answering slower is treated as stuck. */
   callDeadlineMs: 25,
+  /** Parsing one call into the sandbox; a call too large to load gets no skill presentation, its matcher stays on. */
+  callInputDeadlineMs: 250,
   /** First evaluation of a bundle, which defines its matcher. */
   loadDeadlineMs: 250,
   memoryBytes: 16 * 1024 * 1024,

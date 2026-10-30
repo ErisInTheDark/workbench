@@ -4,7 +4,8 @@
  * - SkillMcpMatchFailure: why one skill's matcher could not answer.
  * - SkillMcpMatchReport: every skill's outcome for one call, for authoring tools.
  * - default SkillMcpMatcherRuntime: run active skills' compiled MCP matchers synchronously inside QuickJS, each skill in
- *   its own runtime with a per-call deadline and memory cap; the QuickJS module is injected by its platform loader.
+ *   its own runtime with a memory cap and a deadline on matcher code, apart from loading the call; the QuickJS module
+ *   is injected by its platform loader.
  */
 import { shouldInterruptAfterDeadline, type QuickJSContext, type QuickJSHandle, type QuickJSRuntime, type QuickJSWASMModule } from "quickjs-emscripten-core";
 import { z } from "zod";
@@ -30,7 +31,10 @@ export interface SkillMcpMatchReport {
   failures: SkillMcpMatchFailure[];
 }
 
-/** Bundles assign their matchers here; the prelude below adapts them to one JSON-in, JSON-out function. */
+/**
+ * Bundles assign their matchers here. The prelude splits a run in two, so loading the call (our parse of a possibly
+ * large result) is timed apart from the matcher code the call deadline is for.
+ */
 const PRELUDE = `
 ;(() => {
   const exported = typeof __wbSkillMcpMatchers === "object" && __wbSkillMcpMatchers ? __wbSkillMcpMatchers.default : undefined;
@@ -38,8 +42,11 @@ const PRELUDE = `
   if (!matchers.length || matchers.some(matcher => typeof matcher !== "function")) {
     throw new Error("Each matcher file must default-export defineMcpMatcher(call => ...).");
   }
-  globalThis.__wbMatch = input => {
-    const call = JSON.parse(input);
+  let loaded;
+  globalThis.__wbLoad = input => { loaded = JSON.parse(input); };
+  globalThis.__wbMatch = () => {
+    const call = loaded;
+    loaded = undefined;
     for (const matcher of matchers) {
       const presentation = matcher(call);
       if (presentation !== null && presentation !== undefined) return JSON.stringify(presentation);
@@ -51,7 +58,7 @@ const PRELUDE = `
 /** Runaway matchers (deadline, memory) stop answering for the runtime's life; ordinary throws fail only their call. */
 type BundleState =
   | { kind: "unloaded" }
-  | { kind: "ready"; runtime: QuickJSRuntime; context: QuickJSContext; match: QuickJSHandle }
+  | { kind: "ready"; runtime: QuickJSRuntime; context: QuickJSContext; load: QuickJSHandle; match: QuickJSHandle }
   | { kind: "broken"; message: string };
 
 function describeError(context: QuickJSContext, handle: QuickJSHandle) {
@@ -120,10 +127,12 @@ export default class SkillMcpMatcherRuntime {
     this.#disposed = true;
     for (const state of this.#states) {
       if (state.kind !== "ready") continue;
-      state.match.dispose();
-      state.context.dispose();
-      state.runtime.dispose();
+      SkillMcpMatcherRuntime.#release(state);
     }
+  }
+
+  static #release(state: Extract<BundleState, { kind: "ready" }>) {
+    state.load.dispose(); state.match.dispose(); state.context.dispose(); state.runtime.dispose();
   }
 
   #report(failure: SkillMcpMatchFailure) {
@@ -148,7 +157,11 @@ export default class SkillMcpMatcherRuntime {
       evaluated.error.dispose();
     } else {
       evaluated.value.dispose();
-      next = { kind: "ready", runtime, context, match: context.getProp(context.global, "__wbMatch") };
+      next = {
+        kind: "ready", runtime, context,
+        load: context.getProp(context.global, "__wbLoad"),
+        match: context.getProp(context.global, "__wbMatch"),
+      };
     }
     if (next.kind === "broken") { context.dispose(); runtime.dispose(); }
     this.#states[index] = next;
@@ -160,18 +173,26 @@ export default class SkillMcpMatcherRuntime {
     const state = this.#load(index);
     if (state.kind === "broken") return { kind: "failed", message: state.message };
     const { context, runtime } = state;
+    runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + SKILL_MCP_MATCHER_LIMITS.callInputDeadlineMs));
+    const argument = context.newString(input);
+    const loaded = context.callFunction(state.load, context.undefined, argument);
+    argument.dispose();
+    if (loaded.error) {
+      const message = describeError(context, loaded.error);
+      loaded.error.dispose();
+      return { kind: "failed", message: `Call could not be loaded for this matcher: ${message}` };
+    }
+    loaded.value.dispose();
     const deadline = Date.now() + SKILL_MCP_MATCHER_LIMITS.callDeadlineMs;
     runtime.setInterruptHandler(shouldInterruptAfterDeadline(deadline));
-    const argument = context.newString(input);
-    const called = context.callFunction(state.match, context.undefined, argument);
-    argument.dispose();
+    const called = context.callFunction(state.match, context.undefined);
     if (called.error) {
       const message = describeError(context, called.error);
       called.error.dispose();
       if (Date.now() >= deadline || /out of memory|stack overflow|interrupted/iu.test(message)) {
         const reason = Date.now() >= deadline ? `took longer than ${SKILL_MCP_MATCHER_LIMITS.callDeadlineMs}ms` : message;
         const broken = { kind: "broken" as const, message: `Matcher stopped: ${reason}` };
-        state.match.dispose(); context.dispose(); runtime.dispose();
+        SkillMcpMatcherRuntime.#release(state);
         this.#states[index] = broken;
         return { kind: "failed", message: broken.message };
       }
