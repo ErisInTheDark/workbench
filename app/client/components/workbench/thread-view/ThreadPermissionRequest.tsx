@@ -4,13 +4,14 @@
  * - ThreadPermissionRequestSubject: what a pending permission request asks about: an MCP enable (tool), sign-in (server link) or
  *   connect (server URL), or a network target on another daemon or folder.
  * - ThreadPermissionRequestPanel: the composer's pending permission request; Approve and Deny (Shift: Stop) render into the composer's
- *   action slot. Network approval stays disabled when this app cannot reach the target's daemon.
+ *   action slot. Network requests show the target as the app draws it and what each side gets instead of the agent's reason;
+ *   approval stays disabled when this app cannot reach the target's daemon.
  * - ThreadPermissionDecisionCard: the transcript's record of an answered permission request.
  * - ThreadMcpDownloadCard: the transcript's record of an `mcp_download`: status and server, then the file name and source URL.
  */
 "use client";
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type {
   WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpConnectionContext, WorkbenchUserInputMcpToolContext,
@@ -20,8 +21,12 @@ import { mcpToolLabel } from "../../../workbench/mcp-tool-label";
 import { openCenteredMcpSignInPopup } from "../../../workbench/mcp-sign-in-popup";
 import MarkdownRender from "../../ui/MarkdownRender";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { CheckIcon, ChevronDownIcon, DownloadIcon, KeyRoundIcon, SquareIcon, XIcon } from "../workbench-icons";
+import {
+  BookBookmarkIcon, BotIcon, CheckIcon, ChevronDownIcon, DownloadIcon, KeyRoundIcon, LockIcon, MegaphoneIcon, NetworkIcon,
+  SendHorizontalIcon, ShieldAlertIcon, SquareIcon, XIcon, type IconProps,
+} from "../workbench-icons";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
+import NetworkTargetDisplay from "./NetworkTargetDisplay";
 
 export type ThreadPermissionRequestSubject =
   | { kind: "tool"; tool: WorkbenchUserInputMcpToolContext }
@@ -41,21 +46,38 @@ const DECISION_LABELS = {
 } as const;
 const UNREACHABLE_NETWORK_TARGET = "You don't have access to the daemon this agent wants to network with. Either gain access or approve this prompt from another device.";
 
-/** The remote thread, folder or feedback an agent asks to reach, and the daemon that holds it. */
-function NetworkTargetCard({ target, rounded = true }: { target: NetworkTarget; rounded?: boolean }) {
-  const name = target.kind === "thread" ? target.title
-    : target.kind === "folder" ? `Subagents in ${target.rootPath}`
-      : target.rootPath ? `Feedback for ${target.rootPath}` : "wb feedback, all projects";
-  const detail = target.kind === "thread" ? `${target.projectName} · thread ${target.threadId}` : target.kind === "folder" ? "folder of this project" : "agent feedback";
-  return <div className={`flex flex-col gap-1 bg-recess px-3.5 py-3 ${rounded ? "rounded-[0.9rem]" : ""}`}>
-    <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-      <span className="text-base font-semibold text-text">{name}</span>
-      <code className="break-all text-[0.8rem] text-fg/muted">{target.hostname}</code>
-    </div>
-    <span className="text-sm text-fg/muted">{detail}</span>
-    {target.kind === "thread" && target.daemonProject
-      ? <p className="m-0 text-sm text-danger">This thread can run commands outside the sandbox on {target.hostname}.</p> : null}
+type Capability = { Icon: ComponentType<IconProps>; label: string };
+/** What approving lets the asking agent do, and what the target may do back. */
+const NETWORK_GRANTS: Record<NetworkTarget["kind"], { agent: Capability[]; target: Capability[] }> = {
+  thread: {
+    agent: [{ Icon: SendHorizontalIcon, label: "message" }, { Icon: BookBookmarkIcon, label: "recall" }],
+    target: [{ Icon: SendHorizontalIcon, label: "message reply" }],
+  },
+  folder: { agent: [{ Icon: BotIcon, label: "subagent profiles" }, { Icon: BotIcon, label: "create subagents" }], target: [] },
+  feedback: { agent: [{ Icon: MegaphoneIcon, label: "feedback" }], target: [] },
+};
+const NETWORK_HEADINGS: Record<NetworkTarget["kind"], (hostname: string) => string> = {
+  thread: hostname => `Allow networking with a thread on ${hostname}?`,
+  folder: hostname => `Allow creating subagents in a folder on ${hostname}?`,
+  feedback: hostname => `Allow reading feedback on ${hostname}?`,
+};
+
+function NetworkGrants({ kind }: { kind: NetworkTarget["kind"] }) {
+  const line = (who: string, capabilities: Capability[]) => <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+    <span className="text-[0.8rem] text-fg/muted">{who}</span>
+    {capabilities.map(({ Icon, label }) => <span className="inline-flex items-center gap-1 rounded-full bg-fg/6 px-2 py-0.5 text-[0.78rem] text-text" key={label}>
+      <Icon className="text-fg/72" size={12} />{label}
+    </span>)}
   </div>;
+  return <div className="flex flex-col gap-1.5 px-1">
+    {line("This agent gets:", NETWORK_GRANTS[kind].agent)}
+    {NETWORK_GRANTS[kind].target.length ? line("Target agent gets:", NETWORK_GRANTS[kind].target) : null}
+  </div>;
+}
+
+/** The remote thread, folder or feedback an agent asks to reach, drawn as the app draws it elsewhere. */
+function NetworkTargetCard({ target, rounded = true, compact = false }: { target: NetworkTarget; rounded?: boolean; compact?: boolean }) {
+  return <div className={`bg-recess p-1 ${rounded ? "rounded-[0.9rem]" : ""}`}><NetworkTargetDisplay compact={compact} target={target} /></div>;
 }
 
 /** The server an agent asks to connect for its turn, by name and the URL it serves at. */
@@ -69,7 +91,7 @@ function McpConnectionCard({ connection, rounded = true }: { connection: Workben
 function SubjectCard({ subject, rounded, onOpen }: { subject: ThreadPermissionRequestSubject; rounded?: boolean; onOpen?: (() => void) | undefined }) {
   if (subject.kind === "tool") return <McpToolCard tool={subject.tool} rounded={rounded} />;
   if (subject.kind === "connection") return <McpConnectionCard connection={subject.connection} rounded={rounded} />;
-  if (subject.kind === "network") return <NetworkTargetCard target={subject.target} rounded={rounded} />;
+  if (subject.kind === "network") return <NetworkTargetCard compact={rounded === false} target={subject.target} rounded={rounded} />;
   return <McpAuthorizationCard authorization={subject.authorization} rounded={rounded} onOpen={onOpen} />;
 }
 
@@ -164,11 +186,21 @@ export function ThreadPermissionRequestPanel({ subject, reason, actionTarget, on
       </PrimaryButton>}
   </>;
   const url = subject.kind === "authorization" ? subject.authorization.url : undefined;
+  const network = subject.kind === "network" ? subject.target : null;
   return <div className="flex flex-col gap-3 px-1 py-1">
-    <h3 className="m-0 text-[1.02em] font-semibold leading-[1.35] text-text">{PANEL_TITLES[subject.kind]}</h3>
+    <h3 className="m-0 flex items-center gap-2 text-[1.02em] font-semibold leading-[1.35] text-text">
+      {network ? <NetworkIcon className="shrink-0 text-fg/72" size={18} /> : null}
+      {network ? NETWORK_HEADINGS[network.kind](network.hostname) : PANEL_TITLES[subject.kind]}
+    </h3>
     <SubjectCard subject={subject} onOpen={url ? () => openLink(url) : undefined} />
-    {reason ? <p className="m-0 whitespace-pre-wrap break-words text-[0.95rem] leading-[1.6] text-text">{reason}</p> : null}
-    {unreachable ? <p className="m-0 text-[0.9rem] text-warning">{UNREACHABLE_NETWORK_TARGET}</p> : null}
+    {network ? <NetworkGrants kind={network.kind} /> : reason
+      ? <p className="m-0 whitespace-pre-wrap break-words text-[0.95rem] leading-[1.6] text-text">{reason}</p> : null}
+    {network?.kind === "thread" && network.daemonProject ? <p className="m-0 flex items-start gap-1.5 px-1 text-sm text-danger">
+      <ShieldAlertIcon className="mt-0.5 shrink-0" size={14} />This thread can run commands outside the sandbox on {network.hostname}.
+    </p> : null}
+    {unreachable ? <p className="m-0 flex items-start gap-1.5 px-1 text-sm text-amber-700 dark:text-amber-300">
+      <LockIcon className="mt-0.5 shrink-0" size={14} />{UNREACHABLE_NETWORK_TARGET}
+    </p> : null}
     {error ? <p role="alert" className="m-0 text-[0.84em] text-danger">{error}</p> : null}
     {actionTarget ? createPortal(actions, actionTarget) : <div className="flex items-center justify-end gap-2">{actions}</div>}
   </div>;
@@ -215,7 +247,7 @@ export function ThreadPermissionDecisionCard({ subject, reason, approved }: {
       <span className={`inline-flex shrink-0 items-center gap-1 font-medium ${approved ? "text-success" : "text-danger"}`}>
         {approved ? <CheckIcon size={14} /> : <XIcon size={14} />}{approved ? labels.approved : labels.denied}
       </span>
-      {reason ? <span className="min-w-0 flex-1 truncate text-fg/muted" title={reason}>{reason}</span> : null}
+      {reason && subject.kind !== "network" ? <span className="min-w-0 flex-1 truncate text-fg/muted" title={reason}>{reason}</span> : null}
     </div>
     <SubjectCard subject={subject} rounded={false} />
   </div>;

@@ -140,6 +140,8 @@ export default function ThreadStatusArea({
   const visUpdatedAt = vis ? getVisSessionsUpdatedAt(vis.sessions) : 0;
   const visRendering = vis?.sessions.some(({ rendering }) => rendering) ?? false;
 
+  const activeNetworkCount = network?.history.filter(entry => entry.revokedAt === null).length ?? 0;
+  const activeNetwork = activeNetworkCount ? network : null;
   const panels: ThreadStatusPanel[] = [
     ...(skills?.skills.length ? [{
       id: "skills",
@@ -180,14 +182,11 @@ export default function ThreadStatusArea({
       ),
       segments: arcSegments,
     },
-    ...(network?.history.length ? [{
+    ...(activeNetwork ? [{
       id: "network",
-      label: `Network access to ${network.history.length} remote targets`,
-      render: () => <ThreadNetworkPanel history={network.history} onRevoke={network.onRevoke} />,
-      segments: [{
-        key: "network",
-        content: <><NetworkIcon size={14} />{count(network.history.filter(entry => entry.revokedAt === null).length)}</>,
-      }],
+      label: `Network access to ${activeNetworkCount} remote targets`,
+      render: () => <ThreadNetworkPanel history={activeNetwork.history} onRevoke={activeNetwork.onRevoke} />,
+      segments: [{ key: "network", content: <><NetworkIcon size={14} />{count(activeNetworkCount)}</> }],
     }] : []),
     ...(todos ? [{
       id: "todos",
