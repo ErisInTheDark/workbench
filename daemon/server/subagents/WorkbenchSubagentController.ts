@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchSubagentControllerOptions: provider operations, durable store, message-wait observations, settle handover ports and validated project dependencies.
- * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, and waits that end on caller abort or runtime drain.
+ * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, and waits that end on caller abort or runtime drain; children in other folders or on other daemons go through WorkbenchRemoteSubagents.
  */
 import { randomUUID } from "node:crypto";
 
@@ -34,12 +34,18 @@ import type WorkbenchThreadIdentityController from "../thread/WorkbenchThreadIde
 import { ThreadReferenceSchema, type ProjectId, type ThreadReference, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 import type WorkbenchMessageWaitController from "../agent/WorkbenchMessageWaitController";
+import type { RemoteChildRow } from "workbench-shared/workbench/network/network-remote-calls";
+import { formatUntrustedRemoteOutput } from "../network/network-untrusted-output";
+import type WorkbenchRemoteSubagents from "./WorkbenchRemoteSubagents";
+import type { RemoteSubagentNetwork } from "./WorkbenchRemoteSubagents";
 
 interface PendingQuestionnaireList {
   data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
 }
 
 const POLL_INTERVAL_MS = 1_000;
+/** Remote children report changes; this slower poll only covers reports lost while no app relayed them. */
+const REMOTE_WAIT_POLL_MS = 15_000;
 // Settle rechecks readiness because stop and turn completion reach thread state
 // asynchronously; a settle issued right after can observe stale non-terminal state.
 // The deadline still fails fast for a genuinely working child instead of waiting open-ended.
@@ -77,6 +83,9 @@ export interface WorkbenchSubagentControllerOptions {
   /** Settle handover: move every todo from one thread to another, returning the ids they received. */
   moveTodos?(fromThreadId: WorkbenchThreadId, toThreadId: WorkbenchThreadId): Promise<number[]>;
   messageWaits?: Pick<WorkbenchMessageWaitController, "isWaitingFor" | "subscribePending">;
+  /** Children in other folders or on other daemons; absent where no relay exists. */
+  remote?: WorkbenchRemoteSubagents;
+  network?: Pick<RemoteSubagentNetwork, "self">;
   threadState?: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     mutate(request: WorkbenchThreadStateRequest): Promise<{ accepted: boolean }>;
@@ -144,6 +153,8 @@ export default class WorkbenchSubagentController {
   private readonly moveTodos: WorkbenchSubagentControllerOptions["moveTodos"];
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly messageWaits: WorkbenchSubagentControllerOptions["messageWaits"];
+  private readonly remote: WorkbenchSubagentControllerOptions["remote"];
+  private readonly network: WorkbenchSubagentControllerOptions["network"];
   /** Aborts every wait when the runtime drains, so long waits re-enter the next generation. */
   private readonly lifetime = new AbortController();
   private active = true;
@@ -166,7 +177,11 @@ export default class WorkbenchSubagentController {
     moveTodos,
     threadState,
     messageWaits,
+    remote,
+    network,
   }: WorkbenchSubagentControllerOptions) {
+    this.remote = remote;
+    this.network = network;
     this.provider = provider;
     this.liveApprovals = liveApprovals;
     this.publicThreadId = publicThreadId;
@@ -213,10 +228,10 @@ export default class WorkbenchSubagentController {
       await this.canonicalParams(params);
       switch (message.method) {
         case "workbench/subagent/list": return { id, result: await this.list(params) };
-        case "workbench/subagent/profiles": return { id, result: await this.profiles(params) };
-        case "workbench/subagent/create": return { id, result: await this.create(params) };
-        case "workbench/subagent/stop": return { id, result: await this.stop(params) };
-        case "workbench/subagent/settle": return { id, result: await this.settle(params) };
+        case "workbench/subagent/profiles": return { id, result: await this.profiles(params, callerSignal ?? this.lifetime.signal) };
+        case "workbench/subagent/create": return { id, result: await this.create(params, callerSignal ?? this.lifetime.signal) };
+        case "workbench/subagent/stop": return { id, result: await this.stop(params, callerSignal ?? this.lifetime.signal) };
+        case "workbench/subagent/settle": return { id, result: await this.settle(params, callerSignal ?? this.lifetime.signal) };
         default: throw new Error(`Unsupported Workbench subagent method: ${message.method ?? "unknown"}`);
       }
     } catch (error) {
@@ -228,17 +243,19 @@ export default class WorkbenchSubagentController {
   private async canonicalParams(params: Record<string, unknown>) {
     if (!this.identities) return params;
     const { project } = await this.resolveProjectFromCwd(requiredString(params, "cwd"), { endpointName: "Workbench subagent" });
-    const canonicalId = async (threadId: string) => {
+    const canonicalId = async (threadId: string, remoteAllowed = false) => {
       const identity = await this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.id });
+      // Children in other folders or on other daemons are named by their own ids; ownership checks them against relationships.
+      if (!identity && remoteAllowed) return ThreadReferenceSchema.parse(threadId) as unknown as WorkbenchThreadId;
       if (!identity) throw new Error("Subagent thread identity is unavailable in this project.");
       return identity.threadId;
     };
     for (const key of ["callerThreadId", "parentThreadId", "threadId"] as const) {
-      if (typeof params[key] === "string") params[key] = await canonicalId(params[key]);
+      if (typeof params[key] === "string") params[key] = await canonicalId(params[key], key === "threadId");
     }
     if (Array.isArray(params.threadIds)) params.threadIds = await Promise.all(params.threadIds.map((threadId) => {
       if (typeof threadId !== "string") throw new Error("Subagent thread IDs must be strings.");
-      return canonicalId(threadId);
+      return canonicalId(threadId, true);
     }));
     return params;
   }
@@ -297,7 +314,11 @@ export default class WorkbenchSubagentController {
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent list" });
     const parentThreadId = this.readThreadId(params, typeof params.parentThreadId === "string" ? "parentThreadId" : "callerThreadId");
     const relationships = (await this.subagentStore.list({ parentThreadId, projectId: project.project.id })).subagents;
+    const remoteRows = this.remote && relationships.some(record => record.location)
+      ? await this.remote.read(await this.remoteCaller(params), relationships, this.lifetime.signal) : new Map<WorkbenchThreadId, RemoteChildRow>();
     const joined: WorkbenchSubagentSummary[] = await Promise.all(relationships.map(async (relationship) => {
+      const row = remoteRows.get(relationship.threadId);
+      if (row) return { ...relationship, activityStatus: row.lifecycle.kind === "working" ? "active" as const : "inactive" as const, lastActivityAt: row.activityAt, lifecycle: row.lifecycle, pinned: row.pinned };
       const entry = await this.threadState?.getEntry(project.project.id, relationship.harness, relationship.threadId);
       return entry?.entryKind === "subagent"
         ? { ...relationship, activityStatus: entry.lifecycle.kind === "working" ? "active" as const : "inactive" as const, lastActivityAt: entry.activityAt, lifecycle: entry.lifecycle, pinned: entry.pinned }
@@ -315,7 +336,11 @@ export default class WorkbenchSubagentController {
     return { nextCursor: offset + subagents.length < filtered.length ? String(offset + subagents.length) : null, subagents };
   }
 
-  private async profiles(params: Record<string, unknown>) {
+  private async profiles(params: Record<string, unknown>, signal: AbortSignal) {
+    if (typeof params.folder === "string") {
+      const { target, profiles } = await this.requireRemote().profiles(await this.remoteCaller(params), params.folder, signal);
+      return { folder: { hostname: target.hostname, rootPath: target.rootPath }, profiles };
+    }
     const cwd = requiredString(params, "cwd");
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent profiles" });
     const profiles = (await this.profileStore.read()).profiles.filter((profile) => profile.scope.kind === "global" || profile.scope.projectId === project.project.id);
@@ -330,11 +355,18 @@ export default class WorkbenchSubagentController {
     };
   }
 
-  private async create(params: Record<string, unknown>) {
+  private async create(params: Record<string, unknown>, signal: AbortSignal) {
     const caller = await this.resolveCaller(params);
     const relationships = await this.subagentStore.list({ projectId: caller.project.id });
     if (relationships.subagents.some(({ threadId }) => threadId === caller.callerThreadId)) {
       throw new Error("Workbench subagents cannot create their own subagents.");
+    }
+    if (typeof params.folder === "string") {
+      return await this.requireRemote().create(await this.remoteCaller(params), {
+        address: params.folder, profileId: requiredString(params, "profileId"), name: requiredString(params, "name"),
+        title: requiredString(params, "title"), message: requiredString(params, "message"),
+        userVisibleSimpleVersion: requiredString(params, "userVisibleSimpleVersion"),
+      }, signal);
     }
     const profileId = requiredString(params, "profileId");
     const name = requiredString(params, "name");
@@ -397,13 +429,25 @@ export default class WorkbenchSubagentController {
     this.createQueue = operation.then(() => undefined, () => undefined);
     await operation;
     if (!result) throw new Error("Subagent creation did not return a thread id.");
+    await this.pushRostersIfRemote(params, signal);
     return result;
+  }
+
+  /** Every family change re-pushes the full sibling roster to children in other folders, so their daemons admit new siblings. */
+  private async pushRostersIfRemote(params: Record<string, unknown>, signal: AbortSignal) {
+    if (!this.remote) return;
+    const caller = await this.resolveCaller(params);
+    const children = (await this.subagentStore.list({ parentThreadId: caller.callerThreadId, projectId: caller.project.id })).subagents;
+    if (children.some(record => record.location && record.location.settledAt === null)) {
+      await this.remote.pushRosters(await this.remoteCaller(params), signal);
+    }
   }
 
   async resolveGitArcPeer(input: { cwd: string; parentThreadId: WorkbenchThreadId; name: string }) {
     const records = await this.ownedRecords({ cwd: input.cwd, callerThreadId: input.parentThreadId, name: input.name });
     const record = records[0];
     if (!record) throw new Error("The owned subagent is unavailable.");
+    if (record.location) throw new Error(`Subagent ${record.name} works in another folder; Git claims cannot move between folders.`);
     await this.assertUnlocked(record.projectId, records);
     return { harness: record.harness, threadId: record.threadId };
   }
@@ -412,8 +456,9 @@ export default class WorkbenchSubagentController {
     const callerThreadId = this.readThreadId(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
+    // canonicalParams already resolved local ids; a remote child's id is checked against relationships below.
     const threadIds = Array.isArray(params.threadIds) || typeof params.threadId === "string"
-      ? requiredThreadIds(params).map(threadId => this.identities.knownThread(ThreadReferenceSchema.parse(threadId)).threadId) : [];
+      ? requiredThreadIds(params).map(threadId => ThreadReferenceSchema.parse(threadId) as unknown as WorkbenchThreadId) : [];
     const rawNames = Array.isArray(params.threadNames) ? params.threadNames : Array.isArray(params.names) ? params.names : [params.threadName ?? params.name];
     const threadNames = rawNames
       .map((value) => typeof value === "string" ? value.trim() : "")
@@ -441,9 +486,11 @@ export default class WorkbenchSubagentController {
     return records;
   }
 
+  /** Remote children's locks live on their own daemons, which refuse what a locked child cannot do. */
   private async assertUnlocked(projectId: ProjectId, records: readonly WorkbenchSubagentRelationship[]) {
     if (!this.threadState) return;
-    const entries = await Promise.all(records.map((record) => this.threadState!.getEntry(projectId, record.harness, record.threadId)));
+    const entries = await Promise.all(records.filter(record => !record.location)
+      .map((record) => this.threadState!.getEntry(projectId, record.harness, record.threadId)));
     const locked = entries.find((entry) => entry?.entryKind === "subagent" && entry.pinned);
     if (locked?.entryKind === "subagent") throw new Error(`Subagent ${locked.name} is locked: this subagent is user-owned and may send you follow-up messages.`);
   }
@@ -463,6 +510,9 @@ export default class WorkbenchSubagentController {
     signal.throwIfAborted();
     const waitingForParent = () => records.find(record => this.messageWaits?.isWaitingFor(record.threadId, record.parentThreadId));
     const messageWaitOutput = (record: WorkbenchSubagentRelationship) => ({ output: `${record.name} is waiting for a message from you.` });
+    if (this.remote && records.some(record => record.location)) {
+      return await this.waitAcrossFolders(params, records, waitingForParent, messageWaitOutput, signal);
+    }
     if (this.threadState) {
       type Ready =
         | { kind: "message"; record: WorkbenchSubagentRelationship }
@@ -564,25 +614,117 @@ export default class WorkbenchSubagentController {
     }
   }
 
+  /**
+   * Waits that include children in other folders read them from their own daemons: each read follows a reported child
+   * change, a local change, a parent message wait, or a slow poll for reports lost while no app relayed.
+   */
+  private async waitAcrossFolders(
+    params: Record<string, unknown>,
+    records: readonly WorkbenchSubagentRelationship[],
+    waitingForParent: () => WorkbenchSubagentRelationship | undefined,
+    messageWaitOutput: (record: WorkbenchSubagentRelationship) => { output: string },
+    signal: AbortSignal,
+  ) {
+    const remote = this.requireRemote();
+    const caller = await this.remoteCaller(params);
+    const self = this.network?.self()?.daemonId ?? null;
+    while (true) {
+      const waiting = waitingForParent();
+      if (waiting) return messageWaitOutput(waiting);
+      const rows = await remote.read(caller, records, signal);
+      for (const record of records) {
+        const threadId = await this.publicThreadId(record.threadId, record.projectId).catch(() => record.threadId);
+        const row = rows.get(record.threadId);
+        if (row && (row.pinned || row.lifecycle.kind !== "working")) {
+          if (row.pinned) return { output: `Subagent ${record.name} (${threadId}) was locked by the user.` };
+          const text = row.output ?? "";
+          const output = record.location!.daemonId === self ? text
+            : formatUntrustedRemoteOutput({ hostname: record.location!.hostname, source: `subagent ${record.name}` }, text);
+          return { output: renderSubagentWaitResultOutput({
+            multiplexed: records.length > 1, name: record.name, outcome: row.needsInteraction ? "needs-interaction" : "finished",
+            output, threadId,
+          }) };
+        }
+        if (record.location || !this.threadState) continue;
+        const entry = await this.threadState.getEntry(record.projectId, record.harness, record.threadId);
+        if (entry?.entryKind !== "subagent" || (!entry.pinned && entry.lifecycle.kind === "working")) continue;
+        if (entry.pinned) return { output: `Subagent ${record.name} (${threadId}) was locked by the user.` };
+        const thread = await this.provider(record.harness).threads.readLatest(record.threadId);
+        const pending = entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"
+          ? await this.pendingQuestionnaire(record) : null;
+        return { output: renderSubagentWaitResultOutput({
+          multiplexed: records.length > 1, name: record.name, outcome: pending ? "needs-interaction" : "finished",
+          output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : this.withQueueNote(record.threadId, renderSubagentTurnOutput(thread, entry.lifecycle)),
+          threadId,
+        }) };
+      }
+      const woken = Promise.withResolvers<void>();
+      const stops = [
+        remote.subscribeChanges(parents => { if (parents.includes(caller.threadId)) woken.resolve(); }),
+        this.messageWaits?.subscribePending(() => { if (waitingForParent()) woken.resolve(); }) ?? (() => undefined),
+        this.threadState?.subscribe((_projectId, entry) => {
+          if (entry.entryKind !== "draft" && records.some(record => record.threadId === entry.identity.threadId)) woken.resolve();
+        }) ?? (() => undefined),
+      ];
+      try { await Promise.race([woken.promise, delay(REMOTE_WAIT_POLL_MS, signal)]); }
+      finally { for (const stop of stops) stop(); }
+      signal.throwIfAborted();
+    }
+  }
+
+  private requireRemote() {
+    if (!this.remote) throw new Error("Subagents in other folders are unavailable in this runtime.");
+    return this.remote;
+  }
+
+  /** The calling parent, as cross-folder subagent commands name it to other daemons. */
+  private async remoteCaller(params: Record<string, unknown>) {
+    const caller = await this.resolveCaller(params);
+    const thread = await this.provider(caller.harness).threads.read(caller.callerThreadId, { background: true });
+    return { threadId: caller.callerThreadId, cwd: caller.cwd, projectId: caller.project.id,
+      title: thread?.name?.trim() || thread?.agentNickname?.trim() || "agent" };
+  }
+
   private withQueueNote(threadId: WorkbenchThreadId, output: string) {
     const note = this.queueReleaseNote?.(threadId);
     return note ? `${output}\n\nQueue: ${note}` : output;
   }
 
-  private async stop(params: Record<string, unknown>) {
+  private async stop(params: Record<string, unknown>, signal: AbortSignal) {
     const records = await this.ownedRecords(params);
     await this.assertUnlocked(records[0]!.projectId, records);
-    for (const record of records) await this.stopThread(record.threadId);
+    for (const record of records) if (!record.location) await this.stopThread(record.threadId);
+    if (records.some(record => record.location)) await this.requireRemote().stop(await this.remoteCaller(params), records, signal);
     return {};
   }
 
   /** Settles every selected child it can and reports each outcome; any child left unsettled fails the call with the full receipt. */
-  private async settle(params: Record<string, unknown>) {
+  private async settle(params: Record<string, unknown>, signal: AbortSignal) {
     const threadState = this.threadState;
     if (!threadState) throw new Error("Subagent lifecycle state is unavailable.");
-    const records = await this.ownedRecords(params);
-    await this.assertUnlocked(records[0]!.projectId, records);
+    const owned = await this.ownedRecords(params);
+    await this.assertUnlocked(owned[0]!.projectId, owned);
     const handover = params.handover === true;
+    // Children in other folders settle on their own daemons; their Git claims cannot cross folders, so handover refuses them.
+    const remoteReceipt: SubagentSettleReceipt = { settled: [], blocked: [] };
+    for (const record of owned.filter(item => item.location)) {
+      const target = { name: record.name, threadId: record.threadId };
+      if (handover) {
+        remoteReceipt.blocked.push({ ...target, reason: "works in another folder; handover cannot move Git claims between folders. Have it propose its own work, then settle without handover." });
+        continue;
+      }
+      try {
+        await this.requireRemote().settle(await this.remoteCaller(params), record, signal);
+        remoteReceipt.settled.push(target);
+      } catch (error) {
+        remoteReceipt.blocked.push({ ...target, reason: error instanceof Error ? error.message : "could not be settled." });
+      }
+    }
+    const records = owned.filter(item => !item.location);
+    if (!records.length) {
+      if (remoteReceipt.blocked.length) throw new Error(renderSubagentSettleOutput(remoteReceipt));
+      return remoteReceipt;
+    }
     const parent = handover ? {
       harness: WorkbenchHarnessSchema.parse(params.callerHarness),
       threadId: this.readThreadId(params, "callerThreadId"),
@@ -599,7 +741,7 @@ export default class WorkbenchSubagentController {
       await delay(POLL_INTERVAL_MS);
       if (!this.active) throw new Error("Subagent controller is draining for runtime reload.");
     }
-    const receipt: SubagentSettleReceipt = { settled: [], blocked: [] };
+    const receipt: SubagentSettleReceipt = { settled: [...remoteReceipt.settled], blocked: [...remoteReceipt.blocked] };
     for (const record of records) {
       const target = { name: record.name, threadId: record.threadId };
       if (working.includes(record)) {
@@ -618,6 +760,10 @@ export default class WorkbenchSubagentController {
       const { accepted } = await threadState.mutate({ identity: { harness: record.harness, threadId: record.threadId }, method: "workbench/thread-state/settle", projectId: record.projectId });
       if (accepted) receipt.settled.push({ ...target, ...moved ? { handover: moved } : {} });
       else receipt.blocked.push({ ...target, reason: await this.settlementRefusal(record, await entryOf(record)) });
+    }
+    // Remote settles push rosters themselves; settled local siblings must leave remote children's rosters too.
+    if (receipt.settled.some(settled => records.some(record => record.threadId === settled.threadId))) {
+      await this.pushRostersIfRemote(params, signal);
     }
     if (receipt.blocked.length) throw new Error(renderSubagentSettleOutput(receipt));
     return receipt;

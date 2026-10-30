@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchDaemonRequestOwners: the owners daemon request handlers call.
- * - WorkbenchBrowseSessionPort/ProviderRuntimePort/InstallationUpdatePort: ports that register and retire with their own reload nodes.
+ * - WorkbenchBrowseSessionPort/WorkbenchNetworkPort/ProviderRuntimePort/InstallationUpdatePort: ports that register and retire with
+ *   their own reload nodes.
  * - DaemonRequestContext: what one handler receives besides its params.
  * - DaemonHandledMethod/DaemonRequestHandlers/defineDaemonRequestHandlers: the daemon methods this controller's handlers own, and their handler maps.
  * - InvalidParamsError: a request whose params are wrong (JSON-RPC -32602).
@@ -35,6 +36,17 @@ import type WorkbenchWorkingTreeController from "../git/WorkbenchWorkingTreeCont
 export interface WorkbenchBrowseSessionPort {
   controlSession(params: object): Promise<object>;
   listSessions(params: object): Promise<object>;
+}
+
+/** App-only network requests: relayed calls from other daemons' threads, inbound grants and requesters' approval history. */
+export interface WorkbenchNetworkPort {
+  execute(params: import("workbench-shared/workbench/network/network-relay-contracts").RelayExecuteParams, signal: AbortSignal):
+    Promise<import("workbench-shared/workbench/network/network-remote-calls").RemoteCallOutcome>;
+  createGrant(grant: import("workbench-shared/workbench/network/network-grants").NetworkGrantCreate):
+    Promise<import("workbench-shared/workbench/network/network-grants").NetworkGrant>;
+  listGrants(): Promise<import("workbench-shared/workbench/network/network-grants").NetworkGrant[]>;
+  revokeGrants(revoke: import("workbench-shared/workbench/network/network-grants").NetworkGrantRevoke): Promise<number>;
+  revokeHistory(threadId: string, entryId: string): Promise<boolean>;
 }
 
 export type ProviderRuntimePort = Pick<import("../providers/ProviderRuntimeController").default, "read" | "install">;
@@ -75,6 +87,9 @@ export interface DaemonRequestContext {
   owners: WorkbenchDaemonRequestOwners;
   /** Null while its node reloads. */
   browse(): WorkbenchBrowseSessionPort | null;
+  network(): WorkbenchNetworkPort | null;
+  /** Aborts when the caller cancels the request. */
+  signal: AbortSignal;
   installationUpdate(): InstallationUpdatePort | null;
   providerRuntimes(): ProviderRuntimePort | null;
 }

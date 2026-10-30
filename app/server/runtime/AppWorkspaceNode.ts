@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default AppWorkspaceNode: own cross-daemon connections, queries, draft launch, thread pins and snoozes, peer Git sync and presentation import.
+ * - default AppWorkspaceNode: own cross-daemon connections, queries, draft launch, thread pins and snoozes, peer Git sync, the agent
+ *   relay and presentation import.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
@@ -10,6 +11,7 @@ import WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
 import WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
 import WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import WorkbenchGitPeerRelay from "../workspace/WorkbenchGitPeerRelay";
+import WorkbenchAgentRelay from "../workspace/WorkbenchAgentRelay";
 import WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController";
 import WorkbenchThreadPlacementController from "../state/WorkbenchThreadPlacementController";
 import type { AppProcessContext } from "./app-process-context";
@@ -26,13 +28,14 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     const warn = (message: string) => build.get("logger").error("app", message);
     // Browser frames for `wb socket spy`: recorded by the HTTP node's sockets, read through the attached daemon.
     const socketTraffic = new WebSocketTrafficBuffer();
-    // Peer sync needs the sources it answers through, so their peer fetch requests reach it once it exists.
-    let gitPeers: WorkbenchGitPeerSync | null = null;
+    // The relay answers through the sources it is built from, so their requests reach it once it exists.
+    let agentRelay: WorkbenchAgentRelay | null = null;
+    const relayStarting = (): never => { throw new Error("The app relay is starting."); };
     const sources = new WorkbenchDaemonSources({
       network: build.get("network"), warn, traffic: socketTraffic,
-      answerPeerFetch: async (daemonId, question) => {
-        if (!gitPeers) throw new Error("Peer sync is starting.");
-        return await gitPeers.fetchForAgent(daemonId, question);
+      relay: {
+        answer: async (source, request, accept) => await (agentRelay ?? relayStarting()).answer(source, request, accept),
+        presence: (source, standby) => (agentRelay ?? relayStarting()).presence(source, standby),
       },
     });
     const workspaceThreads = new WorkbenchWorkspaceThreads({ sources, presentation, warn, canProject: canAdmit });
@@ -49,8 +52,15 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       sources, presentation, logger: build.get("logger"), canAdmit,
     });
     const gitPeerRelay = new WorkbenchGitPeerRelay({ sources });
-    const peerSync = gitPeers = new WorkbenchGitPeerSync({ sources, workspace, relay: gitPeerRelay, warn });
+    const peerSync = new WorkbenchGitPeerSync({ sources, workspace, relay: gitPeerRelay, warn });
+    const relayLifetime = new AbortController();
+    const relay = agentRelay = new WorkbenchAgentRelay({
+      sources, threads: workspaceThreads, workspace,
+      fetchPeer: (daemonId, question) => peerSync.fetchForAgent(daemonId, question),
+      signal: relayLifetime.signal,
+    });
     const dispose = async () => {
+      relayLifetime.abort(new Error("The app relay is reloading."));
       peerSync.dispose();
       gitPeerRelay.dispose();
       const importing = presentationImport.close();
@@ -82,6 +92,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       }),
       registrations: {
         sources, socketTraffic, workspace, workspaceThreads, threadPlacements, workspaceDrafts, gitPeers: peerSync, presentationImport,
+        agentRelay: relay,
       },
       start: () => {
         workspace.start();
@@ -96,7 +107,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   },
   description: "Reload app-owned daemon connections, workspace queries and semantic operations.",
   lifecycle: "handoff",
-  provides: ["sources", "socketTraffic", "workspace", "workspaceThreads", "threadPlacements", "workspaceDrafts", "gitPeers", "presentationImport"],
+  provides: ["sources", "socketTraffic", "workspace", "workspaceThreads", "threadPlacements", "workspaceDrafts", "gitPeers", "presentationImport", "agentRelay"],
   requires: ["network", "presentation", "logger"],
   safeAll: false,
   scope: "client:workspace",

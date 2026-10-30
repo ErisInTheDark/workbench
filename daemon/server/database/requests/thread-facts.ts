@@ -1,9 +1,12 @@
 /*
  * Exports:
  * - threadFactRequests: database requests for thread-owned facts: skills, instruction selection, goals, vis, todos, addressed feedback,
- *   summary fact seeds and batched runtime facts.
+ *   summary fact seeds (including networked daemons) and batched runtime facts.
  */
 import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchNetworkHistoryStore from "../../network/WorkbenchNetworkHistoryStore.ts";
+import WorkbenchSubagentRelationshipRepository from "../thread-state/WorkbenchSubagentRelationshipRepository.ts";
 import WorkbenchThreadAddressedFeedbackStore, { type ThreadAddressedFeedbackCommand } from "../feedback/WorkbenchThreadAddressedFeedbackStore.ts";
 import WorkbenchThreadGoalStore, { type ThreadGoalCommand } from "../goals/WorkbenchThreadGoalStore.ts";
 import WorkbenchThreadSkillStore, { type ThreadSkillCommand } from "../skills/WorkbenchThreadSkillStore.ts";
@@ -32,7 +35,7 @@ export const threadFactRequests = {
   executeThreadAddressedFeedback: defineDatabaseRequest({
     run: ({ database }, command: ThreadAddressedFeedbackCommand) => new WorkbenchThreadAddressedFeedbackStore(database).execute(command),
   }),
-  /** Every thread's stored summary facts (required todo and addressed feedback counts) in one read. */
+  /** Every thread's stored summary facts (required todo and addressed feedback counts, networked daemons) in one read. */
   readThreadSummaryFactSeeds: defineDatabaseRequest({
     read: "core",
     run: ({ database }) => {
@@ -42,6 +45,13 @@ export const threadFactRequests = {
       };
       seed(new WorkbenchThreadTodoStore(database).requiredCounts(), "requiredTodoCount");
       seed(new WorkbenchThreadAddressedFeedbackStore(database).counts(), "addressedFeedbackCount");
+      const networked = new Map(Object.entries(new WorkbenchNetworkHistoryStore(database).daemonIds()));
+      for (const [threadId, parentDaemonId] of Object.entries(new WorkbenchSubagentRelationshipRepository(database).remoteParentDaemonIds())) {
+        networked.set(threadId, [...new Set([...networked.get(threadId) ?? [], parentDaemonId])].sort());
+      }
+      for (const [threadId, networkDaemonIds] of networked) {
+        facts.set(threadId, { ...facts.get(threadId), networkDaemonIds: DaemonIdSchema.array().parse(networkDaemonIds) });
+      }
       return facts as ReadonlyMap<string, ThreadSummaryFacts>;
     },
   }),

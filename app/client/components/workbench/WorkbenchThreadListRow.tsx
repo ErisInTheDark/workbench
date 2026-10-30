@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadListRowEntry: a placed row, by key: a listed slot whose facts the row reads itself, or a folder-sidebar entry.
  * - ThreadListRowContext: list-wide state and actions every row of one list shares.
- * - default WorkbenchThreadListRow: one sidebar thread row that reads its own facts, attention and actions, so one thread's activity re-renders only its row.
+ * - default WorkbenchThreadListRow: one sidebar thread row that reads its own facts, attention and actions, so one thread's activity re-renders only its row; rows networked beyond this app's reach do not open.
  */
 "use client";
 
@@ -35,6 +35,9 @@ import Draggable from "./drag/Draggable";
 import { useWorkbenchDrag } from "./drag/workbench-drag-context";
 import { useThread } from "./use-thread";
 import { useThreads } from "./use-threads";
+import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-grants";
+import { useNetworkReach } from "../../workbench/network/use-network-reach";
+import { NetworkIcon } from "./workbench-icons";
 import WorkbenchThreadComposerDropTarget from "./WorkbenchThreadComposerDropTarget";
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
 import WorkbenchThreadListItem, { WorkbenchPendingThreadListItem } from "./WorkbenchThreadListItem";
@@ -118,6 +121,10 @@ export default function WorkbenchThreadListRow({
 }) {
   const { entry, qualified, member } = useRowFacts(listEntry, Boolean(context.logicalProjects), context.attachedDaemonId);
   const attentionLabel = useThread.attention(entry && entry.entryKind !== "draft" ? entry.identity.threadId : null);
+  const networkDaemonIds = useThread.summary(entry && entry.entryKind !== "draft" ? entry.identity.threadId : null)?.summary.facts.networkDaemonIds;
+  const { reach, hostname } = useNetworkReach();
+  // A thread networked with daemons this app cannot reach shows its summary row only; the app refuses its detail anyway.
+  const missingDaemons = ThreadNetworkAccess.missing(networkDaemonIds, reach);
   const activeDragPayload = useWorkbenchDrag.activePayload();
   const { threadKey, projectId: entryProjectId } = listEntry;
   const ctx = context;
@@ -145,11 +152,16 @@ export default function WorkbenchThreadListRow({
 
   const logicalProject = qualified && ctx.logicalProjects?.find(item => item.id === qualified.logicalProjectId);
   const sourceProjectId = qualified?.location.projectId ?? ProjectIdSchema.parse(entryProjectId);
-  const href = ctx.getThreadHref ? ctx.getThreadHref(target, sourceProjectId) : ctx.projectHref(qualified
+  const href = missingDaemons.length ? undefined : ctx.getThreadHref ? ctx.getThreadHref(target, sourceProjectId) : ctx.projectHref(qualified
     ? target.kind === "provider"
       ? createLogicalExistingThreadRoute(null, target)
       : createLogicalThreadRoute(null, qualified.logicalProjectId, qualified.location, target)
     : createHomeThreadRoute(entryProjectId, target));
+  const restrictedDetails = missingDaemons.length ? (
+    <p className="m-0 flex items-center gap-1.5 text-sm text-fg/muted">
+      <NetworkIcon size={14} />Networked with {missingDaemons.map(hostname).join(", ")}; open it from an app that reaches them.
+    </p>
+  ) : null;
   const eyebrow = ctx.showProjectEyebrow ? logicalProject ?? project ?? undefined : undefined;
 
   if (presentation === "preview") {
@@ -283,7 +295,7 @@ export default function WorkbenchThreadListRow({
       showActions={!readOnly}
       showPinPriorityIcon
       tabIndex={selected || (!ctx.hasSelectedEntry && ctx.firstThreadKey === threadKey) ? 0 : -1}
-      tooltipDetails={ctx.renderThreadTooltipDetails?.(entry)}
+      tooltipDetails={restrictedDetails ?? ctx.renderThreadTooltipDetails?.(entry)}
     />
   );
   return (

@@ -4,7 +4,7 @@
 Subagents require **Feature Activation**. 
 
 <!-- MCP-only agents cannot `cd` before a call, so a cwd-only rule was impossible for them to follow; `workdir` is their equivalent of the CLI cwd. -->
-A subagent's directory is its creating call's cwd, or `workdir` when given; target the intended project directory.
+A subagent's directory is its creating call's cwd, or `workdir` when given; target the intended project directory. `folder` places it in another folder of the project, on this or another daemon, after user approval; list that folder's profiles first. Handover never crosses folders.
 
 ### managing subagents
 

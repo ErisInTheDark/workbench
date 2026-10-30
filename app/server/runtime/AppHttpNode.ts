@@ -40,6 +40,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       threadPlacements: build.get("threadPlacements"),
       workspaceDrafts: build.get("workspaceDrafts"),
       gitPeers: build.get("gitPeers"),
+      agentRelay: build.get("agentRelay"),
       presentationImport: build.get("presentationImport"),
       supportsAppWebSockets: context.supportsAppWebSockets === true,
     });
@@ -59,7 +60,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   description: "Reload app routes, static SPA serving, and browser diagnostic admission.",
   lifecycle: "handoff",
   provides: ["http"],
-  requires: ["updatePrediction", "logger", "state", "presentation", "network", "sources", "socketTraffic", "workspace", "workspaceThreads", "threadPlacements", "workspaceDrafts", "gitPeers", "presentationImport"],
+  requires: ["updatePrediction", "logger", "state", "presentation", "network", "sources", "socketTraffic", "workspace", "workspaceThreads", "threadPlacements", "workspaceDrafts", "gitPeers", "agentRelay", "presentationImport"],
   safeAll: false,
   scope: "client:http",
 });

@@ -2,8 +2,10 @@
  * Exports:
  * - IsolatedWorkbenchOptions: select external identities, private shell runtime source, live output and readiness deadlines.
  * - IsolatedWorkbenchProcessEvent: typed child output or structured daemon diagnostics.
+ * - IsolatedWorkbenchPeerDaemon: another isolated installation's daemon, as one app reaches it over loopback.
  * - IsolatedWorkbenchSignalCleanup: settle registered scenario cleanup before a signalled test process exits.
- * - default IsolatedWorkbench: boot current source with private storage, install provider runtimes, and own its socket/process cleanup.
+ * - default IsolatedWorkbench: boot current source with private storage, install provider runtimes, reach other isolated daemons, and own
+ *   its socket/process cleanup.
  * - removeIsolatedWorkbenchWorkspace: clean one validated stopped workspace.
  * - stopIsolatedWorkbenchProcesses: retire fixture processes while collecting every stop result.
  * - CLAUDE_NATIVE_INSTRUCTION_SENTINEL: catch native CLAUDE.md leakage into managed prompts.
@@ -101,6 +103,7 @@ interface IsolatedWorkbenchSignalTarget {
 }
 
 type IsolatedWorkbenchCleanup = () => Promise<void>;
+export interface IsolatedWorkbenchPeerDaemon { daemonId: string; hostname: string; origin: string }
 type OpenCodeFixtureIdentity = {
   configDirectory: string;
   configContent?: string;
@@ -207,6 +210,8 @@ export default class IsolatedWorkbench {
   private readonly cancellation = new AbortController();
   private readonly serviceSession = randomUUID();
   private readonly processLogLineStarts = new Map<string, boolean>();
+  /** Other isolated installations' daemons this one's app reaches, standing in for tailnet discovery. */
+  private peerDaemons: readonly IsolatedWorkbenchPeerDaemon[] = [];
   readonly signal: AbortSignal;
   private constructor(
     private readonly fixtures: string,
@@ -262,6 +267,17 @@ export default class IsolatedWorkbench {
   get daemonId() {
     assert.ok(this.attachedId, "Scenario must resolve its attached installation through the app");
     return this.attachedId;
+  }
+
+  /** This installation's daemon as another isolated app reaches it over loopback. */
+  peerDaemon(hostname: string): IsolatedWorkbenchPeerDaemon {
+    return { daemonId: this.daemonId, hostname, origin: new URL(this.origin).origin };
+  }
+
+  /** Let this installation's app reach other isolated daemons; set before `start` launches the app. */
+  reachPeers(peers: readonly IsolatedWorkbenchPeerDaemon[]) {
+    assert.equal(this.appChild, null, "Peer daemons must be named before the app starts");
+    this.peerDaemons = peers;
   }
   createAppRpcClient() {
     return new WorkbenchAppRpcClient({
@@ -596,6 +612,7 @@ stream_max_retries = 0
         } : {}),
       } : {}),
       ...(this.stateHome === null ? {} : { XDG_STATE_HOME: this.stateHome }),
+      ...(this.peerDaemons.length ? { WORKBENCH_SCENARIO_PEER_DAEMONS: JSON.stringify(this.peerDaemons) } : {}),
     };
     // These children represent a separate installation, never the agent's live caller.
     for (const key of ["WORKBENCH_THREAD_ID", "CODEX_THREAD_ID", "WORKBENCH_DESKTOP_PROTOCOL", "WORKBENCH_APP_PORT",

@@ -19,6 +19,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "mcpServers",
   "messages",
   "modules",
+  "network",
   "projectCatalog",
   "projectSnapshot",
   "projectFiles",

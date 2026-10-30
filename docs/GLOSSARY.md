@@ -56,3 +56,6 @@
 | tool docs | `<docs tools="a b">` instruction regions for specific wb tools; render only when a listed tool is visible to the caller; Stats → Tools charges their tokens evenly to those tools |
 | MCP server | User-configured external MCP server (http, npm or cli), global or scoped to one project; agents reach its allowed tools only through `mcp_tools`/`mcp_call`, identically across providers |
 | thread MCP server | MCP server URL an agent connected with `mcp_connect` after user approval; only its thread sees it, until the turn ends |
+| network grant | A target daemon's record letting one thread on another daemon reach one exact thread, folder or feedback source there; written only by an app executing the user's approval |
+| relay standby | An app's connection to an awake daemon held only so its agents can relay through the app; never keeps the daemon awake |
+| sibling roster | A cross-folder child's copy of its unsettled siblings, pushed by its parent's daemon; authorizes sibling messages without asking the parent |

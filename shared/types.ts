@@ -944,6 +944,10 @@ export interface WorkbenchSubagentRelationship {
   cwd: string;
   directSubagentIndex: number;
   harness: WorkbenchHarness;
+  /** Parent's view: set when the child lives in another folder or on another daemon; `cwd` is that folder's root. */
+  location?: { daemonId: DaemonId; hostname: string; projectId: ProjectId; settledAt: number | null } | undefined;
+  /** Child's view: set when the parent lives on another daemon. */
+  parent?: { daemonId: DaemonId; hostname: string } | undefined;
   name: string;
   parentThreadId: WorkbenchThreadId;
   profileId: string;
@@ -1153,6 +1157,7 @@ export interface WorkbenchUserInputRequest {
   mcpTool?: WorkbenchUserInputMcpToolContext | undefined;
   mcpAuthorization?: WorkbenchUserInputMcpAuthorizationContext | undefined;
   mcpConnection?: WorkbenchUserInputMcpConnectionContext | undefined;
+  networkAccess?: import("./workbench/network/network-grants.ts").WorkbenchUserInputNetworkAccessContext | undefined;
   questions: WorkbenchUserInputQuestion[];
 }
 

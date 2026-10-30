@@ -20,6 +20,8 @@ import type { WorkbenchFileChangeItem } from "../../thread/workbench-file-change
 import { withWorkbenchInputState } from "../../thread/thread-input-item.ts";
 import type { WorkbenchToolOutput } from "../../thread/thread-tool-output.ts";
 import type { WorkbenchTranscriptSnapshot } from "./workbench-transcript-contract.ts";
+import { NetworkTargetSchema } from "../../network/network-grants.ts";
+import { conformToZodSchema } from "../../zod-schema-conformer.ts";
 
 export interface WorkbenchProjectedInteractionItem {
   errorText: string | null;
@@ -128,6 +130,13 @@ function parseJson(value: string, table: string, itemId?: string): JsonValue {
   } catch {
     return fail("invalidJson", table, itemId);
   }
+}
+
+/** A corrupt stored network target drops only the network context, leaving an ordinary answered questionnaire. */
+function readNetworkTarget(value: string) {
+  let parsed: unknown = null;
+  try { parsed = JSON.parse(value); } catch { /* conformed to null below */ }
+  return conformToZodSchema(NetworkTargetSchema.nullable(), parsed, null).data;
 }
 
 function one<Row>(
@@ -446,11 +455,14 @@ function interactionItem(
   const mcpAuthorization = mcpAuthorizationRows.length ? one(mcpAuthorizationRows, "threadInteractionMcpAuthorizations", itemId) : null;
   const mcpConnectionRows = indexes.interactionMcpConnections.get(itemId) ?? [];
   const mcpConnection = mcpConnectionRows.length ? one(mcpConnectionRows, "threadInteractionMcpConnections", itemId) : null;
+  const networkAccessRows = indexes.interactionNetworkAccess.get(itemId) ?? [];
+  const networkTarget = networkAccessRows.length ? readNetworkTarget(one(networkAccessRows, "threadInteractionNetworkAccess", itemId).target) : null;
   return {
     errorText: owner.error_text,
     id: itemId,
     request: {
       ...(approval ? { approval } : {}),
+      ...(networkTarget ? { networkAccess: { target: networkTarget } } : {}),
       ...(mcpTool ? { mcpTool: { server: mcpTool.server, tool: mcpTool.tool, title: mcpTool.title, description: mcpTool.description } } : {}),
       ...(mcpAuthorization ? { mcpAuthorization: { server: mcpAuthorization.server, host: mcpAuthorization.host } } : {}),
       ...(mcpConnection ? { mcpConnection: { server: mcpConnection.server, url: mcpConnection.url } } : {}),
@@ -584,6 +596,7 @@ function createIndexes(rows: Rows, sourceIdsByItemId: ReadonlyMap<number, string
     interactionMcpTools: byItem(rows.threadInteractionMcpTools ?? [], sourceIdsByItemId),
     interactionMcpAuthorizations: byItem(rows.threadInteractionMcpAuthorizations ?? [], sourceIdsByItemId),
     interactionMcpConnections: byItem(rows.threadInteractionMcpConnections ?? [], sourceIdsByItemId),
+    interactionNetworkAccess: byItem(rows.threadInteractionNetworkAccess ?? [], sourceIdsByItemId),
     assistantMessages: byItem(rows.threadItemAssistantMessages, sourceIdsByItemId),
     callableSources: byItem(rows.threadOperationCallableToolSources, sourceIdsByItemId),
     collaborationReceivers: byItem(rows.threadCollaborationReceivers, sourceIdsByItemId),

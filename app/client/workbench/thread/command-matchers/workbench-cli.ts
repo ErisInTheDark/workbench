@@ -475,6 +475,21 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     },
   }),
   CommandMatcher({
+    id: "workbench-cli.network-request",
+    match: ({ stage, summaryParts }) => summaryParts.length || !/^wb(?:\.cmd)?\s+network\s+request(?=\s|$)/iu.test(stage.text.trim())
+      ? null
+      : getWorkbenchCommandRendering("network_request", {})?.result ?? null,
+  }),
+  CommandMatcher({
+    id: "workbench-cli.thread-summary",
+    match: ({ stage, summaryParts }) => {
+      const normalized = stage.text.trim();
+      if (summaryParts.length || !/^wb(?:\.cmd)?\s+thread\s+summary(?=\s|$)/iu.test(normalized)) return null;
+      const threadIds = [...normalized.matchAll(/--thread\s+(\S+)/gu)].map(match => match[1]!);
+      return getWorkbenchCommandRendering("thread_summary", { threadIds })?.result ?? null;
+    },
+  }),
+  CommandMatcher({
     id: "workbench-cli.mcp",
     match: ({ stage, summaryParts }) => {
       if (summaryParts.length) return null;

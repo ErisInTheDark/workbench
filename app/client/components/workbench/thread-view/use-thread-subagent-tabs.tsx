@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default useThreadSubagentTabs: a thread's subagent tab strip: stable tab order, settled-tab reveal, labels, and pin/settle/link actions.
+ * - default useThreadSubagentTabs: a thread's subagent tab strip: stable tab order, settled-tab reveal, labels (naming the host of
+ *   children on other daemons), and pin/settle/link actions.
  */
 "use client";
 
@@ -22,6 +23,7 @@ import {
 } from "../../../workbench/thread/thread-subagents";
 import ThreadSubagentTabMemory, { ThreadSubagentTabMemoryContext } from "../../../workbench/thread/ThreadSubagentTabMemory";
 import ThreadAgentTabs from "./ThreadAgentTabs";
+import { useNetworkReach } from "../../../workbench/network/use-network-reach";
 
 /**
  * Order and reveal persist in the shell's memory: the whole thread surface remounts on every tab switch. Tabs keep their
@@ -78,6 +80,7 @@ export default function useThreadSubagentTabs ({
     return getSubagentThreadIds(getSubagentTabLayout(subagents, { order: order.order, revealedThreadIds }).visible);
   }, [activeThreadId, areSettledVisible, order, subagents, thread.id]);
 
+  const { hostname } = useNetworkReach();
   const tabs = useMemo(() => {
     const labelFor = (threadId: string) => getThreadAgentTabLabel(relatedThreadsById[threadId], getSubagentSummary(subagents, threadId));
     const labelCounts = new Map<string, number>();
@@ -91,16 +94,18 @@ export default function useThreadSubagentTabs ({
       const nextCount = (usedLabels.get(label) ?? 0) + 1;
       usedLabels.set(label, nextCount);
       const subagent = getSubagentSummary(subagents, threadId);
+      // Children in other folders or on other daemons name where they run.
+      const host = subagent?.location ? ` · ${hostname(subagent.location.daemonId)}` : "";
       return {
         id: threadId,
         isLoading: !relatedThreadsById[threadId],
         isPinned: Boolean(subagent?.pinned),
         subagent,
-        suffix: (labelCounts.get(label) ?? 0) > 1 ? ` ${nextCount}` : "",
+        suffix: `${(labelCounts.get(label) ?? 0) > 1 ? ` ${nextCount}` : ""}${host}`,
         thread: relatedThreadsById[threadId] ?? null,
       };
     });
-  }, [relatedThreadsById, subagents, visibleThreadIds]);
+  }, [hostname, relatedThreadsById, subagents, visibleThreadIds]);
 
   const toggleSettledVisible = useCallback(() => {
     const visible = !areSettledVisible;

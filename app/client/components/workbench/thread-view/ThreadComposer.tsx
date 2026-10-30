@@ -48,6 +48,8 @@ import { isWorkbenchThreadSettlementAvailable, isWorkbenchThreadSnoozeAvailable,
 import PrimaryButton from "../../ui/PrimaryButton";
 import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SettleThreadIcon, SnoozedThreadIcon, SquareIcon } from "../workbench-icons";
 import { useWorkbenchClientController } from "../workbench-client-context";
+import { useNetworkReach } from "../../../workbench/network/use-network-reach";
+import { NetworkAccessDecision } from "workbench-shared/workbench/network/network-grants";
 import { useThread } from "../use-thread";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
 import AutoCompactSendMenu from "./AutoCompactSendMenu";
@@ -78,7 +80,7 @@ import ThreadProfileEditorController, { type ProfileEditorSection } from "./Thre
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import { formatHarnessLabel } from "./harness-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
-import { ThreadMcpRequestPanel, type ThreadMcpRequestSubject } from "./ThreadMcpToolRequest";
+import { ThreadPermissionRequestPanel, type ThreadPermissionRequestSubject } from "./ThreadPermissionRequest";
 import {
   MCP_TOOL_REQUEST_APPROVE, MCP_TOOL_REQUEST_DENY, MCP_TOOL_REQUEST_QUESTION_ID,
 } from "workbench-shared/workbench/mcp/mcp-tool-request";
@@ -213,6 +215,8 @@ export default function ThreadComposer ({
   const questionnaire = useComposer.questionnaire(projectId, questionnaireTarget, threadController);
   const sidebarEntry = threadController.entry;
   const client = useWorkbenchClientController();
+  const workspaceClient = client.mounted?.workspace ?? null;
+  const networkReach = useNetworkReach();
   const summary = useThread.summary(sidebarEntry?.entryKind === "thread" ? sidebarEntry.identity.threadId : null);
   const threadState = useMemo(() => ({ status: thread.status, turns: [...turns] }), [thread.status, turns]);
   const threadLifecycle = sidebarEntry?.lifecycle ?? null;
@@ -683,12 +687,15 @@ export default function ThreadComposer ({
     </button>
   ) : null;
 
-  // MCP enable and sign-in requests are answered with their own Approve/Deny controls instead of the questionnaire form.
+  // Permission requests (MCP enable, sign-in, connect, network access) are answered with their own Approve/Deny controls.
   const pendingRequest = visiblePendingUserInputRequest?.request;
-  const pendingMcpSubject: ThreadMcpRequestSubject | null = pendingRequest?.mcpTool
+  const pendingMcpSubject: ThreadPermissionRequestSubject | null = pendingRequest?.mcpTool
     ? { kind: "tool", tool: pendingRequest.mcpTool }
     : pendingRequest?.mcpAuthorization ? { kind: "authorization", authorization: pendingRequest.mcpAuthorization }
-      : pendingRequest?.mcpConnection ? { kind: "connection", connection: pendingRequest.mcpConnection } : null;
+      : pendingRequest?.mcpConnection ? { kind: "connection", connection: pendingRequest.mcpConnection }
+        : pendingRequest?.networkAccess ? {
+          kind: "network", target: pendingRequest.networkAccess.target, reachable: networkReach.reach.has(pendingRequest.networkAccess.target.daemonId),
+        } : null;
   const questionnairePreviewText = visiblePendingUserInputRequest
     ? getThreadUserInputRequestPreviewText(visiblePendingUserInputRequest.request)
     : "";
@@ -727,7 +734,7 @@ export default function ThreadComposer ({
           <SurfacePanels activeKey={activeComposerMode}>
             {visiblePendingUserInputRequest ? (
               <SurfacePanels.Panel active={isQuestionnairePanelActive}>
-                {pendingMcpSubject ? <ThreadMcpRequestPanel
+                {pendingMcpSubject ? <ThreadPermissionRequestPanel
                   key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
                   subject={pendingMcpSubject}
                   reason={visiblePendingUserInputRequest.request.questions[0]?.question ?? ""}
@@ -737,7 +744,13 @@ export default function ThreadComposer ({
                   } : null}
                   onDecide={async approved => {
                     try {
-                      await questionnaire.submit({ answers: { [MCP_TOOL_REQUEST_QUESTION_ID]: {
+                      // Approval writes a grant on the target daemon, so it goes through the app rather than a plain answer.
+                      if (pendingMcpSubject.kind === "network" && approved) {
+                        if (!workspaceClient) throw new Error("The app connection is unavailable.");
+                        await workspaceClient.approveNetwork(thread.id, questionnaireRequestKey);
+                        return;
+                      }
+                      await questionnaire.submit(pendingMcpSubject.kind === "network" ? NetworkAccessDecision.response(false) : { answers: { [MCP_TOOL_REQUEST_QUESTION_ID]: {
                         answers: [approved ? MCP_TOOL_REQUEST_APPROVE : MCP_TOOL_REQUEST_DENY],
                       } } }, buildPendingUserInputRequestSubmissionOptions(turns, visiblePendingUserInputRequest));
                     } catch (submitError) {

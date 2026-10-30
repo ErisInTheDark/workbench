@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - WorkbenchAppRpcRequestSchema/WorkbenchAppRpcRequest/WorkbenchAppRpcIntent: bounded browser-to-app JSON intents (incl. peer Pull/Send).
+ * - WorkbenchAppRpcRequestSchema/WorkbenchAppRpcRequest/WorkbenchAppRpcIntent: bounded browser-to-app JSON intents (incl. peer Pull/Send
+ *   and agent network approvals and grants).
  * - WorkbenchAppRuntimeResponseSchema: validated app reload and frontend projection.
  * - WorkbenchPresentationIntent/WorkbenchPresentationIntentSchema: browser-owned draft edits only.
  * - WorkbenchAppReloadAllRequestSchema/WorkbenchAppPullRequestSchema/WorkbenchAppOperationAdmissionSchema: app-sequenced reload-all and pull intents.
@@ -16,7 +17,10 @@ import { DaemonReloadRequestSchema } from "../workbench/daemon-reload";
 import { DaemonIdSchema } from "../workbench/identity";
 import { GitPeerTransferSchema } from "../workbench/git/git-peer-contracts";
 import { WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema } from "../workbench/workspace/workspace-observation";
-import { WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, WorkspaceDraftLaunchSchema, WorkspaceLayoutRequestSchema, WorkspaceThreadActionSchema } from "../workbench/workspace/workspace-commands";
+import {
+  WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, WorkspaceDraftLaunchSchema,
+  WorkspaceLayoutRequestSchema, WorkspaceThreadActionSchema, WorkspaceNetworkApproveSchema, WorkspaceNetworkGrantsRequestSchema,
+} from "../workbench/workspace/workspace-commands";
 
 const dirtyScope = ReloadDirtScopeSchema.extend({
   dependantScopes: z.array(z.string().regex(WORKBENCH_RELOAD_SCOPE_PATTERN)).default([]),
@@ -64,6 +68,8 @@ export const WorkbenchAppRpcRequestSchema = z.discriminatedUnion("method", [
   z.object({ id, method: z.literal("workspace/retarget"), params: WorkspaceRetargetSchema }).strict(),
   z.object({ id, method: z.literal("workspace/draft/launch"), params: WorkspaceDraftLaunchSchema }).strict(),
   z.object({ id, method: z.literal("workspace/git/peer"), params: GitPeerTransferSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/network/approve"), params: WorkspaceNetworkApproveSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/network/grants"), params: WorkspaceNetworkGrantsRequestSchema }).strict(),
   z.object({
     id, method: z.literal("app/network/action"),
     params: z.object({ action: WorkbenchNetworkActionSchema }).strict(),

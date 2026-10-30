@@ -124,6 +124,7 @@ export default class WorkbenchAppHttpRouter {
     threadPlacements?: WorkbenchThreadPlacementController;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
     gitPeers?: WorkbenchGitPeerSync;
+    agentRelay?: import("../workspace/WorkbenchAgentRelay").default;
     presentationImport?: WorkbenchPresentationImportController;
     runtime?: ConstructorParameters<typeof WorkbenchAppEventSocketController>[0]["runtime"];
     supportsAppWebSockets?: boolean;
@@ -182,7 +183,7 @@ export default class WorkbenchAppHttpRouter {
           sources: options.sources, workspace: options.workspace,
           workspaceThreads: options.workspaceThreads, threadPlacements: options.threadPlacements,
           workspaceDrafts: options.workspaceDrafts,
-          gitPeers: options.gitPeers, traffic: options.socketTraffic,
+          gitPeers: options.gitPeers, agentRelay: options.agentRelay, traffic: options.socketTraffic,
         }) : null;
     this.staticRequests = new StaticHttpRequestController({
       cacheSeconds: 0,

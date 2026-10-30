@@ -261,6 +261,21 @@ const threadInteractionMcpConnectionsHistory = defineTableHistory({
 });
 export const threadInteractionMcpConnections = threadInteractionMcpConnectionsHistory.current;
 
+/** The remote thread, folder or feedback an answered network prompt named, as a `NetworkTarget` JSON conformed on read. */
+const threadInteractionNetworkAccessV1 = defineTable("thread_interaction_network_access", {
+  item_id: integer().primaryKey().references("thread_item_interactions", "item_id", { onDelete: "CASCADE" }),
+  target: text().notNull(),
+});
+const threadInteractionNetworkAccessHistory = defineTableHistory({
+  versions: [tableVersion({
+    schemaVersion: databaseReleases.crossDaemonNetworking.version,
+    table: threadInteractionNetworkAccessV1,
+    migration: createTable(threadInteractionNetworkAccessV1),
+  })],
+  current: threadInteractionNetworkAccessV1,
+});
+export const threadInteractionNetworkAccess = threadInteractionNetworkAccessHistory.current;
+
 export const interactionTables = Object.freeze({
   threadItemWebSearches,
   threadWebSearchQueries,
@@ -274,6 +289,7 @@ export const interactionTables = Object.freeze({
   threadInteractionMcpTools,
   threadInteractionMcpAuthorizations,
   threadInteractionMcpConnections,
+  threadInteractionNetworkAccess,
 });
 
 export type InteractionSchemaRows = {
@@ -293,4 +309,5 @@ export const interactionSchemaHistory = defineSubsystemHistory([
   threadInteractionMcpToolsHistory,
   threadInteractionMcpAuthorizationsHistory,
   threadInteractionMcpConnectionsHistory,
+  threadInteractionNetworkAccessHistory,
 ]);

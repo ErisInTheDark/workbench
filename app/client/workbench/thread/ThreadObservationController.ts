@@ -9,6 +9,7 @@ import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnaps
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { z } from "zod";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
 type WorkbenchObservedThreadTarget = Exclude<WorkbenchThreadRouteTarget, { kind: "new" | "draft" }>;
 
@@ -84,8 +85,14 @@ export default class ThreadObservationController {
     return [...this.observations.values()].flatMap(({ state }) => state.observation ? [state.observation] : []);
   }
 
+  /** The observed root's direct subagents; children living on other daemons carry their daemon as `location`. */
   getSubagents(key: string): WorkbenchSubagentSummary[] {
-    return this.getSnapshot(key).observation?.entries.flatMap(entry => entry.entryKind === "subagent" ? [{
+    const observation = this.getSnapshot(key).observation;
+    const remote = new Map((observation?.remoteSubagents ?? []).map(child => [child.threadId, child.daemonId]));
+    return observation?.entries.flatMap(entry => entry.entryKind === "subagent" ? [{
+      ...(remote.has(entry.identity.threadId) ? { location: {
+        daemonId: remote.get(entry.identity.threadId)!, hostname: "", projectId: ProjectIdSchema.parse(entry.projectId), settledAt: null,
+      } } : {}),
       activityStatus: entry.lifecycle.kind === "working" ? "active" as const : "inactive" as const,
       createdAt: entry.createdAt, cwd: entry.cwd, directSubagentIndex: entry.directSubagentIndex,
       harness: entry.identity.harness, lastActivityAt: entry.activityAt, lifecycle: entry.lifecycle,

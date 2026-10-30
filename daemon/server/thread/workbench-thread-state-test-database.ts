@@ -138,6 +138,10 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
       relationships.activate(parent, reservation, record);
     },
     removeSubagent: async (parent, identifier) => { relationships.remove(parent, identifier); },
+    setRemoteSubagentSettled: async (parent, threadId, settledAt) => relationships.setRemoteSettled(parent, threadId, settledAt),
+    writeSubagentRoster: async (threadId, siblings) => { relationships.writeRoster(threadId, siblings); },
+    readSubagentRoster: async threadId => relationships.readRoster(threadId),
+    readRemoteSubagentParents: async (daemonId, threadId) => relationships.parentsOfRemoteChild(daemonId, threadId),
   };
   const persistence = new WorkbenchThreadStateStore(database);
   return {

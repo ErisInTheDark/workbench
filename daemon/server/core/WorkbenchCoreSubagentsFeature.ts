@@ -17,8 +17,12 @@ import type WorkbenchThreadActionController from "../thread/WorkbenchThreadActio
 import WorkbenchThreadMessageController from "../thread/WorkbenchThreadMessageController";
 import type WorkbenchThreadStateFeature from "../thread/WorkbenchThreadStateFeature";
 import type WorkbenchCoreThreadLookup from "./WorkbenchCoreThreadLookup";
+import type WorkbenchCoreNetworkFeature from "./WorkbenchCoreNetworkFeature";
 import type WorkbenchThreadFactsFeature from "./WorkbenchThreadFactsFeature";
 import type { WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
+
+/** A family message is one quick admission on the target; no prompt can extend it. */
+const FAMILY_MESSAGE_TIMEOUT_MS = 120_000;
 
 export default class WorkbenchCoreSubagentsFeature {
   readonly subagents: WorkbenchSubagentFeature;
@@ -33,17 +37,25 @@ export default class WorkbenchCoreSubagentsFeature {
     projectCatalog: WorkbenchProjectCatalogController;
     profileStore: WorkbenchComposerProfileStore;
     threadState: WorkbenchThreadStateFeature;
-    facts: Pick<WorkbenchThreadFactsFeature, "settlementHold" | "todos">;
+    facts: Pick<WorkbenchThreadFactsFeature, "settlementHold" | "todos" | "networkHistory">;
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
     /** Built after this feature, read at call time. */
     approvals: () => Pick<WorkbenchApprovalController, "list">;
     questionnaires: () => Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver">;
     threadActions: () => Pick<WorkbenchThreadActionController, "stopThread">;
+    network: WorkbenchCoreNetworkFeature;
+    workbenchOrigin: string;
     messageWaitHandoff?: WorkbenchMessageWaitHandoff;
     subagentQueueHandoff?: WorkbenchSubagentQueueHandoff;
   }) {
     const { identities, lookup, projectCatalog, threadState, facts } = ports;
     const subagents = this.subagents = new WorkbenchSubagentFeature({
+      network: ports.network.subagents,
+      workbenchOrigin: ports.workbenchOrigin,
+      resolveProject: async projectId => {
+        const project = await projectCatalog.resolveProjectById(projectId);
+        return { id: project.id, rootPath: project.rootPath, daemonProject: project.kind === "daemon" };
+      },
       messageWaits: {
         isWaitingFor: (caller, sender) => this.messages.isWaitingFor(caller, sender),
         subscribePending: listener => this.messages.subscribePending(listener),
@@ -65,7 +77,11 @@ export default class WorkbenchCoreSubagentsFeature {
       moveTodos: (fromThreadId, toThreadId) => facts.todos.moveAll(fromThreadId, toThreadId),
       provider: harness => lookup.provider(harness),
       liveApprovals: () => ports.approvals().list(),
-      onRelationshipCommitted: (record) => threadState.installSubagentRelationship(record),
+      onRelationshipCommitted: async (record) => {
+        await threadState.installSubagentRelationship(record);
+        // A parent on another daemon networks the child from its first moment, so apps reaching only this daemon see its summary alone.
+        if (record.parent) await facts.networkHistory.refresh(record.threadId);
+      },
       resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
       profileStore: ports.profileStore,
       persistence: ports.database,
@@ -81,7 +97,24 @@ export default class WorkbenchCoreSubagentsFeature {
         subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => threadState.controller.subscribe(listener),
       },
     });
+    const network = ports.network;
     this.messages = new WorkbenchThreadMessageController({
+      network: {
+        self: () => network.relay.self()?.daemonId ?? null,
+        messageFamily: async (caller, daemonId, message) => {
+          await network.family(caller, daemonId, { kind: "message", ...message }, AbortSignal.timeout(FAMILY_MESSAGE_TIMEOUT_MS));
+        },
+        messageThread: async (caller, threadId, message, signal) => {
+          const target = await network.access.resolveOne({ kind: "thread", threadId }, signal);
+          if (target.kind !== "thread") throw new Error(`${threadId} is not a thread.`);
+          await network.access.call(caller, {
+            daemonId: target.daemonId, target: async () => target,
+            reason: `"${caller.title}" wants to message, wait on and read "${target.title}" (${target.projectName}) on ${target.hostname}.`,
+            call: { kind: "message", threadId: target.threadId, ...message },
+          }, signal);
+        },
+        roster: threadId => subagents.readRoster(threadId),
+      },
       identities,
       listSubagents: projectId => subagents.listRelationships(projectId),
       provider: harness => lookup.provider(harness),

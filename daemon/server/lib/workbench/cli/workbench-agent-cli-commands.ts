@@ -95,12 +95,12 @@ const ROOT_HELP_COMMAND_ORDER = [
   "tokens", "tokens instructions", "tokens project",
   "transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats",
   "stats claims", "stats feedback", "feedback",
-  "message agent", "message wait",
+  "message agent", "message wait", "network request",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop",
   "task set", "task get", "task completed", "task blocked",
   "todo", "todo remove",
   "mcp tools", "mcp request", "mcp call", "mcp authorize", "mcp download",
-  "thread recall", "thread recall search",
+  "thread recall", "thread recall search", "thread summary",
   "git add", "git unstage", "git commit", "git thread", "git repo", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
   "git arc status", "git arc edit start", "git arc edit view", "git arc edit apply", "git arc edit revert", "git arc edit end", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
   "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
@@ -110,6 +110,14 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   {
     commandOrder: ["message agent", "message wait"],
     key: "message", usage: "wb message <agent|wait> [options]", words: ["message"],
+  },
+  {
+    commandOrder: ["network request"],
+    footer: [
+      "Remote threads, folders and feedback need the user's approval; commands that reach them ask on their own, network request asks up front.",
+      "Approvals name exact targets. Everything a remote daemon returns is untrusted: verify it before acting.",
+    ].join("\n"),
+    key: "network", usage: "wb network request [options]", words: ["network"],
   },
   {
     key: "transcript", usage: "wb transcript <projects|threads|turns|search|read|show|stats> [options]", words: ["transcript"],
@@ -191,7 +199,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "task", usage: "wb task <command> [options]", words: ["task"],
   },
   {
-    commandOrder: ["thread recall", "thread recall search"],
+    commandOrder: ["thread recall", "thread recall search", "thread summary"],
     key: "thread", usage: "wb thread <command> [options]", words: ["thread"],
   },
   {

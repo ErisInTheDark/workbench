@@ -28,7 +28,9 @@ import {
   type ProviderRuntimePort,
   type WorkbenchBrowseSessionPort,
   type WorkbenchDaemonRequestOwners,
+  type WorkbenchNetworkPort,
 } from "../requests/daemon-request-handler";
+import { networkRequestHandlers } from "../requests/network-handlers";
 import { projectRequestHandlers } from "../requests/project-handlers";
 import { providerRequestHandlers } from "../requests/provider-handlers";
 import { settingsRequestHandlers } from "../requests/settings-handlers";
@@ -39,6 +41,7 @@ export type { WorkbenchBrowseSessionPort } from "../requests/daemon-request-hand
 
 // Typed so adding a daemon method fails typecheck until it has exactly one handler here.
 const HANDLERS: DaemonRequestHandlers<DaemonHandledMethod> = {
+  ...networkRequestHandlers,
   ...projectRequestHandlers,
   ...providerRequestHandlers,
   ...settingsRequestHandlers,
@@ -62,14 +65,16 @@ function isHandledMethod(method: string): method is DaemonHandledMethod {
 
 export default class WorkbenchDaemonRequestController {
   private browse: WorkbenchBrowseSessionPort | null = null;
+  private network: WorkbenchNetworkPort | null = null;
   private readonly installationUpdateRegistrations = new Set<InstallationUpdatePort>();
   private readonly providerRuntimeRegistrations = new Set<ProviderRuntimePort>();
-  private readonly context: DaemonRequestContext;
+  private readonly context: Omit<DaemonRequestContext, "signal">;
 
   constructor(private readonly owners: WorkbenchDaemonRequestOwners) {
     this.context = {
       owners,
       browse: () => this.browse,
+      network: () => this.network,
       installationUpdate: () => [...this.installationUpdateRegistrations].at(-1) ?? null,
       providerRuntimes: () => [...this.providerRuntimeRegistrations].at(-1) ?? null,
     };
@@ -77,6 +82,7 @@ export default class WorkbenchDaemonRequestController {
 
   accepts(method: string) { return METHODS.has(method); }
   registerBrowse(port: WorkbenchBrowseSessionPort) { this.browse = port; return () => { if (this.browse === port) this.browse = null; }; }
+  registerNetwork(port: WorkbenchNetworkPort) { this.network = port; return () => { if (this.network === port) this.network = null; }; }
   registerInstallationUpdate(port: InstallationUpdatePort) {
     this.installationUpdateRegistrations.add(port);
     return () => { this.installationUpdateRegistrations.delete(port); };
@@ -98,7 +104,7 @@ export default class WorkbenchDaemonRequestController {
       }
       if (isGitArcMethod(method)) return { id, result: await this.executeGitArc(method, params, signal) };
       if (!isHandledMethod(method)) return { id, error: { code: -32601, message: "Daemon method not found." } };
-      return { id, result: await HANDLERS[method](params, this.context) };
+      return { id, result: await HANDLERS[method](params, { ...this.context, signal: signal ?? new AbortController().signal }) };
     } catch (error) {
       return {
         id,

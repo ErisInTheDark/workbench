@@ -37,7 +37,7 @@ import {
 } from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcWaitItem from "./ThreadGitArcWaitItem";
-import { ThreadMcpDownloadCard } from "./ThreadMcpToolRequest";
+import { ThreadMcpDownloadCard } from "./ThreadPermissionRequest";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
 import ThreadAgentMessageItem from "./ThreadAgentMessageItem";
 import MarkdownRender from "../../ui/MarkdownRender";

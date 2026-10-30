@@ -817,30 +817,31 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
 
   const recall = await parseWorkbenchAgentCliCommand([
     "thread", "recall", "--thread", "thread/1", "--kind", "user-message", "--kind", "commentary", "--before", "user:item-1",
-  ], { callerThreadId: "ambient/thread" });
+  ], { callerThreadId: "ambient/thread", cwd: "C:/workspace" });
   const context = await parseWorkbenchAgentCliCommand([
     "thread", "context", "--thread", "thread/1", "--kind", "user-message", "--kind", "commentary", "--before", "user:item-1",
-  ]);
+  ], { callerThreadId: "ambient/thread", cwd: "C:/workspace" });
   assert.equal(recall.kind, "request");
   assert.equal(context.kind, "request");
   assert.deepEqual(context.request, recall.request);
-  assert.equal(recall.request.path, "/api/thread-context/thread%2F1?before=user%3Aitem-1&kind=user-message&kind=commentary");
+  assert.equal(recall.request.path,
+    "/api/thread-context/thread%2F1?before=user%3Aitem-1&kind=user-message&kind=commentary&caller=ambient%2Fthread&cwd=C%3A%2Fworkspace");
 
   const search = await parseWorkbenchAgentCliCommand([
     "thread", "recall", "search", "--thread", "thread/1", "--query", "normal commentary",
     "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--cursor", "next-page",
-  ], { callerThreadId: "ambient/thread" });
+  ], { callerThreadId: "ambient/thread", cwd: "C:/workspace" });
   const contextSearch = await parseWorkbenchAgentCliCommand([
     "thread", "context", "search", "--thread", "thread/1", "--query", "normal", "--query", "commentary",
     "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--cursor", "next-page",
-  ]);
+  ], { callerThreadId: "ambient/thread", cwd: "C:/workspace" });
   assert.equal(search.kind, "request");
   assert.equal(contextSearch.kind, "request");
   assert.deepEqual(contextSearch.request, search.request);
   assert.deepEqual(search.request, {
     body: { action: "search", cursor: "next-page", kinds: ["user-message", "commentary"], limit: 12, query: "normal commentary" },
     method: "POST",
-    path: "/api/thread-context/thread%2F1",
+    path: "/api/thread-context/thread%2F1?caller=ambient%2Fthread&cwd=C%3A%2Fworkspace",
     responseKind: "native",
   });
   assert.equal((await parseWorkbenchAgentCliCommand([
@@ -849,9 +850,9 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
 
   const around = await parseWorkbenchAgentCliCommand([
     "thread", "recall", "--thread", "thread/1", "--around", "item-2",
-  ], { callerThreadId: "ambient/thread" });
+  ], { callerThreadId: "ambient/thread", cwd: "C:/workspace" });
   assert.equal(around.kind, "request");
-  assert.equal(around.request.path, "/api/thread-context/thread%2F1?around=item-2");
+  assert.equal(around.request.path, "/api/thread-context/thread%2F1?around=item-2&caller=ambient%2Fthread&cwd=C%3A%2Fworkspace");
   assert.equal((await parseWorkbenchAgentCliCommand(["thread", "recall", "expand", "--ref", "item-2"], { callerThreadId: "ambient/thread" })).kind, "error");
 
   const currentThreadOptions = { callerThreadId: "current/thread", cwd: "C:/workspace" };
@@ -859,8 +860,9 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   const currentSearch = await parseWorkbenchAgentCliCommand(["thread", "recall", "search", "--query", "needle"], currentThreadOptions);
   assert.equal(currentRecall.kind, "request");
   assert.equal(currentSearch.kind, "request");
-  assert.equal(currentRecall.request.path, "/api/thread-context/current%2Fthread?kind=user-message");
-  assert.equal(currentSearch.request.path, "/api/thread-context/current%2Fthread");
+  const callerQuery = "caller=current%2Fthread&cwd=C%3A%2Fworkspace";
+  assert.equal(currentRecall.request.path, `/api/thread-context/current%2Fthread?kind=user-message&${callerQuery}`);
+  assert.equal(currentSearch.request.path, `/api/thread-context/current%2Fthread?${callerQuery}`);
   for (const command of [
     ["thread", "recall"],
     ["thread", "recall", "search", "--query", "needle"],

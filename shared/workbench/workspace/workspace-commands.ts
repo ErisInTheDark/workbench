@@ -12,6 +12,9 @@
  * - WorkspaceHomeLayoutIntent/WorkspaceHomeLayoutIntentSchema: home row or project-folder move intent.
  * - WorkspaceTranscriptDemandSchema/WorkspaceTranscriptDemandResultSchema/WorkspaceTranscriptBodiesSchema/WorkspaceTranscriptRequestSchema: typed transcript reads, subscriptions, bounded item demand, and deferred body reads.
  * - WorkspaceSearchResponseSchema: source-qualified search results and applied typo corrections.
+ * - WorkspaceNetworkApproveSchema/WorkspaceNetworkApproveResultSchema: a user's approval of a pending network prompt.
+ * - WorkspaceNetworkGrantsRequestSchema/WorkspaceNetworkGrantsRequest, WorkspaceNetworkGrantsListSchema/WorkspaceNetworkGrantsList,
+ *   WorkspaceNetworkGrantsRevokeResultSchema: list and revoke agent network grants across reachable daemons.
  */
 import { z } from "zod";
 import type { DaemonRequestRoute } from "../daemon/define-daemon-request";
@@ -23,6 +26,7 @@ import { ProjectLocationReferenceSchema } from "../project/project-location";
 import { DaemonIdSchema, ThreadReferenceSchema, LogicalProjectIdSchema, ThreadDisplayKeySchema } from "../identity";
 import { WorkbenchThreadStateRequestSchema, WorkbenchHomeThreadDisplayOrderSchema, type WorkbenchThreadStateRequest } from "../thread/thread-state";
 import { WorkbenchThreadDisplayOrderSchema } from "../thread/thread-display-order";
+import { NetworkGrantSchema, NetworkTargetSchema } from "../network/network-grants";
 import { WorkbenchMessageContextSchema } from "../provider/provider-input";
 import {
   WORKBENCH_SEARCH_RESULT_LIMIT, WorkbenchSearchCorrectionSchema, WorkbenchSearchResultSchema,
@@ -140,6 +144,25 @@ export const WorkspaceThreadActionResultSchema = z.object({
   revision: z.number().int().nonnegative().optional(),
 }).strict();
 export type WorkspaceThreadActionResult = z.infer<typeof WorkspaceThreadActionResultSchema>;
+
+/** Approve a pending network prompt; the app writes the grant onto the target before answering the prompt. */
+export const WorkspaceNetworkApproveSchema = z.object({ threadId: z.uuid(), requestKey: z.string().min(1) }).strict();
+export const WorkspaceNetworkApproveResultSchema = z.object({ approved: z.literal(true) }).strict();
+
+export const WorkspaceNetworkGrantsRequestSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("list") }).strict(),
+  z.object({ kind: z.literal("revoke"), daemonId: DaemonIdSchema, grantIds: z.array(z.uuid()).min(1).max(256) }).strict(),
+  /** Revoke one approved target from the requesting thread's network pill; revoking only ever removes access. */
+  z.object({ kind: z.literal("revokeHistory"), threadId: z.uuid(), entryId: z.uuid(), target: NetworkTargetSchema }).strict(),
+]);
+export type WorkspaceNetworkGrantsRequest = z.infer<typeof WorkspaceNetworkGrantsRequestSchema>;
+export const WorkspaceNetworkGrantsListSchema = z.object({
+  daemons: z.array(z.object({
+    daemonId: DaemonIdSchema, hostname: z.string(), grants: z.array(NetworkGrantSchema), failure: z.string().nullable(),
+  }).strict()),
+}).strict();
+export type WorkspaceNetworkGrantsList = z.infer<typeof WorkspaceNetworkGrantsListSchema>;
+export const WorkspaceNetworkGrantsRevokeResultSchema = z.object({ revoked: z.number().int().nonnegative() }).strict();
 
 export const WorkspaceSearchResponseSchema = z.object({
   results: z.array(z.object({

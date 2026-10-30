@@ -78,6 +78,7 @@
  * - FlagFilledIcon: thread goal glyph once a goal is set.
  * - ClipboardListIcon: thread todo glyph.
  * - BugIcon/MegaphoneIcon: failed-update-issue and feedback reference glyphs.
+ * - NetworkIcon: a thread's reach into other daemons, and threads networked beyond this app.
  * - GitArcIcon: select the glyph for a Git arc action.
  * - GitArcProposalIcon: commit proposal with its message summary.
  * - GitArcStackIcon/GitArcUnstackIcon: lucide layers and layers-arrow-up glyphs for sealing and reopening stack layers.
@@ -1215,6 +1216,13 @@ export function MegaphoneIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
     <path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14" /><path d="M8 6v8" />
+  </OutlinedIcon>;
+}
+
+export function NetworkIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <rect x="16" y="16" width="6" height="6" rx="1" /><rect x="2" y="16" width="6" height="6" rx="1" />
+    <rect x="9" y="2" width="6" height="6" rx="1" /><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" /><path d="M12 12V8" />
   </OutlinedIcon>;
 }
 

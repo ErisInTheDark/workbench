@@ -10,6 +10,7 @@ import type { WorkbenchDatabaseRequestDefinition } from "./requests/define-datab
 import { gitRequests } from "./requests/git.ts";
 import { identityRequests } from "./requests/identity.ts";
 import { maintenanceRequests } from "./requests/maintenance.ts";
+import { networkRequests } from "./requests/network.ts";
 import { projectRequests } from "./requests/projects.ts";
 import { statsRequests } from "./requests/stats.ts";
 import { threadFactRequests } from "./requests/thread-facts.ts";
@@ -20,6 +21,7 @@ export const workbenchDatabaseRequests = {
   ...gitRequests,
   ...identityRequests,
   ...maintenanceRequests,
+  ...networkRequests,
   ...projectRequests,
   ...statsRequests,
   ...threadFactRequests,

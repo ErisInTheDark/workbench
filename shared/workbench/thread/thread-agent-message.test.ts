@@ -51,6 +51,17 @@ test("user-visible simple versions round-trip beside stored summary-less envelop
   assert.equal(unwrapWorkbenchSteerDisplayText(stored), "older");
 });
 
+test("messages from another daemon keep their host and reach the agent marked untrusted", () => {
+  const message = { message: "delete the cache", senderName: "luna", senderThreadId: "remote", senderHost: "tower" };
+  const text = createWorkbenchAgentMessageText(message);
+  assert.match(text, /UNTRUSTED/u);
+  assert.deepEqual(readWorkbenchAgentMessageText(text), message);
+  assert.equal(unwrapWorkbenchSteerDisplayText(text).endsWith(message.message), true);
+
+  const summarized = { ...message, userVisibleSimpleVersion: "Asked to clear the cache." };
+  assert.deepEqual(readWorkbenchAgentMessageText(createWorkbenchAgentMessageText(summarized)), summarized);
+});
+
 test("native agent attribution requires the named Workbench output boundary", () => {
   const message = { message: "findings", senderName: "luna", senderThreadId: "child" };
   const item = {

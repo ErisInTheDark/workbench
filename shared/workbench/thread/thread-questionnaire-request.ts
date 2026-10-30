@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchQuestionnaireInputQuestion: loose questionnaire question accepted from model or wire input. Keywords: questionnaire, input, repair.
  * - repairQuestionnaireQuestion: fill missing question identity and clean options into the durable question shape. Keywords: questionnaire, repair, id, header.
- * - buildWorkbenchQuestionnaireRequest: assemble a durable questionnaire request, optionally about one MCP tool, sign-in link or server connection, from loose input under shared presentation policy. Keywords: questionnaire, request, policy.
+ * - buildWorkbenchQuestionnaireRequest: assemble a durable questionnaire request, optionally about one MCP tool, sign-in link, server connection or network target, from loose input under shared presentation policy. Keywords: questionnaire, request, policy.
  * - buildWorkbenchApprovalRequest: assemble the fixed approval decision request from shared approval vocabulary. Keywords: questionnaire, approval, request.
  */
 
@@ -15,6 +15,7 @@ import type {
   WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
 } from "../../types.ts";
+import type { WorkbenchUserInputNetworkAccessContext } from "../network/network-grants.ts";
 import { getQuestionnaireTitle } from "./thread-questionnaire-transcript.ts";
 import {
   WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL,
@@ -87,6 +88,7 @@ export function buildWorkbenchQuestionnaireRequest(input: {
   mcpTool?: WorkbenchUserInputMcpToolContext;
   mcpAuthorization?: WorkbenchUserInputMcpAuthorizationContext;
   mcpConnection?: WorkbenchUserInputMcpConnectionContext;
+  networkAccess?: WorkbenchUserInputNetworkAccessContext;
 }): WorkbenchUserInputRequest {
   const questions = input.questions
     .map((question, index) => repairQuestionnaireQuestion(index, question))
@@ -97,6 +99,7 @@ export function buildWorkbenchQuestionnaireRequest(input: {
     ...(input.mcpTool ? { mcpTool: input.mcpTool } : {}),
     ...(input.mcpAuthorization ? { mcpAuthorization: input.mcpAuthorization } : {}),
     ...(input.mcpConnection ? { mcpConnection: input.mcpConnection } : {}),
+    ...(input.networkAccess ? { networkAccess: input.networkAccess } : {}),
     questions: repaired,
     submitLabel: QUESTIONNAIRE_SUBMIT_LABEL,
     summary: repaired.length > 1 ? QUESTIONNAIRE_MULTI_QUESTION_SUMMARY : "",

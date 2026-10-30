@@ -44,5 +44,7 @@ export interface AppRuntimeObjects {
   threadPlacements: WorkbenchThreadPlacementController;
   workspaceDrafts: WorkbenchWorkspaceDrafts;
   gitPeers: WorkbenchGitPeerSync;
+  /** Daemons' agent relays, plus users' network approvals and grant edits. */
+  agentRelay: import("../workspace/WorkbenchAgentRelay").default;
   presentationImport: WorkbenchPresentationImportController;
 }

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, projected once per burst of answers, project selections and rows, and folder peer sync) and publication fences; thread rows carry the app's pins and snoozes.
+ * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, projected once per burst of answers, project selections and rows, and folder peer sync) and publication fences; thread rows carry the app's pins and snoozes; parents' observations gain their children from other daemons; threads networked beyond this app's reach open only as summaries.
  */
 import {
   RETARGETABLE_QUERY_KINDS, WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, applyThreadSummariesPatch,
@@ -16,7 +16,9 @@ import {
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import type { WorkbenchProjectThreadSidebars } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchProjectThreadSidebars, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { LocatedThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
+import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-grants";
 import {
   projectLogicalThreadRows, projectWorkbenchThreadMembership, projectWorkspaceThreadMember, type WorkbenchProjectedThreadRow,
 } from "workbench-shared/workbench/project/workbench-project-projection";
@@ -70,6 +72,8 @@ type Payload = {
   >;
 }[WorkspaceObservation["kind"]];
 type Observation = ReturnType<WorkbenchDaemonSource["observe"]>;
+/** How long a networked-thread check waits for the thread's summary before refusing. */
+const SUMMARY_TIMEOUT_MS = 10_000;
 type Json = z.infer<ReturnType<typeof z.json>>;
 interface Interest {
   request: WorkspaceObserve;
@@ -146,6 +150,8 @@ export default class WorkbenchWorkspaceRequestController {
     };
     reloadOperation?: Pick<WorkbenchAppReloadOrchestrator, "read" | "subscribe">;
     gitPeers?: Pick<WorkbenchGitPeerSync, "observe">;
+    /** Daemons this app reaches; threads networked beyond them show only their summaries. */
+    reach?: () => ReadonlySet<DaemonId>;
     appState: {
       read(browserStateId: string | null): Promise<Extract<WorkspaceObservation, { kind: "appState" }>["data"]>;
       subscribe(browserStateId: string | null, listener: () => void): () => void;
@@ -255,6 +261,7 @@ export default class WorkbenchWorkspaceRequestController {
 
   async mutateThread(input: WorkspaceThreadMutation) {
     const request = WorkspaceThreadMutationSchema.parse(input);
+    await this.assertOpenable(request.identity.threadId);
     return this.options.threads.withThread(request.identity.threadId, async (source, owner) => {
       const { method, ...params } = request;
       return source.request<Json>(method, { ...params, projectId: owner.location.projectId,
@@ -319,12 +326,16 @@ export default class WorkbenchWorkspaceRequestController {
       if (!subscription?.delivered.published) throw new Error("Transcript bodies are unavailable for this subscription.");
       return { snapshot: subscription.delivered.bodies(request.params.itemIds) };
     }
-    if (request.kind === "read") return this.options.threads.withThread(request.params.threadId, (source, owner) =>
-      source.request<Json>(workbenchTranscriptOperations.read.method, {
-        ...request.params, threadId: owner.identity.threadId, protocolVersion: 4,
-      }), this.cancellation.signal);
+    if (request.kind === "read") {
+      await this.assertOpenable(request.params.threadId);
+      return this.options.threads.withThread(request.params.threadId, (source, owner) =>
+        source.request<Json>(workbenchTranscriptOperations.read.method, {
+          ...request.params, threadId: owner.identity.threadId, protocolVersion: 4,
+        }), this.cancellation.signal);
+    }
 
     const { subscriptionId: id, ...query } = request.params;
+    await this.assertOpenable(query.threadId);
     this.releaseTranscript(id);
     const subscription: TranscriptSubscription = {
       source: null,
@@ -453,6 +464,7 @@ export default class WorkbenchWorkspaceRequestController {
     if (route === "thread" || route === "threadCwd") {
       const threadId = command.params.threadId;
       if (typeof threadId !== "string") throw new Error("Thread identity is required.");
+      await this.assertOpenable(threadId);
       return this.options.threads.withThread(threadId, (source, owner) =>
         source.request<Json>(command.method, {
           ...command.params, threadId: owner.identity.threadId,
@@ -467,6 +479,7 @@ export default class WorkbenchWorkspaceRequestController {
     }
     const scope = command.scope;
     if (scope?.kind === "thread") {
+      await this.assertOpenable(scope.threadId);
       return this.options.threads.withThread(scope.threadId, (source, owner) =>
         this.executeSourceCommand(source, command.method, route === "folder"
           ? { ...command.params, projectId: owner.location.projectId } : command.params, options),
@@ -991,11 +1004,84 @@ export default class WorkbenchWorkspaceRequestController {
         const fact = interest.thread?.observation.getSnapshot();
         const value = fact?.value?.kind === "thread" ? fact.value : null;
         const placement = this.options.placements.read();
-        const data = value?.data ? { ...value.data, entries: value.data.entries.map(entry => placement.apply(entry)) } : null;
+        const runtime = value?.runtime ?? {};
+        // A thread networked with a daemon this app cannot reach shows only its summary; its detail stays out of this app.
+        const root = value?.data?.entries.find(entry => entry.entryKind === "thread");
+        const missing = root && this.options.reach ? ThreadNetworkAccess.missing(ThreadNetworkAccess.daemonIds(
+          runtime[root.identity.threadId]?.networkHistory ?? []), this.options.reach()) : [];
+        if (missing.length) {
+          this.update(interest, { kind: "thread", owner, phase: "failed", failure: this.restrictedMessage(missing), data: null, runtime: {} });
+          return;
+        }
+        const remoteEntries = this.remoteSubagentEntries(interest, value?.data?.remoteSubagents ?? []);
+        const data = value?.data ? {
+          ...value.data, entries: [...value.data.entries, ...remoteEntries].map(entry => placement.apply(entry)),
+        } : null;
         this.update(interest, { kind: "thread", owner, phase: fact?.phase ?? phase, failure: fact?.failure ?? failure,
-          data, runtime: value?.runtime ?? {} });
+          data, runtime });
       }
     }
+  }
+
+  /**
+   * A parent's children in other folders or on other daemons, read from their own daemons' summaries and shown as the
+   * parent's tabs; heavy Git facts stay with each child's own daemon.
+   */
+  private remoteSubagentEntries(interest: Interest, children: readonly { daemonId: DaemonId; threadId: string }[]) {
+    const byDaemon = Map.groupBy(children, child => child.daemonId);
+    for (const [daemonId, batch] of interest.summaryBatches) {
+      if (byDaemon.has(daemonId)) continue;
+      batch.release();
+      interest.summaryBatches.delete(daemonId);
+    }
+    const entries: WorkbenchThreadSidebarEntry[] = [];
+    for (const [daemonId, group] of byDaemon) {
+      const source = this.options.sources.get(daemonId);
+      if (!source) continue;
+      const query = { kind: "threadSummaries" as const, threadIds: group.map(child => ThreadReferenceSchema.parse(child.threadId)) };
+      let batch = interest.summaryBatches.get(daemonId);
+      if (!batch) interest.summaryBatches.set(daemonId, batch = source.observe(query, () => this.refresh(interest)));
+      else batch.retarget(query);
+      const value = batch.getSnapshot().value;
+      if (value?.kind !== "threadSummaries") continue;
+      for (const located of Object.values(value.summaries)) {
+        const row = located?.summary.row;
+        if (row?.entryKind !== "subagent") continue;
+        const { gitArc: _gitArc, gitArcPlan: _gitArcPlan, compacting: _compacting, ...entry } = row;
+        entries.push(entry);
+      }
+    }
+    return entries;
+  }
+
+  private restrictedMessage(missing: readonly DaemonId[]) {
+    const hosts = missing.map(id => this.options.sources.get(id)?.getSnapshot().hostname ?? id).join(", ");
+    return `This thread is networked with daemons this app cannot reach (${hosts}); open it from an app that reaches all of them.`;
+  }
+
+  /** Refuses thread detail, commands and transcripts for a thread networked beyond this app's reach; row actions stay allowed. */
+  private async assertOpenable(threadId: string) {
+    const reach = this.options.reach?.();
+    if (!reach) return;
+    await this.options.threads.withThread(threadId, async source => {
+      const summary = await new Promise<LocatedThreadSummary | null>((resolve, reject) => {
+        const timer = setTimeout(() => { observation.release(); reject(new Error("The thread summary did not arrive in time.")); }, SUMMARY_TIMEOUT_MS);
+        const check = () => {
+          const fact = observation?.getSnapshot();
+          if (!fact) return;
+          if (fact.failure || fact.value?.kind === "threadSummaries") {
+            clearTimeout(timer);
+            observation.release();
+            if (fact.failure) reject(new Error(fact.failure));
+            else resolve(fact.value?.kind === "threadSummaries" ? fact.value.summaries[threadId] ?? null : null);
+          }
+        };
+        const observation = source.observe({ kind: "threadSummaries", threadIds: [ThreadReferenceSchema.parse(threadId)] }, () => check());
+        check();
+      });
+      const missing = ThreadNetworkAccess.missing(summary?.summary.facts.networkDaemonIds, reach);
+      if (missing.length) throw new Error(this.restrictedMessage(missing));
+    }, this.cancellation.signal);
   }
 
   /** Vis lives on the daemon that owns the thread, so the relay follows the thread's owner. */

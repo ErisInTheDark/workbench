@@ -4,7 +4,8 @@
  * - WorkbenchDaemonObservationFact: received data with connection-aware freshness.
  * - WorkbenchDaemonTranscriptEvent: source-owned transcript baseline, stream and freshness delivery.
  * - default WorkbenchDaemonSource: own one daemon connection, shared read interests kept warm briefly after release
- *   and retargeted by summary-id patch, operation retention, socket spy answers and the daemon's peer fetch requests.
+ *   and retargeted by summary-id patch, operation retention, relay standby and presence, socket spy answers and the daemon's
+ *   agent relay requests.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -29,9 +30,9 @@ import { applyObservationDelta } from "workbench-shared/workbench/workspace/obse
 import { conformDaemonWorkspaceObservation, conformWorkspaceObservationDelta, describeObservationRepairs } from "workbench-shared/workbench/workspace/workspace-observation-conformance";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
-  GIT_PEER_FETCH_REQUEST_METHOD, GIT_PEER_FETCH_RESULT_METHOD, GitPeerFetchRequestNotificationSchema,
-  type GitPeerFetchOutcome, type GitPeerFetchQuestion,
-} from "workbench-shared/workbench/git/git-peer-contracts";
+  RELAY_PRESENCE_METHOD, RELAY_REQUEST_METHOD, RELAY_RESULT_METHOD, RelayRequestNotificationSchema,
+  type RelayOutcome, type RelayPresence, type RelayRequest,
+} from "workbench-shared/workbench/network/network-relay-contracts";
 import {
   conformWorkbenchTranscriptUpdated, conformWorkbenchTranscriptStreamed, workbenchTranscriptOperations,
   type WorkbenchTranscriptSubscribeParams, type WorkbenchTranscriptUpdatedParams, type WorkbenchTranscriptStreamedParams,
@@ -116,6 +117,9 @@ export default class WorkbenchDaemonSource {
   private readonly interests = new Map<string, Interest>();
   private readonly transcripts = new Map<string, TranscriptInterest>();
   private readonly leases = new Set<object>();
+  /** Relay standby holders; they keep an awake daemon connected without counting as demand that wakes it. */
+  private readonly standbys = new Set<object>();
+  private presentedStandby: boolean | null = null;
   private readonly listeners = new Set<() => void>();
   private readonly endpointListeners = new Set<() => void>();
   private readonly unsubscribe: Array<() => void>;
@@ -131,8 +135,11 @@ export default class WorkbenchDaemonSource {
       createSocket?: (url: string) => WebSocket;
       /** Answers `wb socket spy` for this daemon; null withholds browser traffic (e.g. from peer daemons). */
       answerSpy?: (query: WebSocketTrafficQuery) => WebSocketTrafficResult | null;
-      /** Fetches a named peer's branch into one of this daemon's folders for its agents. */
-      answerPeerFetch?: (question: GitPeerFetchQuestion) => Promise<GitPeerFetchOutcome>;
+      /** Answers this daemon's agents' relay requests and describes the app's reach to it. */
+      relay?: {
+        answer(source: WorkbenchDaemonSource, request: RelayRequest, accept: () => void): Promise<RelayOutcome>;
+        presence(source: WorkbenchDaemonSource, standby: boolean): RelayPresence;
+      };
       transcriptReservoir?: WorkbenchTranscriptReservoir;
       /** Schedules a released observation's upstream release and returns its cancel; defaults to a 30s unref'd timer. */
       linger?: (expire: () => void) => () => void;
@@ -180,22 +187,9 @@ export default class WorkbenchDaemonSource {
         if (result) this.socket.send({ method: WEBSOCKET_SPY_RESULT_METHOD, params: { requestId: query.data.params.requestId, result } });
       }),
       this.socket.onWorkbenchNotification(notification => {
-        if (notification.method !== GIT_PEER_FETCH_REQUEST_METHOD) return;
-        const request = GitPeerFetchRequestNotificationSchema.safeParse(notification);
-        if (!request.success) {
-          reportClientSchemaError("Rejected daemon peer fetch request", request.error);
-          return;
-        }
-        const { requestId, question } = request.data.params;
-        const answer = (outcome: GitPeerFetchOutcome) => this.socket.send({ method: GIT_PEER_FETCH_RESULT_METHOD, params: { requestId, outcome } });
-        const fetch = this.options.answerPeerFetch;
-        if (!fetch) {
-          answer({ kind: "failed", failure: "This app cannot fetch from peer daemons." });
-          return;
-        }
-        answer({ kind: "accepted" });
-        void fetch(question).then(answer, error => answer({ kind: "failed", failure: bounded(error) }));
+        if (notification.method === RELAY_REQUEST_METHOD) this.answerRelay(notification);
       }),
+      this.socket.onConnectionOpen(() => this.sendPresence()),
       this.socket.onWorkbenchNotification(notification => {
         if (notification.method === "workbench/transcript/updated" || notification.method === "workbench/transcript/streamed") {
           this.receiveTranscript(notification);
@@ -224,7 +218,7 @@ export default class WorkbenchDaemonSource {
   get id() { return this.descriptor.daemonId; }
   get available() { return this.descriptor.access && this.socket.isOpen && !this.disposed; }
   private get withdrawn() { return !this.descriptor.published && !this.socket.isOpen; }
-  get hasDemand() { return this.interests.size > 0 || this.transcripts.size > 0 || this.leases.size > 0; }
+  get hasDemand() { return this.interests.size > 0 || this.transcripts.size > 0 || this.leases.size > 0 || this.standbys.size > 0; }
   private get hasActiveDemand() {
     return this.leases.size > 0 || this.transcripts.size > 0 || [...this.interests.values()].some(interest =>
       interest.listeners.size > 0 && interest.query.kind !== "catalogue" && interest.query.kind !== "summaries"
@@ -800,6 +794,59 @@ export default class WorkbenchDaemonSource {
     const suspended = this.disposed || !this.hasDemand || !this.descriptor.access
       || this.descriptor.state === "sleeping" && !this.hasActiveDemand || this.descriptor.state === "failed";
     this.socket.setSuspended(suspended);
+    if (this.standbyOnly !== this.presentedStandby && this.available) this.sendPresence();
+  }
+
+  /** Whether this connection exists only so agents on this daemon can relay through the app. */
+  private get standbyOnly() {
+    return this.standbys.size > 0 && !this.interests.size && !this.transcripts.size && !this.leases.size;
+  }
+
+  /**
+   * Keeps the connection open while the daemon is awake so its agents can relay through this app; never wakes a sleeping
+   * daemon, and the daemon does not count a standby-only connection as attendance.
+   */
+  standby() {
+    if (this.disposed) throw new Error("Daemon source is closed.");
+    const holder = {};
+    this.standbys.add(holder);
+    this.updateDemand();
+    return () => {
+      if (!this.standbys.delete(holder)) return;
+      this.updateDemand();
+    };
+  }
+
+  /** Tells the daemon who it is, what this app reaches and whether the connection is standby-only. */
+  sendPresence() {
+    const presence = this.available ? this.options.relay?.presence(this, this.standbyOnly) : null;
+    if (!presence) return;
+    this.presentedStandby = presence.standby;
+    this.socket.send({ method: RELAY_PRESENCE_METHOD, params: presence });
+  }
+
+  private answerRelay(notification: unknown) {
+    const request = RelayRequestNotificationSchema.safeParse(notification);
+    if (!request.success) {
+      reportClientSchemaError("Rejected daemon relay request", request.error);
+      // A request this app cannot read ran nowhere; saying so spares the daemon waiting out its acceptance deadline.
+      const requestId = (notification as { params?: { requestId?: unknown } } | null)?.params?.requestId;
+      if (typeof requestId === "string") {
+        this.socket.send({ method: RELAY_RESULT_METHOD, params: { requestId, outcome: {
+          kind: "unreachable", failure: "This Workbench app could not read the relay request; it may be older than the daemon.",
+        } satisfies RelayOutcome } });
+      }
+      return;
+    }
+    const { requestId, request: relayed } = request.data.params;
+    const answer = (outcome: RelayOutcome) => this.socket.send({ method: RELAY_RESULT_METHOD, params: { requestId, outcome } });
+    const relay = this.options.relay;
+    if (!relay) {
+      answer({ kind: "unreachable", failure: "This app does not relay agent requests." });
+      return;
+    }
+    void relay.answer(this, relayed, () => answer({ kind: "accepted" }))
+      .then(answer, error => answer({ kind: "failed", failure: bounded(error) }));
   }
 
   private resolveEndpoint(signal: AbortSignal): Promise<string> {

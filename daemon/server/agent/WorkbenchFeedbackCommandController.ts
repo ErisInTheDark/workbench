@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchFeedbackCaller: the cwd-owned project, managed thread, and applied model settings behind one submission.
- * - default WorkbenchFeedbackCommandController: validate agent feedback, record it with its author's settings, and render paged reads.
+ * - default WorkbenchFeedbackCommandController: validate agent feedback, record it with its author's settings, and render paged reads for
+ *   local and relayed callers.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -64,10 +65,24 @@ export default class WorkbenchFeedbackCommandController {
     const parsed = WorkbenchFeedbackStatsExecutionRequestSchema.safeParse(input);
     if (!parsed.success) return invalid(parsed.error.issues);
     signal.throwIfAborted();
-    const { allProjects, cwd, ...filters } = parsed.data;
+    const { cwd, ...filters } = parsed.data;
     // Workbench feedback concerns every project; project feedback stays with the project that owns the cwd.
-    const projectId = await this.options.resolveProjectId(cwd);
-    const projectIds = allProjects ? null : [projectId];
+    return await this.render(filters, await this.options.resolveProjectId(cwd), signal);
+  }
+
+  /** Another daemon's thread reading this daemon's feedback: `null` is the wb channel across projects, a project its own feedback. */
+  async readRemote(projectId: ProjectId | null, input: object, signal: AbortSignal) {
+    const parsed = WorkbenchFeedbackStatsExecutionRequestSchema.safeParse({ ...input, cwd: ".", host: null, callerThreadId: null });
+    if (!parsed.success) return invalid(parsed.error.issues);
+    const { cwd: _cwd, ...filters } = parsed.data;
+    return await this.render(projectId ? { ...filters, allProjects: false } : { ...filters, allProjects: true, channel: "wb" }, projectId, signal);
+  }
+
+  private async render(
+    { allProjects, host: _host, callerThreadId: _caller, ...filters }: Omit<ReturnType<typeof WorkbenchFeedbackStatsExecutionRequestSchema.parse>, "cwd">,
+    projectId: ProjectId | null, signal: AbortSignal,
+  ) {
+    const projectIds = allProjects || !projectId ? null : [projectId];
     const result = await this.options.read({ ...filters, projectIds });
     signal.throwIfAborted();
     if (result.page > result.pages) return new Response(`Page must be between 1 and ${result.pages}.\n`, { headers: TEXT_HEADERS, status: 400 });

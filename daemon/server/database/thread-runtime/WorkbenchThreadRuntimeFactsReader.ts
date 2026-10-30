@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - WorkbenchThreadRuntimeFacts: one thread's stored runtime facts: goal, skills, todos, addressed feedback, usage and latest turn.
+ * - WorkbenchThreadRuntimeFacts: one thread's stored runtime facts: goal, skills, todos, addressed feedback, network history, usage and
+ *   latest turn.
  * - default WorkbenchThreadRuntimeFactsReader: read many threads' runtime facts in one transaction through their owning stores.
  */
 import type Database from "better-sqlite3";
@@ -8,6 +9,7 @@ import type { WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thre
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { projectWorkbenchTranscriptTurnRow } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
@@ -15,6 +17,7 @@ import WorkbenchThreadGoalStore from "../goals/WorkbenchThreadGoalStore.ts";
 import WorkbenchThreadSkillStore from "../skills/WorkbenchThreadSkillStore.ts";
 import WorkbenchThreadTodoStore from "../todos/WorkbenchThreadTodoStore.ts";
 import WorkbenchThreadAddressedFeedbackStore from "../feedback/WorkbenchThreadAddressedFeedbackStore.ts";
+import WorkbenchNetworkHistoryStore from "../../network/WorkbenchNetworkHistoryStore.ts";
 import type WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 
 export interface WorkbenchThreadRuntimeFacts {
@@ -23,6 +26,7 @@ export interface WorkbenchThreadRuntimeFacts {
   skills: WorkbenchThreadSkill[];
   todos: WorkbenchThreadTodo[];
   addressedFeedback: WorkbenchThreadAddressedFeedback[];
+  networkHistory: NetworkHistoryEntry[];
   tokenUsage: ThreadTokenUsage | null;
   latestTurn: Turn | null;
 }
@@ -41,6 +45,7 @@ export default class WorkbenchThreadRuntimeFactsReader {
       const skills = new WorkbenchThreadSkillStore(this.database).readMany(ids);
       const todos = new WorkbenchThreadTodoStore(this.database).readMany(ids);
       const feedback = new WorkbenchThreadAddressedFeedbackStore(this.database).readMany(ids);
+      const network = new WorkbenchNetworkHistoryStore(this.database).readMany(ids);
       const usage = this.transcript.readContextUsages(ids);
       const turns = this.transcript.readLatestTurns(ids);
       return threadIds.map(threadId => {
@@ -51,6 +56,7 @@ export default class WorkbenchThreadRuntimeFactsReader {
           skills: skills.get(threadId) ?? [],
           todos: todos.get(threadId) ?? [],
           addressedFeedback: feedback.get(threadId) ?? [],
+          networkHistory: network.get(threadId) ?? [],
           tokenUsage: usage.get(threadId)?.tokenUsage ?? null,
           latestTurn: turn ? projectWorkbenchTranscriptTurnRow(turn) : null,
         };

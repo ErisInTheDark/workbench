@@ -35,11 +35,14 @@ const feedbackFields = z.object({
   page,
   range,
   sort: z.enum(WORKBENCH_FEEDBACK_SORTS).default("importance"),
+  /** `<host>` reads that daemon's wb feedback across its projects; `<host>:<folder>` reads that folder's project feedback. */
+  host: z.string().trim().min(1).max(4096).nullable().default(null),
 }).strict();
 const wbOnlyAcrossProjects = <T extends { allProjects: boolean; channel: string | null }>(value: T) => !value.allProjects || value.channel === "wb";
 const ALL_PROJECTS_MESSAGE = "--all-projects requires --channel wb; project feedback stays with its project.";
 const feedbackInputSchema = feedbackFields.refine(wbOnlyAcrossProjects, ALL_PROJECTS_MESSAGE);
-export const WorkbenchFeedbackStatsExecutionRequestSchema = feedbackFields.extend({ cwd }).strict()
+export const WorkbenchFeedbackStatsExecutionRequestSchema = feedbackFields
+  .extend({ cwd, callerThreadId: z.string().trim().min(1).nullable().default(null) }).strict()
   .refine(wbOnlyAcrossProjects, ALL_PROJECTS_MESSAGE);
 
 const toolsInputSchema = z.object({
@@ -51,7 +54,7 @@ const toolsInputSchema = z.object({
 export const WorkbenchToolStatsExecutionRequestSchema = toolsInputSchema.extend({ cwd }).strict();
 
 const TOOLS_USAGE = "wb stats tools [--range <7d|14d|30d|90d|365d>] [--sort <value|calls|cost|tool>] [--descending]";
-const FEEDBACK_USAGE = "wb stats feedback [--channel <wb|project>] [--category <bug|waste|confusion|opportunity>] [--sort <importance|newest>] [--range <7d|14d|30d|90d|365d|all>] [--page <n>]";
+const FEEDBACK_USAGE = "wb stats feedback [--channel <wb|project>] [--category <bug|waste|confusion|opportunity>] [--sort <importance|newest>] [--range <7d|14d|30d|90d|365d|all>] [--page <n>] [--host <host>[:<folder>]]";
 
 export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
   words: ["stats", "claims"],
@@ -84,7 +87,7 @@ export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
   inputSchema: feedbackInputSchema,
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, {
-      boolean: ["--all-projects"], values: ["--channel", "--category", "--sort", "--range", "--page"],
+      boolean: ["--all-projects"], values: ["--channel", "--category", "--sort", "--range", "--page", "--host"],
     });
     if (flags.has("--all-projects") && flags.optional("--channel") !== "wb") throw new Error(ALL_PROJECTS_MESSAGE);
     return feedbackInputSchema.parse({
@@ -94,10 +97,11 @@ export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
       page: flags.optionalNonNegativeInteger("--page") ?? 1,
       range: flags.optional("--range") ?? "7d",
       sort: flags.optional("--sort") ?? "importance",
+      host: flags.optional("--host"),
     });
   },
-  buildRequest(input, { cwd }) {
-    return postWorkbenchAgentCommand("/internal/stats/feedback", { cwd, ...input });
+  buildRequest(input, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/internal/stats/feedback", { cwd, callerThreadId, ...input });
   },
 }), defineWorkbenchAgentCommand({
   words: ["stats", "tools"],

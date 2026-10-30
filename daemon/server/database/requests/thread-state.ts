@@ -4,7 +4,8 @@
  *   archive facts, Git commits) and subagent relationships; each runs in its own transaction.
  */
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
-import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { SiblingRosterEntry } from "workbench-shared/workbench/network/network-remote-calls";
+import type { DaemonId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchSubagentReservation } from "../../subagents/workbench-subagent-record.ts";
 import type { WorkbenchStoredThreadTitleHistory } from "../../thread/WorkbenchThreadStateStore.ts";
 import WorkbenchSubagentRelationshipRepository from "../thread-state/WorkbenchSubagentRelationshipRepository.ts";
@@ -123,5 +124,23 @@ export const threadStateRequests = {
     run: (context, parentThreadId: WorkbenchThreadId, identifier: string) => {
       subagents(context, repository => repository.remove(parentThreadId, identifier));
     },
+  }),
+  setRemoteSubagentSettled: defineDatabaseRequest({
+    run: (context, parentThreadId: WorkbenchThreadId, threadId: WorkbenchThreadId, settledAt: number | null) => (
+      subagents(context, repository => repository.setRemoteSettled(parentThreadId, threadId, settledAt))
+    ),
+  }),
+  writeSubagentRoster: defineDatabaseRequest({
+    run: (context, threadId: WorkbenchThreadId, siblings: readonly SiblingRosterEntry[]) => {
+      subagents(context, repository => repository.writeRoster(threadId, siblings));
+    },
+  }),
+  readRemoteSubagentParents: defineDatabaseRequest({
+    read: "core",
+    run: (context, daemonId: DaemonId, threadId: WorkbenchThreadId) => subagents(context, repository => repository.parentsOfRemoteChild(daemonId, threadId)),
+  }),
+  readSubagentRoster: defineDatabaseRequest({
+    read: "core",
+    run: (context, threadId: WorkbenchThreadId) => subagents(context, repository => repository.readRoster(threadId)),
   }),
 };

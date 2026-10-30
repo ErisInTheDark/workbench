@@ -193,6 +193,9 @@ export default class WorkbenchThreadStateFeature {
     this.controller = new WorkbenchThreadStateController({
       ...(context.locks ? { locks: context.locks } : {}),
       resolveProjectId: projectId => this.canonicalProjectId(projectId),
+      readRemoteSubagents: async (projectId, parentThreadId) => (await context.listSubagents(projectId)).subagents
+        .flatMap(record => record.parentThreadId === parentThreadId && record.location && record.location.settledAt === null
+          ? [{ daemonId: record.location.daemonId, threadId: record.threadId, name: record.name }] : []),
       readComposerProfiles: context.readComposerProfiles,
       recordComposerProfileUsage: context.recordComposerProfileUsage,
       recordComposerModelUsage: context.recordComposerModelUsage,
@@ -650,7 +653,8 @@ export default class WorkbenchThreadStateFeature {
     providerEntries: WorkbenchObservedThreadEntry[],
     relationships: SubagentRelationshipList,
   ) {
-    const harnessRelationships = relationships.subagents.filter((relationship) => relationship.harness === harness);
+    // A child in another folder or daemon is projected by its own folder's daemon, never into its parent's project.
+    const harnessRelationships = relationships.subagents.filter((relationship) => relationship.harness === harness && !relationship.location);
     const relationshipKeys = new Set(harnessRelationships.map((relationship) => relationship.threadId));
     // Provider lists may ignore cwd filters. Admission, not the requested filter,
     // establishes which project may receive each row.
@@ -668,6 +672,7 @@ export default class WorkbenchThreadStateFeature {
         directSubagentIndex: relationship.directSubagentIndex, entryKind: "subagent", identity: { harness, threadId: relationship.threadId },
         lifecycle, name: relationship.name,
         parentThreadId: relationship.parentThreadId, pinned: false, profileId: relationship.profileId, profileName: relationship.profileName,
+        ...(relationship.parent ? { parentDaemonId: relationship.parent.daemonId, parentHostname: relationship.parent.hostname } : {}),
         projectId, title: relationship.title, workbenchTitle: relationship.title, updatedAt: relationship.updatedAt,
       };
     })];

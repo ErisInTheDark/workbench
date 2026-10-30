@@ -151,12 +151,26 @@ export function defineThreadQuestionnaireSchema(schemaVersion: number) {
     })],
   });
 
+  /** The remote thread, folder or feedback source a network prompt asks to reach, as a `NetworkTarget` JSON conformed on read. */
+  const networkAccessTable = defineTable("workbench_thread_questionnaire_network_access", {
+    questionnaire_id: text().primaryKey().references("workbench_thread_questionnaires", "id", { onDelete: "CASCADE" }),
+    target: text().notNull(),
+  });
+  const networkAccess = defineTableHistory({
+    current: networkAccessTable,
+    versions: [tableVersion({
+      schemaVersion: releases.crossDaemonNetworking.version, table: networkAccessTable, migration: createTable(networkAccessTable),
+    })],
+  });
+
   return {
     tables: {
       questionnaires: questionnaires.current, questions: questions.current, options: options.current,
       answerGroups: answerGroups.current, answers: answers.current, mcpTools: mcpTools.current,
-      mcpAuthorizations: mcpAuthorizations.current, mcpConnections: mcpConnections.current,
+      mcpAuthorizations: mcpAuthorizations.current, mcpConnections: mcpConnections.current, networkAccess: networkAccess.current,
     },
-    history: defineSubsystemHistory([questionnaires, questions, options, answerGroups, answers, mcpTools, mcpAuthorizations, mcpConnections]),
+    history: defineSubsystemHistory([
+      questionnaires, questions, options, answerGroups, answers, mcpTools, mcpAuthorizations, mcpConnections, networkAccess,
+    ]),
   };
 }

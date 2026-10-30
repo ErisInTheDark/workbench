@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - WORKBENCH_THREAD_COMMANDS: typed task actions plus thread refresh, recall, and Code Mode exposure definitions shared by CLI and MCP.
+ * - WORKBENCH_THREAD_COMMANDS: typed task actions plus thread refresh, recall, summary, and Code Mode exposure definitions shared by CLI
+ *   and MCP.
  */
 import { z } from "zod";
 
@@ -22,6 +23,11 @@ function requireCallerThreadId(callerThreadId: string | null) {
 
 function targetThreadId(explicitThreadId: string | undefined, callerThreadId: string | null) {
   return explicitThreadId ?? requireCallerThreadId(callerThreadId);
+}
+
+/** Recall query parameters naming the calling thread; the daemon strips them before reading history. */
+function recallCaller(callerThreadId: string | null, cwd: string) {
+  return { caller: callerThreadId, cwd: callerThreadId ? cwd : null };
 }
 
 const taskGet = defineWorkbenchAgentCommand({
@@ -147,8 +153,11 @@ const recallSearch = defineWorkbenchAgentCommand({
       threadId: flags.optional("--thread") ?? undefined,
     };
   },
-  buildRequest(input, { callerThreadId }) {
-    return postWorkbenchAgentCommand(`/api/thread-context/${encodeURIComponent(targetThreadId(input.threadId, callerThreadId))}`, {
+  buildRequest(input, { callerThreadId, cwd }) {
+    // The caller travels beside the target so a thread on another daemon can be reached through a network grant.
+    return postWorkbenchAgentCommand(queryWorkbenchAgentCommandPath(
+      `/api/thread-context/${encodeURIComponent(targetThreadId(input.threadId, callerThreadId))}`, recallCaller(callerThreadId, cwd),
+    ), {
       action: "search", query: input.query,
       ...(input.kinds?.length ? { kinds: input.kinds } : {}),
       ...(input.limit !== undefined ? { limit: input.limit } : {}),
@@ -182,12 +191,32 @@ const recall = defineWorkbenchAgentCommand({
       threadId: flags.optional("--thread") ?? undefined,
     };
   },
-  buildRequest(input, { callerThreadId }) {
+  buildRequest(input, { callerThreadId, cwd }) {
     return getWorkbenchAgentCommand(queryWorkbenchAgentCommandPath(
       `/api/thread-context/${encodeURIComponent(targetThreadId(input.threadId, callerThreadId))}`,
-      { after: input.after ?? null, around: input.around ?? null, before: input.before ?? null, kind: input.kinds ?? [] },
+      {
+        after: input.after ?? null, around: input.around ?? null, before: input.before ?? null, kind: input.kinds ?? [],
+        ...recallCaller(callerThreadId, cwd),
+      },
     ));
   },
 });
 
-export const WORKBENCH_THREAD_COMMANDS = [taskGet, taskSet, taskCompleted, taskBlocked, refresh, compact, recallSearch, recall] as const;
+const summary = defineWorkbenchAgentCommand({
+  description: "Read sidebar facts (title, status, project, host) of threads on this or any reachable daemon; needs no network approval.",
+  effects: { idempotent: true, readOnly: true },
+  helpGroups: ["thread"],
+  mcpCodeModeEligible: true,
+  words: ["thread", "summary"],
+  usage: "wb thread summary --thread <id>...",
+  inputSchema: z.object({ threadIds: z.array(requiredText).min(1).max(64) }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--thread"] });
+    return { threadIds: flags.repeated("--thread") };
+  },
+  buildRequest({ threadIds }, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/thread-summary", { callerThreadId: requireCallerThreadId(callerThreadId), cwd, threadIds });
+  },
+});
+
+export const WORKBENCH_THREAD_COMMANDS = [taskGet, taskSet, taskCompleted, taskBlocked, refresh, compact, recallSearch, recall, summary] as const;

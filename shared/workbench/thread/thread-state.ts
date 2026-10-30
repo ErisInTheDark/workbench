@@ -10,7 +10,7 @@
  * - WorkbenchShellQueueEntrySchema/WorkbenchShellQueueEntry: one live wb shell's expensive-queue timing.
  * - WorkbenchShellOutputEntrySchema/WorkbenchShellOutputEntry: one running wb shell's newest output.
  * - WorkbenchBackgroundShellSchema/WorkbenchBackgroundShell: one running wb shell whose call already answered, with its command.
- * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, shell queue, shell output, background shells, goal, skills, todos, addressed feedback) on thread observations.
+ * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, shell queue, shell output, background shells, goal, skills, todos, addressed feedback, network history) on thread observations.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts, plus the subagent refinement they reapply.
  * - settleWorkbenchQuestionnaireWait/withWorkbenchThreadLifecycle: repair entries so a questionnaire exists only with its pendingInput wait, and move lifecycles under that rule.
@@ -62,7 +62,8 @@ import { WorkbenchThreadTodoSchema } from "./thread-todo.ts";
 import { WorkbenchThreadAddressedFeedbackSchema } from "./thread-addressed-feedback.ts";
 import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
 import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
-import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
+import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
+import { NetworkHistoryEntrySchema, WorkbenchUserInputNetworkAccessContextSchema } from "../network/network-grants.ts";
 
 import { areDeeplyEqual } from "../deep-equality.ts";
 import GitArcPathSet from "../git/GitArcPathSet.ts";
@@ -485,6 +486,8 @@ const WorkbenchUserInputRequestSchema = z.object({
   }).strict().optional(),
   /** The server URL an agent asks to connect for its turn. */
   mcpConnection: z.object({ server: z.string().min(1), url: z.string().url() }).strict().optional(),
+  /** The remote thread, folder or feedback source a network prompt asks to reach. */
+  networkAccess: WorkbenchUserInputNetworkAccessContextSchema.optional(),
   questions: z.array(WorkbenchUserInputQuestionSchema).min(1),
   submitLabel: z.string(),
   summary: z.string(),
@@ -568,6 +571,8 @@ export const ThreadRuntimeSchema = z.object({
   todos: z.array(WorkbenchThreadTodoSchema).optional(),
   /** Feedback the thread was launched to address; absent from daemons that predate it. */
   addressedFeedback: z.array(WorkbenchThreadAddressedFeedbackSchema).optional(),
+  /** Remote threads, folders and feedback sources the user approved for this thread, including revoked ones. */
+  networkHistory: z.array(NetworkHistoryEntrySchema).optional(),
 });
 export type ThreadRuntime =z.infer<typeof ThreadRuntimeSchema>;
 export const ThreadRuntimeRecordSchema = z.record(z.string().min(1), ThreadRuntimeSchema);
@@ -666,6 +671,9 @@ const SubagentEntryBaseSchema = SidebarCommonSchema.extend({
   lifecycle: WorkbenchThreadLifecycleSchema,
   name: z.string().trim().min(1),
   parentThreadId: WorkbenchThreadIdSchema,
+  /** Set when the parent lives on another daemon; absent for same-daemon children. */
+  parentDaemonId: DaemonIdSchema.optional(),
+  parentHostname: z.string().max(512).optional(),
   pinned: z.boolean(),
   profileId: z.string(),
   profileName: z.string(),
@@ -808,6 +816,8 @@ export const WorkbenchThreadObservationSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
   /** Live provider facts per listed thread, keyed by thread id; the app adds them from its observation's runtime. */
   runtime: ThreadRuntimeRecordSchema.optional(),
+  /** The root's children on other daemons; the app merges their entries in from their own daemons. */
+  remoteSubagents: z.array(z.object({ daemonId: DaemonIdSchema, threadId: WorkbenchThreadIdSchema }).strict()).optional(),
   subscriptionId: CanonicalUuidSchema,
   target: WorkbenchObservedThreadTargetSchema,
   updateKind: z.literal("threadObservation"),

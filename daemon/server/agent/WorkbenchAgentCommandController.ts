@@ -38,6 +38,9 @@ interface WorkbenchAgentDirectPort {
   executeQuestionnaireRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeThreadGitRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeThreadRecallRequest?: (request: WorkbenchAgentCliRequest, signal: AbortSignal) => Promise<Response>;
+  executeThreadSummary?: (body: object, signal: AbortSignal) => Promise<Response>;
+  /** `wb network request`: a long wait on the user's network prompts. */
+  executeNetworkRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeTranscriptQuery?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSocketSpy?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -398,6 +401,14 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path.startsWith("/api/thread-context/") && this.direct.executeThreadRecallRequest) {
       return await this.direct.executeThreadRecallRequest(request, signal);
+    }
+    if (request.path === "/api/thread-summary" && request.body) {
+      if (!this.direct.executeThreadSummary) throw new Error("Thread summaries are not configured.");
+      return await this.direct.executeThreadSummary(request.body, signal);
+    }
+    if (request.path === "/api/network" && request.body) {
+      if (!this.direct.executeNetworkRequest) throw new Error("Agent networking is not configured.");
+      return await this.direct.executeNetworkRequest(request.body, signal);
     }
     if (request.path === "/internal/proof-of-work" && request.body) {
       if (!this.direct.executeProofOfWorkRequest) throw new Error("Proof of work is not configured.");

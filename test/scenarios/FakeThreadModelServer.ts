@@ -2,7 +2,8 @@
  * Exports:
  * - FakeThreadAction: one test-authored model response and optional tool request.
  * - FakeThreadWire: model wire selected by the request route.
- * - default FakeThreadModelServer: own a disposable loopback model endpoint for provider scenarios, optionally speaking commentary through a commentary tool.
+ * - default FakeThreadModelServer: own a disposable loopback model endpoint for provider scenarios, optionally speaking commentary through a commentary tool,
+ *   with marker-routed lanes for conversations that run at the same time.
  */
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
@@ -48,6 +49,8 @@ type ModelRequest = {
 type ToolCall = { id: string; name: string; arguments: Record<string, unknown> };
 /** `endAfter`: the call was a text-only action's commentary, so its result is answered with an empty final. */
 type PendingResult = { callId: string; provider: ProviderWire; endAfter: boolean };
+/** One conversation's script; `marker` routes requests carrying it, and the unmarked lane takes the rest. */
+type Lane = { marker: string | null; actions: FakeThreadAction[]; pendingResult: PendingResult | null };
 
 function toolName(tool: Tool) {
   return tool.name ?? tool.function?.name ?? "";
@@ -89,8 +92,9 @@ function fillSummaryTemplate(body: ModelRequest, action: FakeThreadAction): Fake
 }
 
 export default class FakeThreadModelServer {
-  private readonly actions: FakeThreadAction[] = [];
-  private pendingResult: PendingResult | null = null;
+  private readonly unmarked: Lane = { marker: null, actions: [], pendingResult: null };
+  /** Checked in the order they were first enqueued, before the unmarked lane. */
+  private readonly lanes: Lane[] = [];
   private failure: Error | null = null;
   private closed = false;
   private forbiddenPromptText: string | null = null;
@@ -107,7 +111,7 @@ export default class FakeThreadModelServer {
 
   get lastFailure() { return this.failure; }
   /** Scripted responses no request has consumed yet. */
-  get queuedActions() { return this.actions.length; }
+  get queuedActions() { return [this.unmarked, ...this.lanes].reduce((total, lane) => total + lane.actions.length, 0); }
 
   /** Resolve when a held response has streamed its reasoning and is waiting open. */
   async nextHeld(signal: AbortSignal) {
@@ -153,7 +157,18 @@ export default class FakeThreadModelServer {
 
   enqueue(actions: readonly FakeThreadAction[]) {
     if (this.closed) throw new Error("Fake model is closed.");
-    this.actions.push(...actions);
+    this.unmarked.actions.push(...actions);
+  }
+
+  /**
+   * Script one conversation that runs alongside others on this endpoint: requests whose body carries `marker`, such as the
+   * thread's first prompt, take these actions and keep their own pending tool result.
+   */
+  enqueueLane(marker: string, actions: readonly FakeThreadAction[]) {
+    if (this.closed) throw new Error("Fake model is closed.");
+    let lane = this.lanes.find(candidate => candidate.marker === marker);
+    if (!lane) this.lanes.push(lane = { marker, actions: [], pendingResult: null });
+    lane.actions.push(...actions);
   }
 
   forbidPromptText(text: string) {
@@ -173,7 +188,7 @@ export default class FakeThreadModelServer {
   }
 
   forgetInterruptedTool() {
-    this.pendingResult = null;
+    this.unmarked.pendingResult = null;
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse) {
@@ -213,8 +228,10 @@ export default class FakeThreadModelServer {
       response.end();
       return;
     }
-    if (this.pendingResult) {
-      const pending = this.pendingResult;
+    const serialized = JSON.stringify(body);
+    const lane = this.lanes.find(candidate => serialized.includes(JSON.stringify(candidate.marker).slice(1, -1))) ?? this.unmarked;
+    if (lane.pendingResult) {
+      const pending = lane.pendingResult;
       if (pending.provider !== provider || !this.observedResult(pending, body)) {
         this.recordFailure(new Error("Fake model tool result was not observed."));
         response.writeHead(409);
@@ -222,7 +239,7 @@ export default class FakeThreadModelServer {
         return;
       }
       if (pending.endAfter) {
-        this.pendingResult = null;
+        lane.pendingResult = null;
         response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "text/event-stream; charset=utf-8" });
         this.chatResponse(provider, response, body, { text: "" }, []);
         response.end();
@@ -251,7 +268,7 @@ export default class FakeThreadModelServer {
       if (missing) throw new Error(`Hidden Workbench context missing from next model request: ${missing}`);
       this.nextPromptText.shift();
     }
-    const action = this.actions[0];
+    const action = lane.actions[0];
     if (!action) {
       const system = JSON.stringify(body.messages?.[0] ?? body.system ?? body.systemInstruction ?? "").slice(0, 160);
       throw new Error(`Unexpected fake model request on ${provider} (tools: ${body.tools?.length ?? 0}, system: ${system}).`);
@@ -281,7 +298,7 @@ export default class FakeThreadModelServer {
     if (action.tool && ("input" in action.tool) !== (provider === "codex" && matches[0]?.type === "custom")) {
       throw new Error("Fake model tool wire type does not match its scripted action.");
     }
-    this.actions.shift();
+    lane.actions.shift();
     const callIdFor = (tool: Tool) => provider === "gemini" ? toolName(tool)
       : `${provider === "claude" ? "toolu" : "call"}_${randomUUID()}`;
     const commentary = this.commentaryTool && provider !== "codex" && !action.bare && action.text?.trim()
@@ -294,7 +311,7 @@ export default class FakeThreadModelServer {
     if (main && mainId && action.tool && "arguments" in action.tool) {
       calls.push({ id: mainId, name: toolName(main), arguments: action.tool.arguments });
     }
-    this.pendingResult = mainId ? { callId: mainId, provider, endAfter: false }
+    lane.pendingResult = mainId ? { callId: mainId, provider, endAfter: false }
       : commentary ? { callId: calls[0]!.id, provider, endAfter: true } : null;
     response.writeHead(200, {
       "Cache-Control": "no-store",

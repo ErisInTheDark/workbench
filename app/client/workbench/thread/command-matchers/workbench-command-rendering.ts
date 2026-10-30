@@ -61,6 +61,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "mcp_call",
   "mcp_authorize",
   "mcp_download",
+  "network_request",
   // Vis is deferred; its CLI matcher and `mcp_call` on server wb render through these names, which also keep earlier MCP calls rendering.
   "vis_start",
   "vis_end",
@@ -92,6 +93,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "thread_recall_search",
   "thread_recall_expand",
   "thread_recall",
+  "thread_summary",
   "git_add",
   "git_unstage",
   "git_commit",
@@ -855,6 +857,8 @@ export function getWorkbenchCommandRoute(
     case "mcp_authorize":
       // The composer request and its transcript decision card own this call's presentation.
       return hidden("workbench-cli.mcp-request");
+    case "network_request":
+      return hidden("workbench-cli.network-request");
     case "mcp_download": {
       const server = readString(args.server);
       const url = readString(args.url);
@@ -902,6 +906,11 @@ export function getWorkbenchCommandRoute(
         kind: "threadRecall",
         operation: { action: "recall", query: null },
       }, "Recalling thread history", { threadRecalls: 1 });
+    case "thread_summary": {
+      const count = readStringArray(args.threadIds).length;
+      const target = count > 1 ? `${count} thread summaries` : "thread summary";
+      return simple("workbench-cli.thread-summary", actionTarget("Reading ", target), actionTarget("Read ", target));
+    }
     case "git_add":
       return simple("workbench-git.selection", actionTarget("Selecting ", "files for commit"), actionTarget("Selected ", "files for commit"));
     case "git_unstage":

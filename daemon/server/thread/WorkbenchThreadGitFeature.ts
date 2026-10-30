@@ -20,6 +20,7 @@ import type {
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 import WorkbenchGitIntegrationSession, { type WorkbenchGitIntegrationClaim } from "../lib/workbench/git/WorkbenchGitIntegrationSession";
 import type { GitPeerFetchOutcome, GitPeerFetchQuestion } from "workbench-shared/workbench/git/git-peer-contracts";
+import { ProjectFolderAddress } from "workbench-shared/workbench/project/project-folder-address";
 import type WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 
@@ -29,7 +30,7 @@ type ThreadGitAction = "add" | "amend" | "commit" | "integrate" | "thread" | "un
 const INTEGRATE_OPERATIONS = ["start", "view", "resolve", "wait", "apply", "end"] as const;
 type IntegrateOperation = typeof INTEGRATE_OPERATIONS[number];
 
-/** Per-request ports the agent command host supplies: caller cancellation and the connected app's peer fetch. */
+/** Per-request ports the agent command host supplies: caller cancellation and the app-relayed peer fetch. */
 export interface WorkbenchThreadGitRequestPorts {
   signal?: AbortSignal;
   fetchPeer?(question: GitPeerFetchQuestion, signal: AbortSignal): Promise<Extract<GitPeerFetchOutcome, { kind: "fetched" }>>;
@@ -301,10 +302,8 @@ export default class WorkbenchThreadGitFeature {
         if (!resolved.project) throw new Error("The current directory has no Workbench project.");
         const branchRef = (await repository.run(["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
         if (!branchRef.startsWith("refs/heads/")) throw new Error("Detached HEAD cannot integrate incoming commits.");
-        const separator = from.indexOf(":");
         const fetched = await ports.fetchPeer({
-          projectId: resolved.project.id, branch: branchRef.slice("refs/heads/".length),
-          host: separator < 0 ? from : from.slice(0, separator), folder: separator < 0 ? null : from.slice(separator + 1) || null,
+          projectId: resolved.project.id, branch: branchRef.slice("refs/heads/".length), ...ProjectFolderAddress.parseHost(from),
         }, signal);
         return textResponse(await read(() => session.start({
           incoming: fetched.tip, source: { kind: "peer", hostname: fetched.hostname, rootPath: fetched.rootPath }, mode, carryOwn,

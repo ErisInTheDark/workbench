@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type Database from "better-sqlite3";
-import type { DraftId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import type { DaemonId, DraftId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import {
   hasWorkbenchThreadDraftContent,
   WorkbenchComposerProfileSelectionSchema,
@@ -48,6 +48,8 @@ interface ThreadStateRow {
   archived: 0 | 1 | null;
   order_at: number | null;
   parent_thread_id: WorkbenchThreadId | null;
+  parent_daemon_id: DaemonId | null;
+  parent_hostname: string | null;
   cwd: string | null;
   name: string | null;
   profile_id: string | null;
@@ -68,10 +70,11 @@ interface ThreadStateRow {
   mcp_generation: string | null;
 }
 
+// A subagent's state lives in exactly one of the local or remote-parent tables; `child` reads whichever holds it.
 const SELECT_THREAD_STATES = `
   SELECT state.*, thread.project_id, top.archived, top.order_at,
-    child.parent_thread_id, child.cwd, child.name, child.profile_id, child.profile_name,
-    child.direct_subagent_index, child.created_at, child.updated_at, child.pinned AS child_pinned,
+    child.parent_thread_id, child.parent_daemon_id, child.parent_hostname, child.cwd, child.name, child.profile_id,
+    child.profile_name, child.direct_subagent_index, child.created_at, child.updated_at, child.pinned AS child_pinned,
     lifecycle.lifecycle_kind, lifecycle.reason, lifecycle.settled, lifecycle.turn_id,
     lifecycle.request_key, lifecycle.agent_status, lifecycle.error_text,
     retention.settled_at, retention.git_history_cleaned_at, retention.mcp_generation
@@ -79,7 +82,15 @@ const SELECT_THREAD_STATES = `
   JOIN workbench_threads thread ON thread.id = state.thread_id
   LEFT JOIN workbench_thread_lifecycle lifecycle ON lifecycle.thread_id = state.thread_id
   LEFT JOIN workbench_top_level_thread_states top ON top.thread_id = state.thread_id
-  LEFT JOIN workbench_subagent_thread_states child ON child.thread_id = state.thread_id
+  LEFT JOIN (
+    SELECT thread_id, parent_thread_id, NULL AS parent_daemon_id, NULL AS parent_hostname, cwd, name, profile_id, profile_name,
+      direct_subagent_index, created_at, updated_at, pinned
+    FROM workbench_subagent_thread_states
+    UNION ALL
+    SELECT thread_id, parent_thread_id, parent_daemon_id, parent_hostname, cwd, name, profile_id, profile_name,
+      direct_subagent_index, created_at, updated_at, pinned
+    FROM workbench_remote_subagent_thread_states
+  ) child ON child.thread_id = state.thread_id
   LEFT JOIN workbench_thread_retention retention ON retention.thread_id = state.thread_id
 `;
 
@@ -551,12 +562,18 @@ export default class WorkbenchThreadStateRelationalRepository {
       const owner = this.database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?")
         .get(threadId) as { project_id: string };
       if (owner.project_id !== this.projects.resolveStoredReference(record.projectId)) throw new Error("Subagent state belongs to another project.");
-      this.writeDomainFact("workbench_subagent_thread_states", ["thread_id"], {
+      const facts = {
         thread_id: threadId, thread_kind: threadKind, parent_thread_id: record.parentThreadId,
         cwd: record.cwd, name: record.name, profile_id: record.profileId, profile_name: record.profileName,
         direct_subagent_index: record.directSubagentIndex ?? 0, created_at: record.createdAt,
         updated_at: record.updatedAt, pinned: Number(record.pinned),
-      });
+      };
+      // A parent on another daemon has no local thread row to reference.
+      if (record.parentDaemonId) {
+        this.writeDomainFact("workbench_remote_subagent_thread_states", ["thread_id"], {
+          ...facts, parent_daemon_id: record.parentDaemonId, parent_hostname: record.parentHostname ?? "",
+        });
+      } else this.writeDomainFact("workbench_subagent_thread_states", ["thread_id"], facts);
     }
   }
 
@@ -698,6 +715,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     if (lifecycle.settled && row.child_pinned) throw new Error("Settled subagent cannot remain pinned.");
     return settleWorkbenchQuestionnaireWait({
       ...common, entryKind: "subagent" as const, parentThreadId: row.parent_thread_id, projectId: row.project_id,
+      ...(row.parent_daemon_id ? { parentDaemonId: row.parent_daemon_id, parentHostname: row.parent_hostname ?? "" } : {}),
       cwd: row.cwd, name: row.name, profileId: row.profile_id, profileName: row.profile_name,
       directSubagentIndex: row.direct_subagent_index, createdAt: row.created_at,
       updatedAt: row.updated_at, pinned: Boolean(row.child_pinned),

@@ -8,3 +8,7 @@
 - Persist network configuration, membership, grants, and handover or rename intent before acknowledging native changes; if persistence fails, keep the previous safe state and expose the failure.
 - Linux sandboxed commands reach every host loopback port, and the host reaches their loopback listeners, through the Workbench relay directly, never through Codex's proxy; remote egress policy stays with Codex's managed proxy.
 - Serve only the Workbench-owned DNS suffix from the selected DNS app; leave public and unrelated names to the configured external path, with no hidden resolver failover.
+- Agents reach other daemons only through app relays; daemons never connect to each other. Apps stamp a relay's origin from its socket, dispatch it once, and never relay for another app or a relayed call.
+- Target daemons authorize every relayed call against their own records; only an app executing a user's approval creates a grant. Relayed calls never relay further. Ungranted callers read only thread summaries. Cross-daemon payloads reach agents marked untrusted.
+- An app opens a thread only when it reaches every daemon the thread is networked with; otherwise it shows the summary.
+- Apps keep a standby connection to each reachable awake daemon for relays; standby-only connections never keep a daemon awake.

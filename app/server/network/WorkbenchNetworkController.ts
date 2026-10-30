@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchNetworkController: own app settings handoff, the browser launch URL and a private service session, relaunching a lost host while the app runs.
+ * - default WorkbenchNetworkController: own app settings handoff, the browser launch URL and a private service session, relaunching a lost host while the app runs; isolated multi-daemon scenarios add their loopback peer daemons.
  */
 import {
   WorkbenchNetworkActionSchema, workbenchNetworkMode,
@@ -16,11 +16,29 @@ import type { WorkbenchDaemonDiscovery, WorkbenchDaemonIdentity } from "workbenc
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import detectHostCertificatePlatform from "workbench-shared/network/host-certificate-platform";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
+import { z } from "zod";
 
 type SettingsCaller = { deviceNodeId: string | null; origin: string };
 type ServiceClient = Pick<WorkbenchServiceClient, "start" | "close" | "reconnect" | "request" | "subscribe" | "getSnapshot">;
 /** Delays before each further relaunch attempt after a failed one; the last repeats while the app stays open. */
 const RELAUNCH_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000, 60_000] as const;
+
+/**
+ * Isolated multi-daemon scenarios have no tailnet, so `pnpm test:daemons` names its peer daemons' loopback endpoints here,
+ * the same way scenario-only fake model endpoints are configured. Nothing else sets it.
+ */
+const SCENARIO_PEERS: WorkbenchDaemonDiscovery["peers"] = (() => {
+  const raw = process.env.WORKBENCH_SCENARIO_PEER_DAEMONS;
+  if (!raw) return [];
+  const parsed = conformToZodSchema(z.array(z.object({ daemonId: z.uuid(), hostname: z.string().min(1), origin: z.url() }).strict()),
+    JSON.parse(raw) as unknown, []).data;
+  return parsed.map(peer => ({
+    peerId: `scenario:${peer.daemonId}`, hostname: peer.hostname, phase: "verified" as const, origin: peer.origin,
+    identity: { protocol: 1 as const, daemonId: peer.daemonId, hostname: peer.hostname, state: "ready" as const, wakeEnabled: false },
+    endpoints: { httpOrigin: peer.origin, secureOrigin: null },
+  }));
+})();
 
 function abortableDelay(delayMs: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -141,11 +159,12 @@ export default class WorkbenchNetworkController {
 
   daemonSources() {
     const service = this.client?.getSnapshot();
+    const discovery = this.discovery(null);
     return {
       current: service?.phase === "ready",
       attached: this.displayIdentity(service?.snapshot?.identity, this.runtime.host?.nodeId) ?? null,
       localOrigin: service?.phase === "ready" ? service.snapshot?.daemonOrigin ?? null : null,
-      discovery: this.discovery(null),
+      discovery: SCENARIO_PEERS.length ? { ...discovery, peers: [...discovery.peers, ...SCENARIO_PEERS] } : discovery,
     };
   }
 
@@ -173,6 +192,7 @@ export default class WorkbenchNetworkController {
   }
 
   canAccessPeer(peerId: string): boolean | null {
+    if (SCENARIO_PEERS.some(peer => peer.peerId === peerId)) return true;
     if (!this.configurationValue) return null;
     const group = this.configuration.group;
     if (!group || group.access === "all") return true;

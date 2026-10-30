@@ -20,9 +20,11 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import LoaderIcon from "../LoaderIcon";
 import Tooltip from "../../ui/Tooltip";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
+import ThreadNetworkPanel from "./ThreadNetworkPill";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
 import { useThread } from "../use-thread";
 import {
-  CheckCheckIcon, ClipboardListIcon, FlagFilledIcon, FlagIcon, GitArcIcon, GitArcProposalIcon, MegaphoneIcon, SlashIcon,
+  CheckCheckIcon, ClipboardListIcon, FlagFilledIcon, FlagIcon, GitArcIcon, GitArcProposalIcon, MegaphoneIcon, NetworkIcon, SlashIcon,
   WallpaperIcon,
 } from "../workbench-icons";
 import { GitArcClaimIcon, GitArcUnclaimIcon } from "./GitArcIcon";
@@ -61,12 +63,15 @@ export default function ThreadStatusArea({
   gitCommitHistory,
   harness,
   liveVerb,
+  network = null,
   skills,
   threadId,
   threadLifecycle,
   todos,
   vis,
 }: {
+  /** Remote targets the user let this thread reach; absent for drafts. */
+  network?: { history: readonly NetworkHistoryEntry[]; onRevoke(entry: NetworkHistoryEntry): Promise<void> } | null;
   gitArc: Omit<ThreadGitArcWorkProps, "threadId"> | null;
   gitCommitHistory?: WorkbenchThreadGitCommitHistory;
   harness: WorkbenchHarnessId;
@@ -175,6 +180,15 @@ export default function ThreadStatusArea({
       ),
       segments: arcSegments,
     },
+    ...(network?.history.length ? [{
+      id: "network",
+      label: `Network access to ${network.history.length} remote targets`,
+      render: () => <ThreadNetworkPanel history={network.history} onRevoke={network.onRevoke} />,
+      segments: [{
+        key: "network",
+        content: <><NetworkIcon size={14} />{count(network.history.filter(entry => entry.revokedAt === null).length)}</>,
+      }],
+    }] : []),
     ...(todos ? [{
       id: "todos",
       label: "Goal, todos and addressed feedback",

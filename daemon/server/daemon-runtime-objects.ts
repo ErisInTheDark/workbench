@@ -226,6 +226,8 @@ export interface DaemonRuntimeObjects {
   reloadController: WorkbenchDaemonReloadController;
   reloadDirt: WorkbenchReloadDirtController;
   messages: import("./thread/WorkbenchThreadMessageController").default;
+  /** Outbound agent networking: target resolution, prompts on refusal, and relayed calls. */
+  network: import("./core/WorkbenchCoreNetworkFeature").default;
   subagents: WorkbenchSubagentFeature;
   subagentQueues: import("./subagents/WorkbenchSubagentQueueController").default;
   stats: WorkbenchStatsController;

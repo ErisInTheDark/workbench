@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchSubagentFeatureContext: current-generation project, relationship, settle handover and thread-state ports.
- * - default WorkbenchSubagentFeature: own the reloadable subagent controller and durable relationship-store wrapper.
+ * - default WorkbenchSubagentFeature: own the reloadable subagent controller, its cross-folder and cross-daemon children, and the
+ *   durable relationship-store wrapper.
  */
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
@@ -13,7 +14,8 @@ import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import type WorkbenchThreadIdentityController from "../thread/WorkbenchThreadIdentityController";
 import type { WorkbenchSubagentControllerOptions } from "./WorkbenchSubagentController";
 import type { WorkbenchSubagentPersistence } from "../database/thread-state/workbench-thread-state-persistence";
-import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { ProjectId, ThreadReference, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import WorkbenchRemoteSubagents, { type RemoteSubagentNetwork } from "./WorkbenchRemoteSubagents";
 
 export interface WorkbenchSubagentFeatureContext {
   identities: WorkbenchThreadIdentityController;
@@ -34,23 +36,50 @@ export interface WorkbenchSubagentFeatureContext {
     mutate(request: WorkbenchThreadStateRequest): Promise<{ accepted: boolean }>;
     subscribe(listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void): () => void;
   };
+  /** Relayed calls to other folders and daemons. */
+  network: RemoteSubagentNetwork;
+  resolveProject(projectId: ProjectId): Promise<{ id: ProjectId; rootPath: string; daemonProject: boolean }>;
+  workbenchOrigin: string | null;
 }
 
 export default class WorkbenchSubagentFeature {
   private readonly controller: WorkbenchSubagentController;
   private readonly store: WorkbenchSubagentStore;
+  /** Children whose parent and child live in different folders or daemons. */
+  readonly remote: WorkbenchRemoteSubagents;
 
   constructor(private readonly context: WorkbenchSubagentFeatureContext) {
     this.store = new WorkbenchSubagentStore(context.persistence);
+    const publicThreadId = async (threadId: WorkbenchThreadId | ThreadReference, projectId: ProjectId) => {
+      const identity = await context.identities.resolve({ threadId, projectId });
+      if (!identity) throw new Error("Subagent metadata is unavailable for public output.");
+      return identity.threadId;
+    };
+    this.remote = new WorkbenchRemoteSubagents({
+      network: context.network,
+      store: this.store,
+      provider: context.provider,
+      profiles: () => context.profileStore.read(),
+      resolveProject: context.resolveProject,
+      publicThreadId,
+      resolveThread: async threadId => {
+        const identity = await context.identities.resolve({ threadId });
+        const harness = identity?.bindings[0]?.harness;
+        return identity && harness ? { projectId: identity.projectId, harness: harness as WorkbenchHarness } : null;
+      },
+      installChild: context.onRelationshipCommitted,
+      threadState: context.threadState,
+      stopThread: context.stopThread,
+      workbenchOrigin: context.workbenchOrigin,
+      warn: message => { console.warn("[remote-subagents]", message.slice(0, 500)); },
+    });
     this.controller = new WorkbenchSubagentController({
       provider: context.provider,
       liveApprovals: context.liveApprovals,
       identities: context.identities,
-      publicThreadId: async (threadId, projectId) => {
-        const identity = await context.identities.resolve({ threadId, projectId });
-        if (!identity) throw new Error("Subagent metadata is unavailable for public output.");
-        return identity.threadId;
-      },
+      remote: this.remote,
+      network: context.network,
+      publicThreadId,
       onRelationshipCommitted: context.onRelationshipCommitted,
       profileStore: context.profileStore,
       resolveProjectFromCwd: context.resolveProjectFromCwd,
@@ -66,9 +95,16 @@ export default class WorkbenchSubagentFeature {
   }
 
   beginRuntimeDrain() { this.controller.beginRuntimeDrain(); }
-  dispose() { return this.controller.dispose(); }
+  dispose() {
+    this.remote.dispose();
+    return this.controller.dispose();
+  }
   handleRequest(request: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse> { return this.controller.handleRequest(request, signal); }
   listRelationships(projectId: ProjectId) { return this.store.list({ projectId }); }
+  readRoster(threadId: WorkbenchThreadId) { return this.store.readRoster(threadId); }
+  getOwned(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadId: WorkbenchThreadId) {
+    return this.store.getOwned(parentThreadId, projectId, threadId);
+  }
   resolveGitArcPeer(input: { cwd: string; parentThreadId: WorkbenchThreadId; name: string }) {
     return this.controller.resolveGitArcPeer(input);
   }

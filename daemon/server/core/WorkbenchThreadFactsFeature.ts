@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadFactsFeature: build the thread-owned facts (activatable skills, components, instruction selection, goals, todos,
- *   addressed feedback, vis sessions and agent context), fan their changes out to runtime observers and thread summaries, and answer which
+ *   addressed feedback, network history, vis sessions and agent context), fan their changes out to runtime observers and thread summaries, and answer which
  *   thread-owned work holds settlement.
  */
 import path from "node:path";
@@ -12,6 +12,7 @@ import { WorkbenchThreadIdSchema, type WorkbenchThreadId } from "workbench-share
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { ThreadRuntime, WorkbenchThreadSettlementHold, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
+import { ThreadNetworkAccess, type NetworkHistoryEntry, type NetworkTarget } from "workbench-shared/workbench/network/network-grants";
 import { readThreadComponentTree, ThreadCompiledComponentSchema, ThreadCompiledStyleSchema } from "workbench-shared/workbench/thread/thread-component-tree";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { DaemonProcessContext } from "../daemon-process-context";
@@ -52,6 +53,16 @@ export default class WorkbenchThreadFactsFeature {
   readonly goals: WorkbenchThreadGoalController;
   readonly todos: WorkbenchThreadTodoController;
   readonly addressedFeedback: WorkbenchThreadAddressedFeedbackController;
+  /**
+   * Remote targets the user approved for each thread; changes refresh its networked-daemon summary fact, as does `refresh`
+   * when the thread gains a parent on another daemon.
+   */
+  readonly networkHistory: {
+    read(threadId: string): Promise<NetworkHistoryEntry[]>;
+    record(threadId: string, target: NetworkTarget): Promise<NetworkHistoryEntry[]>;
+    revoke(threadId: string, entryId: string): Promise<NetworkHistoryEntry[]>;
+    refresh(threadId: string): Promise<NetworkHistoryEntry[]>;
+  };
   readonly vis: WorkbenchVisController;
   readonly agentContext: WorkbenchAgentContextController;
   /** Cancels this generation's vis browser calls when the core node is disposed. */
@@ -275,6 +286,24 @@ export default class WorkbenchThreadFactsFeature {
         ports.publishRuntime(threadId, { addressedFeedback });
       },
     });
+    const historyChanged = async (threadId: string, history: NetworkHistoryEntry[]) => {
+      const entry = await lookup.entry(threadId);
+      const parentDaemonId = entry?.entryKind === "subagent" ? entry.parentDaemonId ?? null : null;
+      ports.setSummaryFacts(threadId, { networkDaemonIds: ThreadNetworkAccess.daemonIds(history, parentDaemonId) });
+      ports.publishRuntime(threadId, { networkHistory: history });
+      return history;
+    };
+    const readHistory = async (threadId: string) => await database.executeThreadNetworkHistory({ kind: "read", threadId });
+    this.networkHistory = {
+      read: readHistory,
+      refresh: async threadId => await historyChanged(threadId, await readHistory(threadId)),
+      record: async (threadId, target) => await historyChanged(threadId, await database.executeThreadNetworkHistory({
+        kind: "record", threadId, id: randomUUID(), approvedAt: Date.now(), target,
+      })),
+      revoke: async (threadId, entryId) => await historyChanged(threadId, await database.executeThreadNetworkHistory({
+        kind: "revoke", threadId, entryId, revokedAt: Date.now(),
+      })),
+    };
     const agentContext: WorkbenchAgentContextController = this.agentContext = new WorkbenchAgentContextController({
       sources: [skills.contextSource, goals.contextSource],
       inject: async (thread, text, signal) => {

@@ -1,10 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchThreadStateQuestionnaireRepository: persist one thread's canonical questionnaire source facts, including MCP tool enable, sign-in link and server connect context.
+ * - default WorkbenchThreadStateQuestionnaireRepository: persist one thread's canonical questionnaire source facts, including MCP tool enable,
+ *   sign-in link, server connect and network access context.
  * - WorkbenchThreadQuestionnaires: pending request and ordered answered history.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { NetworkTargetSchema } from "workbench-shared/workbench/network/network-grants";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema,
   type WorkbenchDurableQuestionnaire, type WorkbenchQuestionnaireHistoryEntryState,
@@ -42,14 +45,24 @@ type AnswerRow = { questionnaire_id: string; question_id: string; answer_index: 
 type McpToolRow = { questionnaire_id: string; server: string; tool: string; title: string | null; description: string };
 type McpAuthorizationRow = { questionnaire_id: string; server: string; host: string; url: string | null };
 type McpConnectionRow = { questionnaire_id: string; server: string; url: string };
+type NetworkAccessRow = { questionnaire_id: string; target: string };
 interface QuestionnaireBatch {
   questions: Map<string, QuestionRow[]>;
   options: Map<string, OptionRow[]>;
   mcpTools: Map<string, McpToolRow>;
   mcpAuthorizations: Map<string, McpAuthorizationRow>;
   mcpConnections: Map<string, McpConnectionRow>;
+  networkAccess: Map<string, NetworkAccessRow>;
   groups: Map<string, AnswerGroupRow[]>;
   answers: Map<string, AnswerRow[]>;
+}
+
+/** A corrupt stored target drops only the network context, leaving an ordinary questionnaire. */
+function readNetworkTarget(row: NetworkAccessRow | undefined) {
+  if (!row) return null;
+  let value: unknown = null;
+  try { value = JSON.parse(row.target); } catch { /* conformed to null below */ }
+  return conformToZodSchema(NetworkTargetSchema.nullable(), value, null).data;
 }
 
 export default class WorkbenchThreadStateQuestionnaireRepository {
@@ -82,7 +95,10 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         .all(...ids) as McpAuthorizationRow[];
       const mcpConnections = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_mcp_connections WHERE questionnaire_id IN (${selection})`)
         .all(...ids) as McpConnectionRow[];
+      const networkAccess = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_network_access WHERE questionnaire_id IN (${selection})`)
+        .all(...ids) as NetworkAccessRow[];
       const batch: QuestionnaireBatch = {
+        networkAccess: new Map(networkAccess.map(row => [row.questionnaire_id, row])),
         questions: Map.groupBy(questions, row => row.questionnaire_id),
         options: Map.groupBy(options, row => row.questionnaire_id),
         mcpTools: new Map(mcpTools.map(row => [row.questionnaire_id, row])),
@@ -174,6 +190,11 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         INSERT INTO workbench_thread_questionnaire_mcp_connections(questionnaire_id, server, url) VALUES (?, ?, ?)
       `).run(id, mcpConnection.server, mcpConnection.url);
     }
+    const networkAccess = entry.request.networkAccess;
+    if (networkAccess) {
+      this.database.prepare("INSERT INTO workbench_thread_questionnaire_network_access(questionnaire_id, target) VALUES (?, ?)")
+        .run(id, JSON.stringify(networkAccess.target));
+    }
     entry.request.questions.forEach((question, questionIndex) => {
       questionStatement.run(id, questionIndex, question.id, question.header, question.question, Number(question.allowOther), Number(question.isSecret));
       question.options.forEach((option, optionIndex) => {
@@ -201,8 +222,10 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
     const mcpTool = batch.mcpTools.get(row.id);
     const mcpAuthorization = batch.mcpAuthorizations.get(row.id);
     const mcpConnection = batch.mcpConnections.get(row.id);
+    const networkTarget = readNetworkTarget(batch.networkAccess.get(row.id));
     return {
       id: row.request_id, title: row.title, summary: row.summary, submitLabel: row.submit_label,
+      ...(networkTarget ? { networkAccess: { target: networkTarget } } : {}),
       ...(mcpTool ? { mcpTool: { server: mcpTool.server, tool: mcpTool.tool, title: mcpTool.title, description: mcpTool.description } } : {}),
       ...(mcpAuthorization ? { mcpAuthorization: {
         server: mcpAuthorization.server, host: mcpAuthorization.host, ...(mcpAuthorization.url ? { url: mcpAuthorization.url } : {}),

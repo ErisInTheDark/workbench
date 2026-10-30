@@ -16,7 +16,8 @@ import type { WorkbenchThreadLayoutOwner } from "./WorkbenchThreadStateLayoutRep
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchSubagentReservation } from "../../subagents/workbench-subagent-record";
 import type { ProjectDocument } from "./workbench-thread-state-document-source";
-import type { DraftId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { DaemonId, DraftId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { SiblingRosterEntry } from "workbench-shared/workbench/network/network-remote-calls";
 
 export type WorkbenchThreadStateProjectDocument = ProjectDocument & { version: 4 };
 
@@ -31,6 +32,10 @@ export interface WorkbenchSubagentPersistence {
   reserveSubagent(record: Omit<WorkbenchSubagentReservation, "directSubagentIndex">): Promise<WorkbenchSubagentReservation>;
   activateSubagent(parentThreadId: WorkbenchThreadId, reservationId: string, record: WorkbenchSubagentRelationship): Promise<void>;
   removeSubagent(parentThreadId: WorkbenchThreadId, identifier: string): Promise<void>;
+  setRemoteSubagentSettled(parentThreadId: WorkbenchThreadId, threadId: WorkbenchThreadId, settledAt: number | null): Promise<boolean>;
+  writeSubagentRoster(threadId: WorkbenchThreadId, siblings: readonly SiblingRosterEntry[]): Promise<void>;
+  readSubagentRoster(threadId: WorkbenchThreadId): Promise<SiblingRosterEntry[]>;
+  readRemoteSubagentParents(daemonId: DaemonId, threadId: WorkbenchThreadId): Promise<WorkbenchThreadId[]>;
 }
 
 export interface WorkbenchStoredThreadDraft {

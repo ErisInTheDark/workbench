@@ -225,7 +225,7 @@ export default class WorkbenchTurnRuntimeFeature {
           runtime: { latestTurn: facts[index]!.latestTurn, status: threadPayloadStatus(entry), turnLive: turnLive[index] ?? false },
         })));
         return new Map(entries.map(({ identity: { threadId } }, index) => {
-          const { addressedFeedback, goal, skills, todos, tokenUsage } = facts[index]!;
+          const { addressedFeedback, goal, networkHistory, skills, todos, tokenUsage } = facts[index]!;
           const live = turnLive[index];
           return [threadId, {
             tokenUsage, willAutoCompact: willAutoCompact.get(threadId) ?? false,
@@ -234,7 +234,7 @@ export default class WorkbenchTurnRuntimeFeature {
             shellQueue: ports.shells.readShellQueue(WorkbenchThreadIdSchema.parse(threadId)),
             shellOutput: ports.shells.readShellOutput(WorkbenchThreadIdSchema.parse(threadId)),
             backgroundShells: ports.shells.readYieldedShells(WorkbenchThreadIdSchema.parse(threadId)),
-            goal, skills, todos, addressedFeedback,
+            goal, skills, todos, addressedFeedback, networkHistory,
           }];
         }));
       },

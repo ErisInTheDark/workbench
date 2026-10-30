@@ -1,9 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchSubagentStore: own durable reservations and exhaustive scoped relationship reads.
+ * - default WorkbenchSubagentStore: own durable reservations, exhaustive scoped relationship reads, remote children's reported
+ *   settlement and remote-parented children's sibling rosters.
  */
 import { z } from "zod";
-import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { DaemonId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { SiblingRosterEntry } from "workbench-shared/workbench/network/network-remote-calls";
 
 import type {
   WorkbenchSubagentRelationship,
@@ -46,6 +48,24 @@ export default class WorkbenchSubagentStore {
 
   getOwnedMany(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadIds: readonly WorkbenchThreadId[]) {
     return this.persistence.readOwnedSubagents(parentThreadId, projectId, threadIds);
+  }
+
+  /** Records what a remote child's daemon last reported about its settlement, freeing its name once settled. */
+  setRemoteSettled(parentThreadId: WorkbenchThreadId, threadId: WorkbenchThreadId, settledAt: number | null) {
+    return this.persistence.setRemoteSubagentSettled(parentThreadId, threadId, settledAt);
+  }
+
+  writeRoster(threadId: WorkbenchThreadId, siblings: readonly SiblingRosterEntry[]) {
+    return this.persistence.writeSubagentRoster(threadId, siblings);
+  }
+
+  readRoster(threadId: WorkbenchThreadId) {
+    return this.persistence.readSubagentRoster(threadId);
+  }
+
+  /** Local parents of a child that lives on `daemonId`. */
+  parentsOfRemoteChild(daemonId: DaemonId, threadId: WorkbenchThreadId) {
+    return this.persistence.readRemoteSubagentParents(daemonId, threadId);
   }
 }
 

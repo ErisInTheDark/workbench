@@ -4,7 +4,8 @@
  * - SubagentQueueState: one parent-owned queue, retained across core reloads.
  * - WorkbenchSubagentQueueHandoff: queue data one core generation hands its successor.
  * - WorkbenchSubagentQueuePorts: project, identity, relationship, lifecycle and notice ports.
- * - default WorkbenchSubagentQueueController: own parent-scoped turn-taking queues, holds, lifecycle pauses, freezes and handoffs.
+ * - default WorkbenchSubagentQueueController: own parent-scoped turn-taking queues, holds, lifecycle pauses, freezes and handoffs,
+ *   including members that are children on other daemons.
  */
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -136,7 +137,19 @@ export default class WorkbenchSubagentQueueController {
   async execute(body: unknown, signal: AbortSignal): Promise<string> {
     const request = WorkbenchSubagentQueueRequestSchema.parse(body);
     this.assertLive(signal);
-    const caller = await this.resolveCaller(request.callerThreadId, request.cwd);
+    return await this.executeAs(await this.resolveCaller(request.callerThreadId, request.cwd), body, signal);
+  }
+
+  /** A child on another daemon joining its parent's queues here; its relayed call was authorized from the relationship. */
+  async executeRemoteMember(member: { threadId: WorkbenchThreadId; name: string; parentThreadId: WorkbenchThreadId; projectId: ProjectId },
+    body: unknown, signal: AbortSignal) {
+    return await this.executeAs({
+      threadId: member.threadId, name: member.name, ownerThreadId: member.parentThreadId, projectId: member.projectId, isOwner: false,
+    }, body, signal);
+  }
+
+  private async executeAs(caller: QueueCaller, body: unknown, signal: AbortSignal) {
+    const request = WorkbenchSubagentQueueRequestSchema.parse(body);
     this.assertLive(signal);
     // Everything below mutates queue state synchronously; only the join wait suspends.
     const { queue, declared } = this.findQueue(caller, request.queue);

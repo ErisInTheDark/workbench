@@ -3,7 +3,7 @@
  * - WorkspaceQuerySnapshot: stable received facts and app-connection-aware freshness.
  * - WorkspaceQueryHandle: caller-owned typed observation, retarget and release boundary.
  * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection, kept warm
- *   briefly after release, retargeting summary batches by id patch.
+ *   briefly after release, retargeting summary batches by id patch; approve network prompts and list or revoke network grants.
  */
 import {
   WorkspaceQuerySchema, diffThreadSummaryIds, workspaceObservationShape,
@@ -17,7 +17,12 @@ import reportClientSchemaError from "workbench-shared/workbench/report-client-sc
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import { WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, workspaceCommandRoutes, type WorkspaceCommandMethod } from "workbench-shared/workbench/workspace/workspace-commands";
+import {
+  WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, workspaceCommandRoutes,
+  WorkspaceNetworkApproveResultSchema, WorkspaceNetworkGrantsListSchema, WorkspaceNetworkGrantsRevokeResultSchema,
+  type WorkspaceCommandMethod, type WorkspaceNetworkGrantsList, type WorkspaceNetworkGrantsRequest,
+} from "workbench-shared/workbench/workspace/workspace-commands";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { z } from "zod";
@@ -350,6 +355,27 @@ export default class WorkbenchWorkspaceClient {
       throw new Error("Draft launch response was invalid.");
     }
     return { threadId: parsed.data.threadId, harness: parsed.data.harness ?? null };
+  }
+
+  /** Approves a pending network prompt; the app writes the grant onto the target daemon before answering it. */
+  async approveNetwork(threadId: string, requestKey: string) {
+    const parsed = WorkspaceNetworkApproveResultSchema.safeParse(
+      await this.rpc.requestRaw({ method: "workspace/network/approve", params: { threadId, requestKey } }));
+    if (!parsed.success) throw new Error("The app returned an invalid network approval.");
+  }
+
+  async listNetworkGrants(): Promise<WorkspaceNetworkGrantsList> {
+    const conformed = conformToZodSchema(WorkspaceNetworkGrantsListSchema.nullable(),
+      await this.rpc.requestRaw({ method: "workspace/network/grants", params: { kind: "list" } }), null);
+    if (!conformed.data) throw new Error("The app returned an invalid network grant list.");
+    return conformed.data;
+  }
+
+  async revokeNetworkGrants(request: Exclude<WorkspaceNetworkGrantsRequest, { kind: "list" }>) {
+    const parsed = WorkspaceNetworkGrantsRevokeResultSchema.safeParse(
+      await this.rpc.requestRaw({ method: "workspace/network/grants", params: request }));
+    if (!parsed.success) throw new Error("The app returned an invalid network revocation.");
+    return parsed.data.revoked;
   }
 
   dispose() {

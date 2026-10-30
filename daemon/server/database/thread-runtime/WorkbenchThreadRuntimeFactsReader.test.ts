@@ -67,7 +67,7 @@ test("one read returns every requested thread's own goal, skills, todos, feedbac
     assert.equal(childFacts.latestTurn, null);
 
     assert.deepEqual(facts.get("unknown"), {
-      threadId: "unknown", goal: null, skills: [], todos: [], addressedFeedback: [], tokenUsage: null, latestTurn: null,
+      threadId: "unknown", goal: null, skills: [], todos: [], addressedFeedback: [], networkHistory: [], tokenUsage: null, latestTurn: null,
     });
   } finally {
     database.close();

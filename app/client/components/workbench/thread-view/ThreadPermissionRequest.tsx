@@ -1,9 +1,11 @@
 /*
  * Exports:
  * - McpToolCard: recessed card naming one MCP server tool, with its markdown description clamped to three lines until expanded.
- * - ThreadMcpRequestSubject: what a pending MCP request asks about: an enable (tool), a sign-in (server link) or a connect (server URL).
- * - ThreadMcpRequestPanel: the composer's pending MCP request; Approve and Deny (Shift: Stop) render into the composer's action slot.
- * - ThreadMcpDecisionCard: the transcript's record of an answered enable or sign-in request.
+ * - ThreadPermissionRequestSubject: what a pending permission request asks about: an MCP enable (tool), sign-in (server link) or
+ *   connect (server URL), or a network target on another daemon or folder.
+ * - ThreadPermissionRequestPanel: the composer's pending permission request; Approve and Deny (Shift: Stop) render into the composer's
+ *   action slot. Network approval stays disabled when this app cannot reach the target's daemon.
+ * - ThreadPermissionDecisionCard: the transcript's record of an answered permission request.
  * - ThreadMcpDownloadCard: the transcript's record of an `mcp_download`: status and server, then the file name and source URL.
  */
 "use client";
@@ -13,6 +15,7 @@ import { createPortal } from "react-dom";
 import type {
   WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpConnectionContext, WorkbenchUserInputMcpToolContext,
 } from "workbench-shared/types";
+import type { NetworkTarget } from "workbench-shared/workbench/network/network-grants";
 import { mcpToolLabel } from "../../../workbench/mcp-tool-label";
 import { openCenteredMcpSignInPopup } from "../../../workbench/mcp-sign-in-popup";
 import MarkdownRender from "../../ui/MarkdownRender";
@@ -20,17 +23,40 @@ import PrimaryButton from "../../ui/PrimaryButton";
 import { CheckIcon, ChevronDownIcon, DownloadIcon, KeyRoundIcon, SquareIcon, XIcon } from "../workbench-icons";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 
-export type ThreadMcpRequestSubject =
+export type ThreadPermissionRequestSubject =
   | { kind: "tool"; tool: WorkbenchUserInputMcpToolContext }
   | { kind: "authorization"; authorization: WorkbenchUserInputMcpAuthorizationContext }
-  | { kind: "connection"; connection: WorkbenchUserInputMcpConnectionContext };
+  | { kind: "connection"; connection: WorkbenchUserInputMcpConnectionContext }
+  /** `reachable` is false when this app cannot reach the target's daemon, so it cannot write the grant there. */
+  | { kind: "network"; target: NetworkTarget; reachable: boolean };
 
-const PANEL_TITLES = { tool: "Enable MCP tool", authorization: "Sign in to MCP server", connection: "Connect MCP server" } as const;
+const PANEL_TITLES = {
+  tool: "Enable MCP tool", authorization: "Sign in to MCP server", connection: "Connect MCP server", network: "Allow agent network access",
+} as const;
 const DECISION_LABELS = {
   tool: { approved: "Enabled MCP tool", denied: "Denied MCP tool" },
   authorization: { approved: "Signed in to MCP server", denied: "Skipped MCP server sign-in" },
   connection: { approved: "Connected MCP server", denied: "Denied MCP server" },
+  network: { approved: "Allowed network access", denied: "Denied network access" },
 } as const;
+const UNREACHABLE_NETWORK_TARGET = "You don't have access to the daemon this agent wants to network with. Either gain access or approve this prompt from another device.";
+
+/** The remote thread, folder or feedback an agent asks to reach, and the daemon that holds it. */
+function NetworkTargetCard({ target, rounded = true }: { target: NetworkTarget; rounded?: boolean }) {
+  const name = target.kind === "thread" ? target.title
+    : target.kind === "folder" ? `Subagents in ${target.rootPath}`
+      : target.rootPath ? `Feedback for ${target.rootPath}` : "wb feedback, all projects";
+  const detail = target.kind === "thread" ? `${target.projectName} · thread ${target.threadId}` : target.kind === "folder" ? "folder of this project" : "agent feedback";
+  return <div className={`flex flex-col gap-1 bg-recess px-3.5 py-3 ${rounded ? "rounded-[0.9rem]" : ""}`}>
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+      <span className="text-base font-semibold text-text">{name}</span>
+      <code className="break-all text-[0.8rem] text-fg/muted">{target.hostname}</code>
+    </div>
+    <span className="text-sm text-fg/muted">{detail}</span>
+    {target.kind === "thread" && target.daemonProject
+      ? <p className="m-0 text-sm text-danger">This thread can run commands outside the sandbox on {target.hostname}.</p> : null}
+  </div>;
+}
 
 /** The server an agent asks to connect for its turn, by name and the URL it serves at. */
 function McpConnectionCard({ connection, rounded = true }: { connection: WorkbenchUserInputMcpConnectionContext; rounded?: boolean }) {
@@ -40,9 +66,10 @@ function McpConnectionCard({ connection, rounded = true }: { connection: Workben
   </div>;
 }
 
-function SubjectCard({ subject, rounded, onOpen }: { subject: ThreadMcpRequestSubject; rounded?: boolean; onOpen?: (() => void) | undefined }) {
+function SubjectCard({ subject, rounded, onOpen }: { subject: ThreadPermissionRequestSubject; rounded?: boolean; onOpen?: (() => void) | undefined }) {
   if (subject.kind === "tool") return <McpToolCard tool={subject.tool} rounded={rounded} />;
   if (subject.kind === "connection") return <McpConnectionCard connection={subject.connection} rounded={rounded} />;
+  if (subject.kind === "network") return <NetworkTargetCard target={subject.target} rounded={rounded} />;
   return <McpAuthorizationCard authorization={subject.authorization} rounded={rounded} onOpen={onOpen} />;
 }
 
@@ -93,8 +120,8 @@ function McpAuthorizationCard({ authorization, rounded = true, onOpen }: {
   </div>;
 }
 
-export function ThreadMcpRequestPanel({ subject, reason, actionTarget, onDecide, stop }: {
-  subject: ThreadMcpRequestSubject;
+export function ThreadPermissionRequestPanel({ subject, reason, actionTarget, onDecide, stop }: {
+  subject: ThreadPermissionRequestSubject;
   reason: string;
   /** The composer's action slot, where Send normally sits. */
   actionTarget: HTMLElement | null;
@@ -122,9 +149,10 @@ export function ThreadMcpRequestPanel({ subject, reason, actionTarget, onDecide,
     setError("");
     popup.navigate(url);
   };
+  const unreachable = subject.kind === "network" && !subject.reachable;
   const actions: ReactNode = <>
-    <PrimaryButton type="button" shape="circle" aria-label="Approve" title="Approve" disabled={Boolean(deciding)}
-      pendingHalo={deciding === "approve"} onClick={() => { void decide(true); }}>
+    <PrimaryButton type="button" shape="circle" aria-label="Approve" title={unreachable ? UNREACHABLE_NETWORK_TARGET : "Approve"}
+      disabled={Boolean(deciding) || unreachable} pendingHalo={deciding === "approve"} onClick={() => { void decide(true); }}>
       <CheckIcon size={20} />
     </PrimaryButton>
     {shift && stop
@@ -140,6 +168,7 @@ export function ThreadMcpRequestPanel({ subject, reason, actionTarget, onDecide,
     <h3 className="m-0 text-[1.02em] font-semibold leading-[1.35] text-text">{PANEL_TITLES[subject.kind]}</h3>
     <SubjectCard subject={subject} onOpen={url ? () => openLink(url) : undefined} />
     {reason ? <p className="m-0 whitespace-pre-wrap break-words text-[0.95rem] leading-[1.6] text-text">{reason}</p> : null}
+    {unreachable ? <p className="m-0 text-[0.9rem] text-warning">{UNREACHABLE_NETWORK_TARGET}</p> : null}
     {error ? <p role="alert" className="m-0 text-[0.84em] text-danger">{error}</p> : null}
     {actionTarget ? createPortal(actions, actionTarget) : <div className="flex items-center justify-end gap-2">{actions}</div>}
   </div>;
@@ -175,8 +204,8 @@ export function ThreadMcpDownloadCard({ server, url, name, outcome, output }: {
   </div>;
 }
 
-export function ThreadMcpDecisionCard({ subject, reason, approved }: {
-  subject: ThreadMcpRequestSubject;
+export function ThreadPermissionDecisionCard({ subject, reason, approved }: {
+  subject: ThreadPermissionRequestSubject;
   reason: string;
   approved: boolean;
 }) {

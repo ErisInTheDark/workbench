@@ -16,3 +16,4 @@
 - Thread activity time advances only when the canonical transcript admits a new thread item, to that item's observed time. Providers and lifecycle transitions never set it.
 - A dependent-snooze source owns its target set; targets may live on any daemon. Target readiness removes one membership. Only an empty set wakes the source. Unreachable targets keep waiting.
 - A thread has one live turn: admitting a turn settles earlier unsettled turns, and their undelivered agent-message steers resend into the new turn.
+- Cross-folder and cross-daemon subagents keep subagent semantics; the child's daemon owns its lifecycle and lists it as its own sidebar row, the parent's daemon owns the relationship, a parent's unsettled remote children hold its task status like local ones, and handover never crosses folders. A child's sibling roster is the parent's latest pushed snapshot; stale rosters reject, never admit.

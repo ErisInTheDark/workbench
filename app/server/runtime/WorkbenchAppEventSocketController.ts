@@ -168,6 +168,7 @@ export default class WorkbenchAppEventSocketController {
     threadPlacements?: WorkbenchThreadPlacementController;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
     gitPeers?: Pick<WorkbenchGitPeerSync, "observe" | "transfer">;
+    agentRelay?: Pick<import("../workspace/WorkbenchAgentRelay").default, "approve" | "grants" | "reach">;
     /** Records every browser frame for `wb socket spy`. */
     traffic?: Pick<WebSocketTrafficBuffer, "record">;
   }) {}
@@ -262,6 +263,7 @@ export default class WorkbenchAppEventSocketController {
         },
         reloadOperation: this.options.runtime.operations,
         gitPeers: this.options.gitPeers,
+        ...(this.options.agentRelay ? { reach: () => this.options.agentRelay!.reach() } : {}),
         appState: {
           read: browserStateId => {
             bindState(browserStateId);
@@ -404,6 +406,14 @@ export default class WorkbenchAppEventSocketController {
         if (input.method === "workspace/git/peer") {
           if (!this.options.gitPeers) throw new Error("Peer sync is unavailable.");
           return await this.options.gitPeers.transfer(input.params);
+        }
+        if (input.method === "workspace/network/approve") {
+          if (!this.options.agentRelay) throw new Error("Agent networking is unavailable.");
+          return await this.options.agentRelay.approve(input.params.threadId, input.params.requestKey);
+        }
+        if (input.method === "workspace/network/grants") {
+          if (!this.options.agentRelay) throw new Error("Agent networking is unavailable.");
+          return await this.options.agentRelay.grants(input.params);
         }
         if (input.method === "app/network/action") {
           if (!workbenchNetworkActionKeepsAppConnection(input.params.action)) {

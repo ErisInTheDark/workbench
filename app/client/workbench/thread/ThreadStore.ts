@@ -25,6 +25,7 @@ import type { WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thre
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
+import type { NetworkHistoryEntry } from "workbench-shared/workbench/network/network-grants";
 import type {
   WorkbenchBackgroundShell, WorkbenchShellOutputEntry, WorkbenchShellQueueEntry, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -64,6 +65,8 @@ interface ThreadHeadFields {
   todos?: readonly WorkbenchThreadTodo[];
   /** Feedback the thread was launched to address, until the user deletes or clears it. */
   addressedFeedback?: readonly WorkbenchThreadAddressedFeedback[];
+  /** Remote threads, folders and feedback the user let this thread reach, including revoked ones. */
+  networkHistory?: readonly NetworkHistoryEntry[];
   /** Live wb shells that waited in the expensive queue; drafts and older daemons have none. */
   shellQueue?: readonly WorkbenchShellQueueEntry[];
   /** Running wb shells whose call already answered, with their commands; drafts and older daemons have none. */

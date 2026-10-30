@@ -7,7 +7,7 @@
  * - createThreadSummary: build a summary from a full entry or lean row and its facts, dropping empty facts.
  */
 import { z } from "zod";
-import { ProjectIdSchema } from "../identity";
+import { DaemonIdSchema, ProjectIdSchema } from "../identity";
 import type { WorkbenchThreadSidebarEntry } from "./thread-state";
 import {
   projectSidebarRow,
@@ -21,6 +21,8 @@ export const ThreadSummaryFactsSchema = z.object({
   addressedFeedbackCount: z.number().int().nonnegative().optional(),
   /** Context compaction is running now. */
   compacting: z.boolean().optional(),
+  /** Other daemons whose content this thread may hold; apps that cannot reach all of them show only this summary. */
+  networkDaemonIds: z.array(DaemonIdSchema).optional(),
   /** Required follow-up todos the thread still holds; they keep it from settling. */
   requiredTodoCount: z.number().int().nonnegative().optional(),
 });
@@ -49,6 +51,7 @@ export function createThreadSummary(entry: ThreadSource, facts: ThreadSummaryFac
     facts: {
       ...(facts.addressedFeedbackCount ? { addressedFeedbackCount: facts.addressedFeedbackCount } : {}),
       ...(facts.compacting ? { compacting: true } : {}),
+      ...(facts.networkDaemonIds?.length ? { networkDaemonIds: [...facts.networkDaemonIds] } : {}),
       ...(facts.requiredTodoCount ? { requiredTodoCount: facts.requiredTodoCount } : {}),
     },
     row: projectSidebarRow(entry) as WorkbenchThreadSidebarThreadRow,

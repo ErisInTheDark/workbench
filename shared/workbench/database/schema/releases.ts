@@ -112,6 +112,7 @@ const databaseReleases = Object.freeze({
   mcpServerPackages: release(102, "da9bb5cce3199ad1ac2189354c82c0af012a21daaaf77d1ff3b6553d0cb6c124"),
   mcpServerPackageEnv: release(103, "59f66a47a35577570205321a795c3c5c56178dee97b8195e265d8d0c48d01f83"),
   mcpProjectServers: release(104, "fca6eea9484d25299ef8844936217cc3b5c5f1f872b7b1241ea4d4d1321aed31"),
+  crossDaemonNetworking: release(105, "8457ecfa009b3e7957a674ef134c94327455f389a8f90e374b89f4cd0d8e1d71"),
 });
 
 export default databaseReleases;

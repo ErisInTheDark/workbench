@@ -76,29 +76,36 @@ const list = defineWorkbenchAgentCommand({
   },
 });
 
+const folder = requiredText.describe("`<host>[:<folder>]`: another folder of this project, on this or another daemon. Needs the user's approval.");
+
 const profiles = defineWorkbenchAgentCommand({
-  description: "List the subagent profiles available to this thread.",
+  description: "List the subagent profiles available to this thread, or to another folder's daemon with folder.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["subagent"],
   words: ["subagent", "profiles"],
-  usage: "wb subagent profiles",
-  inputSchema: z.object({}).strict(),
-  parseCliArgs(args) { new WorkbenchAgentCommandFlags(args, {}); return {}; },
-  buildRequest(_input, { callerThreadId, cwd, workbenchOrigin }) {
+  usage: "wb subagent profiles [--folder <host>[:<folder>]]",
+  inputSchema: z.object({ folder: folder.optional() }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--folder"] });
+    return { folder: flags.optional("--folder") ?? undefined };
+  },
+  buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
     return postWorkbenchAgentCommand("/api/subagents", {
       action: "profiles", callerThreadId: requireCallerThreadId(callerThreadId), cwd,
+      ...(input.folder ? { folder: input.folder } : {}),
       ...(workbenchOrigin ? { workbenchOrigin } : {}),
     }, "json");
   },
 });
 
 const create = defineWorkbenchAgentCommand({
-  description: "Create and start a direct child, then print its thread ID.",
+  description: "Create and start a direct child, then print its thread ID. folder places it in another folder of this project; use that folder's profiles.",
   helpGroups: ["subagent"],
   mcpWorkdir: true,
   words: ["subagent", "create"],
-  usage: "wb subagent create --profile <profile-id> --name <name> --title <title> --message <message> --user-visible-simple-version <text>",
+  usage: "wb subagent create --profile <profile-id> --name <name> --title <title> --message <message> --user-visible-simple-version <text> [--folder <host>[:<folder>]]",
   inputSchema: z.object({
+    folder: folder.optional(),
     message: requiredText,
     name: requiredText,
     profileId: requiredText,
@@ -107,9 +114,10 @@ const create = defineWorkbenchAgentCommand({
   }).strict(),
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, {
-      values: ["--profile", "--name", "--title", "--message", "--user-visible-simple-version"],
+      values: ["--profile", "--name", "--title", "--message", "--user-visible-simple-version", "--folder"],
     });
     return {
+      folder: flags.optional("--folder") ?? undefined,
       message: flags.required("--message"),
       name: flags.required("--name"),
       profileId: flags.required("--profile"),
@@ -118,8 +126,10 @@ const create = defineWorkbenchAgentCommand({
     };
   },
   buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
+    const { folder: target, ...rest } = input;
     return postWorkbenchAgentCommand("/api/subagents", {
-      action: "create", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...input,
+      action: "create", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...rest,
+      ...(target ? { folder: target } : {}),
       ...(workbenchOrigin ? { workbenchOrigin } : {}),
     }, "subagent-create");
   },

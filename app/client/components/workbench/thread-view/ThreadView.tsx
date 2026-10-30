@@ -1,12 +1,16 @@
 /*
  * Exports:
- * - default ThreadView: hold a launched draft until canonical content is renderable, gate ordinary thread loads, and provide the thread animation style and per-paragraph reveal.
+ * - default ThreadView: hold a launched draft until canonical content is renderable, gate ordinary thread loads (showing only a summary
+ *   for threads networked beyond this app's reach), and provide the thread animation style and per-paragraph reveal.
  */
 "use client";
 
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
 import type { ThreadPayload } from "workbench-shared/types";
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { ThreadNetworkAccess } from "workbench-shared/workbench/network/network-grants";
+import { useNetworkReach } from "../../../workbench/network/use-network-reach";
+import { NetworkIcon } from "../workbench-icons";
 import { useThread } from "../use-thread";
 import { useTranscript } from "../use-transcript";
 import { resolveThreadViewHandoff, type ThreadViewDisplay } from "./thread-view-handoff";
@@ -76,6 +80,22 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   const transcriptError = activeTurns.transcript.status === "failed" ? activeTurns.transcript.message
     : activeTurns.transcript.status === "unavailable" ? "The transcript source is unavailable." : "";
   const error = (thread.error ?? active.error ?? (!thread.head ? routeError : "")) || (holdingDraft ? transcriptError : "");
+  const { reach, hostname } = useNetworkReach();
+  const shownSummary = useThread.summary(WorkbenchThreadIdSchema.safeParse(selectedId || rootId).data ?? null);
+  // A thread networked beyond this app's reach is summary-only here; the app refuses its detail too.
+  const missingDaemons = ThreadNetworkAccess.missing(shownSummary?.summary.facts.networkDaemonIds, reach);
+  if (missingDaemons.length && !holdingDraft) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center px-6 py-8">
+        <div className="flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-fg-alpha/16 bg-fg/4 px-5 py-4 text-left">
+          <p className="m-0 flex items-center gap-2 text-[1rem] font-semibold leading-tight text-text"><NetworkIcon size={16} />Networked thread</p>
+          <p className="m-0 break-words text-sm text-text">
+            {shownSummary?.summary.row.title ? `"${shownSummary.summary.row.title}" is` : "This thread is"} networked with {missingDaemons.map(hostname).join(", ")}, which this app cannot reach. Open it from an app that reaches all of them.
+          </p>
+        </div>
+      </div>
+    );
+  }
   if (error && !holdingDraft) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center px-6 py-8">

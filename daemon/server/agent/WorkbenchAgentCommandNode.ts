@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandNode: own shared wb CLI and MCP command execution below core and above MCP adaptation.
+ * - default WorkbenchAgentCommandNode: own shared wb CLI and MCP command execution below core and above MCP adaptation, routing
+ *   commands that reach other daemons through network grants, and executing calls other daemons relay here.
  */
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../daemon-runtime-objects";
@@ -33,7 +34,7 @@ import WorkbenchFileRemovalController from "../project/WorkbenchFileRemovalContr
 import WorkbenchTranscriptCommandController from "../transcript/WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import WorkbenchSkillController from "./WorkbenchSkillController";
 import { WorkbenchSkillExecutionRequestSchema } from "../lib/workbench/commands/skill-command-definition";
@@ -41,6 +42,31 @@ import { listProjectSkillsFromRoot } from "../lib/workbench/project/project-agen
 import { listActiveWorkbenchSkillDefinitions } from "../lib/workbench-library";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import type { JsonValue } from "../lib/workbench/commands/workbench-agent-command-definition";
+import type { NetworkTarget } from "workbench-shared/workbench/network/network-grants";
+import type { RelayRemoteSummary } from "workbench-shared/workbench/network/network-relay-contracts";
+import type { RemoteCall } from "workbench-shared/workbench/network/network-remote-calls";
+import type { NetworkCaller } from "../network/WorkbenchNetworkAccessController";
+import WorkbenchRemoteCallController from "../network/WorkbenchRemoteCallController";
+import { formatUntrustedRemoteOutput } from "../network/network-untrusted-output";
+import { WorkbenchNetworkRequestSchema } from "../lib/workbench/commands/network-command-definitions";
+
+const ThreadSummaryRequestSchema = z.object({ threadIds: z.array(z.string().trim().min(1)).min(1).max(64) }).passthrough();
+
+/** One line per requested thread: sidebar facts, or why it was not found. Names come from other daemons, so they are marked as such. */
+function formatRemoteSummaries(threadIds: readonly string[], summaries: Record<string, RelayRemoteSummary | null>) {
+  return `${threadIds.map(threadId => {
+    const located = summaries[threadId];
+    if (!located) return `${threadId}  not found on any reachable daemon`;
+    const row = located.summary.row;
+    const status = row.lifecycle.settled ? `${row.lifecycle.kind}, settled` : row.lifecycle.kind;
+    const kind = row.entryKind === "subagent" ? `subagent "${row.name}" of ${row.parentThreadId}` : "thread";
+    return `${threadId}  ${status}  ${kind}  on ${located.hostname}  project ${located.projectId}  title (untrusted): ${JSON.stringify(row.title)}`;
+  }).join("\n")}\n`;
+}
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -101,6 +127,52 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       read: async (request) => await stats.readFeedback(request),
     });
     const questionnaires = build.get("questionnaires");
+    const network = build.get("network");
+    const plainText = (text: string, status = 200) => new Response(text, {
+      status, headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
+    /** The local managed thread behind an outbound networked command. */
+    const networkCaller = async (threadId: string, cwd: string): Promise<NetworkCaller> => {
+      const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Agent networking" });
+      const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.id });
+      if (!identity) throw new Error("The managed thread has no admitted identity in this project.");
+      const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+      return { threadId: identity.threadId, cwd, projectId: project.id, title: entry && entry.entryKind !== "draft" ? entry.title : "agent" };
+    };
+    type RemoteThread = Extract<NetworkTarget, { kind: "thread" }>;
+    /** A thread this daemon has recorded; relayed callers reach only these, never ids a provider would admit on request. */
+    const heldThread = async (threadId: string) =>
+      await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId) }, { allowProviderAdmission: false });
+    /**
+     * Where a thread an agent names lives: this daemon's own records first, then another daemon a connected app finds it
+     * on, and only then a provider thread this daemon has not recorded yet.
+     */
+    const locateThread = async (threadId: string, signal: AbortSignal) => {
+      const held = await heldThread(threadId);
+      if (held) return { kind: "local" as const, identity: held };
+      let remoteFailure: unknown;
+      try {
+        const target = await network.access.resolveOne({ kind: "thread", threadId }, signal);
+        if (target.kind === "thread") return { kind: "remote" as const, target };
+      } catch (error) { remoteFailure = error; }
+      try {
+        const admitted = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId) });
+        if (admitted) return { kind: "local" as const, identity: admitted };
+        throw new Error("no provider holds it");
+      } catch (localFailure) {
+        const reason = (error: unknown) => error instanceof Error ? error.message : String(error ?? "not found");
+        throw new Error(`Thread ${threadId} is not here (${reason(localFailure)}) nor on another daemon (${reason(remoteFailure)}).`);
+      }
+    };
+    /** Reads a thread another daemon holds, through that daemon's grant; its answer reaches the agent marked untrusted. */
+    const remoteThreadCall = async (caller: NetworkCaller, target: RemoteThread, verb: string,
+      call: (target: RemoteThread) => RemoteCall, signal: AbortSignal) => {
+      const outcome = await network.access.call(caller, {
+        daemonId: target.daemonId, target: async () => target, call: call(target),
+        reason: `"${caller.title}" wants to ${verb} "${target.title}" (${target.projectName}) on ${target.hostname}.`,
+      }, signal);
+      return formatUntrustedRemoteOutput({ hostname: target.hostname, source: `thread ${target.threadId}` }, outcome.text ?? "");
+    };
     const messages = build.get("messages");
     const subagents = build.get("subagents");
     const subagentQueues = build.get("subagentQueues");
@@ -202,6 +274,17 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       executeSubagentQueueRequest: async (body, signal) => {
         try {
+          // A child whose parent lives on another daemon joins the parent's queues there.
+          const request = body as { callerThreadId?: unknown; cwd?: unknown };
+          if (typeof request.callerThreadId === "string" && typeof request.cwd === "string") {
+            const caller = await networkCaller(request.callerThreadId, request.cwd);
+            const relationship = (await subagents.listRelationships(caller.projectId)).subagents.find(record => record.threadId === caller.threadId);
+            if (relationship?.parent) {
+              const outcome = await network.family({ threadId: caller.threadId, title: caller.title }, relationship.parent.daemonId,
+                { kind: "queue", parentThreadId: relationship.parentThreadId, body: body as Record<string, JsonValue> }, signal);
+              return plainText(outcome.text ?? "");
+            }
+          }
           return new Response(await subagentQueues.execute(body, signal), {
             headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
           });
@@ -229,9 +312,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         signal.throwIfAborted();
         return await build.get("threadGit").executeRequest(body, {
           signal,
-          // The connected app reaches peer daemons; this daemon only asks over the socket the app already holds.
-          fetchPeer: async (question, fetchSignal) => await build.run("webSocketRequests",
-            controller => controller.askPeerFetch(question, fetchSignal), "peer fetch"),
+          // Connected apps reach peer daemons; this daemon only asks one of them through the relay.
+          fetchPeer: async (question, fetchSignal) => {
+            const outcome = await network.relay.request({ kind: "gitPeerFetch", question }, fetchSignal);
+            if (outcome.kind === "failed") throw new Error(outcome.failure);
+            return outcome;
+          },
         });
       },
       executeThreadRecallRequest: async (request, signal) => {
@@ -239,18 +325,69 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const prefix = "/api/thread-context/";
         if (!url.pathname.startsWith(prefix)) throw new Error("Invalid Thread Recall command path.");
         signal.throwIfAborted();
-        const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(decodeURIComponent(url.pathname.slice(prefix.length))) });
-        if (!identity) throw new Error("Thread Recall has no matching Workbench thread.");
+        const callerId = url.searchParams.get("caller");
+        const callerCwd = url.searchParams.get("cwd");
+        const searchParams = new URLSearchParams(url.searchParams);
+        searchParams.delete("caller");
+        searchParams.delete("cwd");
+        const targetId = decodeURIComponent(url.pathname.slice(prefix.length));
+        const located = await locateThread(targetId, signal);
+        if (located.kind === "remote") {
+          // Another daemon's thread, reached only through that daemon's grant.
+          if (!callerId || !callerCwd) throw new Error("Thread Recall of another daemon's thread needs its calling thread.");
+          const caller = await networkCaller(callerId, callerCwd);
+          return plainText(await remoteThreadCall(caller, located.target, "read the history of", target => ({
+            kind: "recall", threadId: target.threadId, search: request.method === "POST", query: searchParams.toString(),
+            body: request.method === "POST" && request.body ? JSON.stringify(request.body) : null,
+          }), signal));
+        }
         signal.throwIfAborted();
         return await threadRecall.execute({
           body: request.body,
           method: request.method,
-          searchParams: url.searchParams,
-          threadId: identity.threadId,
+          searchParams,
+          threadId: located.identity.threadId,
         }, signal);
       },
+      executeNetworkRequest: async (body, signal) => {
+        const request = WorkbenchNetworkRequestSchema.parse(body);
+        const caller = await networkCaller(request.threadId, request.cwd);
+        return plainText(await network.access.request(caller, [
+          ...request.threads.map(threadId => ({ kind: "thread" as const, threadId })),
+          ...request.folders.map(address => ({ kind: "folder" as const, address, callerProjectId: caller.projectId })),
+          ...request.feedback.map(address => ({ kind: "feedback" as const, address, callerProjectId: caller.projectId })),
+        ], request.reason, signal));
+      },
+      executeThreadSummary: async (body, signal) => {
+        const request = conformToZodSchema(ThreadSummaryRequestSchema.nullable(), body, null).data;
+        if (!request) return plainText("Invalid thread summary arguments.\n", 400);
+        const { summaries } = await network.relay.request({ kind: "summary", threadIds: request.threadIds }, signal);
+        return plainText(formatRemoteSummaries(request.threadIds, summaries));
+      },
       executeTokenCount: async (body, signal) => await tokens.execute(body, signal),
-      executeTranscriptQuery: async (body, signal) => await transcriptCommands.execute(body, signal),
+      executeTranscriptQuery: async (body, signal) => {
+        const request = body as { threads?: unknown; callerThreadId?: unknown; cwd?: unknown; action?: unknown };
+        const threads = Array.isArray(request.threads) ? request.threads.filter((id): id is string => typeof id === "string") : [];
+        const located = await Promise.all(threads.map(id => locateThread(id, signal)));
+        const remote = located.flatMap(entry => entry.kind === "remote" ? [entry.target] : []);
+        if (!remote.length) return await transcriptCommands.execute(body, signal);
+        // Threads held elsewhere are read on their own daemon, one thread per request so each needs its own grant.
+        if (threads.length !== 1 || typeof request.callerThreadId !== "string" || typeof request.cwd !== "string") {
+          return plainText("Read one thread from another daemon per transcript command, and do not mix it with local threads.\n", 400);
+        }
+        const normalized = (value: string) => {
+          const resolved = path.resolve(value);
+          return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+        };
+        if (normalized(request.cwd) !== normalized(context.legacyMigrationProjectRoot)) {
+          return plainText("Managed threads can query transcripts only from the running Workbench repository root.\n", 403);
+        }
+        const caller = await networkCaller(request.callerThreadId, request.cwd);
+        const { cwd: _cwd, callerThreadId: _caller, provider: _provider, ...query } = body as Record<string, JsonValue>;
+        return plainText(await remoteThreadCall(caller, remote[0]!, "read the transcript of", target => ({
+          kind: "transcript", threadIds: [target.threadId], body: query,
+        }), signal));
+      },
       executeSocketSpy: async (body, signal) => {
         const request = WorkbenchSocketSpyRequestSchema.parse(body);
         const answer = await build.run("webSocketRequests", controller => controller.spy(request.query, request.target, signal), "socket spy");
@@ -378,7 +515,23 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         }
       },
       acceptVisRender: (runId, content) => build.get("vis").acceptRender(runId, content),
-      executeFeedbackStats: async (body, signal) => await feedback.read(body, signal),
+      executeFeedbackStats: async (body, signal) => {
+        const request = body as { host?: unknown; callerThreadId?: unknown; cwd?: unknown };
+        if (typeof request.host !== "string" || !request.host) return await feedback.read(body, signal);
+        if (typeof request.callerThreadId !== "string" || typeof request.cwd !== "string") {
+          return plainText("Reading another daemon's feedback needs a managed thread.\n", 400);
+        }
+        const caller = await networkCaller(request.callerThreadId, request.cwd);
+        const target = await network.access.resolveOne({ kind: "feedback", address: request.host, callerProjectId: caller.projectId }, signal);
+        if (target.kind !== "feedback") throw new Error(`${request.host} is not a feedback source.`);
+        const { host: _host, callerThreadId: _caller, cwd: _cwd, ...query } = body as Record<string, JsonValue>;
+        const outcome = await network.access.call(caller, {
+          daemonId: target.daemonId, target: async () => target,
+          reason: `"${caller.title}" wants to read ${target.rootPath ? `feedback for ${target.rootPath}` : "wb feedback"} on ${target.hostname}.`,
+          call: { kind: "feedbackStats", projectId: target.projectId, body: query },
+        }, signal);
+        return plainText(formatUntrustedRemoteOutput({ hostname: target.hostname, source: "feedback" }, outcome.text ?? ""));
+      },
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
       executeProjectStoreRequest: async (body, signal) => {
         const request = WorkbenchStoreCommandRequestSchema.parse(body);
@@ -423,9 +576,59 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           : await subagents.handleRequest(request, signal),
       workbenchProjectRoot: context.legacyMigrationProjectRoot,
     }, undefined, undefined, commandLogger);
+    // Calls other daemons' threads relay here run only after this daemon authorizes them; none of these ports can relay onward.
+    const remoteCalls = new WorkbenchRemoteCallController({
+      selfDaemonId: () => network.relay.self()?.daemonId ?? null,
+      grants: caller => database.readNetworkGrantsForCaller({ daemonId: caller.daemonId, threadId: caller.threadId }),
+      thread: async threadId => {
+        const identity = await heldThread(threadId);
+        if (!identity) return null;
+        const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+        return { threadId: identity.threadId, parent: entry?.entryKind === "subagent"
+          ? { threadId: entry.parentThreadId, daemonId: entry.parentDaemonId ?? null } : null };
+      },
+      roster: threadId => subagents.readRoster(threadId),
+      isRemoteChild: async (parentThreadId, caller) => (await subagents.remote.parentsOf(caller)).includes(parentThreadId),
+      remoteParentsOf: caller => subagents.remote.parentsOf(caller),
+      recall: async (call, signal) => await (await threadRecall.execute({
+        body: call.body === null ? undefined : JSON.parse(call.body) as unknown, method: call.search ? "POST" : "GET",
+        searchParams: new URLSearchParams(call.query), threadId: call.threadId,
+      }, signal)).text(),
+      transcript: async (body, signal) => await (await transcriptCommands.execute({
+        ...body, cwd: context.legacyMigrationProjectRoot, callerThreadId: null, provider: undefined,
+      }, signal)).text(),
+      feedbackStats: async (projectId, body, signal) => await (await feedback.readRemote(projectId, body, signal)).text(),
+      message: (caller, call) => messages.admitRemote(caller, call),
+      subagentProfiles: projectId => subagents.remote.profilesFor(projectId),
+      subagentCreate: (caller, call) => subagents.remote.createForRemoteParent(caller, call),
+      childRead: threadIds => subagents.remote.readChildren(threadIds),
+      childStop: threadIds => subagents.remote.stopChildren(threadIds),
+      childSettle: threadId => subagents.remote.settleChild(threadId),
+      writeRoster: (threadId, siblings) => subagents.remote.writeRoster(threadId, siblings),
+      childChanged: parentThreadIds => subagents.remote.childChanged(parentThreadIds),
+      queue: async (caller, parentThreadId, body, signal) => {
+        const parent = await heldThread(parentThreadId);
+        const record = parent ? await subagents.getOwned(parent.threadId, parent.projectId, caller.threadId) : null;
+        if (!record) throw new Error("You are not a subagent of that thread.");
+        return await subagentQueues.executeRemoteMember({ threadId: record.threadId, name: record.name, parentThreadId: record.parentThreadId,
+          projectId: record.projectId }, body, signal);
+      },
+      release: caller => database.revokeNetworkGrants({ callerDaemonId: caller.daemonId, callerThreadId: caller.threadId }),
+    });
+    const unregisterNetwork = build.get("daemonRequests").registerNetwork({
+      execute: (params, signal) => remoteCalls.execute(params, signal),
+      createGrant: grant => database.createNetworkGrant({ id: randomUUID(), createdAt: Date.now(), grant }),
+      listGrants: () => database.listNetworkGrants(),
+      revokeGrants: revoke => database.revokeNetworkGrants(revoke),
+      revokeHistory: async (threadId, entryId) => (await network.revokeHistory(WorkbenchThreadIdSchema.parse(threadId), entryId))
+        .some(entry => entry.id === entryId && entry.revokedAt !== null),
+    });
     return {
       beginRuntimeDrain: () => { agentCommand.beginRuntimeDrain(); },
-      dispose: async () => { await agentCommand.dispose(); },
+      dispose: async () => {
+        unregisterNetwork();
+        await agentCommand.dispose();
+      },
       listRuntimeDrainPending: () => agentCommand.listRuntimeDrainPending(),
       registrations: { agentCommand },
       start: () => undefined,
@@ -434,7 +637,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "mcpServers", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "vis"],
+  requires: ["daemonRequests", "database", "gitArc", "harnesses", "mcpServers", "messages", "network", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "vis"],
   safeAll: true,
   scope: "server:commands",
 });

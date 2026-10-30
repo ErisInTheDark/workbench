@@ -12,6 +12,7 @@ import type {
 } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { DaemonId } from "workbench-shared/workbench/identity";
+import { ProjectFolderAddress } from "workbench-shared/workbench/project/project-folder-address";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import { GitPeerUnsupportedError, type GitPeerLocation } from "./WorkbenchGitPeerRelay";
@@ -189,11 +190,8 @@ export default class WorkbenchGitPeerSync {
   async fetchForAgent(daemonId: DaemonId, question: GitPeerFetchQuestion): Promise<GitPeerFetchOutcome> {
     if (this.closed) throw new Error("Peer sync is reloading.");
     const location = { daemonId, projectId: question.projectId };
-    const normalize = (value: string) => value.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
     const peers = this.findPeers(location);
-    const folder = question.folder ? normalize(question.folder) : null;
-    const matches = peers.filter(peer => peer.hostname.toLowerCase() === question.host.toLowerCase()
-      && (!folder || normalize(peer.rootPath) === folder || normalize(peer.rootPath).endsWith(`/${folder}`)));
+    const matches = ProjectFolderAddress.matchHost(peers, question.host, question.folder);
     const listed = peers.map(peer => `${peer.hostname}:${peer.rootPath}`).join(", ") || "none";
     if (!matches.length) return { kind: "failed", failure: `No visible peer folder matches ${question.host}${question.folder ? `:${question.folder}` : ""}. Peers: ${listed}.` };
     if (matches.length > 1) return { kind: "failed", failure: `Several folders on ${question.host} match; name one as <host>:<folder>. Peers: ${listed}.` };

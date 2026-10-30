@@ -180,6 +180,12 @@ export function transformQuestionnaireEntry(
       item_id: itemId, server: mcpConnection.server, url: mcpConnection.url,
     }, { conflictColumns: ["item_id"], updateColumns: ["server", "url"] }));
   }
+  const networkAccess = entry.request.networkAccess;
+  if (networkAccess) {
+    mutations.push(upsertRow(interactionTables.threadInteractionNetworkAccess, {
+      item_id: itemId, target: JSON.stringify(networkAccess.target),
+    }, { conflictColumns: ["item_id"], updateColumns: ["target"] }));
+  }
   if (command) {
     mutations.push(upsertRow(interactionTables.threadApprovalCommandContexts, {
       item_id: itemId,

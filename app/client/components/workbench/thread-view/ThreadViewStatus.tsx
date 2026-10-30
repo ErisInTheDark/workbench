@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadViewStatus: the shown thread's status row (live verb, git arc work, vis, skills, todos and feedback) and its error card.
+ * - default ThreadViewStatus: the shown thread's status row (live verb, git arc work, vis, skills, network access, todos and feedback) and
+ *   its error card.
  */
 "use client";
 
@@ -52,12 +53,13 @@ export default function ThreadViewStatus ({
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
 }) {
   const daemon = useWorkbenchDaemonClient();
+  const workspace = useContext(WorkbenchWorkspaceContext);
   const active = useThread(projectId, target, "view");
   const activeThread = active.head;
   const turns = useTranscript.turns(active.store);
   const { pending: pendingUserInputRequest } = useThread.questionnaire(active.store);
   const visQuery = useMemo(() => ({ kind: "threadVis" as const, threadId: ThreadReferenceSchema.parse(threadId) }), [threadId]);
-  const vis = useWorkspaceObservation(useContext(WorkbenchWorkspaceContext), visQuery).value?.data ?? null;
+  const vis = useWorkspaceObservation(workspace, visQuery).value?.data ?? null;
   const visActions = useMemo(() => ({
     onEnd: (sessionId: string) => { void daemon?.threads.vis.end({ threadId, sessionId }).catch((error: unknown) => console.error("Ending the vis session failed.", error)); },
     // The card reports a change that was not saved, so a failure reaches the user there.
@@ -110,6 +112,13 @@ export default function ThreadViewStatus ({
         skills={entry && !isDraftThreadView ? { onDeactivate: active.actions.deactivateSkill, skills: active.head?.skills ?? [] } : null}
         threadId={activeThread.id}
         threadLifecycle={entry?.lifecycle ?? null}
+        network={entry && !isDraftThreadView && active.head?.networkHistory?.length ? {
+          history: active.head.networkHistory,
+          onRevoke: async target => {
+            if (!workspace) throw new Error("Workbench is not connected.");
+            await workspace.revokeNetworkGrants({ kind: "revokeHistory", threadId, entryId: target.id, target: target.target });
+          },
+        } : null}
         vis={!isDraftThreadView && vis?.sessions.length ? { sessions: vis.sessions, ...visActions } : null}
         todos={entry && !isDraftThreadView ? {
           goalSet: Boolean(active.head?.goal),

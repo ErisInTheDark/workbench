@@ -18,7 +18,7 @@ import { parseProjectDocument } from "../database/thread-state/workbench-thread-
 import { createWorkbenchProjectThreadSummary, withWorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { projectWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 
-import { ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
@@ -1041,6 +1041,23 @@ test("task status requires every direct child to be settled without changing rej
     } finally {
       await controller.dispose();
     }
+  }
+});
+
+test("a child on another daemon holds its parent's task status until it settles", async () => {
+  let remote = [{ daemonId: DaemonIdSchema.parse("22222222-2222-4222-8222-222222222222"), threadId: fixtureThreadIds.child, name: "bea" }];
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "task-remote-child-settlement", threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog, reconcileProject: async () => [], readRemoteSubagents: async () => remote,
+  });
+  try {
+    const parent = pinnedRecord("thread", "Parent");
+    await controller.ensureProviderEntry(fixtureProjectIds.project, parent);
+    await assert.rejects(controller.setAgentStatus(fixtureProjectIds.project, parent.identity.threadId, "completed"), /bea/);
+    remote = [];
+    await controller.setAgentStatus(fixtureProjectIds.project, parent.identity.threadId, "completed");
+  } finally {
+    await controller.dispose();
   }
 });
 

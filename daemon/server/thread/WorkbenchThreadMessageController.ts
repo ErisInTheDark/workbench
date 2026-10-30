@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
- * - default WorkbenchThreadMessageController: own message admission, Workbench notices, sender lookup, message waits and their undelivered mail, parent questionnaire settlement, and reload drain.
+ * - default WorkbenchThreadMessageController: own message admission (including messages to and from threads on other daemons), Workbench
+ *   notices, sender lookup, message waits and their undelivered mail, parent questionnaire settlement, and reload drain.
  */
 import type {
   WorkbenchHarness,
@@ -10,6 +11,7 @@ import type {
 import {
   ThreadReferenceSchema,
   WorkbenchTurnIdSchema,
+  type DaemonId,
   type ProjectId,
   type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
@@ -34,6 +36,8 @@ import type WorkbenchQuestionnaireController from "../interactions/WorkbenchQues
 import type { WorkbenchQuestionnaireResponseStatePort } from "../interactions/WorkbenchQuestionnaireResponseController";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
 import WorkbenchMessageWaitController, { type WorkbenchMessageWaitHandoff } from "../agent/WorkbenchMessageWaitController";
+import type { RemoteCall, RemoteCaller, SiblingRosterEntry } from "workbench-shared/workbench/network/network-remote-calls";
+import type { NetworkCaller } from "../network/WorkbenchNetworkAccessController";
 
 const PARENT_AGENT_NAME = "parent agent";
 
@@ -52,6 +56,17 @@ export interface WorkbenchThreadMessageControllerOptions {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     resolvePendingQuestionnaire: WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"];
   };
+  /** Messages to threads on other daemons; absent where no relay exists. */
+  network?: {
+    self(): DaemonId | null;
+    /** A message the target authorizes from its own family records; never prompts. */
+    messageFamily(caller: { threadId: WorkbenchThreadId; title: string }, daemonId: DaemonId,
+      message: Omit<Extract<RemoteCall, { kind: "message" }>, "kind">): Promise<void>;
+    /** A message to a thread named by id; the target's refusal prompts the user once. */
+    messageThread(caller: NetworkCaller, threadId: string, message: { message: string; userVisibleSimpleVersion: string; senderName: string },
+      signal: AbortSignal): Promise<void>;
+    roster(threadId: WorkbenchThreadId): Promise<SiblingRosterEntry[]>;
+  };
 }
 
 function buildSubagentPromptContext(name: string, workbenchOrigin: string | undefined): WorkbenchMessageContext {
@@ -66,6 +81,8 @@ export default class WorkbenchThreadMessageController {
   private active = true;
   private readonly requests = new Set<Promise<void>>();
   private readonly waits: WorkbenchMessageWaitController;
+  /** Cancels network prompts still awaiting the user when the runtime drains. */
+  private readonly lifetime = new AbortController();
 
   constructor(private readonly options: WorkbenchThreadMessageControllerOptions, handoff?: WorkbenchMessageWaitHandoff) {
     this.waits = new WorkbenchMessageWaitController(handoff);
@@ -94,8 +111,14 @@ export default class WorkbenchThreadMessageController {
     let senderThreadIds: WorkbenchThreadId[] = [];
     if (!this.waits.hasWait(request.waitId)) {
       const relationships = (await this.options.listSubagents(caller.projectId)).subagents;
+      // A thread on another daemon can only wake this wait by messaging it, which its own grant or family tie authorizes.
+      const remoteSenders = this.options.network ? await Promise.all((request.threadIds ?? []).map(async (threadId: string) =>
+        await this.options.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }) ? null : threadId)) : [];
+      const remoteIds = remoteSenders.filter((threadId): threadId is string => threadId !== null);
       const targets = await Promise.all([
-        ...(request.threadIds ?? []).map(threadId => this.resolveTarget({ threadId }, caller.threadId, relationships)),
+        ...remoteIds.map(threadId => ({ threadId: threadId as unknown as WorkbenchThreadId })),
+        ...(request.threadIds ?? []).filter((threadId: string) => !remoteIds.includes(threadId))
+          .map(threadId => this.resolveTarget({ threadId }, caller.threadId, relationships)),
         ...(request.names ?? []).map(name => this.resolveTarget({ name }, caller.threadId, relationships)),
       ]);
       senderThreadIds = [...new Set(targets.map(target => target.threadId))];
@@ -107,6 +130,7 @@ export default class WorkbenchThreadMessageController {
 
   beginRuntimeDrain() {
     this.active = false;
+    if (!this.lifetime.signal.aborted) this.lifetime.abort(new Error("Thread message controller is draining for runtime reload."));
   }
 
   async dispose() {
@@ -222,6 +246,8 @@ export default class WorkbenchThreadMessageController {
     const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message" });
     const caller = await this.resolveThread(request.callerThreadId, "Workbench message caller", requestedProject.project);
     const relationships = (await this.options.listSubagents(caller.projectId)).subagents;
+    const callerName = caller.thread.name?.trim() || caller.thread.agentNickname?.trim() || "agent";
+    if (await this.sendAcrossDaemons(request, { ...caller, name: callerName }, relationships)) return;
     const target = await this.resolveTarget(request, caller.threadId, relationships);
     if (target.threadId === caller.threadId) throw new Error("A thread cannot message itself.");
 
@@ -236,23 +262,78 @@ export default class WorkbenchThreadMessageController {
       : null;
     const callerRelationship = relationships.find(record => record.threadId === caller.threadId) ?? null;
     const directParent = callerRelationship?.parentThreadId === target.threadId ? callerRelationship : null;
-    const senderName = directChild
-      ? PARENT_AGENT_NAME
-      : directParent?.name ?? (
-        caller.thread.name?.trim()
-        || caller.thread.agentNickname?.trim()
-        || "agent"
-      );
+    const senderName = directChild ? PARENT_AGENT_NAME : directParent?.name ?? callerName;
+    await this.admit(target, { senderName, senderThreadId: caller.threadId }, directChild, request);
+  }
+
+  /**
+   * Sends to a thread on another daemon when the target lives there: a parent, a child or sibling in another folder, or a
+   * thread named by id that this daemon does not hold. Returns false for local targets.
+   */
+  private async sendAcrossDaemons(
+    request: WorkbenchThreadMessageRequest,
+    caller: { threadId: WorkbenchThreadId; projectId: ProjectId; name: string; thread: { cwd: string } },
+    relationships: readonly WorkbenchSubagentRelationship[],
+  ) {
+    const network = this.options.network;
+    if (!network) return false;
+    const message = { message: request.message, userVisibleSimpleVersion: request.userVisibleSimpleVersion };
+    const self = network.self();
+    const callerRelationship = relationships.find(record => record.threadId === caller.threadId) ?? null;
+    const family = async (daemonId: DaemonId, threadId: WorkbenchThreadId, senderName: string) => {
+      await network.messageFamily({ threadId: caller.threadId, title: caller.name }, daemonId, { ...message, threadId, senderName });
+      return true;
+    };
+    if (request.parent) {
+      return callerRelationship?.parent ? await family(callerRelationship.parent.daemonId, callerRelationship.parentThreadId, callerRelationship.name) : false;
+    }
+    if (request.name) {
+      const name = request.name.toLocaleLowerCase();
+      const parentThreadId = callerRelationship?.parentThreadId ?? caller.threadId;
+      const remoteRecord = relationships.find(record => record.location && record.location.daemonId !== self && record.location.settledAt === null
+        && record.parentThreadId === parentThreadId && record.threadId !== caller.threadId && record.name.toLocaleLowerCase() === name);
+      if (remoteRecord) return await family(remoteRecord.location!.daemonId, remoteRecord.threadId,
+        remoteRecord.parentThreadId === caller.threadId ? PARENT_AGENT_NAME : callerRelationship?.name ?? caller.name);
+      if (!callerRelationship?.parent) return false;
+      const localSibling = relationships.some(record => record.parentThreadId === callerRelationship.parentThreadId
+        && record.threadId !== caller.threadId && record.name.toLocaleLowerCase() === name);
+      if (localSibling) return false;
+      const sibling = (await network.roster(caller.threadId)).find(entry => entry.name.toLocaleLowerCase() === name && entry.daemonId !== self);
+      if (!sibling) throw new Error("That sibling is not on your parent's latest roster; ask your parent to message it.");
+      return await family(sibling.daemonId, sibling.threadId, callerRelationship.name);
+    }
+    if (!request.threadId) return false;
+    if (await this.options.identities.resolve({ threadId: ThreadReferenceSchema.parse(request.threadId) })) return false;
+    await network.messageThread({ threadId: caller.threadId, cwd: caller.thread.cwd, title: caller.name, projectId: caller.projectId },
+      request.threadId, { ...message, senderName: callerRelationship?.name ?? caller.name }, this.lifetime.signal);
+    return true;
+  }
+
+  /** Admits a message another daemon's thread relayed here; the remote-call owner already authorized it. */
+  async admitRemote(caller: RemoteCaller, call: Extract<RemoteCall, { kind: "message" }>) {
+    if (!this.active) throw new Error("Thread message controller is draining for runtime reload.");
+    const target = await this.resolveThread(call.threadId, "Workbench message target");
+    const relationship = (await this.options.listSubagents(target.projectId)).subagents
+      .find(record => record.threadId === target.threadId) ?? null;
+    await this.assertUnlocked(target.projectId, relationship);
+    const directChild = relationship?.parent?.daemonId === caller.daemonId && relationship.parentThreadId === caller.threadId ? relationship : null;
+    await this.admit(target, {
+      senderName: directChild ? PARENT_AGENT_NAME : call.senderName, senderThreadId: caller.threadId, senderHost: caller.hostname,
+    }, directChild, { message: call.message, userVisibleSimpleVersion: call.userVisibleSimpleVersion });
+  }
+
+  /** Delivers one attributed message; a parent's message also settles its child's held questionnaire. */
+  private async admit(
+    target: Awaited<ReturnType<WorkbenchThreadMessageController["resolveThread"]>>,
+    sender: { senderName: string; senderThreadId: WorkbenchThreadId; senderHost?: string },
+    directChild: WorkbenchSubagentRelationship | null,
+    request: { message: string; userVisibleSimpleVersion: string; workbenchOrigin?: string | undefined },
+  ) {
     const provider = this.options.provider(target.harness);
     const input = {
       cwd: target.thread.cwd,
       threadId: target.threadId,
-      message: {
-        message: request.message,
-        senderName,
-        senderThreadId: caller.threadId,
-        userVisibleSimpleVersion: request.userVisibleSimpleVersion,
-      },
+      message: { message: request.message, ...sender, userVisibleSimpleVersion: request.userVisibleSimpleVersion },
     };
     const active = isThreadStatusActive(target.thread.status);
     const entry = directChild

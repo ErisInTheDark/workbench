@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - ProjectFolderOption: one selectable daemon folder (location facts plus owning project identity); `byRecentLaunch` orders folders newest thread launch first.
- * - ProjectFolderAddress: per-daemon shortest folder suffixes, url-address derivation and resolution over a folder universe.
+ * - ProjectFolderAddress: per-daemon shortest folder suffixes, url-address derivation and resolution over a folder universe,
+ *   and agents' `<host>[:<folder>]` addresses.
  * - projectFolderOptions: build the folder universe from logical and plain project facts.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "../../types.ts";
@@ -145,7 +146,27 @@ export function projectFolderOptions(
   return [...byKey.values()];
 }
 
+function normalizedPath(value: string) {
+  return value.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+}
+
 export namespace ProjectFolderAddress {
+  /** Splits an agent's `<host>[:<folder>]` at its first colon; the folder may hold colons of its own, such as a drive letter. */
+  export function parseHost(address: string): { host: string; folder: string | null } {
+    const separator = address.indexOf(":");
+    return separator < 0 ? { host: address, folder: null }
+      : { host: address.slice(0, separator), folder: address.slice(separator + 1) || null };
+  }
+
+  /** Folders on `host` (case-insensitive) whose root path is `folder` or ends with it as whole segments; every folder there without one. */
+  export function matchHost<Folder extends { hostname: string; rootPath: string }>(
+    folders: readonly Folder[], host: string, folder: string | null,
+  ): Folder[] {
+    const wanted = folder ? normalizedPath(folder) : null;
+    return folders.filter(candidate => candidate.hostname.toLowerCase() === host.toLowerCase()
+      && (!wanted || normalizedPath(candidate.rootPath) === wanted || normalizedPath(candidate.rootPath).endsWith(`/${wanted}`)));
+  }
+
   /** Each folder's shortest path suffix unique among the given folders on its daemon; worktrees marked `+name`. Input order. */
   export function suffixes(folders: readonly { target: ProjectLocationReference; rootPath: string }[]): string[][] {
     const suffixCounts = new Map<string, number>();

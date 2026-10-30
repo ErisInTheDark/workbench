@@ -113,6 +113,17 @@ class WorkbenchDaemonClient {
     limits: (provider: string) => this.request("account/limits/read", { provider }),
   };
 
+  /** App-only: execute relayed calls and write network grants on this daemon. */
+  readonly network = {
+    execute: (params: WorkbenchDaemonParams<"relay/execute">) => this.request("relay/execute", params),
+    grants: {
+      create: (params: WorkbenchDaemonParams<"network/grants/create">) => this.request("network/grants/create", params),
+      list: () => this.request("network/grants/list", {}),
+      revoke: (params: WorkbenchDaemonParams<"network/grants/revoke">) => this.request("network/grants/revoke", params),
+    },
+    revokeHistory: (params: WorkbenchDaemonParams<"network/history/revoke">) => this.request("network/history/revoke", params),
+  };
+
   readonly threads = {
     resolveIdentity: (params: WorkbenchDaemonParams<"thread/identity/resolve">) => this.request("thread/identity/resolve", params),
     history: {

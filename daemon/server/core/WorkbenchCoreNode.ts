@@ -29,6 +29,7 @@ import WorkbenchModelUsageStore from "../store/WorkbenchModelUsageStore";
 import VoiceSettingsStore from "../voice/VoiceSettingsStore";
 import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
+import WorkbenchCoreNetworkFeature from "./WorkbenchCoreNetworkFeature";
 import WorkbenchProjectCreationController from "../project/WorkbenchProjectCreationController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchHarnessController from "../providers/WorkbenchHarnessController";
@@ -228,7 +229,12 @@ function createWorkbenchCoreFeature(
     warn: logThreadStateWarning,
   });
   facts.endVisOnSettlement(listener => threadStateController.subscribe(listener));
+  const network = new WorkbenchCoreNetworkFeature({
+    questionnaires: () => interactions.questionnaires,
+    history: facts.networkHistory,
+  });
   const collaboration = new WorkbenchCoreSubagentsFeature({
+    network, workbenchOrigin: context.localDaemonOrigin,
     database, transcript, identities: threadIdentity, lookup, projectCatalog, profileStore, threadState: threadStateFeature, facts, gitArc,
     approvals: () => interactions.approvals,
     questionnaires: () => interactions.questionnaires,
@@ -400,7 +406,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, network, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, transcriptReader, transcriptReconciliation,
     vis,
     threadContextRollover,
     workingTree,

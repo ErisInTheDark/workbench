@@ -37,6 +37,10 @@ function fixture() {
     reserveSubagent: async (record) => repository.reserve(record),
     activateSubagent: async (parent, reservation, record) => repository.activate(parent, reservation, record),
     removeSubagent: async (parent, identifier) => { repository.remove(parent, identifier); },
+    setRemoteSubagentSettled: async (parent, threadId, settledAt) => repository.setRemoteSettled(parent, threadId, settledAt),
+    writeSubagentRoster: async (threadId, siblings) => { repository.writeRoster(threadId, siblings); },
+    readSubagentRoster: async threadId => repository.readRoster(threadId),
+    readRemoteSubagentParents: async (daemonId, threadId) => repository.parentsOfRemoteChild(daemonId, threadId),
   };
   const metadata = (parentThreadId: fixtureIdentitySchemas.WorkbenchThreadId, name: string, createdAt = 1) => ({
     parentThreadId, reservationId: randomUUID(), projectId: fixtureIdentityValues.ProjectId.project, harness: "codex" as const,
@@ -70,6 +74,26 @@ test("relationship reads include every child while retaining parent/project scop
   assert.equal((await store.list({ projectId: fixtureIdentityValues.ProjectId["project"] })).subagents.length, 26);
   assert.deepEqual((await store.list({ parentThreadId: otherParent, projectId: fixtureIdentityValues.ProjectId["project"] })).subagents, [other]);
   assert.deepEqual((await store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["another"] })).subagents, []);
+});
+
+test("a child on another daemon keeps its parent's name until its daemon reports it settled", async (context) => {
+  const { database, observe, persistence, metadata } = fixture();
+  context.after(() => database.close());
+  const store = new WorkbenchSubagentStore(persistence);
+  const parent = observe("parent");
+  const daemonId = fixtureIdentitySchemas.DaemonIdSchema.parse("22222222-2222-4222-8222-222222222222");
+  const { reservationId, ...reserved } = await store.reserve(metadata(parent, "remote"));
+  const childId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("remote-child-thread");
+  const location = { daemonId, hostname: "tower", projectId: fixtureIdentityValues.ProjectId.another, settledAt: null };
+  await store.replace(parent, reservationId, { ...reserved, threadId: childId, location });
+
+  const [record] = (await store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId.project })).subagents;
+  assert.deepEqual(record?.location, location);
+  assert.deepEqual(await store.parentsOfRemoteChild(daemonId, childId), [parent]);
+  await assert.rejects(store.reserve(metadata(parent, "REMOTE")));
+
+  await store.setRemoteSettled(parent, childId, 5);
+  assert.equal((await store.reserve(metadata(parent, "remote"))).name, "remote");
 });
 
 test("fresh store wrappers share durable reservations and never reuse allocated indexes", async (context) => {

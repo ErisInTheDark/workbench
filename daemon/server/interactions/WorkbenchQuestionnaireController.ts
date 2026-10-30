@@ -14,6 +14,7 @@ import type {
   WorkbenchPendingUserInputRequest, WorkbenchUserInputMcpAuthorizationContext, WorkbenchUserInputMcpConnectionContext,
   WorkbenchUserInputMcpToolContext, WorkbenchUserInputResponse,
 } from "workbench-shared/types";
+import type { WorkbenchUserInputNetworkAccessContext } from "workbench-shared/workbench/network/network-grants";
 import type { WorkbenchRequestUserInputCommandInput } from "../lib/workbench/commands/questionnaire-command-definition";
 import type { WorkbenchThreadId, WorkbenchTurnId, ProjectId } from "workbench-shared/workbench/identity";
 
@@ -112,6 +113,8 @@ export default class WorkbenchQuestionnaireController {
     mcpAuthorization?: WorkbenchUserInputMcpAuthorizationContext;
     /** The server URL this request asks the user to connect for the agent's turn. */
     mcpConnection?: WorkbenchUserInputMcpConnectionContext;
+    /** The remote thread, folder or feedback source this request asks the user to let the thread reach. */
+    networkAccess?: WorkbenchUserInputNetworkAccessContext;
   }, signal: AbortSignal): Promise<WorkbenchUserInputResponse> {
     this.assertActive();
     signal.throwIfAborted();
@@ -133,7 +136,7 @@ export default class WorkbenchQuestionnaireController {
       itemId: restored?.itemId ?? randomUUID(),
       request: buildWorkbenchQuestionnaireRequest({
         id: requestKey, questions: input.questions, mcpTool: input.mcpTool, mcpAuthorization: input.mcpAuthorization,
-        mcpConnection: input.mcpConnection,
+        mcpConnection: input.mcpConnection, networkAccess: input.networkAccess,
       }),
       requestKey,
       turnId: restored?.turnId ?? turnId,

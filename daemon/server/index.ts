@@ -24,6 +24,7 @@ import { createReloadableNodeModuleLoader } from "./reloadable-node-loader";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 import type { WorkbenchHardReloadNotification } from "./WorkbenchDaemonReloadController";
 import WorkbenchDaemonControlIngress from "./WorkbenchDaemonControlIngress";
+import { getProcessNetworkRelay } from "./network/WorkbenchNetworkRelayController";
 import WorkbenchDaemonListener from "./WorkbenchDaemonListener";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceLauncher from "../host/WorkbenchServiceLauncher.ts";
@@ -236,7 +237,8 @@ function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint, providers
     ...providers,
     ...(process.connected ? { sleep: {
       demanded: () => hostDemand,
-      connected: () => bridgeConnections.size > 0,
+      // Apps hold standby connections only to relay agents' requests; those never keep the daemon awake.
+      connected: () => [...bridgeConnections].some(client => !getProcessNetworkRelay().standbyOnly(client)),
       idle: () => !shuttingDown && featureHost.isIdle(),
       send: sendSleepMessage,
       warn: (message: string) => logError("sleep", message),
@@ -539,6 +541,7 @@ async function startBridgeServer() {
 
     bridgeClient.once("close", () => {
       bridgeClientsByConnectionId.delete(connectionId);
+      getProcessNetworkRelay().disconnect(bridgeClient);
       if (!shuttingDown) {
         void featureHost.run("webSocketRequests", (controller) => controller.disconnect(bridgeClient, connectionId), "browser WebSocket disconnect")
           .catch(error => logError("workbench-socket", `disconnect failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
@@ -614,6 +617,9 @@ async function startDaemon() {
   log("daemon", "provider runtimes pinned");
   featureHost = createFeatureHost(endpoint, providers);
   log("daemon", "feature graph loaded");
+  const relay = getProcessNetworkRelay();
+  relay.attachTransport((client, message) => sendJsonToClient(client as BridgeClient, message));
+  relay.subscribe(() => { if (!shuttingDown) featureHost.get("daemonSleep").refresh(); });
   await ensureWorkbenchPromptFiles();
   if (shuttingDown) return;
   log("daemon", "prompt library ready");

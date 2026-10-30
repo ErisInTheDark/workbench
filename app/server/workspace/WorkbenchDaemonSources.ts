@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchDaemonSources: reconcile verified daemon publications into independent retained connections, routing
- *   each daemon's peer fetch requests to the app's peer sync.
+ * - default WorkbenchDaemonSources: reconcile verified daemon publications into independent retained connections, holding each
+ *   on relay standby and routing every daemon's agent relay requests to the app's relay.
  */
 import { DaemonIdSchema, type DaemonId } from "workbench-shared/workbench/identity";
 import type WorkbenchNetworkController from "../network/WorkbenchNetworkController";
@@ -10,8 +10,6 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkspaceDaemonFact } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 import WorkbenchTranscriptReservoir from "./WorkbenchTranscriptReservoir";
-import type { GitPeerFetchOutcome, GitPeerFetchQuestion } from "workbench-shared/workbench/git/git-peer-contracts";
-
 type Network = Pick<WorkbenchNetworkController, "daemonSources" | "canAccessPeer" | "subscribe">;
 interface Entry {
   source: WorkbenchDaemonSource;
@@ -46,8 +44,8 @@ export default class WorkbenchDaemonSources {
     /** Browser traffic for `wb socket spy`; only the attached local daemon may read it. */
     traffic?: Pick<WebSocketTrafficBuffer, "query">;
     transcriptReservoir?: WorkbenchTranscriptReservoir;
-    /** Fetches a named peer's branch into a folder of the asking daemon, for its agents. */
-    answerPeerFetch?: (daemonId: DaemonId, question: GitPeerFetchQuestion) => Promise<GitPeerFetchOutcome>;
+    /** Answers daemons' agent relay requests; sources then stay on standby so background agents can always relay. */
+    relay?: NonNullable<ConstructorParameters<typeof WorkbenchDaemonSource>[1]["relay"]>;
   }) {
     this.transcriptReservoir = options.transcriptReservoir ?? new WorkbenchTranscriptReservoir();
   }
@@ -144,10 +142,12 @@ export default class WorkbenchDaemonSources {
               warn: this.options.warn,
               transcriptReservoir: this.transcriptReservoir,
               answerSpy: traffic ? query => id === this.attachedId ? traffic.query(query) : null : undefined,
-              answerPeerFetch: this.options.answerPeerFetch ? question => this.options.answerPeerFetch!(id, question) : undefined,
+              ...(this.options.relay ? { relay: this.options.relay } : {}),
             });
+          const subscription = source.subscribe(() => { if (!this.reconciling) this.publish(); });
+          const releaseStandby = this.options.relay ? source.standby() : () => {};
           this.entries.set(id, { source, descriptor: next.descriptor, peers: next.peers,
-            unsubscribe: source.subscribe(() => { if (!this.reconciling) this.publish(); }) });
+            unsubscribe: () => { releaseStandby(); subscription(); } });
         }
       }
       for (const [id, entry] of this.entries) {
@@ -173,7 +173,13 @@ export default class WorkbenchDaemonSources {
   private publish() {
     const next = { attachedId: this.attachedId, sources: this.all().map(source => source.getSnapshot()) };
     if (areDeeplyEqual(this.published, next)) return;
+    const reachChanged = !areDeeplyEqual(
+      this.published?.sources.map(source => [source.daemonId, source.connection === "revoked"]),
+      next.sources.map(source => [source.daemonId, source.connection === "revoked"]),
+    );
     this.published = next;
+    // Every daemon learns which daemons this app reaches, so its agents' relays pick an app that can answer.
+    if (reachChanged && this.options.relay) for (const source of this.all()) source.sendPresence();
     for (const listener of [...this.listeners]) {
       try { listener(); }
       catch (error) {

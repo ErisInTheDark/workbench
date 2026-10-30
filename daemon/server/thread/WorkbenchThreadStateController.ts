@@ -21,7 +21,7 @@ function threadStateLockKey(key: string) {
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { areDeeplyEqual, firstDeepDifference } from "workbench-shared/workbench/deep-equality";
 import { resolveLinkedProfileSelection } from "workbench-shared/workbench/thread/thread-profile";
-import { DraftIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, type DraftId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, type DaemonId, type DraftId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import {
   WorkbenchPresentationAttachmentChunkRequestSchema,
   WorkbenchPresentationAttachmentChunkSchema,
@@ -172,6 +172,9 @@ export interface WorkbenchThreadStateControllerOptions {
   hasGitArcBlockingSettlement: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<boolean>;
   /** Thread-owned work, such as required todos or unhandled addressed feedback, blocks settlement the same way live claims do. */
   settlementHold?: (threadId: WorkbenchThreadId) => Promise<WorkbenchThreadSettlementHold | null>;
+  /** A parent's unsettled children in other folders or on other daemons, which their own daemons project. */
+  /** A parent's unsettled children that live in another folder or daemon. */
+  readRemoteSubagents?: (projectId: ProjectId, parentThreadId: WorkbenchThreadId) => Promise<{ daemonId: DaemonId; threadId: WorkbenchThreadId; name: string }[]>;
   log?: (message: string) => void;
   publishAgentContext?: (harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, text: string) => Promise<void>;
   now?: () => number;
@@ -986,8 +989,10 @@ export default class WorkbenchThreadStateController {
     // An answer resumes the agent before its settlement; a status the agent reports meanwhile belongs after it.
     return await this.enqueue(`${projectId}:questionnaire:${harness}:${threadId}`, async () => {
       const state = await this.getProject(projectId);
-      const unsettled = [...state.entries.values()].flatMap(child =>
-        child.entryKind === "subagent" && child.parentThreadId === threadId && !child.lifecycle.settled ? [child.name] : []);
+      const remote = await this.options.readRemoteSubagents?.(projectId, threadId) ?? [];
+      const unsettled = [...[...state.entries.values()].flatMap(child =>
+        child.entryKind === "subagent" && child.parentThreadId === threadId && !child.lifecycle.settled ? [child.name] : []),
+      ...remote.map(child => child.name)];
       if (unsettled.length) {
         throw new Error(`Cannot mark task ${status}: unsettled subagents: ${unsettled.join(", ")}. Use \`wb subagent list\`, then \`wb subagent settle\` once each child is completed or stopped.`);
       }
@@ -1637,8 +1642,13 @@ export default class WorkbenchThreadStateController {
       ? { kind: "provider", threadId: request.target.parentThreadId }
       : request.target, state, false);
     const entries = context ? await this.withGitCommits(request.projectId, state, context.entries) : [];
+    const root = entries.find(entry => entry.entryKind === "thread");
+    const remoteSubagents = root && this.options.readRemoteSubagents
+      ? (await this.options.readRemoteSubagents(request.projectId, root.identity.threadId)).map(({ daemonId, threadId }) => ({ daemonId, threadId }))
+      : [];
     return {
       entries,
+      ...(remoteSubagents.length ? { remoteSubagents } : {}),
       error: context ? null : state.error?.slice(0, 500) ?? null,
       freshness: context ? "fresh" : state.freshness,
       projectId: request.projectId,

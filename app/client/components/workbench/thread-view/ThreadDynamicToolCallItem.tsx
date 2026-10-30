@@ -34,8 +34,9 @@ import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import { getNativeToolDisplay, isNativeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
-import { ThreadMcpDecisionCard, type ThreadMcpRequestSubject } from "./ThreadMcpToolRequest";
+import { ThreadPermissionDecisionCard, type ThreadPermissionRequestSubject } from "./ThreadPermissionRequest";
 import { isMcpToolRequestApproved } from "workbench-shared/workbench/mcp/mcp-tool-request";
+import { NetworkTargetSchema } from "workbench-shared/workbench/network/network-grants";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
@@ -117,9 +118,12 @@ function parseQuestionnaireRequest (value: unknown, requestId: string) {
   } satisfies WorkbenchUserInputRequest;
 }
 
-/** What an MCP enable, sign-in or connect request was about, when this questionnaire was one. */
-function parseMcpRequestSubject (value: unknown): ThreadMcpRequestSubject | null {
+/** What an MCP enable, sign-in or connect request or a network prompt was about, when this questionnaire was one. */
+function parseMcpRequestSubject (value: unknown): ThreadPermissionRequestSubject | null {
   const request = asRecord(value);
+  const network = NetworkTargetSchema.safeParse(asRecord(request?.networkAccess)?.target);
+  // An answered prompt shows what was decided; reachability only gated the live approval.
+  if (network.success) return { kind: "network", target: network.data, reachable: true };
   const tool = asRecord(request?.mcpTool);
   const toolServer = asString(tool?.server);
   const toolName = asString(tool?.tool);
@@ -417,7 +421,7 @@ export default function ThreadDynamicToolCallItem ({
   if (mcpSubject) {
     const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
     return <div className="py-2">
-      <ThreadMcpDecisionCard subject={mcpSubject} reason={request?.questions[0]?.question ?? ""}
+      <ThreadPermissionDecisionCard subject={mcpSubject} reason={request?.questions[0]?.question ?? ""}
         approved={isMcpToolRequestApproved(parseQuestionnaireResponse(item).response)} />
     </div>;
   }

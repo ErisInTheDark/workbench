@@ -60,6 +60,7 @@ const itemRowTableNames = [
   "threadInteractionMcpTools",
   "threadInteractionMcpAuthorizations",
   "threadInteractionMcpConnections",
+  "threadInteractionNetworkAccess",
   "threadBrowseEntries",
 ] as const satisfies readonly (keyof WorkbenchTranscriptSnapshotRows)[];
 
