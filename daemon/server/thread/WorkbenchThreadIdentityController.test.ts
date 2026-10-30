@@ -46,6 +46,8 @@ function database(overrides: Partial<WorkbenchThreadIdentityDatabase> = {}): Wor
     reserveReplacementBinding: async () => { throw new Error("Unexpected replacement reservation."); },
     releaseReplacementBinding: async () => { throw new Error("Unexpected replacement release."); },
     listThreadIdentities: async () => [record],
+    readNativeLocationRelocations: async () => [],
+    settleThreadRelocation: async () => { throw new Error("Unexpected relocation settlement."); },
     observeTurnIdentities: async () => { throw new Error("Unexpected turn admission."); },
     resolveTurnIdentity: async () => { throw new Error("Unexpected turn lookup."); },
     ...overrides,

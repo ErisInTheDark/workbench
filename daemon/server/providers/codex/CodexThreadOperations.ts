@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CodexThreadOperationOwners: existing bridge, project and identity admission ports.
- * - default CodexThreadOperations: translate WB thread intent into Codex admission, reads, thread interruption and interactions; creation that fails before native start is typed as not dispatched.
+ * - default CodexThreadOperations: translate WB thread intent into Codex admission, reads, relocation, thread interruption and interactions; creation that fails before native start is typed as not dispatched.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn as NativeTurn } from "workbench-shared/codex/generated/app-server/v2/Turn";
@@ -435,6 +435,13 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       params: { threadId: nativeThreadId },
       workbenchCompactionScope: { ...options.scope, threadId },
     }, { waitForCompletion: true, signal: options.signal });
+  }
+
+  /** The bridge owns resume, so it loads the thread at `location` when needed and makes that folder its working directory. */
+  async relocate(threadId: string, location: string) {
+    const nativeThreadId = await this.nativeThreadId(threadId);
+    this.result(await this.dispatch({ id: 0, method: "workbench/codex/thread/relocate", params: { threadId: nativeThreadId, cwd: location } }));
+    return location;
   }
 
   async delete(threadId: string) {

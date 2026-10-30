@@ -7,6 +7,7 @@ import { REMOVED_PROJECTS_ID } from "workbench-shared/workbench/project/project-
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchProjectRepository from "./WorkbenchProjectRepository";
 import { PROJECT_REFERENCES } from "./project-references";
+import NativeLocationRelocations from "../thread-identity/native-location-relocations";
 import type { WorkbenchProjectCandidate, WorkbenchProjectDiscovery } from "./workbench-project-persistence";
 
 function project(rootPath = "/repo", key = "remote://example.test/owner/repo"): WorkbenchProjectCandidate {
@@ -337,6 +338,7 @@ test("a vanished project merges into its one present same-identity checkout", ()
     ]);
     assert.deepEqual(database.prepare("SELECT DISTINCT project_id FROM thread_tool_daily_aggregates").pluck().all(), [newId]);
     assert.equal(repository.requireStoredReference(oldId), newId, "the merged id keeps resolving");
+    assert.deepEqual(NativeLocationRelocations.read(database), [{ from: "/old", to: "/new" }], "provider sessions can follow");
     assert.deepEqual(result.catalog.map(item => item.project.id), [newId]);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }

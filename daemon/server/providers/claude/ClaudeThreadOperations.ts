@@ -3,7 +3,7 @@
  * - ClaudeTurnHandoff: one paused live turn's turn and transcript state for the next bridge generation.
  * - ClaudeInstructionInput: thread facts one managed Claude prompt build reads.
  * - ClaudeThreadOperationsOptions: bind host-owned Claude sessions to Workbench identity, state, lifecycle publication, and managed MCP.
- * - default ClaudeThreadOperations: own Claude admission, thread interruption, reload handoff (re-admitting adopted turn identities), context and native sessions.
+ * - default ClaudeThreadOperations: own Claude admission, thread interruption, reload handoff (re-admitting adopted turn identities), context and native sessions, including relocating them.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -637,6 +637,15 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       if (processExit) await processExit;
       await view?.dispose();
     }
+  }
+
+  /** A session that never ran a turn has no log yet; its first turn starts at `location` anyway. */
+  async relocate(threadId: string, location: string) {
+    const identity = await this.identity(threadId);
+    const binding = identity.bindings.find(value => value.harness === "claude");
+    if (!binding) throw new Error("Claude thread has no native session identity.");
+    if (await this.sessionLog.locate(binding.nativeThreadId)) await this.sessionLog.ensureAt(binding.nativeThreadId, location);
+    return location;
   }
 
   async delete(threadId: string) {

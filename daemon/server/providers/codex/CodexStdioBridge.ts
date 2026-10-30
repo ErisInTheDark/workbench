@@ -2,7 +2,7 @@
  * Exports:
  * - CodexStdioBridgeOptions: app-server, browser, questionnaire, approval, instruction, transcript, and reload boundaries.
  * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
- * - default CodexStdioBridge: own request translation, per-thread transcript capture lanes, transcript recovery, questionnaires, approval transport, and reload state around a stable app-server.
+ * - default CodexStdioBridge: own request translation, per-thread transcript capture lanes, transcript recovery, thread relocation, questionnaires, approval transport, and reload state around a stable app-server.
  */
 import type { CodexThreadContextReadResponse, CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import { toThreadTurn, type CodexThreadSource, type CodexTurnSource } from "workbench-shared/codex/thread-adapter";
@@ -975,6 +975,9 @@ export default class CodexStdioBridge {
     }
     if (message.method === "workbench/codex/message/admit") {
       return await this.enqueueCommand(() => this.handleManagedMessageAdmission(message));
+    }
+    if (message.method === "workbench/codex/thread/relocate") {
+      return await this.enqueueCommand(() => this.relocateThread(message));
     }
     if (message.method?.startsWith("workbench/subagent/")) {
       this.assertAcceptingWork();
@@ -3131,6 +3134,41 @@ export default class CodexStdioBridge {
       };
     }
     return await this.dispatchManagedProviderRequest(message, signal);
+  }
+
+  /**
+   * Makes `cwd` the thread's working directory for later turns. Resume stays bridge-owned: a thread that is not loaded loads
+   * at `cwd` with that folder's instructions, so its first turn there never starts from the folder it left.
+   */
+  private async relocateThread(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const signal = this.generation.signal;
+    const requestId = message.id ?? null;
+    const params = asRecord(message.params);
+    const threadId = asString(params?.threadId)?.trim();
+    const cwd = asString(params?.cwd)?.trim();
+    if (!threadId || !cwd) return { id: requestId, error: { code: -32602, message: "Relocation requires a thread id and cwd." } };
+    this.assertAcceptingWork();
+    const read = await this.dispatchManagedProviderRequest({
+      method: "thread/read", params: { threadId, includeTurns: false },
+    }, signal);
+    signal.throwIfAborted();
+    if (read.error) return { id: requestId, error: read.error };
+    const thread = asRecord(read.result)?.thread as ThreadReadResponse["thread"] | undefined;
+    if (!thread || thread.id !== threadId) return { id: requestId, error: { code: -32000, message: "Unable to read the thread to move it." } };
+    if (isThreadStatusActive(thread.status)) return {
+      id: requestId, error: { code: -32000, message: "Wait for the active turn to finish before moving the thread." },
+    };
+    if (thread.status.type === "notLoaded") {
+      let resumeRequest = this.instructions.createThreadResume({ threadId, excludeTurns: true, cwd }, { kind: "cwd", cwd });
+      if (this.prepareThreadConfiguration) {
+        ({ resumeRequest } = await this.prepareThreadConfiguration({ ...thread, cwd }, { resumeRequest }, signal));
+        signal.throwIfAborted();
+      }
+      const resumed = await this.dispatchManagedProviderRequest(resumeRequest, signal);
+      signal.throwIfAborted();
+      if (resumed.error) return { id: requestId, error: resumed.error };
+    }
+    return await this.dispatchManagedProviderRequest({ id: requestId, method: "thread/settings/update", params: { threadId, cwd } }, signal);
   }
 
   private async admitCodexTurn({

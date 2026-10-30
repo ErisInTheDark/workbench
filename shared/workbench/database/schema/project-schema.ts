@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - projectTables/ProjectSchemaRows: typed project metadata, ordered roots, and legacy addresses.
+ * - projectTables/ProjectSchemaRows: typed project metadata, ordered roots, legacy addresses, and merge-relocated native locations.
  * - projectSchemaHistory: project storage installation before reference admission.
  * - admitProjectReferences: backfill project parents from an existing reference history.
  * - ownProjectReferences: add restrictive ownership after protected identity conversion.
@@ -197,13 +197,28 @@ const rootsHistory = defineTableHistory({
   ],
 });
 const aliasesHistory = initial(aliases);
+
+/** A native location a project merge moved; identity treats it and `to_location` as one location. */
+const relocations = defineTable("workbench_native_location_relocations", {
+  from_location: text().primaryKey(),
+  to_location: text().notNull(),
+  relocated_at: integer().notNull().nonNegative(),
+}, table => ({ constraints: [check(sql`${table.from_location} <> ${table.to_location}`)] }));
+const relocationsHistory = defineTableHistory({
+  current: relocations,
+  versions: [tableVersion({
+    schemaVersion: databaseReleases.nativeLocationRelocations.version, table: relocations, migration: createTable(relocations),
+  })],
+});
+
 export const projectTables = Object.freeze({
   projects: projectsHistory.current, roots: rootsHistory.current, aliases: aliasesHistory.current,
+  relocations: relocationsHistory.current,
 });
 export type ProjectSchemaRows = {
   [Name in keyof typeof projectTables]: SelectRow<(typeof projectTables)[Name]>;
 };
-export const projectSchemaHistory = defineSubsystemHistory([projectsHistory, rootsHistory, aliasesHistory]);
+export const projectSchemaHistory = defineSubsystemHistory([projectsHistory, rootsHistory, aliasesHistory, relocationsHistory]);
 
 export function admitProjectReferences<Table extends TableDefinition>(
   history: TableHistory<Table>,

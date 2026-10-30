@@ -51,6 +51,8 @@ function gitFixtureIdentities() {
       }))));
   return new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => records,
+    readNativeLocationRelocations: async () => [],
+    settleThreadRelocation: async () => { throw new Error("Git fixtures never relocate."); },
     resolveThreadIdentity: async input => records.find(record =>
       (!input.projectId || record.projectId === input.projectId)
       && (!input.harness || record.bindings[0].harness === input.harness)
@@ -1367,6 +1369,8 @@ test("nested worktree registries resolve owners bound at the containing checkout
   const records = [record("main", main, "main-thread"), record("outside", outside, "outside-thread"), record("lab", lab, "lab-thread")];
   const identities = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => records,
+    readNativeLocationRelocations: async () => [],
+    settleThreadRelocation: async () => { throw new Error("Git fixtures never relocate."); },
     // Like the identity database, a canonical thread scoped to another project rejects instead of resolving to null.
     resolveThreadIdentity: async input => {
       const found = records.find(candidate => candidate.threadId === input.threadId || candidate.bindings[0]!.nativeThreadId === input.threadId);
@@ -1402,6 +1406,8 @@ test("a thread of one of two projects sharing a root settles and reads its arc t
   } satisfies WorkbenchThreadIdentityRecord;
   const identities = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => [thread],
+    readNativeLocationRelocations: async () => [],
+    settleThreadRelocation: async () => { throw new Error("Git fixtures never relocate."); },
     resolveThreadIdentity: async input => {
       if (input.threadId !== thread.threadId && input.threadId !== thread.bindings[0].nativeThreadId) return null;
       if (input.projectId && input.projectId !== thread.projectId) throw new Error("Workbench thread does not belong to the requested project.");

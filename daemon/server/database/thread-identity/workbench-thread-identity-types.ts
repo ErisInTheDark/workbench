@@ -17,6 +17,7 @@ import type {
   WorkbenchThreadId, WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptAtomicObservation } from "../transcript/workbench-transcript-types.ts";
+import type { NativeLocationRelocation } from "./native-location-relocations.ts";
 
 export interface WorkbenchNativeThreadIdentity {
   harness: string;
@@ -82,6 +83,9 @@ export interface WorkbenchThreadIdentityDatabase {
   reserveReplacementBinding?(input: WorkbenchThreadReplacementBinding): Promise<WorkbenchThreadIdentityRecord>;
   releaseReplacementBinding?(input: Omit<WorkbenchThreadReplacementBinding, "reservedAt">): Promise<WorkbenchThreadIdentityRecord>;
   listThreadIdentities(): Promise<WorkbenchThreadIdentityRecord[]>;
+  readNativeLocationRelocations(): Promise<NativeLocationRelocation[]>;
+  /** Rebinds a thread's relocated native locations onto `location` once its provider moved there. */
+  settleThreadRelocation(threadId: string, harness: string, location: string): Promise<WorkbenchThreadIdentityRecord>;
   /** Requested records first, then other records whose ordered indexes changed. */
   observeTurnIdentities(inputs: readonly WorkbenchTurnIdentityMetadata[]): Promise<WorkbenchTurnIdentityRecord[]>;
   resolveTurnIdentity(input: WorkbenchTurnIdentityLookup): Promise<WorkbenchTurnIdentityRecord | null>;

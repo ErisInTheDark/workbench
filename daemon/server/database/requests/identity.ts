@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - identityRequests: database requests that admit and resolve thread, turn and transcript item identities.
+ * - identityRequests: database requests that admit and resolve thread, turn and transcript item identities, and read and settle
+ *   merge-relocated native locations.
  */
 import type {
   WorkbenchNativeThreadIdentity,
@@ -42,6 +43,15 @@ export const identityRequests = {
   releaseReplacementBinding: defineDatabaseRequest({
     run: ({ threadIdentities }, input: Omit<WorkbenchThreadReplacementBinding, "reservedAt">) => (
       requireIdentity(threadIdentities.releaseReplacementBinding(input), "release")
+    ),
+  }),
+  readNativeLocationRelocations: defineDatabaseRequest({
+    read: "core",
+    run: ({ threadIdentities }) => threadIdentities.readNativeLocationRelocations(),
+  }),
+  settleThreadRelocation: defineDatabaseRequest({
+    run: ({ threadIdentities }, threadId: string, harness: string, location: string) => (
+      threadIdentities.settleRelocation(threadId, harness, location)
     ),
   }),
   listThreadIdentities: defineDatabaseRequest({

@@ -310,6 +310,43 @@ test("the shared provider admission gate wakes waits only for accepted steers", 
   assert.deepEqual(interrupted, ["parent", "parent"]);
 });
 
+test("a merged thread's native session moves before its next turn, once, and never when nothing moved", async () => {
+  const events: string[] = [];
+  const pending = new Map([["merged", "C:/git/new"]]);
+  const provider = {
+    threads: {
+      // Providers may spell the moved folder their own way; that spelling is what later reports repeat.
+      relocate: async (threadId: string, location: string) => {
+        events.push(`relocate ${threadId} ${location}`);
+        return location.replaceAll("/", "\\");
+      },
+      submit: async (input: { threadId: string }) => {
+        events.push(`submit ${input.threadId}`);
+        return { kind: "started" as const, turn: { id: "turn" } as never };
+      },
+      compact: async (threadId: string) => { events.push(`compact ${threadId}`); },
+    },
+  } as unknown as WorkbenchProvider;
+  const handle = new WorkbenchProviderHandle("codex", async (_registration, operation) => operation(provider), {
+    interruptSteerWaits: () => {},
+    nativeLocations: {
+      pending: threadId => pending.get(threadId) ?? null,
+      settle: async (threadId, location) => { events.push(`settle ${threadId} ${location}`); pending.delete(threadId); },
+    },
+  });
+  const message = (threadId: string) => ({ threadId, clientMessageId: threadId, input: [], intent: "newTurn" as const });
+  await handle.threads.submit(message("merged"));
+  await handle.threads.submit(message("merged"));
+  await handle.threads.submit(message("other"));
+  assert.deepEqual(events, [
+    "relocate merged C:/git/new", "settle merged C:\\git\\new", "submit merged", "submit merged", "submit other",
+  ]);
+  pending.set("compacted", "C:/git/new");
+  events.length = 0;
+  await handle.threads.compact("compacted", { scope: {} as never });
+  assert.deepEqual(events, ["relocate compacted C:/git/new", "settle compacted C:\\git\\new", "compact compacted"]);
+});
+
 test("the shared provider handle publishes each provider-chosen message admission once", async () => {
   const admissions: Array<{ firstMessagePreview?: string; harness: string; kind: string; threadId: string; turnId: string }> = [];
   let userAdmission: "failed" | "started" | "steered" = "started";
@@ -570,13 +607,13 @@ function fixture() {
               context,
               singleFile,
               tools,
-              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused },
+              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, relocate: unused, interrupt: unused, isTurnLive: unused, materialize: unused },
               configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
                 read: currentRead ?? (async () => [{ model: String(current), defaultTokens: 1000, maximumTokens: 2000 }]),
               } },
             },
             openCodeProvider: {
-              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused },
+              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, relocate: unused, interrupt: unused, isTurnLive: unused, materialize: unused },
               configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
                 read: async () => [{ model: "opencode", defaultTokens: 1000, maximumTokens: 2000 }],
               } },

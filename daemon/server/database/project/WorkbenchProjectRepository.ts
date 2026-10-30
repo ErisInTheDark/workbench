@@ -21,6 +21,7 @@ import type {
   WorkbenchProjectMerge, WorkbenchProjectReconciliation, WorkbenchProjectStartup,
 } from "./workbench-project-persistence.ts";
 import { PROJECT_REFERENCES } from "./project-references.ts";
+import NativeLocationRelocations from "../thread-identity/native-location-relocations.ts";
 
 const uuid = z.string().uuid();
 type ProjectRow = ProjectSchemaRows["projects"];
@@ -182,10 +183,18 @@ export default class WorkbenchProjectRepository {
       if ((!targetDiscovered && target.missing_since !== null) || !targetRoots.length) throw new Error("The merge target is not available.");
       const targetRootFor = (root: RootRow | undefined) => targetRoots.find(next => next.root_id === root?.root_id)
         ?? targetRoots.find(next => next.root_index === root?.root_index) ?? targetRoots[0]!;
+      const moves = sourceRoots.map(root => ({ from: root.root_path, to: targetRootFor(root).root_path }));
+      const relocations = new NativeLocationRelocations(moves);
       const threads = this.database.prepare("SELECT id, project_root FROM workbench_threads WHERE project_id = ? ORDER BY id")
         .all(source.id) as Array<{ id: string; project_root: string }>;
       const moveRoot = this.database.prepare("UPDATE workbench_threads SET project_root = ? WHERE id = ?");
-      for (const thread of threads) moveRoot.run(this.relocate(thread.project_root, sourceRoots, targetRootFor), thread.id);
+      for (const thread of threads) {
+        const relocated = relocations.relocate(thread.project_root);
+        moveRoot.run(relocated === thread.project_root ? targetRoots[0]!.root_path : relocated, thread.id);
+      }
+      // Provider sessions keep their old location until they move; identity treats both as one.
+      const relocatedAt = Date.now();
+      for (const move of moves) NativeLocationRelocations.record(this.database, move, relocatedAt);
       this.dissolve(source.id, target.id, "merge", {
         roots: new Map(sourceRoots.map(root => [root.root_id, targetRootFor(root).root_id])),
         fallback: targetRoots[0]!.root_id,
@@ -219,19 +228,6 @@ export default class WorkbenchProjectRepository {
 
   private rootsOf(projectId: string) {
     return this.database.prepare("SELECT * FROM workbench_project_roots WHERE project_id = ? ORDER BY root_index").all(projectId) as RootRow[];
-  }
-
-  /** The same location under the target root matching the source root containing it; anything outside lands on the target's primary root. */
-  private relocate(location: string, sourceRoots: readonly RootRow[], targetRootFor: (root: RootRow | undefined) => RootRow) {
-    const key = nativeLocationKey(location);
-    const containing = [...sourceRoots].sort((left, right) => right.root_path.length - left.root_path.length).find(root => {
-      const rootKey = nativeLocationKey(root.root_path);
-      return key === rootKey || key.startsWith(`${rootKey}${path.sep}`);
-    });
-    const target = targetRootFor(containing);
-    if (!containing) return target.root_path;
-    const suffix = location.replaceAll("\\", "/").slice(containing.root_path.replaceAll("\\", "/").replace(/\/+$/u, "").length);
-    return `${target.root_path.replace(/[\\/]+$/u, "")}${suffix}`;
   }
 
   /** Applies one PROJECT_REFERENCES phase moving `projectId`'s rows to `destination`, then deletes the project row. */

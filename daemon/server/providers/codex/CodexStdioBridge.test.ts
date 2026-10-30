@@ -470,6 +470,8 @@ test("bridge admits public identity before structural publication and records th
   let writes = 0;
   const threads = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => repository.list(),
+    readNativeLocationRelocations: async () => repository.readNativeLocationRelocations(),
+    settleThreadRelocation: async (threadId, harness, location) => repository.settleRelocation(threadId, harness, location),
     observeThreadIdentities: async (inputs) => { writes++; return repository.observeMany(inputs); },
     observeTurnIdentities: async (inputs) => { writes++; return repository.observeTurns(inputs); },
     resolveThreadIdentity: async (input) => repository.resolve(input),
@@ -591,6 +593,8 @@ test("database replacement preserves ordered live events and usage without repla
   const createOwners = () => ({
     threads: new WorkbenchThreadIdentityController({
       listThreadIdentities: async () => repository.list(),
+    readNativeLocationRelocations: async () => repository.readNativeLocationRelocations(),
+    settleThreadRelocation: async (threadId, harness, location) => repository.settleRelocation(threadId, harness, location),
       observeThreadIdentities: async (inputs) => repository.observeMany(inputs),
       observeTurnIdentities: async (inputs) => repository.observeTurns(inputs),
       resolveThreadIdentity: async (input) => repository.resolve(input),
@@ -2336,6 +2340,8 @@ async function recordingIdentities(options: { database?: InstanceType<typeof Dat
   });
   const threads = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => repository.list(),
+    readNativeLocationRelocations: async () => repository.readNativeLocationRelocations(),
+    settleThreadRelocation: async (threadId, harness, location) => repository.settleRelocation(threadId, harness, location),
     observeThreadIdentities: async inputs => repository.observeMany(inputs),
     observeTurnIdentities: async inputs => repository.observeTurns(inputs),
     resolveThreadIdentity: async input => repository.resolve(input),

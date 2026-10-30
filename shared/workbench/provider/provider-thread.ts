@@ -81,6 +81,11 @@ export interface WorkbenchProviderThreads {
   messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<WorkbenchAgentMessageAdmission>;
   rename(threadId: string, title: string): Promise<void>;
   compact(threadId: string, options: { scope: WorkbenchProviderCompactionScope; signal?: AbortSignal }): Promise<void>;
+  /**
+   * Move the backing native session so later turns run in `location`; idempotent. Workbench identity and history stay.
+   * Resolves to the location as the provider now spells it, which its later reports repeat.
+   */
+  relocate(threadId: string, location: string): Promise<string>;
   /** Delete the backing provider session, retaining WB identity, state and history. */
   delete?(threadId: string): Promise<void>;
   /** Interrupt the thread's current execution without requiring a caller-selected turn. */

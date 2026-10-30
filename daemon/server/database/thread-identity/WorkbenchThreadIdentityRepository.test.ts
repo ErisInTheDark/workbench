@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 import WorkbenchThreadIdentityRepository from "./WorkbenchThreadIdentityRepository.ts";
+import NativeLocationRelocations from "./native-location-relocations.ts";
 import WorkbenchThreadLaunchRepository from "../thread-launch/WorkbenchThreadLaunchRepository.ts";
 import type { WorkbenchThreadIdentityMetadata, WorkbenchTurnIdentityMetadata } from "./workbench-thread-identity-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -478,6 +479,28 @@ test("recording a durable turn transfers identity out of the pending row", () =>
     assert.equal((database.prepare("SELECT count(*) AS count FROM workbench_pending_import_threads").get() as { count: number }).count, 0);
     assert.equal(resolved?.bindings.length, 1);
     assert.equal(resolved?.bindings[0]?.pending, false);
+  } finally {
+    database.close();
+  }
+});
+
+test("a relocated native location and its destination resolve to one thread before and after the provider moves", () => {
+  const { database, identity } = setup();
+  try {
+    const old = metadata("native-thread", "C:/old");
+    const { threadId } = identity.observe(old);
+    new WorkbenchTranscriptRepository(database).settle([{
+      kind: "turn", threadId, turnId: fixtureIdentityValues.WorkbenchTurnId["known-turn"], harnessId: "codex",
+      nativeLocation: "C:/old", nativeThreadId: old.native.nativeThreadId,
+      nativeTurnId: fixtureIdentityValues.NativeTurnId["known-turn"], state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
+    }]);
+    NativeLocationRelocations.record(database, { from: "C:/old", to: "C:/new" }, 5);
+    const moved = metadata("native-thread", "C:/new");
+    assert.equal(identity.observe(moved).threadId, threadId, "a provider reporting the destination keeps the thread");
+    assert.equal(identity.resolveNative(moved.native)?.threadId, threadId);
+    assert.deepEqual(identity.settleRelocation(threadId, "codex", "C:/new").bindings.map(binding => binding.nativeLocation), ["C:/new"]);
+    assert.equal(identity.resolveNative(old.native)?.threadId, threadId, "a provider still reporting the old location keeps the thread");
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_threads").pluck().get(), 1);
   } finally {
     database.close();
   }

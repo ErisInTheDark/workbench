@@ -64,6 +64,8 @@ async function setup(platform: NodeJS.Platform = process.platform) {
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
   const threads = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => repository.list(),
+    readNativeLocationRelocations: async () => repository.readNativeLocationRelocations(),
+    settleThreadRelocation: async (threadId, harness, location) => repository.settleRelocation(threadId, harness, location),
     observeThreadIdentities: async (inputs) => repository.observeMany(inputs),
     resolveThreadIdentity: async (input) => repository.resolve(input),
     resolveNativeThreadIdentity: async (input) => repository.resolveNative(input),
@@ -603,6 +605,8 @@ test("notification admission restores cold durable references without replaying 
   const cold = {
     threads: new WorkbenchThreadIdentityController({
       listThreadIdentities: async () => repository.list(),
+    readNativeLocationRelocations: async () => repository.readNativeLocationRelocations(),
+    settleThreadRelocation: async (threadId, harness, location) => repository.settleRelocation(threadId, harness, location),
       observeThreadIdentities: async (inputs) => { writes++; return repository.observeMany(inputs); },
       observeTurnIdentities: async (inputs) => { writes++; return repository.observeTurns(inputs); },
       resolveThreadIdentity: async (input) => { reads++; return repository.resolve(input); },

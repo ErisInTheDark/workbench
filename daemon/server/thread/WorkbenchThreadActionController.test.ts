@@ -29,7 +29,7 @@ function fixture(providerWarning?: string) {
       history: { materialize: unused },
       create: unused, list: unused, read: unused,
       submit: async input => { messages.push(input); return { kind: "steered", turnId: "wb-turn", ...(providerWarning ? { warning: providerWarning } : {}) }; },
-      rename: unused, compact: unused,
+      rename: unused, compact: unused, relocate: unused,
       interrupt: async threadId => {
         stopOrder.push("interrupt");
         if (interruptFailure) throw new Error("interruption failed");

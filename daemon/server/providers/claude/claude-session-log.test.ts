@@ -1,4 +1,4 @@
-/* No production exports. Protect Claude session-log location and turn-window reads. */
+/* No production exports. Protect Claude session-log location, turn-window reads, and moved sessions resuming from their new cwd. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -29,4 +29,20 @@ test("a turn window reads only main-conversation lines between its start and the
   const from = Date.parse(at(10));
   const records = await log.read(file, { from, until: Date.parse(at(20)) });
   assert.deepEqual(records.map(record => record.uuid), ["prompt", "reply"]);
+});
+
+test("a session log found under its old cwd is copied once under the new cwd's project directory", async (t) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("claude-session-log-");
+  t.after(() => temporary.dispose());
+  const original = path.join(temporary.path, "projects", "C--git-rust-zoomie-lint", "session.jsonl");
+  await fs.mkdir(path.dirname(original), { recursive: true });
+  await fs.writeFile(original, "{\"type\":\"user\"}\n");
+  const log = new ClaudeSessionLog(temporary.path);
+  const moved = await log.ensureAt("session", "C:/git/rust/dxlint");
+  assert.equal(moved, path.join(temporary.path, "projects", "C--git-rust-dxlint", "session.jsonl"));
+  assert.equal(await fs.readFile(moved, "utf8"), "{\"type\":\"user\"}\n");
+  await fs.writeFile(moved, "{\"type\":\"assistant\"}\n");
+  assert.equal(await log.ensureAt("session", "C:/git/rust/dxlint"), moved);
+  assert.equal(await fs.readFile(moved, "utf8"), "{\"type\":\"assistant\"}\n", "a later turn's log is never overwritten");
+  assert.equal(await fs.readFile(original, "utf8"), "{\"type\":\"user\"}\n");
 });

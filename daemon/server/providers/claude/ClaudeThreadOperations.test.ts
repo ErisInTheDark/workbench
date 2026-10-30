@@ -442,6 +442,7 @@ test("a Claude turn adopted across a database reload is known to the replacement
   // A fresh controller is what a database reload hands the adopting generation: nothing admitted in memory yet.
   const identities = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => [],
+    readNativeLocationRelocations: async () => [],
     resolveTurnIdentity: async ({ threadId: owner, turnId: reference }: { threadId: string; turnId: string }) => (
       owner === threadId && reference === turnId ? stored : null),
   } as never);

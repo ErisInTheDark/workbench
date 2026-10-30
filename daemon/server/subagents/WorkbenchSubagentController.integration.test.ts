@@ -117,6 +117,7 @@ class FakeProvider {
   };
   readonly threads: WorkbenchProvider["threads"] = {
     reconcile: async () => { throw new Error("Unexpected recovery"); },
+    relocate: async () => { throw new Error("Unexpected relocation"); },
     read: this.read, readLatest: this.read,
     latestTurn: async id => (await this.read(id)).turns.at(-1) ?? null,
     create: async input => {

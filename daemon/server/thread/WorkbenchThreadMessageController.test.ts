@@ -124,7 +124,7 @@ function fixture({
   const unused = async () => { throw new Error("unexpected provider operation"); };
   const provider: Pick<WorkbenchProvider, "threads" | "interactions"> = {
     threads: {
-      reconcile: unused,
+      reconcile: unused, relocate: unused,
       read: async id => threads.get(id) ?? (() => { throw new Error(`unknown thread ${id}`); })(),
       readLatest: async id => threads.get(id) ?? (() => { throw new Error(`unknown thread ${id}`); })(),
       latestTurn: unused, admitTurn: unused, history: { materialize: unused }, create: unused,

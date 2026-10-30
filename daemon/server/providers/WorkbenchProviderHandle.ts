@@ -2,8 +2,11 @@
  * Exports:
  * - WorkbenchProviderMessageAdmission: one provider-chosen message outcome published after acceptance.
  * - WorkbenchProviderHiddenTurn: a Workbench-started hidden turn and its in-lane supersession check.
- * - WorkbenchProviderHandleOptions: post-admission hooks, instruction selection and shared message admission policy.
- * - default WorkbenchProviderHandle: forward operations through the current definition lease, supply thread instruction selections, admit compaction-queue deliveries inside their compaction's admission, and wake waits after accepted steers.
+ * - WorkbenchProviderNativeLocations: pending native session moves after project merges, and their settlement.
+ * - WorkbenchProviderHandleOptions: post-admission hooks, instruction selection, native relocation and shared message admission policy.
+ * - default WorkbenchProviderHandle: forward operations through the current definition lease, move a merged thread's native session
+ *   before its next turn or compaction, supply thread instruction selections, admit compaction-queue deliveries inside their
+ *   compaction's admission, and wake waits after accepted steers.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
@@ -32,8 +35,15 @@ export interface WorkbenchProviderHiddenTurn {
   isCurrent(threads: Pick<WorkbenchProvider["threads"], "latestTurn" | "isTurnLive">): Promise<boolean>;
 }
 
+/** Native sessions a project merge left behind: where one must move, and recording that it did. */
+export interface WorkbenchProviderNativeLocations {
+  pending(threadId: string): string | null;
+  settle(threadId: string, location: string): Promise<void>;
+}
+
 export interface WorkbenchProviderHandleOptions {
   interruptSteerWaits: (threadId: string, senderThreadId?: string) => void;
+  nativeLocations?: WorkbenchProviderNativeLocations;
   instructionSelection?: Pick<WorkbenchThreadInstructionSelectionController, "resolve" | "record">;
   messageAdmission?: WorkbenchThreadAutoCompactController["run"];
   /** An agent message steered a live turn; its model sees it only at a later input boundary. */
@@ -59,7 +69,19 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     admit: () => Promise<T>,
     options?: Parameters<WorkbenchThreadAutoCompactController["run"]>[3],
   ) {
-    return this.options.messageAdmission ? this.options.messageAdmission(threadId, provider, admit, options) : admit();
+    const relocated = async () => {
+      await this.relocatePending(threadId, provider);
+      return await admit();
+    };
+    return this.options.messageAdmission ? this.options.messageAdmission(threadId, provider, relocated, options) : relocated();
+  }
+
+  /** A merge moved this thread's folder: its native session follows before the turn that would run there. */
+  private async relocatePending(threadId: string, provider: WorkbenchProvider) {
+    const location = this.options.nativeLocations?.pending(threadId);
+    if (!location) return;
+    const native = await provider.threads.relocate(threadId, location);
+    await this.options.nativeLocations!.settle(threadId, native);
   }
 
   /** Inside the admission lane, so a selection recorded by an earlier message is the one this message sees. */
@@ -183,7 +205,11 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
       return admitted;
     },
     rename: (threadId, title) => this.run(providerRegistrations[this.key], provider => provider.threads.rename(threadId, title), `${this.key}: threads.rename`),
-    compact: (threadId, options) => this.run(providerRegistrations[this.key], provider => provider.threads.compact(threadId, options), `${this.key}: threads.compact`),
+    compact: (threadId, options) => this.run(providerRegistrations[this.key], async provider => {
+      await this.relocatePending(threadId, provider);
+      return await provider.threads.compact(threadId, options);
+    }, `${this.key}: threads.compact`),
+    relocate: (threadId, location) => this.run(providerRegistrations[this.key], provider => provider.threads.relocate(threadId, location), `${this.key}: threads.relocate`),
     delete: threadId => this.run(providerRegistrations[this.key], provider => {
       if (!provider.threads.delete) throw new Error(`Provider ${this.key} does not support deleting its threads.`);
       return provider.threads.delete(threadId);

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchThreadIdentityRepository: own UUID allocation and pending/turn identity on the database connection.
+ * - default WorkbenchThreadIdentityRepository: own UUID allocation and pending/turn identity on the database connection, comparing
+ *   native locations through merge relocations and rebinding them once a provider moved.
  */
 import { randomUUID } from "node:crypto";
 
@@ -11,7 +12,7 @@ import {
   type ProjectId, type ThreadReference, type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
 
-import { nativeLocationKey } from "./native-location-key.ts";
+import NativeLocationRelocations from "./native-location-relocations.ts";
 import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 import WorkbenchThreadLaunchRepository from "../thread-launch/WorkbenchThreadLaunchRepository.ts";
 import { compileWorkbenchDatabaseStatement, updateRows } from "workbench-shared/database/workbench-database-statements";
@@ -48,6 +49,8 @@ interface ThreadRow {
 type TurnRow = CoreSchemaRows["threadTurns"];
 
 export default class WorkbenchThreadIdentityRepository {
+  private relocationStorage = false;
+
   constructor(
     private readonly database: Database.Database,
     private readonly platform: NodeJS.Platform = process.platform,
@@ -234,7 +237,7 @@ export default class WorkbenchThreadIdentityRepository {
     if (this.platform !== "win32") return;
     type BindingRow = Pick<TurnRow, "thread_id" | "harness_id" | "native_location" | "native_thread_id">;
     const key = (row: BindingRow) => JSON.stringify([
-      row.harness_id, nativeLocationKey(row.native_location, this.platform), row.native_thread_id,
+      row.harness_id, this.locationKey(row.native_location), row.native_thread_id,
     ]);
     const imported = new Map<string, Set<string>>();
     const turns = this.database.prepare("SELECT DISTINCT thread_id, harness_id, native_location, native_thread_id FROM thread_turns").all() as BindingRow[];
@@ -334,13 +337,13 @@ export default class WorkbenchThreadIdentityRepository {
       const following = inputs.map((): { input: WorkbenchTurnIdentityMetadata; row: TurnRow } | undefined => undefined);
       for (let index = inputs.length - 1; index >= 0; index -= 1) {
         const input = inputs[index]!;
-        const scope = JSON.stringify([input.threadId, input.harnessId, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId]);
+        const scope = JSON.stringify([input.threadId, input.harnessId, this.locationKey(input.nativeLocation), input.nativeThreadId]);
         following[index] = successors.get(scope);
         if (known[index]) successors.set(scope, { input, row: known[index]! });
       }
       const previousKnown = new Map<string, TurnRow>();
       const admitted = inputs.map((input, index) => {
-        const scope = JSON.stringify([input.threadId, input.harnessId, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId]);
+        const scope = JSON.stringify([input.threadId, input.harnessId, this.locationKey(input.nativeLocation), input.nativeThreadId]);
         const previous = previousKnown.get(scope);
         if (known[index]) previousKnown.set(scope, known[index]!);
         const next = !known[index] ? following[index] : undefined;
@@ -429,7 +432,46 @@ export default class WorkbenchThreadIdentityRepository {
   }
 
   private sameLocation(left: string, right: string) {
-    return nativeLocationKey(left, this.platform) === nativeLocationKey(right, this.platform);
+    const relocations = this.relocations();
+    return relocations.key(left) === relocations.key(right);
+  }
+
+  private locationKey(location: string) {
+    return this.relocations().key(location);
+  }
+
+  /** Read per comparison: merges on this connection add rows, and the table holds one row per merged root. */
+  private relocations() {
+    if (!this.relocationStorage) {
+      this.relocationStorage = Boolean(this.database.prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'workbench_native_location_relocations'",
+      ).get());
+    }
+    return new NativeLocationRelocations(this.relocationStorage ? NativeLocationRelocations.read(this.database) : [], this.platform);
+  }
+
+  readNativeLocationRelocations() {
+    this.relocations();
+    return this.relocationStorage ? NativeLocationRelocations.read(this.database) : [];
+  }
+
+  /** After a provider moved its session, rebinds the thread's native locations that relocate to `location` onto it. */
+  settleRelocation(threadId: string, harness: string, location: string): WorkbenchThreadIdentityRecord {
+    return this.database.transaction(() => {
+      const owner = this.canonical(threadId);
+      const target = this.locationKey(location);
+      for (const table of ["thread_turns", "workbench_pending_import_threads"] as const) {
+        const rows = this.database.prepare(`SELECT DISTINCT native_location FROM ${table} WHERE thread_id = ? AND harness_id = ?`)
+          .all(owner.threadId, harness) as Array<{ native_location: string }>;
+        const rebind = this.database.prepare(`UPDATE ${table} SET native_location = ? WHERE thread_id = ? AND harness_id = ? AND native_location = ?`);
+        for (const row of rows) {
+          if (row.native_location !== location && this.locationKey(row.native_location) === target) {
+            rebind.run(location, owner.threadId, harness, row.native_location);
+          }
+        }
+      }
+      return this.read(owner.threadId)!;
+    })();
   }
 
   private sameNative(left: WorkbenchNativeThreadIdentity, right: WorkbenchNativeThreadIdentity) {

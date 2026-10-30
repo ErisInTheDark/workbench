@@ -397,7 +397,9 @@ export default class WorkbenchThreadStateFeature {
   private async providerProfileTarget(harness: WorkbenchHarness, thread: ThreadPayload) {
     if (!thread.id || !thread.cwd) throw new Error("Profile preparation requires a provider thread and cwd.");
     const canonical = this.context.identities.threads.knownThread(ThreadReferenceSchema.parse(thread.id));
-    if (!isPathWithinRoot(thread.cwd, canonical.projectRoot)) {
+    // A merged thread's provider may still report the folder it moved from; its turns run where the merge moved it.
+    const cwd = this.context.identities.threads.relocateLocation(thread.cwd);
+    if (!isPathWithinRoot(cwd, canonical.projectRoot)) {
       throw new Error("Provider thread cwd is outside its recorded project location.");
     }
     await this.context.resolveProjectById(canonical.projectId);
@@ -405,7 +407,7 @@ export default class WorkbenchThreadStateFeature {
     if (!entry || entry.entryKind === "draft") throw new Error("The managed thread could not be normalized.");
     await this.controller.ensureProviderEntry(canonical.projectId, entry);
     return {
-      cwd: thread.cwd, projectId: canonical.projectId,
+      cwd, projectId: canonical.projectId,
       slot: { kind: "thread" as const, harness, projectId: canonical.projectId, threadId: canonical.threadId },
     };
   }
@@ -661,7 +663,9 @@ export default class WorkbenchThreadStateFeature {
     const threadId = identity.threadId;
     const thread = await this.provider(harness).threads.read(threadId);
     if (thread.isDraft !== false || thread.id !== threadId) throw new Error("The managed thread metadata returned a different identity.");
-    const actualProject = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Workbench managed thread", ownerThreadId: threadId });
+    const actualProject = await this.context.resolveProjectFromCwd(this.context.identities.threads.relocateLocation(thread.cwd), {
+      endpointName: "Workbench managed thread", ownerThreadId: threadId,
+    });
     if (actualProject.project.id === requestedProject.project.id) return { cwd, harness, projectId: requestedProject.project.id, thread };
     throw new Error("The managed thread does not belong to this cwd project.");
   }

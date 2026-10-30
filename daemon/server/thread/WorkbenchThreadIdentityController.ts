@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchThreadIdentityController: expose database-owned identity, resolve Git arc owners, index admitted native bindings,
- *   and reread threads whose stored ownership changed.
+ * - default WorkbenchThreadIdentityController: expose database-owned identity, resolve Git arc owners, index admitted native bindings
+ *   under merge relocations, report and settle sessions that must move, and reread threads whose stored ownership changed.
  */
-import { nativeLocationKey } from "../database/thread-identity/native-location-key";
+import NativeLocationRelocations from "../database/thread-identity/native-location-relocations";
 import {
   NativeThreadKeySchema, NativeThreadReferenceKeySchema, NativeTurnKeySchema, ProjectIdSchema, ThreadReferenceSchema,
   type NativeThreadId, type NativeThreadKey, type NativeThreadReferenceKey, type NativeTurnId,
@@ -32,17 +32,65 @@ export default class WorkbenchThreadIdentityController {
   private readonly nativeReferences = new Map<NativeThreadReferenceKey, Map<string, WorkbenchNativeThreadIdentity>>();
   private readonly turns = new Map<WorkbenchTurnIdentityLookup["turnId"], WorkbenchTurnIdentityRecord>();
   private readonly nativeTurnOwners = new Map<NativeTurnKey, WorkbenchTurnId>();
+  private relocations: NativeLocationRelocations;
 
   constructor(
     private readonly database: WorkbenchThreadIdentityDatabase,
     private readonly platform: NodeJS.Platform = process.platform,
-  ) {}
+  ) {
+    this.relocations = new NativeLocationRelocations([], platform);
+  }
 
   async start() {
     this.assertActive();
+    await this.loadRelocations();
     const records = await this.database.listThreadIdentities();
     this.assertActive();
     for (const record of records) this.remember(record);
+  }
+
+  /** `location` as merges relocated it; provider reports of a moved location and its destination name one place. */
+  relocateLocation(location: string) {
+    this.assertActive();
+    return this.relocations.relocate(location);
+  }
+
+  /** Where the thread's provider session must move before its next turn, when a merge relocated its native location. */
+  pendingRelocation(threadId: WorkbenchThreadId | ThreadReference) {
+    this.assertActive();
+    for (const binding of this.records.get(threadId)?.bindings ?? []) {
+      const location = this.relocations.relocate(binding.nativeLocation);
+      if (location !== binding.nativeLocation) return location;
+    }
+    return null;
+  }
+
+  /** Records that the thread's provider session now lives at `location`. */
+  async settleRelocation(threadId: WorkbenchThreadId | ThreadReference, location: string) {
+    this.assertActive();
+    const record = this.knownThread(threadId);
+    let settled = record;
+    for (const harness of new Set(record.bindings.map(binding => binding.harness))) {
+      settled = await this.database.settleThreadRelocation(record.threadId, harness, location);
+      this.assertActive();
+    }
+    return this.remember(settled);
+  }
+
+  private async loadRelocations() {
+    const relocations = await this.database.readNativeLocationRelocations();
+    this.assertActive();
+    this.relocations = new NativeLocationRelocations(relocations, this.platform);
+    // Index keys fold relocations in, so every admitted binding re-keys under the new set.
+    const records = [...this.records.values()];
+    const turns = [...this.turns.values()];
+    this.nativeOwners.clear();
+    this.nativeReferences.clear();
+    this.nativeTurnOwners.clear();
+    this.records.clear();
+    this.turns.clear();
+    for (const record of records) this.remember(record, false);
+    for (const turn of turns) this.rememberTurn(turn, false);
   }
 
   async observe(input: WorkbenchThreadIdentityMetadata) {
@@ -70,6 +118,7 @@ export default class WorkbenchThreadIdentityController {
 
   /** Rereads threads whose project ownership changed underneath this cache, such as after a project merge. */
   async refreshThreads(threadIds: readonly WorkbenchThreadId[]) {
+    await this.loadRelocations();
     for (const threadId of threadIds) {
       this.assertActive();
       const record = await this.database.resolveThreadIdentity({ threadId });
@@ -142,8 +191,8 @@ export default class WorkbenchThreadIdentityController {
   }
 
   private gitArcBindings(identity: WorkbenchThreadIdentityRecord, repositoryRoot: string) {
-    const location = nativeLocationKey(repositoryRoot, this.platform);
-    return identity.bindings.filter(candidate => nativeLocationKey(candidate.nativeLocation, this.platform) === location);
+    const location = this.relocations.key(repositoryRoot);
+    return identity.bindings.filter(candidate => this.relocations.key(candidate.nativeLocation) === location);
   }
 
   async observeTurn(input: WorkbenchTurnIdentityMetadata) {
@@ -243,7 +292,7 @@ export default class WorkbenchThreadIdentityController {
     this.nativeTurnOwners.clear();
   }
 
-  private remember(record: WorkbenchThreadIdentityRecord) {
+  private remember(record: WorkbenchThreadIdentityRecord, notify = true) {
     this.assertActive();
     const previous = this.records.get(record.threadId);
     const committed = Object.freeze({
@@ -260,7 +309,7 @@ export default class WorkbenchThreadIdentityController {
       this.nativeOwners.delete(this.nativeKey(binding));
       const key = this.nativeReferenceKey(binding.harness, binding.nativeThreadId);
       const references = this.nativeReferences.get(key);
-      references?.delete(nativeLocationKey(binding.nativeLocation, this.platform));
+      references?.delete(this.relocations.key(binding.nativeLocation));
       if (!references?.size) this.nativeReferences.delete(key);
     }
     this.records.set(committed.threadId, committed);
@@ -270,11 +319,11 @@ export default class WorkbenchThreadIdentityController {
       // bindings, so event projection never performs a database lookup.
       const key = this.nativeReferenceKey(binding.harness, binding.nativeThreadId);
       const references = this.nativeReferences.get(key) ?? new Map<string, WorkbenchNativeThreadIdentity>();
-      references.set(nativeLocationKey(binding.nativeLocation, this.platform), binding);
+      references.set(this.relocations.key(binding.nativeLocation), binding);
       this.nativeReferences.set(key, references);
     }
-    if (!previous || previous.projectId !== committed.projectId
-      || previous.bindings[0]?.harness !== committed.bindings[0]?.harness) {
+    if (notify && (!previous || previous.projectId !== committed.projectId
+      || previous.bindings[0]?.harness !== committed.bindings[0]?.harness)) {
       for (const listener of this.listeners) {
         try { listener(committed.threadId); }
         catch (error) {
@@ -286,7 +335,7 @@ export default class WorkbenchThreadIdentityController {
     return committed;
   }
 
-  private rememberTurn(record: WorkbenchTurnIdentityRecord) {
+  private rememberTurn(record: WorkbenchTurnIdentityRecord, bindThread = true) {
     this.assertActive();
     const committed = Object.freeze({ ...record, native: Object.freeze({ ...record.native }) });
     if (committed.native.nativeTurnId !== null) {
@@ -297,7 +346,7 @@ export default class WorkbenchThreadIdentityController {
     }
     this.turns.set(committed.turnId, committed);
     const thread = this.records.get(committed.threadId);
-    if (thread) {
+    if (thread && bindThread) {
       const key = this.nativeKey(committed.native);
       const previous = thread.bindings.find((binding) => this.nativeKey(binding) === key);
       this.remember({
@@ -323,11 +372,11 @@ export default class WorkbenchThreadIdentityController {
   }
 
   private nativeTurnKey(input: WorkbenchNativeThreadIdentity & { nativeTurnId: NativeTurnId | null }) {
-    return NativeTurnKeySchema.parse(JSON.stringify([input.harness, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId, input.nativeTurnId]));
+    return NativeTurnKeySchema.parse(JSON.stringify([input.harness, this.relocations.key(input.nativeLocation), input.nativeThreadId, input.nativeTurnId]));
   }
 
   private nativeKey(input: WorkbenchNativeThreadIdentity) {
-    return NativeThreadKeySchema.parse(JSON.stringify([input.harness, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId]));
+    return NativeThreadKeySchema.parse(JSON.stringify([input.harness, this.relocations.key(input.nativeLocation), input.nativeThreadId]));
   }
 
   private assertActive() {

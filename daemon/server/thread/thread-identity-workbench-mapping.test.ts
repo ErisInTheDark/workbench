@@ -35,6 +35,8 @@ test("mutations and questionnaires retain canonical identity and reject foreign 
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
   const threads = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => repository.list(),
+    readNativeLocationRelocations: async () => repository.readNativeLocationRelocations(),
+    settleThreadRelocation: async (threadId, harness, location) => repository.settleRelocation(threadId, harness, location),
     observeThreadIdentities: async input => repository.observeMany(input),
     resolveThreadIdentity: async input => repository.resolve(input),
     resolveNativeThreadIdentity: async input => repository.resolveNative(input),

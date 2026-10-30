@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - ClaudeSessionLogRecord: one main-conversation user or assistant line of a Claude session log.
- * - default ClaudeSessionLog: locate a native session log under Claude's data root and stream its lines.
+ * - default ClaudeSessionLog: locate a native session log under Claude's data root, copy it under another cwd's project directory,
+ *   and stream its lines.
  */
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -44,6 +45,21 @@ export default class ClaudeSessionLog {
     return null;
   }
 
+  /**
+   * Makes the session's log resumable from `cwd`: Claude resumes only from the project directory named after the cwd, so a
+   * log found elsewhere is copied there. The original stays for anything still reading it. Returns the log at `cwd`.
+   */
+  async ensureAt(sessionId: string, cwd: string) {
+    const target = path.join(this.dataRoot, "projects", claudeProjectDirectory(cwd), `${sessionId}.jsonl`);
+    if (await exists(target)) return target;
+    const source = await this.locate(sessionId);
+    if (!source) throw new Error("Claude session log is missing, so the session cannot move.");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL);
+    this.files.set(sessionId, target);
+    return target;
+  }
+
   lines(file: string) {
     return createInterface({ input: createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity });
   }
@@ -64,6 +80,11 @@ export default class ClaudeSessionLog {
     }
     return records;
   }
+}
+
+/** Claude's project directory name for a cwd: every character outside ASCII letters and digits becomes `-`. */
+function claudeProjectDirectory(cwd: string) {
+  return cwd.replace(/[^A-Za-z0-9]/gu, "-");
 }
 
 async function exists(file: string) {

@@ -240,6 +240,7 @@ class FakeProvider {
   private unused = async () => { throw new Error("unexpected provider operation"); };
   readonly threads: WorkbenchProvider["threads"] = {
     reconcile: async () => { throw new Error("Unexpected recovery"); },
+    relocate: async () => { throw new Error("Unexpected relocation"); },
     read: async threadId => {
       this.threadReadCalls++;
       return { ...thread(threadId, this.cwd, threadId === questionnaireThreadId), turns: [] };

@@ -36,6 +36,8 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
   const identities = {
     threads: new WorkbenchThreadIdentityController({
       listThreadIdentities: async () => threadRepository.list(),
+      readNativeLocationRelocations: async () => threadRepository.readNativeLocationRelocations(),
+      settleThreadRelocation: async (threadId, harness, location) => threadRepository.settleRelocation(threadId, harness, location),
       observeThreadIdentities: async inputs => threadRepository.observeMany(inputs),
       observeTurnIdentities: async inputs => threadRepository.observeTurns(inputs),
       resolveThreadIdentity: async input => threadRepository.resolve(input),

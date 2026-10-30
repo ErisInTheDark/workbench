@@ -1,6 +1,6 @@
 /*
  * No exports. One explicitly selected provider journey with paid or test-scripted model calls; fake Codex also edits a
- * machine file through a daemon-project arc.
+ * machine file through a daemon-project arc, and every fake provider continues a thread whose checkout moved.
  */
 import assert from "node:assert/strict";
 import { randomInt, randomUUID } from "node:crypto";
@@ -21,6 +21,7 @@ import IsolatedWorkbench, {
 } from "./IsolatedWorkbench";
 import FakeThreadModelServer, { type FakeThreadWire } from "./FakeThreadModelServer";
 import ProviderThreadJourney, { SharedRuntimeCheckpoints } from "./ProviderThreadJourney";
+import { runProviderRelocation } from "./provider-relocation-journey";
 import { parseThreadTestArguments, type ThreadTestMode } from "../thread-test-arguments";
 import {
   createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
@@ -1102,6 +1103,19 @@ test("selected providers complete the shared thread boundary journey in one clon
     const outcomes = await Promise.allSettled(runs);
     const failures = outcomes.filter(result => result.status === "rejected").map(result => result.reason);
     if (failures.length) throw new AggregateError(failures, "Provider journeys failed.");
+    // Scripted models only: every relocation turn is a fixed completion, each provider in its own pair of folders.
+    const relocations = await Promise.allSettled(selectedProviders.flatMap(provider => {
+      const fakeModel = fakeModels[provider];
+      if (!fakeModel) return [];
+      const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens } = profiles[provider]!;
+      return [runProviderRelocation({
+        runtime, provider, fakeModel, signal: scenarioSignal,
+        selection: { kind: "profile", profileId: profiles[provider]!.id,
+          settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens } },
+      })];
+    }));
+    const relocationFailures = relocations.filter(result => result.status === "rejected").map(result => result.reason);
+    if (relocationFailures.length) throw new AggregateError(relocationFailures, "Provider relocations failed.");
   } catch (error) {
     failed = true;
     const failure = error instanceof Error ? error : new Error("Shared provider scenario failed.");

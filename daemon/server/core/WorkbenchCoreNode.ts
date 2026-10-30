@@ -7,7 +7,7 @@
  * Local helpers: construct reloadable modules and the core feature lifecycle.
  */
 import path from "node:path";
-import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchProjectStartup } from "../database/project/workbench-project-persistence";
@@ -143,6 +143,10 @@ function createWorkbenchCoreFeature(
   });
   const { agentContext, skillCatalog, vis } = facts;
   const providers = new WorkbenchProviderDispatcher(run, {
+    nativeLocations: {
+      pending: threadId => threadIdentity.pendingRelocation(ThreadReferenceSchema.parse(threadId)),
+      settle: async (threadId, location) => { await threadIdentity.settleRelocation(ThreadReferenceSchema.parse(threadId), location); },
+    },
     instructionSelection: facts.instructionSelection,
     messageAdmission: autoCompact.run.bind(autoCompact),
     onAgentMessageAdmitted: (threadId, message) => run(

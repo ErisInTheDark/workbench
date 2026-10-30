@@ -1,1 +1,2 @@
 - A vanished project (missed by two complete scans, every root gone) merges into the one present project sharing its kind and identity key; with none or several it stays hidden until retirable or merged by the user. Merging never touches a project with a root still on disk.
+- Merging relocates native thread locations; identity treats a relocated location and its destination as one location, and providers continue merged threads in the destination.

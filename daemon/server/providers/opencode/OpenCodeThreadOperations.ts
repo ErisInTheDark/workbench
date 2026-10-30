@@ -2,7 +2,7 @@
  * Exports:
  * - OpenCodeThreadOperationsOptions: provider-local dependencies for native session operations.
  * - OpenCodeNativeActivity: one connection-recovery observation from native session state.
- * - default OpenCodeThreadOperations: own OpenCode thread admission, session interruption and canonical history.
+ * - default OpenCodeThreadOperations: own OpenCode thread admission, session relocation and interruption, and canonical history.
  */
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -40,6 +40,7 @@ import type WorkbenchTranscriptReader from "../../transcript/WorkbenchTranscript
 import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "../provider-execution";
 import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
+import { nativeLocationKey } from "../../database/thread-identity/native-location-key";
 import type WorkbenchTranscriptReconciliationController from "../../transcript/WorkbenchTranscriptReconciliationController";
 import type WorkbenchThreadContextRolloverController from "../../turn/WorkbenchThreadContextRolloverController";
 import { getWorkbenchLifecycleTurnId } from "workbench-shared/workbench/thread/thread-state";
@@ -92,7 +93,10 @@ export interface OpenCodeThreadOperationsOptions {
 
 interface SessionExecution {
   active: boolean;
-  kind: "prompt" | "compaction";
+  /** Compaction and relocation run native executions of their own; their settlement never ends a Workbench turn. */
+  kind: "prompt" | "compaction" | "relocation";
+  /** Executions settled so far; a wait started before an execution ends compares against it. */
+  settlements: number;
   turn: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null;
   eventSequence: number;
   intentVersion: number;
@@ -167,6 +171,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       || [...this.executions.values()].some(execution => execution.active || execution.admission !== null);
   }
   private readonly executions = new Map<string, SessionExecution>();
+  private readonly settlementWaiters = new Map<string, Set<() => void>>();
   private readonly pendingPrompts = new Set<Promise<void>>();
   private readonly sessions = new Map<string, SessionInfo>();
   private readonly pendingCreations = new Set<Promise<ThreadPayload>>();
@@ -685,6 +690,55 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     return null;
   }
 
+  /**
+   * A move is a native execution of its own, so it runs as maintenance and returns only after Workbench absorbed its
+   * settlement; otherwise that settlement would arrive after the next turn's admission and end it.
+   */
+  async relocate(threadId: string, location: string) {
+    const { binding } = await this.native(threadId);
+    const sessionID = binding.nativeThreadId;
+    const signal = this.options.signal;
+    const client = await this.options.acquire();
+    const session = await client.session.get({ sessionID }, { signal });
+    if (nativeLocationKey(session.location.directory) === nativeLocationKey(location)) return session.location.directory;
+    const execution = this.execution(sessionID);
+    if (execution.active) throw new Error("Wait for the active OpenCode turn to finish before moving the thread.");
+    const settledBefore = execution.settlements;
+    execution.kind = "relocation";
+    try {
+      await client.session.move({ sessionID, directory: location }, { signal });
+      await client.session.wait({ sessionID }, { signal });
+      await this.waitForSettlement(sessionID, settledBefore, signal);
+    } finally {
+      execution.kind = "prompt";
+      this.sessions.delete(sessionID);
+    }
+    const moved = await client.session.get({ sessionID }, { signal });
+    if (nativeLocationKey(moved.location.directory) !== nativeLocationKey(location)) {
+      throw new Error("OpenCode did not move the session to its new folder.");
+    }
+    return moved.location.directory;
+  }
+
+  private waitForSettlement(sessionID: string, after: number, signal: AbortSignal) {
+    const execution = this.execution(sessionID);
+    if (execution.settlements > after) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const waiters = this.settlementWaiters.get(sessionID) ?? new Set<() => void>();
+      this.settlementWaiters.set(sessionID, waiters);
+      const finish = () => {
+        waiters.delete(check);
+        if (!waiters.size) this.settlementWaiters.delete(sessionID);
+        signal.removeEventListener("abort", abort);
+      };
+      const check = () => { if (execution.settlements > after) { finish(); resolve(); } };
+      const abort = () => { finish(); reject(signal.reason); };
+      waiters.add(check);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    });
+  }
+
   async delete(threadId: string) {
     const { binding } = await this.native(threadId);
     await (await this.options.acquire()).session.remove({ sessionID: binding.nativeThreadId });
@@ -789,7 +843,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       }
     }
     return {
-      ...result, turn, maintenance: this.execution(nativeThreadId).kind === "compaction",
+      ...result, turn, maintenance: this.execution(nativeThreadId).kind !== "prompt",
       outcome: session.outcome ?? null, idleAt: session.time.idle ?? null,
     };
   }
@@ -944,7 +998,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   markExecutionSettled(nativeThreadId: string, status: "completed" | "interrupted" | "failed" = "completed") {
-    this.execution(nativeThreadId).active = false;
+    const execution = this.execution(nativeThreadId);
+    execution.active = false;
+    execution.settlements++;
+    for (const waiter of this.settlementWaiters.get(nativeThreadId) ?? []) waiter();
     if (status === "completed") this.compactionCompletion.settled(nativeThreadId);
     else this.compactionCompletion.failed(nativeThreadId, new Error("OpenCode compaction was interrupted or failed."));
   }
@@ -1008,7 +1065,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   private execution(nativeThreadId: string) {
     let execution = this.executions.get(nativeThreadId);
     if (!execution) {
-      execution = { active: false, kind: "prompt", turn: null, eventSequence: -1, intentVersion: 0, admission: null };
+      execution = { active: false, kind: "prompt", settlements: 0, turn: null, eventSequence: -1, intentVersion: 0, admission: null };
       this.executions.set(nativeThreadId, execution);
     }
     return execution;

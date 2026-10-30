@@ -124,7 +124,7 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
       latestTurn: unused, admitTurn: unused,
       history: { materialize: unused },
       create: unused, list: unused, read: unused, rename: unused,
-      compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
+      compact: unused, relocate: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
       submit: async input => {
         observe("submit", input);
         if (options.admissionError) throw new Error(options.admissionError);
@@ -233,7 +233,7 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
           latestTurn: unused, admitTurn: unused,
           history: { materialize: unused },
           create: unused, list: unused, read: unused, rename: unused,
-          compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
+          compact: unused, relocate: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
           submit: async () => ({ kind: "steered", turnId: turn.turnId }),
         },
         interactions: {

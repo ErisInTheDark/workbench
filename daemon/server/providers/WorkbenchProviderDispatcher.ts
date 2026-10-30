@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchProviderDispatcherOptions: shared message admission, instruction selection and post-admission hooks.
+ * - WorkbenchProviderDispatcherOptions: shared message admission, instruction selection, native relocation and post-admission hooks.
  * - default WorkbenchProviderDispatcher: obtain reload-safe provider handles with one process-wide steer-wait interruption path.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
@@ -28,6 +28,7 @@ export default class WorkbenchProviderDispatcher {
   private handle(key: WorkbenchProviderKey) {
     return new WorkbenchProviderHandle(key, this.run, {
       interruptSteerWaits: this.options.interruptSteerWaits ?? interruptSteerWaits,
+      nativeLocations: this.options.nativeLocations,
       instructionSelection: this.options.instructionSelection,
       messageAdmission: this.options.messageAdmission,
       onAgentMessageAdmitted: this.options.onAgentMessageAdmitted,
