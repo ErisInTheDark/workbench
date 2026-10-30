@@ -1,4 +1,4 @@
-// No exports. Own coalesced, cancellable discovery of known host-tailnet peers.
+// No exports. Own coalesced, cancellable discovery of known host-tailnet peers, re-probing incomplete publications with backoff.
 package main
 
 import (
@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"tailscale.com/client/local"
 )
@@ -61,16 +62,26 @@ type daemonDiscoveryPeer struct {
 	address netip.Addr
 }
 
+// A peer publishing an identity before its endpoints is mid-startup; nothing else re-probes it until the netmap changes.
+var discoveryRetryDelays = [...]time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute}
+
+type daemonDiscoveryWalk struct {
+	peers []daemonDiscoveryPeer
+	snapshot daemonDiscoverySnapshot
+}
+
 type daemonDiscovery struct {
 	mu sync.Mutex
 	cancel context.CancelFunc
 	done chan struct{}
+	wake chan struct{}
 	dirty bool
 	closed bool
 	publish func(daemonDiscoverySnapshot)
 	peers func(context.Context) ([]daemonDiscoveryPeer, error)
 	probe func(context.Context, daemonDiscoveryPeer) (daemonDescriptor, string, error)
 	warn func(error)
+	after func(time.Duration) <-chan time.Time
 }
 
 func (owner *networkProcess) refreshDiscovery() {
@@ -88,14 +99,19 @@ func (owner *networkProcess) refreshDiscovery() {
 }
 
 func newDaemonDiscovery(publish func(daemonDiscoverySnapshot), warn func(error)) *daemonDiscovery {
-	return &daemonDiscovery{publish: publish, warn: warn, peers: hostDiscoveryPeers, probe: probeDaemonIdentity}
+	return &daemonDiscovery{publish: publish, warn: warn, peers: hostDiscoveryPeers, probe: probeDaemonIdentity, after: time.After}
 }
 
 func (owner *daemonDiscovery) refresh(parent context.Context) {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	if owner.closed { return }
-	if owner.done != nil { owner.dirty = true; return }
+	if owner.wake == nil { owner.wake = make(chan struct{}, 1) }
+	if owner.done != nil {
+		owner.dirty = true
+		select { case owner.wake <- struct{}{}: default: }
+		return
+	}
 	ctx, cancel := context.WithCancel(parent)
 	owner.cancel = cancel
 	done := make(chan struct{})
@@ -103,18 +119,66 @@ func (owner *daemonDiscovery) refresh(parent context.Context) {
 	go func() {
 		defer close(done)
 		defer cancel()
+		walk := owner.run(ctx)
+		attempt := 0
 		for {
-			owner.run(ctx)
+			incomplete := walk.incomplete()
 			owner.mu.Lock()
-			if owner.closed || ctx.Err() != nil || !owner.dirty {
+			dirty := owner.dirty
+			if owner.closed || ctx.Err() != nil || !dirty && len(incomplete) == 0 {
 				owner.done = nil
 				owner.mu.Unlock()
 				return
 			}
 			owner.dirty = false
 			owner.mu.Unlock()
+			if dirty {
+				walk, attempt = owner.run(ctx), 0
+				continue
+			}
+			if !owner.waitRetry(ctx, attempt) { continue }
+			attempt++
+			owner.reprobe(ctx, &walk, incomplete)
 		}
 	}()
+}
+
+// Returns false when a refresh or cancellation ended the wait instead of the retry delay.
+func (owner *daemonDiscovery) waitRetry(ctx context.Context, attempt int) bool {
+	select {
+	case <-owner.after(discoveryRetryDelays[min(attempt, len(discoveryRetryDelays)-1)]): return true
+	case <-owner.wake: return false
+	case <-ctx.Done(): return false
+	}
+}
+
+func (walk daemonDiscoveryWalk) incomplete() []int {
+	indices := []int{}
+	for index, peer := range walk.snapshot.Peers {
+		if peer.Kind == "verified" && peer.Identity != nil && (peer.Identity.State == "starting" || peer.Endpoints == nil) {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+func observeDaemon(item *discoveredDaemon, descriptor daemonDescriptor, origin string, err error) {
+	if err != nil {
+		item.Kind, item.Identity, item.Origin, item.Endpoints, item.Message = "failed", nil, "", nil, "Workbench identity could not be verified."
+		return
+	}
+	item.Kind, item.Identity, item.Origin, item.Endpoints, item.Message = "verified", &descriptor.Identity, origin, descriptor.Endpoints, ""
+}
+
+func (owner *daemonDiscovery) reprobe(ctx context.Context, walk *daemonDiscoveryWalk, indices []int) {
+	// Every publication owns its slice; earlier snapshots stay untouched.
+	walk.snapshot.Peers = append([]discoveredDaemon{}, walk.snapshot.Peers...)
+	for _, index := range indices {
+		descriptor, origin, err := owner.probe(ctx, walk.peers[index])
+		if ctx.Err() != nil { return }
+		observeDaemon(&walk.snapshot.Peers[index], descriptor, origin, err)
+	}
+	owner.publish(walk.snapshot)
 }
 
 func (owner *daemonDiscovery) close() {
@@ -126,14 +190,14 @@ func (owner *daemonDiscovery) close() {
 	if done != nil { <-done }
 }
 
-func (owner *daemonDiscovery) run(ctx context.Context) {
+func (owner *daemonDiscovery) run(ctx context.Context) daemonDiscoveryWalk {
 	peers, err := owner.peers(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			owner.warn(errors.New("Tailscale daemon discovery could not read peers"))
 			owner.publish(daemonDiscoverySnapshot{Peers: []discoveredDaemon{}, Error: "Tailscale daemon discovery could not read peers."})
 		}
-		return
+		return daemonDiscoveryWalk{}
 	}
 	if len(peers) > 4096 { peers = peers[:4096] }
 	snapshot := daemonDiscoverySnapshot{Refreshing: true, Peers: make([]discoveredDaemon, len(peers))}
@@ -152,12 +216,7 @@ func (owner *daemonDiscovery) run(ctx context.Context) {
 				descriptor, origin, err := owner.probe(ctx, peers[index])
 				if ctx.Err() != nil { return }
 				mu.Lock()
-				item := &snapshot.Peers[index]
-				if err != nil {
-					item.Kind, item.Message = "failed", "Workbench identity could not be verified."
-				} else {
-					item.Kind, item.Identity, item.Origin, item.Endpoints = "verified", &descriptor.Identity, origin, descriptor.Endpoints
-				}
+				observeDaemon(&snapshot.Peers[index], descriptor, origin, err)
 				// Every publication owns its slice; no worker mutates an emitted value.
 				copy := snapshot
 				copy.Peers = append([]discoveredDaemon{}, snapshot.Peers...)
@@ -179,6 +238,7 @@ loop:
 		snapshot.Refreshing = false
 		owner.publish(snapshot)
 	}
+	return daemonDiscoveryWalk{peers: peers, snapshot: snapshot}
 }
 
 func hostDiscoveryPeers(ctx context.Context) ([]daemonDiscoveryPeer, error) {

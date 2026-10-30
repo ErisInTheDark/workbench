@@ -233,6 +233,8 @@ export default class WorkbenchDaemonSource {
 
   getSnapshot = (): WorkspaceDaemonFact => {
     const connection = this.socket.getSnapshot();
+    const unpublished = !this.available && this.hasDemand && this.descriptor.access
+      && this.descriptor.state === "ready" && this.descriptor.endpoint === null;
     return {
       daemonId: this.id,
       hostname: this.descriptor.hostname,
@@ -243,7 +245,8 @@ export default class WorkbenchDaemonSource {
         : this.descriptor.state === "failed" ? "failed"
         : !this.hasDemand ? "idle"
         : connection.phase === "reconnecting" ? "reconnecting" : "connecting",
-      failure: this.descriptor.failure ?? connection.failure,
+      failure: this.descriptor.failure
+        ?? (unpublished ? "This daemon has not published a reachable endpoint yet." : connection.failure),
     };
   };
 

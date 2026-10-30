@@ -3,13 +3,13 @@
   "artifacts": {
     "windows-x64": {
       "file": "windows-x64/workbench-network.exe",
-      "sha256": "d0ca849e568d2bae2719f270af4188c171ac8a112757842d3028b0c7229cb879",
-      "sourceHash": "2576db4e409ae705fb7017c0e411b1b3c51595bbca3481e0710478e54f912421"
+      "sha256": "816974a79ca175050ca3d80acf79db85473f8658876f2ae709e14c888248fce1",
+      "sourceHash": "c127de001ff451875827a27e9684ab62ca4f54653f5166fde9133bc70ff64163"
     },
     "linux-x64": {
       "file": "linux-x64/workbench-network",
-      "sha256": "3df83448f5b5e3849831d3d1ba135916c85c01724b02f01b32021314db2a416c",
-      "sourceHash": "2576db4e409ae705fb7017c0e411b1b3c51595bbca3481e0710478e54f912421"
+      "sha256": "9f3ab11ff3dc986113313a9b5f7b4b672d74e8935b9f01e53bc30844f49f797b",
+      "sourceHash": "c127de001ff451875827a27e9684ab62ca4f54653f5166fde9133bc70ff64163"
     }
   }
 }
