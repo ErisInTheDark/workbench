@@ -6,7 +6,7 @@ import variant from "@jitl/quickjs-wasmfile-release-sync";
 import { newQuickJSWASMModuleFromVariant, type QuickJSWASMModule } from "quickjs-emscripten-core";
 
 import type { SkillMcpCall, SkillMcpMatcherBundle } from "./skill-mcp-matcher-contract.ts";
-import SkillMcpMatcherRuntime, { type SkillMcpMatchFailure } from "./SkillMcpMatcherRuntime.ts";
+import SkillMcpMatcherRuntime, { readSkillMcpPresentation, type SkillMcpMatchFailure } from "./SkillMcpMatcherRuntime.ts";
 
 let module: QuickJSWASMModule;
 const runtimes: SkillMcpMatcherRuntime[] = [];
@@ -71,6 +71,15 @@ test("output outside the presentation contract is rejected with its reason", () 
   const report = matchers.report(call);
   assert.equal(report.match, null);
   assert.match(report.failures[0]!.message, /Matcher output is invalid/u);
+});
+
+test("skills may draw their own icons, but only as path data in a numeric box", () => {
+  const drawn = { svg: { paths: ["M0 0h24v24H0z"], viewBox: "0 0 256 256", mode: "fill" } };
+  const presented = readSkillMcpPresentation(JSON.stringify({ verb: ["A", "B"], icon: drawn, chip: { id: "x", verb: "x", icon: drawn } }));
+  assert.equal(presented.kind, "matched");
+  for (const svg of [{ paths: ["M0 0"], viewBox: "0 0 24 24\" onload=\"x" }, { paths: [] }, { paths: ["M0 0"], mode: "both" }]) {
+    assert.equal(readSkillMcpPresentation(JSON.stringify({ verb: ["A", "B"], icon: { svg } })).kind, "failed");
+  }
 });
 
 test("a bundle without a matcher export reports a load failure", () => {

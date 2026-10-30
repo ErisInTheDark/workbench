@@ -8,7 +8,7 @@
 "use client";
 
 import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ComponentProps, type ComponentType } from "react";
-import type { IconProps } from "../OutlinedIcon";
+import type { IconProps } from "../SvgIcon";
 
 import type { DraftId } from "workbench-shared/workbench/identity";
 import type { WorkbenchRoute, WorkbenchRouteView } from "workbench-shared/workbench/navigation/workbench-route";

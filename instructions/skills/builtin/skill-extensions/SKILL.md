@@ -20,7 +20,7 @@ workbench_mcp_matchers: [mcp-matchers.ts]
 
 - Each `.tsx` default-exports a function component named like its file (`BuildList.tsx` -> `<BuildList />`). Imports: relative files inside the skill, `"workbench/kit"`, React (no hooks).
 - Agents write `<BuildList builds={[...]} />` in a message; Workbench renders it in a sandbox and keeps the result, so later skill edits never change it.
-- Props must be serialisable; no event handlers. Style with Tailwind classes and theme tokens (`text-text`, `text-fg/muted`, `bg-fg/5`); support light and dark.
+- Props must be serialisable; no event handlers. Draw icons with kit `SvgIcon` (`mode="fill"` for brand glyphs, any `viewBox`). Style with Tailwind classes and theme tokens (`text-text`, `text-fg/muted`, `bg-fg/5`); support light and dark.
 - A prop value `"@result:<name>"` becomes the result an `mcp_call` kept with `keep: "<name>"`.
 - Test: `wb vis test --markup '<BuildList ... />'` (MCP `vis_test`) returns a screenshot or the error.
 
@@ -58,11 +58,14 @@ interface Call {
 interface Presentation {
   verb: [running: string, done: string];             // line = verb + summary parts, one space apart
   summary?: (string | { code } | { primary } | { path } | { thread })[];
-  chip?: { id: string; verb: string; icon: "terminal" | "file" | "search" | "book" | "folder" | "eye" | "git" | "arc" | "skill" | "browser" | "web" | "image" };
+  icon?: Icon;                                       // row/card icon; default chip icon, else terminal
+  chip?: { id: string; verb: string; icon: Icon };
   display?: "step" | "hidden" | { card: string; open?: boolean }; // default "step"
   component?: string;                                // one of this skill's components
   props?: Record<string, Json>;                      // extra props for it
 }
+type Icon = "terminal" | "file" | "search" | "book" | "folder" | "eye" | "git" | "arc" | "skill" | "browser" | "web" | "image"
+  | { svg: { paths: string[]; viewBox?: string; mode?: "stroke" | "fill" } }; // single colour; brand glyphs: mode "fill"
 ```
 
 - Return `null` to leave a call to the next active skill, then the generic summary. First non-null wins, in skill catalogue order.

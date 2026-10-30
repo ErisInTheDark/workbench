@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - SKILL_MCP_CHIP_ICONS/SkillMcpChipIcon: icons a skill chip may name.
+ * - SKILL_MCP_CHIP_ICONS/SkillMcpChipIcon: built-in icons a skill may name.
+ * - SkillMcpIconSchema/SkillMcpIcon: a skill's chip or row icon: a built-in name or a single-colour svg drawing.
  * - SKILL_MCP_MATCHER_LIMITS: per-call deadline, runtime memory and output bounds for sandboxed matchers.
  * - SkillMcpCallSchema/SkillMcpCall: one MCP call as a matcher sees it.
  * - SkillMcpPartSchema/SkillMcpPart: one summary part a matcher returns.
@@ -28,7 +29,8 @@ export const SKILL_MCP_MATCHER_LIMITS = {
   loadDeadlineMs: 250,
   memoryBytes: 16 * 1024 * 1024,
   stackBytes: 512 * 1024,
-  outputChars: 16_000,
+  /** Room for a brand icon drawn on both a chip and its rows. */
+  outputChars: 32_000,
   bundleChars: 2 * 1024 * 1024,
   componentPropsChars: 4 * 1024 * 1024,
 } as const;
@@ -68,10 +70,26 @@ export const SkillMcpDisplaySchema = z.union([
 ]);
 export type SkillMcpDisplay = z.infer<typeof SkillMcpDisplaySchema>;
 
+const viewBoxNumber = String.raw`-?\d+(?:\.\d+)?`;
+/** A built-in icon by name, or a single-colour drawing; its paths only ever become `d` attributes. */
+export const SkillMcpIconSchema = z.union([
+  z.enum(SKILL_MCP_CHIP_ICONS),
+  z.object({
+    svg: z.object({
+      paths: z.array(z.string().min(1).max(8_000)).min(1).max(16),
+      viewBox: z.string().regex(new RegExp(`^${viewBoxNumber}(?: ${viewBoxNumber}){3}$`, "u")).optional(),
+      mode: z.enum(["stroke", "fill"]).optional(),
+    }).strict(),
+  }).strict(),
+]);
+export type SkillMcpIcon = z.infer<typeof SkillMcpIconSchema>;
+
 export const SkillMcpPresentationSchema = z.object({
   verb: z.tuple([z.string().min(1).max(40), z.string().min(1).max(40)]),
   summary: z.array(SkillMcpPartSchema).max(32).default([]),
-  chip: z.object({ id: familyId, verb: z.string().min(1).max(32), icon: z.enum(SKILL_MCP_CHIP_ICONS) }).strict().optional(),
+  /** The call's row or card icon; else its chip's. */
+  icon: SkillMcpIconSchema.optional(),
+  chip: z.object({ id: familyId, verb: z.string().min(1).max(32), icon: SkillMcpIconSchema }).strict().optional(),
   display: SkillMcpDisplaySchema.default("step"),
   component: z.string().regex(/^[A-Z][A-Za-z0-9_]*$/u).optional(),
   props: z.record(z.string(), jsonValue).optional(),

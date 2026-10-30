@@ -5,7 +5,7 @@
 
 import { useEffect, useRef } from "react";
 import LoaderAnimationController from "./LoaderAnimationController";
-import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
+import SvgIcon, { type IconProps } from "./SvgIcon";
 
 const spokes = ["M12 2v4", "m16.2 7.8 2.9-2.9", "M18 12h4", "m16.2 16.2 2.9 2.9", "M12 18v4", "m4.9 19.1 2.9-2.9", "M2 12h4", "m4.9 4.9 2.9 2.9"];
 const midpoints = ["12px 4px", "17.65px 6.35px", "20px 12px", "17.65px 17.65px", "12px 20px", "6.35px 17.65px", "4px 12px", "6.35px 6.35px"];
@@ -45,7 +45,7 @@ export default function LoaderIcon(props: IconProps) {
     };
   }, []);
 
-  return <OutlinedIcon {...props} viewportPadding={2}>
+  return <SvgIcon {...props} viewportPadding={2}>
     {/* Keep rotation coordinates independent of the outer bounce clearance. */}
     <svg x={0} y={0} width={24} height={24} viewBox="0 0 24 24" overflow="visible">
       <g ref={group} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
@@ -63,5 +63,5 @@ export default function LoaderIcon(props: IconProps) {
         </g>
       </g>
     </svg>
-  </OutlinedIcon>;
+  </SvgIcon>;
 }

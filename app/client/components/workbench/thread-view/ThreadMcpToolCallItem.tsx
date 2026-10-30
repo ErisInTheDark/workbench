@@ -109,7 +109,7 @@ export default function ThreadMcpToolCallItem ({
   const commandDisplay = getWorkbenchCommandRouteSummaryDisplay(route);
   const outcome = getMcpCallOutcome(item);
   const outcomeDisplay = commandDisplay ? getThreadCommandOutcomeDisplay(commandDisplay, outcome) : null;
-  const Icon = getCommandIcon(outcomeDisplay?.summaryStats, commandDisplay?.skillMcp?.chip);
+  const Icon = getCommandIcon(outcomeDisplay?.summaryStats, commandDisplay?.skillMcp?.icon);
   const details = givenDetails ?? getSkillCallComponent(item, commandDisplay);
   // A running Workbench `mcp_call` to an MCP server can run for minutes, so the user may stop it like a shell; deferred wb tools cannot.
   const callArguments = item.arguments !== null && typeof item.arguments === "object" && !Array.isArray(item.arguments) ? item.arguments : null;

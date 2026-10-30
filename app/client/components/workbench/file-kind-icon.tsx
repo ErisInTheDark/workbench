@@ -6,7 +6,7 @@
 "use client";
 
 import type { ComponentType } from "react";
-import type { IconProps } from "./OutlinedIcon";
+import type { IconProps } from "./SvgIcon";
 import { FileCodeIcon, FileIcon, FileImageIcon, FileTextIcon } from "./workbench-icons";
 
 const TEXT_EXTENSIONS = ["md", "markdown", "mdx", "txt", "text"];

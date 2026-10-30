@@ -66,7 +66,7 @@ function SkillCard({ durationMs, item, itemTimeline, open }: {
   return (
     <ThreadCard
       defaultOpen={open}
-      icon={createElement(getCommandIcon(display.summaryStats, skill.chip), { size: 16 })}
+      icon={createElement(getCommandIcon(display.summaryStats, skill.icon), { size: 16 })}
       iconClassName={outcome === "failed" ? "text-danger" : undefined}
       progress={{ durationMs, state: outcome }}
       renderContent={() => component ?? details}

@@ -2,13 +2,14 @@
  * Exports:
  * - ActivityChip: one counted kind of work in an activity run summary, with change totals for file chips.
  * - CommandChipContext: matcher context for summarising commands.
- * - getCommandIcon: one command step row's kind icon, from the same categories as the chips or its skill chip.
+ * - getCommandIcon: one command step row's kind icon, from the same categories as the chips or its skill's icon (a named
+ *   icon or its own drawing).
  * - getCommandItemDisplay: one command's matcher display.
  * - getActivityChips: count a run's created/edited/deleted files (unique files, in that order; applied arc edit sessions
  *   count as edited) then every step in some command chip (skill chips before exec, unnamed steps as exec), with Browse
  *   screenshots beside browser steps.
  */
-import type { ComponentType } from "react";
+import { createElement, type ComponentType } from "react";
 
 import { parseGitArcEditText, type GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
@@ -24,7 +25,8 @@ import {
   type ThreadCommandSummaryDisplay,
   type ThreadCommandSummaryStats,
 } from "../../../workbench/thread/thread-command-matchers";
-import type { SkillMcpChipIcon } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
+import type { SkillMcpChipIcon, SkillMcpIcon } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
+import SvgIcon from "../SvgIcon";
 import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -100,17 +102,35 @@ function countChip(stats: ThreadCommandSummaryStats, key: CommandChipKey) {
   return STAT_KEYS.reduce((total, stat) => STAT_CHIPS[stat] === key ? total + stats[stat] : total, 0);
 }
 
-/** Icons a skill's chip may name, so skill chips look like the built-in kinds they resemble. */
-const SKILL_CHIP_ICONS = {
+/** Icons a skill may name, so skill chips look like the built-in kinds they resemble. */
+const SKILL_NAMED_ICONS = {
   arc: GitArcProposalIcon, book: BookIcon, browser: BrowserSessionIcon, eye: EyeIcon, file: FileTextIcon, folder: FolderClosedIcon,
   git: GitGraphIcon, image: ImageIcon, search: SearchIcon, skill: BookBookmarkIcon, terminal: TerminalIcon, web: BookSearchIcon,
 } satisfies Record<SkillMcpChipIcon, ComponentType<IconProps>>;
 
-/** A command step row's kind icon: a skill chip's icon, else its first counted chip, else a terminal. */
+const MAX_DRAWN_ICONS = 200;
+const drawnIcons = new Map<string, ComponentType<IconProps>>();
+
+/** A skill's icon as a component; drawings keep one component per content, so rows and chips never remount over it. */
+function getSkillMcpIcon(icon: SkillMcpIcon): ComponentType<IconProps> {
+  if (typeof icon === "string") return SKILL_NAMED_ICONS[icon];
+  const key = JSON.stringify(icon.svg);
+  let Icon = drawnIcons.get(key);
+  if (!Icon) {
+    const { mode, paths, viewBox } = icon.svg;
+    Icon = (props: IconProps) => createElement(SvgIcon, { ...props, mode, viewBox },
+      paths.map(path => createElement("path", { d: path, key: path })));
+    if (drawnIcons.size >= MAX_DRAWN_ICONS) drawnIcons.delete(drawnIcons.keys().next().value!);
+    drawnIcons.set(key, Icon);
+  }
+  return Icon;
+}
+
+/** A command step row's kind icon: a skill's icon, else its first counted chip, else a terminal. */
 export function getCommandIcon(
-  stats: ThreadCommandSummaryStats | null | undefined, skillChip?: ThreadCommandSkillMcp["chip"],
+  stats: ThreadCommandSummaryStats | null | undefined, skillIcon?: ThreadCommandSkillMcp["icon"],
 ): ComponentType<IconProps> {
-  if (skillChip) return SKILL_CHIP_ICONS[skillChip.icon];
+  if (skillIcon) return getSkillMcpIcon(skillIcon);
   return (stats && COMMAND_CHIPS.find(chip => countChip(stats, chip.key) > 0)?.Icon) || TerminalIcon;
 }
 
@@ -217,7 +237,7 @@ export function getActivityChips(segments: readonly ActivitySegment[], context: 
     if (!skillChip) continue;
     const existing = skillChips.get(skillChip.key);
     if (existing) existing.count += 1;
-    else skillChips.set(skillChip.key, { Icon: SKILL_CHIP_ICONS[skillChip.icon], count: 1, key: `skill:${skillChip.key}`, verb: skillChip.verb });
+    else skillChips.set(skillChip.key, { Icon: getSkillMcpIcon(skillChip.icon), count: 1, key: `skill:${skillChip.key}`, verb: skillChip.verb });
   }
   stats.webRequests += segments.reduce((total, segment) => total + (segment.kind === "webSearch" ? segment.items.length : 0), 0);
   const commandChips = COMMAND_CHIPS.flatMap(({ Icon, key, verb }) => {

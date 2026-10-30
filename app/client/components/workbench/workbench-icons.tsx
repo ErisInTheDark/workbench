@@ -97,120 +97,120 @@
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { GitArcCommandAction } from "../../workbench/thread/command-matchers/git-checkpoints";
-import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
+import SvgIcon, { type IconProps } from "./SvgIcon";
 
 export function CertificateIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M12 10H6" /><path d="m20.69 15.479 1.29 4.88a.5.5 0 0 1-.698.591l-1.843-.849a1 1 0 0 0-.879.001l-1.846.85a.5.5 0 0 1-.692-.593l1.29-4.88" /><path d="M22 6.675V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8" /><path d="M6 14h4" /><circle cx="19" cy="13" r="3" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M12 10H6" /><path d="m20.69 15.479 1.29 4.88a.5.5 0 0 1-.698.591l-1.843-.849a1 1 0 0 0-.879.001l-1.846.85a.5.5 0 0 1-.692-.593l1.29-4.88" /><path d="M22 6.675V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8" /><path d="M6 14h4" /><circle cx="19" cy="13" r="3" /></SvgIcon>;
 }
 
 export function MinusIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M5 12h14" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M5 12h14" /></SvgIcon>;
 }
 
 export { default as LoaderIcon } from "./LoaderIcon";
-export type { IconProps } from "./OutlinedIcon";
+export type { IconProps } from "./SvgIcon";
 
 export function FlaskConicalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2" />
     <path d="M6.453 15h11.094" /><path d="M8.5 2h7" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 const SHIELD_PATH = "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z";
 
 export function ShieldQuestionIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d={SHIELD_PATH} /><path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></SvgIcon>;
 }
 
 export function ShieldCheckIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="m9 12 2 2 4-4" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d={SHIELD_PATH} /><path d="m9 12 2 2 4-4" /></SvgIcon>;
 }
 
 export function WeightIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <circle cx="12" cy="5" r="3" />
     <path d="M6.5 8a2 2 0 0 0-1.905 1.46L2.1 18.5A2 2 0 0 0 4 21h16a2 2 0 0 0 1.925-2.54L19.4 9.5A2 2 0 0 0 17.48 8Z" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function HourglassIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M5 22h14" /><path d="M5 2h14" />
     <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" />
     <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ShieldCogCornerIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11 22c-3.806-1.45-7-3.966-7-9V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1v4" />
     <path d="M14.923 16.547 14 16.164" /><path d="m14.923 18.843-.923.383" />
     <path d="M16.547 14.923 16.164 14" /><path d="m16.547 20.467-.383.924" />
     <path d="m18.843 14.923.383-.923" /><path d="m19.225 21.391-.382-.924" />
     <path d="m20.467 16.547.923-.383" /><path d="m20.467 18.843.923.383" />
     <circle cx="17.695" cy="17.695" r="3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ShieldMinusIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="M9 12h6" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d={SHIELD_PATH} /><path d="M9 12h6" /></SvgIcon>;
 }
 
 export function ShieldAlertIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="M12 8v4" /><path d="M12 16h.01" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d={SHIELD_PATH} /><path d="M12 8v4" /><path d="M12 16h.01" /></SvgIcon>;
 }
 
 export function ComputerIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 18h6" /><path d="M6 18h.01" /><path d="M8 6h1" />
     <rect x="2" y="14" width="20" height="8" rx="2" /><rect x="4" y="2" width="16" height="12" rx="2" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GitGraphIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <circle cx="5" cy="6" r="3" /><path d="M5 9v6" /><circle cx="5" cy="18" r="3" />
     <path d="M12 3v18" /><circle cx="19" cy="6" r="3" /><path d="M16 15.7A9 9 0 0 0 19 9" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GitBranchIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <line x1="6" x2="6" y1="3" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GitCommitIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><circle cx="12" cy="12" r="3" /><line x1="3" x2="9" y1="12" y2="12" /><line x1="15" x2="21" y1="12" y2="12" /></OutlinedIcon>;
+  return <SvgIcon {...props}><circle cx="12" cy="12" r="3" /><line x1="3" x2="9" y1="12" y2="12" /><line x1="15" x2="21" y1="12" y2="12" /></SvgIcon>;
 }
 
 export function GitStashIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <rect width="20" height="5" x="2" y="3" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /><path d="M10 12h4" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function PilcrowIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M13 4v16" /><path d="M17 4v16" /><path d="M19 4H9.5a4.5 4.5 0 0 0 0 9H13" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M13 4v16" /><path d="M17 4v16" /><path d="M19 4H9.5a4.5 4.5 0 0 0 0 9H13" /></SvgIcon>;
 }
 
 export function GitMergeIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 21V9a9 9 0 0 0 9 9" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GitRebaseIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="m16 9.5-3.452 6.347A4 4 0 019.017 18H6.024l3-3" />
     <path d="M18 9v11.997" /><path d="M6 9v3.5" /><path d="m9 21-3-3" />
     <circle cx="18" cy="6" r="3" /><circle cx="6" cy="6" r="3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GitFastForwardIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M14.961 20a4 4 0 01-2.943-1.334L9 16" />
     <path d="M18 16v1a3 3 0 01-3 3" />
     <path d="M6 18v3" />
@@ -218,11 +218,11 @@ export function GitFastForwardIcon(props: IconProps) {
     <path d="M9.007 3 6 6h7.973A4 4 0 0118 10" />
     <circle cx="18" cy="13" r="3" />
     <circle cx="6" cy="15" r="3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ShellProcessingIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4" />
     <path d="M6 8h8" /><path d="M6 12h4" />
     <g transform="translate(0 11)">
@@ -232,18 +232,18 @@ export function ShellProcessingIcon(props: IconProps) {
       <path d="m20.772 4.852.924-.383" /><path d="m20.772 7.148.924.383" />
       <circle cx="18" cy="6" r="3" />
     </g>
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ShellIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <rect width="20" height="16" x="2" y="4" rx="2" />
     <path d="M6 8h8" /><path d="M6 12h4" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function TerminalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M12 19h8" /><path d="m4 17 6-6-6-6" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M12 19h8" /><path d="m4 17 6-6-6-6" /></SvgIcon>;
 }
 
 function BrandIcon({ size = 16, ...props }: IconProps) {
@@ -254,7 +254,7 @@ type DashedBookDetail = "bookmark" | "search" | null;
 
 function DashedBookIcon({ detail, ...props }: IconProps & { detail: DashedBookDetail }) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       {detail === "search" ? (
         <path d="M12 22H6.5a1 1 0 0 1 0-5h4.501" />
       ) : (
@@ -274,20 +274,20 @@ function DashedBookIcon({ detail, ...props }: IconProps & { detail: DashedBookDe
       <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H8" />
       {detail === "bookmark" ? <path d="M10 2v7.751a.25.25 0 0 0 .407.195l2.28-1.834a.5.5 0 0 1 .627 0l2.28 1.834A.25.25 0 0 0 16 9.751V2" /> : null}
       {detail === "search" ? <><path d="m22 22-1.879-1.878" /><circle cx="18" cy="18" r="3" /></> : null}
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function BookIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" /></SvgIcon>;
 }
 
 export function BookBookmarkIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M10 2v7.751a.25.25 0 0 0 .407.195l2.28-1.834a.5.5 0 0 1 .627 0l2.28 1.834A.25.25 0 0 0 16 9.751V2" /><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M10 2v7.751a.25.25 0 0 0 .407.195l2.28-1.834a.5.5 0 0 1 .627 0l2.28 1.834A.25.25 0 0 0 16 9.751V2" /><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" /></SvgIcon>;
 }
 
 export function BookSearchIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M12 22H6.5a1 1 0 0 1 0-5h4.501" /><path d="m22 22-1.879-1.878" /><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v8" /><circle cx="18" cy="18" r="3" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M12 22H6.5a1 1 0 0 1 0-5h4.501" /><path d="m22 22-1.879-1.878" /><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v8" /><circle cx="18" cy="18" r="3" /></SvgIcon>;
 }
 
 export function BookDashedIcon(props: IconProps) {
@@ -303,52 +303,52 @@ export function BookSearchDashedIcon(props: IconProps) {
 }
 
 export function BotIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function StarIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function StarOffIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="m10.344 4.688 1.181-2.393a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.237 3.152" />
     <path d="m17.945 17.945.43 2.505a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a8 8 0 0 0 .4-.099" />
     <path d="m2 2 20 20" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ZapIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SquareArrowRightEnterIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="m10 16 4-4-4-4" /><path d="M3 12h11" /><path d="M3 8V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function SquareEqualIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 10h10" /><path d="M7 14h10" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function SquareArrowRightExitIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M10 12h11" /><path d="m17 16 4-4-4-4" /><path d="M21 6.344V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-1.344" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
@@ -400,9 +400,9 @@ export function ClaudeIcon(props: IconProps) {
 }
 
 export function FlameIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function HarnessIcon({ harness, ...props }: IconProps & { harness: WorkbenchHarness }) {
@@ -423,240 +423,240 @@ export function HarnessIcon({ harness, ...props }: IconProps & { harness: Workbe
 
 export function SaveIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <g className="save-icon-main">
         <path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
         <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" />
         <path d="M7 3v4a1 1 0 0 0 1 1h7" />
       </g>
       <path className="save-icon-slash opacity-0 transition-opacity" d="M3 21 21 3" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function ResetIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></SvgIcon>;
 }
 
 export function Trash2Icon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function ZoomInIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <circle cx="11" cy="11" r="8" /><line x1="21" x2="16.65" y1="21" y2="16.65" /><line x1="11" x2="11" y1="8" y2="14" /><line x1="8" x2="14" y1="11" y2="11" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function ChevronLeftIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m15 18-6-6 6-6" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m15 18-6-6 6-6" /></SvgIcon>;
 }
 
 export function ChevronRightIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m9 18 6-6-6-6" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m9 18 6-6-6-6" /></SvgIcon>;
 }
 
 export function CornerLeftUpIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M14 9 9 4 4 9" /><path d="M20 20h-7a4 4 0 0 1-4-4V4" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M14 9 9 4 4 9" /><path d="M20 20h-7a4 4 0 0 1-4-4V4" /></SvgIcon>;
 }
 
 export function PanelLeftCloseIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m16 15-3-3 3-3" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function PanelLeftOpenIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <rect width="18" height="18" x="3" y="3" rx="2" />
       <path d="M9 3v18" />
       <path d="m14 9 3 3-3 3" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function ImageIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
     <circle cx="9" cy="9" r="2" />
     <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function XIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function SettingsIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function HomeIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
       <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function FolderGit2Icon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M18 19a5 5 0 0 1-5-5v8" />
       <path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5" />
       <circle cx="13" cy="12" r="2" />
       <circle cx="20" cy="19" r="2" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function WallpaperIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M12 17v4" /><path d="M8 21h8" /><path d="m9 17 6.1-6.1a2 2 0 0 1 2.81.01L22 15" />
       <circle cx="8" cy="9" r="2" /><rect x="2" y="3" width="20" height="14" rx="2" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function AppWindowIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <rect x="2" y="4" width="20" height="16" rx="2" />
       <path d="M10 4v4" /><path d="M2 8h20" /><path d="M6 4v4" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function RefreshCwIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
       <path d="M21 3v5h-5" />
       <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
       <path d="M8 16H3v5" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function PlayIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function ClockIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <circle cx="12" cy="12" r="10" />
       <path d="M12 6v6l4 2" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function TriangleIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /></SvgIcon>;
 }
 
 export function DiamondIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z" /></SvgIcon>;
 }
 
 export function TriangleAlertIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
       <path d="M12 9v4" /><path d="M12 17h.01" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function CircleAlertIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <circle cx="12" cy="12" r="10" />
       <line x1="12" x2="12" y1="8" y2="12" />
       <line x1="12" x2="12.01" y1="16" y2="16" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function PinIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M12 17v5" />
       <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function FolderClosedIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></SvgIcon>;
 }
 
 export function FolderOpenIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></SvgIcon>;
 }
 
 export function FolderInputIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1" /><path d="M2 13h10" /><path d="m9 16 3-3-3-3" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1" /><path d="M2 13h10" /><path d="m9 16 3-3-3-3" /></SvgIcon>;
 }
 
 export function LockIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></OutlinedIcon>;
+  return <SvgIcon {...props}><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></SvgIcon>;
 }
 
 export function UnlockIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></OutlinedIcon>;
+  return <SvgIcon {...props}><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></SvgIcon>;
 }
 
 export function KeyRoundIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
     <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function KeyRoundOffIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M19.37 13.713a6.5 6.5 0 10-9.083-9.082" />
     <path d="m2 2 20 20" />
     <path d="M9.066 9.066A6.5 6.5 0 009.4 10.6l-6.814 6.814A2 2 0 002 18.828V21a1 1 0 001 1h3a1 1 0 001-1v-1a1 1 0 011-1h1a1 1 0 001-1v-1a1 1 0 011-1h.172a2 2 0 001.414-.586l.814-.814a6.5 6.5 0 001.534.334" />
     <circle cx="16.5" cy="7.5" r="0.5" fill="currentColor" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 const bubblePath = "M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719";
 
 function MessageCircleIcon({ paths, ...props }: IconProps & { paths: readonly string[] }) {
-  return <OutlinedIcon {...props}>{paths.map((path) => <path d={path} key={path} />)}</OutlinedIcon>;
+  return <SvgIcon {...props}>{paths.map((path) => <path d={path} key={path} />)}</SvgIcon>;
 }
 
 export function MessageCircleDashedIcon(props: IconProps) {
   return <MessageCircleIcon {...props} paths={["M10.1 2.182a10 10 0 0 1 3.8 0", "M13.9 21.818a10 10 0 0 1-3.8 0", "M17.609 3.72a10 10 0 0 1 2.69 2.7", "M2.182 13.9a10 10 0 0 1 0-3.8", "M20.28 17.61a10 10 0 0 1-2.7 2.69", "M21.818 10.1a10 10 0 0 1 0 3.8", "M3.721 6.391a10 10 0 0 1 2.7-2.69", "m6.163 21.117-2.906.85a1 1 0 0 1-1.236-1.169l.965-2.98"]} />;
 }
 export function SquarePenIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" /></SvgIcon>;
 }
 export function MessageCircleQuestionMarkIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={[bubblePath, "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", "M12 17h.01"]} />; }
 export function MessageCircleCheckIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={[bubblePath, "m9 12 2 2 4-4"]} />; }
@@ -665,133 +665,133 @@ export function MessageCircleMoreIcon(props: IconProps) { return <MessageCircleI
 export function MessageCircleXIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} />; }
 export function MessagesCircleIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M19.95 10.05a7 7 0 0 1 1.412 7.872 1 1 0 0 0-.058.787l.675 2.089a1 1 0 0 1-1.236 1.168l-2.155-.631a1 1 0 0 0-.745.06 7 7 0 0 1-7.793-1.445" />
       <path d="M2.696 12.708a1 1 0 0 0-.058-.785 7 7 0 1 1 3.518 3.473 1 1 0 0 0-.744-.061l-2.155.63a1 1 0 0 1-1.236-1.167z" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 export function CheckCheckIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={["M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"]} />; }
-export function ArrowUpIcon(props: IconProps) { return <OutlinedIcon {...props}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></OutlinedIcon>; }
-export function ArrowDownIcon(props: IconProps) { return <OutlinedIcon {...props}><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></OutlinedIcon>; }
+export function ArrowUpIcon(props: IconProps) { return <SvgIcon {...props}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></SvgIcon>; }
+export function ArrowDownIcon(props: IconProps) { return <SvgIcon {...props}><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></SvgIcon>; }
 export function DatabaseArrowUpIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M19 22v-6" /><path d="M21 12.536V5" /><path d="m22 19-3-3-3 3" />
       <path d="M3 12A9 3 0 0 0 14.457 14.886" /><path d="M3 5V19A9 3 0 0 0 13.318 21.968" /><ellipse cx="12" cy="5" rx="9" ry="3" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
-export function AlarmClockIcon(props: IconProps) { return <OutlinedIcon {...props}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></OutlinedIcon>; }
-export function ZzzIcon(props: IconProps) { return <OutlinedIcon {...props}><path d="M4 11h8l-8 10h8" /><path d="M15 4h5l-5 8h5" /></OutlinedIcon>; }
+export function AlarmClockIcon(props: IconProps) { return <SvgIcon {...props}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></SvgIcon>; }
+export function ZzzIcon(props: IconProps) { return <SvgIcon {...props}><path d="M4 11h8l-8 10h8" /><path d="M15 4h5l-5 8h5" /></SvgIcon>; }
 
 export function PennantIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M6 22V2.8a.8.8 0 0 1 1.17-.71l11.38 5.69a.8.8 0 0 1 0 1.44L6 15.5" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function ArrowRightIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M5 12h14" /><path d="m12 5 7 7-7 7" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function ArchiveIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <rect width="20" height="5" x="2" y="3" rx="1" />
       <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
       <path d="M10 12h4" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function WrapTextIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="m16 16-3 3 3 3" />
       <path d="M3 12h14.5a1 1 0 0 1 0 7H13" />
       <path d="M3 19h6" /><path d="M3 5h18" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function EyeIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function CopyIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
       <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function MoreVerticalIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <circle cx="12" cy="12" r="1" /><circle cx="12" cy="5" r="1" /><circle cx="12" cy="19" r="1" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function CheckIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}><path d="M20 6 9 17l-5-5" /></OutlinedIcon>
+    <SvgIcon {...props}><path d="M20 6 9 17l-5-5" /></SvgIcon>
   );
 }
 
 export function LinkIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
       <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function UnlinkIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71" />
       <path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71" />
       <path d="M8 2v3" /><path d="M2 8h3" /><path d="M16 19v3" /><path d="M19 16h3" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function ChartNoAxesCombinedIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M12 16v5" /><path d="M16 14.639V21" /><path d="M20 10.656V21" /><path d="m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15" /><path d="M4 18.463V21" /><path d="M8 14.656V21" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function AsteriskIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M12 5v14" />
       <path d="m18.065 8.496-12.125 7" />
       <path d="m5.94 8.504 12.125 7" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function AsteriskOffIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <g transform="translate(-1.286 0.772)">
         <path d="M12 12v7" />
         <path d="m12 12-6.06 3.496" />
@@ -803,257 +803,257 @@ export function AsteriskOffIcon(props: IconProps) {
         <path d="M18.065 8.496 13.732 11" />
         <path d="M18.065 15.504 15.467 14.004" />
       </g>
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function PlusIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M5 12h14" />
       <path d="M12 5v14" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function SparkleIcon(props: IconProps) {
   return (
-    <OutlinedIcon {...props}>
+    <SvgIcon {...props}>
       <path d="M13.2 3.9 14.82 8.64 19.5 10.2 14.82 11.76 13.2 16.5 11.58 11.76 6.9 10.2 11.58 8.64 13.2 3.9Z" />
       <path d="M6 15 6.78 17.22 9 18 6.78 18.78 6 21 5.22 18.78 3 18 5.22 17.22 6 15Z" />
-    </OutlinedIcon>
+    </SvgIcon>
   );
 }
 
 export function FilePlusIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M9 15h6" /><path d="M12 18v-6" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SquareSparkleIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11 15H7" />
     <path d="M15.41 2.49a.6.6 0 0 1 1.18 0l.63 3.334a1.2 1.2 0 0 0 .956.955l3.334.631a.6.6 0 0 1 0 1.18l-3.334.63a1.2 1.2 0 0 0-.955.956l-.631 3.334a.6.6 0 0 1-1.18 0l-.63-3.334a1.2 1.2 0 0 0-.956-.955L10.49 8.59a.6.6 0 0 1 0-1.18l3.334-.63a1.2 1.2 0 0 0 .955-.956z" />
     <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
     <path d="M9 13v4" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SquareDashedXIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M5 3a2 2 0 0 0-2 2" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M5 21a2 2 0 0 1-2-2" />
     <path d="M9 3h1" /><path d="M9 21h1" /><path d="M14 3h1" /><path d="M14 21h1" /><path d="M3 9v1" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M21 14v1" />
     <path d="m15 9-6 6" /><path d="m9 9 6 6" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SquareArrowRightIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" /><path d="m12 16 4-4-4-4" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SendHorizontalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M3.714 3.048a.498.498 0 0 0-.683.627L5 10l5.4 1.5q1.8.5 0 1L5 14l-1.968 6.325a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SquareIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <rect width="18" height="18" x="3" y="3" rx="2" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function EyeOffIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /><path d="m2 2 20 20" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ExternalLinkIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function DownloadIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 15V3" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SearchIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ChevronDownIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m6 9 6 6 6-6" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m6 9 6 6 6-6" /></SvgIcon>;
 }
 
 export function ChevronUpIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m18 15-6-6-6 6" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m18 15-6-6-6 6" /></SvgIcon>;
 }
 
 export function CompactIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M4 3H2" /><path d="M10 3H8" /><path d="M16 3h-2" /><path d="M22 3h-2" />
     <path d="m18 13-6-6-6 6" /><path d="M12 7v14" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ListIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M3 5h.01" /><path d="M3 12h.01" /><path d="M3 19h.01" />
     <path d="M8 5h13" /><path d="M8 12h13" /><path d="M8 19h7" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function ListEndIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M16 5H3" /><path d="M16 12H3" /><path d="M9 19H3" />
     <path d="m16 16-3 3 3 3" /><path d="M21 5v12a2 2 0 0 1-2 2h-6" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function EllipsisIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></OutlinedIcon>;
+  return <SvgIcon {...props}><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></SvgIcon>;
 }
 
 export function SlashIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m16 3-8 18" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m16 3-8 18" /></SvgIcon>;
 }
 
 export function FeatherIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M14.086 18.412A2 2 0 0 1 12.67 19H5v-7.672a2 2 0 0 1 .586-1.414L11.75 3.75a6 6 0 1 1 8.49 8.49z" />
     <path d="M16 8 2 22" /><path d="M17.488 15H9" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function FoldVerticalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 22v-6" /><path d="M12 8V2" /><path d="M4 12H2" /><path d="M10 12H8" /><path d="M16 12h-2" /><path d="M22 12h-2" /><path d="m15 19-3-3-3 3" /><path d="m15 5-3 3-3-3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function UnfoldVerticalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 22v-6" /><path d="M12 8V2" /><path d="M4 12H2" /><path d="M10 12H8" /><path d="M16 12h-2" /><path d="M22 12h-2" /><path d="m15 19-3 3-3-3" /><path d="m15 5-3-3-3 3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function FoldHorizontalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M2 12h6" /><path d="M22 12h-6" /><path d="M12 2v2" /><path d="M12 8v2" /><path d="M12 14v2" /><path d="M12 20v2" /><path d="m19 9-3 3 3 3" /><path d="m5 15 3-3-3-3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function UnfoldHorizontalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M16 12h6" /><path d="M8 12H2" /><path d="M12 2v2" /><path d="M12 8v2" /><path d="M12 14v2" /><path d="M12 20v2" /><path d="m19 15 3-3-3-3" /><path d="m5 9-3 3 3 3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function MaximizeIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function BoldIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8" /></SvgIcon>;
 }
 
 export function ItalicIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M19 4h-9" /><path d="M14 20H5" /><path d="M15 4 9 20" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M19 4h-9" /><path d="M14 20H5" /><path d="M15 4 9 20" /></SvgIcon>;
 }
 
 export function CodeIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m16 18 6-6-6-6" /><path d="m8 6-6 6 6 6" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m16 18 6-6-6-6" /><path d="m8 6-6 6 6 6" /></SvgIcon>;
 }
 
 const headingStem = ["M4 12h8", "M4 18V6", "M12 18V6"];
 
 export function Heading1Icon(props: IconProps) {
-  return <OutlinedIcon {...props}>{[...headingStem, "m17 12 3-2v8"].map((path) => <path d={path} key={path} />)}</OutlinedIcon>;
+  return <SvgIcon {...props}>{[...headingStem, "m17 12 3-2v8"].map((path) => <path d={path} key={path} />)}</SvgIcon>;
 }
 
 export function Heading2Icon(props: IconProps) {
-  return <OutlinedIcon {...props}>{[...headingStem, "M21 18h-4c0-4 4-3 4-6 0-1.5-2-2.5-4-1"].map((path) => <path d={path} key={path} />)}</OutlinedIcon>;
+  return <SvgIcon {...props}>{[...headingStem, "M21 18h-4c0-4 4-3 4-6 0-1.5-2-2.5-4-1"].map((path) => <path d={path} key={path} />)}</SvgIcon>;
 }
 
 export function Heading3Icon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     {[...headingStem, "M17.5 10.5c1.7-1 3.5 0 3.5 1.5a2 2 0 0 1-2 2", "M17 17.5c2 1.5 4 .3 4-1.5a2 2 0 0 0-2-2"].map((path) => <path d={path} key={path} />)}
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function TextQuoteIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M17 5H3" /><path d="M21 12H8" /><path d="M21 19H8" /><path d="M3 12v7" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M17 5H3" /><path d="M21 12H8" /><path d="M21 19H8" /><path d="M3 12v7" /></SvgIcon>;
 }
 
 export function ListOrderedIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11 5h10" /><path d="M11 12h10" /><path d="M11 19h10" /><path d="M4 4h1v5" /><path d="M4 9h2" />
     <path d="M6.5 20H3.4c0-1 2.6-1.925 2.6-3.5a1.5 1.5 0 0 0-2.6-1.02" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function TagIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
     <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GripVerticalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <circle cx="9" cy="12" r="1" /><circle cx="9" cy="5" r="1" /><circle cx="9" cy="19" r="1" />
     <circle cx="15" cy="12" r="1" /><circle cx="15" cy="5" r="1" /><circle cx="15" cy="19" r="1" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function MessageSquareTextIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
     <path d="M7 11h10" /><path d="M7 15h6" /><path d="M7 7h8" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SparklesIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" />
     <path d="M20 2v4" /><path d="M22 4h-4" /><circle cx="4" cy="20" r="2" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function DiffIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M12 4 L12 14" /><path d="M7 20 L17 20" /><path d="M7 9 L17 9" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M12 4 L12 14" /><path d="M7 20 L17 20" /><path d="M7 9 L17 9" /></SvgIcon>;
 }
 
 export function FileCodeCornerIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35" />
     <path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="m5 16-3 3 3 3" /><path d="m9 22 3-3-3-3" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function RemoveFormattingIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M4 7V4h16v3" /><path d="M5 20h6" /><path d="M13 4 8 20" /><path d="m15 15 5 5" /><path d="m20 15-5 5" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SquareCodeIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m10 9-3 3 3 3" /><path d="m14 15 3-3-3-3" /><rect x="3" y="3" width="18" height="18" rx="2" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m10 9-3 3 3 3" /><path d="m14 15 3-3-3-3" /><rect x="3" y="3" width="18" height="18" rx="2" /></SvgIcon>;
 }
 
 export function TableIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M12 3v18" /><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18" /><path d="M3 15h18" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M12 3v18" /><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18" /><path d="M3 15h18" /></SvgIcon>;
 }
 
 const filePaths = [
@@ -1062,7 +1062,7 @@ const filePaths = [
 ];
 
 function FileOutlineIcon({ children, ...props }: IconProps) {
-  return <OutlinedIcon {...props}>{filePaths.map((path) => <path d={path} key={path} />)}{children}</OutlinedIcon>;
+  return <SvgIcon {...props}>{filePaths.map((path) => <path d={path} key={path} />)}{children}</SvgIcon>;
 }
 
 export function FileIcon(props: IconProps) {
@@ -1082,199 +1082,199 @@ export function FileImageIcon(props: IconProps) {
 }
 
 export function Undo2Icon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" /></SvgIcon>;
 }
 
 export function Redo2Icon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5 5.5 5.5 0 0 0 9.5 20H13" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5 5.5 5.5 0 0 0 9.5 20H13" /></SvgIcon>;
 }
 
 export function Grid3x3Icon(props: IconProps) {
-  return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></OutlinedIcon>;
+  return <SvgIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></SvgIcon>;
 }
 
 export function MousePointerIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" /></SvgIcon>;
 }
 
 export function KeyboardIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M10 8h.01" /><path d="M12 12h.01" /><path d="M14 8h.01" /><path d="M16 12h.01" /><path d="M18 8h.01" />
     <path d="M6 8h.01" /><path d="M7 16h10" /><path d="M8 12h.01" /><rect width="20" height="16" x="2" y="4" rx="2" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function TextCursorInputIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 20h-1a2 2 0 0 1-2-2 2 2 0 0 1-2 2H6" /><path d="M13 8h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7" />
     <path d="M5 16H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h1" /><path d="M6 4h1a2 2 0 0 1 2 2 2 2 0 0 1 2-2h1" /><path d="M9 6v12" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function HighlighterIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m9 11-6 6v3h9l3-3" /><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m9 11-6 6v3h9l3-3" /><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" /></SvgIcon>;
 }
 
 export function PenToolIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z" />
     <path d="m18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18" />
     <path d="m2.3 2.3 7.286 7.286" /><circle cx="11" cy="11" r="2" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function CircleIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><circle cx="12" cy="12" r="10" /></OutlinedIcon>;
+  return <SvgIcon {...props}><circle cx="12" cy="12" r="10" /></SvgIcon>;
 }
 
 export function CircleDotIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="1" /></OutlinedIcon>;
+  return <SvgIcon {...props}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="1" /></SvgIcon>;
 }
 
 export function FlipHorizontalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m3 7 5 5-5 5V7M21 7l-5 5 5 5V7M12 20v2M12 14v2M12 8v2M12 2v2" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m3 7 5 5-5 5V7M21 7l-5 5 5 5V7M12 20v2M12 14v2M12 8v2M12 2v2" /></SvgIcon>;
 }
 
 export function FlipVerticalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="m17 3-5 5-5-5h10M17 21l-5-5-5 5h10M4 12H2M10 12H8M16 12h-2M22 12h-2" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="m17 3-5 5-5-5h10M17 21l-5-5-5 5h10M4 12H2M10 12H8M16 12h-2M22 12h-2" /></SvgIcon>;
 }
 
 export function PaletteIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z" />
     <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" /><circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
     <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" /><circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function RulerIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z" />
     <path d="m14.5 12.5 2-2M11.5 9.5l2-2M8.5 6.5l2-2M17.5 15.5l2-2" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function MagnetIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="m12 15 4 4" />
     <path d="M2.352 10.648a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.029-6.029a1 1 0 1 1 3 3l-6.029 6.029a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.365-6.367A1 1 0 0 0 8.716 4.282z" />
     <path d="m5 8 4 4" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function MagnetOffIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11.648 21.648 9.352 19.352M13.352 21.648A1.205 1.205 0 0 1 11.648 21.648M2.352 12.352A1.205 1.205 0 0 1 2.352 10.648" />
     <path d="M4.648 14.648 2.352 12.352M6.352 14.648A1.205 1.205 0 0 1 4.648 14.648M9.352 19.352A1.205 1.205 0 0 1 9.352 17.648" />
     <path d="M12.5 8.49A2.14 2.14 0 0 1 15.5 11.5M12.5 8.49 10.5 10.5M14.5 20.5 13.5 21.5M15.5 11.5 13.5 13.51" />
     <path d="M19.56 15.436A7.78 7.78 0 0 0 8.567 4.436M19.56 15.436 17.493 17.5M2 2 22 22M2.352 10.648 3.5 9.5" />
     <path d="M7.5 13.5 6.352 14.648M8.567 4.436 6.5 6.5M9.352 17.648 10.648 16.352" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SaveAsIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M10 2v3a1 1 0 0 0 1 1h5M18 18v-6a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6M18 22H4a2 2 0 0 1-2-2V6" />
     <path d="M8 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9.172a2 2 0 0 1 1.414.586l2.828 2.828A2 2 0 0 1 22 6.828V16a2 2 0 0 1-2.01 2z" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function WandSparklesIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72" />
     <path d="m14 7 3 3M5 6v4M19 14v4M10 2v2M7 8H3M21 16h-4M11 3H9" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 const FLAG_PATH = "M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528";
 
 export function FlagIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d={FLAG_PATH} /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d={FLAG_PATH} /></SvgIcon>;
 }
 
 export function FlagFilledIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d={FLAG_PATH} fill="currentColor" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d={FLAG_PATH} fill="currentColor" /></SvgIcon>;
 }
 
 export function ClipboardListIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
     <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
     <path d="M12 11h4" /><path d="M12 16h4" /><path d="M8 11h.01" /><path d="M8 16h.01" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function BugIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M12 20v-9" /><path d="M14 7a4 4 0 0 1 4 4v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4z" /><path d="M14.12 3.88 16 2" />
     <path d="M21 21a4 4 0 0 0-3.81-4" /><path d="M21 5a4 4 0 0 1-3.55 3.97" /><path d="M22 13h-4" /><path d="M3 21a4 4 0 0 1 3.81-4" />
     <path d="M3 5a4 4 0 0 0 3.55 3.97" /><path d="M6 13H2" /><path d="m8 2 1.88 1.88" /><path d="M9 7.13V6a3 3 0 1 1 6 0v1.13" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function MegaphoneIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
     <path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14" /><path d="M8 6v8" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function NetworkIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <rect x="16" y="16" width="6" height="6" rx="1" /><rect x="2" y="16" width="6" height="6" rx="1" />
     <rect x="9" y="2" width="6" height="6" rx="1" /><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" /><path d="M12 12V8" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GitArcCleanClaimIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M11 2v2" /><path d="M12 3h-2" /><path d="M13.5 10.5 22 2" /><path d="M14.734 13.841a2 2 0 0 0-.314-2.42L12.58 9.58a2 2 0 0 0-2.421-.314l-7.657 4.461A1 1 0 0 0 2.3 15.3l6.403 6.403a1 1 0 0 0 1.571-.204z" /><path d="M20 15v4" /><path d="M22 17h-4" /><path d="M4 4v4" /><path d="m5 18 2-2" /><path d="M6 6H2" /><path d="m7.699 10.7 5.602 5.601" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GitArcDirtyClaimIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M13.5 10.5 22 2" /><path d="M14.734 13.841a2 2 0 0 0-.314-2.42L12.58 9.58a2 2 0 0 0-2.421-.314l-7.657 4.461A1 1 0 0 0 2.3 15.3l6.403 6.403a1 1 0 0 0 1.571-.204z" /><path d="m5 18 2-2" /><path d="m7.699 10.7 5.602 5.601" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function PennantDashedIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M6 6V3l2.7 1.3" /><path d="m11.15 5.48 2.7 1.3" /><path d="m16.3 7.95 2.7 1.3-2.7 1.3" /><path d="m13.85 11.73-2.7 1.3" /><path d="m8.7 14.2-2.7 1.3v-3" /><path d="M6 9.78V8.72" /><path d="M6 22v-3.75" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function PennantOffIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M7.5 22V7.5" />
     <path d="m12.83 12.83-5.33 2.67" />
     <path d="m2 2 20 20" />
     <path d="M7.5 2 20.05 7.78a.8.8 0 0 1 0 1.44l-3.75 1.88" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function SquareXIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><rect height="18" rx="2" ry="2" width="18" x="3" y="3" /><path d="m15 9-6 6" /><path d="m9 9 6 6" /></OutlinedIcon>;
+  return <SvgIcon {...props}><rect height="18" rx="2" ry="2" width="18" x="3" y="3" /><path d="m15 9-6 6" /><path d="m9 9 6 6" /></SvgIcon>;
 }
 
 export function GitArcWaitIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M5 22h14" /><path d="M5 2h14" /><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" /><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M5 22h14" /><path d="M5 2h14" /><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" /><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" /></SvgIcon>;
 }
 
 export function GitArcStackIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></SvgIcon>;
 }
 
 export function GitArcUnstackIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M12 12V2" /><path d="M2 17.002a1 1 0 00.58.91l8.6 3.91a2 2 0 001.65 0l8.58-3.9a1 1 0 00.59-.92" /><path d="M7.674 8.774 2.58 11.09a1 1 0 000 1.822l8.6 3.91a2 2 0 001.65 0l8.58-3.9a1 1 0 00.59-.92 1 1 0 00-.59-.922l-5.078-2.308" /><path d="m9 5 3-3 3 3" /></OutlinedIcon>;
+  return <SvgIcon {...props}><path d="M12 12V2" /><path d="M2 17.002a1 1 0 00.58.91l8.6 3.91a2 2 0 001.65 0l8.58-3.9a1 1 0 00.59-.92" /><path d="M7.674 8.774 2.58 11.09a1 1 0 000 1.822l8.6 3.91a2 2 0 001.65 0l8.58-3.9a1 1 0 00.59-.92 1 1 0 00-.59-.922l-5.078-2.308" /><path d="m9 5 3-3 3 3" /></SvgIcon>;
 }
 
 export function GitArcProposalIcon(props: IconProps) {
-  return <OutlinedIcon {...props}>
+  return <SvgIcon {...props}>
     <path d="M8 3h11a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8" />
     <path d="M9 8h7" /><path d="M10.5 12h7" /><path d="M9 16h5" />
     <path d="M4 3v6" /><circle cx="4" cy="12" r="3" /><path d="M4 15v6" />
-  </OutlinedIcon>;
+  </SvgIcon>;
 }
 
 export function GitArcIcon({ action, ...props }: IconProps & { action: GitArcCommandAction }) {
@@ -1282,27 +1282,27 @@ export function GitArcIcon({ action, ...props }: IconProps & { action: GitArcCom
   if (action === "stack") return <GitArcStackIcon {...props} />;
   if (action === "unstack") return <GitArcUnstackIcon {...props} />;
   if (action === "plan" || action === "scope" || action === "status") {
-    return <OutlinedIcon {...props}><path d="M14 21h1" /><path d="M14 3h1" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 14v1" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M3 9v1" /><path d="M5 21a2 2 0 0 1-2-2" /><path d="M5 3a2 2 0 0 0-2 2" /><path d="M7 12h10" /><path d="M7 16h6" /><path d="M7 8h8" /><path d="M9 21h1" /><path d="M9 3h1" /></OutlinedIcon>;
+    return <SvgIcon {...props}><path d="M14 21h1" /><path d="M14 3h1" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 14v1" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M3 9v1" /><path d="M5 21a2 2 0 0 1-2-2" /><path d="M5 3a2 2 0 0 0-2 2" /><path d="M7 12h10" /><path d="M7 16h6" /><path d="M7 8h8" /><path d="M9 21h1" /><path d="M9 3h1" /></SvgIcon>;
   }
   if (action === "start" || action === "continue" || action === "planStart") {
-    return <OutlinedIcon {...props}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z" /></OutlinedIcon>;
+    return <SvgIcon {...props}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z" /></SvgIcon>;
   }
   if (action === "claims" || action === "adopt" || action === "release") {
-    return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" />{action !== "release" ? <path d="M12 8v8" /> : null}</OutlinedIcon>;
+    return <SvgIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" />{action !== "release" ? <path d="M12 8v8" /> : null}</SvgIcon>;
   }
   if (action === "edit") return <FileUpdateIcon {...props} />;
   // Proposals share the commit glyph every commit display uses.
   if (action === "propose") return <GitArcProposalIcon {...props} />;
   if (action === "rescind") {
-    return <OutlinedIcon {...props}><path d="M13.657 8H15" /><path d="m2 2 20 20" /><path d="M20.414 20.414A2 2 0 0 1 19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 .586-1.414" /><path d="M7 12h5" /><path d="M7 16h6" /><path d="M7 8h1" /><path d="M8.657 3H19a2 2 0 0 1 2 2v10.343" /></OutlinedIcon>;
+    return <SvgIcon {...props}><path d="M13.657 8H15" /><path d="m2 2 20 20" /><path d="M20.414 20.414A2 2 0 0 1 19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 .586-1.414" /><path d="M7 12h5" /><path d="M7 16h6" /><path d="M7 8h1" /><path d="M8.657 3H19a2 2 0 0 1 2 2v10.343" /></SvgIcon>;
   }
   if (action === "unknown") {
-    return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 8h8" /><path d="M7 12h10" /><path d="M7 16h6" /></OutlinedIcon>;
+    return <SvgIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 8h8" /><path d="M7 12h10" /><path d="M7 16h6" /></SvgIcon>;
   }
   if (action === "compare" || action === "diff") {
-    return <OutlinedIcon {...props}><path d="M16 12v2a2 2 0 0 1-2 2H9a1 1 0 0 0-1 1v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h0" /><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3a1 1 0 0 1-1 1h-5a2 2 0 0 0-2 2v2" /></OutlinedIcon>;
+    return <SvgIcon {...props}><path d="M16 12v2a2 2 0 0 1-2 2H9a1 1 0 0 0-1 1v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h0" /><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3a1 1 0 0 1-1 1h-5a2 2 0 0 0-2 2v2" /></SvgIcon>;
   }
-  return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M10.125 13.25 7 10.125l3.125-3.125" /><path d="M7 10.125h6.5625a3.4375 3.4375 0 0 1 3.4375 3.4375A3.4375 3.4375 0 0 1 13.5625 17H11.375" /></OutlinedIcon>;
+  return <SvgIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M10.125 13.25 7 10.125l3.125-3.125" /><path d="M7 10.125h6.5625a3.4375 3.4375 0 0 1 3.4375 3.4375A3.4375 3.4375 0 0 1 13.5625 17H11.375" /></SvgIcon>;
 }
 
 export const BinIcon = Trash2Icon;

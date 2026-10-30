@@ -27,7 +27,7 @@
 
 import type { CommandAction, JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
-import type { SkillMcpChipIcon, SkillMcpDisplay } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
+import type { SkillMcpDisplay, SkillMcpIcon } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
 import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkspaceFileLinkRoot } from "../../markdown/markdown-links";
 
@@ -121,9 +121,11 @@ export interface ThreadCommandSkillMcp {
   /** The invocation the matcher saw; outcome facts come from the item when its component renders. */
   call: { arguments: JsonValue; keep: string | null; server: string; tool: string };
   /** A skill-named chip, keyed by its skill so two skills' chips never merge. */
-  chip: { icon: SkillMcpChipIcon; key: string; verb: string } | null;
+  chip: { icon: SkillMcpIcon; key: string; verb: string } | null;
   component: string | null;
   display: SkillMcpDisplay;
+  /** The row or card icon: the matcher's own, else its chip's; null draws the generic one. */
+  icon: SkillMcpIcon | null;
   props: Record<string, JsonValue>;
   skillName: string;
   skillPath: string;

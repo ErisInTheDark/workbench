@@ -114,6 +114,7 @@ export function getSkillMcpMatcherResult(match: SkillMcpMatch, invocation: Skill
       chip: presentation.chip ? { icon: presentation.chip.icon, key: `${skillPath}\0${presentation.chip.id}`, verb: presentation.chip.verb } : null,
       component: presentation.component ?? null,
       display: presentation.display,
+      icon: presentation.icon ?? presentation.chip?.icon ?? null,
       props: presentation.props ?? {},
       skillName,
       skillPath,
