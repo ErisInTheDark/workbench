@@ -418,8 +418,8 @@ export default class WorkbenchMcpServerController {
   }
 
   /**
-   * Start the stored stdio server as it is now: an npm server pins the exact version its first install resolved; a cli server
-   * runs from `folderProjectId`'s folder when project-scoped, or home when global.
+   * Start the stored stdio server as it is now, from `folderProjectId`'s folder when project-scoped or home when global;
+   * an npm server pins the exact version its first install resolved.
    */
   async #launch(serverId: string, folderProjectId: string | null): Promise<McpServerLaunch> {
     const server = await this.#stdioServer(serverId);
@@ -429,17 +429,15 @@ export default class WorkbenchMcpServerController {
       if (entry.value === null) throw new Error(unreadableEnv(entry.name));
       env[entry.name] = entry.value;
     }
-    if (source.kind === "cli") {
-      const cwd = folderProjectId
-        ? (await this.#projects()(folderProjectId)).rootPath
-        : (this.options.homeDirectory ?? os.homedir)();
-      return { command: source.command, args: [...source.args], cwd, env };
-    }
+    const cwd = folderProjectId
+      ? (await this.#projects()(folderProjectId)).rootPath
+      : (this.options.homeDirectory ?? os.homedir)();
+    if (source.kind === "cli") return { command: source.command, args: [...source.args], cwd, env };
     const { launch, version } = await this.#packages().launch(serverId, source);
     if (version !== source.version) {
       await this.options.database.executeTransaction([updateRows(mcpServerPackages, { version }, { server_id: serverId })]);
     }
-    return { ...launch, env };
+    return { ...launch, cwd, env };
   }
 
   #packages() {
@@ -781,14 +779,17 @@ export default class WorkbenchMcpServerController {
     return tools.find(tool => tool.name === name) ?? null;
   }
 
-  /** The folder a project-scoped cli server runs from; each folder runs its own process, since each checkout holds its own code. */
+  /**
+   * The folder a project-scoped stdio server runs from; each folder runs its own process, since each checkout holds its own code
+   * and relative paths the server reads or writes must resolve in the caller's checkout.
+   */
   #launchFolder(server: StoredServer) {
-    return server.source.kind === "cli" && server.scope.kind === "project" ? server.folderProjectId ?? server.scope.projectId : null;
+    return server.source.kind !== "http" && server.scope.kind === "project" ? server.folderProjectId ?? server.scope.projectId : null;
   }
 
   /** For settings checks, which have no caller: the folder of the project where a thread most recently started working. */
   async #withActiveFolder(server: StoredServer): Promise<StoredServer> {
-    if (server.source.kind !== "cli" || server.scope.kind !== "project") return server;
+    if (server.source.kind === "http" || server.scope.kind !== "project") return server;
     const identity = await this.#identity(server.scope.projectId);
     let newest: { projectId: string; at: number } | null = null;
     for (const [projectId, at] of this.#folderActivity) {

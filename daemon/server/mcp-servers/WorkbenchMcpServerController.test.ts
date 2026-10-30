@@ -2,7 +2,7 @@
  * No production exports. Tests protect the MCP server allow boundary (only allowed, currently offered tools are
  * forwarded), link requests and downloads limited to links the server sent, credential sealing, OAuth sign-in over real transport,
  * per-server failure isolation, settings validation, npm servers' background install, version pinning, arguments, sealed
- * environment, kept install failures and install removal, project-scoped visibility and caller identity, cli launch folders,
+ * environment, kept install failures and install removal, project-scoped visibility and caller identity, stdio launch folders,
  * project release and reload, and approved per-turn thread servers.
  */
 import assert from "node:assert/strict";
@@ -151,7 +151,7 @@ class FakePackages {
     const install = this.#installed.has(serverId) ? null : this.#install(serverId, source);
     for (const resolve of this.#launchWaiters.splice(0)) resolve();
     await install;
-    return { launch: { command: "local", args: [...source.args], cwd: "C:/data/mcp" }, version: "1.4.2" };
+    return { launch: { command: "local", args: [...source.args] }, version: "1.4.2" };
   };
 
   remove = async (serverId: string) => { this.removals.push(serverId); this.#installed.delete(serverId); };
@@ -342,7 +342,7 @@ test("npm arguments and sealed environment relaunch the server; neither appears 
   const local = new FakeServer("local");
   const packages = new FakePackages();
   const { create, database, close } = setup({ local });
-  const owner = create({ packages });
+  const owner = create({ packages, homeDirectory: () => "/home/chiri" });
   const count = (table: string) => (database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
   try {
     const { servers: [added] } = await owner.update({ action: "addPackage", package: "local-server", version: "1.4.2", args: ["contoso"] });
@@ -358,8 +358,8 @@ test("npm arguments and sealed environment relaunch the server; neither appears 
     assert.equal(JSON.stringify(snapshot).includes("dG9rZW4="), false);
     await owner.read({ id });
     assert.deepEqual(local.launches.at(-1), {
-      command: "local", args: ["fabrikam", "two words"], cwd: "C:/data/mcp", env: { PERSONAL_ACCESS_TOKEN: "dG9rZW4=" },
-    });
+      command: "local", args: ["fabrikam", "two words"], cwd: "/home/chiri", env: { PERSONAL_ACCESS_TOKEN: "dG9rZW4=" },
+    }, "a global npm server runs from home, never its install directory");
     const elsewhere = await create({ packages, readDeviceIdentity: async () => "device-b" }).read({ id });
     assert.match(elsewhere.servers[0]?.catalog.status === "error" ? elsewhere.servers[0].catalog.detail : "", /PERSONAL_ACCESS_TOKEN can't be read/u);
     await assert.rejects(owner.update({ action: "setAuth", id, auth: { header: "authorization", value: "Bearer t" } }), /runs locally/u);
@@ -901,6 +901,21 @@ test("a project server serves every clone of its repository, running one cli pro
     await owner.releaseProject("project-a-next");
     await settle();
     assert.equal(sim.closed, 1, "only the released folder's process stops");
+  } finally { await owner.dispose(); close(); }
+});
+
+test("a project npm server runs one process from each caller's own folder, so relative paths land in that checkout", async () => {
+  const local = new FakeServer("local");
+  local.tools = [tool("download")];
+  const packages = new FakePackages();
+  const { create, close } = setup({ local });
+  const owner = create({ packages, resolveProject: projects });
+  try {
+    const { servers: [added] } = await owner.update({ action: "addPackage", package: "local-server", version: "1.4.2", args: [], projectId: "project-a" });
+    await owner.update({ action: "setAllowAll", id: added!.id, allowAll: true });
+    await owner.call({ server: "local-server", tool: "download", arguments: {} }, inProject("thread-main", "project-a"), signal());
+    await owner.call({ server: "local-server", tool: "download", arguments: {} }, inProject("thread-next", "project-a-next"), signal());
+    assert.deepEqual(local.launches.map(launch => launch.cwd), ["/projects/project-a", "/projects/project-a-next"]);
   } finally { await owner.dispose(); close(); }
 });
 

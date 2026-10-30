@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests protect Workbench-owned npm installs of stdio MCP servers: the launched command is the
- * package's own bin run with the user's arguments, background installs are visible while they run and joined by launches,
+ * package's own bin run with the user's arguments from outside its install directory, background installs are visible while they run and joined by launches,
  * a missing install is restored at its pinned version, and failed installs leave nothing behind but their reason until retried.
  */
 import assert from "node:assert/strict";
@@ -63,7 +63,7 @@ test("the launched command runs the package's bin with the user's arguments, cho
   assert.equal(version, "1.4.2");
   // An extensionless Node script still runs under the daemon's own Node, so PATH never decides which Node starts it.
   assert.equal(launch.command, process.execPath);
-  const { stdout } = await run(launch.command, launch.args, { cwd: launch.cwd });
+  const { stdout } = await run(launch.command, launch.args);
   assert.deepEqual(JSON.parse(stdout), ["contoso", "two words"]);
 });
 
@@ -87,7 +87,7 @@ test("a missing install is restored at the pinned version before launching", asy
   await rm(path.join(root, "server-1"), { recursive: true, force: true });
   const { launch } = await installer.launch("server-1", { package: "server", version: "1.4.2", args: [] });
   assert.deepEqual(installs, ["server@^1", "server@1.4.2"]);
-  assert.deepEqual(JSON.parse((await run(launch.command, launch.args, { cwd: launch.cwd })).stdout), []);
+  assert.deepEqual(JSON.parse((await run(launch.command, launch.args)).stdout), []);
 });
 
 test("a failed install leaves nothing installed and stays failed until the next install retries", async context => {

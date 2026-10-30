@@ -114,13 +114,13 @@ export default class McpPackageInstaller {
   }
 
   /** How to start the server's installed bin with its arguments, and the exact version installed; installs first when the install is gone. */
-  async launch(serverId: string, source: McpPackageSource): Promise<{ launch: McpServerLaunch; version: string }> {
+  async launch(serverId: string, source: McpPackageSource): Promise<{ launch: Pick<McpServerLaunch, "command" | "args">; version: string }> {
     const directory = this.#directory(serverId);
     const installed = this.#read(directory) ?? await this.#install(serverId, source.package, source.version);
     const bin = path.join(directory, installed.bin);
     const launch = installed.node
-      ? { command: process.execPath, args: [bin, ...source.args], cwd: directory }
-      : { command: bin, args: [...source.args], cwd: directory };
+      ? { command: process.execPath, args: [bin, ...source.args] }
+      : { command: bin, args: [...source.args] };
     return { launch, version: installed.version };
   }
 
