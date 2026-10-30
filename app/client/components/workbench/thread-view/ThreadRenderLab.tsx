@@ -15,7 +15,7 @@ import type { ThreadPayload } from "workbench-shared/types";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import ThreadTextPresentationController, { type ThreadTextPresentationField } from "../../../workbench/thread/ThreadTextPresentationController";
 import ThreadTextPresentationContext from "../ThreadTextPresentationContext";
-import ThreadItemActionsContext, { type ThreadItemActions } from "./ThreadItemActionsContext";
+import ThreadItemActionsContext, { readOnlyThreadItemActions } from "./ThreadItemActionsContext";
 import ThreadAnimationStyleContext from "./ThreadAnimationStyleContext";
 import { THREAD_ANIMATION_STYLES } from "../../../workbench/thread/thread-animation-styles";
 import {
@@ -23,9 +23,6 @@ import {
   type WorkbenchThreadAnimationStyle,
 } from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
-const labReadOnly = async () => { throw new Error("Thread lab fixtures are read-only."); };
-/** Item action controls render as in the app; pressing one reports that fixtures cannot be changed. */
-const labItemActions: ThreadItemActions = { resendSteer: labReadOnly, dismissSteer: labReadOnly, stopCall: labReadOnly, startShellNow: labReadOnly };
 const buttonClass ="rounded px-3 py-1.5 text-sm hover:bg-fg-7 focus-visible:outline-2 focus-visible:outline-accent";
 const inputClass = "min-w-0 rounded border border-fg-15 bg-transparent px-2 py-1 font-mono text-sm";
 
@@ -176,7 +173,7 @@ export default function ThreadRenderLab() {
           <ThreadRenderLabBoundary revision={revision}>
             <ThreadAnimationStyleContext value={animation}>
             <ThreadTextPresentationContext value={textOwner}>
-              <ThreadItemActionsContext.Provider value={labItemActions}>
+              <ThreadItemActionsContext.Provider value={readOnlyThreadItemActions}>
                 <ThreadRenderSurface key={mount} thread={thread} context={fixture.context} flags={flags} fontSizeRem={fontSize} emptyMessage="No fixture applied."
                   presentationSource={source} sql={fixture.projection ? { projection: fixture.projection, loading: false, canLoadPrevious: false, loadPrevious: () => {} } : undefined} />
               </ThreadItemActionsContext.Provider>

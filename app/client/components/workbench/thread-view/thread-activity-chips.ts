@@ -25,7 +25,7 @@ import {
   type ThreadCommandSummaryStats,
 } from "../../../workbench/thread/thread-command-matchers";
 import type { SkillMcpChipIcon } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
-import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
+import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchBrowseResultEntry, WorkbenchSkillSummary } from "workbench-shared/types";
 import {
@@ -52,7 +52,7 @@ export interface CommandChipContext {
   projectRootPath?: string;
   /** The content's working directory; MCP summaries resolve paths only when it is known. */
   cwd?: string;
-  skillMcpMatchers?: SkillMcpMatcherRuntime | null;
+  skillMcpMatchers?: SkillMcpMatchers | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 

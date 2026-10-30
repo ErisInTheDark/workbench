@@ -25,7 +25,7 @@ import {
   type WorkbenchFeedbackChannel,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { VirtualRepoWarmRequestSchema } from "workbench-shared/workbench/repo/virtual-repo-contract";
-import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
+import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import { mcpToolLabel } from "../../mcp-tool-label";
 
 import { readBrowseAction } from "./browse-actions";
@@ -229,7 +229,7 @@ export interface WorkbenchCommandRendering {
 export interface WorkbenchCommandPresentationContext extends RipgrepCommand.PresentationContext {
   readonly knownSkills?: readonly WorkbenchSkillSummary[];
   /** Active skills' matchers; external calls they present route through them before generic MCP presentation. */
-  readonly skillMcpMatchers?: SkillMcpMatcherRuntime | null;
+  readonly skillMcpMatchers?: SkillMcpMatchers | null;
 }
 
 export type WorkbenchCommandRoute =

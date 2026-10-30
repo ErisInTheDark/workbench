@@ -7,7 +7,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { WorkbenchShellResultSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
-import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
+import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/thread-optimistic-items";
 import {
@@ -22,7 +22,7 @@ export interface ThreadLiveCommandContext {
   cwd: string;
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
-  skillMcpMatchers?: SkillMcpMatcherRuntime | null;
+  skillMcpMatchers?: SkillMcpMatchers | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 

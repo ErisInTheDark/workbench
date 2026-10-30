@@ -3,7 +3,8 @@
  * expands Tailwind variant groups like the app build, compiles the app's Tailwind for it, and prints
  * `{ document, inputs }` to stdout. Writes no files, so it runs in a read-only sandbox.
  * With `--kit` (Workbench's kit vis context) the file may live in any project: it imports `workbench/kit`,
- * React and its own relative files, always against Workbench's copies, never repository paths.
+ * `workbench/kit/thread`, React and its own relative files, always against Workbench's copies, never repository paths.
+ * Any vis file may import skill matcher files, which resolve `workbench-skill` as their bundles do.
  * Usage: node --import tsx scripts/vis-build.mts [--kit] <file>
  */
 import { spawn } from "node:child_process";
@@ -12,6 +13,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandVariantGroupsInSource } from "../app/server/variant-group-source.ts";
+import { WORKBENCH_SKILL_MODULE_SOURCE } from "../shared/workbench/skills/workbench-skill-module.ts";
 import { collectTailwindCandidates } from "./tailwind-candidates.mts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,14 +28,34 @@ const file = kit ? args[1] : args[0];
 if (!file) throw new Error("Usage: vis-build.mts [--kit] <file>");
 const entry = path.resolve(file);
 const visKit = path.join(app, "client", "components", "vis-kit", "index.ts");
+const visKitThread = path.join(app, "client", "components", "vis-kit", "thread.ts");
 const visStateRoot = path.join(app, "client", "components", "vis-kit", "VisStateRoot.tsx");
 
-/** Kit mockups resolve `workbench/kit` to the kit, and React to the app's single copy even beside a project's own. */
+/** Kit mockups resolve `workbench/kit` (and `/thread`) to the kit, and React to the app's single copy even beside a project's own. */
 const kitPlugin: import("esbuild").Plugin = {
   name: "workbench-vis-kit",
   setup(build) {
     build.onResolve({ filter: /^workbench\/kit$/ }, () => ({ path: visKit }));
+    build.onResolve({ filter: /^workbench\/kit\/thread$/ }, () => ({ path: visKitThread }));
     build.onResolve({ filter: /^react(?:-dom)?(?:\/.*)?$/ }, (args) => ({ path: requireFromApp.resolve(args.path) }));
+  },
+};
+
+/**
+ * Every vis page: skill matcher files import `workbench-skill` as their bundles do, and the app's QuickJS loader is
+ * stubbed, since previews run matchers directly and the loader's wasm cannot be inlined.
+ */
+const skillPlugin: import("esbuild").Plugin = {
+  name: "workbench-vis-skill",
+  setup(build) {
+    build.onResolve({ filter: /^workbench-skill$/ }, () => ({ path: "workbench-skill", namespace: "vis-skill" }));
+    build.onResolve({ filter: /\/load-quickjs$/ }, () => ({ path: "load-quickjs", namespace: "vis-skill" }));
+    build.onLoad({ filter: /.*/, namespace: "vis-skill" }, (args) => ({
+      contents: args.path === "workbench-skill"
+        ? WORKBENCH_SKILL_MODULE_SOURCE
+        : `export default () => Promise.reject(new Error("Vis pages do not load QuickJS."));`,
+      loader: "js",
+    }));
   },
 };
 
@@ -48,7 +70,7 @@ const bundled = await esbuild.build({
   minify: true,
   // Repository mockups import project files by repository path (`app/client/...`); everything takes React from the app.
   nodePaths: kit ? [path.join(app, "node_modules")] : [root, path.join(app, "node_modules")],
-  plugins: [...(kit ? [kitPlugin] : []), {
+  plugins: [...(kit ? [kitPlugin] : []), skillPlugin, {
     name: "variant-groups",
     setup(build) {
       // esbuild filters are Go regular expressions, so no `u` flag.
@@ -104,7 +126,7 @@ const css = await new Promise<string>((resolve, reject) => {
 const document = [
   "<!doctype html><html><head><meta charset=\"utf-8\">",
   `<style>${css.replace(/<\/style/giu, "<\\/style")}</style>`,
-  // No page background: the card's tinted frame shows through.
+  // No page background: the frame's canvas shows through.
   "</head><body class=\"text-text\"><div id=\"root\"></div>",
   // `</script`, `<!--` and `<script` inside the bundle (Markdown handling has all three) would end or re-nest the
   // element; `\x3C` reads as `<` in every string, template and regular expression the minifier can emit.

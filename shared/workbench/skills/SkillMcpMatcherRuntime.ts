@@ -3,6 +3,8 @@
  * - SkillMcpMatch: the first skill presentation for one call.
  * - SkillMcpMatchFailure: why one skill's matcher could not answer.
  * - SkillMcpMatchReport: every skill's outcome for one call, for authoring tools.
+ * - SkillMcpMatchers: what presenting calls needs from a thread's matchers, however they run.
+ * - readSkillMcpPresentation: hold a matcher's serialized answer to the presentation contract.
  * - default SkillMcpMatcherRuntime: run active skills' compiled MCP matchers synchronously inside QuickJS, each skill in
  *   its own runtime with a memory cap and a deadline on matcher code, apart from loading the call; the QuickJS module
  *   is injected by its platform loader.
@@ -29,6 +31,13 @@ export interface SkillMcpMatchFailure {
 export interface SkillMcpMatchReport {
   match: SkillMcpMatch | null;
   failures: SkillMcpMatchFailure[];
+}
+
+/** What presenting MCP calls needs from a thread's matchers: an identity for caching, and the first match for a call. */
+export interface SkillMcpMatchers {
+  /** Changes exactly when the matchers do. */
+  readonly key: string;
+  match(call: SkillMcpCall): SkillMcpMatch | null;
 }
 
 /**
@@ -70,8 +79,7 @@ function describeError(context: QuickJSContext, handle: QuickJSHandle) {
   return String(value);
 }
 
-export default class SkillMcpMatcherRuntime {
-  /** Changes exactly when the bundles do. */
+export default class SkillMcpMatcherRuntime implements SkillMcpMatchers {
   readonly key: string;
   readonly #module: QuickJSWASMModule;
   readonly #bundles: readonly SkillMcpMatcherBundle[];
@@ -202,11 +210,17 @@ export default class SkillMcpMatcherRuntime {
     called.value.dispose();
     if (value === null || value === undefined) return { kind: "none" };
     if (typeof value !== "string") return { kind: "failed", message: "Matcher output must be JSON-serializable." };
-    if (value.length > SKILL_MCP_MATCHER_LIMITS.outputChars) {
-      return { kind: "failed", message: `Matcher output is over ${SKILL_MCP_MATCHER_LIMITS.outputChars} characters.` };
-    }
-    const parsed = SkillMcpPresentationSchema.safeParse(JSON.parse(value));
-    if (!parsed.success) return { kind: "failed", message: `Matcher output is invalid:\n${z.prettifyError(parsed.error)}` };
-    return { kind: "matched", presentation: parsed.data };
+    return readSkillMcpPresentation(value);
   }
+}
+
+/** A matcher's serialized answer held to the presentation contract, however the matcher ran. */
+export function readSkillMcpPresentation(serialized: string):
+  | { kind: "failed"; message: string } | { kind: "matched"; presentation: SkillMcpPresentation } {
+  if (serialized.length > SKILL_MCP_MATCHER_LIMITS.outputChars) {
+    return { kind: "failed", message: `Matcher output is over ${SKILL_MCP_MATCHER_LIMITS.outputChars} characters.` };
+  }
+  const parsed = SkillMcpPresentationSchema.safeParse(JSON.parse(serialized));
+  if (!parsed.success) return { kind: "failed", message: `Matcher output is invalid:\n${z.prettifyError(parsed.error)}` };
+  return { kind: "matched", presentation: parsed.data };
 }

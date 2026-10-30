@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - ThreadItemActions: user actions on transcript items of the viewed thread: resend or dismiss an undelivered steer, stop a running wb shell or stoppable call (such as mcp_call), or start a queued shell now.
+ * - readOnlyThreadItemActions: actions for fixture transcripts (render lab, vis previews) that each report read-only.
  * - default ThreadItemActionsContext: provide those actions to transcript items; null where items are read-only.
  */
 "use client";
@@ -13,6 +14,12 @@ export interface ThreadItemActions {
   stopCall(itemId: string): Promise<void>;
   startShellNow(itemId: string): Promise<void>;
 }
+
+const readOnly = async () => { throw new Error("This transcript is a read-only preview."); };
+/** Fixture transcripts draw item controls as the app does; pressing one reports that the preview cannot change. */
+export const readOnlyThreadItemActions: ThreadItemActions = {
+  resendSteer: readOnly, dismissSteer: readOnly, stopCall: readOnly, startShellNow: readOnly,
+};
 
 const ThreadItemActionsContext = createContext<ThreadItemActions | null>(null);
 

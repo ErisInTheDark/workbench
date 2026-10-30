@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - parseThreadRenderInput: parse canonical thread payloads/items without rewriting them, while adapting shorthand lab fixtures into renderable thread data.
+ * - createThreadRenderFixture: one completed turn of canonical or shorthand items (command strings, `{ command }`, and
+ *   `{ type }` user/agent messages, reasoning, web searches and MCP calls without an `id`).
  */
 
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -21,6 +23,7 @@ type AgentMessageItem = Extract<ThreadItem, { type: "agentMessage" }>;
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
+type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
 function isJsonObject(value: JsonValue): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -203,6 +206,29 @@ function createWebSearchItem(record: JsonObject, index: number): WebSearchItem {
   };
 }
 
+/** A text `result` is the tool's text answer; any other JSON is its structured content. */
+function createMcpToolCallItem(record: JsonObject, index: number): McpToolCallItem {
+  const status = readString(record, "status");
+  const error = readString(record, "error");
+  const result = record.result ?? null;
+  return {
+    type: "mcpToolCall",
+    id: `lab-mcp-${index + 1}`,
+    server: readString(record, "server") ?? "",
+    tool: readString(record, "tool") ?? "",
+    status: status === "inProgress" || status === "failed" ? status : error ? "failed" : "completed",
+    arguments: record.arguments ?? {},
+    appContext: null,
+    pluginId: null,
+    readOnlyHint: null,
+    result: result === null ? null : typeof result === "string"
+      ? { content: [{ type: "text", text: result }], structuredContent: null, _meta: null }
+      : { content: [], structuredContent: result, _meta: null },
+    error: error ? { message: error } : null,
+    durationMs: readNumber(record, "durationMs"),
+  };
+}
+
 function normalizeThreadItem(value: JsonValue, index: number): ThreadItem | null {
   if (typeof value === "string") {
     return createCommandExecutionItem(value, index);
@@ -232,6 +258,8 @@ function normalizeThreadItem(value: JsonValue, index: number): ThreadItem | null
       return createReasoningItem(value, index);
     case "webSearch":
       return createWebSearchItem(value, index);
+    case "mcpToolCall":
+      return createMcpToolCallItem(value, index);
     case "contextCompaction":
       return {
         type: "contextCompaction",
@@ -353,7 +381,7 @@ function createThreadPayloadFromRecord(record: JsonObject): ThreadPayload | null
   };
 }
 
-function normalizeItemsArray(values: JsonValue[]): ThreadPayload | null {
+export function createThreadRenderFixture(values: JsonValue[]): ThreadPayload {
   return createLabThreadPayload([createLabTurn(normalizeItems(values))]);
 }
 
@@ -384,7 +412,7 @@ export function parseThreadRenderInput(text: string): { error: string; thread: T
   try {
     const parsed = JSON.parse(trimmedText) as JsonValue;
     if (Array.isArray(parsed)) {
-      const thread = normalizeItemsArray(parsed);
+      const thread = createThreadRenderFixture(parsed);
       return thread ? { error: "", thread } : { error: "Array did not contain renderable thread items.", thread: null };
     }
 

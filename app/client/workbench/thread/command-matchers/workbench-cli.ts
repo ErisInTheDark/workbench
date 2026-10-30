@@ -14,7 +14,7 @@
  *   commands.
  */
 import type { CommandAction, JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
-import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
+import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import {
   WORKBENCH_FEEDBACK_TITLE_FALLBACK,
   type WorkbenchFeedbackCategory,
@@ -205,7 +205,7 @@ function readFlagValue(command: string, flag: string) {
  * A `wb mcp call` an active skill presents. The command text is the whole invocation, so matchers see no outcome; a
  * malformed `--arguments-json` presents nothing.
  */
-function readSkillMcpCommandCall(runtime: SkillMcpMatcherRuntime, server: string, tool: string, argumentsJson: string | null, keep: string | null) {
+function readSkillMcpCommandCall(runtime: SkillMcpMatchers, server: string, tool: string, argumentsJson: string | null, keep: string | null) {
   let argumentsValue: JsonValue = {};
   if (argumentsJson) {
     try { argumentsValue = JSON.parse(argumentsJson) as JsonValue; }

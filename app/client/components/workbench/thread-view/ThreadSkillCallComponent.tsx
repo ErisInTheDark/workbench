@@ -2,10 +2,11 @@
  * Exports:
  * - default ThreadSkillCallComponent: one settled MCP call's skill component, rendered once by the daemon and kept, given
  *   the call (and any props its matcher added); the call's own details show instead when it cannot render.
+ * - ThreadSkillComponentPreview/ThreadSkillComponentPreviewContext: a vis preview's own drawing of call components.
  */
 "use client";
 
-import { useContext, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { SkillMcpCall } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
@@ -31,9 +32,22 @@ function readCall(item: CallItem, skill: ThreadCommandSkillMcp): SkillMcpCall {
   };
 }
 
-export default function ThreadSkillCallComponent({ fallback, item, skill }: {
-  fallback: ReactNode; item: CallItem; skill: ThreadCommandSkillMcp & { component: string };
-}) {
+type SkillCallComponentProps = { fallback: ReactNode; item: CallItem; skill: ThreadCommandSkillMcp & { component: string } };
+
+/** Draws a call's skill component in place of the daemon's kept render; only vis previews provide one. */
+export type ThreadSkillComponentPreview = (input: {
+  component: string; props: Record<string, unknown> & { call: SkillMcpCall }; fallback: ReactNode;
+}) => ReactNode;
+export const ThreadSkillComponentPreviewContext = createContext<ThreadSkillComponentPreview | null>(null);
+
+export default function ThreadSkillCallComponent(props: SkillCallComponentProps) {
+  const preview = useContext(ThreadSkillComponentPreviewContext);
+  if (!preview) return <DaemonSkillCallComponent {...props} />;
+  const { fallback, item, skill } = props;
+  return preview({ component: skill.component, fallback, props: { ...skill.props, call: readCall(item, skill) } });
+}
+
+function DaemonSkillCallComponent({ fallback, item, skill }: SkillCallComponentProps) {
   const daemon = useWorkbenchDaemonClient();
   const workspace = useContext(WorkbenchWorkspaceContext);
   const { threadId } = useTranscript();

@@ -5,7 +5,7 @@
  *   render links instead of holding the facts; one instance exists per fact content, so the instance is dependency-safe.
  */
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
-import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
+import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../markdown/markdown-links";
 import type { ProjectFilePathDisambiguationIndex } from "./project-file-path";
 import type { InlineMentionHighlightSources } from "../thread/inline-mention-highlights";
@@ -23,7 +23,7 @@ export interface ContextualProjectFacts {
   rootPath?: string;
   skills?: WorkbenchSkillSummary[];
   /** The thread's active skills' MCP matchers, which present external calls their skills know. */
-  skillMcpMatchers?: SkillMcpMatcherRuntime | null;
+  skillMcpMatchers?: SkillMcpMatchers | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
@@ -59,7 +59,7 @@ export default class ContextualProject {
   readonly #commandDisplays = new Map<string, ReturnType<typeof getThreadCommandDisplay>>();
   #matcherContext: ReturnType<ContextualProject["buildMatcherContext"]> | null = null;
   #mcpMatcherContext: {
-    cwd?: string; knownSkills: WorkbenchSkillSummary[]; projectRootPath?: string; skillMcpMatchers: SkillMcpMatcherRuntime | null;
+    cwd?: string; knownSkills: WorkbenchSkillSummary[]; projectRootPath?: string; skillMcpMatchers: SkillMcpMatchers | null;
     workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   } | null = null;
 

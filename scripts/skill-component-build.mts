@@ -25,6 +25,7 @@ import { expandVariantGroupsInSource } from "../app/server/variant-group-source.
 import { collectTailwindCandidates } from "./tailwind-candidates.mts";
 import { readThreadComponentMarkup } from "../shared/workbench/thread/thread-component-markup.ts";
 import { SkillMcpComponentRenderInputSchema } from "../shared/workbench/skills/skill-mcp-matcher-contract.ts";
+import { WORKBENCH_SKILL_MODULE_SOURCE } from "../shared/workbench/skills/workbench-skill-module.ts";
 import { parseBlocks, type ParsedBlock } from "../app/client/workbench/markdown/markdown-parse.ts";
 
 const scriptPath = /^skill-component-build\.(?:mts|ts)$/u.test(path.basename(process.argv[1] ?? ""))
@@ -182,18 +183,6 @@ export async function compileSkillStyles(files: readonly string[], skillRoot: st
   };
 }
 
-/** The virtual module matcher files import their helpers from. */
-const SKILL_MCP_MATCHER_KIT = `
-  export function defineMcpMatcher(match) {
-    if (typeof match !== "function") throw new Error("defineMcpMatcher expects a function (call => presentation | null).");
-    return match;
-  }
-  export const code = value => ({ code: String(value) });
-  export const primary = value => ({ primary: String(value) });
-  export const path = value => ({ path: String(value) });
-  export const thread = value => ({ thread: String(value) });
-`;
-
 /**
  * Bundle one skill's matcher files into a script that assigns their default exports, in order, to the global the
  * sandboxed runtime reads. Imports stay inside the skill; the only bare import is `workbench-skill`.
@@ -210,7 +199,7 @@ export async function compileSkillMcpMatchers(files: readonly string[], rootPath
         errors: [{ text: `Matchers run sandboxed and can import only relative files and "workbench-skill": ${args.path}` }],
       });
       build.onLoad({ filter: /.*/, namespace: "matcher" }, args => args.path === "kit"
-        ? { contents: SKILL_MCP_MATCHER_KIT, loader: "js" }
+        ? { contents: WORKBENCH_SKILL_MODULE_SOURCE, loader: "js" }
         : {
           contents: [
             ...entries.map((file, index) => `import matcher${index} from ${JSON.stringify(file)};`),

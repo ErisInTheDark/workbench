@@ -8,6 +8,7 @@ import { defaultProviderKey } from "workbench-shared/workbench/provider/provider
 import { useMemo, type CSSProperties } from "react";
 
 import type { ThreadPayload, WorkbenchProjectRoot } from "workbench-shared/types";
+import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import ContextualProjectProvider from "../ContextualProjectProvider";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
@@ -42,8 +43,11 @@ export default function ThreadRenderSurface({
   context = {},
   flags = {},
   presentationSource: suppliedPresentationSource,
+  skillMcpMatchers,
 }: {
   className?: string;
+  /** Skill matchers presenting the transcript's MCP calls. */
+  skillMcpMatchers?: SkillMcpMatchers | null;
   emptyMessage?: string;
   fontSizeRem?: number;
   thread: ThreadPayload | null | undefined;
@@ -76,7 +80,7 @@ export default function ThreadRenderSurface({
   } : null;
   // A standalone surface has no thread lifecycle to consult; its newest turn's own status stands in.
   const liveTurn = activityTurn?.status === "inProgress" ? activityTurn : null;
-  const liveVerb = getLiveThreadVerb({ context: { cwd, knownSkills, workspaceRoots }, pendingUserInputRequest: null, turn: liveTurn });
+  const liveVerb = getLiveThreadVerb({ context: { cwd, knownSkills, skillMcpMatchers, workspaceRoots }, pendingUserInputRequest: null, turn: liveTurn });
   const presentationSource = suppliedPresentationSource
     ?? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? defaultProviderKey}:${threadId}` };
   const style = {
@@ -90,6 +94,7 @@ export default function ThreadRenderSurface({
       id={context.projectId ?? projection?.thread.projectId ?? null}
       mentions={context.inlineMentionSources}
       rootPath={cwd}
+      skillMcpMatchers={skillMcpMatchers ?? undefined}
       skills={knownSkills}
       workspaceRoots={workspaceRoots}
     >

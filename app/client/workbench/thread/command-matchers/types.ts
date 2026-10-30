@@ -28,7 +28,7 @@
 import type { CommandAction, JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import type { SkillMcpChipIcon, SkillMcpDisplay } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
-import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
+import type { SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import type { WorkspaceFileLinkRoot } from "../../markdown/markdown-links";
 
 export type CommandShell =
@@ -182,7 +182,7 @@ export interface CommandDisplayContext {
   projectRootPath?: string;
   shell?: CommandShell;
   /** Active skills' MCP matchers for the thread this content belongs to. */
-  skillMcpMatchers?: SkillMcpMatcherRuntime | null;
+  skillMcpMatchers?: SkillMcpMatchers | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 

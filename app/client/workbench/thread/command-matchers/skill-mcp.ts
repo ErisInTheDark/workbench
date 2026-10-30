@@ -9,8 +9,7 @@
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { SkillMcpCall, SkillMcpPart } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
-import type SkillMcpMatcherRuntime from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
-import type { SkillMcpMatch } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
+import type { SkillMcpMatch, SkillMcpMatchers } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
 import { CommandMatcher } from "./core";
 import type { CommandMatcherResult, ThreadCommandDisplayPart } from "./types";
 
@@ -53,7 +52,7 @@ export function readSkillMcpCallOutcome(item: Pick<McpToolCallItem, "error" | "r
 }
 
 const MAX_CACHED_INVOCATIONS = 2_000;
-const matchesByRuntime = new WeakMap<SkillMcpMatcherRuntime, {
+const matchesByRuntime = new WeakMap<SkillMcpMatchers, {
   byIdentity: WeakMap<object, SkillMcpMatch | null>;
   byInvocation: Map<string, SkillMcpMatch | null>;
 }>();
@@ -62,7 +61,7 @@ const matchesByRuntime = new WeakMap<SkillMcpMatcherRuntime, {
  * One answer per call: items are immutable, so an item (or arguments object) identifies its facts; invocation-only
  * calls (CLI text) key by their invocation.
  */
-export function matchSkillMcpCall(runtime: SkillMcpMatcherRuntime, call: SkillMcpCall, identity?: object): SkillMcpMatch | null {
+export function matchSkillMcpCall(runtime: SkillMcpMatchers, call: SkillMcpCall, identity?: object): SkillMcpMatch | null {
   let caches = matchesByRuntime.get(runtime);
   if (!caches) {
     caches = { byIdentity: new WeakMap(), byInvocation: new Map() };
