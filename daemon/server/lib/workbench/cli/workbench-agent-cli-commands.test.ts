@@ -1629,12 +1629,21 @@ test("skill CLI requires a managed caller and routes its name without output ado
   });
   assert.equal(parsed.request.path, "/api/skill");
   assert.equal(parsed.request.responseKind, "native");
+  for (const args of [["skill", "--locate", "react"], ["skill", "react", "--locate"]]) {
+    const located = await parseWorkbenchAgentCliCommand(args, context);
+    assert.equal(located.kind, "request");
+    if (located.kind !== "request") return;
+    assert.deepEqual(located.request.body, {
+      cwd: "C:/workspace", harness: "codex", locate: true, name: "react", threadId: "thread-one",
+    });
+  }
+  assert.equal((await parseWorkbenchAgentCliCommand(["skill", "--locate"], context)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(
     ["skill", "react"], { ...context, callerThreadId: null },
   )).kind, "error");
   const help = await parseWorkbenchAgentCliCommand(["skill", "--help"]);
   assert.equal(help.kind, "help");
-  assert.match(help.help, /wb skill <name>/u);
+  assert.match(help.help, /wb skill \[--locate\] <name>/u);
 });
 
 test("compare keeps CLI text and MCP file facts from the same response", () => {

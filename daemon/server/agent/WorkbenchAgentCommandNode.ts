@@ -39,7 +39,7 @@ import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatche
 import WorkbenchSkillController from "./WorkbenchSkillController";
 import { WorkbenchSkillExecutionRequestSchema } from "../lib/workbench/commands/skill-command-definition";
 import { listProjectSkillsFromRoot } from "../lib/workbench/project/project-agents-folder";
-import { listActiveWorkbenchSkillDefinitions } from "../lib/workbench-library";
+import { listActiveWorkbenchSkillDefinitions, locateWorkbenchSkill } from "../lib/workbench-library";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import path from "node:path";
@@ -180,6 +180,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const settings = new WorkbenchServerSettings(database);
     const skill = new WorkbenchSkillController({
       listSkills: async root => await listActiveWorkbenchSkillDefinitions(await listProjectSkillsFromRoot(root)),
+      locateSkill: async (root, name) => await locateWorkbenchSkill(name, await listProjectSkillsFromRoot(root)),
       readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "Skill instruction tool catalogue"),
       readLocalCapabilities: () => settings.readLocalCapabilities(),
       onLoaded: ({ threadId, path }) => build.get("threadSkills").recordActivations(threadId, [path], "agent"),
@@ -552,6 +553,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       hydrateRepoPath: async (absolutePath, signal) => await repo.hydrate(absolutePath, signal),
       executeSkillRequest: async (body, signal) => {
         const request = WorkbenchSkillExecutionRequestSchema.parse(body);
+        if (request.locate) {
+          const { resolution } = await nativeTarget(request.threadId, request.cwd, request.harness);
+          return await skill.locate({ cwd: resolution.root.rootPath, name: request.name }, signal);
+        }
         return await skill.execute(await resolveSkillRequest(request), signal);
       },
       executeSessionRequest: context.executeBrowseSessionRequest,

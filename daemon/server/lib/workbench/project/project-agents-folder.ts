@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - listProjectSkillsFromRoot: project skills with the gitignored `.agents.local` overlay replacing same-named `.agents` skills, plus tombstoned names.
+ * - listProjectSkillsFromRoot: project skill layers, the gitignored `.agents.local` overlay before `.agents`, plus tombstoned names.
  * - listUserInvocableAgentsFromResolvedProject: library agents followed by overlaid project agents under canonical `.agents/agents/` paths.
  * - readUserInvocableAgentDefinitionFromRoot: read a library agent, or a project agent from `.agents.local` before `.agents`.
  */
@@ -19,7 +19,7 @@ import {
   stripWorkbenchInstructionFrontmatter,
   WORKBENCH_LIBRARY_PROJECT_ID,
 } from "../../workbench-library";
-import { listSkillDefinitionsFromDirectory, type WorkbenchProjectSkills } from "../skills/skill-discovery";
+import { readSkillLayer, type WorkbenchProjectSkills } from "../skills/skill-discovery";
 
 const PROJECT_FOLDER = ".agents";
 const LOCAL_FOLDER = ".agents.local";
@@ -43,11 +43,11 @@ async function listTombstoneNames(directoryPath: string) {
 
 export async function listProjectSkillsFromRoot(rootDir: string): Promise<WorkbenchProjectSkills> {
   const [localSkills, hiddenNames, projectSkills] = await Promise.all([
-    listSkillDefinitionsFromDirectory(rootDir, `${LOCAL_FOLDER}/skills`, parseFrontmatterBlock),
+    readSkillLayer("local overlay", rootDir, `${LOCAL_FOLDER}/skills`, parseFrontmatterBlock),
     listTombstoneNames(path.join(rootDir, LOCAL_FOLDER, "skills")),
-    listSkillDefinitionsFromDirectory(rootDir, `${PROJECT_FOLDER}/skills`, parseFrontmatterBlock),
+    readSkillLayer("project", rootDir, `${PROJECT_FOLDER}/skills`, parseFrontmatterBlock),
   ]);
-  return { skills: [...localSkills, ...projectSkills], hiddenNames: [...hiddenNames] };
+  return { layers: [localSkills, projectSkills], hiddenNames: [...hiddenNames] };
 }
 
 function toLocalPath(projectRelativePath: string) {

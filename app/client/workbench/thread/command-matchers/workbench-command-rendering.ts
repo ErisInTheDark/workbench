@@ -317,18 +317,26 @@ function simple(
   return { kind: "simple", rendering: rendering({ claimedBy, ongoing, stats, summary }) } satisfies WorkbenchCommandRoute;
 }
 
-function renderSkillLoad(name: string | null, context: WorkbenchCommandPresentationContext) {
+/** Locating lists a skill's source copies without loading it, so it counts as a path check, never a Skill Load. */
+function renderSkill(name: string | null, locate: boolean, context: WorkbenchCommandPresentationContext) {
   if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name)) return null;
   const known = context.knownSkills?.find(skill => readWorkbenchSkillDirectoryName(skill.relativePath)?.toLocaleLowerCase() === name);
   const target = known
     ? CommandMatcher.Skill({ name: known.name, path: known.path })
     : CommandMatcher.Code(name);
-  return simple(
-    "workbench-cli.skill",
-    [CommandMatcher.Text("Loading "), target],
-    [CommandMatcher.Text("Load "), target],
-    { skillLoads: 1 },
-  );
+  return locate
+    ? simple(
+      "workbench-cli.skill",
+      [CommandMatcher.Text("Locating copies of "), target],
+      [CommandMatcher.Text("Located copies of "), target],
+      { pathChecks: 1 },
+    )
+    : simple(
+      "workbench-cli.skill",
+      [CommandMatcher.Text("Loading "), target],
+      [CommandMatcher.Text("Load "), target],
+      { skillLoads: 1 },
+    );
 }
 
 function hidden(claimedBy: string) {
@@ -757,7 +765,7 @@ export function getWorkbenchCommandRoute(
     case "shell_stop":
       return hidden("workbench-cli.shell-stop");
     case "skill":
-      return renderSkillLoad(readString(args.name), context);
+      return renderSkill(readString(args.name), args.locate === true, context);
     case "git_arc_wait":
       return specialized("git-arc.wait", { kind: "gitArcWait", ref: readString(args.ref) }, "Waiting for claims");
     case "request_user_input":

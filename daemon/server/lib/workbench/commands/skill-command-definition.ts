@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchSkillExecutionRequestSchema: validate managed skill-load requests.
- * - WORKBENCH_SKILL_COMMANDS: expose precedence-selected skill loading to wb and MCP.
+ * - WorkbenchSkillExecutionRequestSchema: validate managed skill-load and skill-locate requests.
+ * - WORKBENCH_SKILL_COMMANDS: expose precedence-selected skill loading and source location to wb and MCP.
  * - workbenchSkillName: validate a skill directory name.
  */
 import { z } from "zod";
@@ -12,9 +12,13 @@ export const workbenchSkillName = z.string().trim().min(1).max(64)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u)
   .describe("Skill directory name resolved by Workbench precedence.");
 
+const locate = z.boolean().optional()
+  .describe("Instead of loading, list every copy's source layer and path in precedence order, marking the active one.");
+
 export const WorkbenchSkillExecutionRequestSchema = z.object({
   cwd: z.string().trim().min(1),
   harness: ProviderKeySchema,
+  locate,
   name: workbenchSkillName,
   threadId: z.string().trim().min(1),
 }).strict();
@@ -26,15 +30,17 @@ const skill = defineWorkbenchAgentCommand({
   mcpCodeModeEligible: true,
   mcpWorkdir: true,
   words: ["skill"],
-  usage: "wb skill <name>",
-  inputSchema: z.object({ name: workbenchSkillName }).strict(),
+  usage: "wb skill [--locate] <name>",
+  inputSchema: z.object({ locate, name: workbenchSkillName }).strict(),
   parseCliArgs(args) {
-    if (args.length !== 1) throw new Error("wb skill requires one skill name.");
-    return { name: args[0] };
+    const names = args.filter(arg => arg !== "--locate");
+    if (names.length !== 1) throw new Error("wb skill requires one skill name.");
+    return { name: names[0], ...names.length < args.length ? { locate: true } : {} };
   },
-  buildRequest({ name }, context) {
+  buildRequest({ locate, name }, context) {
     return postWorkbenchAgentCommand("/api/skill", {
       ...managedWorkbenchAgentCommandBody(context),
+      ...locate ? { locate } : {},
       name,
     });
   },

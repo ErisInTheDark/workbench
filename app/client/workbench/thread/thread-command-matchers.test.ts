@@ -260,6 +260,28 @@ test("wb skill CLI and MCP calls share the existing known-skill display", () => 
   }), null);
 });
 
+test("wb skill locate shares CLI and MCP display as a path check, never a Skill Load", () => {
+  const knownSkills = [{
+    description: "Use for frontend work.", name: "react",
+    path: "C:/skills/react/SKILL.md", relativePath: "skills/react/SKILL.md",
+  }];
+  const mcp = getWorkbenchMcpCommandDisplay({
+    argumentsValue: { locate: true, name: "react" }, context: { knownSkills }, server: "wb", tool: "skill",
+  });
+  assert.ok(mcp);
+  for (const command of ["wb skill --locate react", "wb skill react --locate"]) {
+    const cli = getThreadCommandDisplay({
+      command, commandActions: [], cwd: PROJECT_ROOT, knownSkills, projectRootPath: PROJECT_ROOT,
+    });
+    assert.deepEqual(cli.summaryParts, mcp.summaryParts);
+    assert.equal(cli.summaryStats.skillLoads, 0);
+    assert.equal(cli.summaryStats.pathChecks, 1);
+  }
+  assert.equal(getThreadCommandDisplay({
+    command: "wb skill --locate", commandActions: [], cwd: PROJECT_ROOT, knownSkills,
+  }).claimedBy, null);
+});
+
 function workbenchMcpServerForTool(tool: string) {
   const definition = listWorkbenchAgentCommands()
     .find((candidate) => getWorkbenchAgentCommandToolName(candidate) === tool);

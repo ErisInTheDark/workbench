@@ -7,6 +7,7 @@
  * - ensureWorkbenchLibrary: create the library root as a Git repository with standard folders.
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners.
  * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions/listActiveWorkbenchSkillDefinitions: discover skills with source precedence.
+ * - WorkbenchSkillLocation/locateWorkbenchSkill: every precedence layer's copy of one skill, for finding its editable source.
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files.
  * - isAgentMarkdownFile/isAgentUserInvocable/getAgentNameFromFileName: agent file rules shared by library and project agents.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs.
@@ -31,7 +32,13 @@ import {
 import { ensureWorkbenchInstructionSourceFiles } from "./workbench/instructions/instruction-source";
 import { createLibraryInstructionFileGeneration } from "./workbench/instructions/library-instruction-files";
 import { renderWorkbenchSkillContent } from "./workbench/instructions/skill-rendering";
-import { EMPTY_PROJECT_SKILLS, listSkillDefinitionsFromDirectory, type WorkbenchProjectSkills } from "./workbench/skills/skill-discovery";
+import {
+  EMPTY_PROJECT_SKILLS,
+  readSkillLayer,
+  type WorkbenchProjectSkills,
+  type WorkbenchSkillLayer,
+  type WorkbenchSkillSource,
+} from "./workbench/skills/skill-discovery";
 import { formatSkillComponentHints } from "./workbench/skills/skill-components";
 import { readWorkbenchSkillDirectoryName } from "workbench-shared/workbench/skill-paths";
 
@@ -277,13 +284,13 @@ function createSkillShadowKey(skill: Pick<WorkbenchSkillSummary, "name" | "relat
 }
 
 function applySkillShadowing(
-  skillGroups: readonly (readonly WorkbenchSkillDefinition[])[],
+  layers: readonly WorkbenchSkillLayer[],
   hiddenKeys: readonly string[] = [],
 ) {
   const seenKeys = new Set(hiddenKeys);
   const activeSkills: WorkbenchSkillDefinition[] = [];
-  for (const group of skillGroups) {
-    for (const skill of group) {
+  for (const layer of layers) {
+    for (const skill of layer.skills) {
       const key = createSkillShadowKey(skill);
       if (!key || seenKeys.has(key)) {
         continue;
@@ -297,32 +304,27 @@ function applySkillShadowing(
   return activeSkills;
 }
 
-async function readWorkbenchLibrarySkillDefinitionsFromDirectory(
-  directoryPath: string,
-  relativeDirectory: string,
-): Promise<WorkbenchSkillDefinition[]> {
-  return await listSkillDefinitionsFromDirectory(
-    workbenchLibraryRoot,
-    path.relative(workbenchLibraryRoot, directoryPath),
-    parseFrontmatterBlock,
-  );
+async function readWorkbenchUserSkillLayer(): Promise<WorkbenchSkillLayer> {
+  await ensureWorkbenchLibrary();
+  const layer = await readSkillLayer("user library", workbenchLibraryRoot, "skills", parseFrontmatterBlock);
+  return {
+    ...layer,
+    skills: layer.skills.filter((skill) => !normalizeRelativePath(skill.relativePath).toLocaleLowerCase().startsWith("skills/builtin/")),
+  };
 }
 
-async function listWorkbenchUserSkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
+async function readWorkbenchBuiltinSkillLayer(): Promise<WorkbenchSkillLayer> {
   await ensureWorkbenchLibrary();
-  const skills = await readWorkbenchLibrarySkillDefinitionsFromDirectory(
-    path.join(workbenchLibraryRoot, "skills"),
-    "skills",
-  );
-  return skills.filter((skill) => !normalizeRelativePath(skill.relativePath).toLocaleLowerCase().startsWith("skills/builtin/"));
+  return await readSkillLayer("builtin", workbenchLibraryRoot, "skills/builtin", parseFrontmatterBlock);
 }
 
-async function listWorkbenchBuiltinSkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
-  await ensureWorkbenchLibrary();
-  return await readWorkbenchLibrarySkillDefinitionsFromDirectory(
-    path.join(workbenchLibraryRoot, "skills", "builtin"),
-    "skills/builtin",
-  );
+async function listWorkbenchSkillLayers(projectSkills: WorkbenchProjectSkills, userHome: string) {
+  const layers = await Promise.all([
+    readWorkbenchUserSkillLayer(),
+    readSkillLayer("user agents", userHome, ".agents/skills", parseFrontmatterBlock, true),
+    readWorkbenchBuiltinSkillLayer(),
+  ]);
+  return [...projectSkills.layers, ...layers];
 }
 
 export async function listWorkbenchLibrarySkills(): Promise<WorkbenchSkillSummary[]> {
@@ -331,23 +333,37 @@ export async function listWorkbenchLibrarySkills(): Promise<WorkbenchSkillSummar
 }
 
 export async function listWorkbenchLibrarySkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
-  const [userSkills, builtinSkills] = await Promise.all([
-    listWorkbenchUserSkillDefinitions(),
-    listWorkbenchBuiltinSkillDefinitions(),
-  ]);
-  return applySkillShadowing([userSkills, builtinSkills]);
+  return applySkillShadowing(await Promise.all([readWorkbenchUserSkillLayer(), readWorkbenchBuiltinSkillLayer()]));
 }
 
 export async function listActiveWorkbenchSkillDefinitions(
   projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS,
   userHome = os.homedir(),
 ): Promise<WorkbenchSkillDefinition[]> {
-  const [userSkills, userAgentSkills, builtinSkills] = await Promise.all([
-    listWorkbenchUserSkillDefinitions(),
-    listSkillDefinitionsFromDirectory(userHome, ".agents/skills", parseFrontmatterBlock, true),
-    listWorkbenchBuiltinSkillDefinitions(),
-  ]);
-  return applySkillShadowing([projectSkills.skills, userSkills, userAgentSkills, builtinSkills], projectSkills.hiddenNames);
+  return applySkillShadowing(await listWorkbenchSkillLayers(projectSkills, userHome), projectSkills.hiddenNames);
+}
+
+export interface WorkbenchSkillLocation {
+  /** A `.agents.local` tombstone hides every copy. */
+  readonly hidden: boolean;
+  /** Every searched layer in precedence order; `path` is null where the layer has no copy. */
+  readonly layers: readonly { readonly source: WorkbenchSkillSource; readonly directory: string; readonly path: string | null }[];
+}
+
+export async function locateWorkbenchSkill(
+  name: string,
+  projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS,
+  userHome = os.homedir(),
+): Promise<WorkbenchSkillLocation> {
+  const key = name.trim().toLocaleLowerCase();
+  return {
+    hidden: projectSkills.hiddenNames.includes(key),
+    layers: (await listWorkbenchSkillLayers(projectSkills, userHome)).map(layer => ({
+      source: layer.source,
+      directory: layer.directory,
+      path: layer.skills.find(skill => createSkillShadowKey(skill) === key)?.path ?? null,
+    })),
+  };
 }
 
 export async function listWorkbenchLibraryAgents(): Promise<WorkbenchAgentOption[]> {

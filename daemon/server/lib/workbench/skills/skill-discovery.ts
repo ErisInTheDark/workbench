@@ -1,18 +1,42 @@
 /*
  * Exports:
  * - listSkillDefinitionsFromDirectory: discover root-bounded SKILL.md packages from one skills directory.
- * - WorkbenchProjectSkills/EMPTY_PROJECT_SKILLS: a project's skills in precedence order plus lowercase skill names it hides at every layer.
+ * - readSkillLayer: discover one skills directory as a labelled precedence layer.
+ * - WorkbenchSkillSource/WorkbenchSkillLayer: one precedence layer of skills and the directory it was read from.
+ * - WorkbenchProjectSkills/EMPTY_PROJECT_SKILLS: a project's skill layers in precedence order plus lowercase skill names it hides at every layer.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { WorkbenchSkillDefinition } from "workbench-shared/types";
 
-export interface WorkbenchProjectSkills {
+export type WorkbenchSkillSource = "local overlay" | "project" | "user library" | "user agents" | "builtin";
+
+export interface WorkbenchSkillLayer {
+  readonly source: WorkbenchSkillSource;
+  readonly directory: string;
   readonly skills: readonly WorkbenchSkillDefinition[];
+}
+
+export interface WorkbenchProjectSkills {
+  readonly layers: readonly WorkbenchSkillLayer[];
   readonly hiddenNames: readonly string[];
 }
 
-export const EMPTY_PROJECT_SKILLS: WorkbenchProjectSkills = { skills: [], hiddenNames: [] };
+export const EMPTY_PROJECT_SKILLS: WorkbenchProjectSkills = { layers: [], hiddenNames: [] };
+
+export async function readSkillLayer(
+  source: WorkbenchSkillSource,
+  rootPath: string,
+  relativeDirectory: string,
+  parseFrontmatter: (content: string) => Map<string, string> | null,
+  optional = false,
+): Promise<WorkbenchSkillLayer> {
+  return {
+    source,
+    directory: path.resolve(rootPath, relativeDirectory).replaceAll("\\", "/"),
+    skills: await listSkillDefinitionsFromDirectory(rootPath, relativeDirectory, parseFrontmatter, optional),
+  };
+}
 
 export async function listSkillDefinitionsFromDirectory(
   rootPath: string,

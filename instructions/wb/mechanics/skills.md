@@ -20,6 +20,7 @@ effect edit "state controller work") and treated one loaded skill as satisfying 
 - Recheck triggers against each edited file, not task framing; one loaded skill never satisfies another
 - `wb:activated-skills` contains preloaded skill text. Only manually load skills genuinely missing
 - If absent, use `wb skill <name>`; catalogs show triggers, not bodies
+- To edit a skill, find its source with `wb skill <name> --locate`; never search folders for it
 </docs>
 
 Follow triggered workflows strictly unless user explicitly overrides specific requirements.

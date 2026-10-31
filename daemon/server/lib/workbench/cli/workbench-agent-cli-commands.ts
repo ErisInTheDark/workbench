@@ -162,8 +162,8 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   },
   {
     commandOrder: ["skill"],
-    key: "skill", usage: "wb skill <name>", words: ["skill"],
-    footer: "Loads one precedence-selected skill for the managed caller and prints only its rendered body.",
+    key: "skill", usage: "wb skill [--locate] <name>", words: ["skill"],
+    footer: "Loads one precedence-selected skill for the managed caller and prints only its rendered body. --locate instead lists every copy's source layer and path in precedence order, marking the active one, without loading.",
   },
   {
     commandOrder: ["tokens", "tokens instructions", "tokens project", "tokens skill"],

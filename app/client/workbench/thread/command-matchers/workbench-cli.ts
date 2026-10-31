@@ -437,9 +437,13 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ knownSkills, stage, summaryParts }) => {
       if (summaryParts.length) return null;
       const tokens = tokenizeCommand(stage.text.trim());
-      if (tokens?.length !== 3 || !/^wb(?:\.cmd)?$/iu.test(tokens[0]!)
-        || tokens[1]?.toLocaleLowerCase() !== "skill") return null;
-      return getWorkbenchCommandRendering("skill", { name: tokens[2]! }, { knownSkills })?.result ?? null;
+      if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1]?.toLocaleLowerCase() !== "skill") return null;
+      const operands = tokens.slice(2);
+      const names = operands.filter(token => token !== "--locate");
+      if (names.length !== 1) return null;
+      return getWorkbenchCommandRendering("skill", {
+        name: names[0]!, locate: names.length < operands.length,
+      }, { knownSkills })?.result ?? null;
     },
   }),
   CommandMatcher({

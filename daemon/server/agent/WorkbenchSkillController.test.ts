@@ -39,6 +39,7 @@ test("selected skill returns only filtered body with relative imports", async ()
         path: skillPath,
         relativePath,
       }],
+      locateSkill: async () => ({ hidden: false, layers: [] }),
       readInstructionTools: async () => [
         { id: "rg", codeModeEligible: true },
         { id: "browse_raw", codeModeEligible: false, deferred: true, requiresCapability: "browseRawCommandsEnabled" },
@@ -86,6 +87,7 @@ test("missing skill and escaping import fail rather than returning partial instr
         content: "unused catalogue body", description: "", name: "spark",
         path: skillPath, relativePath,
       }],
+      locateSkill: async () => ({ hidden: false, layers: [{ source: "project", directory: temporary.path, path: null }] }),
       readInstructionTools: async () => [],
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
     });
@@ -94,6 +96,7 @@ test("missing skill and escaping import fail rather than returning partial instr
       threadId: "thread",
     };
     assert.equal((await controller.execute({ ...base, name: "missing" }, new AbortController().signal)).status, 404);
+    assert.equal((await controller.locate({ cwd: temporary.path, name: "missing" }, new AbortController().signal)).status, 404);
     assert.equal((await controller.execute({ ...base, model: "", name: "spark" }, new AbortController().signal)).status, 409);
     const escaping = await controller.execute({ ...base, name: "spark" }, new AbortController().signal);
     assert.notEqual(escaping.status, 200);

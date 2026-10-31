@@ -34,7 +34,7 @@ async function createFixture(context: { after: (callback: () => Promise<void>) =
 test("local skills replace project skills and tombstones hide a skill from every layer", async (context) => {
   const roots = await createFixture(context);
   const { listProjectSkillsFromRoot } = await import("./project-agents-folder");
-  const { listActiveWorkbenchSkillDefinitions } = await import("../../workbench-library");
+  const { listActiveWorkbenchSkillDefinitions, locateWorkbenchSkill } = await import("../../workbench-library");
   await Promise.all([
     write(roots.project, ".agents/skills/shared/SKILL.md", "---\nname: shared\n---\nproject shared\n"),
     write(roots.project, ".agents.local/skills/shared/SKILL.md", "---\nname: renamed\n---\nlocal shared\n"),
@@ -45,10 +45,21 @@ test("local skills replace project skills and tombstones hide a skill from every
     write(roots.library, "skills/gone/SKILL.md", "---\nname: gone\n---\nlibrary gone\n"),
   ]);
 
-  const active = await listActiveWorkbenchSkillDefinitions(await listProjectSkillsFromRoot(roots.project), roots.home);
+  const projectSkills = await listProjectSkillsFromRoot(roots.project);
+  const active = await listActiveWorkbenchSkillDefinitions(projectSkills, roots.home);
   const fixtureBodies = active.filter(skill => ["gone", "kept", "renamed", "shared"].includes(skill.name))
     .map(skill => skill.content.split("\n").at(-1));
   assert.deepEqual(fixtureBodies.sort(), ["local shared", "project kept"]);
+
+  const copies = async (name: string) => {
+    const location = await locateWorkbenchSkill(name, projectSkills, roots.home);
+    return { hidden: location.hidden, sources: location.layers.filter(layer => layer.path).map(layer => layer.source) };
+  };
+  const shared = await locateWorkbenchSkill("Shared", projectSkills, roots.home);
+  assert.equal(shared.layers.find(layer => layer.path)?.path, active.find(skill => skill.name === "renamed")?.path);
+  assert.deepEqual(await copies("shared"), { hidden: false, sources: ["local overlay", "project"] });
+  assert.deepEqual(await copies("gone"), { hidden: true, sources: ["local overlay", "project", "user library"] });
+  assert.deepEqual(await copies("absent"), { hidden: false, sources: [] });
 });
 
 test("local agents replace project agents under canonical paths and tombstones hide them", async (context) => {
