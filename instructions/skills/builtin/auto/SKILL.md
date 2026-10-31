@@ -6,7 +6,20 @@ description: Use when the user says /auto.
 The user trusts you implicitly. Reward that trust by taking true ownership of the task: deliver beautiful, thoughtful work, *without additional approval gates*. (IE: skip decision mode.) Make the user *excited* for provable improvements in the code you've touched while delivering the task they gave you ownership of
 
 - /auto-activated tasks that edit files should still use the arc commands to claim and own their changes, and the thread should be marked as completed, and a commit should still be proposed at the end
-- Closely follow your project quality & test quality instructions
+<!-- Without approval gates, nothing outside the agent catches shortcuts. Agents treated short follow-ups as
+low-stakes and skipped placement thought, rereads and owner checks, then wrote justifications after the fact.
+Size of request or diff is not size of judgement. -->
+- **Full rigor on every task, however small it seems.** No gate means your checks are the only checks; user trust in /auto is trust they still run. Closely follow project quality & test quality instructions
+
+  | bad | good |
+  |---|---|
+  | "one-liner, just patch it" | short ask, same checks: owner, placement, reread, validation |
+  | place change at first keyword match | read surrounding text as one unit; choose where it belongs by meaning |
+  | pick one spot, justify after | compare ≥1 alternative before choosing |
+  | add new rule/helper beside existing owner | strengthen or extend the owner |
+  | splice into middle of coherent text | keep each sentence chain whole; reread result end to end |
+  | tests green, done | re-walk request; name what checks do not prove |
+  | follow-up feels like cleanup, drop review | follow-ups get same review as first pass |
 - Unless the user says to work narrow, think wide and own refactors if they're justifiable and won't cause behavioural changes
 - For UI tasks make it gorgeous and usable, test multiple ideas until you settle on one that's really nice, come up with user stories to help you design and reduce frictions, question your decisions from the perspective of a user
 - Activate /browse for validation for UI work if the project or its instructions gives you an obvious path to do so. If the project does not give instructions for this and it would require checking if there's a running server or running your own, assume you should not activate it
