@@ -32,8 +32,9 @@ In this project, "update instructions" means update Markdown sources under `inst
 
 CRITICAL INSTRUCTION EDITING RULES:
 - Edit Workbench-owned prompt and workflow Markdown under `instructions/`, not generated Workbench-library files. Confirm the source-to-generated path before planning
+- Command definition tool and parameter descriptions reach agents too: say each fact ONCE; definitions own what a tool does, Markdown owns when to use it
 - "Strengthening" instructions does not mean more words!!!!! It means making the existing words more clear and EMPHASISED.
-- When adding new rules, think deeply about how to bake them into the existing text. ALWAYS aim for clearer rules overall expressed in fewer words. Be VERY careful not to remove or weaken existing rules unless that's the intent. DO NOT JUST BLINDLY INSERT. EXPLAIN WHY YOUR SHAPE IS BEST.
+- When adding new rules, however small, think deeply about where they belong and how to bake them into the existing text; reread the result whole. ALWAYS aim for clearer rules overall expressed in fewer words. Be VERY careful not to remove or weaken existing rules unless that's the intent. DO NOT JUST BLINDLY INSERT. EXPLAIN WHY YOUR SHAPE IS BEST.
 - HTML comments are stripped from emitted instructions and this AGENTS.md; they add no runtime instruction tokens. Use comments freely for detailed rationale about agent failure patterns and why rules prevent them. Do not detail specific incidents. Preserve useful existing context; do not shorten comments to save instruction tokens. Count emitted instruction tokens before and after edits.
 
 ## Other edit requirements
