@@ -101,7 +101,7 @@ test("cold service reads and app detach preserve durable identity without waking
   await client.request({
     method: "service/app/register",
     registration: {
-      appOrigin: "http://127.0.0.1:32123", ingressToken: "a".repeat(64),
+      appOrigin: "http://127.0.0.1:32123", visOrigin: null, ingressToken: "a".repeat(64),
       previewOrigin: null, previewHostPort: null, retainedHostPort: null, privateAppAllowed: true,
     },
   });

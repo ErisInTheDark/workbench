@@ -24,6 +24,8 @@ export const WorkbenchServiceEndpointSchema = WorkbenchDaemonEndpointSchema.exte
 }).strict();
 export const WorkbenchServiceRegistrationSchema = z.object({
   appOrigin: localOrigin,
+  /** The app's vis listener; the relay serves it on its own port so vis pages never share the app's origin. */
+  visOrigin: localOrigin.nullable().default(null),
   previewOrigin: localOrigin.nullable().default(null),
   previewHostPort: z.number().int().min(1).max(65535).nullable().default(null),
   retainedHostPort: z.number().int().min(1).max(65535).nullable().default(null),

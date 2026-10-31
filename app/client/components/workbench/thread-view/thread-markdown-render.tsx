@@ -844,7 +844,7 @@ function ThreadCodeBlock ({
         </pre>
         {svgPreviewSrcDoc ? (
           <div className="absolute inset-0 overflow-auto p-[0.95rem]">
-            <ThreadVisFrame className="size-full" document={svgPreviewSrcDoc} key={svgPreviewSrcDoc} title="SVG code block preview" />
+            <ThreadVisFrame className="size-full" key={svgPreviewSrcDoc} page={{ document: svgPreviewSrcDoc }} title="SVG code block preview" />
           </div>
         ) : null}
       </div>

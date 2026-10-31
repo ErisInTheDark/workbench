@@ -11,7 +11,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import WorkbenchServiceClient from "workbench-shared/process/WorkbenchServiceClient";
 import type { WorkbenchServiceIntent } from "workbench-shared/process/WorkbenchServiceClient";
-import { WORKBENCH_DAEMON_TAILNET_PORT } from "workbench-shared/http/workbench-daemon-endpoint";
+import { assertAppTailnetPort } from "workbench-shared/http/workbench-daemon-endpoint";
 import type { WorkbenchDaemonDiscovery, WorkbenchDaemonIdentity } from "workbench-shared/http/workbench-daemon-discovery";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -99,7 +99,8 @@ export default class WorkbenchNetworkController {
     ensure(signal: AbortSignal): Promise<void>;
     /** Relaunch backoff wait; tests replace the timer. */
     sleep?: (delayMs: number, signal: AbortSignal) => Promise<void>;
-    readTarget: () => { appOrigin: string } | null;
+    /** `visOrigin` is the app's own vis listener, published beside the app so the relay serves it too. */
+    readTarget: () => { appOrigin: string; visOrigin?: string | null } | null;
     wakeLocal: boolean;
     appPort?: Pick<WorkbenchAppPortControl, "read" | "current" | "update">;
     warn: (message: string) => void;
@@ -574,7 +575,7 @@ export default class WorkbenchNetworkController {
       if (!target) return null;
       if (!this.ingressToken) throw new Error("App ingress session is unavailable.");
       return {
-        appOrigin: target.appOrigin, previewOrigin: null, ingressToken: this.ingressToken,
+        appOrigin: target.appOrigin, visOrigin: target.visOrigin ?? null, previewOrigin: null, ingressToken: this.ingressToken,
         previewHostPort: this.change?.previewPort ?? null,
         privateAppAllowed: !this.options.privateIssue?.(),
         retainedHostPort: this.change?.phase !== "finalising" && this.change?.retainedPort ? this.change.retainedPort : null,
@@ -590,6 +591,7 @@ export default class WorkbenchNetworkController {
         if (this.client !== client || client.getSnapshot().generation !== generation) return;
         const current = registration();
         if (!current || intended.appOrigin !== current.appOrigin
+          || intended.visOrigin !== current.visOrigin
           || intended.previewHostPort !== current.previewHostPort
           || intended.retainedHostPort !== current.retainedHostPort
           || intended.privateAppAllowed !== current.privateAppAllowed
@@ -655,7 +657,7 @@ export default class WorkbenchNetworkController {
       const local = this.options.appPort;
       if (!local) throw new Error("Connection settings are unavailable until the app reloads.");
       if (!this.isHost(caller) && settings.mode === "localhost") throw new Error("Use this app's local host to disable remote access.");
-      if (settings.tailnetPort === WORKBENCH_DAEMON_TAILNET_PORT) throw new Error("That port is reserved for daemon discovery.");
+      assertAppTailnetPort(settings.tailnetPort);
       if (!local.read().editable && settings.localPort !== local.read().currentPort) throw new Error("The local port is controlled by the environment.");
       if (settings.mode === "tailnet-service") {
         const issue = this.options.privateIssue?.();

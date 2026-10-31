@@ -3,6 +3,7 @@
  * - ThreadVisStoredBuild: the build context a stored session renders in.
  * - ThreadVisStoredSession: one stored vis session and who it runs as.
  * - ThreadVisCommand: atomic vis session starts, ends, control changes, reads and retention deletes.
+ * - ThreadVisStoredSnapshot: one stored session moment with its document.
  * - ThreadVisResult: the sessions, snapshot or control state one command produced.
  * - default WorkbenchThreadVisStore: own vis sessions, their start and end snapshots, and each vis file's synced control
  *   state in SQLite.
@@ -26,11 +27,14 @@ export interface ThreadVisStoredSession {
 
 interface CapturedDocument { capturedAt: number; document: string | null; failure: string | null }
 
+export type ThreadVisStoredSnapshot = Omit<VisSnapshot, "bytes"> & { document: string | null };
+
 export type ThreadVisCommand =
   | { kind: "start"; session: Omit<ThreadVisStoredSession, "endedAt">; snapshot: CapturedDocument }
   /** Ends the thread's live session on `path`; nothing happens when none is live. */
   | { kind: "end"; threadId: string; path: string; endedBy: "agent" | "user"; snapshot: CapturedDocument }
   | { kind: "readActive" }
+  /** Also returns the snapshot's session, whose build root its assets come from. */
   | { kind: "readSnapshot"; sessionId: string; snapshotKind: VisSnapshotKind }
   /** Sets one control of the live session's file; returns no sessions when that session is not live in the thread. */
   | { kind: "setControl"; threadId: string; sessionId: string; controlId: string; value: string; updatedAt: number }
@@ -40,7 +44,7 @@ export type ThreadVisCommand =
 
 export interface ThreadVisResult {
   sessions: ThreadVisStoredSession[];
-  snapshot: VisSnapshot | null;
+  snapshot: ThreadVisStoredSnapshot | null;
   /** Filled only by `readControls`. */
   controls?: VisControls;
 }
@@ -98,12 +102,12 @@ export default class WorkbenchThreadVisStore {
             snapshot: null,
           };
         case "readSnapshot": {
-          const row = this.database.prepare(`SELECT s.path, v.captured_at, v.document, v.failure
+          const row = this.database.prepare(`SELECT s.*, v.captured_at, v.document, v.failure
             FROM workbench_thread_vis_snapshots v JOIN workbench_thread_vis_sessions s ON s.id = v.session_id
             WHERE v.session_id = ? AND v.kind = ?`).get(command.sessionId, command.snapshotKind) as
-            { path: string; captured_at: number; document: string | null; failure: string | null } | undefined;
+            (SessionRow & { captured_at: number; document: string | null; failure: string | null }) | undefined;
           return {
-            sessions: [],
+            sessions: row ? [session(row)] : [],
             snapshot: row ? {
               sessionId: command.sessionId, kind: command.snapshotKind, path: row.path,
               capturedAt: row.captured_at, document: row.document, failure: row.failure,

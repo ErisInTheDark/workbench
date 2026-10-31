@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchAppHttpRouter: own network admission, app routes/upgrades (including the MCP sign-in callback), client diagnostics and static SPA resolution.
+ * - default WorkbenchAppHttpRouter: own network admission, app routes/upgrades (including the MCP sign-in callback), the vis origin's routes, client diagnostics and static SPA resolution.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 
 import StaticHttpRequestController from "workbench-shared/http/StaticHttpRequestController";
-import { isLoopbackConnection } from "workbench-shared/http/loopback-connection";
+import { admitsAppConnection, isForwardedRequest } from "../network/app-ingress.ts";
 import { WORKBENCH_APP_PORT_PATH } from "workbench-shared/http/workbench-app-port";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 
@@ -23,6 +23,8 @@ import type WorkbenchThreadPlacementController from "../state/WorkbenchThreadPla
 import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
 import type WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import WorkbenchWorkspaceAssetRoutes from "../workspace/WorkbenchWorkspaceAssetRoutes";
+import WorkbenchVisRoutes from "../vis/WorkbenchVisRoutes.ts";
+import { WORKBENCH_VIS_TAILNET_PORT } from "workbench-shared/http/workbench-daemon-endpoint";
 import WorkbenchMcpSignInRoutes from "../workspace/WorkbenchMcpSignInRoutes";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
@@ -49,10 +51,6 @@ function requestKind(pathname: string) {
   return /\.[a-z0-9]{1,8}$/iu.test(pathname) ? "asset" : "page";
 }
 
-/** Whether the network relay forwarded this request from a device rather than the browser connecting directly. */
-function isForwarded(request: IncomingMessage) {
-  return Object.keys(request.headers).some(key => key.startsWith("x-workbench-network-") && key !== "x-workbench-network-request");
-}
 
 function sendJson(response: ServerResponse, status: number, value: object) {
   response.writeHead(status, {
@@ -106,6 +104,7 @@ export default class WorkbenchAppHttpRouter {
   private readonly eventSockets: WorkbenchAppEventSocketController | null;
   private readonly importController: WorkbenchPresentationImportController | null;
   private readonly assets: WorkbenchWorkspaceAssetRoutes | null;
+  private readonly vis: WorkbenchVisRoutes | null;
   private readonly mcpSignIn: WorkbenchMcpSignInRoutes | null;
 
   constructor(private readonly options: {
@@ -128,9 +127,14 @@ export default class WorkbenchAppHttpRouter {
     presentationImport?: WorkbenchPresentationImportController;
     runtime?: ConstructorParameters<typeof WorkbenchAppEventSocketController>[0]["runtime"];
     supportsAppWebSockets?: boolean;
+    /** The app process's loopback vis listener port; null until it listens. */
+    visPort?: () => number | null;
   }) {
     this.assets = options.sources ? new WorkbenchWorkspaceAssetRoutes({
       sources: options.sources, warn: message => options.logger.error("app", message),
+    }) : null;
+    this.vis = options.sources ? new WorkbenchVisRoutes({
+      sources: options.sources, network: options.network, warn: message => options.logger.error("app", message),
     }) : null;
     this.mcpSignIn = options.sources ? new WorkbenchMcpSignInRoutes({
       sources: options.sources, warn: message => options.logger.error("app", message),
@@ -150,7 +154,18 @@ export default class WorkbenchAppHttpRouter {
         return options.network?.stableOrigin(origin) ?? null;
       },
       // Every admitted connection is a loopback socket; forwarded ones are local only when they come from the host node.
-      loopbackReachable: request => !isForwarded(request) || options.network?.ingress(request.headers)?.trustHost === true,
+      loopbackReachable: request => !isForwardedRequest(request) || options.network?.ingress(request.headers)?.trustHost === true,
+      // Relayed browsers reach the vis listener on the relay's fixed port of the host they used; local ones on its own port.
+      visOrigin: request => {
+        const port = options.visPort?.();
+        if (!port) return null;
+        const forwarded = request.headers["x-workbench-network-origin"];
+        try {
+          const origin = new URL(isForwardedRequest(request) && typeof forwarded === "string" ? forwarded : `http://${request.headers.host ?? ""}`);
+          origin.port = String(isForwardedRequest(request) ? WORKBENCH_VIS_TAILNET_PORT : port);
+          return origin.origin;
+        } catch { return null; }
+      },
       onDiagnostic: (message) => options.logger.error("app", `http ${message}`),
     });
     this.settingsRoutes = options.readAppliedReactDevelopmentMode
@@ -198,6 +213,7 @@ export default class WorkbenchAppHttpRouter {
 
   async close() {
     this.assets?.dispose();
+    this.vis?.dispose();
     this.eventSockets?.close();
     await this.presentationRoutes?.close();
     this.networkRoutes?.close();
@@ -241,8 +257,16 @@ export default class WorkbenchAppHttpRouter {
   }
 
   admitConnection(request: IncomingMessage) {
-    return Boolean(isLoopbackConnection(request.socket)
-      && (!isForwarded(request) || this.options.network?.ingress(request.headers)));
+    return admitsAppConnection(request, this.options.network);
+  }
+
+  /** Requests on the vis origin; it serves nothing but vis pages, so no app route is reachable from a vis page. */
+  async handleVis(request: IncomingMessage, response: ServerResponse) {
+    if (!this.vis) {
+      response.writeHead(503, { "Cache-Control": "no-store" }).end();
+      return;
+    }
+    await this.vis.handle(request, response);
   }
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {

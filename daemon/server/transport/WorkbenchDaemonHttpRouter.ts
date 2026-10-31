@@ -28,6 +28,8 @@ export interface WorkbenchDaemonHttpRouterOptions {
   projectSnapshot: ProjectSnapshotHttpController;
   threadGit: HttpController;
   transcriptAssets?: HttpController;
+  /** Vis pages and their build-root files, which the app's vis origin forwards here. */
+  vis?: HttpController;
 }
 
 interface RouteDefinition {
@@ -129,6 +131,15 @@ export default class WorkbenchDaemonHttpRouter {
         await this.options.transcriptAssets.handleHttpRequest(request, response);
       } catch (error) {
         sendJson(response, 500, { error: error instanceof Error ? error.message : "Transcript asset request failed." });
+      }
+      return;
+    }
+    if (this.options.vis && (request.method === "GET" || request.method === "HEAD") && requestPath.startsWith("/daemon/vis/")) {
+      try {
+        await this.options.vis.handleHttpRequest(request, response);
+      } catch (error) {
+        if (!response.headersSent) sendJson(response, 500, { error: error instanceof Error ? error.message : "Vis page request failed." });
+        else if (!response.writableEnded) response.destroy();
       }
       return;
     }

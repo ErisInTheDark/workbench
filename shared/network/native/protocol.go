@@ -74,6 +74,7 @@ type sidecarConfiguration struct {
 	DaemonIngressToken string `json:"daemonIngressToken,omitempty"`
 	Configuration networkConfiguration `json:"configuration"`
 	AppOrigin     string               `json:"appOrigin"`
+	VisOrigin     string               `json:"visOrigin"`
 	DaemonOrigin  string               `json:"daemonOrigin"`
 	DaemonPort    *uint16              `json:"daemonPort"`
 	PublishDaemon bool                `json:"publishDaemon,omitempty"`

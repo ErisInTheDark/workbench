@@ -52,6 +52,8 @@ export default class WorkbenchAppPortRoutes {
     stableOrigin?: (request: IncomingMessage) => string | null;
     /** Whether the requesting browser is on the app's machine, so the loopback origin reaches it. */
     loopbackReachable?: (request: IncomingMessage) => boolean;
+    /** The vis origin as the requesting browser reaches it. */
+    visOrigin?: (request: IncomingMessage) => string | null;
     canUpdate?: () => boolean;
   }) {}
 
@@ -91,6 +93,7 @@ export default class WorkbenchAppPortRoutes {
       ...snapshot,
       stableOrigin: this.options.stableOrigin?.(request) ?? null,
       loopbackReachable: this.options.loopbackReachable?.(request) ?? false,
+      visOrigin: this.options.visOrigin?.(request) ?? null,
     };
   }
 

@@ -45,7 +45,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       readTarget: () => {
         const app = context.appPort.current?.();
         if (!app) return null;
-        return { appOrigin: app.appOrigin };
+        return { appOrigin: app.appOrigin, visOrigin: context.visOrigin() };
       },
     });
     let unsubscribe: (() => void) | undefined;

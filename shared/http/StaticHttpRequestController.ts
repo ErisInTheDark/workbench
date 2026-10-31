@@ -9,6 +9,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
+import { mimeTypeFor } from "./mime-types.ts";
 
 export interface StaticHttpRequestContext {
   request: IncomingMessage;
@@ -26,23 +27,6 @@ export interface StaticHttpRequestControllerOptions {
   rootDirectoryPath: string;
   spaFallbackPath?: string | null;
 }
-
-const MIME_TYPES = new Map([
-  [".css", "text/css; charset=utf-8"],
-  [".html", "text/html; charset=utf-8"],
-  [".ico", "image/x-icon"],
-  [".jpeg", "image/jpeg"],
-  [".jpg", "image/jpeg"],
-  [".js", "text/javascript; charset=utf-8"],
-  [".json", "application/json; charset=utf-8"],
-  [".map", "application/json; charset=utf-8"],
-  [".png", "image/png"],
-  [".svg", "image/svg+xml"],
-  [".txt", "text/plain; charset=utf-8"],
-  [".webmanifest", "application/manifest+json; charset=utf-8"],
-  [".woff", "font/woff"],
-  [".woff2", "font/woff2"],
-]);
 
 function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number) {
   if (value === undefined) return fallback;
@@ -217,7 +201,7 @@ export default class StaticHttpRequestController {
     const entityTag = entityTagFor(fileStat, encoding);
     const headers: Record<string, string> = {
       "Cache-Control": cacheControlFor(filePath, this.cacheSeconds),
-      "Content-Type": MIME_TYPES.get(path.extname(filePath).toLowerCase()) ?? "application/octet-stream",
+      "Content-Type": mimeTypeFor(filePath),
       ETag: entityTag,
       ...(compressible ? { Vary: "Accept-Encoding" } : {}),
     };

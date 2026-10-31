@@ -9,7 +9,7 @@ import {
   type WorkbenchNetworkResult, type WorkbenchNetworkRuntime, type WorkbenchNetworkSnapshot,
   type WorkbenchNetworkSidecarConfiguration,
 } from "../../../shared/http/workbench-network.ts";
-import { WORKBENCH_DAEMON_TAILNET_PORT } from "../../../shared/http/workbench-daemon-endpoint.ts";
+import { assertAppTailnetPort } from "../../../shared/http/workbench-daemon-endpoint.ts";
 import { areDeeplyEqual } from "../../../shared/workbench/deep-equality.ts";
 import WorkbenchNetworkProcess from "../../../shared/network/WorkbenchNetworkProcess.ts";
 import type { NativeArtifactStager } from "../../../shared/process/NativeArtifactStage.ts";
@@ -105,7 +105,7 @@ export default class WorkbenchNetworkController {
   }
 
   async settings(mode: WorkbenchNetworkConfiguration["mode"], port: number) {
-    if (port === WORKBENCH_DAEMON_TAILNET_PORT) throw new Error("That port is reserved for daemon discovery.");
+    assertAppTailnetPort(port);
     return this.own(async () => {
       this.preparing = mode === "tailnet-service" && this.configuration.privateAccess !== null;
       this.save({ ...this.configuration, mode, hostServe: { enabled: mode !== "localhost", port } });
@@ -234,7 +234,7 @@ export default class WorkbenchNetworkController {
         if (action.mode === "tailnet-service" && this.configuration.rename) await this.resumeRename();
         return { kind: "ok" };
       case "tailnet-port":
-        if (action.port === WORKBENCH_DAEMON_TAILNET_PORT) throw new Error("That port is reserved for daemon discovery.");
+        assertAppTailnetPort(action.port);
         this.save({ ...this.configuration, hostServe: { ...this.configuration.hostServe, port: action.port } });
         await this.synchronise();
         return { kind: "ok" };
@@ -250,7 +250,7 @@ export default class WorkbenchNetworkController {
         return { kind: "ok" };
       }
       case "host-serve":
-        if (action.port === WORKBENCH_DAEMON_TAILNET_PORT) throw new Error("That port is reserved for daemon discovery.");
+        assertAppTailnetPort(action.port);
         this.preparing = false;
         this.save({ ...this.configuration, mode: action.enabled ? "tailnet-ip" : "localhost", hostServe: { enabled: action.enabled, port: action.port } });
         await this.synchronise();

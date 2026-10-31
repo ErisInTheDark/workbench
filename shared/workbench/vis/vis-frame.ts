@@ -1,7 +1,11 @@
 /*
  * Exports:
- * - frameVisDocument: prepend the no-network content policy and the `window.wb` bridge, seeded with the file's synced
- *   control state, the app's palette and who is looking (VisAudience), to a rendered vis document.
+ * - VIS_SERVED_CONTENT_POLICY: the header policy of pages on the vis origin: anything from that origin, nothing from any other.
+ * - VIS_FRAME_SANDBOX/VIS_STANDALONE_SANDBOX: frame sandboxes for served pages (same-origin only with the vis origin,
+ *   never the app's) and for standalone documents (opaque).
+ * - frameVisDocument: prepend the `window.wb` bridge, seeded with the file's synced control state, the app's palette and
+ *   who is looking (VisAudience), to a rendered vis document; standalone pages also get a no-network policy.
+ * - hostVisFrame: a page holding one served vis in the card's sandbox, sized by the height it reports, for headless checks.
  * - visFrameControlsMessage: the card's message relaying the file's control state into a running frame.
  * - visFrameThemeMessage: the card's message repainting a running frame in the app's palette.
  * - acceptVisFrameControl: the control change a frame message may forward to Workbench, or null.
@@ -19,8 +23,14 @@ export const VIS_FRAME_MIN_HEIGHT = 48;
 /** Pages sized from the viewport grow with every report; the cap ends that loop. */
 export const VIS_FRAME_MAX_HEIGHT = 6_000;
 
-// Inline scripts and styles run; nothing loads from anywhere, though embedded data: images and fonts still work.
-const CONTENT_POLICY = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:">`;
+// Standalone pages (component previews) have no origin to load from: inline code and embedded data only.
+const STANDALONE_CONTENT_POLICY = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:">`;
+
+export const VIS_SERVED_CONTENT_POLICY = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; base-uri 'self'; form-action 'self'";
+
+export const VIS_FRAME_SANDBOX = "allow-scripts allow-same-origin";
+/** Standalone documents have no origin of their own to share, so they stay opaque. */
+export const VIS_STANDALONE_SANDBOX = "allow-scripts";
 
 /**
  * `wb.state` holds the file's synced controls. A page's own `set` updates it at once and posts the JSON text to the card,
@@ -66,13 +76,27 @@ export type VisAudience = "user" | "agent";
 /**
  * The policy and bridge must come before anything the document runs, but after a doctype, which must stay first.
  * `theme` paints the page in the app's palette from its first frame; without one the page keeps the default palette.
+ * Served pages take their policy from the response header instead, which a meta policy could only narrow.
  */
-export function frameVisDocument(document: string, controls: VisControls, { audience = "user", theme = null }: {
-  audience?: VisAudience; theme?: WorkbenchTheme | null;
+export function frameVisDocument(document: string, controls: VisControls, { audience = "user", served = false, theme = null }: {
+  audience?: VisAudience; served?: boolean; theme?: WorkbenchTheme | null;
 } = {}) {
   const doctype = /^\s*<!doctype[^>]*>/iu.exec(document);
-  const head = `${CONTENT_POLICY}${BRIDGE_SCRIPT(controlsLiteral(controls), theme, audience)}`;
+  const head = `${served ? "" : STANDALONE_CONTENT_POLICY}${BRIDGE_SCRIPT(controlsLiteral(controls), theme, audience)}`;
   return doctype ? `${doctype[0]}${head}${document.slice(doctype[0].length)}` : `${head}${document}`;
+}
+
+function attribute(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;");
+}
+
+/** Hosts the page the way the card does, so a check sees the card's origin rules and content height. */
+export function hostVisFrame(url: string) {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0}iframe{display:block;width:100%;height:${VIS_FRAME_MIN_HEIGHT}px;border:0}</style></head>`
+    + `<body><iframe sandbox="${VIS_FRAME_SANDBOX}" src="${attribute(url)}" title="vis"></iframe>`
+    + `<script>(function(){var frame=document.querySelector("iframe");addEventListener("message",function(event){`
+    + `var data=event.data;if(event.source!==frame.contentWindow||!data||data.kind!=="${HEIGHT_KIND}"||typeof data.height!=="number"||!isFinite(data.height))return;`
+    + `frame.style.height=Math.min(${VIS_FRAME_MAX_HEIGHT},Math.max(${VIS_FRAME_MIN_HEIGHT},Math.ceil(data.height)))+"px";});})();</script></body></html>`;
 }
 
 export function visFrameControlsMessage(controls: VisControls) {

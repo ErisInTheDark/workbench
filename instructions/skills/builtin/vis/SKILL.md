@@ -32,7 +32,12 @@ Project context without needed `.wb.json` command fails with a clear error: conf
 - Real components: find where the live app renders them; pass fake data. Provide required contexts with fake values; if a context is private, reuse that component's markup and class names. Fake `useSyncExternalStore` stores must return stable snapshots.
 - Style with Tailwind classes; both contexts compile them. Theme tokens: `text-text`, `text-fg/muted`, `bg-fg/5`, `border-fg/10`; support light and dark.
 - Frame height follows page content: no viewport-height sizing (`h-screen`, `min-h-screen`, `100vh`). Leave page background transparent.
-- `.html`/`.svg`: add `<link rel="workbench-css">` in `<head>` for project CSS. No network: inline everything; images/fonts only as `data:`.
+- `.html`/`.svg`: add `<link rel="workbench-css">` in `<head>` for project CSS.
+<!-- Pages used to run in an opaque srcdoc sandbox with no network, so agents base64-inlined every asset, gzipped
+documents to fit the size cap and shimmed storage; real app code crashed on storage access and agent checks ran
+unsandboxed, so they never saw it. Pages now load from a dedicated vis origin that serves the build root. -->
+- Page is a normal page on its own origin, served from the build root: relative URLs (`static/a.png`, never `/static/a.png`) load project files; storage, `indexedDB`, eval and workers work. Other origins are blocked.
+- Reference assets by URL; never inline them. Documents over 1 MB wait for the user to tap load.
 - Kit (`workbench/kit`):
   - layout: `Section`, `Compare` (columns 2-4), `Stat`, `Table`, `Swatch`, `Callout` (Markdown in thread notice style)
   - options: `Options label id?` wrapping direct `Option title value?` children (children = that option's preview)
@@ -93,6 +98,6 @@ Root `.wb.json` (JSON schema: `wb.schema.json` in the `@inthedark/wb` package):
 - Commands run as your thread in its sandbox: read-only, no network, cwd = project root, through login shell.
 - Placeholders: `{file}` vis file, `{root}` project root, `{input}` temp file holding `input` text.
 - `css` prints CSS to stdout; inserted as leading `<style>`.
-- `build` prints JSON `{ "document": "<!doctype html>...", "inputs": ["relative/or/absolute/paths"] }`: whole page with inline script/style; `inputs` = files read, watched for re-render (`node_modules` ignored).
+- `build` prints JSON `{ "document": "<!doctype html>...", "inputs": ["relative/or/absolute/paths"] }`: whole page, which may load build-root files by relative URL; `inputs` = files read, watched for re-render (`node_modules` ignored).
 - Build script: bundle in memory (esbuild `write: false`), mount default export into page, inline Tailwind output; escape `</script`, `<script`, `<!--` in inlined JS. Workbench's `scripts/vis-build.mts` is a reference.
 - Invalid entries are ignored individually; the error names them.

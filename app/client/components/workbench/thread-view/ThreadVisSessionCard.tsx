@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadVisSessionCard: show each live vis session's latest render under a summary row, keeping it while
- *   a new render is in flight, with theatre, fullscreen, frame-reload and end buttons; control changes its page makes
+ *   a new render is in flight (a large one waits for the user to load it), with theatre, fullscreen, frame-reload and end buttons; control changes its page makes
  *   through `wb.state` are saved, and only a failed save is reported. With several sessions each is an open disclosure
  *   whose summary row carries its buttons, and theatre stays on the card's header. Frameless and presentational: its
  *   host frames it, owns theatre width, and the thread view observes the sessions.
@@ -16,7 +16,7 @@ import Disclosure from "../../ui/Disclosure";
 import IconButton from "../../ui/IconButton";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import { FoldHorizontalIcon, MaximizeIcon, RefreshCwIcon, UnfoldHorizontalIcon, XIcon } from "../workbench-icons";
-import ThreadVisFrame from "./ThreadVisFrame";
+import ThreadVisPage from "./ThreadVisPage";
 
 function Spinner({ label }: { label: string }) {
   return <span aria-label={label} className="inline-flex shrink-0" role="status"><LoaderIcon size={14} /></span>;
@@ -69,23 +69,28 @@ type VisSessionProps = {
   /** Bumping this remounts the frame, rerunning the same document from scratch. */
   reloads: number;
   session: VisLiveSession;
+  threadId: string;
 };
 
-function VisSessionBody({ controlFailure, fullscreen, onControl, onExitFullscreen, reloads, session }: VisSessionProps) {
+function VisSessionBody({ controlFailure, fullscreen, onControl, onExitFullscreen, reloads, session, threadId }: VisSessionProps) {
   return (
     <>
       {session.failure ? <p className="m-0 whitespace-pre-wrap text-[0.74rem] text-danger" role="alert">{session.failure}</p> : null}
       {controlFailure ? <p className="m-0 text-[0.74rem] text-danger" role="alert">Your choice was not saved: {controlFailure}</p> : null}
       {session.render ? (
-        <ThreadVisFrame
-          className="rounded-[0.65rem] bg-canvas"
+        <ThreadVisPage
+          bytes={session.render.bytes}
           controls={session.controls}
-          document={session.render.document}
           fullscreen={fullscreen}
           key={reloads}
           onControl={onControl}
           onExitFullscreen={onExitFullscreen}
+          path={session.path}
+          revision={session.render.renderedAt}
+          sessionId={session.sessionId}
+          threadId={threadId}
           title={`Live vis of ${session.path}`}
+          variant="live"
         />
       ) : (
         <div aria-hidden="true" className="h-48 animate-pulse rounded-[0.65rem] bg-fg/4 motion-reduce:animate-none" />
@@ -117,7 +122,9 @@ function CollapsibleVisSession({ actions, ...props }: VisSessionProps & { action
   );
 }
 
-export default function ThreadVisSessionCard({ onControl, onEnd, onTheatreChange, sessions, theatre }: {
+export default function ThreadVisSessionCard({ onControl, onEnd, onTheatreChange, sessions, theatre, threadId }: {
+  /** Whose sessions these are; their pages load from that thread's daemon. */
+  threadId: string;
   /** Forwards one control change from a session's frame; rejects when Workbench did not save it. */
   onControl: (sessionId: string, id: string, value: string) => Promise<void>;
   onEnd: (sessionId: string) => void;
@@ -151,6 +158,7 @@ export default function ThreadVisSessionCard({ onControl, onEnd, onTheatreChange
     onExitFullscreen: () => setFullscreenSessionId(null),
     reloads: reloads[session.sessionId] ?? 0,
     session,
+    threadId,
   });
   return (
     <section className="w-full" data-thread-vis-card="true">

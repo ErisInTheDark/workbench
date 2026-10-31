@@ -1,13 +1,15 @@
 /*
  * Exports:
  * - WorkbenchVisControllerOptions: storage, project, sandboxed project-command, browser and file-watching ports.
+ * - VisServed: one served document, its build root and its bridge's starting controls.
  * - default WorkbenchVisController: own live vis sessions for one daemon generation. Starting and ending snapshot the
  *   rendered file; between them a change to the file (or, for built components, any file the build read) keeps the
  *   last render and marks one in flight, and only a finished render replaces it. Live sessions survive reloads
  *   through storage and resume on start. Each session builds in its caller's project, another folder's `.wb.json`,
  *   or Workbench's kit, keeps its file's synced control state (which outlives the session), and has a headless browser
- *   agents check it in with that state, whose page follows every render. Also screenshots skill component markup and
- *   MCP matcher tests in throwaway pages.
+ *   agents check it in with that state, whose page follows every render. Observers see only render metadata; the
+ *   documents and the build root they load files from are served on request. Also screenshots skill component markup
+ *   and MCP matcher tests in throwaway pages.
  */
 import { randomUUID } from "node:crypto";
 import { watch as watchDirectory } from "node:fs";
@@ -15,8 +17,9 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   isVisPath, VIS_MAX_DOCUMENT_LENGTH, VIS_MAX_SOURCE_BYTES, VisControlIdSchema, VisControlValueSchema,
-  type VisControls, type VisLiveSession, type VisProject, type VisSnapshotKind, type VisThread,
+  type VisControls, type VisLiveSession, type VisProject, type VisSnapshot, type VisSnapshotKind, type VisThread,
 } from "workbench-shared/workbench/vis/vis-contract";
+import type { VisVariant } from "workbench-shared/workbench/vis/vis-url";
 import { renderVisDocument, visWantsCss } from "workbench-shared/workbench/vis/vis-document";
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredBuild, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
 import { WORKBENCH_PROJECT_CONFIG_FILE } from "workbench-shared/workbench/project-config/workbench-project-config";
@@ -40,7 +43,7 @@ export interface WorkbenchVisControllerOptions {
   /** Resolves the verified absolute pwsh.exe path used for Windows project commands. */
   powerShellExecutable?(): Promise<string>;
   /** Each session's headless browser, opened with it and stopped when it ends. */
-  browse?: Pick<WorkbenchVisBrowse, "end" | "inspect" | "open" | "refresh">;
+  browse?: Pick<WorkbenchVisBrowse, "end" | "inspect" | "inspectDocument" | "open" | "refresh">;
   /** Renders active skill component markup through the native component renderer. */
   componentPreview?(threadId: string, markup: string, signal: AbortSignal): Promise<string>;
   /** Runs active skills' MCP matchers on a sample call; `preview` is its component's document, when one rendered. */
@@ -58,8 +61,17 @@ interface Rendered {
   inputs: string[] | null;
 }
 
+/** A document to serve, the build root its relative URLs read from, and the controls its bridge starts with. */
+export interface VisServed {
+  document: string;
+  rootPath: string;
+  controls: VisControls;
+}
+
 interface Live {
   stored: ThreadVisStoredSession;
+  /** The latest finished render; `state.render` describes it to observers. */
+  document: string | null;
   file: string;
   /** The caller's project root; the file lives inside it. */
   rootPath: string;
@@ -135,10 +147,10 @@ export default class WorkbenchVisController {
     const { endedAt: _, ...session } = stored;
     await this.#options.store({ kind: "start", session, snapshot: { capturedAt: stored.startedAt, document: rendered.document, failure: rendered.failure } });
     const controls = await this.#controls(stored);
-    const live = this.#begin(stored, file, input.rootPath, context, { document: rendered.document, renderedAt: stored.startedAt }, rendered.failure, controls);
+    const live = this.#begin(stored, file, input.rootPath, context, rendered.document, stored.startedAt, rendered.failure, controls);
     this.#watch(live, rendered.inputs);
     // Warms the session's browser without holding up the start; it never rejects.
-    void this.#options.browse?.open({ ...stored, document: rendered.document, controls });
+    void this.#options.browse?.open(this.#browseTarget(live));
     return { sessionId: stored.sessionId, path: display, failure: rendered.failure };
   }
 
@@ -150,7 +162,25 @@ export default class WorkbenchVisController {
     if (!live) throw new Error(`No vis session is live on ${display}.`);
     if (!live.state.render) throw new Error(`${display} has not rendered yet; try again once it has.`);
     if (!this.#options.browse) throw new Error("Vis browser checks are unavailable.");
-    return await this.#options.browse.inspect({ ...live.stored, document: live.state.render.document, controls: live.state.controls }, kind);
+    return await this.#options.browse.inspect(this.#browseTarget(live), kind);
+  }
+
+  /**
+   * What the vis origin serves for a session: the live render, or a stored start or end snapshot, each with the build
+   * root its files come from. Null when there is nothing to serve, such as a session that is no longer live.
+   */
+  async serve(sessionId: string, variant: VisVariant): Promise<VisServed | null> {
+    await this.start();
+    if (variant === "live") {
+      const live = this.#live.get(sessionId);
+      if (!live?.document) return null;
+      return { document: live.document, rootPath: live.context.rootPath, controls: live.state.controls };
+    }
+    const { sessions: [stored], snapshot } = await this.#options.store({ kind: "readSnapshot", sessionId, snapshotKind: variant });
+    if (!stored || !snapshot?.document) return null;
+    const projectRoot = await this.#options.resolveRoot(stored);
+    if (!projectRoot) return null;
+    return { document: snapshot.document, rootPath: this.#context(stored.build, projectRoot).rootPath, controls: await this.#controls(stored) };
   }
 
   async testMarkup(input: { threadId: string; cwd: string; markup: string }, signal?: AbortSignal) {
@@ -184,7 +214,7 @@ export default class WorkbenchVisController {
     };
     let output: string | null = null;
     let failure: Error | null = null;
-    try { output = await browse.inspect(target, "screenshot"); }
+    try { output = await browse.inspectDocument(target); }
     catch (error) { failure = error instanceof Error ? error : new Error(String(error)); }
     try { await browse.end(target, { strict: true }); }
     catch (error) {
@@ -231,8 +261,11 @@ export default class WorkbenchVisController {
     await this.#options.store({ kind: "delete", threadIds });
   }
 
-  async readSnapshot(sessionId: string, kind: VisSnapshotKind) {
-    return (await this.#options.store({ kind: "readSnapshot", sessionId, snapshotKind: kind })).snapshot;
+  async readSnapshot(sessionId: string, kind: VisSnapshotKind): Promise<VisSnapshot | null> {
+    const snapshot = (await this.#options.store({ kind: "readSnapshot", sessionId, snapshotKind: kind })).snapshot;
+    if (!snapshot) return null;
+    const { document, ...rest } = snapshot;
+    return { ...rest, bytes: document === null ? null : Buffer.byteLength(document) };
   }
 
   /** The user's force-end from the card; its caller records the transcript item, the agent is never told. */
@@ -304,7 +337,7 @@ export default class WorkbenchVisController {
       if (!rootPath) continue;
       const controls = await this.#controls(stored);
       if (this.#lifetime.signal.aborted) return;
-      const live = this.#begin(stored, path.resolve(rootPath, stored.path), rootPath, this.#context(stored.build, rootPath), null, null, controls);
+      const live = this.#begin(stored, path.resolve(rootPath, stored.path), rootPath, this.#context(stored.build, rootPath), null, 0, null, controls);
       this.#watch(live, null);
       this.#changed(live);
     }
@@ -344,12 +377,16 @@ export default class WorkbenchVisController {
 
   #begin(
     stored: ThreadVisStoredSession, file: string, rootPath: string, context: VisBuildContext,
-    render: VisLiveSession["render"], failure: string | null, controls: VisControls,
+    document: string | null, renderedAt: number, failure: string | null, controls: VisControls,
   ) {
     const live: Live = {
-      stored, file, rootPath, context, running: null, again: false, watched: new Map(),
+      stored, document, file, rootPath, context, running: null, again: false, watched: new Map(),
       cancel: new AbortController(),
-      state: { sessionId: stored.sessionId, path: stored.path, startedAt: stored.startedAt, render, rendering: false, failure, controls },
+      state: {
+        sessionId: stored.sessionId, path: stored.path, startedAt: stored.startedAt,
+        render: document === null ? null : { renderedAt, bytes: Buffer.byteLength(document) },
+        rendering: false, failure, controls,
+      },
     };
     this.#live.set(stored.sessionId, live);
     this.#publish(stored.threadId);
@@ -397,9 +434,10 @@ export default class WorkbenchVisController {
       this.#watch(live, rendered.inputs);
       // A failed step keeps the previous render; with nothing to keep, an unstyled document is better than none.
       const replace = rendered.document !== null && (!rendered.failure || !live.state.render);
+      if (replace) live.document = rendered.document;
       live.state = {
         ...live.state,
-        render: replace ? { document: rendered.document!, renderedAt: this.#now() } : live.state.render,
+        render: replace ? { renderedAt: this.#now(), bytes: Buffer.byteLength(rendered.document!) } : live.state.render,
         failure: rendered.failure,
         rendering: live.again,
       };
@@ -410,8 +448,11 @@ export default class WorkbenchVisController {
 
   /** The session's browser page follows the card, so a reload there shows the latest render; it never rejects. */
   #refreshBrowser(live: Live) {
-    const render = live.state.render;
-    if (render) void this.#options.browse?.refresh({ ...live.stored, document: render.document, controls: live.state.controls });
+    if (live.state.render) void this.#options.browse?.refresh(this.#browseTarget(live));
+  }
+
+  #browseTarget(live: Live) {
+    return { ...live.stored, revision: live.state.render?.renderedAt ?? 0 };
   }
 
   async #end(live: Live, endedBy: "agent" | "user" = "agent") {
@@ -475,7 +516,7 @@ export default class WorkbenchVisController {
       }
     }
     const document = renderVisDocument(source, /\.svg$/iu.test(file) ? "svg" : "html", css);
-    if (document.length > VIS_MAX_DOCUMENT_LENGTH) return { document: null, failure: "The rendered document is larger than 6 MB.", inputs: null };
+    if (document.length > VIS_MAX_DOCUMENT_LENGTH) return { document: null, failure: "The rendered document is larger than 16 MB.", inputs: null };
     return { document, failure, inputs: null };
   }
 

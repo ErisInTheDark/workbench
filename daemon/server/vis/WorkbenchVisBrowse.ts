@@ -1,17 +1,20 @@
 /*
  * Exports:
  * - VisBrowsePort: run a Browse script or stop a session as a vis session's thread.
- * - VisBrowseTarget: the vis session, its thread and the render to show.
- * - default WorkbenchVisBrowse: own each vis session's headless Browse session: keep its page on the current render,
- *   framed and seeded with the user's control state, open it, return a snapshot or screenshot of it, and stop it with the vis.
+ * - VisBrowseTarget: a live vis session, its thread and the render revision to show.
+ * - VisDocumentTarget: a throwaway document, such as a skill component preview, with no session behind it.
+ * - default WorkbenchVisBrowse: own each vis session's headless Browse session: keep its page framing the session's
+ *   served render in the card's sandbox, open it, return a snapshot or screenshot of it, and stop it with the vis.
+ *   Throwaway documents get a standalone page instead.
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { WorkbenchBrowseAgentScriptInlineRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
-import { formatVisScreenshotResult, type VisControls } from "workbench-shared/workbench/vis/vis-contract";
-import { frameVisDocument } from "workbench-shared/workbench/vis/vis-frame";
+import { formatVisScreenshotResult } from "workbench-shared/workbench/vis/vis-contract";
+import { frameVisDocument, hostVisFrame } from "workbench-shared/workbench/vis/vis-frame";
+import { daemonVisPath, VIS_AUDIENCE_PARAM, VIS_REVISION_PARAM } from "workbench-shared/workbench/vis/vis-url";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 
 export interface VisBrowsePort {
@@ -19,15 +22,21 @@ export interface VisBrowsePort {
   stop(request: { session: string; threadId: string; cwd: string }): Promise<void>;
 }
 
-export interface VisBrowseTarget {
+interface BrowseOwner {
   sessionId: string;
   threadId: string;
   cwd: string;
   path: string;
-  document: string;
-  /** The file's synced control state, so checks see what the user sees. */
-  controls: VisControls;
   signal?: AbortSignal;
+}
+
+export interface VisBrowseTarget extends BrowseOwner {
+  /** Changes with every render, so the page loads the latest one. */
+  revision: number;
+}
+
+export interface VisDocumentTarget extends BrowseOwner {
+  document: string;
 }
 
 /**
@@ -44,13 +53,15 @@ function message(error: unknown) {
 export default class WorkbenchVisBrowse {
   readonly #directory: string;
   readonly #port: VisBrowsePort;
+  readonly #visOrigin: () => string | null;
   readonly #log: (message: string) => void;
   /** Each session's page writes and removal, in order, so an older render never lands over a newer one or after the end. */
   readonly #pageWrites = new Map<string, Promise<void>>();
 
-  constructor(options: { directory: string; port: VisBrowsePort; log(message: string): void }) {
+  constructor(options: { directory: string; port: VisBrowsePort; visOrigin(): string | null; log(message: string): void }) {
     this.#directory = options.directory;
     this.#port = options.port;
+    this.#visOrigin = options.visOrigin;
     this.#log = options.log;
   }
 
@@ -74,44 +85,32 @@ export default class WorkbenchVisBrowse {
   /** Opens the render ahead of the first check; checks reopen it anyway, so failing here only costs a warning. */
   async open(target: VisBrowseTarget) {
     try {
-      await this.#load(target, `Opening vis of ${target.path}`);
+      await this.#load(target, this.#hostPage(target), `Opening vis of ${target.path}`);
     } catch (error) {
       this.#log(`Vis browser for ${target.path} could not open: ${message(error)}`);
     }
   }
 
-  /** Puts a rebuilt render in the page without navigating, so a `reload` in the session shows what the card shows. */
+  /** Points the page at a newer render without navigating, so a `reload` in the session shows what the card shows. */
   async refresh(target: VisBrowseTarget) {
     try {
-      await this.#writePage(target);
+      await this.#writePage(target.sessionId, this.#hostPage(target));
     } catch (error) {
       this.#log(`Vis browser page for ${target.path} could not refresh: ${message(error)}`);
     }
   }
 
-  /**
-   * Reopens the current render each time, since the page may have re-rendered since the last check. The check runs
-   * as its own one-line script: a script's output joins every line's JSON, so only a single line parses as one value.
-   */
+  /** Reopens the current render each time, since the page may have re-rendered since the last check. */
   async inspect(target: VisBrowseTarget, kind: "snapshot" | "screenshot") {
-    const verb = kind === "snapshot" ? "Snapshotting" : "Screenshotting";
-    await this.#load(target, `${verb} vis of ${target.path}`);
-    const stdout = await this.#script(target, kind === "snapshot" ? "snapshot --compact" : "screenshot --full-page", `${verb} vis of ${target.path}`);
-    if (kind === "screenshot") {
-      const result = conformToZodSchema(z.object({ assetUrl: z.string().min(1) }), JSON.parse(stdout));
-      if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
-        throw new Error("Browse screenshot did not return an image.");
-      }
-      return formatVisScreenshotResult(target.path, result.data.assetUrl);
-    }
-    const result = conformToZodSchema(z.object({ tree: z.string() }), JSON.parse(stdout));
-    if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
-      throw new Error("Browse returned a snapshot without an accessibility tree.");
-    }
-    return `${result.data.tree}\n`;
+    return await this.#check(target, this.#hostPage(target), kind);
   }
 
-  async end(target: Pick<VisBrowseTarget, "sessionId" | "threadId" | "cwd">, options: { strict?: boolean } = {}) {
+  /** Screenshots a document on a standalone page, with no network and no session to serve it. */
+  async inspectDocument(target: VisDocumentTarget) {
+    return await this.#check(target, frameVisDocument(target.document, {}, { audience: "agent" }), "screenshot");
+  }
+
+  async end(target: Pick<BrowseOwner, "sessionId" | "threadId" | "cwd">, options: { strict?: boolean } = {}) {
     const failures: Error[] = [];
     try {
       await this.#port.stop({ session: WorkbenchVisBrowse.sessionName(target.sessionId), threadId: target.threadId, cwd: target.cwd });
@@ -129,6 +128,37 @@ export default class WorkbenchVisBrowse {
     if (options.strict && failures.length) throw new AggregateError(failures, "Vis browser cleanup failed.");
   }
 
+  #hostPage(target: VisBrowseTarget) {
+    const origin = this.#visOrigin();
+    if (!origin) throw new Error("Vis browser checks are unavailable until the daemon's vis listener is up.");
+    const url = new URL(daemonVisPath(target.sessionId, "live"), origin);
+    url.searchParams.set(VIS_AUDIENCE_PARAM, "agent");
+    url.searchParams.set(VIS_REVISION_PARAM, String(target.revision));
+    return hostVisFrame(url.href);
+  }
+
+  /**
+   * The check runs as its own one-line script: a script's output joins every line's JSON, so only a single line parses
+   * as one value.
+   */
+  async #check(target: BrowseOwner, html: string, kind: "snapshot" | "screenshot") {
+    const verb = kind === "snapshot" ? "Snapshotting" : "Screenshotting";
+    await this.#load(target, html, `${verb} vis of ${target.path}`);
+    const stdout = await this.#script(target, kind === "snapshot" ? "snapshot --compact" : "screenshot --full-page", `${verb} vis of ${target.path}`);
+    if (kind === "screenshot") {
+      const result = conformToZodSchema(z.object({ assetUrl: z.string().min(1) }), JSON.parse(stdout));
+      if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
+        throw new Error("Browse screenshot did not return an image.");
+      }
+      return formatVisScreenshotResult(target.path, result.data.assetUrl);
+    }
+    const result = conformToZodSchema(z.object({ tree: z.string() }), JSON.parse(stdout));
+    if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
+      throw new Error("Browse returned a snapshot without an accessibility tree.");
+    }
+    return `${result.data.tree}\n`;
+  }
+
   #page(sessionId: string) {
     return path.join(this.#directory, `${sessionId}.html`);
   }
@@ -139,21 +169,21 @@ export default class WorkbenchVisBrowse {
     return queued;
   }
 
-  #writePage(target: VisBrowseTarget) {
-    return this.#queuePage(target.sessionId, async () => {
+  #writePage(sessionId: string, html: string) {
+    return this.#queuePage(sessionId, async () => {
       await mkdir(this.#directory, { recursive: true });
-      await writeFile(this.#page(target.sessionId), frameVisDocument(target.document, target.controls, { audience: "agent" }));
+      await writeFile(this.#page(sessionId), html);
     });
   }
 
-  /** Writes the framed current render and opens it at the card's width. */
-  async #load(target: VisBrowseTarget, summary: string) {
-    await this.#writePage(target);
+  /** Writes the page and opens it at the card's width. */
+  async #load(target: BrowseOwner, html: string, summary: string) {
+    await this.#writePage(target.sessionId, html);
     await this.#script(target, `open ${pathToFileURL(this.#page(target.sessionId)).href} --headless\n${VIEWPORT}`, summary);
   }
 
   /** Script requests answer with one command response; failures carry `error`. */
-  async #script(target: VisBrowseTarget, script: string, summary: string) {
+  async #script(target: BrowseOwner, script: string, summary: string) {
     const response = await this.#port.execute({
       cwd: target.cwd,
       threadId: target.threadId,

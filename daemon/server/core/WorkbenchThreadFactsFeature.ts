@@ -24,6 +24,8 @@ import * as workbenchLibrary from "../lib/workbench-library";
 import type { ReloadableNodeBuild, ReloadableNodeLease } from "../runtime/ReloadableNode";
 import WorkbenchVisBrowse from "../vis/WorkbenchVisBrowse";
 import WorkbenchVisController from "../vis/WorkbenchVisController";
+import WorkbenchVisHttpController from "../vis/WorkbenchVisHttpController";
+import WorkbenchVisListener from "../vis/WorkbenchVisListener";
 import WorkbenchComponentsController from "../skills/WorkbenchComponentsController";
 import loadQuickJS from "../skills/load-quickjs";
 import type McpDownloadStore from "../mcp-servers/McpDownloadStore";
@@ -65,6 +67,8 @@ export default class WorkbenchThreadFactsFeature {
     refresh(threadId: string): Promise<NetworkHistoryEntry[]>;
   };
   readonly vis: WorkbenchVisController;
+  /** Serves vis pages to this daemon's headless checks, on an origin that reaches no daemon API. */
+  readonly #visListener: WorkbenchVisListener;
   readonly agentContext: WorkbenchAgentContextController;
   /** Cancels this generation's vis browser calls when the core node is disposed. */
   readonly #visBrowseLifetime = new AbortController();
@@ -259,6 +263,10 @@ export default class WorkbenchThreadFactsFeature {
         write: (target, result) => database.writeTranscriptCallComponent(target, result),
       },
     });
+    const visLog = (message: string) => console.warn(`[vis] ${message.slice(0, 500)}`);
+    const visPages = new WorkbenchVisHttpController({ serve: (sessionId, variant) => this.vis.serve(sessionId, variant) });
+    this.#visListener = new WorkbenchVisListener((request, response) => visPages.handleHttpRequest(request, response), visLog);
+    void this.#visListener.start().catch(error => visLog(`Vis listener could not start: ${error instanceof Error ? error.message : String(error)}`));
     this.vis = new WorkbenchVisController({
       store: command => database.executeThreadVis(command),
       componentPreview: (threadId, markup, signal) => this.components.previewMarkup(threadId, markup, signal),
@@ -291,9 +299,10 @@ export default class WorkbenchThreadFactsFeature {
             await WorkbenchVisBrowse.checkStopResponse(response);
           },
         },
-        log: message => console.warn(`[vis] ${message.slice(0, 500)}`),
+        visOrigin: () => this.#visListener.origin(),
+        log: visLog,
       }),
-      log: message => console.warn(`[vis] ${message.slice(0, 500)}`),
+      log: visLog,
     });
     this.addressedFeedback = new WorkbenchThreadAddressedFeedbackController({
       store: command => database.executeThreadAddressedFeedback(command),
@@ -367,5 +376,6 @@ export default class WorkbenchThreadFactsFeature {
   disposeVis() {
     this.vis.dispose();
     this.#visBrowseLifetime.abort(new Error("Vis browser calls are reloading."));
+    void this.#visListener.close().catch(error => console.warn(`[vis] Vis listener could not close: ${error instanceof Error ? error.message.slice(0, 500) : String(error)}`));
   }
 }

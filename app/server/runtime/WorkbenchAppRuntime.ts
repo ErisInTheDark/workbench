@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchAppRuntimeOptions: process-owned compiler, database, logging, and port configuration.
- * - default WorkbenchAppRuntime: own the stable graph host, runtime facts, the relayed launch URL, reload ingress and its busy reason.
+ * - default WorkbenchAppRuntime: own the stable graph host, runtime facts, the relayed launch URL, reload ingress and its busy reason,
+ *   and the process-lifetime vis origin listener.
  */
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -9,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
+import HttpServer, { type HttpServerAddress } from "workbench-shared/http/HttpServer";
 import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
 import { createReloadableNodeModuleLoader } from "workbench-shared/reload/reloadable-node-loader";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
@@ -98,10 +100,25 @@ export default class WorkbenchAppRuntime {
     update: ReturnType<WorkbenchDaemonSource["observe"]>;
   } | null = null;
 
+  /**
+   * The vis origin's listener lives with the process, not a reload generation: its port is part of every open frame's
+   * origin, so a reload must not move it. Each request still runs in the current generation's router.
+   */
+  private readonly visServer: HttpServer;
+  private visAddress: HttpServerAddress | null = null;
+
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
     const busy = options.busy ?? { hold: () => {} };
+    this.visServer = new HttpServer({
+      hostname: "127.0.0.1",
+      handleRequest: async (request, response) => await host.run("http", router => router.handleVis(request, response),
+        `app vis: ${request.method ?? "UNKNOWN"}`),
+      onError: error => options.logger.error("app", `vis http ${error.message}`),
+    });
     const context: AppProcessContext = {
+      visPort: () => this.visAddress?.port ?? null,
+      visOrigin: () => this.visAddress?.url ?? null,
       busy,
       daemonEndpointPath: options.daemonEndpointPath ?? path.join(resolveWorkbenchDataRoot(), "daemon", "runtime.json"),
       appPort: options.appPort,
@@ -318,6 +335,8 @@ export default class WorkbenchAppRuntime {
   }
 
   async start() {
+    // Listening first lets the first network registration carry the vis origin.
+    this.visAddress = await this.visServer.start();
     await this.host.start();
     this.runtimeSourcesReady = true;
     this.bindRuntimeSources();
@@ -331,7 +350,8 @@ export default class WorkbenchAppRuntime {
     this.releaseControlSources();
     this.controlListeners.clear();
     this.launchUrlListeners.clear();
-    await this.host.dispose();
+    this.visAddress = null;
+    await Promise.all([this.visServer.close({ force: true }), this.host.dispose()]);
   }
 
   private readRuntimeSnapshot() {

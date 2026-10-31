@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchMcpNode: own the wb MCP server, its caller-audience, local-capability and hosted-shell approval ports, and HTTP router after core and topology parents are active.
+ * - default WorkbenchMcpNode: own the wb MCP server, its caller-audience, local-capability and hosted-shell approval ports, and HTTP router (including served vis pages) after core and topology parents are active.
  */
 import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../daemon-runtime-objects";
@@ -8,6 +8,7 @@ import ReloadableNode from "../runtime/ReloadableNode";
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import WorkbenchDaemonHttpRouter from "../transport/WorkbenchDaemonHttpRouter";
 import WorkbenchTranscriptAssetController from "../transcript/WorkbenchTranscriptAssetController";
+import WorkbenchVisHttpController from "../vis/WorkbenchVisHttpController";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -91,6 +92,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       projectSnapshot: build.get("projectSnapshot"),
       threadGit: build.get("threadGit"),
       transcriptAssets: new WorkbenchTranscriptAssetController(build.get("database")),
+      vis: new WorkbenchVisHttpController({ serve: (sessionId, variant) => build.run("vis", vis => vis.serve(sessionId, variant), "Vis page") }),
     });
     return {
       afterCommit: () => {

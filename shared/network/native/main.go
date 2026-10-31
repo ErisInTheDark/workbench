@@ -37,6 +37,7 @@ type networkProcess struct {
 	access networkAccess
 	ingress *hostIngress
 	daemonIngress *hostIngress
+	visIngress *hostIngress
 	discovery *daemonDiscovery
 	group *networkGroupController
 	ctx       context.Context
@@ -310,7 +311,7 @@ func (owner *networkProcess) configure(ctx context.Context, configuration sideca
 			}
 		}
 	}
-	if err := owner.targets.set(configuration.AppOrigin, configuration.DaemonOrigin); err != nil {
+	if err := owner.targets.set(configuration.AppOrigin, configuration.DaemonOrigin, configuration.VisOrigin); err != nil {
 		return err
 	}
 	owner.mu.Lock()
@@ -428,6 +429,10 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 			err = errors.Join(err, owner.daemonIngress.close())
 			owner.daemonIngress = nil
 		}
+		if owner.visIngress != nil {
+			err = errors.Join(err, owner.visIngress.close())
+			owner.visIngress = nil
+		}
 		owner.mu.Lock()
 		owner.runtime.HostServe = modeStatus{Phase: "off"}
 		owner.runtime.DaemonServe = modeStatus{Phase: "off"}
@@ -443,18 +448,24 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 		return
 	}
 	if owner.ingress == nil {
-		owner.ingress, err = startHostIngress(owner.ctx, &owner.targets, &owner.access, owner.appNodeID, owner.hostFailure)
+		owner.ingress, err = startHostIngress(owner.ctx, &owner.targets, &owner.access, owner.appNodeID, owner.hostFailure, appProxy)
 		if err != nil { owner.hostFailure(err); return }
 	}
-	target := ""
-	if settings.Enabled && configuration.AppOrigin != "" { target = owner.ingress.listener.Addr().String() }
-	daemonTarget := ""
+	targets := hostTargets{}
+	if settings.Enabled && configuration.AppOrigin != "" { targets.app = owner.ingress.listener.Addr().String() }
 	if configuration.DaemonOrigin != "" {
 		if owner.daemonIngress == nil {
-			owner.daemonIngress, err = startHostIngress(owner.ctx, &owner.targets, &owner.access, owner.appNodeID, owner.hostFailure, true)
+			owner.daemonIngress, err = startHostIngress(owner.ctx, &owner.targets, &owner.access, owner.appNodeID, owner.hostFailure, daemonProxy)
 			if err != nil { owner.hostFailure(err); return }
 		}
-		daemonTarget = owner.daemonIngress.listener.Addr().String()
+		targets.daemon = owner.daemonIngress.listener.Addr().String()
+	}
+	if targets.app != "" && configuration.VisOrigin != "" {
+		if owner.visIngress == nil {
+			owner.visIngress, err = startHostIngress(owner.ctx, &owner.targets, &owner.access, owner.appNodeID, owner.hostFailure, visProxy)
+			if err != nil { owner.hostFailure(err); return }
+		}
+		targets.vis = owner.visIngress.listener.Addr().String()
 	}
 	owner.mu.Lock()
 	owner.runtime.HostServe = modeStatus{Phase: "starting"}
@@ -462,11 +473,11 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 	owner.mu.Unlock()
 	var publication hostPublication
 	if owner.host == nil {
-		owner.host, publication, err = startHostServe(owner.ctx, ctx, settings.Port, configuration.RetainedHostPort, target, daemonTarget, owner.hostFailure, func() {
+		owner.host, publication, err = startHostServe(owner.ctx, ctx, settings.Port, configuration.RetainedHostPort, targets, owner.hostFailure, func() {
 			if owner.discovery != nil { owner.discovery.refresh(owner.ctx) }
 		})
 	} else {
-		publication, err = owner.host.update(ctx, settings.Port, configuration.RetainedHostPort, target, daemonTarget)
+		publication, err = owner.host.update(ctx, settings.Port, configuration.RetainedHostPort, targets)
 	}
 	if err != nil {
 		owner.hostFailure(err)
@@ -478,7 +489,12 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 	owner.mu.Lock()
 	if owner.runtime.HostServe.Phase != "failed" {
 		owner.runtime.HostServe = modeStatus{Phase: "ready", URL: &address}
-		if target == "" { owner.runtime.HostServe = modeStatus{Phase: "off"} }
+		if targets.app == "" { owner.runtime.HostServe = modeStatus{Phase: "off"} }
+		// The app still serves without vis pages, so their failure is a note on a ready app, not a failure of it.
+		if targets.app != "" && publication.visError != nil {
+			message := "Vis pages are unavailable: " + publication.visError.Error()
+			owner.runtime.HostServe.Message = &message
+		}
 		owner.runtime.DaemonServe = modeStatus{Phase: "ready", URL: &daemonAddress}
 		if publication.appError != nil {
 			message := publication.appError.Error()
@@ -545,6 +561,10 @@ func (owner *networkProcess) close() error {
 	if owner.daemonIngress != nil {
 		failures = append(failures, owner.daemonIngress.close())
 		owner.daemonIngress = nil
+	}
+	if owner.visIngress != nil {
+		failures = append(failures, owner.visIngress.close())
+		owner.visIngress = nil
 	}
 	if owner.host != nil {
 		failures = append(failures, owner.host.close())

@@ -19,6 +19,8 @@ export interface WorkbenchAppPortSnapshot {
   stableOrigin?: string | null;
   /** Whether this browser runs on the app's machine, so `appOrigin` reaches the app. */
   loopbackReachable?: boolean;
+  /** Where this browser loads vis pages: the vis listener's own origin, never the app's. */
+  visOrigin?: string | null;
 }
 
 export interface WorkbenchAppPortUpdateRequest {
@@ -37,6 +39,8 @@ export const WorkbenchAppPortSnapshotSchema = z.object({
   stableOrigin: z.url().refine(value => new URL(value).origin === value
     && ["http:", "https:"].includes(new URL(value).protocol)).nullable().default(null),
   loopbackReachable: z.boolean().default(false),
+  visOrigin: z.url().refine(value => new URL(value).origin === value
+    && ["http:", "https:"].includes(new URL(value).protocol)).nullable().default(null),
 }).strict().superRefine((value, context) => {
   if (Number(new URL(value.appOrigin).port) !== value.currentPort) {
     context.addIssue({

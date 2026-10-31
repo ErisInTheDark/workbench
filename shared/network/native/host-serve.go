@@ -44,11 +44,15 @@ func configureHostServe(configuration *ipn.ServeConfig, session string, port uin
 	return nil
 }
 
-const daemonTailnetPort uint16 = 52739
-
 type hostPublication struct {
 	appError error
 	daemonError error
+	visError error
+}
+
+// Each target the host forwards a fixed tailnet port to; empty targets are not published.
+type hostTargets struct {
+	app, daemon, vis string
 }
 
 type hostServe struct {
@@ -60,7 +64,7 @@ type hostServe struct {
 	mu      sync.Mutex
 }
 
-func startHostServe(ctx context.Context, setup context.Context, port, retainedPort uint16, target, daemonTarget string, onFailure func(error), peersChanged ...func()) (*hostServe, hostPublication, error) {
+func startHostServe(ctx context.Context, setup context.Context, port, retainedPort uint16, targets hostTargets, onFailure func(error), peersChanged ...func()) (*hostServe, hostPublication, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	stopSetupCancellation := context.AfterFunc(setup, cancel)
 	defer stopSetupCancellation()
@@ -76,7 +80,7 @@ func startHostServe(ctx context.Context, setup context.Context, port, retainedPo
 		return nil, hostPublication{}, errors.Join(errors.New("host Tailscale did not provide a foreground session"), watcher.Close())
 	}
 	owner := &hostServe{client: client, watcher: watcher, cancel: cancel, session: initial.SessionID, done: make(chan struct{})}
-	publication, err := owner.update(ctx, port, retainedPort, target, daemonTarget)
+	publication, err := owner.update(ctx, port, retainedPort, targets)
 	if err != nil {
 		cancel()
 		return nil, publication, errors.Join(err, watcher.Close())
@@ -106,7 +110,7 @@ func startHostServe(ctx context.Context, setup context.Context, port, retainedPo
 	return owner, publication, nil
 }
 
-func (owner *hostServe) update(ctx context.Context, port, retainedPort uint16, target, daemonTarget string) (hostPublication, error) {
+func (owner *hostServe) update(ctx context.Context, port, retainedPort uint16, targets hostTargets) (hostPublication, error) {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	configuration, err := owner.client.GetServeConfig(ctx)
@@ -116,7 +120,7 @@ func (owner *hostServe) update(ctx context.Context, port, retainedPort uint16, t
 	if configuration == nil {
 		configuration = &ipn.ServeConfig{}
 	}
-	publication := configureHostMappings(configuration, owner.session, port, retainedPort, target, daemonTarget)
+	publication := configureHostMappings(configuration, owner.session, port, retainedPort, targets)
 	if err := owner.client.SetServeConfig(ctx, configuration); err != nil {
 		if local.IsPreconditionsFailedError(err) {
 			return publication, errors.New("Tailscale serve changed concurrently; retry without replacing the other configuration")
@@ -126,19 +130,38 @@ func (owner *hostServe) update(ctx context.Context, port, retainedPort uint16, t
 	return publication, nil
 }
 
-func configureHostMappings(configuration *ipn.ServeConfig, session string, port, retainedPort uint16, target, daemonTarget string) hostPublication {
+func reservedHostPort(port uint16) bool {
+	return port == daemonTailnetPort || port == visTailnetPort
+}
+
+// Publishes one fixed port beside the app's, replacing any earlier mapping of it; returns why it could not.
+func configureFixedHostPort(configuration *ipn.ServeConfig, session string, port uint16, target, unavailable string) error {
+	if current := configuration.Foreground[session]; current != nil {
+		delete(current.TCP, port)
+	}
+	if target == "" {
+		return errors.New(unavailable)
+	}
+	if err := configureHostServe(configuration, session, port, target); err != nil {
+		return err
+	}
+	configuration.Foreground[session].TCP[port].ProxyProtocol = 2
+	return nil
+}
+
+func configureHostMappings(configuration *ipn.ServeConfig, session string, port, retainedPort uint16, targets hostTargets) hostPublication {
 	if configuration.Foreground == nil {
 		configuration.Foreground = make(map[string]*ipn.ServeConfig)
 	}
 	previous := configuration.Foreground[session]
 	configuration.Foreground[session] = &ipn.ServeConfig{}
 	publication := hostPublication{}
-	if port == daemonTailnetPort || retainedPort == daemonTailnetPort {
-		publication.appError = errors.New("the app port is reserved for daemon discovery")
-	} else if target != "" {
-		publication.appError = configureHostServe(configuration, session, port, target)
+	if reservedHostPort(port) || reservedHostPort(retainedPort) {
+		publication.appError = errors.New("the app port is reserved for daemon discovery or vis pages")
+	} else if targets.app != "" {
+		publication.appError = configureHostServe(configuration, session, port, targets.app)
 		if publication.appError == nil && retainedPort != 0 && retainedPort != port {
-			publication.appError = configureHostServe(configuration, session, retainedPort, target)
+			publication.appError = configureHostServe(configuration, session, retainedPort, targets.app)
 		}
 		if publication.appError == nil {
 			for _, handler := range configuration.Foreground[session].TCP { handler.ProxyProtocol = 2 }
@@ -148,17 +171,11 @@ func configureHostMappings(configuration *ipn.ServeConfig, session string, port,
 	if publication.appError != nil {
 		configuration.Foreground[session] = previous
 	}
-	if current := configuration.Foreground[session]; current != nil {
-		delete(current.TCP, daemonTailnetPort)
-	}
-	if daemonTarget == "" {
-		publication.daemonError = errors.New("local daemon is unavailable")
-	} else {
-		publication.daemonError = configureHostServe(configuration, session, daemonTailnetPort, daemonTarget)
-		if publication.daemonError == nil {
-			configuration.Foreground[session].TCP[daemonTailnetPort].ProxyProtocol = 2
-		}
-	}
+	publication.daemonError = configureFixedHostPort(configuration, session, daemonTailnetPort, targets.daemon, "local daemon is unavailable")
+	// Vis pages follow the app: without a published app there is nothing to serve them for.
+	visTarget := targets.vis
+	if targets.app == "" || publication.appError != nil { visTarget = "" }
+	publication.visError = configureFixedHostPort(configuration, session, visTailnetPort, visTarget, "the app's vis listener is unavailable")
 	return publication
 }
 

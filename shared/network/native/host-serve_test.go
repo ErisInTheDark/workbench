@@ -10,7 +10,7 @@ import (
 func TestHostServeHandoffKeepsOldPortAndRejectsConflicts(t *testing.T) {
 	config := &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{9000: {HTTPS: true}}}
 	configureHostServe(config, "workbench", 8080, "127.0.0.1:4200")
-	publication := configureHostMappings(config, "workbench", 8089, 8080, "127.0.0.1:4300", "127.0.0.1:32123")
+	publication := configureHostMappings(config, "workbench", 8089, 8080, hostTargets{app: "127.0.0.1:4300", daemon: "127.0.0.1:32123"})
 	if publication.appError != nil { t.Fatal(publication.appError) }
 	for _, port := range []uint16{8080, 8089} {
 		handler := config.Foreground["workbench"].TCP[port]
@@ -18,15 +18,15 @@ func TestHostServeHandoffKeepsOldPortAndRejectsConflicts(t *testing.T) {
 			t.Fatal("handoff lost a reachable app entry")
 		}
 	}
-	publication = configureHostMappings(config, "workbench", 9000, 8089, "127.0.0.1:4300", "127.0.0.1:32123")
+	publication = configureHostMappings(config, "workbench", 9000, 8089, hostTargets{app: "127.0.0.1:4300", daemon: "127.0.0.1:32123"})
 	if publication.appError == nil || config.Foreground["workbench"].TCP[8080] == nil || config.Foreground["workbench"].TCP[8089] == nil {
 		t.Fatal("conflicting replacement removed working entries")
 	}
-	publication = configureHostMappings(config, "workbench", 8089, 0, "127.0.0.1:4300", "127.0.0.1:32123")
+	publication = configureHostMappings(config, "workbench", 8089, 0, hostTargets{app: "127.0.0.1:4300", daemon: "127.0.0.1:32123"})
 	if publication.appError != nil || config.Foreground["workbench"].TCP[8080] != nil || config.Foreground["workbench"].TCP[daemonTailnetPort] == nil {
 		t.Fatal("completion failed to retire only the old app entry")
 	}
-	publication = configureHostMappings(config, "workbench", 9000, 0, "127.0.0.1:4300", "")
+	publication = configureHostMappings(config, "workbench", 9000, 0, hostTargets{app: "127.0.0.1:4300"})
 	if publication.appError == nil || publication.daemonError == nil || config.Foreground["workbench"].TCP[8089] == nil || config.Foreground["workbench"].TCP[daemonTailnetPort] != nil {
 		t.Fatal("app conflict kept forwarding to a retired daemon listener")
 	}
@@ -93,13 +93,30 @@ func TestHostServeKeepsIndependentAppAndDaemonMappings(t *testing.T) {
 
 func TestDaemonOnlyPublicationRetainsAuthenticatedIngressWithoutAnApp(t *testing.T) {
 	config := &ipn.ServeConfig{}
-	first := configureHostMappings(config, "workbench", 8080, 0, "127.0.0.1:4200", "127.0.0.1:4300")
+	first := configureHostMappings(config, "workbench", 8080, 0, hostTargets{app: "127.0.0.1:4200", daemon: "127.0.0.1:4300"})
 	if first.appError != nil || first.daemonError != nil { t.Fatal("initial publication failed") }
-	next := configureHostMappings(config, "workbench", 8080, 0, "", "127.0.0.1:4300")
+	next := configureHostMappings(config, "workbench", 8080, 0, hostTargets{daemon: "127.0.0.1:4300"})
 	if next.appError != nil || next.daemonError != nil { t.Fatal("app detachment disabled the daemon") }
 	mappings := config.Foreground["workbench"].TCP
 	if mappings[8080] != nil { t.Fatal("detached app retained a stale target") }
 	if mappings[daemonTailnetPort] == nil || mappings[daemonTailnetPort].ProxyProtocol != 2 {
 		t.Fatal("daemon forwarding bypassed transport peer authentication")
+	}
+}
+
+func TestVisPagesArePublishedOnlyBesideAnAppAndAuthenticateTheirPeer(t *testing.T) {
+	config := &ipn.ServeConfig{}
+	published := configureHostMappings(config, "workbench", 8080, 0, hostTargets{app: "127.0.0.1:4200", daemon: "127.0.0.1:4300", vis: "127.0.0.1:4400"})
+	if published.appError != nil || published.visError != nil { t.Fatal("initial publication failed") }
+	vis := config.Foreground["workbench"].TCP[visTailnetPort]
+	if vis == nil || vis.TCPForward != "127.0.0.1:4400" || vis.ProxyProtocol != 2 {
+		t.Fatal("vis pages were not forwarded through peer authentication")
+	}
+	detached := configureHostMappings(config, "workbench", 8080, 0, hostTargets{daemon: "127.0.0.1:4300", vis: "127.0.0.1:4400"})
+	if detached.visError == nil || config.Foreground["workbench"].TCP[visTailnetPort] != nil {
+		t.Fatal("vis pages outlived the app they belong to")
+	}
+	if reserved := configureHostMappings(config, "workbench", visTailnetPort, 0, hostTargets{app: "127.0.0.1:4200"}); reserved.appError == nil {
+		t.Fatal("the app took the vis port")
 	}
 }

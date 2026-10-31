@@ -199,6 +199,8 @@ export const WorkbenchNetworkResultSchema = z.discriminatedUnion("kind", [
 export const WorkbenchNetworkSidecarConfigurationSchema = z.object({
   configuration: WorkbenchNetworkConfigurationSchema,
   appOrigin: z.url().nullable(),
+  /** Served on the relay's fixed vis port, wherever the app is served. */
+  visOrigin: z.url().nullable().optional(),
   daemonOrigin: z.url().nullable(),
   daemonPort: port.nullable(),
   publishDaemon: z.boolean().optional(),

@@ -41,4 +41,7 @@ export interface AppProcessContext {
   repositoryRootPath: string;
   supportsAppWebSockets?: true;
   subscribeAppRuntimeChanges(listener: () => void): () => void;
+  /** The process's loopback vis listener; null until it listens. It outlives reloads, so frame origins stay put. */
+  visPort(): number | null;
+  visOrigin(): string | null;
 }

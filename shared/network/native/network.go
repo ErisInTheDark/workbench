@@ -1,4 +1,4 @@
-// No exports. Own private-node networking and live app/daemon proxy targets.
+// No exports. Own private-node networking and live app/daemon/vis proxy targets.
 package main
 
 import (
@@ -34,7 +34,28 @@ import (
 type proxyTargets struct {
 	app    *url.URL
 	daemon *url.URL
+	vis    *url.URL
 }
+
+// Which local listener a relayed request reaches. Vis pages get their own listener, so they never share the app's origin.
+type proxyKind int
+
+const (
+	appProxy proxyKind = iota
+	daemonProxy
+	visProxy
+)
+
+// Fixed tailnet ports. A node can open each port once, so ports one node listens on must differ.
+const (
+	daemonTailnetPort uint16 = 52739
+	groupControlPort  uint16 = 52740
+	// Serves the app's vis pages, on whichever host name the browser used.
+	visTailnetPort uint16 = 52741
+)
+
+// Ports the private node always opens; its daemon port must avoid them.
+var privateNodePorts = []uint16{443, 53, groupControlPort, visTailnetPort}
 
 type networkTargets struct {
 	current atomic.Pointer[proxyTargets]
@@ -45,31 +66,33 @@ type networkTargets struct {
 
 type networkDeviceContext struct{}
 
-func (targets *networkTargets) set(appOrigin, daemonOrigin string) error {
-	var app *url.URL
-	var err error
-	if appOrigin != "" {
-		app, err = localProxyURL(appOrigin)
-		if err != nil { return err }
-	}
-	var daemon *url.URL
-	if daemonOrigin != "" {
-		daemon, err = localProxyURL(daemonOrigin)
-		if err != nil {
-			return err
-		}
-	}
-	targets.current.Store(&proxyTargets{app: app, daemon: daemon})
+func optionalProxyURL(origin string) (*url.URL, error) {
+	if origin == "" { return nil, nil }
+	return localProxyURL(origin)
+}
+
+func (targets *networkTargets) set(appOrigin, daemonOrigin, visOrigin string) error {
+	app, err := optionalProxyURL(appOrigin)
+	if err != nil { return err }
+	daemon, err := optionalProxyURL(daemonOrigin)
+	if err != nil { return err }
+	vis, err := optionalProxyURL(visOrigin)
+	if err != nil { return err }
+	targets.current.Store(&proxyTargets{app: app, daemon: daemon, vis: vis})
 	return nil
 }
 
-func (targets *networkTargets) proxy(daemon bool, transport http.RoundTripper, warn func(error)) http.Handler {
+func (targets *networkTargets) proxy(kind proxyKind, transport http.RoundTripper, warn func(error)) http.Handler {
+	daemon := kind == daemonProxy
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		current := targets.current.Load()
 		var target *url.URL
 		if current != nil {
-			target = current.app
-			if daemon { target = current.daemon }
+			switch kind {
+			case daemonProxy: target = current.daemon
+			case visProxy: target = current.vis
+			default: target = current.app
+			}
 		}
 		if target == nil {
 			http.Error(response, "Local Workbench service is unavailable.", http.StatusServiceUnavailable)
@@ -171,8 +194,8 @@ func newPrivateNetwork(parent context.Context, directory string, settings privat
 	if err != nil {
 		return nil, err
 	}
-	if daemonPort == 443 || daemonPort == 53 {
-		return nil, errors.New("daemon port must differ from private HTTPS 443 and DNS 53")
+	if slices.Contains(privateNodePorts, daemonPort) {
+		return nil, errors.New("daemon port must differ from the private node's HTTPS, DNS, group control and vis ports")
 	}
 	if err := ensurePrivateDirectory(directory); err != nil {
 		return nil, errors.New("could not protect private network state directory")
@@ -468,7 +491,7 @@ func (node *privateNetwork) run() (result error) {
 		node.cancel()
 	}
 	if node.group != nil {
-		listener, err := node.server.Listen("tcp", ":"+groupControlPort)
+		listener, err := node.server.Listen("tcp", ":"+strconv.Itoa(int(groupControlPort)))
 		if err != nil { return errors.New("private network control listener could not open") }
 		cleanup = append(cleanup, listener.Close)
 		server := &http.Server{Handler: node.group, BaseContext: func(net.Listener) context.Context { return node.ctx }}
@@ -491,7 +514,7 @@ func (node *privateNetwork) run() (result error) {
 		}
 		return certificate, nil
 	}}
-	ports := []uint16{443}
+	ports := []uint16{443, visTailnetPort}
 	if node.port != 0 {
 		ports = append(ports, node.port)
 	}
@@ -501,7 +524,10 @@ func (node *privateNetwork) run() (result error) {
 			return errors.New("private HTTPS listener could not open")
 		}
 		cleanup = append(cleanup, listener.Close)
-		proxy := node.targets.proxy(port == node.port, nil, func(err error) {
+		kind := appProxy
+		if port == node.port { kind = daemonProxy }
+		if port == visTailnetPort { kind = visProxy }
+		proxy := node.targets.proxy(kind, nil, func(err error) {
 			message := err.Error()
 			node.change(func(current *privateStatus) { current.Message = &message })
 		})
@@ -554,7 +580,7 @@ func (node *privateNetwork) run() (result error) {
 				defer release()
 				request = request.WithContext(context.WithValue(ctx, networkDeviceContext{}, device))
 			}
-			if allowed := node.targets.privateAppAllowed.Load(); port == 443 && allowed != nil && !*allowed {
+			if allowed := node.targets.privateAppAllowed.Load(); kind != daemonProxy && allowed != nil && !*allowed {
 				http.Error(response, "This app's explicit daemon URL is not compatible with private HTTPS.", http.StatusServiceUnavailable)
 				return
 			}

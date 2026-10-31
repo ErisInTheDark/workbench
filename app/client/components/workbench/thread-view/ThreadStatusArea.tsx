@@ -155,7 +155,7 @@ export default function ThreadStatusArea({
       id: "vis",
       label: "Live vis",
       wide: visTheatre,
-      render: () => <ThreadVisSessionCard {...vis} onTheatreChange={setVisTheatre} theatre={visTheatre} />,
+      render: () => <ThreadVisSessionCard {...vis} onTheatreChange={setVisTheatre} theatre={visTheatre} threadId={threadId} />,
       segments: [{
         key: "vis",
         content: <>

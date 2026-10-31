@@ -40,6 +40,15 @@ async function fixture(context: TestContext) {
         return { sessions: [live], snapshot: null };
       }
       case "readControls": return { sessions: [], snapshot: null, controls: controls.get(`${command.threadId}:${command.path}`) ?? {} };
+      case "readSnapshot": {
+        const stored = sessions.get(command.sessionId);
+        const captured = snapshots.get(`${command.sessionId}:${command.snapshotKind}`);
+        if (!stored || !captured) break;
+        return {
+          sessions: [stored],
+          snapshot: { sessionId: stored.sessionId, kind: command.snapshotKind, path: stored.path, capturedAt: 100, ...captured },
+        };
+      }
       default: break;
     }
     return { sessions: [], snapshot: null };
@@ -51,22 +60,34 @@ async function fixture(context: TestContext) {
     next: { exitCode: 0, stdout: ".a{}", stderr: "" },
   };
   const workbenchRoot = path.join(root, "workbench-checkout");
+  let current: WorkbenchVisController | null = null;
+  /** The browser loads the served page, so the fake records what serving would have shown it. */
+  const shown = async (sessionId: string) => {
+    const served = await current!.serve(sessionId, "live");
+    browse.controls.push(served?.controls ?? {});
+    return served?.document ?? "(nothing)";
+  };
+  /** The controller fires opens and refreshes without waiting; tests settle them before reading `calls`. */
+  const settle = (work: Promise<void>) => { browse.pending.push(work); return work; };
   const browse = {
     calls: [] as string[],
     controls: [] as VisControls[],
+    pending: [] as Promise<void>[],
     failure: null as Error | null,
     stopFailure: null as Error | null,
-    open: async (target: { sessionId: string; document: string }) => { browse.calls.push(`open ${target.document}`); },
-    inspect: async (target: { document: string; controls: VisControls }, kind: "snapshot" | "screenshot") => {
-      browse.calls.push(`${kind} ${target.document}`);
-      browse.controls.push(target.controls);
+    open: (target: { sessionId: string }) => settle(shown(target.sessionId).then(document => { browse.calls.push(`open ${document}`); })),
+    inspect: async (target: { sessionId: string }, kind: "snapshot" | "screenshot") => {
+      const document = await shown(target.sessionId);
+      browse.calls.push(`${kind} ${document}`);
       if (browse.failure) throw browse.failure;
-      return `${kind} of ${target.document}`;
+      return `${kind} of ${document}`;
     },
-    refresh: async (target: { document: string; controls: VisControls }) => {
-      browse.calls.push(`refresh ${target.document}`);
-      browse.controls.push(target.controls);
+    inspectDocument: async (target: { document: string }) => {
+      browse.calls.push(`screenshot ${target.document}`);
+      if (browse.failure) throw browse.failure;
+      return `screenshot of ${target.document}`;
     },
+    refresh: (target: { sessionId: string }) => settle(shown(target.sessionId).then(document => { browse.calls.push(`refresh ${document}`); })),
     end: async (target: { sessionId: string }) => {
       browse.calls.push(`end ${target.sessionId}`);
       if (browse.stopFailure) throw browse.stopFailure;
@@ -93,6 +114,7 @@ async function fixture(context: TestContext) {
       now: () => 100,
       log: () => undefined,
     });
+    current = controller;
     return controller;
   };
   const file = path.join(root, "mock.html");
@@ -100,6 +122,10 @@ async function fixture(context: TestContext) {
     threadId: "thread", harness: "codex", cwd: root, projectId: "project", rootPath: root, path: "mock.html", project: { kind: "caller" },
   });
   return { root, file, create, start, snapshots, sessions, watchers, css, workbenchRoot, browse };
+}
+
+async function served(controller: WorkbenchVisController, sessionId: string) {
+  return (await controller.serve(sessionId, "live"))?.document;
 }
 
 /** Resolves on the first publication whose thread state passes `accept`; file reads are real I/O, so no tick count works. */
@@ -231,7 +257,7 @@ test("a change keeps the last render while one is in flight, and a burst of chan
   const inFlight = controller.observe("thread", () => undefined);
   watched();
   const marked = inFlight.read().sessions[0]!;
-  assert.deepEqual([marked.rendering, marked.render?.document], [true, "<p>one</p>"], "the old render stays while the new one runs");
+  assert.deepEqual([marked.rendering, await served(controller, sessionId)], [true, "<p>one</p>"], "the old render stays while the new one runs");
   inFlight.release();
   watched();
   watched();
@@ -239,7 +265,9 @@ test("a change keeps the last render while one is in flight, and a burst of chan
   held.open();
   const finished = await done;
   assert.equal(f.css.commands.length, 2, "three changes during one render cause exactly one follow-up");
-  assert.equal(finished.render?.document, "<head><style>.a{}</style></head><p>two</p>");
+  const document = "<head><style>.a{}</style></head><p>two</p>";
+  assert.equal(await served(controller, sessionId), document);
+  assert.equal(finished.render?.bytes, Buffer.byteLength(document), "observers learn the size, never the document");
   controller.dispose();
 });
 
@@ -248,15 +276,15 @@ test("a failing CSS command keeps the previous render and reports why", async co
   await writeFile(path.join(f.root, ".wb.json"), CONFIG);
   await writeFile(f.file, `<link rel="workbench-css"><p>styled</p>`);
   const controller = f.create();
-  await f.start(controller);
+  const { sessionId } = await f.start(controller);
   // The command runs through the login shell with `{file}` substituted as one quoted argument.
   assert.ok(f.css.commands[0]?.at(-1)?.includes(`'${f.file.replaceAll("\\", "/")}'`));
-  const first = controller.read("thread").sessions[0]!.render?.document;
+  const first = await served(controller, sessionId);
   f.css.next = { exitCode: 1, stdout: "", stderr: "unknown utility" };
   const done = until(controller, current => !current.rendering);
   [...f.watchers.values()][0]!();
   const session = await done;
-  assert.equal(session.render?.document, first);
+  assert.equal(await served(controller, sessionId), first);
   assert.match(session.failure ?? "", /^CSS: The CSS command exited with code 1\.\nunknown utility/u);
   controller.dispose();
 });
@@ -269,7 +297,7 @@ test("a component re-renders when a file its build read changes, and watching fo
   const button = path.join(f.root, "Button.tsx");
   f.css.next = { exitCode: 0, stdout: JSON.stringify({ document: "<p>one</p>", inputs: ["mock.tsx", "Button.tsx", "node_modules/react/index.js"] }), stderr: "" };
   const controller = f.create();
-  await controller.startSession({
+  const { sessionId } = await controller.startSession({
     threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "mock.tsx", project: { kind: "caller" },
   });
   assert.deepEqual([...f.watchers.keys()].sort(), [button, entry].sort(), "dependencies are watched; node_modules is not");
@@ -277,7 +305,8 @@ test("a component re-renders when a file its build read changes, and watching fo
   f.css.next = { exitCode: 0, stdout: JSON.stringify({ document: "<p>two</p>", inputs: ["mock.tsx"] }), stderr: "" };
   const done = until(controller, session => !session.rendering);
   f.watchers.get(button)!();
-  assert.equal((await done).render?.document, "<p>two</p>");
+  await done;
+  assert.equal(await served(controller, sessionId), "<p>two</p>");
   assert.deepEqual([...f.watchers.keys()], [entry], "inputs the build stopped reading are no longer watched");
   controller.dispose();
 });
@@ -317,6 +346,23 @@ test("ending snapshots the current file and stops watching; a new generation res
   second.dispose();
 });
 
+test("a session serves its live render only while live, and its start and end snapshots from the same build root", async context => {
+  const f = await fixture(context);
+  await writeFile(f.file, "<p>start</p>");
+  const controller = f.create();
+  const { sessionId } = await f.start(controller);
+  assert.deepEqual(await controller.serve(sessionId, "live"), { document: "<p>start</p>", rootPath: f.root, controls: {} });
+  await writeFile(f.file, "<p>end</p>");
+  await controller.endSession({ threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" });
+  assert.equal(await controller.serve(sessionId, "live"), null, "an ended session has no live page");
+  assert.deepEqual(await controller.serve(sessionId, "start"), { document: "<p>start</p>", rootPath: f.root, controls: {} });
+  assert.equal((await controller.serve(sessionId, "end"))?.document, "<p>end</p>");
+  assert.deepEqual(await controller.readSnapshot(sessionId, "end"), {
+    sessionId, kind: "end", path: "mock.html", capturedAt: 100, bytes: Buffer.byteLength("<p>end</p>"), failure: null,
+  });
+  controller.dispose();
+});
+
 test("a session's browser opens with it, follows each rebuild, checks its latest render, and stops when it ends", async context => {
   const f = await fixture(context);
   await writeFile(f.file, "<p>one</p>");
@@ -324,9 +370,9 @@ test("a session's browser opens with it, follows each rebuild, checks its latest
   const { sessionId } = await f.start(controller);
   const target = { threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" };
   await writeFile(f.file, "<p>two</p>");
-  const rendered = until(controller, session => !session.rendering && session.render?.document === "<p>two</p>");
   f.watchers.get(f.file)!();
-  await rendered;
+  await until(controller, session => !session.rendering);
+  await Promise.all(f.browse.pending);
   assert.equal(await controller.inspect(target, "screenshot"), "screenshot of <p>two</p>");
   await controller.endSession(target);
   assert.deepEqual(f.browse.calls, ["open <p>one</p>", "refresh <p>two</p>", "screenshot <p>two</p>", `end ${sessionId}`]);
@@ -375,6 +421,7 @@ test("control changes are JSON from a live session, reach every frame of it, and
   const published = until(controller, session => session.controls.tab === "\"card\"");
   await controller.setControl("thread", sessionId, "tab", "\"card\"");
   await published;
+  await Promise.all(f.browse.pending);
   assert.deepEqual([f.browse.calls.at(-1), f.browse.controls.at(-1)], ["refresh <p>x</p>", { tab: "\"card\"" }], "a reload in the agent's browser sees the user's state");
   assert.deepEqual(await controller.readControls(target), { path: "mock.html", live: true, controls: { tab: "\"card\"" } });
   await controller.inspect(target, "screenshot");

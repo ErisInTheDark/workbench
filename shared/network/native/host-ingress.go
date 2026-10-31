@@ -30,13 +30,13 @@ type hostIngress struct {
 	done chan struct{}
 }
 
-func startHostIngress(parent context.Context, targets *networkTargets, access *networkAccess, appID func() string, warn func(error), daemon ...bool) (*hostIngress, error) {
+func startHostIngress(parent context.Context, targets *networkTargets, access *networkAccess, appID func() string, warn func(error), kind proxyKind) (*hostIngress, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil { return nil, errors.New("private host ingress listener could not open") }
 	ctx, cancel := context.WithCancel(parent)
 	owner := &hostIngress{listener: listener, cancel: cancel, done: make(chan struct{})}
 	client := &local.Client{}
-	proxy := targets.proxy(len(daemon) > 0 && daemon[0], nil, warn)
+	proxy := targets.proxy(kind, nil, warn)
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		peer, err := client.WhoIs(request.Context(), request.RemoteAddr)
 		if err != nil || peer.Node == nil || peer.Node.StableID == "" {

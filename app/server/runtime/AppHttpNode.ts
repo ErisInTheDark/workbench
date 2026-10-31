@@ -43,6 +43,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       agentRelay: build.get("agentRelay"),
       presentationImport: build.get("presentationImport"),
       supportsAppWebSockets: context.supportsAppWebSockets === true,
+      visPort: () => context.visPort(),
     });
     return {
       beginHandoff: () => ({

@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - VIS_MAX_SOURCE_BYTES/VIS_MAX_DOCUMENT_LENGTH: size bounds for a vis file and its rendered document.
+ * - VIS_MAX_SOURCE_BYTES/VIS_MAX_DOCUMENT_LENGTH: size bounds for a vis file read on its own and a rendered document.
+ * - VIS_LARGE_DOCUMENT_BYTES/isLargeVis: documents above this size load only once the user asks.
  * - isVisPath: whether a project path names a renderable vis file (.html, .htm, .svg, or a .tsx/.jsx component).
  * - VisSnapshotKindSchema/VisSnapshotKind: the moment a snapshot captured, session start or end.
- * - VisRenderSchema/VisRender: one rendered document, ready for a sandboxed frame.
+ * - VisRenderSchema/VisRender: when the latest document rendered and its size; frames load it from the vis origin.
  * - VisLiveSessionSchema/VisLiveSession: one active session's latest render, in-flight render and failure.
  * - VisThreadSchema/VisThread: every active vis session of one thread.
- * - VisSnapshotSchema/VisSnapshot: the stored document of one session moment.
+ * - VisSnapshotSchema/VisSnapshot: one stored session moment's size and failure; frames load it from the vis origin.
  * - formatVisSessionResult/parseVisSessionResult: the tool acknowledgement that carries a session id to transcript cards.
  * - VisProject/parseVisProject: the build context a session renders in: the caller's project, another folder's `.wb.json`, or Workbench's kit.
  * - VIS_MAX_CONTROL_ID_LENGTH/VIS_MAX_CONTROL_VALUE_LENGTH/VIS_MAX_CONTROLS: bounds of a vis file's synced control state.
@@ -17,8 +18,14 @@
 import { z } from "zod";
 
 export const VIS_MAX_SOURCE_BYTES = 2 * 1024 * 1024;
-/** Rendered documents include compiled CSS, so they may outgrow their source. */
-export const VIS_MAX_DOCUMENT_LENGTH = 6 * 1024 * 1024;
+/** Bounds what a daemon holds and stores per render; assets are served from disk, so they never count. */
+export const VIS_MAX_DOCUMENT_LENGTH = 16 * 1024 * 1024;
+/** Counts only the document; assets it loads later are not known ahead. */
+export const VIS_LARGE_DOCUMENT_BYTES = 1024 * 1024;
+
+export function isLargeVis(bytes: number) {
+  return bytes > VIS_LARGE_DOCUMENT_BYTES;
+}
 
 export function isVisPath(path: string) {
   return /\.(?:html?|svg|[jt]sx)$/iu.test(path);
@@ -45,9 +52,11 @@ export type VisControls = z.infer<typeof VisControlsSchema>;
 export const VisSnapshotKindSchema = z.enum(["start", "end"]);
 export type VisSnapshotKind = z.infer<typeof VisSnapshotKindSchema>;
 
+const bytes = z.number().int().nonnegative();
+
 export const VisRenderSchema = z.object({
-  document: z.string().max(VIS_MAX_DOCUMENT_LENGTH),
   renderedAt: timestamp,
+  bytes,
 }).strict();
 export type VisRender = z.infer<typeof VisRenderSchema>;
 
@@ -78,7 +87,7 @@ export const VisSnapshotSchema = z.object({
   path,
   capturedAt: timestamp,
   /** Null when the file could not be read at all. */
-  document: z.string().max(VIS_MAX_DOCUMENT_LENGTH).nullable(),
+  bytes: bytes.nullable(),
   failure,
 }).strict();
 export type VisSnapshot = z.infer<typeof VisSnapshotSchema>;

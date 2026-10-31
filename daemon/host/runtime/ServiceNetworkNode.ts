@@ -25,6 +25,7 @@ export default ReloadableNode.define<ServiceProcessContext, ServiceRuntimeObject
       stateDirectory: path.join(context.dataRoot, "app", "network"),
       target: () => ({
         appOrigin: context.sessions.current?.appOrigin ?? null,
+        visOrigin: context.sessions.current?.visOrigin ?? null,
         daemonOrigin: context.brokerOrigin(), daemonPort: 52739,
         publishDaemon: database.wakeEnabled,
         privateAppAllowed: context.sessions.current?.privateAppAllowed ?? true,

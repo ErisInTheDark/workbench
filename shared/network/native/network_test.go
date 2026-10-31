@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -32,6 +33,21 @@ func TestPrivateDaemonOriginFollowsOpenedListenerPort(t *testing.T) {
 	origin := privateDaemonOrigin("peer.wb.inthedark.boo", 32123)
 	if origin == nil || *origin != "https://peer.wb.inthedark.boo:32123" {
 		t.Fatalf("wrong private daemon endpoint: %v", origin)
+	}
+}
+
+func TestPrivateNodeNeverOpensOnePortTwice(t *testing.T) {
+	seen := map[uint16]bool{}
+	for _, port := range privateNodePorts {
+		if seen[port] {
+			t.Fatalf("the private node would open port %d twice and fail to start", port)
+		}
+		seen[port] = true
+	}
+	for _, port := range privateNodePorts {
+		if _, err := newPrivateNetwork(context.Background(), t.TempDir(), privateConfiguration{Label: "desktop"}, port, &networkTargets{}, func(privateStatus) {}); err == nil {
+			t.Fatalf("daemon port %d was admitted although the private node already listens on it", port)
+		}
 	}
 }
 
@@ -93,7 +109,7 @@ func TestHostIdentitySurvivesServePublicationFailure(t *testing.T) {
 
 func TestProxyFollowsAppPortAndPreservesRequestSemantics(t *testing.T) {
 	targets := &networkTargets{}
-	if err := targets.set("http://127.0.0.1:4200", "http://127.0.0.1:4500"); err != nil {
+	if err := targets.set("http://127.0.0.1:4200", "http://127.0.0.1:4500", ""); err != nil {
 		t.Fatal(err)
 	}
 	var destinations []string
@@ -108,9 +124,9 @@ func TestProxyFollowsAppPortAndPreservesRequestSemantics(t *testing.T) {
 		}
 		return testHTTPResponse(200, "ok"), nil
 	})
-	handler := targets.proxy(false, transport, func(err error) { t.Error(err) })
+	handler := targets.proxy(appProxy, transport, func(err error) { t.Error(err) })
 	for _, port := range []string{"4200", "4300"} {
-		if err := targets.set("http://127.0.0.1:"+port, "http://127.0.0.1:4500"); err != nil {
+		if err := targets.set("http://127.0.0.1:"+port, "http://127.0.0.1:4500", ""); err != nil {
 			t.Fatal(err)
 		}
 		request := httptest.NewRequest("POST", "https://desktop.wb.inthedark.boo/api/example?a=one", strings.NewReader("payload"))
@@ -128,15 +144,18 @@ func TestProxyFollowsAppPortAndPreservesRequestSemantics(t *testing.T) {
 
 func TestProxyRejectsInvalidTargetsWithoutLosingPreviousTarget(t *testing.T) {
 	targets := &networkTargets{}
-	if err := targets.set("http://127.0.0.1:4200", "http://127.0.0.1:4500"); err != nil {
+	if err := targets.set("http://127.0.0.1:4200", "http://127.0.0.1:4500", ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range []string{"file:///private/key", "http://example.com:4200", "http://127.0.0.1:4200/path", "http://user:secret@127.0.0.1:4200"} {
-		if err := targets.set(target, "http://127.0.0.1:4500"); err == nil {
+		if err := targets.set(target, "http://127.0.0.1:4500", ""); err == nil {
 			t.Fatal("proxy admitted an invalid local target")
 		}
+		if err := targets.set("http://127.0.0.1:4200", "http://127.0.0.1:4500", target); err == nil {
+			t.Fatal("proxy admitted an invalid vis target")
+		}
 	}
-	handler := targets.proxy(false, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	handler := targets.proxy(appProxy, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Host != "127.0.0.1:4200" {
 			t.Fatal("invalid update corrupted the current target")
 		}
@@ -147,7 +166,7 @@ func TestProxyRejectsInvalidTargetsWithoutLosingPreviousTarget(t *testing.T) {
 
 func TestUnavailableDaemonDoesNotDisableAppOrUseARetiredPort(t *testing.T) {
 	targets := &networkTargets{}
-	if err := targets.set("http://127.0.0.1:4200", ""); err != nil {
+	if err := targets.set("http://127.0.0.1:4200", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -157,13 +176,47 @@ func TestUnavailableDaemonDoesNotDisableAppOrUseARetiredPort(t *testing.T) {
 		return testHTTPResponse(200, "ok"), nil
 	})
 	app := httptest.NewRecorder()
-	targets.proxy(false, transport, func(err error) { t.Error(err) }).ServeHTTP(app, httptest.NewRequest("GET", "https://desktop.wb.inthedark.boo/", nil))
+	targets.proxy(appProxy, transport, func(err error) { t.Error(err) }).ServeHTTP(app, httptest.NewRequest("GET", "https://desktop.wb.inthedark.boo/", nil))
 	if app.Code != 200 {
 		t.Fatal("unavailable daemon disabled the app")
 	}
 	daemon := httptest.NewRecorder()
-	targets.proxy(true, transport, func(err error) { t.Error(err) }).ServeHTTP(daemon, httptest.NewRequest("GET", "https://desktop.wb.inthedark.boo/", nil))
+	targets.proxy(daemonProxy, transport, func(err error) { t.Error(err) }).ServeHTTP(daemon, httptest.NewRequest("GET", "https://desktop.wb.inthedark.boo/", nil))
 	if daemon.Code != http.StatusServiceUnavailable {
 		t.Fatal("missing daemon was not reported unavailable")
+	}
+}
+
+func TestVisPagesReachOnlyTheVisListenerWithTheAppsIngressProof(t *testing.T) {
+	targets := &networkTargets{}
+	appToken, daemonToken := "app-token", "daemon-token"
+	targets.ingressToken.Store(&appToken)
+	targets.daemonIngressToken.Store(&daemonToken)
+	if err := targets.set("http://127.0.0.1:4200", "http://127.0.0.1:4500", "http://127.0.0.1:4600"); err != nil {
+		t.Fatal(err)
+	}
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "127.0.0.1:4600" {
+			t.Fatalf("a vis page reached %s instead of the vis listener", request.URL.Host)
+		}
+		if request.Header.Get("X-Workbench-Network-Token") != appToken {
+			t.Fatal("a vis page carried another listener's ingress proof")
+		}
+		return testHTTPResponse(200, "ok"), nil
+	})
+	request := httptest.NewRequest("GET", "https://desktop.wb.inthedark.boo:52741/page", nil)
+	request = request.WithContext(context.WithValue(request.Context(), networkDeviceContext{}, "device"))
+	response := httptest.NewRecorder()
+	targets.proxy(visProxy, transport, func(err error) { t.Error(err) }).ServeHTTP(response, request)
+	if response.Code != 200 {
+		t.Fatalf("vis status %d", response.Code)
+	}
+	if err := targets.set("http://127.0.0.1:4200", "http://127.0.0.1:4500", ""); err != nil {
+		t.Fatal(err)
+	}
+	missing := httptest.NewRecorder()
+	targets.proxy(visProxy, transport, func(err error) { t.Error(err) }).ServeHTTP(missing, httptest.NewRequest("GET", "https://desktop.wb.inthedark.boo:52741/page", nil))
+	if missing.Code != http.StatusServiceUnavailable {
+		t.Fatal("a missing vis listener fell back to another target")
 	}
 }

@@ -17,9 +17,9 @@ import { WallpaperIcon } from "../workbench-icons";
 import ThreadStepRow from "./ThreadStepRow";
 import { isFailedStep, stepLabel, stepLabels, type StepLabels, type StepState } from "./thread-step";
 import ThreadUserImage from "./ThreadUserImage";
-import ThreadVisFrame from "./ThreadVisFrame";
+import ThreadVisPage from "./ThreadVisPage";
 
-/** Mounts only once the disclosure opens, so the stored document is read on demand. */
+/** Mounts only once the disclosure opens, so the stored document loads on demand. */
 function VisSnapshotContent({ sessionId, snapshotKind, threadId }: { sessionId: string; snapshotKind: "start" | "end"; threadId: string }) {
   const workspace = useContext(WorkbenchWorkspaceContext);
   const query = useMemo(() => ({
@@ -34,9 +34,17 @@ function VisSnapshotContent({ sessionId, snapshotKind, threadId }: { sessionId: 
   }
   return (
     <div className="space-y-1">
-      {data.document !== null
-        ? <ThreadVisFrame className="rounded-[0.65rem] bg-canvas" document={data.document} title={`Vis snapshot of ${data.path}`} />
-        : null}
+      {data.bytes !== null ? (
+        <ThreadVisPage
+          bytes={data.bytes}
+          path={data.path}
+          revision={0}
+          sessionId={sessionId}
+          threadId={threadId}
+          title={`Vis snapshot of ${data.path}`}
+          variant={snapshotKind}
+        />
+      ) : null}
       {data.failure ? <p className="m-0 text-[0.78em] text-fg/muted">{data.failure}</p> : null}
     </div>
   );

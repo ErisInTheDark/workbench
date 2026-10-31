@@ -18,12 +18,11 @@ import (
 	"net/netip"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
-
-const groupControlPort = "52740"
 
 type networkCandidate struct {
 	ID string `json:"id"`
@@ -143,7 +142,7 @@ func (group *networkGroupController) envelope() (directoryEnvelope, error) {
 
 func (group *networkGroupController) request(ctx context.Context, member networkMember, path string, input, output interface{}) (result error) {
 	if len(member.Addresses) == 0 { return errors.New("app address is unavailable") }
-	address := net.JoinHostPort(member.Addresses[0], groupControlPort)
+	address := net.JoinHostPort(member.Addresses[0], strconv.Itoa(int(groupControlPort)))
 	peer, err := group.node.local.WhoIs(ctx, address)
 	if err != nil || peer.Node == nil || string(peer.Node.StableID) != member.NodeID {
 		return errors.New("app control address does not match its Tailscale identity")
