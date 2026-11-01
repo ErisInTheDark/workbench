@@ -170,7 +170,7 @@ Enter Implement mode only after explicit approval of the current concrete plan.
 
 Use Implement mode only after approval. Before each entry, apply this **Reasoning Checklist**:
 <!-- Failure: agents treated a pending addendum, a tentative idea or an earlier loop's approval as approval and started editing. Quoting the approval forces a check of what the user actually approved, at the moment it matters. -->
-<proof-of-work id="approval">
+<proof-of-work id="approval" hidden>
 - [ ] **Approval [approval.user_approved]:** Quote the user's approval, or explicit autonomy instruction, covering exactly the work you are starting. Planned, implied or earlier-scope approval is not approval; without it, return to Brief or Decision.
 </proof-of-work>
 
