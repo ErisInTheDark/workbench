@@ -44,8 +44,8 @@ export interface ReloadDeviceState {
   ports: ReloadDevicePorts;
   /** The running operation's label when it targets this device. */
   running: string | null;
-  /** Another operation runs or the app connection dropped, so no control may start. */
-  disabled: boolean;
+  /** Why no control may start here: an operation runs, the app connection dropped, or a reload is finishing. */
+  blockedBy: string | null;
   error: string | null;
   pendingScopes: readonly string[];
   /** Why this device cannot be reached; it shows instead of controls. */
@@ -89,9 +89,25 @@ function operationFor(sources: ReloadSources, daemonId: DaemonId | null) {
   return (target ?? null) === daemonId ? sources.operation : null;
 }
 
+const operationLabel = (operation: DeviceReloadOperation) => OPERATION_LABELS[operation.phase] ?? "Updating";
+
 function runningLabel(mine: DeviceReloadOperation | null, interrupted: boolean) {
   if (!mine || !isRunning(mine)) return null;
-  return interrupted ? "Reconnecting" : OPERATION_LABELS[mine.phase] ?? "Updating";
+  return interrupted ? "Reconnecting" : operationLabel(mine);
+}
+
+/** One operation runs at a time across every device, so another device's operation blocks this one too. */
+function blockedBy(sources: ReloadSources, daemonId: DaemonId | null, pendingScopes: readonly string[]) {
+  if (sources.interrupted) return "Reconnecting to the Workbench app";
+  const { operation } = sources;
+  if (isRunning(operation)) {
+    const target = operation.daemonId ?? sources.attachedId;
+    if (target === daemonId) return operationLabel(operation);
+    const name = target === sources.attachedId ? sources.localName
+      : sources.remotes.find(source => source.daemonId === target)?.hostname ?? "another device";
+    return `${operationLabel(operation)} ${name}`;
+  }
+  return pendingScopes.length ? "Finishing a reload" : null;
 }
 
 function useAppRuntimeSnapshot(appRuntime: WorkbenchAppRuntimeStore | null) {
@@ -163,6 +179,7 @@ export function useLocalReloadDevice({ appRuntime, daemonRuntime, sources, onAsk
   const [issueError, setIssueError] = useState("");
   const dirt = mergeReloadDirt(appDirt, daemonDirt);
   const mine = operationFor(sources, sources.attachedId);
+  const pendingScopes = dirt?.pendingScopes ?? [];
   const ports: ReloadDevicePorts = {
     reloadScope: scope => ignoringInterruption(async () => {
       const owners = partitionReloadScopes([scope.scope]);
@@ -203,9 +220,9 @@ export function useLocalReloadDevice({ appRuntime, daemonRuntime, sources, onAsk
     plan: planReloadDevice({ local: true, dirt, update, appUpdateScopes: appDirt?.updateScopes ?? null }),
     ports,
     running: runningLabel(mine, sources.interrupted),
-    disabled: isRunning(sources.operation) || sources.interrupted,
+    blockedBy: blockedBy(sources, sources.attachedId, pendingScopes),
     error: issueError || (mine?.phase === "failed" ? mine.error : null) || dirt?.error || null,
-    pendingScopes: dirt?.pendingScopes ?? [],
+    pendingScopes,
     unavailable: null,
     resolve,
   };
@@ -281,7 +298,7 @@ export function useRemoteReloadDevices({ appRuntime, sources }: {
         },
       },
       running: runningLabel(mine, false),
-      disabled: isRunning(sources.operation) || sources.interrupted,
+      blockedBy: blockedBy(sources, daemonId, dirt.pendingScopes),
       error: (mine?.phase === "failed" ? mine.error : null) || dirt.error || null,
       pendingScopes: dirt.pendingScopes,
       unavailable: offline(source),

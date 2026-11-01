@@ -105,7 +105,7 @@ export default function WorkbenchReloadDevice({ device, startOpen = false }: {
   device: ReloadDeviceState;
   startOpen?: boolean;
 }) {
-  const { name, local, plan, pendingScopes, running, disabled, error, unavailable, ports, resolve: onResolve } = device;
+  const { name, local, plan, pendingScopes, running, blockedBy, error, unavailable, ports, resolve: onResolve } = device;
   const [open, setOpen] = useState(startOpen);
   const { request, requesting, error: requestError } = useReloadRequest();
   const pending = new Set(pendingScopes);
@@ -115,8 +115,19 @@ export default function WorkbenchReloadDevice({ device, startOpen = false }: {
   const impact = plan.reload ?? plan.update?.impact ?? null;
   const chips = !expanded && impact && (impact.restarts.length || impact.migrates) ? <ReloadImpactChips impact={impact} /> : null;
   const quiet = unavailable ?? (!plan.reload && !plan.update && !plan.issue && !running ? "up to date" : null);
-  const blocked = disabled || requesting || pending.size > 0;
+  const blocked = blockedBy !== null || requesting;
   const shownError = requestError || error;
+  const actions = (
+    <DeviceActions
+      disabled={blocked}
+      local={local}
+      onRequest={request}
+      onResolve={onResolve}
+      plan={plan}
+      ports={ports}
+      running={running}
+    />
+  );
   return (
     <section className="border-b border-fg/8 py-1.5 last:border-b-0">
       <div className="flex min-h-9 min-w-0 items-center gap-2">
@@ -140,17 +151,10 @@ export default function WorkbenchReloadDevice({ device, startOpen = false }: {
             ) : null}
           </span>
         </button>
-        {unavailable ? null : (
-          <DeviceActions
-            disabled={blocked}
-            local={local}
-            onRequest={request}
-            onResolve={onResolve}
-            plan={plan}
-            ports={ports}
-            running={running}
-          />
-        )}
+        {/* A running operation keeps its label even after its device drops off, so the wait stays visible. */}
+        {unavailable && !running ? null : blockedBy && !running ? (
+          <Tooltip content={blockedBy}><span className="flex shrink-0">{actions}</span></Tooltip>
+        ) : actions}
       </div>
       {expanded ? (
         <div className="pb-1 pt-0.5">

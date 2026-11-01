@@ -118,9 +118,11 @@ export default function WorkbenchReloadFooterPill({ local, remotes, tabOutOfDate
   const shift = useNonTextInputShiftKey({ allowWhileTextInputFocused: true });
   const { request, requesting, error: requestError } = useReloadRequest();
   const { plan, ports } = local;
-  const disabled = local.disabled || requesting || local.pendingScopes.length > 0;
+  const disabled = local.blockedBy !== null || requesting;
   const error = requestError || local.error;
   const update = plan.update && !plan.update.blocked && !plan.issue ? plan.update : null;
+  const blockable = !local.running && Boolean(plan.reload || update || plan.issue && local.resolve);
+  const explanation = error ? <span className="text-danger">{error}</span> : blockable ? local.blockedBy : null;
   const attention = [...plan.issue && !local.resolve ? [local] : [], ...remotes.filter(needsAttention)];
 
   const main: ReactNode = (() => {
@@ -180,7 +182,7 @@ export default function WorkbenchReloadFooterPill({ local, remotes, tabOutOfDate
   })();
 
   const pill = <>
-    {main ? (error ? <Tooltip content={<span className="text-danger">{error}</span>}><span className="flex">{main}</span></Tooltip> : main) : null}
+    {main ? (explanation ? <Tooltip content={explanation}><span className="flex">{main}</span></Tooltip> : main) : null}
     <DevicesButton
       afterDisabled={Boolean(local.running)}
       attention={attention}
