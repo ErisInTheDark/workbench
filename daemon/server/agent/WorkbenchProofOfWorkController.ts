@@ -1,21 +1,28 @@
 /*
  * Exports:
- * - WorkbenchProofOfWorkControllerOptions: caller, checklist catalogue and current-turn transcript ports.
- * - default WorkbenchProofOfWorkController: record one checklist submission and report what the turn still owes.
+ * - WorkbenchProofOfWorkControllerOptions: caller, checklist catalogue, mode gate, workflow ledger and current-turn transcript ports.
+ * - default WorkbenchProofOfWorkController: record one checklist submission and report what is still owed: gated checklists over
+ *   their gate's window, others over the current turn.
  */
 import {
+  formatProofOfWorkReport,
   mergeProofs,
   proofFamily,
   readProofOfWorkSubmission,
   reconcileProofOfWork,
   type ProofOfWorkChecklist,
+  type ProofState,
 } from "workbench-shared/workbench/thread/proof-of-work";
+import { gatedProofWindows, type ModeGate, type WorkflowLedgerEntry } from "workbench-shared/workbench/thread/workflow-modes";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { WorkbenchProofOfWorkRequestSchema } from "../lib/workbench/commands/proof-of-work-command-definition";
 
 export interface WorkbenchProofOfWorkControllerOptions {
   resolveCaller(caller: { cwd: string; harness: string; threadId: string }, signal: AbortSignal): Promise<{ threadId: string; projectRoot: string | null }>;
   readCatalogue(projectRoot: string | null): Promise<readonly ProofOfWorkChecklist[]>;
+  readGates(threadId: string): Promise<readonly ModeGate[]>;
+  /** The thread's earlier successful filings and mode switches, oldest first; never the call being answered. */
+  readLedger(threadId: string): Promise<readonly WorkflowLedgerEntry[]>;
   /** The latest turn's items in transcript order; it may already hold the call being answered. */
   readTurnItems(threadId: string, signal: AbortSignal): Promise<readonly ThreadItem[]>;
 }
@@ -33,9 +40,11 @@ export default class WorkbenchProofOfWorkController {
     }
     const { proof, ...caller } = parsed.data;
     const { threadId, projectRoot } = await this.options.resolveCaller(caller, signal);
-    const [catalogue, items] = await Promise.all([
+    const [catalogue, items, gates, ledger] = await Promise.all([
       this.options.readCatalogue(projectRoot),
       this.options.readTurnItems(threadId, signal),
+      this.options.readGates(threadId),
+      this.options.readLedger(threadId),
     ]);
     signal.throwIfAborted();
 
@@ -48,19 +57,14 @@ export default class WorkbenchProofOfWorkController {
     }
 
     const filed = items.flatMap(item => { const submission = readProofOfWorkSubmission(item); return submission ? [submission] : []; });
-    const report = reconcileProofOfWork(mergeProofs([...filed, proof]), catalogue);
-    const lines = ["Recorded."];
-    for (const { checklist, resolved, deferred, missing } of report.checklists) {
-      if (!deferred.length && !missing.length) { lines.push(`${checklist.id}: complete.`); continue; }
-      lines.push([
-        `${checklist.id}: ${resolved}/${checklist.items.length} resolved.`,
-        deferred.length ? `Deferred: ${deferred.join(", ")}.` : "",
-        missing.length ? `Missing: ${missing.join(", ")}. File or defer them.` : "",
-      ].filter(Boolean).join(" "));
+    const turn = mergeProofs([...filed, proof]);
+    const touched = new Set([...turn.keys()].map(proofFamily));
+    const windows = gatedProofWindows(ledger, gates);
+    const proofs = new Map<string, ProofState>([...turn].filter(([id]) => !windows.has(proofFamily(id))));
+    for (const [family, window] of windows) {
+      if (!touched.has(family)) continue;
+      for (const [id, state] of mergeProofs([...window, proof])) if (proofFamily(id) === family) proofs.set(id, state);
     }
-    if (report.unknownFamilies.length) {
-      lines.push(`Unregistered checklists: ${report.unknownFamilies.join(", ")}; filed without coverage checks. Registered: ${catalogue.map(checklist => checklist.id).join(", ") || "none"}.`);
-    }
-    return new Response(`${lines.join("\n")}\n`, { headers: TEXT_HEADERS });
+    return new Response(formatProofOfWorkReport(reconcileProofOfWork(proofs, catalogue), catalogue), { headers: TEXT_HEADERS });
   }
 }

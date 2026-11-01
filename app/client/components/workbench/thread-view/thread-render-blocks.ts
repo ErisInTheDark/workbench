@@ -14,7 +14,8 @@
  * - reuseRenderableBlocks/hasSameBlockTimeline: retain unchanged rows across transcript item arrivals.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import { readProofOfWorkSubmission } from "workbench-shared/workbench/thread/proof-of-work";
+import { proofFamily, readProofOfWorkCompletion, readProofOfWorkSubmission } from "workbench-shared/workbench/thread/proof-of-work";
+import { readModeSwitch } from "workbench-shared/workbench/thread/workflow-modes";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
@@ -114,7 +115,9 @@ export type ActivitySegment =
   | { durationMs: number; item: CommandItem | Extract<ThreadItem, { type: "generic" }>; kind: "sleep" }
   | { kind: "webSearch"; items: Extract<ThreadItem, { type: "webSearch" }>[] };
 export type ThreadRenderableBlock =
-  | { kind: "proofOfWork"; items: Extract<ThreadItem, { type: "mcpToolCall" }>[] }
+  /** The filing that left every reported checklist complete, shown with the incomplete filings before it that drew as rows. */
+  | { earlier: Extract<ThreadItem, { type: "mcpToolCall" }>[]; kind: "proofOfWork"; items: [Extract<ThreadItem, { type: "mcpToolCall" }>] }
+  | { kind: "modeSwitch"; items: [Extract<ThreadItem, { type: "mcpToolCall" }>]; mode: string }
   /** Consecutive work (reasoning, plain commands, file changes, searches) shown as one summary that expands into its steps. */
   | { kind: "activityRun"; items: ThreadItem[]; segments: ActivitySegment[] }
   /**
@@ -158,6 +161,8 @@ export interface HiddenThreadItemIds {
   controlUserMessages?: boolean;
   dynamicToolCallIds?: ReadonlySet<string> | null;
   itemIds?: ReadonlySet<string> | null;
+  /** Checklist families declared hidden, whose filings never draw. */
+  proofOfWorkFamilies?: ReadonlySet<string> | null;
   reasoningStep?: ThreadReasoningStepReference | null;
   webSearchItemIds?: ReadonlySet<string> | null;
 }
@@ -182,10 +187,11 @@ export function reuseRenderableBlocks(
     if (old.kind === "item" && block.kind === "item") {
       return old.item === block.item && old.hasCapturedChildren === block.hasCapturedChildren ? old : block;
     }
-    const oldItems = getRenderableBlockItems(old);
-    const nextItems = getRenderableBlockItems(block);
-    return oldItems.length === nextItems.length
-      && oldItems.every((item, index) => item === nextItems[index])
+    const sameItems = (left: readonly ThreadItem[], right: readonly ThreadItem[]) => (
+      left.length === right.length && left.every((item, index) => item === right[index])
+    );
+    return sameItems(getRenderableBlockItems(old), getRenderableBlockItems(block))
+      && (old.kind !== "proofOfWork" || block.kind !== "proofOfWork" || sameItems(old.earlier, block.earlier))
       && (!("state" in old) || !("state" in block) || old.state === block.state)
       ? old : block;
   });
@@ -258,6 +264,13 @@ function isAlreadyMatchingTaskTitle(item: ThreadItem, fallbackCwd: string) {
     tool: item.tool,
   });
   return route?.kind === "specialized" && route.operation.kind === "threadTitle";
+}
+
+/** A running filing, or one whose feedback still lists owed items, draws as a row; an expired result keeps its card. */
+function proofOfWorkPlacement(item: Extract<ThreadItem, { type: "mcpToolCall" }>) {
+  if (item.status !== "completed") return "row";
+  const feedback = formatToolCallOutput({ content: item.result?.content, fallback: null });
+  return readProofOfWorkCompletion(feedback) === "partial" ? "row" : "card";
 }
 
 /** Held input awaiting delivery (`pending`) or never delivered (`unsent`); null once delivered or for ordinary input. */
@@ -524,6 +537,7 @@ export function buildRenderableBlocks(
   };
   const narrativeKeys = new Set<string>();
   const heldAgentMessages: IncomingAgentMessageItem[] = [];
+  let incompleteProofs: Extract<ThreadItem, { type: "mcpToolCall" }>[] = [];
   let compacted = false;
   for (const item of items) {
     if (item.type === "plan") continue;
@@ -576,11 +590,22 @@ export function buildRenderableBlocks(
       }
     }
     if (isUnstartedToolCall(item)) continue;
-    if (item.type === "mcpToolCall" && readProofOfWorkSubmission(item)) {
+    const submission = item.type === "mcpToolCall" ? readProofOfWorkSubmission(item) : null;
+    if (item.type === "mcpToolCall" && submission) {
+      const families = [...Object.keys(submission.proofs ?? {}), ...submission.notApplicable ?? [], ...submission.defer ?? []].map(proofFamily);
+      if (families.every(family => hidden.proofOfWorkFamilies?.has(family))) continue;
+      if (proofOfWorkPlacement(item) === "card") {
+        flush();
+        blocks.push({ earlier: incompleteProofs, kind: "proofOfWork", items: [item] });
+        incompleteProofs = [];
+        continue;
+      }
+      incompleteProofs.push(item);
+    }
+    const mode = item.type === "mcpToolCall" ? readModeSwitch(item) : null;
+    if (item.type === "mcpToolCall" && mode) {
       flush();
-      const previous = blocks.at(-1);
-      if (previous?.kind === "proofOfWork") previous.items.push(item);
-      else blocks.push({ kind: "proofOfWork", items: [item] });
+      blocks.push({ items: [item], kind: "modeSwitch", mode });
       continue;
     }
     if (item.type === "commandExecution") {

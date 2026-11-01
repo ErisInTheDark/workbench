@@ -23,6 +23,7 @@ import ThreadFileChangeItem from "../ThreadFileChangeItem";
 import ThreadGenericItem from "../ThreadGenericItem";
 import ThreadIncomingAgentMessageGroup from "../ThreadIncomingAgentMessageGroup";
 import ThreadMessageTimestamp from "../ThreadMessageTimestamp";
+import ThreadModeDivider from "../ThreadModeDivider";
 import ThreadProofOfWorkItem from "../ThreadProofOfWorkItem";
 import ThreadSkillMcpCard from "../ThreadSkillMcpCard";
 import ThreadSleepItem from "../ThreadSleepItem";
@@ -236,7 +237,9 @@ function ThreadRenderableBlockViewComponent ({
   const turn = useTranscript.turn();
   switch (block.kind) {
     case "proofOfWork":
-      return <ThreadProofOfWorkItem items={block.items} />;
+      return <ThreadProofOfWorkItem items={[...block.earlier, ...block.items]} />;
+    case "modeSwitch":
+      return <ThreadModeDivider mode={block.mode} />;
     case "activityRun":
       return <ThreadActivityRunBlock animateEntries={animateEntries} block={block} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} />;
     case "cardHistory":

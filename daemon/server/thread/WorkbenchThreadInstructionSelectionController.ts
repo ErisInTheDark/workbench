@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadInstructionSelectionPorts: durable store, thread kind, skill catalog, activation recording and warning ports.
+ * - defaultThreadInstructionSelection: the workflows a thread with no recorded selection runs, by thread kind.
  * - default WorkbenchThreadInstructionSelectionController: remember each thread's chosen instructions, supply them to messages that carry none, and activate the skills an admitted message names.
  */
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
@@ -23,6 +24,10 @@ export interface WorkbenchThreadInstructionSelectionPorts {
   warn(message: string): void;
 }
 
+export function defaultThreadInstructionSelection(kind: "thread" | "subagent" | null): WorkbenchInstructionSelection {
+  return { workflowIds: [kind === "subagent" ? "subagent" : "default"] };
+}
+
 function failure(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(0, 300);
 }
@@ -39,7 +44,7 @@ export default class WorkbenchThreadInstructionSelectionController {
   ): Promise<WorkbenchMessageContext> {
     const selection = readWorkbenchInstructionSelection(context)
       ?? await this.ports.store({ kind: "read", threadId })
-      ?? { workflowIds: [await this.ports.readThreadKind(threadId) === "subagent" ? "subagent" : "default"] };
+      ?? defaultThreadInstructionSelection(await this.ports.readThreadKind(threadId));
     const named = input
       ? readWorkbenchSkillMentionPaths(input.flatMap(part => part.type === "text" ? [part.text] : []), await this.ports.readSkills(threadId))
       : [];

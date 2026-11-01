@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect hidden control transport, final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, dedicated CLI row visibility, and skill-presented call placement.
+ * No exports. Tests protect proof card placement, mode switch dividers, hidden control transport, final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, dedicated CLI row visibility, and skill-presented call placement.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -53,14 +53,31 @@ function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted"
   return withWorkbenchInputState(user(id), { kind: "steer", status });
 }
 
-test("consecutive proofs merge without crossing failures or other items", () => {
-  const proof = (id: string, answer: string) => mcp(id, "proof_of_work", { proofs: { "plan.result": answer } });
-  const failed = { ...proof("failed", "bad"), status: "failed" as const };
-  const blocks = buildRenderableBlocks([proof("a", "first"), proof("b", "last"), failed, proof("c", "next"), user("boundary"), proof("d", "final")]);
-  assert.deepEqual(blocks.filter(block => block.kind === "proofOfWork").map(block => block.items.map(item => item.id)), [["a", "b"], ["c"], ["d"]]);
-  assert.ok(blocks.some(block => getRenderableBlockItems(block).some(item => item.id === "failed")));
-  assert.deepEqual(getRenderableBlockItems(blocks[0]!).map(item => item.id), ["a", "b"]);
-  assert.equal(getRenderableBlockKey(buildRenderableBlocks([proof("a", "first")])[0]!), getRenderableBlockKey(blocks[0]!));
+test("filings still owing items draw as rows until one completes every checklist, which carries them in its card", () => {
+  const proof = (id: string, feedback: string, args: JsonValue = { proofs: { "plan.result": id } }) => (
+    mcpWithOutput(id, "proof_of_work", args, `Recorded.\n${feedback}\n`)
+  );
+  const partial = (id: string) => proof(id, "plan: 1/3 resolved. Missing: plan.failure, plan.verify. File or defer them.");
+  const running = { ...partial("running"), result: null, status: "inProgress" as const };
+  const cards = (items: ThreadItem[]) => buildRenderableBlocks(items, { proofOfWorkFamilies: new Set(["recovery"]) })
+    .flatMap(block => block.kind === "proofOfWork" ? [[block.earlier.map(item => item.id), block.items[0].id]] : []);
+  const rows = (items: ThreadItem[]) => buildRenderableBlocks(items, { proofOfWorkFamilies: new Set(["recovery"]) })
+    .filter(block => block.kind === "commandSequence").flatMap(block => getRenderableBlockItems(block).map(item => item.id));
+
+  const loop = [partial("a"), command("work"), partial("b"), proof("c", "plan: complete.\nquality: complete."), partial("d"), proof("e", "quality: complete.")];
+  assert.deepEqual(cards(loop), [[["a", "b"], "c"], [["d"], "e"]], "each card holds only the incomplete filings since the previous card");
+  assert.deepEqual(rows(loop), ["a", "work", "b", "d"]);
+  assert.deepEqual(cards([running]), [], "a running filing has no verdict yet");
+  assert.deepEqual(cards([{ ...partial("expired"), result: null }]), [[[], "expired"]], "an expired result keeps its card");
+  const hidden = proof("hidden", "recovery: 1/6 resolved. Missing: recovery.x. File or defer them.", { proofs: { "recovery.user_said": "x" } });
+  assert.deepEqual(buildRenderableBlocks([hidden], { proofOfWorkFamilies: new Set(["recovery"]) }), [], "hidden-only filings never draw");
+});
+
+test("a successful mode switch draws as its own divider block, a refused one as a row", () => {
+  const entered = mcpWithOutput("entered", "mode_set", { mode: "Brief" }, "Entered Brief.\n");
+  const refused = { ...mcpWithOutput("refused", "mode_set", { mode: "Review" }, "Not entered Review."), status: "failed" as const };
+  const blocks = buildRenderableBlocks([entered, refused]);
+  assert.deepEqual(blocks.map(block => block.kind === "modeSwitch" ? `mode:${block.mode}` : block.kind), ["mode:Brief", "commandSequence"]);
 });
 
 test("transcript-hidden screenshots create no block, so the work around them stays together", () => {

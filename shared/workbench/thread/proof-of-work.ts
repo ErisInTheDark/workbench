@@ -7,6 +7,7 @@
  * - ProofState: an id's latest filed state.
  * - mergeProofs: replay submissions so each id keeps its latest state.
  * - reconcileProofOfWork: compare merged proofs with declared checklists, reporting deferred, missing and unknown ids.
+ * - formatProofOfWorkReport/readProofOfWorkCompletion: write a recorded filing's feedback, and read back whether it left every reported checklist complete.
  * - presentProofOfWork: group merged proofs for display, leaving out hidden checklists.
  * - proofFamily/formatProofId/proofFamilies: read families and readable labels from ids.
  */
@@ -83,6 +84,34 @@ export function reconcileProofOfWork(proofs: ReadonlyMap<string, ProofState>, ch
     unknownFamilies: [...touched].filter(family => !declared.has(family)),
     unknownItems: [...proofs.keys()].filter(id => declared.get(proofFamily(id))?.items.every(item => item.id !== id) ?? false),
   };
+}
+
+const REPORT_HEADING = "Recorded.";
+const REPORT_CHECKLIST_LINE = /^([a-z][a-z0-9_]*): (.*)$/u;
+const COMPLETE = "complete.";
+
+/** The feedback a recorded filing answers with; `readProofOfWorkCompletion` reads the same lines back. */
+export function formatProofOfWorkReport(report: ReturnType<typeof reconcileProofOfWork>, registered: readonly ProofOfWorkChecklist[]) {
+  const lines = [REPORT_HEADING];
+  for (const { checklist, resolved, deferred, missing } of report.checklists) {
+    if (!deferred.length && !missing.length) { lines.push(`${checklist.id}: ${COMPLETE}`); continue; }
+    lines.push([
+      `${checklist.id}: ${resolved}/${checklist.items.length} resolved.`,
+      deferred.length ? `Deferred: ${deferred.join(", ")}.` : "",
+      missing.length ? `Missing: ${missing.join(", ")}. File or defer them.` : "",
+    ].filter(Boolean).join(" "));
+  }
+  if (report.unknownFamilies.length) {
+    lines.push(`Unregistered checklists: ${report.unknownFamilies.join(", ")}; filed without coverage checks. Registered: ${registered.map(checklist => checklist.id).join(", ") || "none"}.`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/** Whether a filing's feedback left every checklist it reports complete; null when the text is not a recorded report. */
+export function readProofOfWorkCompletion(text: string): "complete" | "partial" | null {
+  const [heading, ...lines] = text.trim().split("\n");
+  if (heading !== REPORT_HEADING) return null;
+  return lines.every(line => (REPORT_CHECKLIST_LINE.exec(line)?.[2] ?? COMPLETE) === COMPLETE) ? "complete" : "partial";
 }
 
 /** Drops hidden checklists' ids; labels come from the declaring checklist, else from the id. */

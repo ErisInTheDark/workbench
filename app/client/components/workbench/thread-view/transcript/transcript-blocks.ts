@@ -71,10 +71,11 @@ export function withInteractionTimeline(
 }
 
 export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscriptItem[], {
-  browseResultEntries, codeDetails, hiddenReasoningStep, project, turnLive, yieldedShells,
+  browseResultEntries, codeDetails, hiddenProofOfWorkFamilies, hiddenReasoningStep, project, turnLive, yieldedShells,
 }: {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
   codeDetails: boolean;
+  hiddenProofOfWorkFamilies: ReadonlySet<string>;
   hiddenReasoningStep: ThreadReasoningStepReference | null;
   project: ContextualProject | null;
   /** An ended turn runs nothing: a call whose finish never arrived still shows as over. */
@@ -89,7 +90,7 @@ export function buildTranscriptEntries(items: readonly WorkbenchProjectedTranscr
   const flush = () => {
     if (!pending.length) return;
     entries.push(...foldCardBlocks(buildActivityRuns(
-      buildRenderableBlocks(pending, { reasoningStep: hiddenReasoningStep }, project?.cwd, yieldedShells, matchers),
+      buildRenderableBlocks(pending, { proofOfWorkFamilies: hiddenProofOfWorkFamilies, reasoningStep: hiddenReasoningStep }, project?.cwd, yieldedShells, matchers),
       {
         browseScreenshotUrls, codeDetails, knownSkills: matchers?.knownSkills, projectRootPath: matchers?.projectRootPath,
         skillMcpMatchers: matchers?.skillMcpMatchers, workspaceRoots: matchers?.workspaceRoots,

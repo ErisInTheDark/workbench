@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - transcriptRequests: database requests that settle and read canonical transcripts, their assets, context usage, undelivered user
- *   steers, delivered agent messages, history queries and approval outcomes. Settlement and transcript reads name their thread
+ *   steers, delivered agent messages, history queries, approval outcomes and workflow ledgers. Settlement and transcript reads name their thread
  *   in slow-request reports.
  */
 import type { WorkbenchTranscriptItemCursor } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
@@ -9,6 +9,7 @@ import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/p
 import { HistoryQueryError, type HistoryPage, type HistoryQuery } from "../history/history-query-contract.ts";
 import WorkbenchHistoryQueryRepository from "../history/WorkbenchHistoryQueryRepository.ts";
 import WorkbenchApprovalOutcomeRepository from "../transcript/WorkbenchApprovalOutcomeRepository.ts";
+import WorkbenchWorkflowLedgerRepository from "../transcript/WorkbenchWorkflowLedgerRepository.ts";
 import WorkbenchTranscriptAssetStore, {
   type TranscriptAssetRead, type TranscriptAssetWrite, type TranscriptCallComponentTarget, type TranscriptComponentTarget,
 } from "../transcript/WorkbenchTranscriptAssetStore.ts";
@@ -135,5 +136,9 @@ export const transcriptRequests = {
   readApprovalOutcomes: defineDatabaseRequest({
     read: "core",
     run: ({ database }, threadId: string, turnIds?: readonly string[]) => new WorkbenchApprovalOutcomeRepository(database).read(threadId, turnIds),
+  }),
+  readWorkflowLedger: defineDatabaseRequest({
+    read: "transcript",
+    run: ({ database }, threadId: string) => new WorkbenchWorkflowLedgerRepository(database).read(threadId),
   }),
 };

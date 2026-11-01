@@ -28,7 +28,10 @@ import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
 import WorkbenchToolStatsCommandController from "./WorkbenchToolStatsCommandController";
 import WorkbenchFeedbackCommandController from "./WorkbenchFeedbackCommandController";
 import WorkbenchProofOfWorkController from "./WorkbenchProofOfWorkController";
+import WorkbenchModeSwitchController from "./WorkbenchModeSwitchController";
 import { readWorkbenchProofOfWorkCatalogue } from "../lib/workbench/instructions/proof-of-work-catalogue";
+import { readWorkbenchModeGates } from "../lib/workbench/instructions/mode-gate-catalogue";
+import { defaultThreadInstructionSelection } from "../thread/WorkbenchThreadInstructionSelectionController";
 import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import WorkbenchFileRemovalController from "../project/WorkbenchFileRemovalController";
 import WorkbenchTranscriptCommandController from "../transcript/WorkbenchTranscriptCommandController";
@@ -215,13 +218,25 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       signal.throwIfAborted();
       return await gitArc.checkActiveClaimPaths(cwd, WorkbenchHarnessSchema.parse(binding.harness), identity.threadId, paths);
     });
-    const proofOfWork = new WorkbenchProofOfWorkController({
-      resolveCaller: async ({ cwd, harness, threadId }, signal) => {
+    const workflowPorts = {
+      resolveCaller: async ({ cwd, harness, threadId }: { cwd: string; harness: string; threadId: string }, signal: AbortSignal) => {
         const { identity, resolution: { root } } = await nativeTarget(threadId, cwd, harness);
         signal.throwIfAborted();
         return { threadId: identity.threadId, projectRoot: root.rootPath };
       },
-      readCatalogue: async projectRoot => await readWorkbenchProofOfWorkCatalogue(projectRoot),
+      readCatalogue: async (projectRoot: string | null) => await readWorkbenchProofOfWorkCatalogue(projectRoot),
+      readGates: async (threadId: string) => {
+        const recorded = await database.executeThreadInstructionSelection({ kind: "read", threadId });
+        if (recorded) return await readWorkbenchModeGates(recorded.workflowIds ?? []);
+        const identity = await heldThread(threadId);
+        const entry = identity ? await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
+        return await readWorkbenchModeGates(defaultThreadInstructionSelection(entry?.entryKind === "subagent" ? "subagent" : "thread").workflowIds ?? []);
+      },
+      readLedger: async (threadId: string) => await database.readWorkflowLedger(threadId),
+    };
+    const modeSwitch = new WorkbenchModeSwitchController(workflowPorts);
+    const proofOfWork = new WorkbenchProofOfWorkController({
+      ...workflowPorts,
       readTurnItems: async (threadId, signal) => {
         const snapshot = await transcript.read({ threadId, turnLimit: 1 });
         signal.throwIfAborted();
@@ -410,6 +425,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeToolStats: async (body, signal) => await toolStats.execute(body, signal),
       executeFeedbackSubmit: async (body, signal) => await feedback.submit(body, signal),
       executeProofOfWorkRequest: async (body, signal) => await proofOfWork.execute(body, signal),
+      executeModeSwitchRequest: async (body, signal) => await modeSwitch.execute(body, signal),
       executeTodoRequest: async (body, signal) => {
         const parsed = WorkbenchTodoRequestSchema.safeParse(body);
         if (!parsed.success) {

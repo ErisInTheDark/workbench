@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  collectWorkbenchInstructionModeGates,
   collectWorkbenchInstructionProofOfWork,
   filterWorkbenchInstructionContent,
   formatWorkbenchInstructionFilterWarning,
@@ -106,6 +107,28 @@ test("proof-of-work checklists warn on foreign items, nesting and selectors", ()
   assert.deepEqual(messages("- plain bullet"), ["Proof-of-work items must read `- [ ] **Label [plan.item]:**`"]);
   assert.deepEqual(messages("<harness:codex>\n- [ ] **Result [plan.result]:** x\n</harness:codex>"), ["Selectors cannot sit inside a proof-of-work checklist"]);
   assert.deepEqual(messages("<proof-of-work id=\"inner\">\n</proof-of-work>"), ["Proof-of-work checklists cannot nest"]);
+});
+
+test("mode gates render as one sentence and declare gates, while examples and malformed tags do not", () => {
+  const value = [
+    "<mode-gate mode=\"Brief\" checklists=\"plan quality\" since=\"Review\" />",
+    "<mode-gate mode=\"Review\" checklists=\"review\" since=\"Brief Decision\" />",
+    "<!-- <mode-gate mode=\"Ghost\" checklists=\"plan\" since=\"Inspect\" /> -->",
+    "```md",
+    "<mode-gate mode=\"Example\" checklists=\"plan\" since=\"Inspect\" />",
+    "```",
+  ].join("\n");
+  const result = filter(value);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.output?.split("\n").slice(0, 2), [
+    "Entering Brief requires the plan and quality checklists filed since you last entered Review.",
+    "Entering Review requires the review checklist filed since you last entered Brief or Decision.",
+  ]);
+  assert.deepEqual(collectWorkbenchInstructionModeGates(value), [
+    { mode: "Brief", checklists: ["plan", "quality"], since: ["Review"] },
+    { mode: "Review", checklists: ["review"], since: ["Brief", "Decision"] },
+  ]);
+  assert.deepEqual(filter("<mode-gate mode=\"Brief\" checklists=\"Plan\" since=\"Review\" />").warnings.map(warning => warning.message), ["Malformed instruction selector"]);
 });
 
 test("invalid tool references stay visible and report their source", () => {

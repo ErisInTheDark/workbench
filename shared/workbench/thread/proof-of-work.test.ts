@@ -1,9 +1,12 @@
 /*
- * No production exports. Tests proof validation, latest-state merging and checklist reconciliation.
+ * No production exports. Tests proof validation, latest-state merging, checklist reconciliation and report completion.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ProofOfWorkSchema, mergeProofs, presentProofOfWork, reconcileProofOfWork, type ProofOfWorkChecklist } from "./proof-of-work";
+import {
+  ProofOfWorkSchema, formatProofOfWorkReport, mergeProofs, presentProofOfWork, readProofOfWorkCompletion, reconcileProofOfWork,
+  type ProofOfWork, type ProofOfWorkChecklist,
+} from "./proof-of-work";
 
 const plan: ProofOfWorkChecklist = {
   id: "plan",
@@ -43,6 +46,18 @@ test("display leaves out hidden checklists and labels items from their declarati
   assert.deepEqual(shown.answered.map(entry => [entry.label, entry.answer]), [["Result", "done"], ["Thing", "x"]]);
   assert.deepEqual(shown.notApplicable.map(entry => entry.id), ["plan.failure"]);
   assert.deepEqual(shown.deferred.map(entry => entry.id), ["plan.verify"]);
+});
+
+test("a filing's report reads back complete only when every reported checklist is", () => {
+  const review: ProofOfWorkChecklist = { id: "review", hidden: false, items: [{ id: "review.diff", label: "Diff" }] };
+  const completion = (...submissions: ProofOfWork[]) => readProofOfWorkCompletion(
+    formatProofOfWorkReport(reconcileProofOfWork(mergeProofs(submissions), [plan, review]), [plan, review]),
+  );
+  assert.equal(completion({ proofs: { "plan.result": "a" }, notApplicable: ["plan.failure", "plan.verify", "review.diff"] }), "complete");
+  assert.equal(completion({ proofs: { "plan.result": "a", "review.diff": "b" } }), "partial", "missing items");
+  assert.equal(completion({ notApplicable: ["plan.result", "plan.failure"], defer: ["plan.verify"] }), "partial", "deferred items");
+  assert.equal(completion({ proofs: { "custom.thing": "x" } }), "complete", "unregistered checklists have nothing left to file");
+  assert.equal(readProofOfWorkCompletion("Unknown checklist ids: plan.typo. Nothing was recorded.\n"), null);
 });
 
 test("reconciliation reports missing items and unknown ids only for touched families", () => {

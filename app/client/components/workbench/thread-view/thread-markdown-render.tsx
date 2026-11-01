@@ -15,7 +15,6 @@ import {
   parseCommentLine,
 } from "../../../workbench/markdown/comment-markdown";
 import {
-  formatThreadStateChangeMode,
   isThreadMarkdownSectionBreak,
   parseBlocks,
   parseInlineMarkdown,
@@ -37,6 +36,7 @@ import {
 } from "workbench-shared/workbench/thread/unified-diff";
 import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
+import ThreadModeDivider from "./ThreadModeDivider";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
 import IconButton from "../../ui/IconButton";
 import Disclosure from "../../ui/Disclosure";
@@ -501,22 +501,7 @@ function renderThreadSingleItemOrderedStep (
 }
 
 function renderThreadStateChange (mode: string, keyPrefix: string, sectionActions?: ReactNode) {
-  return (
-    <div
-      className={`
-        relative my-[0.85em] flex items-center gap-2 font-sans leading-none text-fg/muted last:mb-0
-        before:(block h-px flex-1 bg-[color-mix(in srgb, var(--text) 10%, transparent)] content-[''])
-        after:(block h-px flex-1 bg-[color-mix(in srgb, var(--text) 10%, transparent)] content-[''])
-      `}
-      data-thread-state-change="true"
-      data-thread-state-mode={mode}
-      key={keyPrefix}
-    >
-      <span className="text-[0.62em] font-medium uppercase tracking-[0.14em]" data-thread-state-change-kicker="true">Mode</span>
-      <span className="text-[0.84em] font-semibold text-text" data-thread-state-change-label="true">{formatThreadStateChangeMode(mode)}</span>
-      {sectionActions}
-    </div>
-  );
+  return <ThreadModeDivider actions={sectionActions} key={keyPrefix} mode={mode} />;
 }
 
 function renderThreadMarkdownBlocks (markdown: string, options: ThreadRenderOptions, keyPrefix: string) {

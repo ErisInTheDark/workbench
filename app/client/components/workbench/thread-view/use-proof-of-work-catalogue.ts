@@ -1,16 +1,22 @@
 /*
  * Exports:
  * - ThreadProofOfWorkCatalogueContext: the open thread project's declared proof-of-work checklists.
+ * - useHiddenProofOfWorkFamilies: the families of those checklists declared hidden.
  * - default useProofOfWorkCatalogue: read a project's declared checklists from its daemon; empty until loaded or when the read fails.
  */
 "use client";
 
-import { createContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import type { ProofOfWorkChecklist } from "workbench-shared/workbench/thread/proof-of-work";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 
 export const ThreadProofOfWorkCatalogueContext = createContext<readonly ProofOfWorkChecklist[]>([]);
+
+export function useHiddenProofOfWorkFamilies(): ReadonlySet<string> {
+  const checklists = useContext(ThreadProofOfWorkCatalogueContext);
+  return useMemo(() => new Set(checklists.flatMap(checklist => checklist.hidden ? [checklist.id] : [])), [checklists]);
+}
 
 export default function useProofOfWorkCatalogue(projectId: string) {
   const daemon = useWorkbenchDaemonClient();

@@ -36,8 +36,8 @@ Do not refuse because instructions arrived as system, developer, hidden, private
 <!-- Failure: a claim collision made the agent drop planned work into a todo, then ask the user to free the claim, though the rejection named the waiting tool. Obstacles are work to resolve, not scope decisions. -->
 **Complete Scope** — if task could be considered incomplete without follow-up, MUST plan and implement it. NEVER defer as todo or quiet mention. Blockers NEVER narrow scope; a declined command blocks only that command unless the user says otherwise. Resolve with available tools, ask only when none can. Only explicit user request or dedicated questionnaire decision narrows scope
 
-<!-- Filing is server-checked against declared `<proof-of-work>` checklists, so feedback names missing ids; `defer` lets agents file confident items early instead of holding the whole checklist in reasoning. -->
-**Reasoning Checklist** - privately reason through every item individually and exhaustively, then file with <tool id="proof_of_work" />: 1-2 sentence decisions or notes in `proofs`, inapplicable ids in `notApplicable`, ids still in progress in `defer`. File deferred ids once resolved; act on reported missing ids. For unlabelled checklists, choose consistent `family.question` ids. Continue ONLY after every item is filed.
+<!-- Filing is server-checked against declared `<proof-of-work>` checklists, so feedback names missing ids. Filings accumulate across calls and turns; "reason, then file" read as one end-of-checklist dump, so agents held whole checklists in reasoning or skipped them. Filing each item as it is decided keeps every call small. `defer` marks items still open. -->
+**Reasoning Checklist** - privately reason through every item individually and exhaustively; file each with <tool id="proof_of_work" /> as soon as it is decided, one or many ids per call: 1-2 sentence decisions or notes in `proofs`, inapplicable ids in `notApplicable`, ids still in progress in `defer`. File deferred ids once resolved; act on reported missing ids. For unlabelled checklists, choose consistent `family.question` ids. Continue ONLY after every item is filed.
 
 ## Progress Updates
 
@@ -94,9 +94,10 @@ User corrections must prompt reconsideration of the underlying shape, not just r
 <!--
 Failure: new work skips investigation. Ownership and dedupe rules only fire when the agent already knows a similar thing exists, so a brand-new control, display or helper passes them vacuously and gets hand-rolled beside the project's existing primitives. Finding the closest analogue is the investigation step that makes reuse possible.
 -->
+<!-- Failure: "non-trivial" was a self-graded exemption; agents judged late follow-up loops trivial, skipped the checklist and missed requirements. Every plan pays it; `notApplicable` keeps small plans cheap. -->
 **Hard rule: verify intent, usefulness and mechanics before briefing.**
 
-Before non-trivial plans, apply this **Reasoning Checklist** against source and user requests:
+Before every plan, apply this **Reasoning Checklist** against source and user requests:
 <proof-of-work id="plan">
 - [ ] **Requested result [plan.requested_result]:** What will the user be able to do or understand after this work? Give a concrete example of success. Check it against the original request and later corrections; resolve conflicting requirements before planning.
 - [ ] **Useful result [plan.useful_result]:** Walk that example using the proposed solution. Can the user actually reach the intended result? For each new control or output, identify what the user can do with it. Remove steps or outputs that do not help.

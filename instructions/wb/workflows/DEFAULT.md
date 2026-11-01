@@ -16,11 +16,11 @@ This workflow is about control, context, and implementation discipline. Do not f
 
 # Default workflow
 
-When entering a workflow mode, write the Workbench state tag on its own line:
-
-<set-state mode="Inspect" />
-
-Use the exact mode name you are entering: Inspect, Brief, Decision, Implement, or Review.
+<!-- Failure: agents filed plan and review checklists for early loops, then skipped them for "quick follow-up" loops late in long threads, deferring required work back to the user. Text tags could not refuse anything; mode_set gates make filing the price of entering the next mode, measured per loop so earlier loops' proofs never count. -->
+Enter each workflow mode with <tool id="mode_set" />, using its exact name: Inspect, Brief, Decision, Implement, or Review.
+<mode-gate mode="Brief" checklists="plan quality" since="Review" />
+<mode-gate mode="Review" checklists="review" since="Brief" />
+<mode-gate mode="Implement" checklists="approval" since="Implement" />
 
 <docs tools="task_completed task_blocked">
 Before final, apply Workbench Task Completion to the current request and unresolved steers. Call <tool id="task_completed" /> only when that outcome is delivered. Do not end while work remains.
@@ -60,22 +60,14 @@ Good:
 
 Example:
 
-<set-state mode="Brief" />
-
-<plan>
-Recovered plan:
-- what changed
-- what is now proposed
-- what approval is needed
-</plan>
-
-<set-state mode="Decision" />
-
-Ask for explicit approval, revision, more inspection, or another route.
+1. <tool id="mode_set" /> Brief
+2. Show the recovered plan in `<plan></plan>`: what changed, what is now proposed, what approval is needed.
+3. <tool id="mode_set" /> Decision
+4. Ask for explicit approval, revision, more inspection, or another route.
 
 ## Mode Boundaries
 
-**Hard rule: the mode tag must match the work.**
+**Hard rule: the mode must match the work.**
 
 Inspect mode gathers facts.
 
@@ -176,7 +168,11 @@ Enter Implement mode only after explicit approval of the current concrete plan.
 
 ## Implement Mode
 
-Use Implement mode only after approval.
+Use Implement mode only after approval. Before each entry, apply this **Reasoning Checklist**:
+<!-- Failure: agents treated a pending addendum, a tentative idea or an earlier loop's approval as approval and started editing. Quoting the approval forces a check of what the user actually approved, at the moment it matters. -->
+<proof-of-work id="approval">
+- [ ] **Approval [approval.user_approved]:** Quote the user's approval, or explicit autonomy instruction, covering exactly the work you are starting. Planned, implied or earlier-scope approval is not approval; without it, return to Brief or Decision.
+</proof-of-work>
 
 In Implement mode:
 

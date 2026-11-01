@@ -1,10 +1,11 @@
 /*
- * No production exports. Tests proof feedback across a turn's filings, rejection of undeclared items and unregistered checklists.
+ * No production exports. Tests proof feedback across a turn's filings and gate windows, rejection of undeclared items and unregistered checklists.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProofOfWork, ProofOfWorkChecklist } from "workbench-shared/workbench/thread/proof-of-work";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { ModeGate, WorkflowLedgerEntry } from "workbench-shared/workbench/thread/workflow-modes";
 import WorkbenchProofOfWorkController from "./WorkbenchProofOfWorkController";
 
 const plan: ProofOfWorkChecklist = {
@@ -20,18 +21,31 @@ function call(proof: ProofOfWork, status: "completed" | "failed" = "completed"):
   };
 }
 
-function controller(items: readonly ThreadItem[]) {
+function controller(items: readonly ThreadItem[], gated?: { gates: ModeGate[]; ledger: WorkflowLedgerEntry[] }) {
   return new WorkbenchProofOfWorkController({
     resolveCaller: async () => ({ threadId: "thread", projectRoot: null }),
     readCatalogue: async () => [plan],
+    readGates: async () => gated?.gates ?? [],
+    readLedger: async () => gated?.ledger ?? [],
     readTurnItems: async () => items,
   });
 }
 
-async function submit(items: readonly ThreadItem[], proof: object) {
-  const response = await controller(items).execute({ cwd: ".", harness: "codex", threadId: "thread", proof }, new AbortController().signal);
+async function submit(items: readonly ThreadItem[], proof: object, gated?: { gates: ModeGate[]; ledger: WorkflowLedgerEntry[] }) {
+  const response = await controller(items, gated).execute({ cwd: ".", harness: "codex", threadId: "thread", proof }, new AbortController().signal);
   return { status: response.status, text: await response.text() };
 }
+
+test("a gated checklist reports over its gate's window, across turns and never from the previous loop", async () => {
+  const gates: ModeGate[] = [{ mode: "Brief", checklists: ["plan"], since: ["Review"] }];
+  const ledger: WorkflowLedgerEntry[] = [
+    { kind: "proof", proof: { proofs: { "plan.failure": "last loop" } } },
+    { kind: "mode", mode: "Review" },
+    { kind: "proof", proof: { proofs: { "plan.result": "earlier turn" } } },
+  ];
+  assert.equal((await submit([], { notApplicable: ["plan.verify"] }, { gates, ledger })).text,
+    "Recorded.\nplan: 2/3 resolved. Missing: plan.failure. File or defer them.\n");
+});
 
 test("feedback counts earlier filings in the turn and keeps deferred items open", async () => {
   const earlier = [

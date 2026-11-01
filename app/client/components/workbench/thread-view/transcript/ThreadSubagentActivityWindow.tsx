@@ -20,6 +20,7 @@ import WorkbenchClientContext from "../../workbench-client-context";
 import ContextualProjectProvider from "../../ContextualProjectProvider";
 import { useProject } from "../../use-projects";
 import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
+import { useHiddenProofOfWorkFamilies } from "../use-proof-of-work-catalogue";
 import { getRenderableBlockKey, type ThreadRenderableBlock } from "../thread-render-blocks";
 import ThreadRenderableBlockView from "./ThreadRenderableBlockView";
 import { ThreadContentLoadingSkeleton } from "./ThreadTurnLoadStates";
@@ -94,11 +95,14 @@ function ThreadSubagentActivityTail ({ thread }: { thread: RelatedThread | undef
   const turnItems = currentTurn?.items;
   const turnLive = currentTurn?.status === "inProgress";
   const codeDetails = useThreadCodeDetails();
+  const hiddenProofOfWorkFamilies = useHiddenProofOfWorkFamilies();
   const recentBlocks = useMemo(() => turnItems
-    ? buildTranscriptEntries(turnItems, { browseResultEntries: NO_BROWSE_RESULTS, codeDetails, hiddenReasoningStep: null, project, turnLive })
+    ? buildTranscriptEntries(turnItems, {
+      browseResultEntries: NO_BROWSE_RESULTS, codeDetails, hiddenProofOfWorkFamilies, hiddenReasoningStep: null, project, turnLive,
+    })
       .flatMap(entry => entry.kind === "block" ? [entry.block] : [])
       .slice(-SUBAGENT_ACTIVITY_WINDOW_BLOCKS)
-    : NO_BLOCKS, [codeDetails, project, turnItems, turnLive]);
+    : NO_BLOCKS, [codeDetails, hiddenProofOfWorkFamilies, project, turnItems, turnLive]);
   const blocks = useStableRenderableBlocks(recentBlocks);
   if (!thread || !currentTurn || !turnScope) {
     return <ThreadContentLoadingSkeleton />;
