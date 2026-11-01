@@ -4,7 +4,6 @@
  *   caller's arc baseline, everything else from disk), with in-process reads and a Node child-process environment.
  *   Falls back to the plain filesystem outside agent threads or when the daemon view fails.
  */
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,64 +16,41 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.length > 0;
 }
 
-/** Keep every well-formed repository and held entry; each malformed one drops only itself. */
+/**
+ * Keep every well-formed repository, held entry and held path's daemon-read bytes; each malformed one drops only
+ * itself, so its path reads from disk.
+ */
 function conformRepositories(body, warn) {
   if (!body || typeof body !== "object" || !Array.isArray(body.repositories)) {
     throw new Error("the daemon's held-paths response lacks repositories");
   }
   let dropped = 0;
+  const files = new Map();
   const repositories = body.repositories.flatMap((repository) => {
     if (!repository || typeof repository !== "object" || !nonEmptyString(repository.repoRoot) || !TREE_SHA.test(String(repository.baseline))) {
       dropped++;
       return [];
     }
+    const root = path.resolve(repository.repoRoot);
+    const contents = repository.contents && typeof repository.contents === "object" ? repository.contents : {};
     const held = (Array.isArray(repository.held) ? repository.held : []).flatMap((entry) => {
       if (!entry || typeof entry !== "object" || !nonEmptyString(entry.threadId) || !Array.isArray(entry.paths)) {
         dropped++;
         return [];
       }
-      const paths = entry.paths.filter(nonEmptyString);
+      const paths = entry.paths.filter((relative) => nonEmptyString(relative)
+        && Object.hasOwn(contents, relative) && (contents[relative] === null || typeof contents[relative] === "string"));
       dropped += entry.paths.length - paths.length;
+      for (const relative of paths) {
+        files.set(path.resolve(root, relative), contents[relative] === null ? null : Buffer.from(contents[relative], "base64"));
+      }
       return [{ threadId: entry.threadId, paths }];
     });
     const head = typeof repository.head === "string" && TREE_SHA.test(repository.head) ? repository.head : null;
-    return [{ root: path.resolve(repository.repoRoot), head, baseline: repository.baseline, held }];
+    return [{ root, head, baseline: repository.baseline, held }];
   });
   if (dropped) warn(`Workbench arc tree dropped ${dropped} malformed daemon entr${dropped === 1 ? "y" : "ies"}; their paths read from disk.`);
-  return repositories;
-}
-
-async function git(root, args, { input = "", signal } = {}) {
-  const child = spawn("git", args, { cwd: root, signal, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
-  const stdout = [];
-  const stderr = [];
-  child.stdout.on("data", (chunk) => stdout.push(chunk));
-  child.stderr.on("data", (chunk) => stderr.push(chunk));
-  const exit = new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", resolve);
-  });
-  child.stdin.end(input);
-  if (await exit !== 0) throw new Error(`git ${args[0]} failed: ${Buffer.concat(stderr).toString().trim()}`);
-  return Buffer.concat(stdout);
-}
-
-/**
- * Each path's bytes in `tree` as a checkout would write them, or null where the tree lacks it. Batch reads skip
- * checkout filters, so only the existence check is batched.
- */
-async function readTreeFiles(root, tree, paths, signal) {
-  if (paths.some((relative) => relative.includes("\n"))) throw new Error("held paths containing newlines cannot be read from Git");
-  const checks = paths.length
-    ? (await git(root, ["cat-file", "--batch-check"], { input: paths.map((relative) => `${tree}:${relative}\n`).join(""), signal })).toString().split("\n")
-    : [];
-  return await Promise.all(paths.map(async (relative, index) => {
-    const target = path.resolve(root, relative);
-    if (checks[index].endsWith(" missing")) return [target, null];
-    const [, type] = checks[index].split(" ");
-    if (type !== "blob") throw new Error(`${relative} is a ${type} in the arc tree, not a file`);
-    return [target, await git(root, ["cat-file", "--filters", `${tree}:${relative}`], { signal })];
-  }));
+  return { files, repositories };
 }
 
 function missing(target) {
@@ -100,16 +76,11 @@ export default class WorkbenchArcTree {
     signal?.throwIfAborted();
     if (!daemonGitArcIdentity(env)) return new WorkbenchArcTree("filesystem", root, new Map(), []);
     try {
-      const repositories = conformRepositories(
-        await requestDaemonGitArc({ action: "arcHeld", cwd: root, holdOwn }, { env, fetch, signal }),
+      const { files, repositories } = conformRepositories(
+        await requestDaemonGitArc({ action: "arcHeld", contents: true, cwd: root, holdOwn }, { env, fetch, signal }),
         warn,
       );
       if (!repositories.length) throw new Error(`no Workbench arc covers ${root}`);
-      const files = new Map();
-      for (const repository of repositories) {
-        const held = [...new Set(repository.held.flatMap(({ paths }) => paths))];
-        for (const [target, content] of await readTreeFiles(repository.root, repository.baseline, held, signal)) files.set(target, content);
-      }
       return new WorkbenchArcTree("arc", root, files, repositories);
     } catch (error) {
       signal?.throwIfAborted();

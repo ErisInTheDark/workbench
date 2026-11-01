@@ -531,20 +531,20 @@ const tree = defineWorkbenchAgentCommand({
 });
 
 const held = defineWorkbenchAgentCommand({
-  description: "Print JSON with the paths `wb git arc tree` holds (other live threads' claimed changes) and a baseline tree whose bytes at those paths match the caller's view, without composing the view. Read a held path with `git cat-file --filters <baseline>:<path>`; a missing path is absent in the view. --hold-own holds the caller's back too.",
+  description: "Print JSON with the paths `wb git arc tree` holds (other live threads' claimed changes) and a baseline tree whose bytes at those paths match the caller's view, without composing the view. --contents adds `contents`: each held path's bytes as a checkout writes them (base64), null when absent in the view. --hold-own holds the caller's back too.",
   effects: { idempotent: true },
   helpGroups: ["git-arc"],
   mcpDeferred: true,
   words: ["git", "arc", "held"],
-  usage: "wb git arc held [--hold-own]",
-  inputSchema: z.object({ holdOwn: z.boolean().default(false) }).strict(),
+  usage: "wb git arc held [--hold-own] [--contents]",
+  inputSchema: z.object({ contents: z.boolean().default(false), holdOwn: z.boolean().default(false) }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--hold-own"] });
-    return { holdOwn: flags.has("--hold-own") };
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--contents", "--hold-own"] });
+    return { contents: flags.has("--contents"), holdOwn: flags.has("--hold-own") };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      action: "arcHeld", ...baseBody(callerHarness, callerThreadId, cwd), holdOwn: input.holdOwn,
+      action: "arcHeld", ...baseBody(callerHarness, callerThreadId, cwd), contents: input.contents, holdOwn: input.holdOwn,
     }, "json");
   },
 });

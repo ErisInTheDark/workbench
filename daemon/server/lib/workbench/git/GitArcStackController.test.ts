@@ -1,6 +1,6 @@
 /*
  * Exports: none. Protect stack layer waiting, sealing, reopening, batch landing, history rewrites, subagent transfer,
- * held-path reads matching arc trees, and arc tree cancellation on prepared branches.
+ * held-path reads and contents matching arc trees, and arc tree cancellation on prepared branches.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -341,11 +341,12 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   const view = async (threadId: string, holdOwn = false) => {
     const built = await controller.readClaimView({ cwd, threadId, holdOwn });
     // Held-path reads skip composing the view but must list its held paths and read its bytes there.
-    const held = await controller.readHeldPaths({ cwd, threadId, holdOwn });
+    const held = await controller.readHeldPaths({ cwd, threadId, holdOwn, contents: true });
     const files = built.held.flatMap(({ paths }) => paths);
+    const viewFiles = await repository.readTreeFiles(built.tree, files);
     assert.deepEqual(
-      [held.head, sorted(held.held), await repository.readTreeFiles(held.baseline, files)],
-      [built.head, sorted(built.held), await repository.readTreeFiles(built.tree, files)],
+      [held.head, sorted(held.held), await repository.readTreeFiles(held.baseline, files), held.contents],
+      [built.head, sorted(built.held), viewFiles, Object.fromEntries(files.map(file => [file, viewFiles.get(file)?.bytes.toString("base64") ?? null]))],
     );
     return { ...built, ...await controller.mirrorClaimView({ into: out, paths: ["two.txt"], repoRoot: built.repoRoot, tree: built.tree }) };
   };
@@ -454,9 +455,22 @@ test("arc tree and held-path composition and mirroring stop once their caller di
   await fs.appendFile(path.resolve(cwd, (await git("rev-parse", "--git-path", "info/exclude")).trim()), "\nabort-out/\n");
   const aborted = AbortSignal.abort(new Error("caller left"));
   await assert.rejects(controller.readClaimView({ cwd, threadId: "owner", holdOwn: false, signal: aborted }), /caller left/u);
-  await assert.rejects(controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, signal: aborted }), /caller left/u);
+  await assert.rejects(controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: true, signal: aborted }), /caller left/u);
   const view = await controller.readClaimView({ cwd, threadId: "owner", holdOwn: false });
   const out = path.join(cwd, "abort-out");
   await assert.rejects(controller.mirrorClaimView({ into: out, paths: [], repoRoot: view.repoRoot, signal: aborted, tree: view.tree }), /caller left/u);
   await assert.rejects(fs.access(out), "nothing is mirrored for a departed caller");
+});
+
+test("held-path contents are the view's bytes, null where another thread created the file, and only on request", async () => {
+  const { cwd, git } = branch("stacked");
+  await controller.editArcClaims({ cwd, threadId: "other", inherit: true, addPaths: ["fresh.txt"] });
+  await fs.writeFile(path.join(cwd, "two.txt"), "other edit\n");
+  await fs.writeFile(path.join(cwd, "fresh.txt"), "new\n");
+  const held = await controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: true });
+  assert.deepEqual(held.contents, {
+    "fresh.txt": null,
+    "two.txt": Buffer.from(await git("show", "HEAD:two.txt")).toString("base64"),
+  });
+  assert.equal((await controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: false })).contents, undefined);
 });

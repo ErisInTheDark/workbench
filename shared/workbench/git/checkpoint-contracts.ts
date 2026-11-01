@@ -12,7 +12,7 @@
  * - GitArcStashResultSchema/GitArcStashResult: browser-safe stash and unstash lifecycle result.
  * - GitArcStackResultSchema/GitArcStackResult: sealed or reopened stack layer receipt.
  * - GitArcClaimViewSchema/GitArcClaimView/GitArcClaimViewResultSchema/GitArcClaimViewResult: per-repository build view tree, held owners and mirror counts.
- * - GitArcHeldPathsSchema/GitArcHeldPaths/GitArcHeldPathsResultSchema/GitArcHeldPathsResult: per-repository held owners and the baseline tree holding their view bytes.
+ * - GitArcHeldPathsSchema/GitArcHeldPaths/GitArcHeldPathsResultSchema/GitArcHeldPathsResult: per-repository held owners, the baseline tree holding their view bytes, and those bytes on request.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
  * - GitArcProposalCommitEntry: one proposal's commit choices inside a batched acceptance.
  * - GitArcProposalCommitManyResultSchema/GitArcProposalCommitManyResult: landed proposals and the first failure of a batch.
@@ -300,6 +300,8 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }).strict(),
   z.object({
     action: z.literal("arcHeld"),
+    /** Include each held path's bytes in the view, so callers never read Git themselves. */
+    contents: z.boolean().default(false),
     /** Hold the caller's own dirty claims back too, for a matched "before" build. */
     holdOwn: z.boolean().default(false),
     ...checkpointBaseRequest,
@@ -396,6 +398,8 @@ export type GitArcClaimViewResult = z.infer<typeof GitArcClaimViewResultSchema>;
 export const GitArcHeldPathsSchema = GitArcClaimViewSchema.pick({ head: true, held: true, repoRoot: true }).extend({
   /** Tree whose bytes at each held path match the caller's arc tree there. */
   baseline: checkpointSha,
+  /** Requested only: each held path's checkout bytes in the view (base64), null where the view lacks it. */
+  contents: z.record(z.string().min(1), z.string().nullable()).optional(),
 }).strict();
 export type GitArcHeldPaths = z.infer<typeof GitArcHeldPathsSchema>;
 export const GitArcHeldPathsResultSchema = z.object({ repositories: z.array(GitArcHeldPathsSchema) }).strict();

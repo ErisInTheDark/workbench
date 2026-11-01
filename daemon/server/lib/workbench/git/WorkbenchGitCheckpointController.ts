@@ -62,7 +62,7 @@ import {
 } from "./git-arc-thread-identity";
 import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcRetentionController";
 import GitArcStackController from "./GitArcStackController";
-import GitArcClaimViewController, { type GitArcClaimViewInput } from "./GitArcClaimViewController";
+import GitArcClaimViewController, { type GitArcClaimViewInput, type GitArcHeldPathsInput } from "./GitArcClaimViewController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import { absorbMachineBaseline } from "./machine-git-baseline";
@@ -270,8 +270,8 @@ export default class WorkbenchGitCheckpointController {
     return await this.views.readClaimView({ ...input, harness: normalizeHarness(input.harness) });
   }
 
-  /** That view's held paths and baseline, without composing it; hold the repository read gate around this only. */
-  async readHeldPaths(input: ControllerInput & Pick<GitArcClaimViewInput, "holdOwn" | "signal">) {
+  /** That view's held paths and baseline (and their bytes on request), without composing it; hold the repository read gate around this only. */
+  async readHeldPaths(input: ControllerInput & Pick<GitArcHeldPathsInput, "contents" | "holdOwn" | "signal">) {
     return await this.views.readHeldPaths({ ...input, harness: normalizeHarness(input.harness) });
   }
 

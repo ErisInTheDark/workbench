@@ -593,7 +593,8 @@ export default class WorkbenchWorkspaceGitArcController {
       }
       case "arcHeld": {
         const values = await this.runMembers(await this.joinedMembers(members, request.harness, request.threadId), async member => await this.local.readHeldPaths({
-          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, holdOwn: request.holdOwn, signal: options.signal,
+          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, contents: request.contents, holdOwn: request.holdOwn,
+          signal: options.signal,
         }), undefined, "read");
         return { repositories: values.map(({ result }) => result) } satisfies GitArcHeldPathsResult;
       }

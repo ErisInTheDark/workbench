@@ -1,9 +1,11 @@
 /*
  * Exports:
  * - GitArcClaimViewInput: owner and hold-own choice for a build view.
+ * - GitArcHeldPathsInput: that choice plus whether held paths' view bytes are read too.
  * - default GitArcClaimViewController: write the worktree as one owner builds it (every other live owner's dirty claims at
  *   HEAD plus the caller's own or inherited sealed layers, written through one index); list just those held paths and
- *   the baseline holding their view bytes, diffing only claimed paths; and mirror selected paths of a view into an
+ *   the baseline holding their view bytes (with those bytes as a checkout writes them on request), diffing only
+ *   claimed paths; and mirror selected paths of a view into an
  *   ignored directory, checking out only files whose content differs and removing only files its own record says it
  *   wrote. All stop once the caller's signal aborts.
  */
@@ -29,6 +31,11 @@ export interface GitArcClaimViewInput {
   /** Aborts once the caller is gone, so abandoned views stop composing. */
   signal?: AbortSignal;
   threadId: string;
+}
+
+export interface GitArcHeldPathsInput extends GitArcClaimViewInput {
+  /** Also read each held path's bytes in the view. */
+  contents: boolean;
 }
 
 interface WantedFile {
@@ -149,7 +156,7 @@ export default class GitArcClaimViewController {
   }
 
   /** The view's held paths without composing it: only claimed paths are compared with the caller's baseline. */
-  async readHeldPaths(input: GitArcClaimViewInput): Promise<GitArcHeldPaths> {
+  async readHeldPaths(input: GitArcHeldPathsInput): Promise<GitArcHeldPaths> {
     return await GitObjectReadSession.run(async () => {
       input.signal?.throwIfAborted();
       const repository = await WorkbenchGitRepository.open(input.cwd);
@@ -162,8 +169,22 @@ export default class GitArcClaimViewController {
         const paths = changed.filter(candidate => scope.covers(candidate));
         return paths.length ? [{ paths, threadId }] : [];
       });
-      return { baseline: await repository.resolveTree(baseline), head, held, repoRoot: repository.root };
+      const tree = await repository.resolveTree(baseline);
+      const paths = [...new Set(held.flatMap(({ paths }) => paths))];
+      return {
+        baseline: tree, head, held, repoRoot: repository.root,
+        ...input.contents ? { contents: await this.readContents(repository, tree, paths, input.signal) } : {},
+      };
     });
+  }
+
+  /** Each path's bytes as a checkout of `tree` writes them (base64), or null where the tree lacks it. */
+  private async readContents(repository: WorkbenchGitRepository, tree: string, paths: readonly string[], signal?: AbortSignal) {
+    if (!paths.length) return {};
+    signal?.throwIfAborted();
+    const present = new Set(await repository.listTreePaths(tree, [...paths]));
+    const bytes = await repository.readCheckoutBytes(tree, paths.filter(relative => present.has(relative)));
+    return Object.fromEntries(paths.map(relative => [relative, bytes.get(relative)?.toString("base64") ?? null]));
   }
 
   /** Other live owners (and the caller's with `holdOwn`) and the caller's baseline they are held at. */

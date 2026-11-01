@@ -1191,7 +1191,7 @@ export default class WorkbenchGitArcFeature {
         repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn, signal })],
       } satisfies GitArcClaimViewResult);
       case "arcHeld": return Response.json({
-        repositories: [await this.controller.readHeldPaths({ ...common, holdOwn: input.holdOwn, signal })],
+        repositories: [await this.controller.readHeldPaths({ ...common, contents: input.contents, holdOwn: input.holdOwn, signal })],
       } satisfies GitArcHeldPathsResult);
       case "plan": return Response.json(await this.controller.createPlan({
         ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
