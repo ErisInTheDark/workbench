@@ -311,6 +311,7 @@ func (node *privateNetwork) present(hostname string, names []string, certificate
 		status.RootCertificate = details.RootCertificate
 		status.RootFingerprint = details.RootFingerprint
 		status.CertificateExpiresAt = details.CertificateExpiresAt
+		status.TrustProbeHostname = details.TrustProbeHostname
 	})
 	select {
 	case node.refresh <- struct{}{}:
@@ -339,7 +340,11 @@ func privateCertificateDetails(certificate *tls.Certificate, hostname string) (p
 	rootHash := sha256.Sum256(root.Raw)
 	fingerprint := hex.EncodeToString(rootHash[:])
 	expires := leaf.NotAfter.UTC().Format(time.RFC3339)
-	return privateStatus{RootCertificate: &rootPEM, RootFingerprint: &fingerprint, CertificateExpiresAt: &expires}, nil
+	details := privateStatus{RootCertificate: &rootPEM, RootFingerprint: &fingerprint, CertificateExpiresAt: &expires}
+	if probe := trustProbeHostname(hostname); leaf.VerifyHostname(probe) == nil {
+		details.TrustProbeHostname = &probe
+	}
+	return details, nil
 }
 
 func offlinePrivateStatus(directory string, settings *privateConfiguration) (privateStatus, error) {
@@ -367,6 +372,7 @@ func offlinePrivateStatus(directory string, settings *privateConfiguration) (pri
 		return status, err
 	}
 	status.RootCertificate, status.RootFingerprint, status.CertificateExpiresAt = details.RootCertificate, details.RootFingerprint, details.CertificateExpiresAt
+	status.TrustProbeHostname = details.TrustProbeHostname
 	return status, nil
 }
 
@@ -508,7 +514,7 @@ func (node *privateNetwork) run() (result error) {
 		presentation := node.presentation.Load()
 		certificate := presentation.certificate
 		name := strings.TrimSuffix(strings.ToLower(hello.ServerName), ".")
-		allowed := slices.Contains(presentation.names, name) || name == node.controlHostname()
+		allowed := slices.Contains(presentation.names, name) || name == node.controlHostname() || name == trustProbeHostname(presentation.hostname)
 		if certificate == nil || certificate.Leaf == nil || !allowed || certificate.Leaf.VerifyHostname(name) != nil || !time.Now().Before(certificate.Leaf.NotAfter) {
 			return nil, errors.New("private certificate is unavailable, expired or requested for another name")
 		}
@@ -533,12 +539,16 @@ func (node *privateNetwork) run() (result error) {
 		})
 		handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 			presentation := node.presentation.Load()
+			verify := port == 443 && request.URL.Path == "/_workbench-network/verify" && request.Method == http.MethodGet
 			isControl := port == 443 && strings.HasPrefix(request.URL.Path, "/_workbench-network/") && request.URL.Path != "/_workbench-network/verify"
-			if !isControl && (request.TLS == nil || !slices.Contains(presentation.names, strings.TrimSuffix(strings.ToLower(request.TLS.ServerName), "."))) {
+			serverName := ""
+			if request.TLS != nil { serverName = strings.TrimSuffix(strings.ToLower(request.TLS.ServerName), ".") }
+			probe := request.TLS != nil && serverName == trustProbeHostname(presentation.hostname)
+			if probe && !verify || !probe && !isControl && (request.TLS == nil || !slices.Contains(presentation.names, serverName)) {
 				http.NotFound(response, request)
 				return
 			}
-			if port == 443 && request.URL.Path == "/_workbench-network/verify" && request.Method == http.MethodGet {
+			if verify {
 				response.Header().Set("Access-Control-Allow-Origin", "*")
 				response.Header().Set("Cache-Control", "no-store")
 				response.Header().Set("Content-Type", "application/json")
@@ -613,7 +623,8 @@ func (node *privateNetwork) run() (result error) {
 	for _, server := range dnsServers {
 		server.Handler = dns.HandlerFunc(func(writer dns.ResponseWriter, request *dns.Msg) {
 			presentation := node.presentation.Load()
-			answer := dnsAnswer(presentation.hostname, status.TailscaleIPs, request, presentation.names...)
+			answer := dnsAnswer(presentation.hostname, status.TailscaleIPs, request,
+				append(slices.Clone(presentation.names), trustProbeHostname(presentation.hostname))...)
 			if node.directorySnapshot != nil {
 				if directory := node.directorySnapshot(); directory != nil {
 					if directory.Group.DNSNodeID != nodeID {
@@ -684,15 +695,23 @@ func (node *privateNetwork) run() (result error) {
 	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	// Leaves issued before trust probes reissue once per run and on each daily check, never per refresh,
+	// so an authority that still issues probe-less leaves cannot cause a renewal storm.
+	probeRenewalTried := false
 	for {
+		scheduled := false
 		select {
 		case <-node.ctx.Done():
 			return nil
 		case <-node.refresh:
 		case <-timer.C:
+			scheduled = true
 		}
 		certificate := node.certificate()
-		if certificate != nil && renewalDue(certificate.Leaf, time.Now()) && node.renew != nil {
+		probeRenewal := certificate != nil && (!probeRenewalTried || scheduled) &&
+			certificate.Leaf.VerifyHostname(trustProbeHostname(node.hostname())) != nil
+		if probeRenewal { probeRenewalTried = true }
+		if certificate != nil && (renewalDue(certificate.Leaf, time.Now()) || probeRenewal) && node.renew != nil {
 			node.change(func(current *privateStatus) {
 				message := "Renewing the private certificate with the setup installation."
 				current.Message = &message

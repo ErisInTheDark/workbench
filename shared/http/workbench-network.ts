@@ -106,6 +106,7 @@ export const WorkbenchNetworkRuntimeSchema = z.object({
     rootCertificate: z.string().max(16_384).nullable(),
     rootFingerprint: z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
     certificateExpiresAt: z.string().datetime().nullable(),
+    trustProbeHostname: z.string().max(253).nullable().optional(),
     pending: z.array(z.object({ id: z.string().min(1).max(64), member: WorkbenchNetworkMemberSchema }).strict()).max(4),
     discovery: z.enum(["searching", "none", "joined", "conflict", "failed"]).optional(),
     networks: z.array(z.object({ id: z.uuid(), ownerNodeId: nodeId, label }).strict()).max(256).optional(),

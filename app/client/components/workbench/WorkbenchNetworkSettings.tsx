@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchNetworkSettings: app reachability status, any needed setup, then Connection, Other devices and Network rules disclosures.
+ * - WorkbenchNetworkSettings: app reachability status, any needed setup, Connection, Other devices with certificate download, and Network rules.
  */
 "use client";
 import { useContext, useState } from "react";
@@ -10,6 +10,7 @@ import Disclosure from "../ui/Disclosure";
 import FormSection from "../ui/FormSection";
 import PrimaryButton from "../ui/PrimaryButton";
 import SettingsCard, { SettingsCardRow } from "../ui/SettingsCard";
+import WorkbenchCertificateInstall from "./WorkbenchCertificateInstall";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import IconButton from "../ui/IconButton";
 import LoaderIcon from "./LoaderIcon";
@@ -119,6 +120,8 @@ function NetworkSettingsContent () {
               : service ? "Before Tailnet service works on another device, you must open this page via the tailnet IP and trust the certificate."
                 : "Open this page via the tailnet IP on the other device."}</p>
           {mode !== "localhost" && tailnetUrl && otherDevices ? <Address label="tailnet IP URL" url={tailnetUrl} text="Tailnet IP URL" /> : null}
+          {service && otherDevices && status.privateAccess.rootCertificate
+            ? <div className="flex flex-col items-start gap-2 pt-1"><WorkbenchCertificateInstall certificate={status.privateAccess.rootCertificate} /></div> : null}
         </div>
         {mode !== "localhost" && tailnetUrl && otherDevices ? <WorkbenchQrCode text={tailnetUrl} className="size-28" /> : null}
       </div>

@@ -43,7 +43,7 @@ func (resolver directoryDNS) answer(ctx context.Context, query *dns.Msg, tcp boo
 		if member.Published != nil && !*member.Published { continue }
 		host, err := machineHostname(member.Label)
 		if err != nil { return dnsFailure(query), errors.New("invalid app label in DNS directory") }
-		names := []string{host}
+		names := []string{host, trustProbeHostname(host)}
 		if member.Rename != nil {
 			for _, label := range []string{member.Rename.From, member.Rename.To} {
 				alias, err := machineHostname(label)

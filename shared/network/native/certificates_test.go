@@ -2,6 +2,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"testing"
 	"time"
@@ -30,6 +31,13 @@ func TestCertificateTrustAndOwnership(t *testing.T) {
 	roots.AddCert(authority.certificate)
 	if _, err := certificate.Verify(x509.VerifyOptions{Roots: roots, DNSName: host, CurrentTime: now}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := certificate.Verify(x509.VerifyOptions{Roots: roots, DNSName: trustProbeHostname(host), CurrentTime: now}); err != nil {
+		t.Fatalf("certificate did not authenticate its trust probe: %v", err)
+	}
+	details, err := privateCertificateDetails(&tls.Certificate{Certificate: [][]byte{der, authority.certificate.Raw}}, host)
+	if err != nil || details.TrustProbeHostname == nil || *details.TrustProbeHostname != trustProbeHostname(host) {
+		t.Fatalf("presented certificate did not advertise its trust probe: %v", err)
 	}
 	if _, err := certificate.Verify(x509.VerifyOptions{Roots: roots, DNSName: "laptop.wb.inthedark.boo", CurrentTime: now}); err == nil {
 		t.Fatal("certificate authenticated another machine")

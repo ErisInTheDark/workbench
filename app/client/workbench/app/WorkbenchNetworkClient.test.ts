@@ -150,6 +150,29 @@ test("HTTPS verification rejects a different installation", async context => {
   assert.equal(client.snapshot().verification.phase, "verified");
 });
 
+test("HTTPS proof uses the trust probe so a browsed-host certificate exception cannot pass for root trust", async context => {
+  const snapshot = networkSnapshot();
+  Object.assign(snapshot.runtime.privateAccess, { phase: "setup", hostname: "desktop.wb.inthedark.boo",
+    nodeId: "app", rootCertificate: "certificate", rootFingerprint: "a".repeat(64),
+    trustProbeHostname: "verify.desktop.wb.inthedark.boo" });
+  let rootTrusted = false;
+  const { client, publish } = await fixture(context, snapshot, async input => {
+    const host = new URL(String(input)).hostname;
+    if (host !== "desktop.wb.inthedark.boo" && !rootTrusted) throw new TypeError("Failed to fetch");
+    return Response.json({ hostname: "desktop.wb.inthedark.boo", nodeId: "app" });
+  });
+  await client.verify();
+  assert.equal(client.snapshot().verification.phase, "failed");
+  rootTrusted = true;
+  await client.verify();
+  assert.equal(client.snapshot().verification.phase, "verified");
+  rootTrusted = false;
+  snapshot.runtime.privateAccess.trustProbeHostname = null;
+  publish();
+  await client.verify();
+  assert.equal(client.snapshot().verification.phase, "verified");
+});
+
 test("enabling a higher mode follows pushed readiness but waits for browser HTTPS trust", async context => {
   const { location, navigations } = browser(context);
   const snapshot = networkSnapshot();

@@ -34,6 +34,9 @@ func validMachineHostname(host string) bool {
 	return found && machineLabelPattern.MatchString(label)
 }
 
+// Browsers never open the trust probe as a page, so no certificate exception can cover it.
+func trustProbeHostname(host string) string { return "verify." + host }
+
 type certificateAuthority struct {
 	certificate *x509.Certificate
 	key         *ecdsa.PrivateKey
@@ -147,6 +150,7 @@ func (authority *certificateAuthority) issue(request []byte, host string, now ti
 	if len(names) > 3 {
 		return nil, errors.New("private certificate has too many transition names")
 	}
+	names = append(names, trustProbeHostname(host))
 	if !authority.certificate.NotAfter.After(now.Add(30 * 24 * time.Hour)) {
 		return nil, errors.New("certificate authority is expiring; renew device trust before issuing certificates")
 	}

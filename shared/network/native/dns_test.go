@@ -26,7 +26,7 @@ func TestDirectoryDNS(t *testing.T) {
 			return answer, nil
 		},
 	}
-	for _, name := range []string{"NAS.wb.inthedark.boo.", "desktop.wb.inthedark.boo."} {
+	for _, name := range []string{"NAS.wb.inthedark.boo.", "desktop.wb.inthedark.boo.", "verify.desktop.wb.inthedark.boo."} {
 		answer, err := resolver.answer(context.Background(), new(dns.Msg).SetQuestion(name, dns.TypeA), false)
 		if err != nil || !answer.Authoritative || len(answer.Answer) != 1 { t.Fatalf("directory answer failed: %v %v", answer, err) }
 	}
@@ -37,11 +37,11 @@ func TestDirectoryDNS(t *testing.T) {
 	if err != nil || answer.Authoritative || forwards != 2 { t.Fatal("explicitly removed address remained in private DNS") }
 	members[0].Published = nil
 	forwards = 0
-	for _, name := range []string{"wb.inthedark.boo.", "docs.wb.inthedark.boo."} {
+	for _, name := range []string{"wb.inthedark.boo.", "docs.wb.inthedark.boo.", "child.desktop.wb.inthedark.boo."} {
 		answer, err := resolver.answer(context.Background(), new(dns.Msg).SetQuestion(name, dns.TypeA), false)
 		if err != nil || answer.Truncated || answer.Authoritative { t.Fatalf("public fallback failed: %v %v", answer, err) }
 	}
-	if forwards != 4 { t.Fatal("truncated public responses must retry using TCP") }
+	if forwards != 6 { t.Fatal("truncated public responses must retry using TCP") }
 	answer, err = resolver.answer(context.Background(), new(dns.Msg).SetQuestion("failed.wb.inthedark.boo.", dns.TypeA), false)
 	if err == nil || answer.Rcode != dns.RcodeServerFailure { t.Fatal("upstream failure must not become a negative answer") }
 	answer, err = resolver.answer(context.Background(), new(dns.Msg).SetQuestion("example.com.", dns.TypeA), false)

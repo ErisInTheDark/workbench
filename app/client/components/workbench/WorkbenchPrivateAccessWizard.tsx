@@ -8,9 +8,9 @@ import type { WorkbenchNetworkAction } from "workbench-shared/http/workbench-net
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import privateAccessStep from "../../workbench/app/private-access-step";
 import PrimaryButton from "../ui/PrimaryButton";
-import Disclosure from "../ui/Disclosure";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import WorkbenchLinkButton from "./WorkbenchLinkButton";
+import WorkbenchCertificateInstall from "./WorkbenchCertificateInstall";
 import WorkbenchCertificateTrust from "./WorkbenchCertificateTrust";
 import { ExternalLinkIcon, RefreshCwIcon } from "./workbench-icons";
 
@@ -75,18 +75,9 @@ export default function WorkbenchPrivateAccessWizard() {
           onCopyFailure={() => setError({ step, message: "Certificate install command could not be copied." })}
           onTrust={() => act({ action: "trust-host" })}
         />
-        <WorkbenchLinkButton download="workbench-private-root.crt" href={`data:application/x-x509-ca-cert,${encodeURIComponent(status.rootCertificate)}`}>Download certificate</WorkbenchLinkButton>
         <PrimaryButton disabled={busy} pendingHalo={busy} onClick={() => { void run(() => network.client.verify()); }}><RefreshCwIcon className="mr-2 size-4" />Retry HTTPS check</PrimaryButton>
       </div>
-      <Disclosure summary="How do I install it?" className="w-full text-sm text-fg/muted" contentClassName="flex flex-col items-start gap-2 pt-3">
-          <p className="m-0">Trust is only needed once per browsing device. If this certificate is already trusted, check Tailscale connectivity and the nameserver entry instead of installing it again.</p>
-          <p className="m-0">Open the downloaded certificate in your device's certificate settings and enable trust for websites. Only trust it if you recognise this Workbench network.</p>
-          <p className="m-0">On another Windows PC, import it into your Current User &gt; Trusted Root Certification Authorities store.</p>
-          <WorkbenchLinkButton href="https://learn.microsoft.com/en-us/windows-hardware/drivers/install/trusted-root-certification-authorities-certificate-store" target="_blank" rel="noreferrer">Windows certificate help<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
-          <WorkbenchLinkButton href="https://support.apple.com/en-ie/102390" target="_blank" rel="noreferrer">iPhone and iPad instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
-          <WorkbenchLinkButton href="https://support.apple.com/en-ie/guide/keychain-access/kyca11871/mac" target="_blank" rel="noreferrer">Mac instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
-          <WorkbenchLinkButton href="https://support.google.com/pixelphone/answer/2844832?hl=en" target="_blank" rel="noreferrer">Android instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
-      </Disclosure>
+      <WorkbenchCertificateInstall certificate={status.rootCertificate} />
     </> : null}
     {configuration?.role !== "unconfigured" && step !== "failed" && status.discovery === "failed" ? <div className="space-y-2">
       <p className="m-0 text-sm text-fg/muted">{status.message ?? "Network updates could not be checked. Previously saved access settings remain in use."}</p>

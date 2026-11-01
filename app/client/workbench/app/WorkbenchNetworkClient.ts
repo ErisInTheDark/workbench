@@ -231,7 +231,7 @@ export default class WorkbenchNetworkClient {
     this.requests.add(controller);
     this.update({ ...this.state, verification: { phase: "checking", identity } });
     try {
-      const response = await (this.options.fetcher ?? fetch)(`https://${node.hostname}/_workbench-network/verify`, {
+      const response = await (this.options.fetcher ?? fetch)(`https://${node.trustProbeHostname ?? node.hostname}/_workbench-network/verify`, {
         cache: "no-store", credentials: "omit", signal: controller.signal,
       }).catch((error: unknown) => {
         if (controller.signal.aborted) throw error;

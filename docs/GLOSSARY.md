@@ -60,3 +60,4 @@
 | network grant | A target daemon's record letting one thread on another daemon reach one exact thread, folder or feedback source there; written only by an app executing the user's approval |
 | relay standby | An app's connection to an awake daemon held only so its agents can relay through the app; never keeps the daemon awake |
 | sibling roster | A cross-folder child's copy of its unsettled siblings, pushed by its parent's daemon; authorizes sibling messages without asking the parent |
+| trust probe | `verify.<label>.wb.inthedark.boo`, never-browsed SAN on every private leaf; browser HTTPS proof fetches it so click-through exceptions cannot fake root trust |

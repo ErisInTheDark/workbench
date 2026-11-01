@@ -103,6 +103,7 @@ type privateStatus struct {
 	RootCertificate      *string          `json:"rootCertificate"`
 	RootFingerprint      *string          `json:"rootFingerprint"`
 	CertificateExpiresAt *string          `json:"certificateExpiresAt"`
+	TrustProbeHostname   *string          `json:"trustProbeHostname"`
 	Pending              []pairingRequest `json:"pending"`
 }
 
