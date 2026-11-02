@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadModeDivider: the heading a workflow mode switch opens across the thread: a top border, rail and wash
- *   fading down behind what follows, in the mode's declared colour, with its declared icon and name, a retitle and any
+ * - default ThreadModeDivider: the heading a workflow mode switch opens across the thread: a hairline and glow
+ *   fading down behind what follows and out at both edges, in the mode's declared colour, with its declared icon and name, a retitle and any
  *   always-editable grant beside it, opening onto the proofs filed on the way in. Tags, mode_set and thread_state all draw it.
  */
 import { useContext, type CSSProperties, type ReactNode } from "react";
@@ -65,19 +65,20 @@ export default function ThreadModeDivider({ actions, editable = null, mode, proo
     </span>
   );
   return (
-    <div className="-mx-5 my-[0.85em] font-sans last:mb-0 md:-mx-3" data-thread-state-change="true" data-thread-state-mode={mode}>
-      {/* Zero net height: the heading sits on it and whatever follows paints over it. Bleeds into the column gutter, edge to edge on narrow screens. */}
+    <div className="-mx-5 my-[0.85em] font-sans last:mb-0 md:-mx-16" data-thread-state-change="true" data-thread-state-mode={mode}>
+      {/* Zero net height: the heading sits on it and whatever follows paints over it. Reaches past the text into the gutter and fades out before its edges, edge to edge on narrow screens. */}
       <div
         aria-hidden="true"
         className={`
-          pointer-events-none -mb-36 h-36 border-t-[0.22rem] border-current bg-no-repeat
-          [background-image:linear-gradient(to_bottom,currentColor,transparent),linear-gradient(to_bottom,color-mix(in_srgb,currentColor_10%,transparent),transparent)]
-          [background-size:1px_100%,100%_100%]
+          pointer-events-none -mb-36 h-36 border-t border-current
+          [background-image:linear-gradient(to_bottom,color-mix(in_srgb,currentColor_18%,transparent),color-mix(in_srgb,currentColor_7%,transparent)_2.2rem,transparent)]
+          [mask-image:linear-gradient(to_right,transparent,#000_2.5rem,#000_calc(100%-2.5rem),transparent)]
+          md:[mask-image:linear-gradient(to_right,transparent,#000_9rem,#000_calc(100%-9rem),transparent)]
           ${color.className}
         `}
         style={color.style}
       />
-      <div className="px-5 pb-3 pt-[0.7rem] md:px-3">
+      <div className="px-5 pb-3 pt-[0.7rem] md:px-16">
         {proof.families.length ? (
           <details>
             <summary className="cursor-pointer list-none">{line}</summary>
