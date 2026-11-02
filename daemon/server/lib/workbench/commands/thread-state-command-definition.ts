@@ -18,27 +18,25 @@ export const WorkbenchThreadStateRequestSchema = z.object({
 
 const threadState = defineWorkbenchAgentCommand({
   words: ["thread", "state"],
-  usage: "wb thread state [--proofs-json <json-object>] [--not-applicable <id>]... [--defer <id>]... [--mode <name>] "
+  usage: "wb thread state [--proofs-json <json-object>] [--not-applicable <id>]... [--mode <name>] "
     + "[--title <text> [--current-title <text>]] [--status completed|blocked] [--always-editable <path>]... [--clear-always-editable]",
-  description: "Read this thread's state, or change it in one call: file checklist proofs (one-to-two-sentence answers, "
-    + "not-applicable ids, ids still in progress), enter a mode, retitle, set status, and set the paths every mode may edit. "
+  description: "Read this thread's state, or change it in one call: file Gotcha Checklist proofs (what each item found, "
+    + "or not-applicable ids), enter a mode, retitle, set status, and set the paths every mode may edit. "
     + "Proofs always file; a refused mode or status applies nothing else. Every result reports the full state.",
   helpGroups: ["thread"],
   inputSchema: ThreadStateSchema,
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, {
       values: ["--proofs-json", "--mode", "--title", "--current-title", "--status"],
-      repeatable: ["--not-applicable", "--defer", "--always-editable"],
+      repeatable: ["--not-applicable", "--always-editable"],
       boolean: ["--clear-always-editable"],
     });
     const proofs = flags.optional("--proofs-json");
     const notApplicable = flags.repeated("--not-applicable");
-    const defer = flags.repeated("--defer");
     const alwaysEditable = flags.repeated("--always-editable");
     return ThreadStateSchema.parse({
       ...(proofs === null ? {} : { proofs: JSON.parse(proofs) }),
       ...(notApplicable.length ? { notApplicable } : {}),
-      ...(defer.length ? { defer } : {}),
       ...(flags.optional("--mode") ? { mode: flags.optional("--mode") } : {}),
       ...(flags.optional("--title") ? { title: flags.optional("--title") } : {}),
       ...(flags.optional("--current-title") ? { currentTitle: flags.optional("--current-title") } : {}),

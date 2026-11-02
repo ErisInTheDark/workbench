@@ -1,14 +1,14 @@
 /*
  * Exports:
  * - useThreadProofOfWork: the proofs some filing calls hold, merged and labelled, leaving out hidden checklists.
- * - ThreadProofOfWorkList: those proofs as answered, not-applicable and deferred lists.
+ * - ThreadProofOfWorkList: those proofs as answered and not-applicable lists.
  * - default ThreadProofOfWorkItem: show consecutive checklist proofs as one card, leaving out hidden checklists.
  */
 import { useContext, type ReactNode } from "react";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { mergeProofs, presentProofOfWork } from "workbench-shared/workbench/thread/proof-of-work";
 import { readFiledProofs } from "workbench-shared/workbench/thread/workflow-modes";
-import { CertificateIcon, CheckIcon, ClockIcon, MinusIcon } from "../workbench-icons";
+import { CertificateIcon, CheckIcon, MinusIcon } from "../workbench-icons";
 import ThreadCard from "./ThreadCard";
 import { ThreadProofOfWorkCatalogueContext } from "./use-proof-of-work-catalogue";
 
@@ -46,7 +46,6 @@ export function ThreadProofOfWorkList({ proof }: { proof: ReturnType<typeof useT
         ))}
       </dl>
       <LabelList icon={<MinusIcon size={14} />} labels={proof.notApplicable.map(entry => entry.label)} title="Not applicable" />
-      <LabelList icon={<ClockIcon size={14} />} labels={proof.deferred.map(entry => entry.label)} title="Deferred" />
     </div>
   );
 }
@@ -63,7 +62,6 @@ export default function ThreadProofOfWorkItem({ items }: { items: FilingItem[] }
           <span className="truncate font-semibold text-text">{proof.families.join(", ")}</span>
           <Count count={proof.answered.length} icon={<CheckIcon className="translate-y-px" size={14} />} />
           <Count count={proof.notApplicable.length} icon={<MinusIcon className="translate-y-px" size={14} />} />
-          <Count count={proof.deferred.length} icon={<ClockIcon className="translate-y-px" size={14} />} />
         </span>
       )}
     >

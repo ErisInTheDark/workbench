@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests mode transitions: fresh proofs per loop, cross-turn filings, deferral, ungated modes,
+ * No production exports. Tests mode transitions: fresh proofs per loop, cross-turn filings, missing items, ungated modes, retired defer arguments,
  * entry sources, undeclared and unentered modes, the completed-status pairing, and what refused and legacy calls contribute to the ledger.
  */
 import assert from "node:assert/strict";
@@ -44,9 +44,8 @@ test("the previous loop's proofs do not open the next loop's gate", () => {
   assert.deepEqual(enter([complete, mode("Brief"), mode("Inspect")], { mode: "Brief" }).unresolved, [], "a revised brief reuses its proofs");
 });
 
-test("deferred items block, ungated modes pass, and undeclared checklists are reported", () => {
-  const deferred = proof({ proofs: { "plan.result": "a" }, defer: ["plan.verify"] });
-  assert.deepEqual(enter([deferred], { mode: "Brief" }).unresolved, [{ checklist: "plan", ids: ["plan.verify"] }]);
+test("missing items block, ungated modes pass, and undeclared checklists are reported", () => {
+  assert.deepEqual(enter([proof({ proofs: { "plan.result": "a" } })], { mode: "Brief" }).unresolved, [{ checklist: "plan", ids: ["plan.verify"] }]);
   assert.deepEqual(enter([], { mode: "Inspect" }).unresolved, []);
   const ghost = evaluateThreadStateTransition([], [defined("Brief", { proofs: ["ghost"] })], [plan], { mode: "Brief" });
   assert.deepEqual([ghost.unresolved, ghost.undeclared], [[], ["ghost"]]);
@@ -100,6 +99,12 @@ test("refused thread_state calls keep only their proofs; legacy calls count only
   assert.deepEqual(readWorkflowLedgerEntries({ tool: "mode_set", args: { mode: "Brief" }, failed: true }), []);
   assert.deepEqual(readWorkflowLedgerEntries({ tool: "proof_of_work", args: { proofs: {} }, failed: false }), []);
   assert.deepEqual(currentAlwaysEditable([{ kind: "editable", paths: ["a.md"] }, { kind: "editable", paths: [] }]), []);
+});
+
+test("recorded calls that sent the retired defer bucket keep their mode and other proofs", () => {
+  const args = { proofs: { "review.coverage": "ok" }, defer: ["review.other"], mode: "Review" };
+  assert.deepEqual(readWorkflowLedgerEntries({ tool: "thread_state", args, failed: false }), [reviewed, mode("Review")]);
+  assert.deepEqual(readWorkflowLedgerEntries({ tool: "proof_of_work", args: { proofs: { "review.coverage": "ok" }, defer: ["review.other"] }, failed: false }), [reviewed]);
 });
 
 test("transcript calls enter modes only when applied, but file proofs once settled", () => {

@@ -832,7 +832,7 @@ export function getWorkbenchCommandRoute(
       if (title) return specialized("workbench-cli.task-title-set", { kind: "threadTitle", title }, "Naming task");
       const mode = readString(args.mode);
       if (mode) return simple("workbench-cli.thread-state", actionTarget("Entering ", mode), actionTarget("Entered ", mode));
-      if (args.proofs || args.notApplicable || args.defer) {
+      if (args.proofs || args.notApplicable) {
         return simple("workbench-cli.thread-state", actionTarget("Filing ", "proof of work"), actionTarget("Filed ", "proof of work"));
       }
       return simple("workbench-cli.thread-state", actionTarget("Checking ", "thread state"), actionTarget("Checked ", "thread state"));

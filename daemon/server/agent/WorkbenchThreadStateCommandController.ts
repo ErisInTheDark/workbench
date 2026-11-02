@@ -35,9 +35,9 @@ function text(body: string, status = 200) {
 }
 
 /** Null when the call files no proof ids; empty buckets file nothing. */
-function proofOf({ proofs, notApplicable, defer }: ThreadState) {
-  if (!Object.keys(proofs ?? {}).length && !notApplicable?.length && !defer?.length) return null;
-  return ProofOfWorkSchema.safeParse({ ...proofs ? { proofs } : {}, ...notApplicable ? { notApplicable } : {}, ...defer ? { defer } : {} });
+function proofOf({ proofs, notApplicable }: ThreadState) {
+  if (!Object.keys(proofs ?? {}).length && !notApplicable?.length) return null;
+  return ProofOfWorkSchema.safeParse({ ...proofs ? { proofs } : {}, ...notApplicable ? { notApplicable } : {} });
 }
 
 export default class WorkbenchThreadStateCommandController {

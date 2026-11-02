@@ -16,7 +16,7 @@
 import { z } from "zod";
 import { conformToZodSchema } from "../zod-schema-conformer.ts";
 import {
-  mergeProofs, ProofFamilySchema, ProofOfWorkBuckets, ProofOfWorkSchema, readProofOfWorkSubmission,
+  mergeProofs, ProofFamilySchema, ProofOfWorkBuckets, ProofOfWorkSchema, readProofOfWorkSubmission, withoutRetiredProofFields,
   type ProofOfWork, type ProofOfWorkChecklist,
 } from "./proof-of-work.ts";
 import type { ThreadItem } from "./workbench-thread-items.ts";
@@ -70,7 +70,6 @@ function proofOf(state: ThreadState): ProofOfWork | null {
   const parsed = ProofOfWorkSchema.safeParse({
     ...(state.proofs ? { proofs: state.proofs } : {}),
     ...(state.notApplicable ? { notApplicable: state.notApplicable } : {}),
-    ...(state.defer ? { defer: state.defer } : {}),
   });
   return parsed.success ? parsed.data : null;
 }
@@ -78,7 +77,7 @@ function proofOf(state: ThreadState): ProofOfWork | null {
 /** A refused thread_state call still files its proofs; its other changes never applied. Legacy calls count only on success. */
 export function readWorkflowLedgerEntries({ tool, args, failed }: WorkflowLedgerSource): WorkflowLedgerEntry[] {
   if (tool === THREAD_STATE_TOOL) {
-    const parsed = ThreadStateSchema.safeParse(args);
+    const parsed = ThreadStateSchema.safeParse(withoutRetiredProofFields(args));
     if (!parsed.success) return [];
     const proof = proofOf(parsed.data);
     const entries: WorkflowLedgerEntry[] = proof ? [{ kind: "proof", proof }] : [];
@@ -93,7 +92,7 @@ export function readWorkflowLedgerEntries({ tool, args, failed }: WorkflowLedger
     return parsed.success ? [{ kind: "mode", mode: parsed.data.mode }] : [];
   }
   if (tool === LEGACY_PROOF_TOOL) {
-    const parsed = ProofOfWorkSchema.safeParse(args);
+    const parsed = ProofOfWorkSchema.safeParse(withoutRetiredProofFields(args));
     return parsed.success ? [{ kind: "proof", proof: parsed.data }] : [];
   }
   return [];
@@ -106,7 +105,7 @@ function isWorkbenchCall(item: ThreadItem, tool: string): item is Extract<Thread
 /** A thread_state call's arguments and whether it applied; null for other items and unreadable arguments. */
 export function readThreadStateCall(item: ThreadItem) {
   if (!isWorkbenchCall(item, THREAD_STATE_TOOL)) return null;
-  const parsed = conformToZodSchema(ThreadStateSchema, item.arguments);
+  const parsed = conformToZodSchema(ThreadStateSchema, withoutRetiredProofFields(item.arguments));
   if (!parsed.success || parsed.discardedPaths.length) return null;
   return { state: parsed.data, applied: item.status === "completed" && !item.error, settled: item.status !== "inProgress" };
 }

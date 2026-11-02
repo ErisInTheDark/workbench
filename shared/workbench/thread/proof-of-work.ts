@@ -1,13 +1,14 @@
 /*
  * Exports:
  * - ProofIdSchema/ProofFamilySchema: validate `family.item` proof ids and checklist family ids.
- * - ProofOfWorkBuckets: the answered, not-applicable and deferred fields every filing tool shares.
- * - ProofOfWorkSchema/ProofOfWork: validate one submission of answered, not-applicable and deferred ids.
+ * - ProofOfWorkBuckets: the answered and not-applicable fields every filing tool shares.
+ * - withoutRetiredProofFields: recorded filing arguments minus the retired `defer` bucket.
+ * - ProofOfWorkSchema/ProofOfWork: validate one submission of answered and not-applicable ids.
  * - ProofOfWorkChecklistSchema/ProofOfWorkChecklist: one instruction-declared checklist and its items.
  * - readProofOfWorkSubmission: the submission a successful Workbench proof-of-work tool call filed, or null.
  * - ProofState: an id's latest filed state.
  * - mergeProofs: replay submissions so each id keeps its latest state.
- * - reconcileProofOfWork: compare merged proofs with declared checklists, reporting deferred, missing and unknown ids.
+ * - reconcileProofOfWork: compare merged proofs with declared checklists, reporting missing and unknown ids.
  * - formatProofOfWorkReport/readProofOfWorkCompletion: write a recorded filing's feedback, and read back whether it left every reported checklist complete.
  * - presentProofOfWork: group merged proofs for display, leaving out hidden checklists.
  * - proofFamily/formatProofId/proofFamilies: read families and readable labels from ids.
@@ -22,11 +23,17 @@ export const ProofIdSchema = z.string().regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*
 export const ProofOfWorkBuckets = {
   proofs: z.record(ProofIdSchema, z.string().refine(value => value.trim().length > 0, "Answers must not be blank.")).optional(),
   notApplicable: z.array(ProofIdSchema).optional(),
-  defer: z.array(ProofIdSchema).optional(),
 };
 
+/** Recorded arguments without the retired `defer` bucket, so strict schemas still read calls that sent it. */
+export function withoutRetiredProofFields(args: unknown) {
+  if (args === null || typeof args !== "object" || Array.isArray(args) || !("defer" in args)) return args;
+  const { defer: _retired, ...rest } = args as Record<string, unknown>;
+  return rest;
+}
+
 export const ProofOfWorkSchema = z.object(ProofOfWorkBuckets).strict().superRefine((value, context) => {
-  const buckets = [Object.keys(value.proofs ?? {}), [...new Set(value.notApplicable)], [...new Set(value.defer)]];
+  const buckets = [Object.keys(value.proofs ?? {}), [...new Set(value.notApplicable)]];
   const ids = buckets.flat();
   if (!ids.length) context.addIssue({ code: "custom", message: "File at least one proof id." });
   const repeated = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
@@ -44,21 +51,19 @@ export type ProofOfWorkChecklist = z.infer<typeof ProofOfWorkChecklistSchema>;
 export function readProofOfWorkSubmission(item: ThreadItem) {
   if (item.type !== "mcpToolCall" || (item.server !== "wb" && item.server !== "wbex") || item.tool !== "proof_of_work") return null;
   if (item.status === "failed" || item.error) return null;
-  const parsed = conformToZodSchema(ProofOfWorkSchema, item.arguments);
+  const parsed = conformToZodSchema(ProofOfWorkSchema, withoutRetiredProofFields(item.arguments));
   return parsed.success && !parsed.discardedPaths.length ? parsed.data : null;
 }
 
 export type ProofState =
   | { readonly kind: "answered"; readonly answer: string }
-  | { readonly kind: "notApplicable" }
-  | { readonly kind: "deferred" };
+  | { readonly kind: "notApplicable" };
 
 export function mergeProofs(submissions: readonly ProofOfWork[]) {
   const merged = new Map<string, ProofState>();
   for (const submission of submissions) {
     for (const [id, answer] of Object.entries(submission.proofs ?? {})) merged.set(id, { kind: "answered", answer });
     for (const id of submission.notApplicable ?? []) merged.set(id, { kind: "notApplicable" });
-    for (const id of submission.defer ?? []) merged.set(id, { kind: "deferred" });
   }
   return merged;
 }
@@ -77,8 +82,7 @@ export function reconcileProofOfWork(proofs: ReadonlyMap<string, ProofState>, ch
     const itemIds = checklist.items.map(item => item.id);
     return [{
       checklist,
-      resolved: itemIds.filter(id => { const kind = proofs.get(id)?.kind; return kind === "answered" || kind === "notApplicable"; }).length,
-      deferred: itemIds.filter(id => proofs.get(id)?.kind === "deferred"),
+      resolved: itemIds.filter(id => proofs.has(id)).length,
       missing: itemIds.filter(id => !proofs.has(id)),
     }];
   });
@@ -96,13 +100,10 @@ const COMPLETE = "complete.";
 /** The feedback a recorded filing answers with; `readProofOfWorkCompletion` reads the same lines back. */
 export function formatProofOfWorkReport(report: ReturnType<typeof reconcileProofOfWork>, registered: readonly ProofOfWorkChecklist[]) {
   const lines = [REPORT_HEADING];
-  for (const { checklist, resolved, deferred, missing } of report.checklists) {
-    if (!deferred.length && !missing.length) { lines.push(`${checklist.id}: ${COMPLETE}`); continue; }
-    lines.push([
-      `${checklist.id}: ${resolved}/${checklist.items.length} resolved.`,
-      deferred.length ? `Deferred: ${deferred.join(", ")}.` : "",
-      missing.length ? `Missing: ${missing.join(", ")}. File or defer them.` : "",
-    ].filter(Boolean).join(" "));
+  for (const { checklist, resolved, missing } of report.checklists) {
+    lines.push(missing.length
+      ? `${checklist.id}: ${resolved}/${checklist.items.length} resolved. Missing: ${missing.join(", ")}. File them.`
+      : `${checklist.id}: ${COMPLETE}`);
   }
   if (report.unknownFamilies.length) {
     lines.push(`Unregistered checklists: ${report.unknownFamilies.join(", ")}; filed without coverage checks. Registered: ${registered.map(checklist => checklist.id).join(", ") || "none"}.`);
@@ -129,7 +130,6 @@ export function presentProofOfWork(proofs: ReadonlyMap<string, ProofState>, chec
     families: proofFamilies(visible.map(entry => entry.id)),
     answered: visible.flatMap(entry => entry.state.kind === "answered" ? [{ ...entry, answer: entry.state.answer }] : []),
     notApplicable: visible.filter(entry => entry.state.kind === "notApplicable"),
-    deferred: visible.filter(entry => entry.state.kind === "deferred"),
   };
 }
 

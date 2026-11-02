@@ -16,23 +16,20 @@ const plan: ProofOfWorkChecklist = {
 
 test("submissions need valid ids in exactly one bucket", () => {
   assert.equal(ProofOfWorkSchema.safeParse({}).success, false);
-  assert.equal(ProofOfWorkSchema.safeParse({ proofs: {}, defer: [] }).success, false);
+  assert.equal(ProofOfWorkSchema.safeParse({ proofs: {}, notApplicable: [] }).success, false);
   assert.equal(ProofOfWorkSchema.safeParse({ proofs: { invalid: "answer" } }).success, false);
   assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": " " } }).success, false);
-  assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": "good" }, defer: ["plan.result"] }).success, false);
+  assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": "good" }, notApplicable: ["plan.result"] }).success, false);
   assert.equal(ProofOfWorkSchema.safeParse({ notApplicable: ["plan.failure", "plan.failure"] }).success, true);
-  assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": "good" }, notApplicable: ["plan.failure"], defer: ["plan.verify"] }).success, true);
+  assert.equal(ProofOfWorkSchema.safeParse({ proofs: { "plan.result": "good" }, defer: ["plan.verify"] }).success, false, "defer is retired");
 });
 
-test("a later filing replaces an earlier deferral", () => {
-  const proofs = mergeProofs([
-    { proofs: { "plan.result": "first" }, defer: ["plan.failure", "plan.verify"] },
-    { notApplicable: ["plan.failure"] },
-  ]);
+test("a later filing replaces an earlier one", () => {
+  const proofs = mergeProofs([{ proofs: { "plan.result": "first", "plan.failure": "x" } }, { notApplicable: ["plan.failure"] }]);
   const [report] = reconcileProofOfWork(proofs, [plan]).checklists;
   assert.equal(report?.resolved, 2);
-  assert.deepEqual(report?.deferred, ["plan.verify"]);
-  assert.deepEqual(report?.missing, []);
+  assert.deepEqual(report?.missing, ["plan.verify"]);
+  assert.deepEqual(proofs.get("plan.failure"), { kind: "notApplicable" });
 });
 
 test("display leaves out hidden checklists and labels items from their declaration", () => {
@@ -40,12 +37,10 @@ test("display leaves out hidden checklists and labels items from their declarati
   const shown = presentProofOfWork(mergeProofs([{
     proofs: { "plan.result": "done", "recovery.user_said": "terse", "custom.thing": "x" },
     notApplicable: ["plan.failure"],
-    defer: ["plan.verify"],
   }]), [plan, recovery]);
   assert.deepEqual(shown.families, ["Plan", "Custom"]);
   assert.deepEqual(shown.answered.map(entry => [entry.label, entry.answer]), [["Result", "done"], ["Thing", "x"]]);
   assert.deepEqual(shown.notApplicable.map(entry => entry.id), ["plan.failure"]);
-  assert.deepEqual(shown.deferred.map(entry => entry.id), ["plan.verify"]);
 });
 
 test("a filing's report reads back complete only when every reported checklist is", () => {
@@ -55,7 +50,6 @@ test("a filing's report reads back complete only when every reported checklist i
   );
   assert.equal(completion({ proofs: { "plan.result": "a" }, notApplicable: ["plan.failure", "plan.verify", "review.diff"] }), "complete");
   assert.equal(completion({ proofs: { "plan.result": "a", "review.diff": "b" } }), "partial", "missing items");
-  assert.equal(completion({ notApplicable: ["plan.result", "plan.failure"], defer: ["plan.verify"] }), "partial", "deferred items");
   assert.equal(completion({ proofs: { "custom.thing": "x" } }), "complete", "unregistered checklists have nothing left to file");
   assert.equal(readProofOfWorkCompletion("Unknown checklist ids: plan.typo. Nothing was recorded.\n"), null);
 });

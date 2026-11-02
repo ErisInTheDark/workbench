@@ -13,7 +13,7 @@ Immediate behavior:
 - If user's remark is too vague to know exactly how to proceed, proceed to Recovery Checklist below
 
 ### Recovery Checklist
-This is a **Reasoning Checklist** to ensure proper recovery in confusing situations.
+This is a **Gotcha Checklist** to ensure proper recovery in confusing situations.
 
 <!-- Hidden: recovery notes judge the user's tone, which reads badly as a card in their own thread. -->
 <proof-of-work id="recovery" hidden>

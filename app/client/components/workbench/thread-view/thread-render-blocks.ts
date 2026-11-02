@@ -609,7 +609,7 @@ export function buildRenderableBlocks(
     }
     const submission = item.type === "mcpToolCall" ? readProofOfWorkSubmission(item) : null;
     if (item.type === "mcpToolCall" && submission) {
-      const families = [...Object.keys(submission.proofs ?? {}), ...submission.notApplicable ?? [], ...submission.defer ?? []].map(proofFamily);
+      const families = [...Object.keys(submission.proofs ?? {}), ...submission.notApplicable ?? []].map(proofFamily);
       if (families.every(family => hidden.proofOfWorkFamilies?.has(family))) continue;
       if (proofOfWorkPlacement(item) === "card") {
         flush();
