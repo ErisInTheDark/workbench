@@ -211,7 +211,7 @@ export type ControllerFixtureState = Awaited<ReturnType<typeof CONTROLLER_OPERAT
 export const STACK_OPERATIONS_FIXTURE = {
   commits: CONTROLLER_BASE_FIXTURE.commits,
   name: "stack-shared-states",
-  revision: 8,
+  revision: 9,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const fork = async (name: string, source = repositoryRoot) => {
@@ -252,12 +252,8 @@ export const STACK_OPERATIONS_FIXTURE = {
       cwd: amended, threadId: "owner", amend: true, amendProposalId: original, paths: ["one.txt"],
       title: "first amended", description: "", freshTitle: "first follow-up",
     })).proposalId;
-    // Layers sealed before stacking made amends fresh still hold the amend state.
-    const legacyAmendmentCommit = (await new GitCheckpointStore(await WorkbenchGitRepository.open(amended))
-      .readProposal("codex", "owner", amendment)).proposalCommit;
     await controller.stackArc({ cwd: amended, threadId: "owner", title: "amend layer" });
     const amendedUpper = await propose(amended, "owner", "one.txt", "stacked\n", "stacked");
-    const legacyAmended = await fork("legacy-amended", amended);
 
     // reworded: a committed proposal's pending reword beside pending content work, not yet stacked.
     const reworded = await fork("reworded");
@@ -292,7 +288,7 @@ export const STACK_OPERATIONS_FIXTURE = {
     await write(sibling, "two.txt", "sibling\n");
     await runGit(["commit", "--quiet", "-m", "sibling", "--", "two.txt"], { cwd: sibling });
 
-    for (const root of [sealed, stacked, broken, amended, legacyAmended, reworded, transfer, sibling]) {
+    for (const root of [sealed, stacked, broken, amended, reworded, transfer, sibling]) {
       await runGit(["fsck", "--strict"], { cwd: root });
     }
     return {
@@ -300,7 +296,6 @@ export const STACK_OPERATIONS_FIXTURE = {
       stacked: { root: relative(stacked), lower, upper },
       broken: { root: relative(broken), upper },
       amended: { root: relative(amended), amendment, upper: amendedUpper },
-      legacyAmended: { root: relative(legacyAmended), amendment, legacyAmendmentCommit },
       reworded: { root: relative(reworded), content: rewordedContent, reword },
       transfer: { root: relative(transfer), lower: transferLower, upper: transferUpper },
       sibling: { root: relative(sibling), lower: siblingLower },

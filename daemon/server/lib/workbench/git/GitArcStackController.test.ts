@@ -265,8 +265,8 @@ test("outside commits on unsealed paths never strand work beneath a pending stac
 });
 
 /** Lands a sealed amendment as offered, then the layer above it; earlier history must survive untouched. */
-async function assertSealedAmendCommitsFresh(key: "amended" | "legacyAmended", upperId: string | null) {
-  const { commit, cwd, git, read, state } = branch(key);
+async function assertSealedAmendCommitsFresh(upperId: string) {
+  const { commit, cwd, git, read, state } = branch("amended");
   const amendedHead = (await git("rev-parse", "HEAD")).trim();
   const offered = await read("owner", state.amendment);
   assert.equal(offered.mode, "commit");
@@ -279,25 +279,13 @@ async function assertSealedAmendCommitsFresh(key: "amended" | "legacyAmended", u
   await commit("owner", state.amendment, offered.title);
   assert.equal((await git("rev-parse", "HEAD~1")).trim(), amendedHead, "committing a sealed amendment never rewrites history");
   assert.equal(await git("show", "HEAD:one.txt"), "amended\n");
-  if (!upperId) return;
   await commit("owner", upperId, "stacked");
   assert.equal(await git("show", "HEAD:one.txt"), "stacked\n");
   assert.equal(await git("log", "-3", "--format=%s"), "stacked\nfirst follow-up\nfirst\n");
 }
 
 test("stacking turns an amendment into a fresh commit that lands beneath the layer above", async () => {
-  await assertSealedAmendCommitsFresh("amended", branch("amended").state.upper);
-});
-
-test("amendments sealed before stacking made them fresh still commit fresh", async () => {
-  const { cwd, state } = branch("legacyAmended");
-  const store = new GitCheckpointStore(await WorkbenchGitRepository.open(cwd));
-  const sealed = await store.readProposal("codex", "owner", state.amendment);
-  await (await WorkbenchGitRepository.open(cwd)).updateRefs([{
-    newValue: state.legacyAmendmentCommit, oldValue: sealed.proposalCommit, ref: sealed.proposalRef,
-  }]);
-  assert.equal((await store.readProposal("codex", "owner", state.amendment)).metadata.mode, "amend");
-  await assertSealedAmendCommitsFresh("legacyAmended", null);
+  await assertSealedAmendCommitsFresh(branch("amended").state.upper);
 });
 
 test("stacking leaves pending rewords unsealed beside the layer", async () => {

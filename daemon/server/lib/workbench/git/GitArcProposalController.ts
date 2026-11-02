@@ -529,17 +529,6 @@ async function resolveProposalState(
     transitioned = true;
     return deriveProposalTransition(proposal, metadata, treeish);
   };
-  // Layers sealed before stacking made amendments fresh still hold them as amends.
-  if (
-    options.sealed
-    && proposal.metadata.status === "proposed"
-    && proposal.metadata.mode === "amend"
-    && proposal.metadata.freshCommitMessage
-    && !proposal.metadata.messageOnly
-  ) {
-    const fresh = await freshCommitProposal(repository, proposal);
-    proposal = await applyTransition(fresh.metadata, fresh.tree);
-  }
   if (proposal.metadata.stackBase && proposal.metadata.status === "proposed") {
     const head = options.snapshot ? options.snapshot.head : await repository.headOrNull();
     const stacked = await new GitArcStackController(repository, resolveThreadIdentity).classifyStackedProposal(
@@ -1659,10 +1648,7 @@ export default class GitArcProposalController {
   private async landsInBatch(repository: WorkbenchGitRepository, harness: GitArcHarness, threadId: string, { mode, proposalId }: GitArcProposalCommitEntry) {
     const { metadata } = await this.store(repository).readProposal(harness, threadId, proposalId);
     if (metadata.status === "committed" || metadata.messageOnly) return false;
-    // Layers sealed before stacking made amends fresh still hold the amend; resolution lands them fresh.
-    const sealedFresh = metadata.mode === "amend" && Boolean(metadata.freshCommitMessage)
-      && Boolean(await this.sealingLayer(repository, harness, threadId, proposalId));
-    return (mode ?? (sealedFresh ? "commit" : metadata.mode)) === "commit";
+    return (mode ?? metadata.mode) === "commit";
   }
 
   /** Land one proposal that amends history or only its message; fresh commits land through commit batches. */
