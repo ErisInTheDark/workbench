@@ -57,8 +57,8 @@ export default function ThreadModeDivider({ actions, mode, proofs = [], title }:
     </span>
   );
   return (
-    <div className="my-[0.85em] font-sans last:mb-0" data-thread-state-change="true" data-thread-state-mode={mode}>
-      {/* Zero net height: the heading sits on it and whatever follows paints over it. */}
+    <div className="-mx-5 my-[0.85em] font-sans last:mb-0 md:-mx-3" data-thread-state-change="true" data-thread-state-mode={mode}>
+      {/* Zero net height: the heading sits on it and whatever follows paints over it. Bleeds into the column gutter, edge to edge on narrow screens. */}
       <div
         aria-hidden="true"
         className={`
@@ -69,7 +69,7 @@ export default function ThreadModeDivider({ actions, mode, proofs = [], title }:
         `}
         style={color.style}
       />
-      <div className="pl-[0.95rem] pt-[0.7rem]">
+      <div className="px-5 pb-3 pt-[0.7rem] md:px-3">
         {proof.families.length ? (
           <details>
             <summary className="cursor-pointer list-none">{line}</summary>
