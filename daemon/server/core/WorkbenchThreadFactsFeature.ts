@@ -19,6 +19,7 @@ import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
 import { listProjectSkillsFromRoot } from "../lib/workbench/project/project-agents-folder";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
+import type { WorkbenchSkillLayer } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import * as workbenchLibrary from "../lib/workbench-library";
 import type { ReloadableNodeBuild, ReloadableNodeLease } from "../runtime/ReloadableNode";
@@ -89,6 +90,8 @@ export default class WorkbenchThreadFactsFeature {
     providers: () => WorkbenchProviderDispatcher;
     keptResults: () => Pick<McpDownloadStore, "readKept">;
     harnesses: () => WorkbenchHarnessController;
+    /** Built after this feature, called at publish time with the skill layers the published bodies declare. */
+    pinSkills(threadId: string, skills: readonly WorkbenchSkillLayer[]): Promise<void>;
     publishRuntime(threadId: string, change: Partial<ThreadRuntime>): void;
     setSummaryFacts(threadId: string, facts: ThreadSummaryFacts): void;
   }) {
@@ -131,7 +134,7 @@ export default class WorkbenchThreadFactsFeature {
         const profile = await lookup.requireThreadState().controller.readComposerProfileTarget({
           harness: thread.harness, kind: "thread", projectId: owner.id, threadId: resolved.identity.threadId,
         });
-        return workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills({
+        const built = await workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills({
           cwd: owner.rootPath, projectId: owner.id, threadId: resolved.identity.threadId,
           roots: owner.roots.map(root => ({
             id: root.id, name: root.name, relativePath: root.relativePath ?? ".",
@@ -141,6 +144,8 @@ export default class WorkbenchThreadFactsFeature {
           activatedSkillPaths: paths, workbenchOrigin: context.localDaemonOrigin,
           readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Thread skill instruction tool catalogue"),
         }, () => ports.settings.readLocalCapabilities());
+        await ports.pinSkills(resolved.identity.threadId, built.skillLayers);
+        return built.catalog;
       },
       publish: (thread, text) => agentContext.publish(thread, text),
       broadcast: (thread, active) => ports.publishRuntime(thread.threadId, { skills: [...active] }),

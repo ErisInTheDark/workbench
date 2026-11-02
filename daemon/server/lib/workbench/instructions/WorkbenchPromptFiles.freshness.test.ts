@@ -162,7 +162,7 @@ user-owned agent prompt
     assert.doesNotMatch(selectedLibraryAgent.baseInstructions ?? "", /base alternate/u);
 
     const builtinSkillPath = path.join(temporaryLibraryRoot, "skills", "builtin", "browse", "SKILL.md");
-    const activatedSkillCatalog = await promptFiles.buildWorkbenchActivatedSkillCatalog({
+    const { catalog: activatedSkillCatalog } = await promptFiles.buildWorkbenchActivatedSkillCatalog({
       ...context,
       activatedSkillPaths: [builtinSkillPath],
     });
@@ -263,18 +263,18 @@ user-owned agent prompt
       relativePath: "project",
       rootPath: temporaryProjectRoot,
     }];
-    assert.equal(await promptFiles.buildWorkbenchActivatedSkillCatalog({
+    assert.equal((await promptFiles.buildWorkbenchActivatedSkillCatalog({
       activatedSkillPaths: [builtinSkillPath],
       harness: "codex",
       roots: projectRoots,
       threadId: "freshness-thread",
-    }), null);
-    assert.match(await promptFiles.buildWorkbenchActivatedSkillCatalog({
+    })).catalog, null);
+    assert.match((await promptFiles.buildWorkbenchActivatedSkillCatalog({
       activatedSkillPaths: [projectSkillPath],
       harness: "codex",
       roots: projectRoots,
       threadId: "freshness-thread",
-    }) ?? "", /project browse skill/u);
+    })).catalog ?? "", /project browse skill/u);
 
     const voiceInstructions = await promptFiles.buildWorkbenchPromptInstructions({
       ...context, role: "voice-to-text", agentPath: "library:agents/does-not-exist.md",

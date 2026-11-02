@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - threadFactRequests: database requests for thread-owned facts: skills, instruction selection, goals, vis, todos, addressed feedback,
+ * - threadFactRequests: database requests for thread-owned facts: skills, instruction selection and pinned layers, goals, vis, todos, addressed feedback,
  *   summary fact seeds (including networked daemons) and batched runtime facts.
  */
 import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
@@ -11,6 +11,7 @@ import WorkbenchThreadAddressedFeedbackStore, { type ThreadAddressedFeedbackComm
 import WorkbenchThreadGoalStore, { type ThreadGoalCommand } from "../goals/WorkbenchThreadGoalStore.ts";
 import WorkbenchThreadSkillStore, { type ThreadSkillCommand } from "../skills/WorkbenchThreadSkillStore.ts";
 import WorkbenchThreadInstructionSelectionStore, { type ThreadInstructionSelectionCommand } from "../thread-state/WorkbenchThreadInstructionSelectionStore.ts";
+import WorkbenchThreadInstructionOverlayStore, { type ThreadInstructionOverlayCommand } from "../thread-state/WorkbenchThreadInstructionOverlayStore.ts";
 import WorkbenchThreadRuntimeFactsReader from "../thread-runtime/WorkbenchThreadRuntimeFactsReader.ts";
 import WorkbenchThreadTodoStore, { type ThreadTodoCommand } from "../todos/WorkbenchThreadTodoStore.ts";
 import WorkbenchThreadVisStore, { type ThreadVisCommand } from "../vis/WorkbenchThreadVisStore.ts";
@@ -22,6 +23,9 @@ export const threadFactRequests = {
   }),
   executeThreadInstructionSelection: defineDatabaseRequest({
     run: ({ database }, command: ThreadInstructionSelectionCommand) => new WorkbenchThreadInstructionSelectionStore(database).execute(command),
+  }),
+  executeThreadInstructionOverlays: defineDatabaseRequest({
+    run: ({ database }, command: ThreadInstructionOverlayCommand) => new WorkbenchThreadInstructionOverlayStore(database).execute(command),
   }),
   executeThreadGoals: defineDatabaseRequest({
     run: ({ database }, command: ThreadGoalCommand) => new WorkbenchThreadGoalStore(database).execute(command),

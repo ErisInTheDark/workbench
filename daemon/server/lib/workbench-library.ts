@@ -12,7 +12,8 @@
  * - isAgentMarkdownFile/isAgentUserInvocable/getAgentNameFromFileName: agent file rules shared by library and project agents.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs.
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering.
- * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build skill catalogs and universal instructions.
+ * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build skill catalogs and universal instructions;
+ *   the activated catalog also returns each skill's rendered body.
  * - formatWorkbenchSkillCatalogEntry: render a skill's name and trigger for the instruction catalog.
  * - resolveWorkbenchActivatedSkills: canonical path and catalog name for each active skill selected by path.
  * - listActivatedSkillDefinitions: resolve active skill definitions by their canonical paths.
@@ -567,17 +568,15 @@ export async function buildWorkbenchActivatedSkillCatalog(
   activatedSkillPaths: readonly string[] = [],
 ) {
   const activatedSkills = await listActivatedSkillDefinitions(projectSkills, activatedSkillPaths);
-  if (!activatedSkills.length) {
-    return null;
-  }
-
-  return activatedSkills.map((skill) => {
+  const skills = activatedSkills.map((skill) => {
     const attributes = `name="${escapeXmlAttribute(createSkillShadowKey(skill))}" trigger="${escapeXmlAttribute(skill.description)}"`;
     const body = stripWorkbenchInstructionFrontmatter(renderWorkbenchSkillContent(skill)) + formatSkillComponentHints(skill.content);
-    return body
-      ? `<skill ${attributes}>\n${body}\n</skill>`
-      : `<skill ${attributes} />`;
-  }).join("\n");
+    return { path: skill.path, body, entry: body ? `<skill ${attributes}>\n${body}\n</skill>` : `<skill ${attributes} />` };
+  });
+  return {
+    catalog: skills.length ? skills.map(skill => skill.entry).join("\n") : null,
+    skills: skills.map(({ path, body }) => ({ path, body })),
+  };
 }
 
 export interface WorkbenchLibraryBootstrapInstructionsOptions {

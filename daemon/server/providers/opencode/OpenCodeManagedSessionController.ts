@@ -2,7 +2,8 @@
  * Exports:
  * - OpenCodeManagedSessionContext: provider-local instruction refresh input.
  * - OpenCodeManagedSessionControllerOptions: injectable managed-session boundaries.
- * - default OpenCodeManagedSessionController: own OpenCode session marking, native command and per-audience tool denial, fresh instructions, and activated skill builds.
+ * - default OpenCodeManagedSessionController: own OpenCode session marking, native command and per-audience tool denial, fresh instructions, and activated skill builds,
+ *   pinning the instruction layers each refresh delivers.
  */
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
@@ -14,7 +15,10 @@ import { OPENCODE_WORKBENCH_DIRECT_NAMESPACE, OPENCODE_WORKBENCH_NAMESPACE } fro
 import {
   buildWorkbenchManagedThreadActivatedSkills,
   buildWorkbenchManagedThreadInstructions,
+  type WorkbenchSkillLayer,
 } from "../../lib/workbench/instructions/WorkbenchPromptFiles";
+import type { WorkbenchInstructionOverlays } from "../../lib/workbench/instructions/instruction-overlay-catalogue";
+import type { WorkbenchInstructionPin } from "../../thread/WorkbenchThreadWorkflowReader";
 
 const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
 // A tool's permission action is its effective name, which carries its code-mode or direct namespace.
@@ -52,6 +56,8 @@ interface BuiltInstructions {
   baseInstructions: string | null;
   developerInstructions: string | null;
   activatedSkills: string | null;
+  overlayLayers: readonly WorkbenchInstructionOverlays[];
+  skillLayers: readonly WorkbenchSkillLayer[];
 }
 
 export interface OpenCodeManagedSessionControllerOptions {
@@ -62,6 +68,8 @@ export interface OpenCodeManagedSessionControllerOptions {
   /** Workbench repository root; sessions elsewhere are denied its root-only tools. */
   workbenchRoot: string;
   workbenchOrigin?: string;
+  /** Records the instruction layers a build delivered to the thread. */
+  pin?: (threadId: string, pin: WorkbenchInstructionPin) => Promise<void>;
 }
 
 export default class OpenCodeManagedSessionController {
@@ -99,6 +107,8 @@ export default class OpenCodeManagedSessionController {
       key: "workbench",
       value,
     });
+    await this.options.pin?.(input.threadId, { base: built.overlayLayers });
+    await this.options.pin?.(input.threadId, { skills: built.skillLayers });
     return { activatedSkills: built.activatedSkills?.trim() ? built.activatedSkills : null };
   }
 
@@ -129,7 +139,9 @@ export default class OpenCodeManagedSessionController {
     return {
       baseInstructions: instructions.baseInstructions,
       developerInstructions: instructions.developerInstructions,
-      activatedSkills,
+      activatedSkills: activatedSkills.catalog,
+      overlayLayers: instructions.overlayLayers,
+      skillLayers: activatedSkills.skillLayers,
     };
   }
 }

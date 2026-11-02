@@ -1,25 +1,26 @@
 /*
  * Exports:
- * - WorkbenchPromptContext/WorkbenchPromptInstructions: stable prompt assembly contracts. Keywords: prompt, context, instructions.
- * - ensure/build Workbench prompt functions: delegate each source-consuming call through the current assembly generation, refreshed after source edits. Keywords: prompt, markdown, reload.
- * - buildWorkbenchActivatedSkillCatalog: load fresh bodies for validated slash-activated skills. Keywords: skills, slash, input.
- * - buildWorkbenchManagedThreadInstructions/buildWorkbenchManagedThreadActivatedSkills: shared managed-thread instruction and activated-skill assembly with one filtering pipeline. Keywords: managed, filter, providers.
- * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: final selector filtering and capability-backed availability helpers. Keywords: selector, mechanics.
- * - default WorkbenchPromptFiles: stable public prompt API. Keywords: prompt, owner, generation.
+ * - WorkbenchPromptContext/WorkbenchPromptInstructions/WorkbenchActivatedSkillCatalog/WorkbenchSkillLayer: stable prompt assembly contracts.
+ * - ensure/build Workbench prompt functions: delegate each source-consuming call through the current assembly generation, refreshed after source edits.
+ * - buildWorkbenchActivatedSkillCatalog: load fresh bodies for validated slash-activated skills, with each body's declared layer.
+ * - buildWorkbenchManagedThreadInstructions/buildWorkbenchManagedThreadActivatedSkills: shared managed-thread instruction and activated-skill assembly with one filtering pipeline.
+ * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: final selector filtering and capability-backed availability helpers.
+ * - default WorkbenchPromptFiles: stable public prompt API.
  */
 
 import { filterWorkbenchInstructionContent } from "./instruction-context-filter";
 import { listWorkbenchInstructionMechanics } from "./workbench-instruction-mechanics";
 import { loadWorkbenchPromptAssembly } from "./workbench-prompt-generation";
-import type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
+import type { WorkbenchActivatedSkillCatalog, WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
 
-export type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
+export type { WorkbenchActivatedSkillCatalog, WorkbenchPromptContext, WorkbenchPromptInstructions, WorkbenchSkillLayer } from "./workbench-prompt-types";
 export {
   buildWorkbenchManagedThreadActivatedSkills,
   buildWorkbenchManagedThreadInstructions,
 } from "./workbench-managed-thread-instructions";
 export type {
   ManagedThreadInstructionContext,
+  WorkbenchManagedThreadActivatedSkills,
   WorkbenchManagedThreadInstructions,
 } from "./workbench-managed-thread-instructions";
 export { filterWorkbenchInstructionContent, listWorkbenchInstructionMechanics };
@@ -36,7 +37,7 @@ export async function buildWorkbenchPromptInstructions(
 
 export async function buildWorkbenchActivatedSkillCatalog(
   context: WorkbenchPromptContext = {},
-): Promise<string | null> {
+): Promise<WorkbenchActivatedSkillCatalog> {
   return await (await loadWorkbenchPromptAssembly()).buildWorkbenchActivatedSkillCatalog(context);
 }
 

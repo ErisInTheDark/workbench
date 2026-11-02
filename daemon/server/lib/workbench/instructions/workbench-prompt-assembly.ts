@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - WorkbenchPromptContext/WorkbenchPromptInstructions: public prompt assembly contracts.
+ * - WorkbenchPromptContext/WorkbenchPromptInstructions/WorkbenchActivatedSkillCatalog: public prompt assembly contracts.
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders.
- * - buildWorkbenchPromptInstructions: resolve fresh Workbench and project instructions, recursive imports, and runtime slots.
- * - buildWorkbenchActivatedSkillCatalog: resolve fresh bodies for validated slash-activated skills.
+ * - buildWorkbenchPromptInstructions: resolve fresh Workbench and project instructions, recursive imports, and runtime slots,
+ *   with the modes and checklists the rendered text declares.
+ * - buildWorkbenchActivatedSkillCatalog: resolve fresh bodies for validated slash-activated skills, with each body's declarations.
  * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free typed Workbench instructions.
  * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: re-export final selector filtering and mechanic availability.
  * - default WorkbenchPromptFiles: prompt-file assembly owner namespace.
@@ -44,9 +45,10 @@ import {
 } from "./workbench-instruction-mechanics";
 import { filterWorkbenchInstructionContent } from "./instruction-context-filter";
 import type { RenderedInstructionContent } from "./instruction-file-generation";
-import type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
+import { readWorkbenchInstructionLayer } from "./instruction-overlay-catalogue";
+import type { WorkbenchActivatedSkillCatalog, WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
 
-export type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
+export type { WorkbenchActivatedSkillCatalog, WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
 export {
   filterWorkbenchInstructionContent,
   listWorkbenchInstructionMechanics,
@@ -289,8 +291,9 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     instructionFiles.renderWithSources(AGENTS_FILE_NAME, slots),
   );
   const baseInstructions = renderedBaseInstructions.content;
+  const projectContent = voice ? null : buildProjectInstructionContent(context);
   const developerInstructions = voice ? null : joinInstructionSections([
-    buildProjectInstructionSection(buildProjectInstructionContent(context)),
+    buildProjectInstructionSection(projectContent),
     buildInstructionPackSections(instructionPacks),
   ]);
 
@@ -298,19 +301,19 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     baseInstructions: baseInstructions || null,
     baseInstructionSources: renderedBaseInstructions.sources,
     developerInstructions,
+    overlayLayers: voice ? [] : [baseInstructions, ...instructionPacks.map(pack => pack.content), projectContent ?? ""]
+      .map(readWorkbenchInstructionLayer),
   };
 }
 
 export async function buildWorkbenchActivatedSkillCatalog(
   context: WorkbenchPromptContext = {},
-): Promise<string | null> {
+): Promise<WorkbenchActivatedSkillCatalog> {
   await ensureWorkbenchPromptFiles();
 
   const projectSkills = await listProjectSkillsForPrompt(context);
-  return await buildActivatedSkillCatalog(
-    projectSkills,
-    context.activatedSkillPaths,
-  );
+  const { catalog, skills } = await buildActivatedSkillCatalog(projectSkills, context.activatedSkillPaths);
+  return { catalog, skillLayers: skills.map(skill => ({ path: skill.path, layer: readWorkbenchInstructionLayer(skill.body) })) };
 }
 
 export async function buildWorkbenchThreadUtilityDeveloperInstructions(

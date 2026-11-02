@@ -3,7 +3,8 @@
  * - WorkbenchCodexInstructionSource: request-inherited or cwd-owned context for internal resume configuration.
  * - WorkbenchCodexInstructionPort: request-augmentation boundary consumed by the bridge.
  * - WorkbenchCodexThreadConfiguration: daemon-resolved settings and validated thread ownership.
- * - default WorkbenchCodexInstructionAdapter: adapt model-filtered thread instructions, skills, settings and project-local MCP config into Codex requests.
+ * - default WorkbenchCodexInstructionAdapter: adapt model-filtered thread instructions, skills, settings and project-local MCP config into Codex requests,
+ *   pinning the instruction layers each build delivers.
  */
 import path from "node:path";
 import { isSamePath } from "workbench-shared/same-path";
@@ -17,6 +18,7 @@ import { listWorkbenchInstructionTools, type WorkbenchInstructionTool } from "..
 import { listWorkbenchAgentCommands } from "../../lib/workbench/commands/workbench-agent-command-registry";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "../../bridge-types";
+import type { WorkbenchInstructionPin } from "../../thread/WorkbenchThreadWorkflowReader";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "../workbench-prompt-context";
 import { withWorkbenchCodexSandboxConfig } from "./codex-sandbox-policy";
@@ -82,6 +84,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     workbenchRoot: string,
     private readonly readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>,
     private readonly readInstructionTools: () => Promise<readonly WorkbenchInstructionTool[]> = readDefaultInstructionTools,
+    private readonly pin: (threadId: string, pin: WorkbenchInstructionPin) => Promise<void> = async () => undefined,
   ) {
     this.workbenchRoot = path.resolve(workbenchRoot);
   }
@@ -164,10 +167,11 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       readInstructionTools: this.readInstructionTools,
     };
     if (isPromptAugmentedTurnMethod(method)) {
-      const activatedSkillCatalog = await workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills(
+      const { catalog: activatedSkillCatalog, skillLayers } = await workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills(
         context,
         this.readLocalCapabilities,
       );
+      if (context.threadId) await this.pin(context.threadId, { skills: skillLayers });
       if (!activatedSkillCatalog) return message;
       const input = Array.isArray(params.input) ? params.input : [];
       return {
@@ -186,6 +190,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       context,
       this.readLocalCapabilities,
     );
+    if (context.threadId) await this.pin(context.threadId, { base: promptInstructions.overlayLayers });
     return {
       ...message,
       params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, promptInstructions), context.cwd, context.subagentName),

@@ -125,13 +125,31 @@ ${bodyMarker}
     assert.doesNotMatch(prompt, new RegExp(bodyMarker, "u"));
     assert.doesNotMatch(prompt, /<\/skill>/u);
 
-    const activatedSkills = await managed.buildWorkbenchManagedThreadActivatedSkills(
+    const { catalog: activatedSkills } = await managed.buildWorkbenchManagedThreadActivatedSkills(
       createContext([skillPath]),
       readNoLocalCapabilities,
     );
     assert.match(activatedSkills ?? "", new RegExp(bodyMarker, "u"));
     assert.ok((activatedSkills ?? "").includes(manifestEntry.replace(" />", ">")));
     assert.doesNotMatch(activatedSkills ?? "", /<skill filename=/u);
+  } finally {
+    await Promise.all([override, skillPath].map(file => fs.rm(file, { force: true })));
+  }
+});
+
+test("builds report the modes their own rendered text declares, base and each activated skill apart", async () => {
+  const override = path.join(libraryRoot, "AGENTS.override.md");
+  const skillPath = path.join(projectRoot, ".agents", "skills", "moded", "SKILL.md");
+  await fs.mkdir(path.dirname(skillPath), { recursive: true });
+  await fs.mkdir(libraryRoot, { recursive: true });
+  await fs.writeFile(override, '<mode name="Base" deny="edit" />\n', "utf8");
+  await fs.writeFile(skillPath, '---\nname: moded\ndescription: Use when asked for /moded.\n---\n\n<mode name="Skilled" />\n', "utf8");
+  try {
+    const instructions = await managed.buildWorkbenchManagedThreadInstructions(createContext(), readNoLocalCapabilities);
+    assert.deepEqual(instructions.overlayLayers.flatMap(layer => layer.modes.map(mode => mode.name)), ["Base"]);
+    assert.doesNotMatch(instructions.baseInstructions ?? "", /<mode /u, "agents read the declaration as a sentence");
+    const { skillLayers } = await managed.buildWorkbenchManagedThreadActivatedSkills(createContext([skillPath]), readNoLocalCapabilities);
+    assert.deepEqual(skillLayers.map(skill => [path.resolve(skill.path), skill.layer.modes.map(mode => mode.name)]), [[skillPath, ["Skilled"]]]);
   } finally {
     await Promise.all([override, skillPath].map(file => fs.rm(file, { force: true })));
   }
@@ -185,7 +203,7 @@ test("managed instructions and activated skills render provider tool references"
       ...createContext(), harness: "codex",
     }, readNoLocalCapabilities);
     assert.match(codex.baseInstructions ?? "", /`tools\.mcp__wb__rg` and `tools\.mcp__wbex__git_arc_release`/u);
-    const activated = await managed.buildWorkbenchManagedThreadActivatedSkills(
+    const { catalog: activated } = await managed.buildWorkbenchManagedThreadActivatedSkills(
       createContext([skillPath]), readNoLocalCapabilities,
     );
     assert.match(activated ?? "", /`wbex_git_arc_release`/u);
@@ -218,7 +236,7 @@ test("slash-activated skills render source-relative imports and overrides before
   ]);
 
   try {
-    const output = await managed.buildWorkbenchManagedThreadActivatedSkills(
+    const { catalog: output } = await managed.buildWorkbenchManagedThreadActivatedSkills(
       createContext([projectSkillPath, librarySkillPath]), readNoLocalCapabilities,
     );
     assert.match(output ?? "", /project project reference content/u);

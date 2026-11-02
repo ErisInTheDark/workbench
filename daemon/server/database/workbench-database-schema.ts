@@ -78,6 +78,7 @@ import { execRootSchemaHistory } from "../lib/workbench/database/schema/exec-roo
 import { mcpServerSchemaHistory } from "../lib/workbench/database/schema/mcp-server-schema.ts";
 import { networkGrantSchemaHistory } from "../lib/workbench/database/schema/network-grant-schema.ts";
 import { remoteSubagentSchemaHistory } from "../lib/workbench/database/schema/remote-subagent-schema.ts";
+import { threadInstructionOverlaySchemaHistory } from "../lib/workbench/database/schema/thread-instruction-overlay-schema.ts";
 import {
   threadPayloadRetentionSchemaHistory,
   threadPayloadRetentionTables,
@@ -160,6 +161,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       mcpServerSchemaHistory,
       networkGrantSchemaHistory,
       remoteSubagentSchemaHistory,
+      threadInstructionOverlaySchemaHistory,
     ],
   });
 }

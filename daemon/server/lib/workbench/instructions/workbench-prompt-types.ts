@@ -1,11 +1,13 @@
 /*
  * Exports:
  * - WorkbenchPromptContext: prompt assembly input and installed capabilities.
- * - WorkbenchPromptInstructions: assembled base and developer instructions.
+ * - WorkbenchPromptInstructions: assembled base and developer instructions, and the instruction layers they declare in prompt order.
+ * - WorkbenchSkillLayer/WorkbenchActivatedSkillCatalog: activated skill bodies joined for the prompt, and each body's declared layer.
  */
 
 import type { WorkbenchHarness, WorkbenchProjectRoot } from "workbench-shared/types";
 import type { InstructionSourceSpan } from "./instruction-file-generation";
+import type { WorkbenchInstructionOverlays } from "./instruction-overlay-catalogue";
 
 export interface WorkbenchPromptContext {
   readonly role?: "agent" | "voice-to-text";
@@ -28,4 +30,15 @@ export interface WorkbenchPromptInstructions {
   readonly baseInstructions: string | null;
   readonly baseInstructionSources?: readonly InstructionSourceSpan[];
   readonly developerInstructions: string | null;
+  readonly overlayLayers: readonly WorkbenchInstructionOverlays[];
+}
+
+export interface WorkbenchSkillLayer {
+  readonly path: string;
+  readonly layer: WorkbenchInstructionOverlays;
+}
+
+export interface WorkbenchActivatedSkillCatalog {
+  readonly catalog: string | null;
+  readonly skillLayers: readonly WorkbenchSkillLayer[];
 }

@@ -13,6 +13,7 @@ import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPr
 import type { WorkbenchProjectStartup } from "../database/project/workbench-project-persistence";
 import BrowseSessionCleanupSupervisor from "../browse/BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "../providers/codex/CodexBridgeNode";
+import WorkbenchCodexInstructionNode from "../providers/codex/WorkbenchCodexInstructionNode";
 import OpenCodeBridgeNode from "../providers/opencode/OpenCodeBridgeNode";
 import ClaudeBridgeNode from "../providers/claude/ClaudeBridgeNode";
 import ProviderRuntimeNode from "../providers/ProviderRuntimeNode";
@@ -141,6 +142,7 @@ function createWorkbenchCoreFeature(
     keptResults: () => mcpDownloads,
     publishRuntime: (threadId, change) => turns.publish(threadId, change),
     setSummaryFacts,
+    pinSkills: async (threadId, skills) => await threadWorkflow.pin(threadId, { skills }),
   });
   const { agentContext, skillCatalog, vis } = facts;
   const threadWorkflow = new WorkbenchThreadWorkflowReader({
@@ -148,6 +150,7 @@ function createWorkbenchCoreFeature(
     readSkills: async threadId => await facts.skills.read(threadId),
     readProjectRoot: async threadId => (await lookup.identity(threadId))?.projectRoot ?? null,
     readLedger: async threadId => await database.readWorkflowLedger(threadId),
+    executePins: async command => await database.executeThreadInstructionOverlays(command),
   });
   const providers = new WorkbenchProviderDispatcher(run, {
     nativeLocations: {
@@ -600,7 +603,7 @@ function createWorkbenchCoreFeature(
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, import("../daemon-runtime-objects").DaemonProviderNotification>()({
   access: "agent",
-  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, ProviderRuntimeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchInstallationUpdateNode, WorkbenchWebSocketNode],
+  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, WorkbenchCodexInstructionNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, ProviderRuntimeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchInstallationUpdateNode, WorkbenchWebSocketNode],
   create: (context, { get, run, lease, handoffState, isReplacing, mode }) => {
     const reloadState = handoffState as WorkbenchCoreReloadState | undefined;
     return createWorkbenchCoreFeature(

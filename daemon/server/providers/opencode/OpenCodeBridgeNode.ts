@@ -65,6 +65,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       readLocalCapabilities: () => settings.readLocalCapabilities(),
       workbenchRoot: context.legacyMigrationProjectRoot,
       workbenchOrigin: context.localDaemonOrigin,
+      pin: async (threadId, pin) => await build.get("threadWorkflow").pin(threadId, pin),
     });
     const threads = new OpenCodeThreadOperations({
       acquire,
@@ -144,7 +145,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [
     "openCodeService", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity",
     "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database",
-    "threadContextRollover",
+    "threadContextRollover", "threadWorkflow",
   ],
   safeAll: true,
   scope: "server:opencode",

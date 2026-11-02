@@ -114,6 +114,7 @@ const databaseReleases = Object.freeze({
   mcpProjectServers: release(104, "fca6eea9484d25299ef8844936217cc3b5c5f1f872b7b1241ea4d4d1321aed31"),
   crossDaemonNetworking: release(105, "8457ecfa009b3e7957a674ef134c94327455f389a8f90e374b89f4cd0d8e1d71"),
   nativeLocationRelocations: release(106, "1457aef16c30843a402f12379662b41a9d6b3aa9925e5ace0bb4ef4959e54d8f"),
+  threadInstructionOverlays: release(107, "f2810d9431c2180b4ac22e86f2cc35f53bd9a6004d2661ddcc510d7a0d17c7a2"),
 });
 
 export default databaseReleases;

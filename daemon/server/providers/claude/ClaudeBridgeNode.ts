@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ClaudeBridgeNode: own reloadable Claude turn logic, managed prompt and activated-skill builds, input-time agent context, lifecycle publication, native edit claim gating, tool batch ordering, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
+ * - default ClaudeBridgeNode: own reloadable Claude turn logic, managed prompt and activated-skill builds (pinning the layers they deliver), input-time agent context, lifecycle publication, native edit claim gating, tool batch ordering, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
  */
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import ReloadableNode from "../../runtime/ReloadableNode";
@@ -73,12 +73,15 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const instructions = await buildWorkbenchManagedThreadInstructions(
           await promptContext(input), () => settings.readLocalCapabilities(),
         );
+        await build.get("threadWorkflow").pin(input.threadId, { base: instructions.overlayLayers });
         return [instructions.baseInstructions, instructions.developerInstructions]
           .filter((part): part is string => Boolean(part?.trim())).join("\n\n");
       },
-      buildActivatedSkills: async input => buildWorkbenchManagedThreadActivatedSkills(
-        await promptContext(input), () => settings.readLocalCapabilities(),
-      ),
+      buildActivatedSkills: async input => {
+        const built = await buildWorkbenchManagedThreadActivatedSkills(await promptContext(input), () => settings.readLocalCapabilities());
+        await build.get("threadWorkflow").pin(input.threadId, { skills: built.skillLayers });
+        return built.catalog;
+      },
       collectInputContext: (threadId, trigger, signal) => (
         build.get("agentContext").collect({ harness: "claude", threadId }, trigger, signal)
       ),
