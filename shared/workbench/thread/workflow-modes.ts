@@ -4,7 +4,7 @@
  * - ThreadStateSchema/ThreadState: one thread_state call; no fields reads.
  * - ModeIconSchema/ModeIcon: the icons an instruction-declared mode may show beside its name.
  * - MODE_EDIT_DENIALS: deny tokens that restrict file edits rather than tools.
- * - WorkflowModeSchema/WorkflowMode: one instruction-declared mode: its icon, proofs due on entry, resets, status pairing and denials.
+ * - WorkflowModeSchema/WorkflowMode: one instruction-declared mode: its icon, colour, proofs due on entry, resets, status pairing and denials.
  * - WorkflowLedgerSource/WorkflowLedgerEntry/readWorkflowLedgerEntries: what one recorded Workbench call contributed to a thread's workflow.
  * - readThreadStateCall/readModeEntered/readFiledProofs: a transcript call's thread_state arguments, entered mode, and filed proofs.
  * - currentWorkflowMode/currentAlwaysEditable: a ledger's latest entered mode and always-editable paths.
@@ -43,6 +43,8 @@ export const MODE_EDIT_DENIALS = ["edit", "edit:claims"] as const;
 export const WorkflowModeSchema = z.object({
   name: z.string().trim().min(1),
   icon: ModeIconSchema.nullable(),
+  /** Any colour a `<color>` tag accepts: a palette word or hex. */
+  color: z.string().trim().min(1).nullable(),
   proofs: z.array(ProofFamilySchema),
   resetOn: z.array(z.string().trim().min(1)),
   status: z.literal("completed").nullable(),

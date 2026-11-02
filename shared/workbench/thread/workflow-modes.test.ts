@@ -15,7 +15,7 @@ const plan: ProofOfWorkChecklist = {
 };
 const review: ProofOfWorkChecklist = { id: "review", hidden: false, items: [{ id: "review.coverage", label: "Coverage" }] };
 const defined = (name: string, rest: Partial<WorkflowMode> = {}): WorkflowMode => ({
-  name, icon: null, proofs: [], resetOn: [], status: null, deny: [], ...rest,
+  name, icon: null, color: null, proofs: [], resetOn: [], status: null, deny: [], ...rest,
 });
 const modes: WorkflowMode[] = [
   defined("Brief", { proofs: ["plan"], resetOn: ["Review"] }),

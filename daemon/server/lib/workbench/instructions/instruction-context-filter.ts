@@ -90,8 +90,8 @@ const FAMILY_NAMES = "[a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*";
 const DENY_TOKENS = "[a-z][a-z0-9_]*(?::[a-z]+)?(?: [a-z][a-z0-9_]*(?::[a-z]+)?)*";
 /** Attributes are optional but ordered, so one declaration always reads the same way. */
 const MODE_TAG = new RegExp(
-  `<mode name="([A-Za-z][A-Za-z0-9_-]*)"(?: icon="([a-z]+)")?(?: proofs="(${FAMILY_NAMES})")?(?: reset-on="(${MODE_NAMES})")?`
-    + `(?: status="(completed)")?(?: deny="(${DENY_TOKENS})")?\\s*/>`,
+  `<mode name="([A-Za-z][A-Za-z0-9_-]*)"(?: icon="([a-z]+)")?(?: color="([a-z]+|#[0-9a-f]{3,8})")?(?: proofs="(${FAMILY_NAMES})")?`
+    + `(?: reset-on="(${MODE_NAMES})")?(?: status="(completed)")?(?: deny="(${DENY_TOKENS})")?\\s*/>`,
   "uy",
 );
 const PROOF_OPEN_TAG = /<proof-of-work id="([a-z][a-z0-9_]*)"( hidden)?>/uy;
@@ -575,10 +575,11 @@ function readModeTag(tag: string): WorkflowMode | null {
   return {
     name: match[1]!,
     icon: icon.success ? icon.data : null,
-    proofs: words(match[3]),
-    resetOn: words(match[4]),
-    status: match[5] === "completed" ? "completed" : null,
-    deny: words(match[6]),
+    color: match[3] ?? null,
+    proofs: words(match[4]),
+    resetOn: words(match[5]),
+    status: match[6] === "completed" ? "completed" : null,
+    deny: words(match[7]),
   };
 }
 

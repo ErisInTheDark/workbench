@@ -5,6 +5,7 @@
  * - ThreadTextColor: a palette colour or a lowercase hex colour a `<color>` tag paints text with.
  * - readThreadIconMarker: read one `<icon …>` marker leniently and resolve the icon and colour the agent meant.
  * - readThreadColorTag: read one `<color …>` tag and its matching closer leniently; partial text closes at its end.
+ * - resolveThreadTextColor: the colour one authored value (a palette word, alias or hex) names, as a `<color>` tag reads it.
  */
 
 export type ThreadIconType = "alert" | "asterisk" | "check" | "x";
@@ -108,6 +109,10 @@ function resolveTextColor(words: readonly string[]): ThreadTextColor | null {
     if (color) return color;
   }
   return null;
+}
+
+export function resolveThreadTextColor(value: string) {
+  return resolveTextColor([value.trim().toLowerCase()]);
 }
 
 /** Closer pairing counts nested `<color>` openers so an inner tag never closes its parent. */

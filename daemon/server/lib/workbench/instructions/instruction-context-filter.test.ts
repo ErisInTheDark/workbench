@@ -109,10 +109,10 @@ test("proof-of-work checklists warn on foreign items, nesting and selectors", ()
   assert.deepEqual(messages("<proof-of-work id=\"inner\">\n</proof-of-work>"), ["Proof-of-work checklists cannot nest"]);
 });
 
-test("modes render as one agent sentence without their icon and declare modes, while examples and malformed tags do not", () => {
+test("modes render as one agent sentence without their icon or colour and declare modes, while examples and malformed tags do not", () => {
   const value = [
-    "<mode name=\"Brief\" icon=\"clipboard\" proofs=\"plan quality\" reset-on=\"Review\" deny=\"edit:claims\" />",
-    "<mode name=\"Review\" icon=\"flag\" proofs=\"review\" reset-on=\"Brief\" status=\"completed\" deny=\"shell edit:claims\" />",
+    "<mode name=\"Brief\" icon=\"clipboard\" color=\"purple\" proofs=\"plan quality\" reset-on=\"Review\" deny=\"edit:claims\" />",
+    "<mode name=\"Review\" icon=\"flag\" color=\"#16a34a\" proofs=\"review\" reset-on=\"Brief\" status=\"completed\" deny=\"shell edit:claims\" />",
     "<!-- <mode name=\"Ghost\" proofs=\"plan\" /> -->",
     "```md",
     "<mode name=\"Example\" proofs=\"plan\" />",
@@ -121,10 +121,10 @@ test("modes render as one agent sentence without their icon and declare modes, w
   const result = filter(value);
   assert.deepEqual(result.warnings, []);
   const sentences = result.output?.split("\n").slice(0, 2) ?? [];
-  assert.equal(sentences.every(sentence => sentence.endsWith(".") && !sentence.includes("icon") && !sentence.includes("clipboard")), true);
+  assert.equal(sentences.every(sentence => sentence.endsWith(".") && !/icon|clipboard|purple|16a34a/u.test(sentence)), true);
   assert.deepEqual(collectWorkbenchInstructionModes(value), [
-    { name: "Brief", icon: "clipboard", proofs: ["plan", "quality"], resetOn: ["Review"], status: null, deny: ["edit:claims"] },
-    { name: "Review", icon: "flag", proofs: ["review"], resetOn: ["Brief"], status: "completed", deny: ["shell", "edit:claims"] },
+    { name: "Brief", icon: "clipboard", color: "purple", proofs: ["plan", "quality"], resetOn: ["Review"], status: null, deny: ["edit:claims"] },
+    { name: "Review", icon: "flag", color: "#16a34a", proofs: ["review"], resetOn: ["Brief"], status: "completed", deny: ["shell", "edit:claims"] },
   ]);
   assert.deepEqual(filter("<mode name=\"Brief\" proofs=\"Plan\" />").warnings.map(warning => warning.message), ["Malformed instruction selector"]);
 });
