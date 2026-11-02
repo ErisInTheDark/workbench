@@ -1,11 +1,13 @@
 /*
- * No production exports. Tests the workflow ledger keeps Workbench filings and only successful switches, in transcript order across turns.
+ * No production exports. Tests the workflow ledger keeps Workbench filings, only successful switches and user-visible agent messages,
+ * in transcript order across turns.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { WORKBENCH_TURN_END_MARKER } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchTranscriptAtomicObservation } from "./workbench-transcript-types.ts";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
@@ -69,6 +71,29 @@ test("the ledger keeps Workbench proofs and successful mode switches in order ac
       { kind: "proof", proof: { notApplicable: ["plan.verify"] } },
       { kind: "proof", proof: { proofs: { "review.coverage": "ok" } } },
       { kind: "mode", mode: "Review" },
+    ]);
+  } finally { database.close(); }
+});
+
+test("user-visible agent messages join the ledger in order; blank text and the bare turn-end marker do not", () => {
+  const database = new Database(":memory:");
+  const message = (id: string, text: string, phase: "commentary" | "final_answer" = "commentary"): FixtureItem => ({
+    type: "agentMessage", id, text, phase, memoryCitation: null, delivery: null, questions: null,
+  });
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    seedThread(database, "thread");
+    settleTurn(database, "thread", 0, [
+      message("before", "Looking around."),
+      call("brief", "thread_state", { mode: "Brief" }),
+      message("blank", " \n"),
+      message("end", `\n${WORKBENCH_TURN_END_MARKER}\n`, "final_answer"),
+    ]);
+    settleTurn(database, "thread", 1, [message("plan", "The plan."), call("implement", "thread_state", { mode: "Implement" })]);
+
+    assert.deepEqual(new WorkbenchWorkflowLedgerRepository(database).read("thread"), [
+      { kind: "message" }, { kind: "mode", mode: "Brief" }, { kind: "message" }, { kind: "mode", mode: "Implement" },
     ]);
   } finally { database.close(); }
 });

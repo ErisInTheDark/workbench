@@ -23,7 +23,7 @@ export const SCENARIO_COMPLETION = {
   mode: "Review",
   status: "completed",
 };
-/** Threads start under Inspect's rules, so scripted edits first pass Brief and Implement with every item not applicable. */
+/** Threads start under Inspect's rules, so scripted edits first pass Brief and Implement with every item not applicable; Implement also needs a message sent after entering Brief. */
 export const SCENARIO_IMPLEMENT = [
   {
     notApplicable: [

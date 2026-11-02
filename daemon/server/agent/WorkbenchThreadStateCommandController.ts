@@ -70,6 +70,9 @@ export default class WorkbenchThreadStateCommandController {
       ...transition.needsFrom.length
         ? [`${transition.target!.name} is entered only from ${transition.needsFrom.join(" or ")}; current mode: ${transition.current ?? "none"}.`]
         : [],
+      ...transition.needsMessage && !transition.needsFrom.length
+        ? [`${transition.target!.name} needs a user-visible message since you entered ${transition.current ?? "the current mode"}: show the user your plan, or what approved work you are resuming, first.`]
+        : [],
       ...transition.needsStatus ? [`${transition.target!.name} is entered together with status: "${transition.needsStatus}".`] : [],
       ...transition.needsMode.length ? [`Status completed needs mode ${transition.needsMode.join(" or ")} after this call.`] : [],
     ];
@@ -125,10 +128,13 @@ export default class WorkbenchThreadStateCommandController {
   private owed(ledger: readonly WorkflowLedgerEntry[], workflow: WorkbenchThreadWorkflow, mode: string | null) {
     const { checklists, modes } = workflow.overlays;
     return modes.flatMap((candidate) => {
-      if ((!candidate.proofs.length && !candidate.from.length) || candidate.name.toLowerCase() === mode?.toLowerCase()) return [];
-      const { needsFrom, unresolved } = evaluateThreadStateTransition(ledger, modes, checklists, { mode: candidate.name, status: candidate.status ?? undefined });
+      if ((!candidate.proofs.length && !candidate.from.length && !candidate.after) || candidate.name.toLowerCase() === mode?.toLowerCase()) return [];
+      const { current, needsFrom, needsMessage, unresolved } = evaluateThreadStateTransition(
+        ledger, modes, checklists, { mode: candidate.name, status: candidate.status ?? undefined },
+      );
       const needs = [
         ...needsFrom.length ? [`entering from ${needsFrom.join(" or ")}`] : [],
+        ...needsMessage && !needsFrom.length ? [`a user-visible message since entering ${current ?? "the current mode"}`] : [],
         ...unresolved.map(({ checklist, ids }) => `${checklist} (${ids.join(", ")})`),
       ];
       return needs.length ? [`${candidate.name} needs: ${needs.join("; ")}.`] : [];

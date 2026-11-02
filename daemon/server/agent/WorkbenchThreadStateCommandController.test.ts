@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests thread_state ordering: a refused, undeclared or unpaired mode or status applies nothing else, a refused title
+ * No production exports. Tests thread_state ordering: a refused, undeclared, unpaired or unannounced mode or status applies nothing else, a refused title
  * stops the status, and an accepted call retitles before setting status.
  */
 import assert from "node:assert/strict";
@@ -9,14 +9,17 @@ import type { WorkflowLedgerEntry, WorkflowMode } from "workbench-shared/workben
 import WorkbenchThreadStateCommandController from "./WorkbenchThreadStateCommandController";
 
 const review: ProofOfWorkChecklist = { id: "review", hidden: false, items: [{ id: "review.coverage", label: "Coverage" }] };
-const reviewMode: WorkflowMode = { name: "Review", icon: "flag", color: null, proofs: ["review"], resetOn: ["Brief"], from: [], status: "completed", deny: [] };
+const reviewMode: WorkflowMode = {
+  name: "Review", icon: "flag", color: null, proofs: ["review"], resetOn: ["Brief"], from: [], after: null, status: "completed", deny: [],
+};
+const implementMode: WorkflowMode = { name: "Implement", icon: "pen", color: null, proofs: [], resetOn: [], from: [], after: "message", status: null, deny: [] };
 
 function fixture(ledger: WorkflowLedgerEntry[] = [], { titleFails = false } = {}) {
   const applied: string[] = [];
   const controller = new WorkbenchThreadStateCommandController({
     resolveCaller: async ({ threadId }) => ({ threadId }),
     readWorkflow: async () => ({
-      overlays: { checklists: [review], modes: [reviewMode] }, ledger, mode: "Implement", definition: null, alwaysEditable: [], projectRoot: null,
+      overlays: { checklists: [review], modes: [reviewMode, implementMode] }, ledger, mode: "Implement", definition: null, alwaysEditable: [], projectRoot: null,
     }),
     readTurnItems: async () => [],
     readTitle: async () => "Title",
@@ -66,8 +69,17 @@ test("an undeclared mode is refused with the declared ones, applying nothing els
   const { applied, call } = fixture();
   const result = await call({ mode: "Fixing", title: "New" });
   assert.equal(result.status, 400);
-  assert.match(result.body, /Unknown mode "Fixing"; declared: Review\./u);
+  assert.match(result.body, /Unknown mode "Fixing"; declared: Review, Implement\./u);
   assert.deepEqual(applied, []);
+});
+
+test("a mode entered only after a message refuses a silent hop, applying nothing else, and admits once something was said", async () => {
+  const silent = fixture([{ kind: "mode", mode: "Review" }]);
+  const result = await silent.call({ mode: "Implement", title: "New" });
+  assert.equal(result.status, 400);
+  assert.match(result.body, /since you entered Review/u);
+  assert.deepEqual(silent.applied, []);
+  assert.equal((await fixture([{ kind: "mode", mode: "Review" }, { kind: "message" }]).call({ mode: "Implement" })).status, 200);
 });
 
 test("invalid proofs are rejected before anything runs", async () => {

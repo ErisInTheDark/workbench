@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests mode transitions: fresh proofs per loop, cross-turn filings, missing items, ungated modes, retired defer arguments,
- * entry sources, undeclared and unentered modes, the completed-status pairing, and what refused and legacy calls contribute to the ledger.
+ * entry sources, message preconditions, undeclared and unentered modes, the completed-status pairing, and what refused and legacy calls contribute to the ledger.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -15,7 +15,7 @@ const plan: ProofOfWorkChecklist = {
 };
 const review: ProofOfWorkChecklist = { id: "review", hidden: false, items: [{ id: "review.coverage", label: "Coverage" }] };
 const defined = (name: string, rest: Partial<WorkflowMode> = {}): WorkflowMode => ({
-  name, icon: null, color: null, proofs: [], resetOn: [], from: [], status: null, deny: [], ...rest,
+  name, icon: null, color: null, proofs: [], resetOn: [], from: [], after: null, status: null, deny: [], ...rest,
 });
 const modes: WorkflowMode[] = [
   defined("Brief", { proofs: ["plan"], resetOn: ["Review"] }),
@@ -70,6 +70,17 @@ test("a mode listing its sources is entered only from them, however complete the
   assert.deepEqual(enterImplement([mode("brief")]), []);
   assert.deepEqual(enterImplement([mode("Implement")]), [], "re-entering for an addendum");
   assert.deepEqual(enter([mode("Review")], { mode: "Brief" }).needsFrom, [], "modes without sources are entered from anywhere");
+});
+
+test("a mode entered after a message needs one since the latest mode entry, so a silent hop through its source is refused", () => {
+  const declared = [defined("Brief"), defined("Implement", { from: ["Brief"], after: "message" })];
+  const enterImplement = (ledger: WorkflowLedgerEntry[]) => evaluateThreadStateTransition(ledger, declared, [], { mode: "Implement" }).needsMessage;
+  const message: WorkflowLedgerEntry = { kind: "message" };
+  assert.equal(enterImplement([mode("Brief")]), true);
+  assert.equal(enterImplement([message, mode("Review"), message, mode("Brief"), complete]), true, "messages before entering Brief do not count");
+  assert.equal(enterImplement([mode("Brief"), message, complete]), false);
+  assert.equal(enterImplement([message]), false, "with no mode entered yet, any message counts");
+  assert.equal(evaluateThreadStateTransition([mode("Brief")], declared, [], { mode: "Brief" }).needsMessage, false);
 });
 
 test("only declared modes can be entered, and only while the workflow declares any", () => {

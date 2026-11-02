@@ -208,7 +208,7 @@ async function verifyCodexMachineArcs(input: {
     const daemonProject = (await runtime.waitForProjects([])).find(project => project.kind === "daemon");
     assert.ok(daemonProject, "The clone catalogue must offer its daemon project");
     fakeModel.enqueue([
-      ...SCENARIO_IMPLEMENT.map(state => ({ tool: { nameSuffix: "thread_state", arguments: state } })),
+      ...SCENARIO_IMPLEMENT.map(state => ({ ...state.mode === "Implement" ? { text: "Plan: change the file." } : {}, tool: { nameSuffix: "thread_state", arguments: state } })),
       // Git arc tools are direct Codex tools, not code-mode ones.
       { tool: { nameSuffix: "git_plan_start", arguments: { intentName: "Machine edit", addPaths: [display] } } },
       { tool: { nameSuffix: "apply_patch", input: `*** Begin Patch\n*** Update File: ${display}\n@@\n-before\n+after\n*** End Patch\n` } },

@@ -4,8 +4,9 @@
  * - ThreadStateSchema/ThreadState: one thread_state call; no fields reads.
  * - ModeIconSchema/ModeIcon: the icons an instruction-declared mode may show beside its name.
  * - MODE_EDIT_DENIALS: deny tokens that restrict file edits rather than tools.
- * - WorkflowModeSchema/WorkflowMode: one instruction-declared mode: its icon, colour, proofs due on entry, resets, entry sources, status pairing and denials.
- * - WorkflowLedgerSource/WorkflowLedgerEntry/readWorkflowLedgerEntries: what one recorded Workbench call contributed to a thread's workflow.
+ * - WorkflowModeSchema/WorkflowMode: one instruction-declared mode: its icon, colour, proofs due on entry, resets, entry sources, message precondition, status pairing and denials.
+ * - WorkflowLedgerSource/WorkflowLedgerEntry/readWorkflowLedgerEntries: what one recorded Workbench call contributed to a thread's workflow;
+ *   user-visible agent messages join the ledger as message entries.
  * - readThreadStateCall/readModeEntered/readFiledProofs: a transcript call's thread_state arguments, entered mode, and filed proofs.
  * - currentWorkflowMode/currentAlwaysEditable: a ledger's latest entered mode and always-editable paths.
  * - effectiveWorkflowMode: the declared mode whose rules apply, falling back to the first declared one.
@@ -50,6 +51,8 @@ export const WorkflowModeSchema = z.object({
   resetOn: z.array(z.string().trim().min(1)),
   /** Modes it may be entered from; empty means any. */
   from: z.array(z.string().trim().min(1)),
+  /** `message`: entered only after a user-visible message since the current mode was entered. */
+  after: z.literal("message").nullable(),
   status: z.literal("completed").nullable(),
   deny: z.array(z.string().trim().min(1)),
 }).strict();
@@ -64,7 +67,8 @@ export interface WorkflowLedgerSource {
 export type WorkflowLedgerEntry =
   | { readonly kind: "proof"; readonly proof: ProofOfWork }
   | { readonly kind: "mode"; readonly mode: string }
-  | { readonly kind: "editable"; readonly paths: readonly string[] };
+  | { readonly kind: "editable"; readonly paths: readonly string[] }
+  | { readonly kind: "message" };
 
 function proofOf(state: ThreadState): ProofOfWork | null {
   const parsed = ProofOfWorkSchema.safeParse({
@@ -155,6 +159,15 @@ export function currentAlwaysEditable(ledger: readonly WorkflowLedgerEntry[]): r
   return [];
 }
 
+function messagedSinceModeEntry(ledger: readonly WorkflowLedgerEntry[]) {
+  for (let index = ledger.length - 1; index >= 0; index -= 1) {
+    const entry = ledger[index]!;
+    if (entry.kind === "message") return true;
+    if (entry.kind === "mode") return false;
+  }
+  return false;
+}
+
 /** Proofs filed after the latest entry into any reset mode; with no such entry, every proof in the ledger. */
 function proofsSinceReset(ledger: readonly WorkflowLedgerEntry[], resetOn: readonly string[]) {
   let boundary = ledger.length - 1;
@@ -168,7 +181,8 @@ function proofsSinceReset(ledger: readonly WorkflowLedgerEntry[], resetOn: reado
 
 /**
  * `ledger` already holds this call's proofs. Only declared modes can be entered. Entering one needs its proof checklists
- * resolved and, when it lists `from` modes, the effective mode among them; a mode paired with `completed` is entered only with that status, and while
+ * resolved, when it lists `from` modes, the effective mode among them, and with `after="message"`, a user-visible message
+ * since the latest mode entry; a mode paired with `completed` is entered only with that status, and while
  * any mode is paired, `completed` needs one of them after the call.
  */
 export function evaluateThreadStateTransition(
@@ -188,6 +202,7 @@ export function evaluateThreadStateTransition(
   const needsStatus = target?.status && call.status !== target.status ? target : null;
   const current = effectiveWorkflowMode(ledger, modes)?.name ?? null;
   const needsFrom = target?.from.length && !target.from.some(mode => current && sameMode(mode, current)) ? target.from : [];
+  const needsMessage = target?.after === "message" && !messagedSinceModeEntry(ledger);
   const paired = modes.filter(mode => mode.status === "completed");
   const after = call.mode ?? currentWorkflowMode(ledger);
   const needsMode = call.status === "completed" && paired.length && !paired.some(mode => after && sameMode(mode.name, after))
@@ -200,6 +215,7 @@ export function evaluateThreadStateTransition(
     unknown: Boolean(call.mode && modes.length && !target),
     current,
     needsFrom,
+    needsMessage,
     needsStatus: needsStatus?.status ?? null,
     needsMode,
   };
