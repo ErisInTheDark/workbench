@@ -380,6 +380,31 @@ test("a session's browser opens with it, follows each rebuild, checks its latest
   controller.dispose();
 });
 
+test("a check waits for an in-flight rebuild, and says when the latest build failed", async context => {
+  const f = await fixture(context);
+  await writeFile(path.join(f.root, ".wb.json"), CONFIG);
+  await writeFile(f.file, `<link rel="workbench-css"><p>one</p>`);
+  const controller = f.create();
+  await f.start(controller);
+  const target = { threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" };
+
+  await writeFile(f.file, `<link rel="workbench-css"><p>two</p>`);
+  const held = gate();
+  f.css.gates.push(held);
+  f.watchers.get(f.file)!();
+  const checked = controller.inspect(target, "screenshot");
+  held.open();
+  const rendered = "screenshot of <head><style>.a{}</style></head><p>two</p>";
+  assert.equal(await checked, rendered, "the edit's render, not the one before it");
+
+  f.css.next = { exitCode: 1, stdout: "", stderr: "unknown utility" };
+  f.watchers.get(f.file)!();
+  const failed = await controller.inspect(target, "screenshot");
+  assert.ok(failed.startsWith(rendered), "the last good render stays");
+  assert.match(failed, /latest build failed[\s\S]*unknown utility/u);
+  controller.dispose();
+});
+
 test("a session builds in its chosen context, and a resumed session keeps it", async context => {
   const f = await fixture(context);
   const entry = path.join(f.root, "mock.tsx");

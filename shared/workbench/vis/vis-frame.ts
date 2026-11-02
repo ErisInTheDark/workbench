@@ -5,7 +5,9 @@
  *   never the app's) and for standalone documents (opaque).
  * - frameVisDocument: prepend the `window.wb` bridge, seeded with the file's synced control state, the app's palette and
  *   who is looking (VisAudience), to a rendered vis document; standalone pages also get a no-network policy.
- * - hostVisFrame: a page holding one served vis in the card's sandbox, sized by the height it reports, for headless checks.
+ * - hostVisFrame: a page holding one served vis in the card's sandbox, sized by the height it reports, for headless checks;
+ *   its VIS_HOST_SETTLED_GLOBAL promise resolves (VisFrameSettle) once the frame goes quiet or VIS_FRAME_SETTLE_LIMIT_MS passes.
+ * - VIS_FRAME_QUIET_MS: how long an agent's check frame must stay unchanged after load to count as settled.
  * - visFrameControlsMessage: the card's message relaying the file's control state into a running frame.
  * - visFrameThemeMessage: the card's message repainting a running frame in the app's palette.
  * - acceptVisFrameControl: the control change a frame message may forward to Workbench, or null.
@@ -19,9 +21,17 @@ const CONTROL_KIND = "workbench-vis-control";
 const CONTROLS_KIND = "workbench-vis-controls";
 const HEIGHT_KIND = "workbench-vis-height";
 const THEME_KIND = "workbench-vis-theme";
+const SETTLED_KIND = "workbench-vis-settled";
 export const VIS_FRAME_MIN_HEIGHT = 48;
 /** Pages sized from the viewport grow with every report; the cap ends that loop. */
 export const VIS_FRAME_MAX_HEIGHT = 6_000;
+export const VIS_FRAME_QUIET_MS = 500;
+/** Pages that never go quiet, such as ones animating through the DOM, are checked anyway after this long. */
+export const VIS_FRAME_SETTLE_LIMIT_MS = 10_000;
+/** The check page's global holding a promise of how its frame settled. */
+export const VIS_HOST_SETTLED_GLOBAL = "workbenchVisSettled";
+/** Whether a check page's frame went quiet, or was still changing at the limit. */
+export type VisFrameSettle = "quiet" | "busy";
 
 // Standalone pages (component previews) have no origin to load from: inline code and embedded data only.
 const STANDALONE_CONTENT_POLICY = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:">`;
@@ -31,6 +41,30 @@ export const VIS_SERVED_CONTENT_POLICY = "default-src 'self' 'unsafe-inline' 'un
 export const VIS_FRAME_SANDBOX = "allow-scripts allow-same-origin";
 /** Standalone documents have no origin of their own to share, so they stay opaque. */
 export const VIS_STANDALONE_SANDBOX = "allow-scripts";
+
+/**
+ * An agent's check frame tells its host page once it has loaded, has no pending work, and has then gone quiet: no DOM
+ * change, finished resource load, fired timer or finished request for VIS_FRAME_QUIET_MS. A page waiting on a timer or
+ * request changes nothing while it waits, so quiet alone would count it settled mid-boot; pending work is any timer due
+ * within the settle limit and any fetch or XMLHttpRequest in flight. The bridge runs before the page's own scripts, so
+ * it sees every one of them.
+ */
+const SETTLE_SCRIPT = `var nativeSet=window.setTimeout,nativeClear=window.clearTimeout,pending=0,timers={},quiet=0,loaded=false;`
+  + `function bump(){if(!loaded||pending)return;nativeClear(quiet);quiet=nativeSet(function(){post({kind:"${SETTLED_KIND}"});},${VIS_FRAME_QUIET_MS});}`
+  + `function track(){pending++;nativeClear(quiet);}function done(){pending--;bump();}`
+  + `function once(){var finished=false;track();return function(){if(!finished){finished=true;done();}};}`
+  + `window.setTimeout=function(callback,delay){var ms=+delay||0;if(typeof callback!=="function"||ms>${VIS_FRAME_SETTLE_LIMIT_MS})return nativeSet.apply(window,arguments);`
+  + `var args=Array.prototype.slice.call(arguments,2);var id=nativeSet(function(){if(!timers[id])return;delete timers[id];`
+  + `try{callback.apply(window,args);}finally{done();}},ms);timers[id]=true;track();return id;};`
+  + `window.clearTimeout=function(id){if(timers[id]){delete timers[id];done();}return nativeClear.apply(window,arguments);};`
+  + `if(typeof window.fetch==="function"){var nativeFetch=window.fetch;window.fetch=function(){var finish=once();var request;`
+  + `try{request=nativeFetch.apply(window,arguments);}catch(error){finish();throw error;}request.then(finish,finish);return request;};}`
+  + `if(typeof window.XMLHttpRequest==="function"){var nativeSend=window.XMLHttpRequest.prototype.send;`
+  + `window.XMLHttpRequest.prototype.send=function(){var finish=once();this.addEventListener("loadend",finish);`
+  + `try{return nativeSend.apply(this,arguments);}catch(error){finish();throw error;}};}`
+  + `new MutationObserver(bump).observe(root,{subtree:true,childList:true,attributes:true,characterData:true});`
+  + `if(typeof PerformanceObserver==="function")new PerformanceObserver(bump).observe({type:"resource"});`
+  + `window.addEventListener("load",function(){loaded=true;bump();});`;
 
 /**
  * `wb.state` holds the file's synced controls. A page's own `set` updates it at once and posts the JSON text to the card,
@@ -57,7 +91,8 @@ const BRIDGE_SCRIPT = (initial: string, theme: WorkbenchTheme | null, audience: 
   + `var next=Object.assign({},values);var changed=false;`
   + `Object.keys(data.controls).forEach(function(id){var json=data.controls[id];if(typeof json!=="string"||JSON.stringify(next[id])===json)return;`
   + `try{next[id]=JSON.parse(json);changed=true;}catch(error){}});if(changed){values=next;notify();}});`
-  + `if(parent===window||typeof ResizeObserver!=="function")return;var last=-1;`
+  + `if(parent===window)return;${audience === "agent" ? SETTLE_SCRIPT : ""}`
+  + `if(typeof ResizeObserver!=="function")return;var last=-1;`
   + `function report(){var h=Math.ceil(document.documentElement.getBoundingClientRect().height);if(h!==last){last=h;post({kind:"${HEIGHT_KIND}",height:h});}}`
   + `var observer=new ResizeObserver(report);observer.observe(document.documentElement);`
   + `document.addEventListener("DOMContentLoaded",function(){if(document.body)observer.observe(document.body);report();});})();</script>`;
@@ -96,7 +131,10 @@ export function hostVisFrame(url: string) {
     + `<body><iframe sandbox="${VIS_FRAME_SANDBOX}" src="${attribute(url)}" title="vis"></iframe>`
     + `<script>(function(){var frame=document.querySelector("iframe");addEventListener("message",function(event){`
     + `var data=event.data;if(event.source!==frame.contentWindow||!data||data.kind!=="${HEIGHT_KIND}"||typeof data.height!=="number"||!isFinite(data.height))return;`
-    + `frame.style.height=Math.min(${VIS_FRAME_MAX_HEIGHT},Math.max(${VIS_FRAME_MIN_HEIGHT},Math.ceil(data.height)))+"px";});})();</script></body></html>`;
+    + `frame.style.height=Math.min(${VIS_FRAME_MAX_HEIGHT},Math.max(${VIS_FRAME_MIN_HEIGHT},Math.ceil(data.height)))+"px";});`
+    + `window.${VIS_HOST_SETTLED_GLOBAL}=new Promise(function(resolve){setTimeout(function(){resolve("busy");},${VIS_FRAME_SETTLE_LIMIT_MS});`
+    + `addEventListener("message",function(event){if(event.source===frame.contentWindow&&event.data&&event.data.kind==="${SETTLED_KIND}")resolve("quiet");});});`
+    + `})();</script></body></html>`;
 }
 
 export function visFrameControlsMessage(controls: VisControls) {

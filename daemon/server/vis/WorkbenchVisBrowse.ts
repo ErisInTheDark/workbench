@@ -4,7 +4,7 @@
  * - VisBrowseTarget: a live vis session, its thread and the render revision to show.
  * - VisDocumentTarget: a throwaway document, such as a skill component preview, with no session behind it.
  * - default WorkbenchVisBrowse: own each vis session's headless Browse session: keep its page framing the session's
- *   served render in the card's sandbox, open it, return a snapshot or screenshot of it, and stop it with the vis.
+ *   served render in the card's sandbox, open it, return a snapshot or screenshot of it once it settles, and stop it with the vis.
  *   Throwaway documents get a standalone page instead.
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -13,7 +13,9 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { WorkbenchBrowseAgentScriptInlineRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import { formatVisScreenshotResult } from "workbench-shared/workbench/vis/vis-contract";
-import { frameVisDocument, hostVisFrame } from "workbench-shared/workbench/vis/vis-frame";
+import {
+  frameVisDocument, hostVisFrame, VIS_FRAME_SETTLE_LIMIT_MS, VIS_HOST_SETTLED_GLOBAL, type VisFrameSettle,
+} from "workbench-shared/workbench/vis/vis-frame";
 import { daemonVisPath, VIS_AUDIENCE_PARAM, VIS_REVISION_PARAM } from "workbench-shared/workbench/vis/vis-url";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 
@@ -100,14 +102,17 @@ export default class WorkbenchVisBrowse {
     }
   }
 
-  /** Reopens the current render each time, since the page may have re-rendered since the last check. */
+  /**
+   * Reopens the current render each time, since the page may have re-rendered since the last check, and captures it
+   * once it settles, so a page still booting is never mistaken for the result.
+   */
   async inspect(target: VisBrowseTarget, kind: "snapshot" | "screenshot") {
-    return await this.#check(target, this.#hostPage(target), kind);
+    return await this.#check(target, this.#hostPage(target), kind, true);
   }
 
   /** Screenshots a document on a standalone page, with no network and no session to serve it. */
   async inspectDocument(target: VisDocumentTarget) {
-    return await this.#check(target, frameVisDocument(target.document, {}, { audience: "agent" }), "screenshot");
+    return await this.#check(target, frameVisDocument(target.document, {}, { audience: "agent" }), "screenshot", false);
   }
 
   async end(target: Pick<BrowseOwner, "sessionId" | "threadId" | "cwd">, options: { strict?: boolean } = {}) {
@@ -141,22 +146,36 @@ export default class WorkbenchVisBrowse {
    * The check runs as its own one-line script: a script's output joins every line's JSON, so only a single line parses
    * as one value.
    */
-  async #check(target: BrowseOwner, html: string, kind: "snapshot" | "screenshot") {
+  async #check(target: BrowseOwner, html: string, kind: "snapshot" | "screenshot", framed: boolean) {
     const verb = kind === "snapshot" ? "Snapshotting" : "Screenshotting";
     await this.#load(target, html, `${verb} vis of ${target.path}`);
+    const settle = framed ? await this.#settle(target) : "quiet";
+    const note = settle === "busy"
+      ? `The page was still changing after ${VIS_FRAME_SETTLE_LIMIT_MS / 1_000}s; this capture may be mid-update.\n`
+      : "";
     const stdout = await this.#script(target, kind === "snapshot" ? "snapshot --compact" : "screenshot --full-page", `${verb} vis of ${target.path}`);
     if (kind === "screenshot") {
       const result = conformToZodSchema(z.object({ assetUrl: z.string().min(1) }), JSON.parse(stdout));
       if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
         throw new Error("Browse screenshot did not return an image.");
       }
-      return formatVisScreenshotResult(target.path, result.data.assetUrl);
+      return `${formatVisScreenshotResult(target.path, result.data.assetUrl)}${note}`;
     }
     const result = conformToZodSchema(z.object({ tree: z.string() }), JSON.parse(stdout));
     if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
       throw new Error("Browse returned a snapshot without an accessibility tree.");
     }
-    return `${result.data.tree}\n`;
+    return `${result.data.tree}\n${note}`;
+  }
+
+  /** Waits on the check page's own report of its frame going quiet; the page gives up by itself at the limit. */
+  async #settle(target: BrowseOwner): Promise<VisFrameSettle> {
+    const stdout = await this.#script(target, `\`\`\`js\nawait window.${VIS_HOST_SETTLED_GLOBAL}\n\`\`\``, `Waiting for vis of ${target.path} to settle`);
+    const result = conformToZodSchema(z.object({ result: z.enum(["quiet", "busy"]) }), JSON.parse(stdout));
+    if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
+      throw new Error("The vis check page never said whether it settled.");
+    }
+    return result.data.result;
   }
 
   #page(sessionId: string) {

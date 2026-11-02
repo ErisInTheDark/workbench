@@ -154,15 +154,22 @@ export default class WorkbenchVisController {
     return { sessionId: stored.sessionId, path: display, failure: rendered.failure };
   }
 
-  /** Checks the session's current render in its headless browser: an accessibility snapshot, or a screenshot sent to the agent. */
+  /**
+   * Checks the session's latest render in its headless browser: an accessibility snapshot, or a screenshot sent to the
+   * agent. A check right after an edit waits for its rebuild, and says when that build failed.
+   */
   async inspect(input: { threadId: string; cwd: string; rootPath: string; path: string }, kind: "snapshot" | "screenshot") {
     await this.start();
     const { display } = await this.#resolve(input.rootPath, input.cwd, input.path, false);
     const live = this.#findLive(input.threadId, display);
     if (!live) throw new Error(`No vis session is live on ${display}.`);
+    await live.running?.catch(() => undefined);
+    if (this.#live.get(live.stored.sessionId) !== live) throw new Error(`The vis session on ${display} ended while it was rebuilding.`);
     if (!live.state.render) throw new Error(`${display} has not rendered yet; try again once it has.`);
     if (!this.#options.browse) throw new Error("Vis browser checks are unavailable.");
-    return await this.#options.browse.inspect(this.#browseTarget(live), kind);
+    const failure = live.state.failure;
+    const result = await this.#options.browse.inspect(this.#browseTarget(live), kind);
+    return failure ? `${result}The latest build failed, so this shows the last good render:\n${failure}\n` : result;
   }
 
   /**

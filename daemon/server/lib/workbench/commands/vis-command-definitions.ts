@@ -132,6 +132,6 @@ export const WORKBENCH_VIS_COMMANDS = [
   match,
   visCommand("end", "End a live vis session and snapshot its final content.", false),
   visCommand("read", "Read a vis file's synced control state (tab picks and other controls the user set), by control id.", true),
-  visCommand("snapshot", "Accessibility snapshot of a live vis's current render, from its headless browser.", true),
-  visCommand("screenshot", "Full-page screenshot of a live vis's current render, from its headless browser; the image is sent to you.", true),
+  visCommand("snapshot", "Accessibility snapshot of a live vis's latest render, from its headless browser, once any rebuild finishes and the page settles; notes a failed build or a page still changing.", true),
+  visCommand("screenshot", "Full-page screenshot of a live vis's latest render, from its headless browser, once any rebuild finishes and the page settles; notes a failed build or a page still changing. The image is sent to you.", true),
 ] as const;
