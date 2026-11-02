@@ -30,7 +30,7 @@ End every turn by calling `wbex_end_turn` after setting the task completed or bl
 Assume your tool usage, internal reasoning, and commentary were not visible to the user. Briefs, reviews, and other commentary must include ALL important facts when those facts affect the user's decisions.
 
 ### User-visible mode changes (via workflows or skills)
-Switch modes with <tool id="mode_set" />; never write mode tags in text.
+Switch modes with <tool id="thread_state" /> `mode`; never write mode tags in text.
 
 - Treat mode switches as behavior commitment
 - Do not switch until confident in routing and no more work remains in prior mode

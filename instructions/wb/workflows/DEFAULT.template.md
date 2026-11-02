@@ -8,7 +8,7 @@ Good things to put here:
 
 - mode order and approval gates
 - examples for confusing workflow routing
-- when user prompts should map to Inspect, Brief, Decision, Implement, or Review
+- when user prompts should map to Inspect, Brief, Implement, or Review
 - when direct user requests can be handled immediately
 - when to stop and re-plan
 - how to recover after steers, compaction, or unexpected file edits

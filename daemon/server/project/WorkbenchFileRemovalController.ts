@@ -82,7 +82,7 @@ export default class WorkbenchFileRemovalController {
       cwd, harness: request.harness, threadId: request.threadId, paths: resolved.map(({ absolute }) => absolute),
     }, signal);
     if (!claims.allowed) {
-      return text(400, [claims.uncoveredPaths.length
+      return text(400, [claims.modeDenial ? `${claims.modeDenial} Nothing was deleted.` : claims.uncoveredPaths.length
         ? `Unclaimed paths: ${claims.uncoveredPaths.join(", ")}. Claim every path before deleting. Nothing was deleted.`
         : `${describePendingProposalDenial(claims.pendingProposals)} Nothing was deleted.`]);
     }

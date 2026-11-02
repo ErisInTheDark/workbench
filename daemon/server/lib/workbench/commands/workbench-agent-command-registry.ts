@@ -12,11 +12,10 @@ import { WORKBENCH_GIT_REPO_COMMANDS } from "./git-repo-command-definition";
 import { WORKBENCH_LIVE_SCENARIO_COMMANDS } from "./live-scenario-command-definition";
 import { WORKBENCH_MCP_COMMANDS } from "./mcp-command-definitions";
 import { WORKBENCH_MESSAGE_COMMANDS } from "./message-command-definitions";
-import { WORKBENCH_MODE_COMMANDS } from "./mode-command-definition";
+import { WORKBENCH_THREAD_STATE_COMMANDS } from "./thread-state-command-definition";
 import { WORKBENCH_NETWORK_COMMANDS } from "./network-command-definitions";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_QUESTIONNAIRE_COMMANDS } from "./questionnaire-command-definition";
-import { WORKBENCH_PROOF_OF_WORK_COMMANDS } from "./proof-of-work-command-definition";
 import { createWorkbenchReloadCommands } from "./reload-command-definitions";
 import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SKILL_COMMANDS } from "./skill-command-definition";
@@ -47,8 +46,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_FILE_REMOVAL_COMMANDS,
   ...WORKBENCH_SKILL_COMMANDS,
   ...WORKBENCH_QUESTIONNAIRE_COMMANDS,
-  ...WORKBENCH_PROOF_OF_WORK_COMMANDS,
-  ...WORKBENCH_MODE_COMMANDS,
+  ...WORKBENCH_THREAD_STATE_COMMANDS,
   ...WORKBENCH_MESSAGE_COMMANDS,
   ...WORKBENCH_NETWORK_COMMANDS,
   ...WORKBENCH_SUBAGENT_COMMANDS,

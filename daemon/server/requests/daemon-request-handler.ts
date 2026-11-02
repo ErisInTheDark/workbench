@@ -62,7 +62,7 @@ export interface WorkbenchDaemonRequestOwners {
   launches?: Pick<WorkbenchThreadLaunchController, "launch" | "read">;
   presentationExport?: Pick<WorkbenchThreadStateController,
     "exportPresentationPage" | "exportPresentationManifestPage" | "readPresentationAttachmentChunk">;
-  agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readProofOfWorkChecklists" | "readSkills">;
+  agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readProofOfWorkChecklists" | "readSkills" | "readWorkflowModes">;
   files: Pick<WorkbenchProjectFileController, "read" | "write">;
   gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
   workingTree?: Pick<WorkbenchWorkingTreeController, "read" | "summary" | "diff" | "preview" | "mutate">;

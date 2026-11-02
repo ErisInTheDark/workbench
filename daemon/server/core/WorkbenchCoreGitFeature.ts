@@ -22,6 +22,7 @@ import type WorkbenchProjectCatalogController from "../project/WorkbenchProjectC
 import type WorkbenchSubagentFeature from "../subagents/WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "../thread/WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "../thread/WorkbenchThreadStateFeature";
+import type WorkbenchThreadWorkflowReader from "../thread/WorkbenchThreadWorkflowReader";
 import WorkbenchWorkingTreeController from "../git/WorkbenchWorkingTreeController";
 import type { createWorktreeGitTransitions } from "../git/worktree-git-transitions";
 import type { WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
@@ -41,6 +42,7 @@ export default class WorkbenchCoreGitFeature {
     projectCatalog: WorkbenchProjectCatalogController;
     transitions: ReturnType<typeof createWorktreeGitTransitions>;
     agentContext: Pick<WorkbenchAgentContextController, "publish">;
+    threadWorkflow: Pick<WorkbenchThreadWorkflowReader, "readEditDenial">;
     /** Built after this feature, read at call time. */
     threadState: () => WorkbenchThreadStateFeature | null;
     /**
@@ -64,6 +66,7 @@ export default class WorkbenchCoreGitFeature {
     };
     const gitArc = this.gitArc = new WorkbenchGitArcFeature({
       identities,
+      workflow: ports.threadWorkflow,
       legacyDiffStore: database,
       proposalDiffStore: {
         read: async identity => await database.readGitArcProposalDiff(identity),

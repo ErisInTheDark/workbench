@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests the workflow ledger keeps only successful Workbench filings and switches, in transcript order across turns.
+ * No production exports. Tests the workflow ledger keeps Workbench filings and only successful switches, in transcript order across turns.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -43,7 +43,7 @@ function call(id: string, tool: string, args: object, options: { failed?: boolea
   };
 }
 
-test("the ledger keeps successful Workbench proofs and mode switches in order across turns", () => {
+test("the ledger keeps Workbench proofs and successful mode switches in order across turns, including refused thread_state proofs", () => {
   const database = new Database(":memory:");
   try {
     database.pragma("foreign_keys = ON");
@@ -57,12 +57,18 @@ test("the ledger keeps successful Workbench proofs and mode switches in order ac
       call("done", "task_completed", {}),
     ]);
     settleTurn(database, "thread", 1, [call("brief", "mode_set", { mode: "Brief" }), call("late", "proof_of_work", { notApplicable: ["plan.verify"] })]);
+    settleTurn(database, "thread", 2, [
+      call("refused", "thread_state", { proofs: { "review.coverage": "ok" }, mode: "Review" }, { failed: true }),
+      call("review", "thread_state", { mode: "Review", status: "completed" }),
+    ]);
     settleTurn(database, "other", 0, [call("elsewhere", "mode_set", { mode: "Review" })]);
 
     assert.deepEqual(new WorkbenchWorkflowLedgerRepository(database).read("thread"), [
       { kind: "proof", proof: { proofs: { "plan.result": "done" } } },
       { kind: "mode", mode: "Brief" },
       { kind: "proof", proof: { notApplicable: ["plan.verify"] } },
+      { kind: "proof", proof: { proofs: { "review.coverage": "ok" } } },
+      { kind: "mode", mode: "Review" },
     ]);
   } finally { database.close(); }
 });

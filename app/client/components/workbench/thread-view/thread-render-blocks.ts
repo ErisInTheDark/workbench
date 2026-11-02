@@ -15,7 +15,7 @@
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { proofFamily, readProofOfWorkCompletion, readProofOfWorkSubmission } from "workbench-shared/workbench/thread/proof-of-work";
-import { readModeSwitch } from "workbench-shared/workbench/thread/workflow-modes";
+import { readFiledProofs, readModeEntered, readThreadStateCall } from "workbench-shared/workbench/thread/workflow-modes";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
@@ -117,7 +117,8 @@ export type ActivitySegment =
 export type ThreadRenderableBlock =
   /** The filing that left every reported checklist complete, shown with the incomplete filings before it that drew as rows. */
   | { earlier: Extract<ThreadItem, { type: "mcpToolCall" }>[]; kind: "proofOfWork"; items: [Extract<ThreadItem, { type: "mcpToolCall" }>] }
-  | { kind: "modeSwitch"; items: [Extract<ThreadItem, { type: "mcpToolCall" }>]; mode: string }
+  /** `earlier`: this turn's proof-filing thread_state calls since the previous mode line, refused ones included. */
+  | { earlier: Extract<ThreadItem, { type: "mcpToolCall" }>[]; kind: "modeSwitch"; items: [Extract<ThreadItem, { type: "mcpToolCall" }>]; mode: string }
   /** Consecutive work (reasoning, plain commands, file changes, searches) shown as one summary that expands into its steps. */
   | { kind: "activityRun"; items: ThreadItem[]; segments: ActivitySegment[] }
   /**
@@ -191,7 +192,7 @@ export function reuseRenderableBlocks(
       left.length === right.length && left.every((item, index) => item === right[index])
     );
     return sameItems(getRenderableBlockItems(old), getRenderableBlockItems(block))
-      && (old.kind !== "proofOfWork" || block.kind !== "proofOfWork" || sameItems(old.earlier, block.earlier))
+      && (!("earlier" in old) || !("earlier" in block) || sameItems(old.earlier, block.earlier))
       && (!("state" in old) || !("state" in block) || old.state === block.state)
       ? old : block;
   });
@@ -538,6 +539,7 @@ export function buildRenderableBlocks(
   const narrativeKeys = new Set<string>();
   const heldAgentMessages: IncomingAgentMessageItem[] = [];
   let incompleteProofs: Extract<ThreadItem, { type: "mcpToolCall" }>[] = [];
+  let stateProofs: Extract<ThreadItem, { type: "mcpToolCall" }>[] = [];
   let compacted = false;
   for (const item of items) {
     if (item.type === "plan") continue;
@@ -590,6 +592,21 @@ export function buildRenderableBlocks(
       }
     }
     if (isUnstartedToolCall(item)) continue;
+    const stateCall = item.type === "mcpToolCall" ? readThreadStateCall(item) : null;
+    if (item.type === "mcpToolCall" && stateCall) {
+      const filesProofs = Boolean(readFiledProofs(item));
+      if (stateCall.settled && !stateCall.applied) {
+        if (filesProofs) stateProofs.push(item);
+        continue;
+      }
+      if (stateCall.applied && stateCall.state.mode) {
+        flush();
+        blocks.push({ earlier: stateProofs, items: [item], kind: "modeSwitch", mode: stateCall.state.mode });
+        stateProofs = [];
+        continue;
+      }
+      if (filesProofs) stateProofs.push(item);
+    }
     const submission = item.type === "mcpToolCall" ? readProofOfWorkSubmission(item) : null;
     if (item.type === "mcpToolCall" && submission) {
       const families = [...Object.keys(submission.proofs ?? {}), ...submission.notApplicable ?? [], ...submission.defer ?? []].map(proofFamily);
@@ -602,10 +619,10 @@ export function buildRenderableBlocks(
       }
       incompleteProofs.push(item);
     }
-    const mode = item.type === "mcpToolCall" ? readModeSwitch(item) : null;
+    const mode = item.type === "mcpToolCall" ? readModeEntered(item) : null;
     if (item.type === "mcpToolCall" && mode) {
       flush();
-      blocks.push({ items: [item], kind: "modeSwitch", mode });
+      blocks.push({ earlier: [], items: [item], kind: "modeSwitch", mode });
       continue;
     }
     if (item.type === "commandExecution") {

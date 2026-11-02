@@ -16,17 +16,17 @@ import IsolatedWorkbench from "./IsolatedWorkbench";
 import type FakeThreadModelServer from "./FakeThreadModelServer";
 import type { FakeThreadAction } from "./FakeThreadModelServer";
 import ProviderThreadJourney from "./ProviderThreadJourney";
-import { fakeOpenCodeDirectTool } from "./provider-boundary-journey";
+import { fakeOpenCodeDirectTool, SCENARIO_COMPLETION } from "./provider-boundary-journey";
 
 type Provider = "codex" | "opencode" | "claude";
 
 /** The shortest scripted turn each provider accepts as completed, quoting `proof`. */
 function completedTurn(provider: Provider, proof: string): FakeThreadAction[] {
-  if (provider === "codex") return [{ tool: { nameSuffix: "task_completed", arguments: {} } }, { text: proof }];
+  if (provider === "codex") return [{ tool: { nameSuffix: "thread_state", arguments: SCENARIO_COMPLETION } }, { text: proof }];
   // OpenCode samples again after the completion tool's result; an empty answer ends its loop, as in the shared final turn.
-  if (provider === "opencode") return [fakeOpenCodeDirectTool("task_completed", {}, proof), { text: "" }];
+  if (provider === "opencode") return [fakeOpenCodeDirectTool("thread_state", SCENARIO_COMPLETION, proof), { text: "" }];
   return [
-    { text: proof, tool: { nameSuffix: "task_completed", arguments: {} } },
+    { text: proof, tool: { nameSuffix: "thread_state", arguments: SCENARIO_COMPLETION } },
     { text: "Done.", bare: true },
     { text: WORKBENCH_TURN_END_MARKER, bare: true, requiredPromptText: [CLAUDE_COMMENTARY_HINT] },
   ];

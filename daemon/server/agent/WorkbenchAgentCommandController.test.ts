@@ -679,7 +679,6 @@ test("CLI audience follows canonical child identity before dispatch", async () =
     };
     for (const args of [
       ["git", "arc", "propose", "--title", "child proposal"],
-      ["task", "get"],
       ["subagent", "list"],
     ]) {
       const response = await run("child", args);

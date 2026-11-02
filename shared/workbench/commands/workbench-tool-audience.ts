@@ -13,7 +13,7 @@ export function isWorkbenchCodeModeTool(meta: Record<string, unknown> | undefine
   return meta?.["workbench/codeMode"] === true;
 }
 
-// Parents own child lifecycle, proposal, and title operations.
+// Parents own child lifecycle and proposal operations.
 export const WORKBENCH_PARENT_ONLY_TOOLS: readonly string[] = [
   "git_arc_propose",
   "subagent_create",
@@ -22,8 +22,6 @@ export const WORKBENCH_PARENT_ONLY_TOOLS: readonly string[] = [
   "subagent_settle",
   "subagent_stop",
   "subagent_wait",
-  "task_get",
-  "task_set",
 ];
 const parentOnly = new Set(WORKBENCH_PARENT_ONLY_TOOLS);
 

@@ -228,6 +228,10 @@ class WorkbenchDaemonClient {
     read: (params: WorkbenchDaemonParams<"proof-of-work/read">) => this.request("proof-of-work/read", params),
   };
 
+  readonly workflowModes = {
+    read: (params: WorkbenchDaemonParams<"workflow-modes/read">) => this.request("workflow-modes/read", params),
+  };
+
   readonly search = {
     query: (params: WorkbenchDaemonParams<"search/query">) => this.request("search/query", params),
   };

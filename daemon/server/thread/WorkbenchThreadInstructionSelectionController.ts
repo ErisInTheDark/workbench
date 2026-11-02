@@ -35,6 +35,11 @@ function failure(error: unknown) {
 export default class WorkbenchThreadInstructionSelectionController {
   constructor(private readonly ports: WorkbenchThreadInstructionSelectionPorts) {}
 
+  /** The thread's recorded selection, or its kind's default. */
+  async readSelection(threadId: WorkbenchThreadId): Promise<WorkbenchInstructionSelection> {
+    return await this.ports.store({ kind: "read", threadId }) ?? defaultThreadInstructionSelection(await this.ports.readThreadKind(threadId));
+  }
+
   /**
    * A context carrying a selection launches as sent; otherwise the thread's recorded selection, or its kind's default, applies.
    * User input being admitted activates the skills it names, so merged messages need no stored activations.
@@ -42,9 +47,7 @@ export default class WorkbenchThreadInstructionSelectionController {
   async resolve(
     threadId: WorkbenchThreadId, context: WorkbenchMessageContext | undefined, input?: readonly WorkbenchUserInput[],
   ): Promise<WorkbenchMessageContext> {
-    const selection = readWorkbenchInstructionSelection(context)
-      ?? await this.ports.store({ kind: "read", threadId })
-      ?? defaultThreadInstructionSelection(await this.ports.readThreadKind(threadId));
+    const selection = readWorkbenchInstructionSelection(context) ?? await this.readSelection(threadId);
     const named = input
       ? readWorkbenchSkillMentionPaths(input.flatMap(part => part.type === "text" ? [part.text] : []), await this.ports.readSkills(threadId))
       : [];

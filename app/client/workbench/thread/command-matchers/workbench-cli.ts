@@ -324,9 +324,20 @@ export function parseWorkbenchMessageCommand(
   return parseSingleWorkbenchMessageCommand(command);
 }
 
+const THREAD_STATE_COMMAND = /^wb(?:\.cmd)?\s+thread\s+state(?:\s|$)/iu;
+
+/** `wb thread state` titles and statuses render like the task commands they replaced; a mode switch takes precedence. */
+function readThreadStateFlag(normalized: string, flag: "status" | "title") {
+  if (!THREAD_STATE_COMMAND.test(normalized) || readFlagValue(normalized, "mode")) return null;
+  if (flag === "title" && readFlagValue(normalized, "status")) return null;
+  return readFlagValue(normalized, flag);
+}
+
 function parseSingleWorkbenchTaskTitleCommand(command: string): WorkbenchTaskTitleCommand | null {
   const normalized = command.trim();
   if (/^wb(?:\.cmd)?\s+task\s+get\s*$/iu.test(normalized)) return { action: "get" };
+  const stateTitle = readThreadStateFlag(normalized, "title");
+  if (stateTitle) return { action: "set", title: stateTitle };
   if (!/^wb(?:\.cmd)?\s+task\s+set(?:\s|$)/iu.test(normalized)) return null;
   const title = readFlagValue(normalized, "title");
   return title ? { action: "set", title } : null;
@@ -349,6 +360,8 @@ export function isWorkbenchTaskTitleSetMatcherClaim(claimedBy: string | null | u
 
 function parseSingleWorkbenchTaskStatusCommand(command: string): WorkbenchTaskStatusCommand | null {
   const normalized = command.trim();
+  const stateStatus = readThreadStateFlag(normalized, "status")?.toLowerCase();
+  if (stateStatus === "completed" || stateStatus === "blocked") return { status: stateStatus };
   const match = /^wb(?:\.cmd)?\s+task\s+(completed|blocked)\s*$/iu.exec(normalized);
   return match ? { status: match[1]!.toLowerCase() as WorkbenchTaskStatusCommand["status"] } : null;
 }
@@ -595,6 +608,19 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const command = parseSingleWorkbenchTaskTitleCommand(stage.text);
       if (summaryParts.length || command?.action !== "get") return null;
       return getWorkbenchCommandRendering("task_get", {})?.result ?? null;
+    },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.thread-state",
+    match: ({ stage, summaryParts }) => {
+      const normalized = stage.text.trim();
+      if (summaryParts.length || !THREAD_STATE_COMMAND.test(normalized)) return null;
+      const files = ["proofs-json", "not-applicable", "defer"].some(flag => readFlagValue(normalized, flag));
+      const editable = /(?:^|\s)--(?:always-editable|clear-always-editable)(?:\s|=|$)/u.test(normalized);
+      const mode = readFlagValue(normalized, "mode");
+      return getWorkbenchCommandRendering("thread_state", {
+        ...files ? { proofs: {} } : {}, ...editable ? { alwaysEditable: [] } : {}, ...mode ? { mode } : {},
+      })?.result ?? null;
     },
   }),
   CommandMatcher({

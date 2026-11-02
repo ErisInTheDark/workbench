@@ -30,7 +30,8 @@ const TRIVIAL_ITEM_SQL = `(
   OR (later_item.type = 'userMessage' AND ${agentMessageInputSql("later_item")})
   OR (later_item.type = 'functionCallOutput' AND ${agentMessageOutputSql("later_item")})
   OR (later_item.type = 'operation' AND EXISTS (SELECT 1 FROM thread_operation_callable_tool_sources task
-    WHERE task.item_id = later_item.id AND task.server_name IN (${WORKBENCH_TOOL_SERVERS_SQL}) AND task.tool_name = 'task_completed'))
+    WHERE task.item_id = later_item.id AND task.server_name IN (${WORKBENCH_TOOL_SERVERS_SQL}) AND (task.tool_name = 'task_completed'
+      OR (task.tool_name = 'thread_state' AND json_extract(task.arguments_json, '$.status') = 'completed'))))
 )`;
 
 const LATEST_MEANINGFUL_TURN_SQL = `(

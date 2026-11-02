@@ -52,12 +52,11 @@ export default class WorkbenchThreadSkillStore {
         case "read":
           break;
         case "activate": {
-          // Reactivation cancels any undelivered notice; the activation itself carries the body.
+          // Reactivation cancels any undelivered notice and moves the skill to the top instruction layer; the activation carries the body.
           const upsert = this.database.prepare(`INSERT INTO workbench_thread_skills
             (thread_id, path, name, source, activated_at, active, pending_notice) VALUES (?, ?, ?, ?, ?, 1, NULL)
             ON CONFLICT(thread_id, path) DO UPDATE SET name = excluded.name, source = excluded.source,
-              activated_at = CASE WHEN workbench_thread_skills.active = 1 THEN workbench_thread_skills.activated_at ELSE excluded.activated_at END,
-              active = 1, pending_notice = NULL`);
+              activated_at = excluded.activated_at, active = 1, pending_notice = NULL`);
           for (const skill of command.skills) upsert.run(command.threadId, skill.path, skill.name, skill.source, command.at);
           break;
         }

@@ -27,11 +27,7 @@ import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
 import WorkbenchToolStatsCommandController from "./WorkbenchToolStatsCommandController";
 import WorkbenchFeedbackCommandController from "./WorkbenchFeedbackCommandController";
-import WorkbenchProofOfWorkController from "./WorkbenchProofOfWorkController";
-import WorkbenchModeSwitchController from "./WorkbenchModeSwitchController";
-import { readWorkbenchProofOfWorkCatalogue } from "../lib/workbench/instructions/proof-of-work-catalogue";
-import { readWorkbenchModeGates } from "../lib/workbench/instructions/mode-gate-catalogue";
-import { defaultThreadInstructionSelection } from "../thread/WorkbenchThreadInstructionSelectionController";
+import WorkbenchThreadStateCommandController from "./WorkbenchThreadStateCommandController";
 import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import WorkbenchFileRemovalController from "../project/WorkbenchFileRemovalController";
 import WorkbenchTranscriptCommandController from "../transcript/WorkbenchTranscriptCommandController";
@@ -218,25 +214,38 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       signal.throwIfAborted();
       return await gitArc.checkActiveClaimPaths(cwd, WorkbenchHarnessSchema.parse(binding.harness), identity.threadId, paths);
     });
-    const workflowPorts = {
-      resolveCaller: async ({ cwd, harness, threadId }: { cwd: string; harness: string; threadId: string }, signal: AbortSignal) => {
-        const { identity, resolution: { root } } = await nativeTarget(threadId, cwd, harness);
+    const threadWorkflow = build.get("threadWorkflow");
+    const managedThread = async (method: string, params: Record<string, unknown>) => {
+      const response = await threadState.handleManagedThreadRequest({ id: 0, method, params });
+      if (response.error) throw new Error(response.error.message);
+      return (response.result ?? {}) as Record<string, unknown>;
+    };
+    const threadStateCommand = new WorkbenchThreadStateCommandController({
+      resolveCaller: async ({ cwd, harness, threadId }, signal) => {
+        const { identity } = await nativeTarget(threadId, cwd, harness);
         signal.throwIfAborted();
-        return { threadId: identity.threadId, projectRoot: root.rootPath };
+        return { threadId: identity.threadId };
       },
-      readCatalogue: async (projectRoot: string | null) => await readWorkbenchProofOfWorkCatalogue(projectRoot),
-      readGates: async (threadId: string) => {
-        const recorded = await database.executeThreadInstructionSelection({ kind: "read", threadId });
-        if (recorded) return await readWorkbenchModeGates(recorded.workflowIds ?? []);
+      readWorkflow: async threadId => await threadWorkflow.read(threadId),
+      readTitle: async ({ cwd, threadId }) => {
+        const { title } = await managedThread("workbench/thread/title", { action: "get", callerThreadId: threadId, cwd });
+        return typeof title === "string" ? title : "";
+      },
+      setTitle: async ({ cwd, threadId }, title, currentTitle) => {
+        await managedThread("workbench/thread/title", {
+          action: "set", callerThreadId: threadId, cwd, title, ...currentTitle === undefined ? {} : { currentTitle },
+        });
+      },
+      readStatus: async (threadId) => {
         const identity = await heldThread(threadId);
         const entry = identity ? await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
-        return await readWorkbenchModeGates(defaultThreadInstructionSelection(entry?.entryKind === "subagent" ? "subagent" : "thread").workflowIds ?? []);
+        if (!entry || entry.entryKind === "draft") return "unknown";
+        const agent = "agent" in entry.lifecycle ? entry.lifecycle.agent?.agentStatus : undefined;
+        return agent && agent !== entry.lifecycle.kind ? `${entry.lifecycle.kind} (agent: ${agent})` : entry.lifecycle.kind;
       },
-      readLedger: async (threadId: string) => await database.readWorkflowLedger(threadId),
-    };
-    const modeSwitch = new WorkbenchModeSwitchController(workflowPorts);
-    const proofOfWork = new WorkbenchProofOfWorkController({
-      ...workflowPorts,
+      setStatus: async ({ cwd, threadId }, status) => {
+        await managedThread("workbench/thread/status", { callerThreadId: threadId, cwd, status });
+      },
       readTurnItems: async (threadId, signal) => {
         const snapshot = await transcript.read({ threadId, turnLimit: 1 });
         signal.throwIfAborted();
@@ -424,8 +433,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeToolStats: async (body, signal) => await toolStats.execute(body, signal),
       executeFeedbackSubmit: async (body, signal) => await feedback.submit(body, signal),
-      executeProofOfWorkRequest: async (body, signal) => await proofOfWork.execute(body, signal),
-      executeModeSwitchRequest: async (body, signal) => await modeSwitch.execute(body, signal),
+      executeThreadStateRequest: async (body, signal) => await threadStateCommand.execute(body, signal),
+      readModeToolDenial: async (threadId, toolName) => await threadWorkflow.readToolDenial(threadId, toolName),
       executeTodoRequest: async (body, signal) => {
         const parsed = WorkbenchTodoRequestSchema.safeParse(body);
         if (!parsed.success) {
@@ -658,7 +667,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["daemonRequests", "database", "gitArc", "harnesses", "mcpServers", "messages", "network", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "vis"],
+  requires: ["daemonRequests", "database", "gitArc", "harnesses", "mcpServers", "messages", "network", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "threadWorkflow", "transcript", "threadIdentity", "vis"],
   safeAll: true,
   scope: "server:commands",
 });

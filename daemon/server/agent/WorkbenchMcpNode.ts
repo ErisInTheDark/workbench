@@ -18,6 +18,7 @@ import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSe
 
 const REQUIRED_REGISTRATIONS = [
   "agentCommand",
+  "threadWorkflow",
   "approvals",
   "toolRevision",
   "database",
@@ -78,6 +79,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       isWorkbenchRootCaller: caller => isSamePath(caller.cwd, context.legacyMigrationProjectRoot),
       readLocalCapabilities: () => settings.readLocalCapabilities(),
+      readModeToolDenial: async (threadId, toolName) => await build.get("threadWorkflow").readToolDenial(threadId, toolName),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
       virtualReposAvailable: () => repo.isAvailable(),
       daemonOrigin: context.localDaemonOrigin,

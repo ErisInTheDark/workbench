@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  collectWorkbenchInstructionModeGates,
+  collectWorkbenchInstructionModes,
   collectWorkbenchInstructionProofOfWork,
   filterWorkbenchInstructionContent,
   formatWorkbenchInstructionFilterWarning,
@@ -109,26 +109,24 @@ test("proof-of-work checklists warn on foreign items, nesting and selectors", ()
   assert.deepEqual(messages("<proof-of-work id=\"inner\">\n</proof-of-work>"), ["Proof-of-work checklists cannot nest"]);
 });
 
-test("mode gates render as one sentence and declare gates, while examples and malformed tags do not", () => {
+test("modes render as one agent sentence without their icon and declare modes, while examples and malformed tags do not", () => {
   const value = [
-    "<mode-gate mode=\"Brief\" checklists=\"plan quality\" since=\"Review\" />",
-    "<mode-gate mode=\"Review\" checklists=\"review\" since=\"Brief Decision\" />",
-    "<!-- <mode-gate mode=\"Ghost\" checklists=\"plan\" since=\"Inspect\" /> -->",
+    "<mode name=\"Brief\" icon=\"clipboard\" proofs=\"plan quality\" reset-on=\"Review\" deny=\"edit:claims\" />",
+    "<mode name=\"Review\" icon=\"flag\" proofs=\"review\" reset-on=\"Brief\" status=\"completed\" deny=\"shell edit:claims\" />",
+    "<!-- <mode name=\"Ghost\" proofs=\"plan\" /> -->",
     "```md",
-    "<mode-gate mode=\"Example\" checklists=\"plan\" since=\"Inspect\" />",
+    "<mode name=\"Example\" proofs=\"plan\" />",
     "```",
   ].join("\n");
   const result = filter(value);
   assert.deepEqual(result.warnings, []);
-  assert.deepEqual(result.output?.split("\n").slice(0, 2), [
-    "Entering Brief requires the plan and quality checklists filed since you last entered Review.",
-    "Entering Review requires the review checklist filed since you last entered Brief or Decision.",
+  const sentences = result.output?.split("\n").slice(0, 2) ?? [];
+  assert.equal(sentences.every(sentence => sentence.endsWith(".") && !sentence.includes("icon") && !sentence.includes("clipboard")), true);
+  assert.deepEqual(collectWorkbenchInstructionModes(value), [
+    { name: "Brief", icon: "clipboard", proofs: ["plan", "quality"], resetOn: ["Review"], status: null, deny: ["edit:claims"] },
+    { name: "Review", icon: "flag", proofs: ["review"], resetOn: ["Brief"], status: "completed", deny: ["shell", "edit:claims"] },
   ]);
-  assert.deepEqual(collectWorkbenchInstructionModeGates(value), [
-    { mode: "Brief", checklists: ["plan", "quality"], since: ["Review"] },
-    { mode: "Review", checklists: ["review"], since: ["Brief", "Decision"] },
-  ]);
-  assert.deepEqual(filter("<mode-gate mode=\"Brief\" checklists=\"Plan\" since=\"Review\" />").warnings.map(warning => warning.message), ["Malformed instruction selector"]);
+  assert.deepEqual(filter("<mode name=\"Brief\" proofs=\"Plan\" />").warnings.map(warning => warning.message), ["Malformed instruction selector"]);
 });
 
 test("invalid tool references stay visible and report their source", () => {

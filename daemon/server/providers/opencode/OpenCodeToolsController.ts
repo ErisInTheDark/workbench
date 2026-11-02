@@ -119,9 +119,9 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
     signal.throwIfAborted();
     return JSON.stringify(result.allowed ? { allowed: true } : {
       allowed: false,
-      reason: (result.uncoveredPaths.length
+      reason: (result.modeDenial ?? (result.uncoveredPaths.length
         ? `Unclaimed file changes: ${result.uncoveredPaths.join(", ")}. Claim every path before editing.`
-        : describePendingProposalDenial(result.pendingProposals)).slice(0, 1000),
+        : describePendingProposalDenial(result.pendingProposals))).slice(0, 1000),
     });
   }
 }

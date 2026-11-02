@@ -589,6 +589,11 @@ class FakeLocalGitArcController {
   }
 }
 
+/** Claim-coverage expectations here are about admission; `claimedPaths` has its own assertion. */
+function withoutClaimedPaths<Result extends { claimedPaths?: unknown }>({ claimedPaths: _claimed, ...result }: Result) {
+  return result;
+}
+
 function createNestedWorktreeProject(main: string): AgentEndpointProjectResolution {
   const lab = `${main}/.worktrees/lab`;
   const mainRoot = { id: "main", name: "main", root: main, rootPath: main };
@@ -743,9 +748,10 @@ test("active claims and Git ignore rules cover patch paths across workspace root
     async (rootPath) => rootPath,
   );
   const identity = { cwd: apiRoot, harness: "opencode" as const, threadId: "claim-thread" };
-  const check = async (paths: string[], threadId: string = identity.threadId) => (
+  const checkWithClaims = async (paths: string[], threadId: string = identity.threadId) => (
     await controller.checkActiveClaimPaths(project, identity.harness, threadId, paths)
   );
+  const check = async (paths: string[], threadId?: string) => withoutClaimedPaths(await checkWithClaims(paths, threadId));
   const plan = await controller.execute(project, {
     action: "plan",
     adoptPaths: [],
@@ -782,6 +788,7 @@ test("active claims and Git ignore rules cover patch paths across workspace root
   assert.deepEqual(await check(uncovered), { allowed: false, pendingProposals: [], uncoveredPaths: uncovered });
   const ignored = [path.join(apiRoot, "ignored", "generated.ts"), path.join(apiRoot, "untracked.log")];
   assert.deepEqual(await check([...covered, ...ignored]), admitted);
+  assert.deepEqual((await checkWithClaims([...covered, ...ignored])).claimedPaths, covered, "mode denials tell claimed files from gitignored ones");
   assert.deepEqual(await check([...ignored, trackedIgnored]), { allowed: false, pendingProposals: [], uncoveredPaths: [trackedIgnored] });
   assert.deepEqual(await check(ignored, "no-active-arc"), admitted);
   assert.deepEqual(await check(covered, "no-active-arc"), { allowed: false, pendingProposals: [], uncoveredPaths: covered });
@@ -796,7 +803,7 @@ test("active claims and Git ignore rules cover patch paths across workspace root
   await execFileAsync("git", ["init"], { cwd: nestedRoot });
   const nestedHolder = path.join(apiRoot, "ignored");
   assert.deepEqual(
-    await controller.checkActiveClaimPaths(createWorkspace(apiRoot, nestedRoot), identity.harness, "no-active-arc", [nestedHolder]),
+    withoutClaimedPaths(await controller.checkActiveClaimPaths(createWorkspace(apiRoot, nestedRoot), identity.harness, "no-active-arc", [nestedHolder])),
     { allowed: false, pendingProposals: [], uncoveredPaths: [nestedHolder] },
     "ignore rules never waive deleting a folder holding another root",
   );
@@ -1647,7 +1654,7 @@ test("nested worktree files follow the worktree's own ignore rules, not the cont
   await controller.execute(project, { cwd: main, harness: "codex", threadId: "thread-one", ...nestedClaims(["lab:src/lab.ts"]) });
   const allowed = [path.join(lab, "src", "lab.ts"), path.join(lab, "debug.log"), path.join(main, "scratch.tmp")];
   const uncovered = [path.join(lab, "src", "other.ts"), path.join(lab, "notes.tmp"), path.join(lab, "keep.log")];
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "thread-one", [...allowed, ...uncovered]), {
+  assert.deepEqual(withoutClaimedPaths(await controller.checkActiveClaimPaths(project, "codex", "thread-one", [...allowed, ...uncovered])), {
     allowed: false, pendingProposals: [], uncoveredPaths: uncovered,
   });
 });
@@ -1699,7 +1706,7 @@ test("machine roots claim existing files by absolute path, admit scratch edits, 
   assert.deepEqual(await machine.listWorktreeChangedPaths("HEAD", ["notes/config.txt", "repo/cache/data.txt"]), ["notes/config.txt", "repo/cache/data.txt"]);
 
   const other = path.join(drive, "notes", "other.txt");
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [config, path.join(daemonWorkspaceRoot, "tmp.txt"), other]), {
+  assert.deepEqual(withoutClaimedPaths(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [config, path.join(daemonWorkspaceRoot, "tmp.txt"), other])), {
     allowed: false, pendingProposals: [], uncoveredPaths: [other],
   });
   // Claimed folders become file claims, so deleting a machine folder is admitted by those files, inside nested repositories too.
@@ -1710,12 +1717,12 @@ test("machine roots claim existing files by absolute path, admit scratch edits, 
     action: "arcClaims", addPaths: [archive], adoptPaths: [], removePaths: [], roots: [], inherit: true, ...identity,
   });
   const cacheFolder = path.join(drive, "repo", "cache");
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [archive, cacheFolder]), {
+  assert.deepEqual(withoutClaimedPaths(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [archive, cacheFolder])), {
     allowed: true, pendingProposals: [], uncoveredPaths: [],
   });
   const stray = path.join(archive, "stray.txt");
   await writeFile(stray, "unclaimed\n", "utf8");
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [archive]), {
+  assert.deepEqual(withoutClaimedPaths(await controller.checkActiveClaimPaths(project, "codex", "machine-thread", [archive])), {
     allowed: false, pendingProposals: [], uncoveredPaths: [stray],
   });
   await rm(stray);

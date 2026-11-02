@@ -84,8 +84,8 @@ test("configured creation, resume and fork retain tool docs and workspace mechan
   await adapter.augment({ method: "thread/start", params: {}, workbenchPromptContext: {} }, "thread/start");
   const override = path.join(testWorkbenchLibraryRoot, "AGENTS.override.md");
   const selectors = {
-    "task-title": ["<docs tools=\"task_set\">", "</docs>"],
-    "task-status": ["<docs tools=\"task_completed\">", "</docs>"],
+    "thread-state": ["<docs tools=\"thread_state\">", "</docs>"],
+    "subagent-only": ["<docs tools=\"subagent_create\">", "</docs>"],
     "thread-git": ["<workspace:project>", "</workspace:project>"],
     "thread-recall": ["<docs tools=\"thread_recall\">", "</docs>"],
     "thread-refresh": ["<docs tools=\"thread_refresh\">", "</docs>"],
@@ -110,7 +110,7 @@ test("configured creation, resume and fork retain tool docs and workspace mechan
         assert.match(packet, /`tools\.mcp__wb__rg` and `tools\.mcp__wbex__git_arc_release`/u);
         assert.doesNotMatch(packet, /<tool id=/u);
         for (const mechanic of mechanics) {
-          assert.equal(packet.includes(`fixture ${mechanic}`), mechanic !== "task-title" || subagentName === null, `${method} ${subagentName} ${mechanic}`);
+          assert.equal(packet.includes(`fixture ${mechanic}`), mechanic !== "subagent-only" || subagentName === null, `${method} ${subagentName} ${mechanic}`);
         }
         assert.match(packet, /fixture matching model/u);
         assert.doesNotMatch(packet, /fixture other model/u);

@@ -100,6 +100,7 @@ export function createClaudeSessionHooks(options: {
           if (turn !== "ready") return deny(turn === "skipped" ? SKIPPED_AFTER_FAILURE_TEXT : BATCH_TURN_INTERRUPTION_TEXT);
           const result = await options.check([path.resolve(options.cwd, filePath)]);
           if (result.allowed) return {};
+          if (result.modeDenial) return deny(result.modeDenial);
           // Only claim denials carry the transcript's unclaimed-change presentation.
           if (!result.uncoveredPaths.length) return deny(describePendingProposalDenial(result.pendingProposals));
           options.onDenied(toolUseId ?? input.tool_use_id);

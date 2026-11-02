@@ -124,7 +124,7 @@ export default class OpenCodeCompanionToolsController {
   constructor(private readonly options: {
     isManagedSession(sessionID: string): Promise<boolean>;
     /** A wb tool call succeeded, whether called directly or nested in code mode. */
-    succeeded?(sessionID: string, name: string): void;
+    succeeded?(sessionID: string, name: string, input: unknown): void;
     resolveDaemonOrigin?: () => Promise<string>;
     connectTools?: (url: string) => Promise<CompanionToolClient>;
     fetch?: typeof fetch;
@@ -229,7 +229,7 @@ export default class OpenCodeCompanionToolsController {
       return [];
     }).join("\n");
     if (result.isError) throw new Error(content || "Workbench tool failed.");
-    this.options.succeeded?.(context.sessionID, name);
+    this.options.succeeded?.(context.sessionID, name, input);
     return { content, output: result.structuredContent ?? result };
   }
 

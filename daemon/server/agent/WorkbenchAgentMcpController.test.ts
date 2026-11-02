@@ -40,8 +40,6 @@ const EXPECTED_PARENT_ONLY_TOOLS = [
   "subagent_settle",
   "subagent_stop",
   "subagent_wait",
-  "task_get",
-  "task_set",
 ] as const;
 
 /** A prepared shell whose run is opaque to the MCP layer; the injected `executeShell` supplies its result. */
@@ -55,7 +53,7 @@ function preparedShell(cwd: string): WorkbenchPreparedShell {
   };
 }
 
-for (const name of ["task_get", "shell"]) {
+for (const name of ["thread_state", "shell"]) {
   test(`captures complete ${name} results before replying`, async () => {
     const order: string[] = [];
     const results: ProviderToolResult[] = [];
@@ -195,7 +193,7 @@ for (const phase of ["start", "finish", "operation"] as const) {
     const recorded: ProviderToolResult[] = [];
     const errors: string[] = [];
     const reference = { threadId: "thread", turnId: "turn", itemId: "item", sourceId: "child",
-      parentId: "parent", tool: "task_get", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
+      parentId: "parent", tool: "thread_state", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
     const unused = async (): Promise<never> => { throw new Error("unexpected tool"); };
     const tools: WorkbenchProviderTools = {
       caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
@@ -222,7 +220,7 @@ for (const phase of ["start", "finish", "operation"] as const) {
     const server = await startController(controller);
     const client = await connectClient(server.url);
     try {
-      const result = await client.callTool({ name: "task_get", arguments: {} });
+      const result = await client.callTool({ name: "thread_state", arguments: {} });
       assert.equal(result.isError, true);
       assert.equal(executions, phase === "start" ? 0 : 1);
       if (phase !== "start") {
@@ -582,7 +580,7 @@ for (const outcome of ["success", "tool error", "protocol error", "admission err
           ? { invalid: true }
           : {
             jsonrpc: "2.0", id, method: "tools/call",
-            params: { name: "task_get", arguments: {}, _meta: { threadId: "thread-1" } },
+            params: { name: "thread_state", arguments: {}, _meta: { threadId: "thread-1" } },
           };
       const status = await new Promise<number | undefined>((resolve, reject) => {
         const request = http.request(server.url, {
@@ -637,8 +635,8 @@ test("the explicit provider owns MCP metadata and supplies WB command identity",
   server.url.searchParams.set("provider", "another-provider");
   const client = await connectClient(server.url);
   try {
-    await client.callTool({ name: "task_get", arguments: {}, _meta: { session: "provider-owned" } });
-    const definition = listWorkbenchAgentCommands([], "agent").find(definition => definition.words.join("_") === "task_get")!;
+    await client.callTool({ name: "thread_state", arguments: {}, _meta: { session: "provider-owned" } });
+    const definition = listWorkbenchAgentCommands([], "agent").find(definition => definition.words.join("_") === "thread_state")!;
     assert.deepEqual(executed, [await definition.buildRequestFromJson({}, {
       callerHarness: "another-provider", callerThreadId: "wb-caller", cwd: "/trusted",
       workbenchOrigin: "http://127.0.0.1:4500", workbenchRoot: false,
@@ -758,11 +756,11 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(instructionTools.find(({ id }) => id === "git_arc_edit_start")?.deferred, true);
     assert.equal(instructionTools.find(({ id }) => id === "rg")?.codeModeEligible, true);
     assert.equal(instructionTools.find(({ id }) => id === "git_arc_release")?.codeModeEligible, false);
-    assert.equal(instructionTools.find(({ id }) => id === "proof_of_work")?.codeModeEligible, false);
-    assert.ok(inventory.tools.find(({ name }) => name === "proof_of_work"));
-    const proof = await client.callTool({ name: "proof_of_work", arguments: { proofs: { "plan.result": "checked" } }, _meta: { threadId: "native-thread" } });
+    assert.equal(instructionTools.find(({ id }) => id === "thread_state")?.codeModeEligible, false);
+    assert.ok(inventory.tools.find(({ name }) => name === "thread_state"));
+    const proof = await client.callTool({ name: "thread_state", arguments: { proofs: { "plan.result": "checked" } }, _meta: { threadId: "native-thread" } });
     assert.notEqual(proof.isError, true);
-    assert.deepEqual((executed.at(-1)?.body as { proof?: unknown } | undefined)?.proof, { proofs: { "plan.result": "checked" } });
+    assert.deepEqual((executed.at(-1)?.body as { state?: unknown } | undefined)?.state, { proofs: { "plan.result": "checked" } });
     assert.equal(instructionTools.some(({ id }) => id === "not_a_tool"), false);
     assert.equal(inventory.tools.some(({ name }) => name.startsWith("transcript_")), false);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name.startsWith("transcript_")), false);
@@ -793,17 +791,10 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const refresh = inventory.tools.find(({ name }) => name === "thread_refresh");
     assert.ok(refresh);
     assert.deepEqual(refresh.inputSchema.properties, {});
-    const title = inventory.tools.find(({ name }) => name === "task_set");
-    assert.ok(title);
-    assert.deepEqual(Object.keys(title.inputSchema.properties ?? {}).sort(), ["currentTitle", "title"]);
-    assert.equal(title.inputSchema.required?.includes("title") ?? false, true);
-    assert.equal(title.inputSchema.required?.includes("currentTitle") ?? false, false);
-    for (const name of ["task_completed", "task_blocked"]) {
-      const status = inventory.tools.find((tool) => tool.name === name);
-      assert.ok(status);
-      assert.deepEqual(status.inputSchema.properties, {});
-    }
-    assert.equal(inventory.tools.some(({ name }) => name === "thread_title" || name === "thread_title_get" || name === "thread_status"), false);
+    const state = inventory.tools.find(({ name }) => name === "thread_state");
+    assert.ok(state);
+    assert.deepEqual(state.inputSchema.required ?? [], [], "a call with no fields reads the state");
+    assert.equal(inventory.tools.some(({ name }) => /^task_|^mode_set$|^proof_of_work$/u.test(name)), false);
     const ripgrep = inventory.tools.find(({ name }) => name === "rg");
     assert.ok(ripgrep);
     assert.deepEqual(Object.keys(ripgrep.inputSchema.properties ?? {}), ["args"]);
@@ -964,57 +955,18 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       responseKind: "native",
     });
 
-    const result = await client.callTool({
-      _meta: { threadId: "thread-1" },
-      arguments: {},
-      name: "task_get",
-    });
+    const change = { currentTitle: "Typed Workbench", title: "Preserve overarching titles", status: "blocked" as const };
+    const result = await client.callTool({ _meta: { threadId: "thread-1" }, arguments: change, name: "thread_state" });
     assert.equal(result.isError, false);
-    assert.match(responseText(result), /Task title: Typed Workbench/u);
     assert.deepEqual(codexRequests.at(-1), {
       id: 0,
       method: "thread/read",
       params: { includeTurns: false, threadId: "thread-1" },
     });
-    assert.deepEqual(executed.at(-1), {
-      body: { action: "get", callerThreadId: "thread-1", cwd: "C:/authoritative" },
-      method: "POST",
-      path: "/api/thread-title",
-      responseKind: "thread-title-get",
-    });
-    const titleSet = await client.callTool({
-      _meta: { threadId: "thread-1" },
-      arguments: { currentTitle: "Typed Workbench", title: "Preserve overarching titles" },
-      name: "task_set",
-    });
-    assert.equal(titleSet.isError, false);
-    assert.deepEqual(executed.at(-1), {
-      body: {
-        action: "set",
-        callerThreadId: "thread-1",
-        currentTitle: "Typed Workbench",
-        cwd: "C:/authoritative",
-        title: "Preserve overarching titles",
-      },
-      method: "POST",
-      path: "/api/thread-title",
-      responseKind: "thread-title",
-    });
-    for (const status of ["completed", "blocked"] as const) {
-      const statusResult = await client.callTool({
-        _meta: { threadId: "thread-1" },
-        arguments: {},
-        name: `task_${status}`,
-      });
-      assert.equal(statusResult.isError, false);
-      assert.deepEqual(executed.at(-1), {
-        body: { callerThreadId: "thread-1", cwd: "C:/authoritative", status },
-        method: "POST",
-        path: "/api/thread-status",
-        responseKind: "thread-status",
-      });
-    }
-    assert.ok(server.getReleasedRequestCount() >= 3);
+    const dispatched = executed.at(-1) as { body?: { cwd?: unknown; state?: unknown; threadId?: unknown }; path?: unknown } | undefined;
+    assert.equal(dispatched?.path, "/internal/thread-state");
+    assert.deepEqual([dispatched?.body?.state, dispatched?.body?.cwd], [change, "C:/authoritative"]);
+    assert.ok(server.getReleasedRequestCount() >= 1);
   } finally {
     await projectClient.close();
     await capableClient.close();
@@ -1073,8 +1025,6 @@ test("stale parent-only tools cannot dispatch for a canonical child caller", asy
       subagent_settle: { threadIds: ["child"] },
       subagent_stop: { threadIds: ["child"] },
       subagent_wait: { threadIds: ["child"] },
-      task_get: {},
-      task_set: { title: "change title" },
     };
     for (const name of EXPECTED_PARENT_ONLY_TOOLS) {
       const result = await client.callTool({
@@ -1169,7 +1119,7 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
   const server = await startController(controller);
   const client = await connectClient(server.url);
   try {
-    const missingIdentity = await client.callTool({ arguments: {}, name: "task_get" });
+    const missingIdentity = await client.callTool({ arguments: {}, name: "thread_state" });
     assert.equal(missingIdentity.isError, true);
     assert.match(responseText(missingIdentity), /trusted MCP thread identity/u);
     assert.equal(codexReadCount, 0);
@@ -1183,7 +1133,7 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
     const sanitized = await client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
-      name: "task_get",
+      name: "thread_state",
     });
     assert.equal(sanitized.isError, true);
     assert.doesNotMatch(responseText(sanitized), /super-secret|Users/u);
@@ -1210,7 +1160,7 @@ test("isolates duplicate protocol IDs and cancellation by configured MCP client"
       },
     },
     executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
-      const callerThreadId = String(request.body?.callerThreadId ?? "");
+      const callerThreadId = String(request.body?.threadId ?? "");
       executions.set(callerThreadId, { resolve, signal });
       if (executions.size === 2) bothStarted.resolve();
       signal.addEventListener("abort", () => {
@@ -1234,12 +1184,12 @@ test("isolates duplicate protocol IDs and cancellation by configured MCP client"
     const firstCall = firstClient.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
-      name: "task_get",
+      name: "thread_state",
     }, undefined, { signal: firstAbort.signal });
     const secondCall = secondClient.callTool({
       _meta: { threadId: "thread-2" },
       arguments: {},
-      name: "task_get",
+      name: "thread_state",
     });
     await bothStarted.promise;
     assert.equal(executions.get("thread-1")?.signal.aborted, false);
@@ -1436,7 +1386,7 @@ test("keeps every detached command alive with request-owned progress until it fi
     const ordinary = client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
-      name: "task_get",
+      name: "thread_state",
     }, undefined, {
       onprogress: update => {
         ordinaryProgress.push(update.progress);
@@ -1450,7 +1400,7 @@ test("keeps every detached command alive with request-owned progress until it fi
     assert.equal(await progressed.promise, 1);
     assert.equal(await ordinaryProgressed.promise, 1);
 
-    executions.get("thread-title-get")?.(Response.json({ title: "done" }));
+    executions.get("native")?.(Response.json({ title: "done" }));
     executions.get("json")?.(Response.json({ answers: { choice: { answers: ["one"] } } }));
     assert.equal((await ordinary).isError, false);
     assert.equal((await questionnaire).isError, false);
@@ -1703,16 +1653,16 @@ test("serial shells and mutating wb tools wait their batch turn before they are 
   assert.deepEqual(started, ["shell", "shell", "shell"], "the skipped shell still shows as a failed row");
 
   const titleCall = (extra: object = {}) => controller.call(scope, {
-    arguments: { title: "renamed" }, batchTurns: true, meta: { key: "title" }, name: "task_set", requestId: "title",
+    arguments: { title: "renamed" }, batchTurns: true, meta: { key: "title" }, name: "thread_state", requestId: "title",
     signal: new AbortController().signal, ...extra,
   });
-  assert.deepEqual(await titleCall(), { kind: "batchTurn", key: "title", toolName: "task_set" });
+  assert.deepEqual(await titleCall(), { kind: "batchTurn", key: "title", toolName: "thread_state" });
   const title = await titleCall({ batchTurn: "skipped" });
   assert.ok(title.kind === "result");
   assert.match(responseText(title.result), /^Skipped: an earlier call in this batch failed/u);
   assert.deepEqual(executed, [], "a mutating wb tool after a failure never runs");
   const readOnly = await controller.call(scope, {
-    arguments: {}, batchTurns: true, meta: { key: "get" }, name: "task_get", requestId: "get", signal: new AbortController().signal,
+    arguments: {}, batchTurns: true, meta: { key: "get" }, name: "thread_recall", requestId: "get", signal: new AbortController().signal,
   });
   assert.equal(readOnly.kind, "result", "read-only wb tools never wait");
 });
@@ -1767,8 +1717,8 @@ test("thread steer interruption ends declared waits but preserves questionnaires
       return workbenchThreadId;
     },
     executeCommand: async (request, signal) => await new Promise<Response>((resolve) => {
-      assert.equal(request.body?.callerThreadId, "97d84a45-0d43-4d20-a996-e6b8bd8ad149");
-      executions.set(request.responseKind, { resolve, signal });
+      assert.equal(request.body?.callerThreadId ?? request.body?.threadId, "97d84a45-0d43-4d20-a996-e6b8bd8ad149");
+      executions.set(request.path === "/internal/thread-state" ? "state" : request.responseKind, { resolve, signal });
       if (executions.size === 3) allStarted.resolve();
       signal.addEventListener("abort", () => resolve(new Response(
         "This expected steer interruption must not reach MCP output.",
@@ -1792,7 +1742,7 @@ test("thread steer interruption ends declared waits but preserves questionnaires
     const titleCall = client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
-      name: "task_get",
+      name: "thread_state",
     });
     const questionnaireCall = client.callTool({
       _meta: { threadId: "thread-1" },
@@ -1810,10 +1760,10 @@ test("thread steer interruption ends declared waits but preserves questionnaires
     assert.equal(subagentResult.isError, false);
     assert.match(responseText(subagentResult), /new message arrived/u);
     assert.deepEqual(subagentResult.structuredContent, { kind: "interruptedBySteer", version: 1 });
-    assert.equal(executions.get("thread-title-get")?.signal.aborted, false);
+    assert.equal(executions.get("state")?.signal.aborted, false);
     assert.equal(executions.get("json")?.signal.aborted, false);
 
-    executions.get("thread-title-get")?.resolve(Response.json({ title: "still running" }));
+    executions.get("state")?.resolve(new Response("still running"));
     executions.get("json")?.resolve(Response.json({ answers: { details: { answers: ["still waiting"] } } }));
     const titleResult = await titleCall;
     const questionnaireResult = await questionnaireCall;
@@ -1925,9 +1875,9 @@ test("a timed wait ends with a non-error timed-out result, keeps timeoutMs out o
   try {
     assert.ok((await listedProperties("subagent_wait")).includes("timeoutMs"));
     assert.ok((await listedProperties("subagent_queue")).includes("timeoutMs"));
-    assert.equal((await listedProperties("task_get")).includes("timeoutMs"), false);
+    assert.equal((await listedProperties("thread_state")).includes("timeoutMs"), false);
     assert.equal((await listedProperties("request_user_input")).includes("timeoutMs"), false);
-    const rejected = await callTool("task_get", { timeoutMs: 1_000 });
+    const rejected = await callTool("thread_state", { timeoutMs: 1_000 });
     assert.ok(rejected.kind === "result" && rejected.result.isError);
 
     const timed = await callTool("subagent_wait", { names: ["momo"], timeoutMs: 300_000 });
@@ -2004,7 +1954,7 @@ test("cwd-sensitive commands run from an MCP workdir as the CLI would after cd; 
   const parent = path.resolve(process.cwd(), "..");
   try {
     assert.ok((await listedProperties("skill")).includes("workdir"));
-    assert.equal((await listedProperties("task_get")).includes("workdir"), false);
+    assert.equal((await listedProperties("thread_state")).includes("workdir"), false);
 
     const direct = await callTool("skill", { name: "react", workdir: ".." });
     assert.ok(direct.kind === "result" && !direct.result.isError, direct.kind === "result" ? responseText(direct.result) : direct.kind);
@@ -2021,7 +1971,7 @@ test("cwd-sensitive commands run from an MCP workdir as the CLI would after cd; 
     assert.equal(logged.length, 1);
     assert.equal(executed.length, 2, "a missing workdir never reaches the command");
 
-    const unsupported = await callTool("task_get", { workdir: ".." });
+    const unsupported = await callTool("thread_state", { workdir: ".." });
     assert.ok(unsupported.kind === "result" && unsupported.result.isError);
     assert.equal(executed.length, 2);
   } finally {

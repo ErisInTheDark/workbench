@@ -50,8 +50,9 @@ interface WorkbenchAgentDirectPort {
   executeToolStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFeedbackSubmit?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeTodoRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
-  executeProofOfWorkRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
-  executeModeSwitchRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeThreadStateRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  /** Why the caller's current workflow mode denies a tool, or null. */
+  readModeToolDenial?: (threadId: string, toolName: string) => Promise<string | null>;
   executeMcpRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeVisRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Hands piped project-command output to the vis run waiting on `runId`; false when no run waits. */
@@ -281,6 +282,7 @@ export default class WorkbenchAgentCommandController {
         subagent: caller?.subagent ?? false,
         virtualRepos: this.direct.virtualReposAvailable?.() ?? false,
         ...(this.direct.readLocalCapabilities ? { readCapabilities: this.direct.readLocalCapabilities } : {}),
+        ...(this.direct.readModeToolDenial ? { readModeToolDenial: this.direct.readModeToolDenial } : {}),
         workbenchOrigin,
       });
       if (parsed.kind === "help") {
@@ -411,13 +413,9 @@ export default class WorkbenchAgentCommandController {
       if (!this.direct.executeNetworkRequest) throw new Error("Agent networking is not configured.");
       return await this.direct.executeNetworkRequest(request.body, signal);
     }
-    if (request.path === "/internal/proof-of-work" && request.body) {
-      if (!this.direct.executeProofOfWorkRequest) throw new Error("Proof of work is not configured.");
-      return await this.direct.executeProofOfWorkRequest(request.body, signal);
-    }
-    if (request.path === "/internal/mode-set" && request.body) {
-      if (!this.direct.executeModeSwitchRequest) throw new Error("Mode switching is not configured.");
-      return await this.direct.executeModeSwitchRequest(request.body, signal);
+    if (request.path === "/internal/thread-state" && request.body) {
+      if (!this.direct.executeThreadStateRequest) throw new Error("Thread state is not configured.");
+      return await this.direct.executeThreadStateRequest(request.body, signal);
     }
     if (request.path === "/api/toc" && request.body) {
       return await this.markdownToc.execute(request.body, signal);

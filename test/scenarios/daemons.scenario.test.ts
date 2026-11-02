@@ -14,7 +14,7 @@ import { WorkspaceThreadActionResultSchema } from "../../shared/workbench/worksp
 import IsolatedWorkbench from "./IsolatedWorkbench";
 import FakeThreadModelServer, { type FakeThreadAction } from "./FakeThreadModelServer";
 import ProviderThreadJourney from "./ProviderThreadJourney";
-import { fakeCodexTool } from "./provider-boundary-journey";
+import { fakeCodexTool, SCENARIO_COMPLETION } from "./provider-boundary-journey";
 
 const STALL_MS = 120_000;
 
@@ -41,7 +41,7 @@ async function codexProfile(): Promise<WorkbenchComposerProfile> {
 function turn({ incoming = [], steps = [], text }: {
   incoming?: readonly string[]; steps?: readonly FakeThreadAction[]; text: string;
 }): FakeThreadAction[] {
-  const [first, ...rest] = [...steps, { tool: { nameSuffix: "task_completed", arguments: {} } }, { text }] as FakeThreadAction[];
+  const [first, ...rest] = [...steps, { tool: { nameSuffix: "thread_state", arguments: SCENARIO_COMPLETION } }, { text }] as FakeThreadAction[];
   return [incoming.length ? { ...first!, requiredPromptText: incoming } : first!, ...rest];
 }
 

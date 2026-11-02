@@ -3,6 +3,7 @@
  * - ProviderBoundaryToolNames: provider-native names for shared Workbench capabilities.
  * - PROVIDER_SEARCH_PROOF/PROVIDER_SEARCH_PROOF_FILE: isolated project fixture read through WB search.
  * - PROVIDER_SHELL_PROOF_FILE: isolated project file written through the provider shell boundary.
+ * - SCENARIO_COMPLETION: thread_state arguments that complete a default-workflow task.
  * - fakeCodexTool: script a Workbench tool through Codex code mode.
  * - fakeOpenCodeTool: script a Workbench tool through OpenCode's execute tool.
  * - createProviderBoundaryJourney: build one ordered behavioural journey for every real provider.
@@ -14,6 +15,14 @@ import type { FakeThreadAction } from "./FakeThreadModelServer";
 export const PROVIDER_SEARCH_PROOF = "workbench-provider-search-proof";
 export const PROVIDER_SEARCH_PROOF_FILE = ".workbench-provider-search-proof";
 export const PROVIDER_SHELL_PROOF_FILE = ".workbench-provider-shell-proof";
+/** The default workflow completes only alongside Review, which needs its checklist resolved. */
+export const SCENARIO_COMPLETION = {
+  notApplicable: [
+    "review.request_coverage", "review.actual_behavior", "review.preserved_behavior", "review.validation_strength", "review.completion_accuracy",
+  ],
+  mode: "Review",
+  status: "completed",
+};
 
 export interface ProviderBoundaryToolNames {
   search: string;
@@ -72,11 +81,11 @@ export function createProviderBoundaryJourney(
   ].join(" ");
   const call = (nameSuffix: string, args: Record<string, unknown>, text?: string): FakeThreadAction =>
     provider === "codex"
-      ? nameSuffix === "task_completed"
+      ? nameSuffix === "thread_state"
         ? { ...(text === undefined ? {} : { text }), tool: { nameSuffix, arguments: args } }
         : fakeCodexTool(nameSuffix, args, text)
       : provider === "opencode"
-        ? nameSuffix === "task_completed" ? fakeOpenCodeDirectTool(nameSuffix, args, text) : fakeOpenCodeTool(nameSuffix, args, text)
+        ? nameSuffix === "thread_state" ? fakeOpenCodeDirectTool(nameSuffix, args, text) : fakeOpenCodeTool(nameSuffix, args, text)
         : { ...(text === undefined ? {} : { text }), tool: { nameSuffix, arguments: args } };
   return {
     ask,
@@ -96,13 +105,15 @@ export function createProviderBoundaryJourney(
           outside_sandbox: true,
         })]),
         // Claude's plain text earns a hint after its tool batch and at a prose stop, which continues the turn once.
-        provider === "claude" ? { ...call("task_get", {}), text: "Checking the task.", bare: true } : call("task_get", {}),
+        provider === "claude" ? { ...call("thread_state", {}), text: "Checking the task.", bare: true } : call("thread_state", {}),
         {
           ...call("rg", { args: ["-n", PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE] }),
           ...(provider === "claude" ? { requiredPromptText: [CLAUDE_COMMENTARY_HINT] } : {}),
         },
         call("shell", { command: `node -e "require('fs').writeFileSync('${shellProofFile}','${finalProof}')"` }),
-        call("task_completed", {}, provider !== "codex" ? `${finalProof} ${prefixProof} ${title}` : undefined),
+        call("thread_state", SCENARIO_COMPLETION, provider !== "codex" ? `${finalProof} ${prefixProof} ${title}` : undefined),
+        // Review denies shell; leaving it keeps the completed status for the turn's end.
+        call("thread_state", { mode: "Inspect" }),
         call("shell", { command: holdCommand(completionProof) }),
         ...(provider === "claude" ? [
           { text: "Done.", bare: true },
@@ -150,9 +161,10 @@ export function createProviderBoundaryJourney(
         shellProofFile
       }','${finalProof}')"\`.`,
       `4. Quote "${finalProof}", "${prefixProof}", and the task title together in commentary.`,
-      `5. Call ${tools.taskComplete}. This completion is authorised.`,
-      `6. ${hold(completionProof)}`,
-      "7. End with an empty final response.",
+      `5. Call ${tools.taskComplete} with exactly ${JSON.stringify(SCENARIO_COMPLETION)}. This completion is authorised.`,
+      `6. Call ${tools.taskComplete} with exactly ${JSON.stringify({ mode: "Inspect" })}.`,
+      `7. ${hold(completionProof)}`,
+      "8. End with an empty final response.",
     ].join("\n"),
   };
 }

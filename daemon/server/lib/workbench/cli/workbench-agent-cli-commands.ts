@@ -195,11 +195,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "mcp", usage: "wb mcp <tools|request|call> [options]", words: ["mcp"],
   },
   {
-    commandOrder: ["task set", "task get", "task completed", "task blocked"],
-    key: "task", usage: "wb task <command> [options]", words: ["task"],
-  },
-  {
-    commandOrder: ["thread recall", "thread recall search", "thread summary"],
+    commandOrder: ["thread state", "thread recall", "thread recall search", "thread summary"],
     key: "thread", usage: "wb thread <command> [options]", words: ["thread"],
   },
   {
@@ -364,9 +360,12 @@ export async function parseWorkbenchAgentCliCommand(
     allowStoreRead = false,
     managedScript = false,
     readCapabilities = async () => DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS,
+    readModeToolDenial = async () => null,
   }: {
     /** Live local capability settings, read only when help or the matched command depends on them. */
     readCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>;
+    /** Why the managed caller's current workflow mode denies a tool, or null. */
+    readModeToolDenial?: (threadId: string, toolName: string) => Promise<string | null>;
     /** Project tooling run by an agent declared itself with `THIS_IS_A_MANAGED_SCRIPT=1`; scripts cannot call MCP. */
     managedScript?: boolean;
     callerHarness?: string;
@@ -414,6 +413,8 @@ export async function parseWorkbenchAgentCliCommand(
   if (refusal) {
     return { error: describeWorkbenchCommandRefusal(refusal, `wb ${matched.definition.words.join(" ")}`, callerHarness), kind: "error" };
   }
+  const modeDenial = callerThreadId ? await readModeToolDenial(callerThreadId, getWorkbenchAgentCommandToolName(matched.definition)) : null;
+  if (modeDenial) return { error: modeDenial, kind: "error" };
   if (
     callerThreadId !== null && !managedScript
     && !isWorkbenchAgentCliOpenTo(callerHarness, { onMcp: isWorkbenchAgentCommandOnMcp(matched.definition) })

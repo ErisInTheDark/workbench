@@ -1,9 +1,7 @@
 /*
  * Exports:
  * - normalizeThreadTitle: trim and normalize candidate thread titles into a short UI-safe value.
- * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links.
- * - buildThreadTitleBootstrapInstructions: create managed-task CLI instructions for setting and reading its title through wb.
- */
+ * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links. */
 import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "./workbench/thread/workbench-file-link-instructions";
 
 const MAX_THREAD_TITLE_LENGTH = 80;
@@ -39,14 +37,4 @@ export function normalizeThreadTitle(value: string | null | undefined) {
   return truncateText(normalized, MAX_THREAD_TITLE_LENGTH);
 }
 
-export function buildThreadTitleBootstrapInstructions() {
-  return `
-## Workbench Task Title CLI
-
-\`wb task set --title "<short title>" [--current-title "<exact current title>"]\`
-
-\`wb task get\`
-
-`.trimStart();
-}
 

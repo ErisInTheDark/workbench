@@ -11,6 +11,7 @@ import { memo } from "react";
 
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
+import { readThreadStateCall } from "workbench-shared/workbench/thread/workflow-modes";
 import { useProject } from "../../use-projects";
 import { useTranscript } from "../../use-transcript";
 import ThreadActivityRun, { ThreadActivitySteps, type ThreadActivityRunRenderers } from "../ThreadActivityRun";
@@ -239,7 +240,13 @@ function ThreadRenderableBlockViewComponent ({
     case "proofOfWork":
       return <ThreadProofOfWorkItem items={[...block.earlier, ...block.items]} />;
     case "modeSwitch":
-      return <ThreadModeDivider mode={block.mode} />;
+      return (
+        <ThreadModeDivider
+          mode={block.mode}
+          proofs={[...block.earlier, ...block.items]}
+          title={readThreadStateCall(block.items[0])?.state.title ?? null}
+        />
+      );
     case "activityRun":
       return <ThreadActivityRunBlock animateEntries={animateEntries} block={block} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} />;
     case "cardHistory":

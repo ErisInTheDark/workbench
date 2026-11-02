@@ -24,6 +24,7 @@ import type {
 } from "../../../types.ts";
 import { FilePayloadSchema } from "../../project/project-file.ts";
 import { ProofOfWorkChecklistSchema, type ProofOfWorkChecklist } from "../../thread/proof-of-work.ts";
+import { WorkflowModeSchema, type WorkflowMode } from "../../thread/workflow-modes.ts";
 import {
   ProjectCreateResultSchema, ProjectFolderListSchema,
   type ProjectCreateRequest, type ProjectCreateResult, type ProjectFolderList, type ProjectFolderListRequest,
@@ -137,5 +138,8 @@ export const projectDaemonRequests = {
   }),
   "proof-of-work/read": defineDaemonRequest<{ projectId: string | null }, { data: ProofOfWorkChecklist[] }>()({
     route: "folder", result: z.object({ data: z.array(ProofOfWorkChecklistSchema) }).strict(),
+  }),
+  "workflow-modes/read": defineDaemonRequest<{ projectId: string | null }, { data: WorkflowMode[] }>()({
+    route: "folder", result: z.object({ data: z.array(WorkflowModeSchema) }).strict(),
   }),
 };

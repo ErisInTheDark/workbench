@@ -226,4 +226,7 @@ export const projectRequestHandlers = defineDaemonRequestHandlers({
   "proof-of-work/read": async (params, { owners }) => await owners.agents.readProofOfWorkChecklists(
     typeof params.projectId === "string" ? params.projectId : null,
   ),
+  "workflow-modes/read": async (params, { owners }) => await owners.agents.readWorkflowModes(
+    typeof params.projectId === "string" ? params.projectId : null,
+  ),
 });

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - ProofIdSchema/ProofFamilySchema: validate `family.item` proof ids and checklist family ids.
+ * - ProofOfWorkBuckets: the answered, not-applicable and deferred fields every filing tool shares.
  * - ProofOfWorkSchema/ProofOfWork: validate one submission of answered, not-applicable and deferred ids.
  * - ProofOfWorkChecklistSchema/ProofOfWorkChecklist: one instruction-declared checklist and its items.
  * - readProofOfWorkSubmission: the submission a successful Workbench proof-of-work tool call filed, or null.
@@ -18,11 +19,13 @@ import type { ThreadItem } from "./workbench-thread-items.ts";
 export const ProofFamilySchema = z.string().regex(/^[a-z][a-z0-9_]*$/u);
 export const ProofIdSchema = z.string().regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/u);
 
-export const ProofOfWorkSchema = z.object({
+export const ProofOfWorkBuckets = {
   proofs: z.record(ProofIdSchema, z.string().refine(value => value.trim().length > 0, "Answers must not be blank.")).optional(),
   notApplicable: z.array(ProofIdSchema).optional(),
   defer: z.array(ProofIdSchema).optional(),
-}).strict().superRefine((value, context) => {
+};
+
+export const ProofOfWorkSchema = z.object(ProofOfWorkBuckets).strict().superRefine((value, context) => {
   const buckets = [Object.keys(value.proofs ?? {}), [...new Set(value.notApplicable)], [...new Set(value.defer)]];
   const ids = buckets.flat();
   if (!ids.length) context.addIssue({ code: "custom", message: "File at least one proof id." });

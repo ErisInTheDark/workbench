@@ -192,15 +192,13 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
       category: "waste", channel: "wb", report: "diff printed lockfile churn", title: "Lockfile diff noise",
     };
     case "request_user_input": return { questions: [{ header: "details", id: "details", options: [], question: "What should change?" }] };
-    case "task_set": return { title: "Render typed wb tools" };
+    case "thread_state": return { title: "Render typed wb tools" };
     case "vis_start":
     case "vis_end":
     case "vis_read":
     case "vis_snapshot":
     case "vis_screenshot": return { path: "mockups/chart.html" };
     case "vis_test": return { markup: '<Card content="hello" />' };
-    case "task_completed":
-    case "task_blocked": return {};
     case "message_wait":
     case "subagent_wait":
     case "subagent_stop":
@@ -445,7 +443,7 @@ test("simple typed wb MCP calls share argument-sensitive CLI presentations", () 
     ["wb tokens project", "tokens_project", {}],
     ["wb tokens skill react", "tokens_skill", { name: "react" }],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
-    ["wb task get", "task_get", {}],
+    ["wb thread state", "thread_state", {}],
     ["wb subagent list", "subagent_list", {}],
     ['wb browse run --thread thread-one --session rendering --summary "Check page" --command "snapshot --compact"', "browse_run", { commands: ["snapshot --compact"], session: "rendering", summary: "Check page" }],
   ] satisfies Array<[string, string, JsonValue]>;
@@ -469,7 +467,7 @@ test("simple typed wb MCP calls share argument-sensitive CLI presentations", () 
 test("every valid simple typed wb MCP route emphasizes its important target", () => {
   const cases = [
     ["rg", { args: ["-n", "needle", "webapp"] }, ["plain", "pattern", "plain", "path"]],
-    ["task_get", {}, ["plain", "primary"]],
+    ["thread_state", {}, ["plain", "primary"]],
     ["thread_refresh", {}, ["plain", "primary"]],
     ["git_add", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_unstage", { paths: ["src/a.ts"] }, ["plain", "primary"]],
@@ -529,8 +527,8 @@ test("reload help remains a read-only command instead of rendering reload activi
 
 test("specialized typed wb MCP calls share CLI claims without duplicate summaries", () => {
   const cases = [
-    ["wb task blocked", "task_blocked", {}],
-    ['wb task set --title "Render typed wb tools"', "task_set", { title: "Render typed wb tools" }],
+    ["wb thread state --status blocked", "thread_state", { status: "blocked" }],
+    ['wb thread state --title "Render typed wb tools"', "thread_state", { title: "Render typed wb tools" }],
     ["wb subagent wait --name Lumi --name Nova", "subagent_wait", { names: ["Lumi", "Nova"] }],
     ['wb message agent --thread review-target --message "progress"', "message_agent", { message: "progress", threadId: "review-target" }],
     ["wb git arc wait", "git_arc_wait", {}],
@@ -710,7 +708,7 @@ test("failed Recall MCP calls use the generic error renderer", () => {
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), true);
-  const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wbex", tool: "task_blocked" });
+  const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { status: "blocked" }, server: "wbex", tool: "thread_state" });
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), true);
 });
 

@@ -311,7 +311,7 @@ export default class WorkbenchWorkspaceGitArcController {
       const held = admittedPaths.filter((candidate) => scopes.overlaps(comparable(candidate)));
       return held.length ? [{ paths: held, proposalId }] : [];
     });
-    return { allowed: !uncoveredPaths.length && !pendingProposals.length, pendingProposals, uncoveredPaths };
+    return { allowed: !uncoveredPaths.length && !pendingProposals.length, claimedPaths: admittedPaths, pendingProposals, uncoveredPaths };
   }
 
   async findPlanClaimCollisions(

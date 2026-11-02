@@ -358,7 +358,7 @@ test("unsettled threads keep old results from their latest meaningful turn onwar
       userMessage("incoming", createWorkbenchAgentMessageText({ message: "done", senderName: "Child", senderThreadId: "child" })),
       { type: "reasoning", id: "thinking", summary: [], content: ["nothing to do"] },
       {
-        type: "mcpToolCall", id: "complete", server: "wb", tool: "task_completed", arguments: {},
+        type: "mcpToolCall", id: "complete", server: "wb", tool: "thread_state", arguments: { mode: "Review", status: "completed" },
         status: "completed", result: { content: [{ type: "text", text: "ok" }], structuredContent: null, _meta: null },
         error: null, durationMs: 1, appContext: null, pluginId: null, readOnlyHint: false,
       },

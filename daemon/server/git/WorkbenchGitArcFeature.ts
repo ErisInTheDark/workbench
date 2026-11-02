@@ -75,6 +75,8 @@ const UNSTASH_CONFLICT_CONTEXT = "Git arc unstash left editable conflict markers
 
 export interface WorkbenchGitArcFeatureOptions {
   identities: WorkbenchThreadIdentityController;
+  /** Edits the caller's workflow mode denies, checked after claims so gitignored paths are told apart. */
+  workflow?: Pick<import("../thread/WorkbenchThreadWorkflowReader").default, "readEditDenial">;
   proposalDiffStore?: GitArcProposalDiffStore;
   legacyDiffStore?: Pick<import("../database/WorkbenchDatabaseController").default, "readLegacyDiffArtifact">;
   /** Accepted proposals already in permanent thread history; lifecycle reads stop publishing them. */
@@ -390,7 +392,9 @@ export default class WorkbenchGitArcFeature {
   async checkActiveClaimPaths(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId, paths: readonly string[]) {
     const project = await this.resolveProject(cwd, threadId);
     const owner = await this.gitThreadIdentity(project, harness, threadId);
-    return await this.workspaceController.checkActiveClaimPaths(project, owner.harness, owner.threadId, paths);
+    const result = await this.workspaceController.checkActiveClaimPaths(project, owner.harness, owner.threadId, paths);
+    const modeDenial = await this.options.workflow?.readEditDenial(threadId, paths, result.claimedPaths ?? []);
+    return modeDenial ? { ...result, allowed: false, modeDenial } : result;
   }
 
   async listReloadScopeClaims(_cwd: string) {

@@ -47,6 +47,7 @@ export default class CodexToolsController implements WorkbenchProviderTools {
       ]);
       signal.throwIfAborted();
       if (result.allowed) return JSON.stringify(allowCodexApplyPatch());
+      if (result.modeDenial) return JSON.stringify(denyCodexApplyPatch(result.modeDenial));
       if (!result.uncoveredPaths.length) return JSON.stringify(denyCodexApplyPatch(describePendingProposalDenial(result.pendingProposals)));
       const uncoveredPaths = new Set(result.uncoveredPaths);
       const uncoveredChanges = hook.changes.filter(change => uncoveredPaths.has(change.path)

@@ -1,4 +1,4 @@
-/* No production exports. Tests protect thread-skill activation, deactivation and compaction notices, and acknowledgement that never eats newer transitions. */
+/* No production exports. Tests protect thread-skill activation order, deactivation and compaction notices, and acknowledgement that never eats newer transitions. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -39,6 +39,13 @@ test("compaction marks every active skill for re-delivery, and acknowledgement c
   const acknowledged = store.execute({ kind: "acknowledge", threadId, notice: "redeliver", paths: [react.path] });
   assert.deepEqual(names(acknowledged.pending.redeliver), ["review"]);
   assert.deepEqual(names(acknowledged.skills), ["react", "review"]);
+});
+
+test("reactivating an active skill moves it to the top instruction layer", async context => {
+  const { store, threadId } = await fixture(context);
+  store.execute({ kind: "activate", threadId, skills: [react], at: 1 });
+  store.execute({ kind: "activate", threadId, skills: [review], at: 2 });
+  assert.deepEqual(names(store.execute({ kind: "activate", threadId, skills: [react], at: 3 }).skills), ["review", "react"]);
 });
 
 test("deactivation hides the skill at once and keeps its notice until delivery; reactivation cancels it", async context => {

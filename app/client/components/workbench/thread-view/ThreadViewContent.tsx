@@ -39,6 +39,7 @@ import useThreadSubagentTabs from "./use-thread-subagent-tabs";
 import useWorkbenchSkillCatalogue from "./use-workbench-skill-catalogue";
 import useThreadSkillMcpMatchers from "../../../workbench/skills/use-thread-skill-mcp-matchers";
 import useProofOfWorkCatalogue, { ThreadProofOfWorkCatalogueContext } from "./use-proof-of-work-catalogue";
+import useWorkflowModeCatalogue, { ThreadWorkflowModeCatalogueContext } from "./use-workflow-mode-catalogue";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
 const EMPTY_TURNS: readonly Turn[] = [];
@@ -152,6 +153,7 @@ export default memo(function ThreadViewContent ({
   }), [entryMotion.activityRunController, entryMotion.controller, threadScrollViewport]);
   const [workbenchSkills, reconcileRejectedSkills] = useWorkbenchSkillCatalogue(projectId, activeThread?.harness ?? thread.harness);
   const proofOfWorkChecklists = useProofOfWorkCatalogue(projectId);
+  const workflowModes = useWorkflowModeCatalogue(projectId);
   const skillMcpMatchers = useThreadSkillMcpMatchers(activeThread && !activeThread.isDraft ? activeThreadId : null);
   const loadedTurns = activeThread?.isDraft || activeTranscriptProjection ? activeTurns.turns : EMPTY_TURNS;
   const isDraftThreadView = Boolean(activeThread?.isDraft);
@@ -253,6 +255,7 @@ export default memo(function ThreadViewContent ({
   return (
     <WorkbenchThreadDisplaySettingsContext.Provider value={threadCodeDetails}>
     <ThreadProofOfWorkCatalogueContext.Provider value={proofOfWorkChecklists}>
+    <ThreadWorkflowModeCatalogueContext.Provider value={workflowModes}>
     <ThreadScrollViewportContext.Provider value={entryMotionContext}>
     <ContextualProjectProvider
       cwd={activeThread?.cwd}
@@ -380,6 +383,7 @@ export default memo(function ThreadViewContent ({
       </ThreadComponentStyles>
     </ContextualProjectProvider>
     </ThreadScrollViewportContext.Provider>
+    </ThreadWorkflowModeCatalogueContext.Provider>
     </ThreadProofOfWorkCatalogueContext.Provider>
     </WorkbenchThreadDisplaySettingsContext.Provider>
   );

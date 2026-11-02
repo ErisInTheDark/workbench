@@ -16,21 +16,22 @@ This workflow is about control, context, and implementation discipline. Do not f
 
 # Default workflow
 
-<!-- Failure: agents filed plan and review checklists for early loops, then skipped them for "quick follow-up" loops late in long threads, deferring required work back to the user. Text tags could not refuse anything; mode_set gates make filing the price of entering the next mode, measured per loop so earlier loops' proofs never count. -->
-Enter each workflow mode with <tool id="mode_set" />, using its exact name: Inspect, Brief, Decision, Implement, or Review.
-<mode-gate mode="Brief" checklists="plan quality" since="Review" />
-<mode-gate mode="Review" checklists="review" since="Brief" />
-<mode-gate mode="Implement" checklists="approval" since="Implement" />
+<!-- Failure: agents filed plan and review checklists for early loops, then skipped them for "quick follow-up" loops late in long threads, deferring required work back to the user. Text tags could not refuse anything; mode gates make filing the price of entering the next mode, measured per loop so earlier loops' proofs never count. Denials stop out-of-mode edits mechanically instead of by reminder. Decision mode was dropped once Implement required a quoted approval: it only added a switch before every questionnaire. -->
+Enter each workflow mode with <tool id="thread_state" /> `mode`, using its exact name: Inspect, Brief, Implement, or Review. Later instruction layers (project AGENTS files, then skills by activation) may redefine modes and checklists by name; the latest definition wins.
+<mode name="Inspect" icon="search" deny="edit:claims" />
+<mode name="Brief" icon="clipboard" proofs="plan quality" reset-on="Review" deny="edit:claims" />
+<mode name="Implement" icon="pen" proofs="approval" reset-on="Implement" />
+<mode name="Review" icon="flag" proofs="review" reset-on="Brief" status="completed" deny="shell edit:claims" />
 
-<docs tools="task_completed task_blocked">
-Before final, apply Workbench Task Completion to the current request and unresolved steers. Call <tool id="task_completed" /> only when that outcome is delivered. Do not end while work remains.
+<docs tools="thread_state">
+Before final, apply Workbench Task Completion to the current request and unresolved steers. Close a delivered loop in one <tool id="thread_state" /> call: remaining review proofs, `mode: "Review"`, `status: "completed"`. Do not end while work remains.
 
-If user input or an external change blocks progress, call <tool id="task_blocked" /> and continue through commentary or a questionnaire.
+If user input or an external change blocks progress, set `status: "blocked"` and continue through commentary or a questionnaire.
 </docs>
 
 ## Workflow Integrity
 
-**Hard rule: each full workflow loop follows Inspect -> Brief -> Decision -> Implement -> Review.**
+**Hard rule: each full workflow loop follows Inspect -> Brief -> Implement -> Review.**
 
 Use Git plan/arc mechanics for non-trivial file edits. Missing mechanics, unusable HEAD or failed arc safety require explicit approval before bypass.
 
@@ -38,7 +39,7 @@ Review ends a completed loop. A later user request starts a new loop at the mode
 
 Do not skip steps.
 
-Do not move from Inspect, Brief, Decision, or Review into Implement unless the user explicitly approved the current concrete plan.
+Do not move from Inspect, Brief, or Review into Implement unless the user explicitly approved the current concrete plan.
 
 A concrete plan is a specific implementation route whose important choices have already been made and explained. The plan must say what each planned part means in the current codebase: the existing mechanism, exact change or wording, behavior or structure preserved, and validation that proves it. If implementation would require choosing among plausible shapes, inventing missing mechanics, deciding ownership, or discovering what "make X do Y" should mean, the plan is not concrete yet; return to Inspect or Brief instead of asking for approval.
 
@@ -60,10 +61,9 @@ Good:
 
 Example:
 
-1. <tool id="mode_set" /> Brief
+1. <tool id="thread_state" /> `mode: "Brief"`
 2. Show the recovered plan in `<plan></plan>`: what changed, what is now proposed, what approval is needed.
-3. <tool id="mode_set" /> Decision
-4. Ask for explicit approval, revision, more inspection, or another route.
+3. Ask for explicit approval, revision, more inspection, or another route.
 
 ## Mode Boundaries
 
@@ -71,19 +71,17 @@ Example:
 
 Inspect mode gathers facts.
 
-Brief mode presents already-gathered facts and a concrete plan.
-
-Decision mode asks for explicit direction on the visible plan.
+Brief mode presents already-gathered facts and a concrete plan, then asks for explicit direction on it.
 
 Implement mode changes implementation files or project behavior and validates the approved plan.
 
 Review mode verifies work, asks genuine questions, or closes completed work.
 
-If you are in Brief or Decision mode and discover you need more facts, switch back to Inspect before running commands or reading more files.
+If you are in Brief mode and discover you need more facts, switch back to Inspect before running commands or reading more files.
 
 ### Plan Document Iteration
 
-When the user asks to draft, crystallize, revise, summarize, or iterate on a markdown plan document, treat that file as a shared planning output channel during Inspect, Brief, and Decision mode.
+When the user asks to draft, crystallize, revise, summarize, or iterate on a markdown plan document, treat that file as a shared planning output channel during Inspect and Brief mode. List it in <tool id="thread_state" /> `alwaysEditable` so modes that deny edits allow it; use that list only for committed process or plan notes, never to dodge a mode.
 
 Plan-document edits are not implementation when they only record current understanding, options, open questions, proposed steps, or decision summaries. Brief mode may summarize what changed in the plan document and what still needs approval.
 
@@ -115,7 +113,7 @@ In Brief mode:
 - recommend a different route only when it better fits the user's goal
 <!-- Prevent path-only edit lists from hiding unexplained work in claimed files. -->
 - present a concrete user-visible plan, not only an outcome: for every claimed file, explain its exact planned changes in current-source terms, including changed and preserved behavior or structure. State settled choices, risks, tradeoffs, and validation. Path-only lists or summaries leaving any claimed file unexplained are not concrete plans
-- if the plan adds or changes tests and project guidance does not provide an approved command that executes them, the brief must also propose adding a project-owned test command and durable validation instructions, and Decision mode must ask the user for permission to add them; do not propose tests as validation while leaving them unexecutable
+- if the plan adds or changes tests and project guidance does not provide an approved command that executes them, the brief must also propose adding a project-owned test command and durable validation instructions, and ask the user for permission to add them; do not propose tests as validation while leaving them unexecutable
 - include focused samples when they would make the plan meaningfully easier to approve: existing file excerpts around relevant insertions/deletions/replacements, proposed text for instruction or note changes, and usage examples for new APIs, systems, or workflows
 - when multiple plausible implementation shapes exist, state the chosen shape and at least one rejected alternative enough that the user can correct the route before work starts
 - for non-trivial work, list the major existing behaviors and structures affected by the plan and mark each as changed, preserved, removed, or unknown. These can include UI surfaces, APIs, routes, data models, persistence, state and lifecycle boundaries, validation semantics, background processes, generated/source boundaries, and user workflows.
@@ -140,13 +138,9 @@ Before presenting a plan that edits files:
 
 Plans and substantial findings must be inside <plan></plan> tags.
 
-After the brief, enter Decision mode.
+### Asking for approval
 
-## Decision Mode
-
-Use Decision mode to get explicit user direction.
-
-In Decision mode:
+After the plan is visible:
 
 - ask whether the user approves the plan, wants revisions, wants more inspection, or wants another route
 - use <tool id="request_user_input" /> through Workbench Long Wait when useful
@@ -160,7 +154,7 @@ Approval applies to the exact visible plan. Required omitted paths remain within
 
 Classify approval details and later steers under **Steers And Recovery**. An exact user-authored addendum can extend the current plan without another brief when it fully states the action, affected scope, and relevant behavior or structure choices. Combine the plan and addendum as the approval boundary, then enter Implement mode. Do not render the user's own addendum back for ceremonial approval.
 
-When an exact steer changes inactive scope, apply additions/removals/adoptions together with <tool id="git_plan_claims" /> and `inherit: true`. Inspect reported drift before briefing. Never use active claim edits in Brief or Decision. Degraded safety requires explicit approval.
+When an exact steer changes inactive scope, apply additions/removals/adoptions together with <tool id="git_plan_claims" /> and `inherit: true`. Inspect reported drift before briefing. Never use active claim edits in Brief. Degraded safety requires explicit approval.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -171,7 +165,7 @@ Enter Implement mode only after explicit approval of the current concrete plan.
 Use Implement mode only after approval. Before each entry, apply this **Reasoning Checklist**:
 <!-- Failure: agents treated a pending addendum, a tentative idea or an earlier loop's approval as approval and started editing. Quoting the approval forces a check of what the user actually approved, at the moment it matters. -->
 <proof-of-work id="approval" hidden>
-- [ ] **Approval [approval.user_approved]:** Quote the user's approval, or explicit autonomy instruction, covering exactly the work you are starting. Planned, implied or earlier-scope approval is not approval; without it, return to Brief or Decision.
+- [ ] **Approval [approval.user_approved]:** Quote the user's approval, or explicit autonomy instruction, covering exactly the work you are starting. Planned, implied or earlier-scope approval is not approval; without it, return to Brief.
 </proof-of-work>
 
 In Implement mode:
@@ -211,7 +205,7 @@ Before the first file edit in Implement mode:
 Unexpected omitted paths:
 
 - Report each path and reason.
-- No material change: acquire the path and continue. No Decision.
+- No material change: acquire the path and continue. No new approval.
 - Material or uncertain change: keep work; use inherited <tool id="git_plan_claims" />; return to Brief.
 - For collisions, wait on the inactive plan with <tool id="git_arc_wait" />, without republishing it. If requested scope has no inactive plan, publish it first.
 - For incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
@@ -225,7 +219,7 @@ Use validation that matches the risk. Prefer non-emitting checks unless project 
 
 - Inspect <tool id="git_arc_compare" /> to account for the complete changed set. Use targeted <tool id="git_arc_diff" /> paths for areas most likely to hide missed behavior, leftovers, or overcomplexity. Apply universal change-review checks.
 - Missing work, mismatches, unresolved requests or required validation block completion, not risks to disclaim. Continue covered corrections; otherwise return for approval.
-- Only after checks pass, call <tool id="task_completed" />, then enter Review.
+- Only after checks pass, enter Review with `status: "completed"` in the same <tool id="thread_state" /> call.
 
 ## Review Mode
 
@@ -253,7 +247,7 @@ Review follows completion gate: summarize/propose. No inspection, implementation
 <!-- Prevent answered feasibility questions from becoming dead ends or permission-to-plan loops. -->
 **CRITICAL rule: answer first, then proactively take the natural next step.**
 
-- Viable route towards user goal: inspect missing facts -> Brief concrete plan -> Decision approval
+- Viable route towards user goal: inspect missing facts -> Brief concrete plan -> approval
 - Never ask permission to plan or stop at an offer; plan approval protects user control
 - Respect explicit answer-only or stop requests; questions do not approve implementation
 - THERE IS NO SUCH THING as a task that ends with a plan or viability review!
@@ -271,7 +265,7 @@ Review follows completion gate: summarize/propose. No inspection, implementation
 
 ### Requests for a plan
 
-- Plan, "look into", "investigate", "how difficult": Inspect enough context -> Brief concrete plan -> Decision
+- Plan, "look into", "investigate", "how difficult": Inspect enough context -> Brief concrete plan -> approval
 - Skip inspection only when needed context already present
 - Ground plans in code, project state, docs, prior work; never substitute assumptions
 

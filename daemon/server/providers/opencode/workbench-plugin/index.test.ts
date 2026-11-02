@@ -165,7 +165,7 @@ test("managed sessions keep only allowlisted native tools while ordinary session
   const owner = await fixture();
   const cleanup = await owner.setup();
   try {
-    const retained = [...MANAGED_NATIVE_TOOLS, "wb_shell", "wbex_task_completed", OPENCODE_COMMENTARY_TOOL_NAME,
+    const retained = [...MANAGED_NATIVE_TOOLS, "wb_shell", "wbex_thread_state", OPENCODE_COMMENTARY_TOOL_NAME,
       OPENCODE_END_TURN_TOOL_NAME];
     const unlisted = ["shell", "read", "grep", "glob", "question", "skill", "subagent", "opencode_worktree_create", "future_native"];
     const tools = Object.fromEntries([...unlisted, ...retained].map(name => [name, { description: name }]));
@@ -245,13 +245,15 @@ async function bareText(owner: Awaited<ReturnType<typeof fixture>>) {
 }
 
 test("the end turn tool needs a task status, then turns the session's next response into an empty finished step", async () => {
-  const owner = await fixture({ catalogue: ["task_completed"] });
+  const owner = await fixture({ catalogue: ["thread_state"] });
   const cleanup = await owner.setup();
   const call = { sessionID: "managed", id: "call", messageID: "message" };
   try {
     const end = owner.tools.get(OPENCODE_END_TURN_TOOL_NAME)!;
     assert.equal((await end.execute({}, call)).content, openCodeEndTurnResult("status-missing"));
-    await owner.tools.get("task_completed")!.execute({}, call);
+    await owner.tools.get("thread_state")!.execute({ mode: "Inspect" }, call);
+    assert.equal((await end.execute({}, call)).content, openCodeEndTurnResult("status-missing"), "only a status ends the turn");
+    await owner.tools.get("thread_state")!.execute({ status: "completed" }, call);
     assert.equal((await end.execute({}, { ...call, sessionID: "other" })).content, openCodeEndTurnResult("status-missing"),
       "status belongs to the session that set it");
     assert.equal((await end.execute({}, call)).content, openCodeEndTurnResult("ending"));
@@ -265,22 +267,22 @@ test("the end turn tool needs a task status, then turns the session's next respo
 
 test("a successful task status call turns commentary results into turn-end guidance and lets bare text end the turn", async () => {
   const call = { sessionID: "managed", id: "call", messageID: "message" };
-  const failing = await fixture({ catalogue: ["task_completed"], toolFails: true });
+  const failing = await fixture({ catalogue: ["thread_state"], toolFails: true });
   const failingCleanup = await failing.setup();
   try {
-    await assert.rejects(failing.tools.get("task_completed")!.execute({}, call), /refused/u);
+    await assert.rejects(failing.tools.get("thread_state")!.execute({ status: "completed" }, call), /refused/u);
     assert.equal((await failing.tools.get(OPENCODE_COMMENTARY_TOOL_NAME)!.execute({ text: "x" }, call)).content,
       openCodeCommentaryResult(false), "a failed status call changes nothing");
   } finally { if (typeof failingCleanup === "function") await failingCleanup(); }
 
-  const owner = await fixture({ catalogue: ["task_completed", "git_arc_status"] });
+  const owner = await fixture({ catalogue: ["thread_state", "git_arc_status"] });
   const cleanup = await owner.setup();
   try {
     const commentary = owner.tools.get(OPENCODE_COMMENTARY_TOOL_NAME)!;
     assert.doesNotMatch(await bareText(owner), /Done\./u);
     await owner.tools.get("git_arc_status")!.execute({}, call);
     assert.equal((await commentary.execute({ text: "x" }, call)).content, openCodeCommentaryResult(false));
-    await owner.tools.get("task_completed")!.execute({}, call);
+    await owner.tools.get("thread_state")!.execute({ status: "blocked" }, call);
     assert.equal((await commentary.execute({ text: "x" }, call)).content, openCodeCommentaryResult(true));
     assert.equal((await commentary.execute({ text: "x" }, { ...call, sessionID: "other" })).content,
       openCodeCommentaryResult(false), "status belongs to the session that set it");

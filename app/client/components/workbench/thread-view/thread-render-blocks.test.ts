@@ -80,6 +80,21 @@ test("a successful mode switch draws as its own divider block, a refused one as 
   assert.deepEqual(blocks.map(block => block.kind === "modeSwitch" ? `mode:${block.mode}` : block.kind), ["mode:Brief", "commandSequence"]);
 });
 
+test("thread_state mode lines carry the turn's earlier filings; refused calls draw nothing, other calls draw rows", () => {
+  const state = (id: string, args: JsonValue, status: "completed" | "failed" = "completed") => ({ ...mcpWithOutput(id, "thread_state", args, "ok"), status });
+  const proofs = state("proofs", { proofs: { "plan.result": "a" } });
+  const refused = state("refused", { notApplicable: ["plan.verify"], mode: "Brief" }, "failed");
+  const read = state("read", {});
+  const brief = state("brief", { mode: "Brief", title: "Plan it" });
+  const blocks = buildRenderableBlocks([proofs, refused, read, brief, state("after", { proofs: { "review.coverage": "b" } })]);
+  assert.deepEqual(
+    blocks.map(block => block.kind === "modeSwitch"
+      ? `mode:${block.mode}:${block.earlier.map(item => item.id).join("+")}`
+      : getRenderableBlockItems(block).map(item => item.id).join("+")),
+    ["proofs+read", "mode:Brief:proofs+refused", "after"],
+  );
+});
+
 test("transcript-hidden screenshots create no block, so the work around them stays together", () => {
   const image = { type: "image" as const, url: "/api/transcript-assets/thread/shot.png" };
   const screenshotSteer = (id: string, hidden: boolean): ThreadItem => ({

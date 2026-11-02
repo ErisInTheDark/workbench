@@ -4,8 +4,8 @@
  * - WorkbenchInstructionFacts: one caller's workspace facts.
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
- * - filterWorkbenchInstructionContent: strip comments, apply selectors, `<docs tools>` tool gates, `<else>` fallbacks and provider tool references, drop `<proof-of-work>` checklist tags, render `<mode-gate>` tags as sentences, and collapse inline wrapper regions.
- * - collectWorkbenchInstructionModeGates: read every `<mode-gate>` an instruction source declares, regardless of selectors.
+ * - filterWorkbenchInstructionContent: strip comments, apply selectors, `<docs tools>` tool gates, `<else>` fallbacks and provider tool references, drop `<proof-of-work>` checklist tags, render `<mode>` declarations as sentences, and collapse inline wrapper regions.
+ * - collectWorkbenchInstructionModes: read every `<mode>` an instruction source declares, regardless of selectors.
  * - collectWorkbenchInstructionProofOfWork: read every `<proof-of-work>` checklist an instruction source declares, regardless of selectors.
  * - formatWorkbenchInstructionFilterWarning: render one bounded source diagnostic with ANSI emphasis.
  */
@@ -13,7 +13,7 @@
 import os from "node:os";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { ProofOfWorkChecklist } from "workbench-shared/workbench/thread/proof-of-work";
-import type { ModeGate } from "workbench-shared/workbench/thread/workflow-modes";
+import { ModeIconSchema, type WorkflowMode } from "workbench-shared/workbench/thread/workflow-modes";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
@@ -86,14 +86,19 @@ const TOOL_TAG = /<tool id="([a-z][a-z0-9_]*)"\s*\/>/uy;
 const DOCS_OPEN_TAG = /<docs tools="([a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*)">/uy;
 const DOCS_CLOSE_TAG = /<\/docs>/uy;
 const MODE_NAMES = "[A-Za-z][A-Za-z0-9_-]*(?: [A-Za-z][A-Za-z0-9_-]*)*";
-const MODE_GATE_TAG = new RegExp(
-  `<mode-gate mode="([A-Za-z][A-Za-z0-9_-]*)" checklists="([a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*)" since="(${MODE_NAMES})"\\s*/>`, "uy",
+const FAMILY_NAMES = "[a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*";
+const DENY_TOKENS = "[a-z][a-z0-9_]*(?::[a-z]+)?(?: [a-z][a-z0-9_]*(?::[a-z]+)?)*";
+/** Attributes are optional but ordered, so one declaration always reads the same way. */
+const MODE_TAG = new RegExp(
+  `<mode name="([A-Za-z][A-Za-z0-9_-]*)"(?: icon="([a-z]+)")?(?: proofs="(${FAMILY_NAMES})")?(?: reset-on="(${MODE_NAMES})")?`
+    + `(?: status="(completed)")?(?: deny="(${DENY_TOKENS})")?\\s*/>`,
+  "uy",
 );
 const PROOF_OPEN_TAG = /<proof-of-work id="([a-z][a-z0-9_]*)"( hidden)?>/uy;
 const PROOF_CLOSE_TAG = /<\/proof-of-work>/uy;
 /** A top-level checklist item: `- [ ] **Label [family.item]:**`, the colon optional. */
 const PROOF_ITEM = /^- \[ \] \*\*(.+?) \[(([a-z][a-z0-9_]*)\.[a-z][a-z0-9_]*)\]:?\*\*/u;
-const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|docs|else|harness|model|mode-gate|proof-of-work|setting|shell|role|tool|workspace)(?::|\s|>)/u;
+const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|docs|else|harness|model|mode|proof-of-work|setting|shell|role|tool|workspace)(?::|\s|>)/u;
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
 const MAX_MODEL_REGEX_LENGTH = 200;
 const WORKSPACE_FACTS = new Set<string>(WORKBENCH_INSTRUCTION_WORKSPACE_FACTS);
@@ -161,8 +166,8 @@ function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column:
       index += toolMatch[0].length;
       continue;
     }
-    MODE_GATE_TAG.lastIndex = index;
-    const gateMatch = MODE_GATE_TAG.exec(line);
+    MODE_TAG.lastIndex = index;
+    const gateMatch = MODE_TAG.exec(line);
     if (gateMatch) {
       tags.push({
         control: { axis: "gate", closing: false, matchMode: "exact", neutral: false, pattern: null, value: gateMatch[0] },
@@ -561,33 +566,57 @@ function warn(
   });
 }
 
-function readModeGateTag(tag: string): ModeGate | null {
-  MODE_GATE_TAG.lastIndex = 0;
-  const match = MODE_GATE_TAG.exec(tag);
-  return match ? { mode: match[1]!, checklists: match[2]!.split(" "), since: match[3]!.split(" ") } : null;
+function readModeTag(tag: string): WorkflowMode | null {
+  MODE_TAG.lastIndex = 0;
+  const match = MODE_TAG.exec(tag);
+  if (!match) return null;
+  const words = (value: string | undefined) => value?.split(" ") ?? [];
+  const icon = ModeIconSchema.safeParse(match[2]);
+  return {
+    name: match[1]!,
+    icon: icon.success ? icon.data : null,
+    proofs: words(match[3]),
+    resetOn: words(match[4]),
+    status: match[5] === "completed" ? "completed" : null,
+    deny: words(match[6]),
+  };
 }
 
 function joinWords(words: readonly string[], conjunction: string) {
   return words.length > 1 ? `${words.slice(0, -1).join(", ")} ${conjunction} ${words.at(-1)}` : words[0] ?? "";
 }
 
-function describeModeGate(gate: ModeGate) {
-  const checklists = `${joinWords(gate.checklists, "and")} checklist${gate.checklists.length > 1 ? "s" : ""}`;
-  return `Entering ${gate.mode} requires the ${checklists} filed since you last entered ${joinWords(gate.since, "or")}.`;
+function describeDenial(token: string) {
+  if (token === "edit") return "every file edit";
+  if (token === "edit:claims") return "edits to Git-visible files";
+  return `\`${token}\``;
 }
 
-/** Fenced or commented tags are examples, not gates; malformed tags are left to the payload filter's warnings. */
-export function collectWorkbenchInstructionModeGates(value: string): ModeGate[] {
-  const gates: ModeGate[] = [];
+/** The sentence an agent reads for a `<mode>` declaration; an attribute-free declaration lifts every rule. */
+function describeMode(mode: WorkflowMode) {
+  const rules = [
+    mode.proofs.length
+      ? `entering it requires the ${joinWords(mode.proofs, "and")} checklist${mode.proofs.length > 1 ? "s" : ""}`
+        + (mode.resetOn.length ? `, filed since you last entered ${joinWords(mode.resetOn, "or")}` : "")
+      : "",
+    mode.status ? `it is entered together with status ${mode.status}, which needs it` : "",
+    mode.deny.length ? `it denies ${joinWords(mode.deny.map(describeDenial), "and")}` : "",
+  ].filter(Boolean);
+  return rules.length ? `${mode.name} mode: ${rules.join("; ")}.` : `${mode.name} mode has no entry rules or denials.`;
+}
+
+/** Fenced or commented tags are examples, not modes; malformed tags are left to the payload filter's warnings. */
+export function collectWorkbenchInstructionModes(value: string): WorkflowMode[] {
+  const modes: WorkflowMode[] = [];
   let fence: Fence | null = null;
   for (const line of stripWorkbenchInstructionHtmlComments(value.replace(/\r\n?/gu, "\n")).split("\n")) {
     if (fence) { if (closesFence(line, fence)) fence = null; continue; }
     fence = readFence(line);
     if (fence) continue;
-    const gate = readModeGateTag(line.trim());
-    if (gate) gates.push(gate);
+    const mode = readModeTag(line.trim());
+    if (mode) modes.push(mode);
   }
-  return gates;
+  return modes;
 }
 
 /** Malformed tags and items are left to the payload filter's warnings; this read only keeps well-formed items. */
@@ -864,7 +893,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         continue;
       }
       if (control.axis === "gate") {
-        if (included()) { emit(describeModeGate(readModeGateTag(control.value)!)); flushed = true; }
+        if (included()) { emit(describeMode(readModeTag(control.value)!)); flushed = true; }
         cursor = tag.end;
         continue;
       }

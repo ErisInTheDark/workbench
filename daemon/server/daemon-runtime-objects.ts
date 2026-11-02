@@ -142,6 +142,7 @@ export interface DaemonTranscriptRegistration {
 export interface DaemonRuntimeObjects {
   agentContext: import("./agent/WorkbenchAgentContextController").default;
   threadSkills: import("./thread/WorkbenchThreadSkillsController").default;
+  threadWorkflow: import("./thread/WorkbenchThreadWorkflowReader").default;
   threadTodos: import("./thread/WorkbenchThreadTodoController").default;
   mcpServers: import("./mcp-servers/WorkbenchMcpServerController").default;
   vis: import("./vis/WorkbenchVisController").default;

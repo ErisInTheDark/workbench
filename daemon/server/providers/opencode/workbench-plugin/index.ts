@@ -21,7 +21,7 @@ import providerAccountFingerprint from "../../provider-account-fingerprint";
 import {
   isOpenCodeWorkbenchToolName,
   OPENCODE_COMMENTARY_TOOL_NAME,
-  OPENCODE_TASK_STATUS_TOOLS,
+  isOpenCodeTaskStatusCall,
   openCodeWorkbenchRpc,
   OpenCodeGoQuotaSchema,
   type OpenCodeGoQuotaResult,
@@ -224,7 +224,7 @@ export function createOpenCodeWorkbenchPlugin(
       const tools = new OpenCodeCompanionToolsController({
         ...options,
         isManagedSession,
-        succeeded: (sessionID, name) => { if (OPENCODE_TASK_STATUS_TOOLS.has(name)) cuts.taskStatusSet(sessionID); },
+        succeeded: (sessionID, name, input) => { if (isOpenCodeTaskStatusCall(name, input)) cuts.taskStatusSet(sessionID); },
       });
       await tools.load().catch(async error => {
         try { await tools.dispose(); }

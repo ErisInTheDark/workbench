@@ -25,7 +25,7 @@ import { runProviderRelocation } from "./provider-relocation-journey";
 import { parseThreadTestArguments, type ThreadTestMode } from "../thread-test-arguments";
 import {
   createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
-  fakeCodexTool, fakeOpenCodeDirectTool, type ProviderBoundaryToolNames,
+  fakeCodexTool, fakeOpenCodeDirectTool, SCENARIO_COMPLETION, type ProviderBoundaryToolNames,
 } from "./provider-boundary-journey";
 import { OPENCODE_COMMENTARY_TOOL_NAME } from "../../daemon/server/providers/opencode/opencode-workbench-rpc";
 import { CLAUDE_COMMENTARY_TOOL_NAME } from "../../daemon/server/providers/claude/claude-commentary-tool";
@@ -124,7 +124,7 @@ async function verifyOpenCodeSteerCuts(input: {
       { reasoning: `Weighing ${answerProof}`, hold: true },
       { text: bareProof, bare: true },
       { text: steerProof },
-      fakeOpenCodeDirectTool("task_completed", {}),
+      fakeOpenCodeDirectTool("thread_state", SCENARIO_COMPLETION),
       fakeOpenCodeDirectTool("end_turn", {}),
       { text: endedProof, bare: true },
     ]);
@@ -211,7 +211,7 @@ async function verifyCodexMachineArcs(input: {
       // Git arc tools are direct Codex tools, not code-mode ones.
       { tool: { nameSuffix: "git_plan_start", arguments: { intentName: "Machine edit", addPaths: [display] } } },
       { tool: { nameSuffix: "apply_patch", input: `*** Begin Patch\n*** Update File: ${display}\n@@\n-before\n+after\n*** End Patch\n` } },
-      { tool: { nameSuffix: "task_completed", arguments: {} } },
+      { tool: { nameSuffix: "thread_state", arguments: SCENARIO_COMPLETION } },
       { text: "Machine edit done." },
     ]);
     const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens } = profile;
@@ -305,9 +305,9 @@ function codexFirstPrompt() {
     "1. Report the prefix proof from project instructions in commentary.",
     "2. Call code-mode exec with JavaScript that awaits `tools.mcp__wb__shell({command: \"node .workbench/transcript-gate.mjs\"})` until it finishes.",
     "3. Wait for that command to finish. The scenario releases it. Do not bypass the gate.",
-    "4. Call Workbench MCP task_get to read this task's title.",
+    "4. Call the direct Workbench MCP mcp__wbex__thread_state tool with {} to read this task's title.",
     "5. Report the title and prefix proof together in commentary.",
-    "6. Call the direct Workbench MCP mcp__wbex__task_completed tool, then end with an empty final response. This completion is authorised.",
+    `6. Call the direct Workbench MCP mcp__wbex__thread_state tool with exactly ${JSON.stringify(SCENARIO_COMPLETION)}, then end with an empty final response. This completion is authorised.`,
     "Do not edit files, spawn agents, ask questions or make plans.",
   ].join("\n");
 }
@@ -587,8 +587,8 @@ test("selected providers complete the shared thread boundary journey in one clon
       tools: {
         search: "Workbench MCP rg",
         shell: "Workbench MCP shell",
-        taskGet: "Workbench MCP task_get",
-        taskComplete: "direct Workbench MCP mcp__wbex__task_completed",
+        taskGet: "the direct Workbench MCP mcp__wbex__thread_state tool with {}",
+        taskComplete: "the direct Workbench MCP mcp__wbex__thread_state tool",
         questionnaire: "Workbench MCP request_user_input (NOT the native Codex questionnaire)",
       },
       verifyFirstTurn: async (thread: ThreadPayload, id: string, title: string) => {
@@ -629,8 +629,8 @@ test("selected providers complete the shared thread boundary journey in one clon
       tools: {
         search: "tools.wb.rg through execute",
         shell: "tools.wb.shell through execute",
-        taskGet: "tools.wb.task_get through execute",
-        taskComplete: "the direct wbex_task_completed tool (not through execute)",
+        taskGet: "the direct wbex_thread_state tool with {} (not through execute)",
+        taskComplete: "the direct wbex_thread_state tool (not through execute)",
         questionnaire: "tools.wb.request_user_input through execute",
       },
       verifySearch: (items: ProjectedItems) => {
@@ -654,8 +654,8 @@ test("selected providers complete the shared thread boundary journey in one clon
       tools: {
         search: "mcp__wb__rg",
         shell: "mcp__wb__shell",
-        taskGet: "mcp__wb__task_get",
-        taskComplete: "mcp__wb__task_completed",
+        taskGet: "mcp__wb__thread_state with {}",
+        taskComplete: "mcp__wb__thread_state",
         questionnaire: "mcp__wb__request_user_input",
       },
       verifySearch: items => {
@@ -663,10 +663,11 @@ test("selected providers complete the shared thread boundary journey in one clon
           && item.tool === "rg" && item.status === "completed"), "Claude must complete WB search");
       },
       verifyTaskIdentity: (items, title) => {
-        const taskGet = items.find(item => item.type === "mcpToolCall" && item.tool === "task_get");
-        assert.ok(taskGet?.type === "mcpToolCall" && taskGet.status === "completed", "Claude must complete WB task_get");
+        const taskGet = items.find(item => item.type === "mcpToolCall" && item.tool === "thread_state"
+          && JSON.stringify(item.arguments) === "{}");
+        assert.ok(taskGet?.type === "mcpToolCall" && taskGet.status === "completed", "Claude must complete a WB thread_state read");
         assert.ok(JSON.stringify(taskGet.result).includes(title),
-          "Claude's MCP task_get must resolve the managed WB thread identity");
+          "Claude's MCP thread_state read must resolve the managed WB thread identity");
       },
       verifyCapabilities: async () => {
         assert.ok((await runtime.daemon.models.list("claude")).data.some(entry =>
@@ -695,8 +696,8 @@ test("selected providers complete the shared thread boundary journey in one clon
       assert.ok(codexGate);
       fakeModel.enqueue([
         fakeCodexTool("shell", { command: "node .workbench/transcript-gate.mjs" }, prefixProof),
-        fakeCodexTool("task_get", {}),
-        { tool: { nameSuffix: "task_completed", arguments: {} } },
+        { tool: { nameSuffix: "thread_state", arguments: {} } },
+        { tool: { nameSuffix: "thread_state", arguments: SCENARIO_COMPLETION } },
         { text: `${title} ${prefixProof}` },
       ]);
     }
@@ -769,7 +770,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     }
 
     const cliTaskGet = IsolatedWorkbench.command("bash", [
-      path.join(runtime.project, "wb"), "task", "get",
+      path.join(runtime.project, "wb"), "thread", "state",
     ], runtime.project, {
       ...process.env,
       WORKBENCH_DATA_ROOT: runtime.dataRootPath,

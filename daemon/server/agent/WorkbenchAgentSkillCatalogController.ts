@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchAgentSkillCatalogController: own browser-visible agent, skill and proof-of-work checklist catalog reads, and the activatable skills messages are checked against.
+ * - default WorkbenchAgentSkillCatalogController: own browser-visible agent, skill, proof-of-work checklist and workflow mode catalog reads, and the activatable skills messages are checked against.
  */
-import { readWorkbenchProofOfWorkCatalogue } from "../lib/workbench/instructions/proof-of-work-catalogue";
+import { readWorkbenchInstructionOverlays } from "../lib/workbench/instructions/instruction-overlay-catalogue";
 import type { ResolvedProject } from "../lib/project";
 import {
   listProjectSkillsFromRoot,
@@ -23,7 +23,7 @@ interface WorkbenchAgentSkillCatalogOperations {
   listProjectSkills: typeof listProjectSkillsFromRoot;
   listUserAgents: typeof listUserInvocableAgentsFromResolvedProject;
   readAgent: typeof readUserInvocableAgentDefinitionFromRoot;
-  readProofOfWorkCatalogue: typeof readWorkbenchProofOfWorkCatalogue;
+  readInstructionOverlays: typeof readWorkbenchInstructionOverlays;
 }
 
 const defaultOperations: WorkbenchAgentSkillCatalogOperations = {
@@ -33,7 +33,7 @@ const defaultOperations: WorkbenchAgentSkillCatalogOperations = {
   listProjectSkills: listProjectSkillsFromRoot,
   listUserAgents: listUserInvocableAgentsFromResolvedProject,
   readAgent: readUserInvocableAgentDefinitionFromRoot,
-  readProofOfWorkCatalogue: readWorkbenchProofOfWorkCatalogue,
+  readInstructionOverlays: readWorkbenchInstructionOverlays,
 };
 
 export default class WorkbenchAgentSkillCatalogController {
@@ -77,8 +77,16 @@ export default class WorkbenchAgentSkillCatalogController {
   }
 
   async readProofOfWorkChecklists(projectId: string | null) {
+    return { data: (await this.readOverlays(projectId)).checklists };
+  }
+
+  async readWorkflowModes(projectId: string | null) {
+    return { data: (await this.readOverlays(projectId)).modes };
+  }
+
+  private async readOverlays(projectId: string | null) {
     const project = projectId ? await this.resolveProjectById(projectId) : null;
-    return { data: await this.operations.readProofOfWorkCatalogue(project && project.kind !== "workbench-library" ? project.root : null) };
+    return await this.operations.readInstructionOverlays({ projectRoot: project && project.kind !== "workbench-library" ? project.root : null });
   }
 
   /** The skills a message in this project can activate: the same list `readSkills` gives the composer. */

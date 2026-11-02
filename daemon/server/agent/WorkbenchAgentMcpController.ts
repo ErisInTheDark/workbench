@@ -117,6 +117,8 @@ function waitTimeoutText(toolName: string) {
 
 export interface WorkbenchAgentMcpControllerOptions {
   isSubagentCaller?: (caller: WorkbenchProviderCaller) => Promise<boolean>;
+  /** Why the caller's current workflow mode denies a tool, or null. */
+  readModeToolDenial?: (threadId: string, toolName: string) => Promise<string | null>;
   /** Live local capability settings; capability-gated deferred tools are found and run only while enabled. */
   readLocalCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>;
   /** Whether the caller works at the Workbench repository root, the only audience of root-only commands. */
@@ -257,6 +259,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   private readonly isSubagentCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isSubagentCaller"]>;
   private readonly isWorkbenchRootCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isWorkbenchRootCaller"]>;
   private readonly readLocalCapabilities: NonNullable<WorkbenchAgentMcpControllerOptions["readLocalCapabilities"]>;
+  private readonly readModeToolDenial: NonNullable<WorkbenchAgentMcpControllerOptions["readModeToolDenial"]>;
   private readonly createWaitDeadline: NonNullable<WorkbenchAgentMcpControllerOptions["createWaitDeadline"]>;
 
   constructor({
@@ -273,8 +276,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     isSubagentCaller = async () => false,
     isWorkbenchRootCaller = () => false,
     readLocalCapabilities = async () => DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS,
+    readModeToolDenial = async () => null,
     createWaitDeadline = createWorkbenchMcpWaitDeadline,
   }: WorkbenchAgentMcpControllerOptions) {
+    this.readModeToolDenial = readModeToolDenial;
     this.createWaitDeadline = createWaitDeadline;
     this.injectedExecuteCommand = executeCommand;
     this.executeCommand = executeCommand ?? (async (request, signal) => await requestRegistry.executeCommand(request, signal));
@@ -745,6 +750,9 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     const finishFailure = async (error: unknown, signal: AbortSignal): Promise<WorkbenchMcpToolStep> => ({
       kind: "result", result: await this.finishTranscript(tools, started.reference, this.shellFailure(error, signal)),
     });
+    // The recorded call already names its Workbench thread; unrecorded shells have no thread to restrict.
+    const denial = started.reference ? await this.readModeToolDenial(started.reference.threadId, WORKBENCH_SHELL_MCP_TOOL_NAME) : null;
+    if (denial) return await finishFailure(new Error(denial), call.signal);
     let registration: ReturnType<WorkbenchAgentMcpRequestRegistry["register"]>;
     const shellItemReferences = this.itemReferences(started.reference, call.meta);
     // Only an ingress that backgrounds shells may let the command stop following its call.
@@ -999,12 +1007,8 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         { harness: caller.harness, workbenchRoot },
         { isSubagent: async () => await this.isSubagentCaller(caller), readCapabilities: this.readLocalCapabilities },
       );
-      if (refusal) {
-        return {
-          kind: "result", unregister,
-          result: { isError: true, content: [{ type: "text" as const, text: describeWorkbenchCommandRefusal(refusal, toolName, caller.harness) }] },
-        };
-      }
+      const denial = refusal ? describeWorkbenchCommandRefusal(refusal, toolName, caller.harness) : await this.readModeToolDenial(caller.threadId, toolName);
+      if (denial) return { kind: "result", unregister, result: { isError: true, content: [{ type: "text" as const, text: denial }] } };
       const { input: commandInput, cwd } = await resolveWorkbenchMcpWorkdir(definition, input, caller.cwd);
       if (signal.aborted) throw signal.reason;
       const request = await definition.buildRequestFromJson(commandInput, {

@@ -66,6 +66,7 @@ import WorkbenchCoreSubagentsFeature from "./WorkbenchCoreSubagentsFeature";
 import WorkbenchCoreThreadLookup from "./WorkbenchCoreThreadLookup";
 import WorkbenchInteractionsFeature from "./WorkbenchInteractionsFeature";
 import WorkbenchThreadFactsFeature from "./WorkbenchThreadFactsFeature";
+import WorkbenchThreadWorkflowReader from "../thread/WorkbenchThreadWorkflowReader";
 import WorkbenchTurnRuntimeFeature, { type WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
@@ -142,6 +143,12 @@ function createWorkbenchCoreFeature(
     setSummaryFacts,
   });
   const { agentContext, skillCatalog, vis } = facts;
+  const threadWorkflow = new WorkbenchThreadWorkflowReader({
+    readSelection: async threadId => await facts.instructionSelection.readSelection(WorkbenchThreadIdSchema.parse(threadId)),
+    readSkills: async threadId => await facts.skills.read(threadId),
+    readProjectRoot: async threadId => (await lookup.identity(threadId))?.projectRoot ?? null,
+    readLedger: async threadId => await database.readWorkflowLedger(threadId),
+  });
   const providers = new WorkbenchProviderDispatcher(run, {
     nativeLocations: {
       pending: threadId => threadIdentity.pendingRelocation(ThreadReferenceSchema.parse(threadId)),
@@ -175,7 +182,7 @@ function createWorkbenchCoreFeature(
   const modelUsage = new WorkbenchModelUsageStore(database);
   const voiceSettings = new VoiceSettingsStore(database);
   const git = new WorkbenchCoreGitFeature({
-    database, transcript, identities: threadIdentity, projectCatalog, transitions: worktreeGitTransitions, agentContext,
+    database, transcript, identities: threadIdentity, projectCatalog, transitions: worktreeGitTransitions, agentContext, threadWorkflow,
     threadState: () => threadState,
     publishThreadState: operation => run("threadState", operation, "Git arc publication"),
     subagents: () => collaboration.subagents,
@@ -422,7 +429,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, network, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, network, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, threadWorkflow, transcriptReader, transcriptReconciliation,
     vis,
     threadContextRollover,
     workingTree,

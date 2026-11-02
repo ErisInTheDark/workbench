@@ -55,6 +55,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "tokens_project",
   "tokens_skill",
   "feedback",
+  "thread_state",
+  // Former workflow tools `thread_state` replaced; keep earlier calls rendering.
   "proof_of_work",
   "mode_set",
   "todo",
@@ -810,6 +812,22 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-cli.tokens", actionTarget("Counting ", "project instruction tokens"), actionTarget("Counted ", "project instruction tokens"));
     case "tokens_skill":
       return simple("workbench-cli.tokens", actionTarget("Counting ", "skill tokens"), actionTarget("Counted ", "skill tokens"));
+    case "thread_state": {
+      // Mode switches draw as mode lines and refused calls draw nothing; these are the rest.
+      const status = args.status === "completed" || args.status === "blocked" ? args.status : null;
+      if (status) return specialized("workbench-cli.task-status", { kind: "threadStatus", status }, `Marking task ${status}`);
+      const title = readString(args.title);
+      if (title) return specialized("workbench-cli.task-title-set", { kind: "threadTitle", title }, "Naming task");
+      const mode = readString(args.mode);
+      if (mode) return simple("workbench-cli.thread-state", actionTarget("Entering ", mode), actionTarget("Entered ", mode));
+      if (args.proofs || args.notApplicable || args.defer) {
+        return simple("workbench-cli.thread-state", actionTarget("Filing ", "proof of work"), actionTarget("Filed ", "proof of work"));
+      }
+      if (args.alwaysEditable) {
+        return simple("workbench-cli.thread-state", actionTarget("Setting ", "always-editable paths"), actionTarget("Set ", "always-editable paths"));
+      }
+      return simple("workbench-cli.thread-state", actionTarget("Checking ", "thread state"), actionTarget("Checked ", "thread state"));
+    }
     case "proof_of_work":
       return simple("workbench-cli.proof-of-work", actionTarget("Filing ", "proof of work"), actionTarget("Filed ", "proof of work"));
     case "mode_set": {

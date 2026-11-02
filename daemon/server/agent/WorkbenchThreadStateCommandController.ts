@@ -1,0 +1,126 @@
+/*
+ * Exports:
+ * - WorkbenchThreadStateCommandPorts: caller, workflow, turn transcript, title and status ports.
+ * - default WorkbenchThreadStateCommandController: answer one thread_state call: file its proofs, refuse its mode or status
+ *   without applying anything else, or retitle then set status; every answer reports the full state.
+ */
+import {
+  formatProofOfWorkReport, mergeProofs, ProofOfWorkSchema, proofFamily, reconcileProofOfWork,
+  type ProofOfWork, type ProofState,
+} from "workbench-shared/workbench/thread/proof-of-work";
+import {
+  evaluateThreadStateTransition, gatedProofWindows, readFiledProofs, type ThreadState, type WorkflowLedgerEntry,
+} from "workbench-shared/workbench/thread/workflow-modes";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { WorkbenchThreadStateRequestSchema } from "../lib/workbench/commands/thread-state-command-definition";
+import type { WorkbenchThreadWorkflow } from "../thread/WorkbenchThreadWorkflowReader";
+
+export interface WorkbenchThreadStateCommandPorts {
+  resolveCaller(caller: { cwd: string; harness: string; threadId: string }, signal: AbortSignal): Promise<{ threadId: string }>;
+  /** The thread's workflow before this call; its ledger never holds the call being answered. */
+  readWorkflow(threadId: string): Promise<WorkbenchThreadWorkflow>;
+  /** The latest turn's items in transcript order; it may already hold the call being answered. */
+  readTurnItems(threadId: string, signal: AbortSignal): Promise<readonly ThreadItem[]>;
+  readTitle(caller: { cwd: string; threadId: string }): Promise<string>;
+  /** Throws the owner's explanation when the guarded title does not match. */
+  setTitle(caller: { cwd: string; threadId: string }, title: string, currentTitle: string | undefined): Promise<void>;
+  readStatus(threadId: string): Promise<string>;
+  setStatus(caller: { cwd: string; threadId: string }, status: "completed" | "blocked"): Promise<void>;
+}
+
+const TEXT_HEADERS = { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" };
+
+function text(body: string, status = 200) {
+  return new Response(`${body.trimEnd()}\n`, { headers: TEXT_HEADERS, status });
+}
+
+/** Null when the call files no proof ids; empty buckets file nothing. */
+function proofOf({ proofs, notApplicable, defer }: ThreadState) {
+  if (!Object.keys(proofs ?? {}).length && !notApplicable?.length && !defer?.length) return null;
+  return ProofOfWorkSchema.safeParse({ ...proofs ? { proofs } : {}, ...notApplicable ? { notApplicable } : {}, ...defer ? { defer } : {} });
+}
+
+export default class WorkbenchThreadStateCommandController {
+  constructor(private readonly ports: WorkbenchThreadStateCommandPorts) {}
+
+  async execute(body: object, signal: AbortSignal) {
+    const parsed = WorkbenchThreadStateRequestSchema.safeParse(body);
+    if (!parsed.success) return text(`Invalid thread state.\n${this.issues(parsed.error.issues)}`, 400);
+    const { state, ...callerInput } = parsed.data;
+    const filed = proofOf(state);
+    if (filed && !filed.success) return text(`Invalid proofs.\n${this.issues(filed.error.issues)}`, 400);
+    const proof = filed?.data ?? null;
+    const { threadId } = await this.ports.resolveCaller(callerInput, signal);
+    const caller = { cwd: callerInput.cwd, threadId };
+    const [workflow, items] = await Promise.all([this.ports.readWorkflow(threadId), this.ports.readTurnItems(threadId, signal)]);
+    signal.throwIfAborted();
+    const { checklists, modes } = workflow.overlays;
+
+    const unknown = proof ? reconcileProofOfWork(mergeProofs([proof]), checklists).unknownItems : [];
+    const ledger: WorkflowLedgerEntry[] = proof ? [...workflow.ledger, { kind: "proof", proof }] : workflow.ledger;
+    const transition = evaluateThreadStateTransition(ledger, modes, checklists, state);
+    if (transition.undeclared.length) console.warn(`[thread-state] ${state.mode} requires undeclared checklists: ${transition.undeclared.join(", ")}.`);
+    const refusals = [
+      ...unknown.length ? [`Unknown checklist ids: ${unknown.join(", ")}.`] : [],
+      ...transition.unresolved.length ? [
+        `${transition.target!.name} needs checklists filed${transition.target!.resetOn.length ? ` since you last entered ${transition.target!.resetOn.join(" or ")}` : ""}; still unresolved:`,
+        ...transition.unresolved.map(({ checklist, ids }) => `- ${checklist}: ${ids.join(", ")}`),
+      ] : [],
+      ...transition.needsStatus ? [`${transition.target!.name} is entered together with status: "${transition.needsStatus}".`] : [],
+      ...transition.needsMode.length ? [`Status completed needs mode ${transition.needsMode.join(" or ")} after this call.`] : [],
+    ];
+
+    let titleFailure: string | null = null;
+    if (!refusals.length && state.title) {
+      try { await this.ports.setTitle(caller, state.title, state.currentTitle); }
+      catch (error) { titleFailure = error instanceof Error ? error.message : String(error); }
+    }
+    const applied = !refusals.length && !titleFailure;
+    if (applied && state.status) await this.ports.setStatus(caller, state.status);
+
+    const mode = applied && state.mode ? state.mode : workflow.mode;
+    const editable = applied && state.alwaysEditable ? state.alwaysEditable : workflow.alwaysEditable;
+    const [title, status] = await Promise.all([this.ports.readTitle(caller), this.ports.readStatus(threadId)]);
+    const report = [
+      applied
+        ? (state.mode ? `Entered ${state.mode}.` : "Applied.")
+        : `Not applied${proof ? "; proofs filed" : ""}:\n${titleFailure ? `Title: ${titleFailure}` : refusals.join("\n")}`,
+      `Mode: ${mode ?? "none"}. Status: ${status}${applied && state.status ? ` (${state.status} applies when the turn ends)` : ""}. Title: ${title || "none"}.`,
+      `Always editable: ${editable.length ? editable.join(", ") : "none"}.`,
+      ...proof ? [this.proofReport(proof, items, ledger, workflow)] : [],
+      ...this.owed(ledger, workflow, mode),
+    ];
+    return text(report.join("\n"), applied ? 200 : 400);
+  }
+
+  private issues(issues: readonly { message: string; path: readonly PropertyKey[] }[]) {
+    return issues.slice(0, 5).map(({ message, path }) => `${path.map(String).join(".") || "input"}: ${message}`).join("\n");
+  }
+
+  /** Gated checklists report over their modes' windows; others over the current turn, as filed so far. */
+  private proofReport(proof: ProofOfWork, items: readonly ThreadItem[], ledger: readonly WorkflowLedgerEntry[], workflow: WorkbenchThreadWorkflow) {
+    const { checklists, modes } = workflow.overlays;
+    const filed = items.flatMap(item => { const submission = readFiledProofs(item); return submission ? [submission] : []; });
+    const turn = mergeProofs([...filed, proof]);
+    const touched = new Set([...turn.keys()].map(proofFamily));
+    const windows = gatedProofWindows(ledger, modes);
+    const proofs = new Map<string, ProofState>([...turn].filter(([id]) => !windows.has(proofFamily(id))));
+    for (const [family, window] of windows) {
+      if (!touched.has(family)) continue;
+      for (const [id, state] of mergeProofs(window)) if (proofFamily(id) === family) proofs.set(id, state);
+    }
+    return formatProofOfWorkReport(reconcileProofOfWork(proofs, checklists), checklists).trimEnd();
+  }
+
+  /** What every other gated mode still needs, so the agent can file it before switching. */
+  private owed(ledger: readonly WorkflowLedgerEntry[], workflow: WorkbenchThreadWorkflow, mode: string | null) {
+    const { checklists, modes } = workflow.overlays;
+    return modes.flatMap((candidate) => {
+      if (!candidate.proofs.length || candidate.name.toLowerCase() === mode?.toLowerCase()) return [];
+      const { unresolved } = evaluateThreadStateTransition(ledger, modes, checklists, { mode: candidate.name, status: candidate.status ?? undefined });
+      return unresolved.length
+        ? [`${candidate.name} needs: ${unresolved.map(({ checklist, ids }) => `${checklist} (${ids.join(", ")})`).join("; ")}.`]
+        : [];
+    });
+  }
+}

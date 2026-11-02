@@ -230,7 +230,7 @@ test("companion catalogue and decoded calls cross real MCP transport with full c
       await connection.load();
       const catalogue: Info[] = [];
       connection.register({ add: tool => { catalogue.push(tool); } } as ToolEditor);
-      const tool = catalogue.find(tool => tool.name === "task_get");
+      const tool = catalogue.find(tool => tool.name === "thread_state");
       assert.ok(tool);
       return { catalogue, tool };
     }));

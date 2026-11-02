@@ -351,8 +351,6 @@ test("CLI help and dispatch enforce every command audience", async () => {
     ["subagent_settle", ["--id", "child"]],
     ["subagent_stop", ["--id", "child"]],
     ["subagent_wait", ["--id", "child"]],
-    ["task_get", []],
-    ["task_set", ["--title", "change title"]],
   ]);
   assert.deepEqual([...WORKBENCH_PARENT_ONLY_TOOLS].sort(), [...argumentsByTool.keys()].sort());
   for (const tool of WORKBENCH_PARENT_ONLY_TOOLS) {
@@ -770,41 +768,12 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     responseKind: "json",
   });
 
-  const title = await parseWorkbenchAgentCliCommand([
-    "task", "set", "--title", "A title", "--current-title", "Current title",
+  const state = await parseWorkbenchAgentCliCommand([
+    "thread", "state", "--title", "A title", "--current-title", "Current title", "--status", "blocked",
   ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
-  assert.equal(title.kind, "request");
-  assert.deepEqual(title.request, {
-    body: { action: "set", callerThreadId: "thread/1", currentTitle: "Current title", cwd: "C:/workspace", title: "A title" },
-    method: "POST",
-    path: "/api/thread-title",
-    responseKind: "thread-title",
-  });
-
-  const titleGet = await parseWorkbenchAgentCliCommand([
-    "task", "get",
-  ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
-  assert.equal(titleGet.kind, "request");
-  assert.deepEqual(titleGet.request, {
-    body: { action: "get", callerThreadId: "thread/1", cwd: "C:/workspace" },
-    method: "POST",
-    path: "/api/thread-title",
-    responseKind: "thread-title-get",
-  });
-
-  for (const status of ["completed", "blocked"] as const) {
-    const taskStatus = await parseWorkbenchAgentCliCommand(["task", status], {
-      callerThreadId: "thread/1",
-      cwd: "C:/workspace",
-    });
-    assert.equal(taskStatus.kind, "request");
-    assert.deepEqual(taskStatus.request, {
-      body: { callerThreadId: "thread/1", cwd: "C:/workspace", status },
-      method: "POST",
-      path: "/api/thread-status",
-      responseKind: "thread-status",
-    });
-  }
+  assert.equal(state.kind, "request");
+  assert.equal(state.request.path, "/internal/thread-state");
+  assert.deepEqual((state.request.body as { state?: unknown }).state, { title: "A title", currentTitle: "Current title", status: "blocked" });
 
   const refresh = await parseWorkbenchAgentCliCommand(["thread", "refresh"], { callerThreadId: "thread/1", cwd: "C:/workspace" });
   assert.equal(refresh.kind, "request");

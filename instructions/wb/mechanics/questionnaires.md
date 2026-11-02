@@ -20,7 +20,7 @@ Constraints:
 - The wait survives user steers and scoped Workbench reloads. Do not restart it
 
 Response:
-- **On questionnaire tool timeout error (not your Workbench Long Wait intervals!), override normal workflow completion: immediately call <tool id="task_blocked" />; end the turn with <>
+- **On questionnaire tool timeout error (not your Workbench Long Wait intervals!), override normal workflow completion: immediately set <tool id="thread_state" /> `status: "blocked"`; end the turn with <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
 <harness:opencode>a `wbex_end_turn` call</harness:opencode>
 <else>empty final</else>

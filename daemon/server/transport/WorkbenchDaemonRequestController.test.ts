@@ -189,6 +189,7 @@ function createController(options: {
       readAgent: async () => ({ providerGlobalDuplicate: false, data: { description: "", name: "", path: "", prompt: "" } }),
       readSkills: async () => ({ data: [], instructionPacks: [], instructions: "" }),
       readProofOfWorkChecklists: async () => ({ data: [] }),
+      readWorkflowModes: async () => ({ data: [] }),
     },
     files: {
       read: async ({ path, projectId }) => ({ content: "", headContent: null, mtimeMs: 1, path, projectId: ProjectIdSchema.parse(projectId), updatedAt: "" }),
