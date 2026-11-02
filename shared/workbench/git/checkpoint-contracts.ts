@@ -12,7 +12,6 @@
  * - GitArcStashResultSchema/GitArcStashResult: browser-safe stash and unstash lifecycle result.
  * - GitArcStackResultSchema/GitArcStackResult: sealed or reopened stack layer receipt.
  * - GitArcRestackEditsSchema/GitArcRestackEdits: drops, path strips and folds one restack applies together.
- * - GitArcRestackResultSchema/GitArcRestackResult: per-proposal restack outcomes, rewritten layers and released claims.
  * - GitArcClaimViewSchema/GitArcClaimView/GitArcClaimViewResultSchema/GitArcClaimViewResult: per-repository build view tree, held owners and mirror counts.
  * - GitArcHeldPathsSchema/GitArcHeldPaths/GitArcHeldPathsResultSchema/GitArcHeldPathsResult: per-repository held owners, the baseline tree holding their view bytes, and those bytes on request.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
@@ -395,19 +394,6 @@ export const GitArcStackResultSchema = z.object({
   stackTip: checkpointSha.nullable(),
 }).strict();
 export type GitArcStackResult = z.infer<typeof GitArcStackResultSchema>;
-
-export const GitArcRestackResultSchema = z.object({
-  /** Layers the restack rewrote, bottom first; lower layers and removed ones are omitted. */
-  layers: z.array(z.object({ proposalIds: z.array(nonEmptyString), title: nonEmptyString }).strict()),
-  proposals: z.array(z.discriminatedUnion("status", [
-    z.object({ proposalId: nonEmptyString, status: z.enum(["rebased", "rescinded"]) }).strict(),
-    z.object({ proposalId: nonEmptyString, replacementId: nonEmptyString, status: z.enum(["replaced", "superseded"]) }).strict(),
-  ])),
-  releasedClaims: optionalCheckpointPaths,
-  rootId: nonEmptyString.optional(),
-  stackTip: checkpointSha.nullable(),
-}).strict();
-export type GitArcRestackResult = z.infer<typeof GitArcRestackResultSchema>;
 
 export const GitArcClaimViewSchema = z.object({
   /** Mirrored files rewritten or removed; present only when the view was mirrored into a directory. */

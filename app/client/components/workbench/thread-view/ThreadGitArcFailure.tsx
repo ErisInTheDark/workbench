@@ -140,7 +140,13 @@ export default function ThreadGitArcFailure({
             <ContextualProjectProvider id={resolvedProjectId}><ProjectFileLinkList paths={rejectedPaths} /></ContextualProjectProvider>
           ) : null}
           {rejectedProjects.length ? <p className="m-0 text-fg/muted">Projects: {rejectedProjects.join(", ")}</p> : null}
-          {rejection && "proposalId" in rejection ? <p className="m-0 text-fg/muted">Proposal <ThreadInlineCode>{rejection.proposalId}</ThreadInlineCode></p> : null}
+          {rejection && "proposalId" in rejection ? (
+            <p className="m-0 text-fg/muted">
+              Proposal {"title" in rejection && rejection.title
+                ? <b className="font-medium text-text">{rejection.title}</b>
+                : <ThreadInlineCode>{rejection.proposalId}</ThreadInlineCode>}
+            </p>
+          ) : null}
           {rejection && "refs" in rejection ? <p className="m-0 text-fg/muted">Published on {rejection.refs.join(", ")}</p> : null}
           {failure.workspace ? (
             <div className="text-fg/muted">

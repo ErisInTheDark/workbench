@@ -9,6 +9,7 @@ import { useMemo, type ReactNode } from "react";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
 import { parseGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
+import { parseGitArcRestackText } from "workbench-shared/workbench/git/git-arc-restack";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
@@ -228,6 +229,8 @@ export default function ThreadWorkbenchCommandItem({
           : diffChanges?.length ? createThreadGitArcDiffSummaryRows(diffChanges) : []}
         outcome={gitArcOutcome}
         receipt={receipt}
+        restackResult={intent.action !== "restack" ? null
+          : structured?.kind === "success" ? structured.restack : hasStructuredResult ? null : parseGitArcRestackText(output)}
         statusFacts={structured?.kind === "success" ? structured.status : undefined}
         statusIncomplete={Boolean(typed?.error)}
         statusOutput={intent.action === "status" ? output : undefined}

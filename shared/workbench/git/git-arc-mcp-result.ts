@@ -10,6 +10,7 @@ import { GitCheckpointFileChangeSchema } from "./git-checkpoint-file-change.ts";
 import { GitArcEditResultSchema } from "./git-arc-edit-contracts.ts";
 import { GitArcFailureSchema } from "./git-arc-failures.ts";
 import { GitArcReceiptSchema } from "./git-arc-receipts.ts";
+import { GitArcRestackResultSchema } from "./git-arc-restack.ts";
 import { GitArcStatusPresentationSchema } from "./git-arc-status.ts";
 
 const successSchema = z.object({
@@ -20,6 +21,7 @@ const successSchema = z.object({
   changes: z.array(GitCheckpointFileChangeSchema).default([]),
   diff: z.string().nullable().default(null),
   edit: GitArcEditResultSchema.nullable().default(null),
+  restack: GitArcRestackResultSchema.nullable().default(null),
 }).strict();
 
 const failureSchema = z.object({
@@ -46,6 +48,7 @@ const successDefaults = {
   changes: [],
   diff: null,
   edit: null,
+  restack: null,
 };
 
 export function readGitArcMcpResult(value: JsonValue | null) {

@@ -1276,7 +1276,7 @@ test("MCP returns typed Git status without replacing its readable output", async
     assert.equal(result.isError, false);
     assert.match(responseText(result), /Dirty claims: a\.ts/u);
     assert.deepEqual(result.structuredContent, {
-      kind: "success", version: 1, receipt: null, status: status, changes: [], diff: null, edit: null,
+      kind: "success", version: 1, receipt: null, status: status, changes: [], diff: null, edit: null, restack: null,
     });
   } finally {
     await client.close();

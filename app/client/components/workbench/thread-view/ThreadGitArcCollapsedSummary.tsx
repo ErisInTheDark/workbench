@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadGitArcCollapsedSummary: compose established result rows beneath a closed Git arc card.
- * - ThreadGitArcCollapsedSummaryContent: typed file, claim or count preview content.
+ * - ThreadGitArcCollapsedSummaryContent: typed file, claim, count or restack preview content.
  * - createThreadGitArcStatusCounts: a status read compressed to one count per non-empty group.
  * - ThreadGitArcStatusCounts: those counts as one inline run, for a status card's line.
  * - createThreadGitArcCompareSummaryRows/createThreadGitArcDiffSummaryRows/createThreadGitArcEditSummaryRows: normalise parsed operation changes for file-row presentation.
@@ -19,12 +19,14 @@ import {
   ThreadFileChangePreviewList,
   type ThreadFileChangeListChange,
 } from "./ThreadFileChangeItem";
+import ThreadGitArcRestackEdits, { type GitArcRestackSummary } from "./ThreadGitArcRestackEdits";
 import ThreadSummaryText from "./ThreadSummaryText";
 
 export type ThreadGitArcCollapsedSummaryContent =
   | { changes: ThreadFileChangeListChange[]; kind: "files" }
   | { kind: "claims"; label: string; marker: ThreadClaimMarker; paths: string[]; totalCount: number }
-  | { kind: "counts"; rows: Array<{ label: string; marker: ThreadClaimMarker }> };
+  | { kind: "counts"; rows: Array<{ label: string; marker: ThreadClaimMarker }> }
+  | { kind: "restack"; summary: GitArcRestackSummary };
 
 /** Everything a status read knows as one inline run of counts, for its card's line. */
 export function ThreadGitArcStatusCounts({ counts }: { counts: ReturnType<typeof createThreadGitArcStatusCounts> }) {
@@ -118,6 +120,13 @@ export default function ThreadGitArcCollapsedSummary ({
 }: {
   content: ThreadGitArcCollapsedSummaryContent;
 }) {
+  if (content.kind === "restack") {
+    return (
+      <div className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]" data-thread-git-arc-collapsed-summary="true">
+        <ThreadGitArcRestackEdits limit={2} summary={content.summary} />
+      </div>
+    );
+  }
   const totalCount = content.kind === "files" ? content.changes.length
     : content.kind === "claims" ? content.totalCount : content.rows.length;
   const remainingCount = totalCount - Math.min(totalCount, 2);

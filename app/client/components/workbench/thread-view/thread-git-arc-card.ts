@@ -2,7 +2,7 @@
  * Exports:
  * - GitArcCardState/GitArcCardStyle/GitArcPathGroup/GitArcCard: one Git arc call as a card: its line, its flat body and its
  *   closed preview.
- * - buildGitArcCard: derive that card from the call's intent, outcome, receipt or typed failure, and status facts.
+ * - buildGitArcCard: derive that card from the call's intent, outcome, receipt, restack result or typed failure, and status facts.
  */
 import {
   createGitArcOperationRejected,
@@ -12,6 +12,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import type { GitArcRestackResult } from "workbench-shared/workbench/git/git-arc-restack";
 import { parseGitArcStatus, type GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import type { GitArcEditStep } from "../../../workbench/thread/command-matchers/workbench-command-rendering";
@@ -22,6 +23,7 @@ import {
   createThreadGitArcStatusCounts,
   type ThreadGitArcCollapsedSummaryContent,
 } from "./ThreadGitArcCollapsedSummary";
+import { summarizeGitArcRestack, type GitArcRestackSummary } from "./ThreadGitArcRestackEdits";
 
 /** Declined Git arc calls read as failures: the arc did not change. */
 export type GitArcCardState = Exclude<StepState, "declined">;
@@ -77,6 +79,8 @@ export interface GitArcCard {
   conflictedPaths: readonly string[];
   /** What an applied edit session changed; previews, views, ends and reverts change nothing themselves, so they have none. */
   editTotals: { additions: number; deletions: number } | null;
+  /** What a completed restack dropped, stripped, folded and rebased. */
+  restack: GitArcRestackSummary | null;
 }
 
 const ACTION_LABELS: Record<GitArcCommandAction, StepLabels> = {
@@ -120,7 +124,7 @@ const ADOPT_AND_START_LABELS = stepLabels("Adopting changes and starting", "Adop
 
 const CARD_STYLES: Record<GitArcCommandAction, Exclude<GitArcCardStyle, "step">> = {
   adopt: "card", claims: "card", compare: "card", continue: "card", diff: "card", edit: "cardPreview", plan: "card",
-  planStart: "card", propose: "card", release: "card", rescind: "card", restack: "card", restore: "cardPreview", scope: "cardPreview",
+  planStart: "card", propose: "card", release: "card", rescind: "card", restack: "cardPreview", restore: "cardPreview", scope: "cardPreview",
   stack: "card", start: "card", stash: "card", status: "card", unknown: "card", unstack: "card", unstash: "card",
 };
 
@@ -218,6 +222,7 @@ export function buildGitArcCard(input: {
   name: string | null;
   outcome: ThreadCommandExecutionOutcome;
   receipt: GitArcReceipt | null;
+  restackResult: GitArcRestackResult | null;
   statusFacts: Partial<GitArcStatusPresentation> | null | undefined;
   statusOutput: string | undefined;
   typedFailure: GitArcFailure | null;
@@ -299,10 +304,12 @@ export function buildGitArcCard(input: {
   ] as const).flatMap(([count, noun, marker]) => count === undefined ? [] : [{ label: `${count} ${noun} ${count === 1 ? "file" : "files"}`, marker }]);
 
   const style: GitArcCardStyle = input.asRunStep ? "step" : CARD_STYLES[action];
-  // Only preview cards keep a result visible while closed: edited files, or the first file list.
+  const restack = action === "restack" && state === "completed" && input.restackResult ? summarizeGitArcRestack(input.restackResult) : null;
+  // Only preview cards keep a result visible while closed: restack edits, edited files, or the first file list.
   const editRows = editResult ? createThreadGitArcEditSummaryRows(editResult.files) : [];
   const first = pathGroups[0];
   const preview: ThreadGitArcCollapsedSummaryContent | null = style !== "cardPreview" ? null
+    : restack?.edits.length ? { kind: "restack", summary: restack }
     : editRows.length ? { changes: editRows, kind: "files" }
       : first ? { kind: "claims", label: first.label, marker: first.marker, paths: [...first.paths], totalCount: first.totalCount ?? first.paths.length }
         : counts.length ? { kind: "counts", rows: counts } : null;
@@ -333,5 +340,6 @@ export function buildGitArcCard(input: {
     status,
     conflictedPaths: action === "unstash" ? receipt?.conflictedPaths ?? [] : [],
     editTotals: editResult?.phase === "applied" ? { additions: editResult.additions, deletions: editResult.deletions } : null,
+    restack,
   };
 }

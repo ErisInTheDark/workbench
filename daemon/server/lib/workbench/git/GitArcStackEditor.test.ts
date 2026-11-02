@@ -78,6 +78,12 @@ test("restack drops, strips and folds in one transaction without touching the wo
   const replacement = result.proposals.find(outcome => outcome.proposalId === state.feature);
   assert.ok(replacement && "replacementId" in replacement);
   assert.deepEqual(result.layers, [{ proposalIds: [replacement.replacementId], title: "feature" }]);
+  // Outcomes name each proposal and the files a strip took out, so the transcript can say what happened.
+  assert.deepEqual(new Map(result.proposals.map(outcome => [outcome.proposalId, outcome])), new Map([
+    [state.feature, { proposalId: state.feature, replacementId: replacement.replacementId, status: "replaced", stripped: ["mod/a.txt"], title: "feature" }],
+    [state.mod, { proposalId: state.mod, status: "rescinded", title: "add mod" }],
+    [state.removal, { proposalId: state.removal, replacementId: replacement.replacementId, status: "superseded", stripped: [], title: "remove mod" }],
+  ]));
   assert.deepEqual(
     [await status(state.mod), await status(state.removal), await status(state.feature), await status(replacement.replacementId)],
     ["rescinded", "superseded", "superseded", "proposed"],

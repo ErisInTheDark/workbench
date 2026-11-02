@@ -1,6 +1,7 @@
 /*
  * No production exports. Tests protect when failed Git arc starts fold into their successful retry: only a completed
- * retry folds, only work and arc reads fold between, waits and continues open retries, and MCP and CLI starts fold alike;
+ * retry folds, only work and arc reads fold between, waits and continues open retries, restacks retry only into restacks,
+ * and MCP and CLI starts fold alike;
  * arc-only review steps (never edit sessions) fold into the completed proposal they lead into, and back-to-back arc cards
  * stitch into one.
  */
@@ -110,6 +111,23 @@ test("a failed continue starts a retry like a failed start", () => {
   assert.deepEqual(after?.kind === "cardHistory" ? after.items.map(item => item.id) : null, ["continued", "why", "started"]);
   assert.deepEqual(fold([thought("earlier"), mcp("continued", "git_arc_continue", "failed"), commentary("stuck")]).map(block => block.kind),
     ["activityRun", "agentCommentarySequence"]);
+});
+
+test("failed restacks fold into the restack that succeeded, never across into starts", () => {
+  const [retry, ...rest] = fold([
+    mcp("conflict", "git_arc_restack", "failed"), mcp("diffed", "git_arc_diff"), mcp("emptied", "git_arc_restack", "failed"), mcp("restacked", "git_arc_restack"),
+  ]);
+  assert.equal(rest.length, 0);
+  assert.equal(retry?.kind === "cardHistory" ? retry.failedAttempts : null, 2);
+  assert.deepEqual(retry ? getRenderableBlockItems(retry).map(item => item.id) : null, ["conflict", "diffed", "emptied", "restacked"]);
+  // A failed start is not a failed restack, and a restack does not complete a start: both stay their own cards.
+  for (const items of [
+    [mcp("failed", "git_arc_start", "failed"), mcp("restacked", "git_arc_restack")],
+    [mcp("conflict", "git_arc_restack", "failed"), mcp("started", "git_arc_start")],
+  ]) {
+    const [stitched] = fold(items);
+    assert.deepEqual(stitched?.kind === "cardSequence" ? stitched.blocks.map(block => block.kind) : null, ["item", "item"]);
+  }
 });
 
 test("CLI starts fold like MCP starts", () => {

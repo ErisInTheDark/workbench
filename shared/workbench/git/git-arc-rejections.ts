@@ -84,7 +84,7 @@ export const GitArcRejectionSchema = z.discriminatedUnion("reason", [
     paths: facts,
   }).strict(),
   z.object({ reason: z.literal("proposalNotFound"), proposalId: fact }).strict(),
-  z.object({ reason: z.enum(["restackConflict", "proposalEmptied"]), proposalId: fact, paths: facts }).strict(),
+  z.object({ reason: z.enum(["restackConflict", "proposalEmptied"]), proposalId: fact, paths: facts, title: z.string().optional() }).strict(),
   z.object({ reason: z.literal("publishedCommit"), refs: facts }).strict(),
   z.object({
     reason: z.enum(["unknownWorkspaceRoot", "rootNotRepository", "noClaimedRootPaths", "missingRestoreRef", "crossRootProposal"]),

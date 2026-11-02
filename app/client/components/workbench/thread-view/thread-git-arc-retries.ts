@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - foldGitArcHistories: fold failed arc starts, waits or continues (with the work between) into the start that finally
- *   succeeded, then fold the arc-only review steps leading into a completed proposal into it.
+ *   succeeded, and failed restacks into the restack that succeeded, then fold the arc-only review steps leading into a
+ *   completed proposal into it.
  * - isGitArcCall: a block that is one Git arc call, drawn as one Git arc card.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -20,8 +21,15 @@ type ActivityRunBlock = Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
 type ArcCallAction = GitArcCommandAction | "wait";
 type ArcCall = { action: ArcCallAction; item: CommandSequenceItem; outcome: "completed" | "failed" | "other" };
 
-const STARTS: ReadonlySet<ArcCallAction> = new Set(["start", "planStart", "wait"]);
-/** Reads an agent makes while working out why its start failed; they change nothing, so they fold into the retry. */
+type RetryFamily = "restack" | "start";
+/**
+ * Calls an agent retries until one works; failures fold only into a later success of their own family. Continues are run
+ * steps, never cards of their own, so a failed continue opens a start retry that only a start completes.
+ */
+const RETRY_FAMILIES: ReadonlyMap<ArcCallAction, RetryFamily> = new Map([
+  ["continue", "start"], ["planStart", "start"], ["restack", "restack"], ["start", "start"], ["wait", "start"],
+]);
+/** Reads an agent makes while working out why its attempt failed; they change nothing, so they fold into the retry. */
 const READS: ReadonlySet<ArcCallAction> = new Set(["status", "scope"]);
 
 /** One Git arc call; an interrupted or running call has no settled outcome. */
@@ -52,28 +60,35 @@ function readArcCall(block: ThreadRenderableBlock): ArcCall | null {
   return block.kind === "commandSequence" && block.items.length === 1 ? readArcItem(block.items[0]!) : null;
 }
 
-function readGitArcStartAttempt(block: ThreadRenderableBlock) {
+/** A standalone retryable call and the retry family it belongs to. */
+function readRetryAttempt(block: ThreadRenderableBlock) {
   const call = readArcCall(block);
-  return call && STARTS.has(call.action) ? call : null;
+  const family = call ? RETRY_FAMILIES.get(call.action) : undefined;
+  return call && family ? { family, outcome: call.outcome } : null;
 }
 
-function isFailedStart(block: ThreadRenderableBlock) {
-  return readGitArcStartAttempt(block)?.outcome === "failed";
+/** The family a standalone failed attempt opens a retry for. */
+function failedFamily(block: ThreadRenderableBlock) {
+  const attempt = readRetryAttempt(block);
+  return attempt?.outcome === "failed" ? attempt.family : null;
 }
 
-/** A failed start, wait or continue; continues are run steps, so they sit inside activity runs. */
-function isFailedAttempt(item: ThreadItem) {
+/** A failed attempt of `family`, standalone or a run step. */
+function isFailedAttempt(item: ThreadItem, family: RetryFamily) {
   const call = readArcItem(item);
-  return Boolean(call && call.outcome === "failed" && (STARTS.has(call.action) || call.action === "continue"));
+  return Boolean(call && call.outcome === "failed" && RETRY_FAMILIES.get(call.action) === family);
+}
+
+function isFailedContinue(item: ThreadItem) {
+  return readArcItem(item)?.action === "continue" && isFailedAttempt(item, "start");
 }
 
 /** Split a run at its first failed continue: the work before it, and the run from the continue on. */
 function splitAtFailedContinue(run: ActivityRunBlock): { head: ActivityRunBlock | null; tail: ActivityRunBlock } | null {
-  const segmentIndex = run.segments.findIndex(segment => segment.kind === "commands"
-    && segment.items.some(item => readArcItem(item)?.action === "continue" && isFailedAttempt(item)));
+  const segmentIndex = run.segments.findIndex(segment => segment.kind === "commands" && segment.items.some(isFailedContinue));
   const segment = run.segments[segmentIndex];
   if (segment?.kind !== "commands") return null;
-  const at = segment.items.findIndex(item => readArcItem(item)?.action === "continue" && isFailedAttempt(item));
+  const at = segment.items.findIndex(isFailedContinue);
   const itemIndex = run.items.indexOf(segment.items[at]!);
   const headSegments = [...run.segments.slice(0, segmentIndex), ...(at ? [{ ...segment, items: segment.items.slice(0, at) }] : [])];
   return {
@@ -86,16 +101,16 @@ function splitAtFailedContinue(run: ActivityRunBlock): { head: ActivityRunBlock 
   };
 }
 
-/** What may sit between a failed start and its retry: runs of work, arc reads and further failed starts. */
-function isAbsorbable(block: ThreadRenderableBlock) {
-  if (block.kind === "activityRun" || isFailedStart(block)) return true;
+/** What may sit between a failed attempt and its retry: runs of work, arc reads and further failures of its family. */
+function isAbsorbable(block: ThreadRenderableBlock, family: RetryFamily) {
+  if (block.kind === "activityRun" || failedFamily(block) === family) return true;
   const call = readArcCall(block);
   return Boolean(call && READS.has(call.action) && call.outcome !== "other");
 }
 
 /** The card `success` opening onto `span` (runs and absorbable arc calls) as run steps. */
-function historyBlock(span: readonly ThreadRenderableBlock[], success: ThreadRenderableBlock): ThreadRenderableBlock {
-  const failedAttempts = span.flatMap(entry => getRenderableBlockItems(entry)).filter(isFailedAttempt).length;
+function historyBlock(span: readonly ThreadRenderableBlock[], success: ThreadRenderableBlock, family: RetryFamily): ThreadRenderableBlock {
+  const failedAttempts = span.flatMap(entry => getRenderableBlockItems(entry)).filter(item => isFailedAttempt(item, family)).length;
   return buildCardHistory(span.map(entry => entry.kind === "activityRun" ? entry : readArcCall(entry)!.item), success, failedAttempts);
 }
 
@@ -109,21 +124,23 @@ function foldRetries(blocks: readonly ThreadRenderableBlock[]): ThreadRenderable
   while (index < blocks.length) {
     const block = blocks[index]!;
     const split = block.kind === "activityRun" ? splitAtFailedContinue(block) : null;
-    if (!isFailedStart(block) && !split) {
+    const family = split ? "start" : failedFamily(block);
+    if (!family) {
       folded.push(block);
       index += 1;
       continue;
     }
     let end = index + 1;
-    while (end < blocks.length && isAbsorbable(blocks[end]!)) end += 1;
+    while (end < blocks.length && isAbsorbable(blocks[end]!, family)) end += 1;
     const success = blocks[end];
-    if (!success || readGitArcStartAttempt(success)?.outcome !== "completed") {
+    const retry = success ? readRetryAttempt(success) : null;
+    if (!success || retry?.family !== family || retry.outcome !== "completed") {
       folded.push(...blocks.slice(index, end));
       index = end;
       continue;
     }
     if (split?.head) folded.push(split.head);
-    folded.push(historyBlock([split?.tail ?? block, ...blocks.slice(index + 1, end)], success));
+    folded.push(historyBlock([split?.tail ?? block, ...blocks.slice(index + 1, end)], success, family));
     index = end + 1;
   }
   return folded;
@@ -145,7 +162,7 @@ function foldLeadIns(blocks: readonly ThreadRenderableBlock[]): ThreadRenderable
     const next = blocks[index + 1];
     const proposal = next ? readArcCall(next) : null;
     if (next && isArcOnlyRun(block) && proposal?.action === "propose" && proposal.outcome === "completed") {
-      folded.push(historyBlock([block], next));
+      folded.push(historyBlock([block], next, "start"));
       index += 1;
       continue;
     }

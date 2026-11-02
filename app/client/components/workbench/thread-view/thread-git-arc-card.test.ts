@@ -7,6 +7,7 @@ import { test } from "node:test";
 
 import { formatGitArcEditText, parseGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import type { GitArcRestackResult } from "workbench-shared/workbench/git/git-arc-restack";
 import type { GitArcCommandAction, GitArcCommandIntent } from "../../../workbench/thread/thread-command-matchers";
 import { buildGitArcCard } from "./thread-git-arc-card";
 
@@ -23,9 +24,35 @@ function receipt(action: GitArcReceipt["action"], values: Partial<GitArcReceipt>
 function card(action: GitArcCommandAction, values: Partial<CardInput> = {}) {
   return buildGitArcCard({
     asRunStep: false, currentPlan: null, editResult: null, failureReason: null, intent: intent(action), interruptedBySteer: false,
-    name: null, outcome: "completed", receipt: null, statusFacts: undefined, statusOutput: undefined, typedFailure: null, ...values,
+    name: null, outcome: "completed", receipt: null, restackResult: null, statusFacts: undefined, statusOutput: undefined, typedFailure: null, ...values,
   });
 }
+
+test("a restack card says what it dropped, stripped and folded by title, and keeps those edits in view while closed", () => {
+  const restackResult: GitArcRestackResult = {
+    layers: [],
+    proposals: [
+      { proposalId: "upper", status: "rebased", title: "dev server" },
+      { proposalId: "mapgen", replacementId: "mapgen-2", status: "replaced", stripped: ["mods/lilygen/Noise.ts"], title: "mapgen 2.16.0" },
+      { proposalId: "scripts", replacementId: "scripts-2", status: "replaced", stripped: [], title: "agent scripts" },
+      { proposalId: "lilygen", status: "rescinded", title: "lilygen mod" },
+      { proposalId: "removal", replacementId: "mapgen-2", status: "superseded", stripped: [], title: "remove lilygen" },
+    ],
+    releasedClaims: ["mods/lilygen/Noise.ts"],
+    stackTip: null,
+  };
+  const restacked = card("restack", { restackResult });
+  // A replaced proposal with nothing stripped (an edit elsewhere rebuilt it) gets no strip row of its own.
+  assert.deepEqual(restacked.restack?.edits, [
+    { kind: "drop", title: "lilygen mod" },
+    { kind: "strip", paths: ["mods/lilygen/Noise.ts"], title: "mapgen 2.16.0" },
+    { into: "mapgen 2.16.0", kind: "fold", title: "remove lilygen" },
+  ]);
+  assert.deepEqual(restacked.restack?.rebased, ["dev server"]);
+  assert.equal(restacked.preview?.kind, "restack");
+  // Only a completed restack shows edits; a failed one's failure says why.
+  assert.equal(card("restack", { outcome: "failed", restackResult }).restack, null);
+});
 
 test("any call in step chrome is a step, so a retry's failed start reads as one of its steps", () => {
   for (const action of ["diff", "start", "restore", "propose"] as const) {

@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcStackedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
+import type { GitArcRestackOutcome } from "workbench-shared/workbench/git/git-arc-restack";
 import {
   checkpointMessage,
   type CheckpointMetadata,
@@ -46,10 +47,7 @@ export interface GitArcStackEdit {
 
 export interface GitArcStackEditResult {
   layers: Array<{ proposalIds: string[]; title: string }>;
-  proposals: Array<
-    | { proposalId: string; status: "rebased" | "rescinded" }
-    | { proposalId: string; replacementId: string; status: "replaced" | "superseded" }
-  >;
+  proposals: GitArcRestackOutcome[];
   releasedClaims: string[];
   /** Metadata of every proposal published under a new id, keyed by that id. */
   replacements: Map<string, ProposalMetadata>;
@@ -123,11 +121,15 @@ export default class GitArcStackEditor {
     groups.push({ layer: null, proposals: unsealed.filter(({ metadata }) => metadata.status === "proposed" && !metadata.messageOnly) });
 
     const located = new Map<string, number>();
-    groups.forEach(({ proposals }, index) => proposals.forEach(({ metadata }) => located.set(metadata.proposalId, index)));
+    const byId = new Map<string, StoredProposal>();
+    groups.forEach(({ proposals }, index) => proposals.forEach((proposal) => {
+      located.set(proposal.metadata.proposalId, index);
+      byId.set(proposal.metadata.proposalId, proposal);
+    }));
     const locate = (proposalId: string) => {
       const index = located.get(proposalId);
       const group = index === undefined ? undefined : groups[index];
-      const proposal = group?.proposals.find(({ metadata }) => metadata.proposalId === proposalId);
+      const proposal = byId.get(proposalId);
       if (index === undefined || !group || !proposal) invalid(`Proposal ${proposalId} is not one of this thread's pending stack proposals.`);
       if (group.layer && !ownsLayer(group.layer, identity)) invalid(`Proposal ${proposalId} is sealed in a layer this thread inherited.`);
       if (proposal.metadata.status !== "proposed") invalid(`Proposal ${proposalId} is not pending.`);
@@ -148,7 +150,7 @@ export default class GitArcStackEditor {
     }
     for (const [proposalId, prefixes] of strip) {
       if (drop.has(proposalId)) invalid(`Proposal ${proposalId} cannot be both dropped and stripped.`);
-      const proposal = groups[located.get(proposalId)!]!.proposals.find(({ metadata }) => metadata.proposalId === proposalId)!;
+      const proposal = byId.get(proposalId)!;
       const selected = new GitArcPathSet(prefixes);
       if (!proposal.metadata.paths.some(candidate => selected.covers(candidate))) {
         invalid(`Strip paths ${prefixes.join(", ")} match none of proposal ${proposalId}'s files.`);
@@ -159,19 +161,23 @@ export default class GitArcStackEditor {
 
     const conflict = (proposalId: string, paths: string[]) => revising
       ? new GitArcRejectionError({ reason: "proposalRevisionConflict" }, `The revision conflicts with proposal ${proposalId} layered above it: ${paths.join(", ")}`)
-      : new GitArcRejectionError({ reason: "restackConflict", paths, proposalId }, `Proposal ${proposalId} conflicts after the restack: ${paths.join(", ")}`);
+      : new GitArcRejectionError({ reason: "restackConflict", paths, proposalId, title: byId.get(proposalId)!.metadata.title }, `Proposal ${proposalId} conflicts after the restack: ${paths.join(", ")}`);
     const merge = async (base: string | null, ours: string | null, theirs: string, proposalId: string) => {
       const result = await this.repository.mergeWorktreeTrees(base, ours, theirs);
       if (result.conflictedPaths.length || result.unsupportedConflictTypes.length) throw conflict(proposalId, result.conflictedPaths);
       return result.tree;
     };
+    /** Files each strip took out of its proposal, by proposal id. */
+    const strippedById = new Map<string, string[]>();
     const stripOwn = async (proposal: StoredProposal, tree: string, paths: string[]) => {
       const prefixes = strip.get(proposal.metadata.proposalId);
       if (!prefixes) return { paths, stripped: [] as string[], tree };
       const selected = new GitArcPathSet(prefixes);
+      const stripped = paths.filter(candidate => selected.covers(candidate));
+      strippedById.set(proposal.metadata.proposalId, stripped);
       return {
         paths: paths.filter(candidate => !selected.covers(candidate)),
-        stripped: paths.filter(candidate => selected.covers(candidate)),
+        stripped,
         tree: (await this.repository.writeTreeWithPathSources(tree, [{ paths: prefixes, source: proposal.metadata.baseCommit }])).tree,
       };
     };
@@ -217,7 +223,7 @@ export default class GitArcStackEditor {
         let tree = rebases ? await merge(proposal.metadata.baseCommit, base, own.tree, id) : own.tree;
         let candidates = own.paths;
         for (const sourceId of folds) {
-          const source = groups[located.get(sourceId)!]!.proposals.find(({ metadata }) => metadata.proposalId === sourceId)!;
+          const source = byId.get(sourceId)!;
           const sourceOwn = await stripOwn(source, source.tree, source.metadata.paths);
           released.push(...sourceOwn.stripped);
           tree = await merge(source.metadata.baseCommit, tree, sourceOwn.tree, sourceId);
@@ -230,7 +236,7 @@ export default class GitArcStackEditor {
         }
         const paths = await this.repository.listChangedPaths(nextBase, tree, candidates);
         if (!paths.length) {
-          throw new GitArcRejectionError({ reason: "proposalEmptied", paths: [], proposalId: id }, `Proposal ${id} would have no changes; drop it instead.`);
+          throw new GitArcRejectionError({ reason: "proposalEmptied", paths: [], proposalId: id, title: proposal.metadata.title }, `Proposal ${id} would have no changes; drop it instead.`);
         }
         results.push({ base: nextBase, contentEdited, livePaths: paths, newId: contentEdited ? randomUUID() : null, paths, proposal, tree });
       }
@@ -311,7 +317,7 @@ export default class GitArcStackEditor {
       if (!result.newId) {
         const { commit } = await store.createProposalCommit(result.tree, rebased);
         proposalUpdates.push({ newValue: commit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef });
-        outcomes.push({ proposalId: id, status: "rebased" });
+        outcomes.push({ proposalId: id, status: "rebased", title: proposal.metadata.title });
         continue;
       }
       const revision = edit.revise?.proposalId === id ? edit.revise : null;
@@ -330,7 +336,9 @@ export default class GitArcStackEditor {
       replacements.set(result.newId, created.metadata);
       replace.set(id, result.newId);
       await settle(proposal, { ...remapped, status: "superseded", supersededByProposalId: result.newId, supersededBySha: null, unavailableReason: null });
-      outcomes.push({ proposalId: id, replacementId: result.newId, status: "replaced" });
+      outcomes.push({
+        proposalId: id, replacementId: result.newId, status: "replaced", stripped: strippedById.get(id) ?? [], title: messageOf(proposal).title,
+      });
     }
     for (const group of groups) {
       for (const proposal of group.proposals) {
@@ -338,13 +346,13 @@ export default class GitArcStackEditor {
         const remapped = remapProposalMetadata(proposal.metadata, commits);
         if (drop.has(id)) {
           await settle(proposal, { ...remapped, status: "rescinded", unavailableReason: null });
-          outcomes.push({ proposalId: id, status: "rescinded" });
+          outcomes.push({ proposalId: id, status: "rescinded", title: proposal.metadata.title });
         }
         const into = foldSources.get(id);
         if (into) {
           const replacementId = replace.get(into)!;
           await settle(proposal, { ...remapped, status: "superseded", supersededByProposalId: replacementId, supersededBySha: null, unavailableReason: null });
-          outcomes.push({ proposalId: id, replacementId, status: "superseded" });
+          outcomes.push({ proposalId: id, replacementId, status: "superseded", stripped: strippedById.get(id) ?? [], title: proposal.metadata.title });
         }
       }
     }

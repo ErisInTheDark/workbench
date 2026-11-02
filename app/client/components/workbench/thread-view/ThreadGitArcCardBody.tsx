@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadGitArcCardBody: what a Git arc card opens into, laid flat: edit session details, the caller's operation
- *   details, stacked commits, status facts, member roots, the card's path groups, unstash conflicts and any failure.
+ *   details, restack edits, stacked commits, status facts, member roots, the card's path groups, unstash conflicts and any failure.
  */
 "use client";
 
@@ -14,6 +14,7 @@ import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadGitArcCollapsedSummary, { createThreadGitArcEditSummaryRows } from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcEditDetails from "./ThreadGitArcEditDetails";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
+import ThreadGitArcRestackEdits from "./ThreadGitArcRestackEdits";
 import ThreadGitArcStatusDetails from "./ThreadGitArcStatusDetails";
 import type { GitArcCard } from "./thread-git-arc-card";
 
@@ -32,6 +33,7 @@ export default function ThreadGitArcCardBody({ card, editResult, operationDetail
     <div className="space-y-1" data-thread-git-arc-body={card.action}>
       {editResult ? <ThreadGitArcEditDetails result={editResult} rows={createThreadGitArcEditSummaryRows(editResult.files)} /> : null}
       {operationDetails && !claimFailure ? <div>{operationDetails}</div> : null}
+      {card.restack ? <ThreadGitArcRestackEdits summary={card.restack} /> : null}
       {card.stackedProposals.length ? (
         <div className="divide-y divide-[color-mix(in_srgb,var(--text)_8%,transparent)]" data-thread-git-arc-stacked-proposals="true">
           {card.stackedProposals.map(({ changeCount, changes, description, proposalId, title }) => (

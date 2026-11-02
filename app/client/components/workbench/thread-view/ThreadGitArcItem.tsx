@@ -12,6 +12,7 @@ import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/work
 import type { GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { summarizeGitArcChanges } from "workbench-shared/workbench/git/git-arc-change-totals";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import type { GitArcRestackResult } from "workbench-shared/workbench/git/git-arc-restack";
 import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
 import type { GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
@@ -73,6 +74,7 @@ export default function ThreadGitArcItem ({
   outcome,
   operationSummaryRows = [],
   receipt,
+  restackResult = null,
   statusFacts,
   statusIncomplete = false,
   statusOutput,
@@ -91,6 +93,8 @@ export default function ThreadGitArcItem ({
   outcome: ThreadCommandExecutionOutcome;
   operationSummaryRows?: readonly ThreadFileChangeListChange[];
   receipt: GitArcReceipt | null;
+  /** What a restack did, from its typed result or its CLI text. */
+  restackResult?: GitArcRestackResult | null;
   statusFacts?: Partial<GitArcStatusPresentation> | null;
   statusIncomplete?: boolean;
   statusOutput?: string;
@@ -101,7 +105,7 @@ export default function ThreadGitArcItem ({
   const asRunStep = useContext(ThreadRowChromeContext) === "step";
   const card = buildGitArcCard({
     asRunStep, currentPlan: presentation?.gitArcPlan ?? null, editResult, failureReason, intent: commandIntent, interruptedBySteer,
-    name, outcome, receipt, statusFacts, statusOutput, typedFailure,
+    name, outcome, receipt, restackResult, statusFacts, statusOutput, typedFailure,
   });
   // The trailing slot carries totals, then progress; never internal ids.
   const line = {

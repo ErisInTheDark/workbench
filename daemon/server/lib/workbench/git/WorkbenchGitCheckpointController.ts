@@ -20,12 +20,12 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import type {
   GitArcProposalCommitEntry,
   GitArcRestackEdits,
-  GitArcRestackResult,
   GitArcStackResult,
   GitCheckpointFileChange,
   GitCheckpointProposal,
   GitCheckpointRequest,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { GitArcRestackResult } from "workbench-shared/workbench/git/git-arc-restack";
 import { GitArcMissingClaimSetError } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcClaimChanges, GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";

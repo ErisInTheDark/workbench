@@ -43,7 +43,7 @@ function OpenedGitArcCard(props: ComponentProps<typeof ThreadGitArcItem>) {
   const card = buildGitArcCard({
     asRunStep: false, currentPlan: presentation?.gitArcPlan ?? null, editResult: props.editResult ?? null,
     failureReason: props.failureReason ?? null, intent: props.commandIntent, interruptedBySteer: props.interruptedBySteer ?? false,
-    name: props.name ?? null, outcome: props.outcome, receipt: props.receipt,
+    name: props.name ?? null, outcome: props.outcome, receipt: props.receipt, restackResult: props.restackResult ?? null,
     statusFacts: props.statusFacts, statusOutput: props.statusOutput, typedFailure: props.typedFailure ?? null,
   });
   return createElement(Fragment, null,
