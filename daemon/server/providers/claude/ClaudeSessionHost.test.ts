@@ -13,7 +13,7 @@ const request = { cwd: "C:/repo", threadId, paths: ["C:/repo/a.ts"] };
 function handlers(
   check: ClaudeSessionHandlers["checkFileClaims"], toolBatch = new WorkbenchAgentMcpRequestRegistry(),
 ): ClaudeSessionHandlers {
-  return { checkFileClaims: check, recordNativeToolDenial: () => undefined, toolBatch };
+  return { checkFileClaims: check, recordNativeToolDenial: () => undefined, readModeToolDenial: async () => null, toolBatch };
 }
 
 test("detach waits for hook calls in flight and later hooks reach the next bridge generation", async () => {

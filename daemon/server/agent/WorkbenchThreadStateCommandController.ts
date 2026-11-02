@@ -9,7 +9,7 @@ import {
   type ProofOfWork, type ProofState,
 } from "workbench-shared/workbench/thread/proof-of-work";
 import {
-  evaluateThreadStateTransition, gatedProofWindows, readFiledProofs, type ThreadState, type WorkflowLedgerEntry,
+  effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows, readFiledProofs, type ThreadState, type WorkflowLedgerEntry,
 } from "workbench-shared/workbench/thread/workflow-modes";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { WorkbenchThreadStateRequestSchema } from "../lib/workbench/commands/thread-state-command-definition";
@@ -62,6 +62,7 @@ export default class WorkbenchThreadStateCommandController {
     if (transition.undeclared.length) console.warn(`[thread-state] ${state.mode} requires undeclared checklists: ${transition.undeclared.join(", ")}.`);
     const refusals = [
       ...unknown.length ? [`Unknown checklist ids: ${unknown.join(", ")}.`] : [],
+      ...transition.unknown ? [`Unknown mode "${state.mode}"; declared: ${modes.map(mode => mode.name).join(", ")}.`] : [],
       ...transition.unresolved.length ? [
         `${transition.target!.name} needs checklists filed${transition.target!.resetOn.length ? ` since you last entered ${transition.target!.resetOn.join(" or ")}` : ""}; still unresolved:`,
         ...transition.unresolved.map(({ checklist, ids }) => `- ${checklist}: ${ids.join(", ")}`),
@@ -81,14 +82,19 @@ export default class WorkbenchThreadStateCommandController {
     const applied = !refusals.length && !titleFailure;
     if (applied && state.status) await this.ports.setStatus(caller, state.status);
 
-    const mode = applied && state.mode ? state.mode : workflow.mode;
+    const entered = applied && state.mode ? state.mode : workflow.mode;
+    const effective = applied && state.mode ? state.mode : effectiveWorkflowMode(workflow.ledger, modes)?.name ?? null;
+    const mode = effective ?? entered;
+    const shownMode = entered && effective && entered.toLowerCase() === effective.toLowerCase()
+      ? entered
+      : `${entered ?? "none"}${effective ? `, so ${effective}'s rules apply` : ""}`;
     const editable = applied && state.alwaysEditable ? state.alwaysEditable : workflow.alwaysEditable;
     const [title, status] = await Promise.all([this.ports.readTitle(caller), this.ports.readStatus(threadId)]);
     const report = [
       applied
         ? (state.mode ? `Entered ${state.mode}.` : "Applied.")
         : `Not applied${proof ? "; proofs filed" : ""}:\n${titleFailure ? `Title: ${titleFailure}` : refusals.join("\n")}`,
-      `Mode: ${mode ?? "none"}. Status: ${status}${applied && state.status ? ` (${state.status} applies when the turn ends)` : ""}. Title: ${title || "none"}.`,
+      `Mode: ${shownMode}. Status: ${status}${applied && state.status ? ` (${state.status} applies when the turn ends)` : ""}. Title: ${title || "none"}.`,
       `Always editable: ${editable.length ? editable.join(", ") : "none"}.`,
       ...proof ? [this.proofReport(proof, items, ledger, workflow)] : [],
       ...this.owed(applied && state.mode ? [...ledger, { kind: "mode", mode: state.mode }] : ledger, workflow, mode),

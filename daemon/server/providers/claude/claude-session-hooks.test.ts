@@ -1,4 +1,4 @@
-/* No production exports. Tests protect compact recall directive injection, commentary hint delivery, refusing questionnaires with unseen context, the Claude Edit/Write claim gate, and tool batch failure skipping. */
+/* No production exports. Tests protect compact recall directive injection, commentary hint delivery, refusing questionnaires with unseen context, the Claude Edit/Write claim gate, mode-denied native reads, and tool batch failure skipping. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
@@ -23,7 +23,7 @@ function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit", batc
   const checked: string[][] = [];
   const hooks = createClaudeSessionHooks({
     cwd, onDenied: id => denied.push(id), nudge: new ClaudeCommentaryNudge(), batch: batch.batch,
-    check: async paths => { checked.push(paths); return check(paths); },
+    check: async paths => { checked.push(paths); return check(paths); }, readModeToolDenial: async () => null,
   });
   const hook = hooks.PreToolUse.find(({ matcher }) => matcher === "Edit|Write")!.hooks[0]!;
   const output = hook({
@@ -40,7 +40,7 @@ test("plain assistant text reaches Claude as hint context after its tool batch a
   const nudge = new ClaudeCommentaryNudge();
   const hooks = createClaudeSessionHooks({
     cwd, onDenied: () => undefined, nudge, batch: recordingBatch().batch,
-    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
+    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }), readModeToolDenial: async () => null,
   });
   const base = { session_id: "session", transcript_path: "", cwd };
   const context = (result: unknown) =>
@@ -65,7 +65,7 @@ test("a questionnaire is refused only while the text introducing it went unseen"
   const nudge = new ClaudeCommentaryNudge();
   const hooks = createClaudeSessionHooks({
     cwd, onDenied: () => undefined, nudge, batch: recordingBatch().batch,
-    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
+    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }), readModeToolDenial: async () => null,
   });
   const hook = hooks.PreToolUse.find(({ matcher }) => matcher === "mcp__wb__request_user_input")!.hooks[0]!;
   const ask = () => hook({
@@ -90,7 +90,7 @@ test("a questionnaire is refused only while the text introducing it went unseen"
 test("only native compaction injects the recall directive", async () => {
   const hooks = createClaudeSessionHooks({
     cwd, onDenied: () => undefined, nudge: new ClaudeCommentaryNudge(), batch: recordingBatch().batch,
-    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
+    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }), readModeToolDenial: async () => null,
   });
   const hook = hooks.SessionStart[0]!.hooks[0]!;
 
@@ -138,7 +138,7 @@ test("a resolved batch ends", async () => {
   const batch = recordingBatch();
   const hooks = createClaudeSessionHooks({
     cwd, onDenied: () => undefined, nudge: new ClaudeCommentaryNudge(), batch: batch.batch,
-    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
+    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }), readModeToolDenial: async () => null,
   });
   await hooks.PostToolBatch[0]!.hooks[0]!(
     { session_id: "session", transcript_path: "", cwd, hook_event_name: "PostToolBatch", tool_calls: [] } as never,
@@ -177,6 +177,27 @@ test("claim check failures and unreadable paths deny rather than letting the edi
   const missing = await run(async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }), { path: "opencode-shape.ts" });
   assert.equal(decision(missing.result), "deny");
   assert.deepEqual(missing.checked, []);
+});
+
+test("native Read follows the mode's read denial, and a failed mode check denies", async context => {
+  context.mock.method(console, "warn", () => undefined);
+  const read = async (readModeToolDenial: (token: string) => Promise<string | null>) => {
+    const asked: string[] = [];
+    const hooks = createClaudeSessionHooks({
+      cwd, onDenied: () => undefined, nudge: new ClaudeCommentaryNudge(), batch: recordingBatch().batch,
+      check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
+      readModeToolDenial: async token => { asked.push(token); return await readModeToolDenial(token); },
+    });
+    const hook = hooks.PreToolUse.find(({ matcher }) => matcher === "Read")!.hooks[0]!;
+    const result = await hook({
+      hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "a.ts" }, tool_use_id: "tool-1",
+      session_id: "session", transcript_path: "", cwd,
+    } as never, "tool-1", { signal: new AbortController().signal });
+    return { asked, decision: decision(result) };
+  };
+  assert.deepEqual(await read(async () => "Review mode denies read."), { asked: ["read"], decision: "deny" });
+  assert.deepEqual(await read(async () => null), { asked: ["read"], decision: undefined });
+  assert.equal((await read(async () => { throw new Error("offline"); })).decision, "deny");
 });
 
 test("tools that merely resemble Edit or Write are not judged", async () => {

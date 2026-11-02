@@ -83,6 +83,8 @@ export const ENDED_CLAUDE_SESSION: ClaudeSession = {
 export interface ClaudeSessionHandlers {
   checkFileClaims(request: { cwd: string; threadId: WorkbenchThreadId; paths: string[] }): Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   recordNativeToolDenial(turnId: WorkbenchTurnId, toolUseId: string): void;
+  /** Why the thread's workflow mode denies a tool, by its deny token, or null. */
+  readModeToolDenial(request: { threadId: WorkbenchThreadId; toolName: string }): Promise<string | null>;
   /** The thread's provider tool batch, which orders serial wb shells and skips calls after a failure. */
   toolBatch: Pick<WorkbenchAgentMcpRequestRegistry, "awaitBatchTurn" | "declareToolBatch" | "endToolBatch" | "settleToolUse">;
 }
@@ -291,6 +293,7 @@ export default class ClaudeSessionHost {
           hooks: createClaudeSessionHooks({
             cwd, nudge,
             check: paths => this.call(handlers => handlers.checkFileClaims({ cwd, threadId, paths })),
+            readModeToolDenial: toolName => this.call(handlers => handlers.readModeToolDenial({ threadId, toolName })),
             onDenied: toolUseId => {
               void this.call(async handlers => handlers.recordNativeToolDenial(turnId, toolUseId)).catch((error: unknown) => {
                 console.warn("[claude] native tool denial was not recorded",

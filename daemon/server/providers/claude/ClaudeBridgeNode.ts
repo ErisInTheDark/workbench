@@ -84,11 +84,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       ),
     });
     const gitArc = build.get("gitArc");
+    const threadWorkflow = build.get("threadWorkflow");
     let detachHooks: (() => Promise<void>) | null = null;
     const attachHooks = () => {
       detachHooks = sessions.attach({
         checkFileClaims: ({ cwd, threadId, paths }) => gitArc.checkActiveClaimPaths(cwd, "claude", threadId, paths),
         recordNativeToolDenial: (turnId, toolUseId) => transcript.recordNativeToolDenial(turnId, toolUseId),
+        readModeToolDenial: ({ threadId, toolName }) => threadWorkflow.readToolDenial(threadId, toolName),
         toolBatch: getProcessWorkbenchAgentMcpRequestRegistry(),
       });
     };
@@ -141,6 +143,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [
     "claudeSessions", "gitArc", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity", "database",
     "threadState", "transcript", "transcriptReader", "transcriptReconciliation", "providerObservations", "agentContext",
+    "threadWorkflow",
   ],
   safeAll: true,
   scope: "server:claude",

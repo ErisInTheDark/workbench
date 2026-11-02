@@ -1,12 +1,12 @@
 /*
  * No production exports. Tests mode transitions: fresh proofs per loop, cross-turn filings, deferral, ungated modes,
- * entry sources, the completed-status pairing, and what refused and legacy calls contribute to the ledger.
+ * entry sources, undeclared and unentered modes, the completed-status pairing, and what refused and legacy calls contribute to the ledger.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProofOfWork, ProofOfWorkChecklist } from "./proof-of-work";
 import {
-  currentAlwaysEditable, evaluateThreadStateTransition, gatedProofWindows, readFiledProofs, readModeEntered, readWorkflowLedgerEntries,
+  currentAlwaysEditable, effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows, readFiledProofs, readModeEntered, readWorkflowLedgerEntries,
   type ThreadState, type WorkflowLedgerEntry, type WorkflowMode,
 } from "./workflow-modes";
 
@@ -63,13 +63,25 @@ test("a completed-paired mode and completion require each other; blocked and unp
 });
 
 test("a mode listing its sources is entered only from them, however complete the filed proofs", () => {
-  const implement = defined("Implement", { from: ["Brief", "Implement"] });
-  const enterImplement = (ledger: WorkflowLedgerEntry[]) => evaluateThreadStateTransition(ledger, [implement], [plan], { mode: "Implement" }).needsFrom;
+  const declared = [defined("Inspect"), defined("Brief"), defined("Implement", { from: ["Brief", "Implement"] })];
+  const enterImplement = (ledger: WorkflowLedgerEntry[]) => evaluateThreadStateTransition(ledger, declared, [plan], { mode: "Implement" }).needsFrom;
   assert.deepEqual(enterImplement([complete, mode("Review")]), ["Brief", "Implement"], "plan proofs filed inline do not replace Brief");
-  assert.deepEqual(enterImplement([]), ["Brief", "Implement"], "no mode yet");
+  assert.deepEqual(enterImplement([]), ["Brief", "Implement"], "no mode yet counts as the first declared");
+  assert.deepEqual(enterImplement([mode("Decision")]), ["Brief", "Implement"], "an undeclared current mode counts as the first declared");
   assert.deepEqual(enterImplement([mode("brief")]), []);
   assert.deepEqual(enterImplement([mode("Implement")]), [], "re-entering for an addendum");
   assert.deepEqual(enter([mode("Review")], { mode: "Brief" }).needsFrom, [], "modes without sources are entered from anywhere");
+});
+
+test("only declared modes can be entered, and only while the workflow declares any", () => {
+  assert.equal(enter([mode("Review")], { mode: "Fixing" }).unknown, true);
+  assert.equal(enter([mode("Review")], { mode: "brief" }).unknown, false);
+  assert.equal(evaluateThreadStateTransition([], [], [], { mode: "Anything" }).unknown, false);
+  assert.equal(enter([], { status: "blocked" }).unknown, false);
+  assert.deepEqual(
+    [effectiveWorkflowMode([], modes)?.name, effectiveWorkflowMode([mode("Ghost")], modes)?.name, effectiveWorkflowMode([mode("review")], modes)?.name, effectiveWorkflowMode([], [])],
+    ["Brief", "Brief", "Review", null],
+  );
 });
 
 test("gated families report over the same window their modes count", () => {

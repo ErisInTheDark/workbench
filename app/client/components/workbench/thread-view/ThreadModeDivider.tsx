@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - default ThreadModeDivider: the heading a workflow mode switch opens across the thread: a top border, rail and wash
- *   fading down behind what follows, in the mode's declared colour, with its declared icon and name, a retitle beside it,
- *   opening onto the proofs filed on the way in. Tags, mode_set and thread_state all draw it.
+ *   fading down behind what follows, in the mode's declared colour, with its declared icon and name, a retitle and any
+ *   always-editable grant beside it, opening onto the proofs filed on the way in. Tags, mode_set and thread_state all draw it.
  */
 import { useContext, type CSSProperties, type ReactNode } from "react";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -28,9 +28,11 @@ function readModeColor(color: string | null | undefined): { className: string; s
   return { className: paint.className ?? "", style: paint.style };
 }
 
-export default function ThreadModeDivider({ actions, mode, proofs = [], title }: {
+export default function ThreadModeDivider({ actions, editable = null, mode, proofs = [], title }: {
   /** Controls a markdown section offers beside its mode line. */
   actions?: ReactNode;
+  /** Always-editable paths the switch set; empty when it cleared them. */
+  editable?: readonly string[] | null;
   mode: string;
   /** Filing calls whose proofs the line opens onto. */
   proofs?: readonly Extract<ThreadItem, { type: "mcpToolCall" }>[];
@@ -50,6 +52,12 @@ export default function ThreadModeDivider({ actions, mode, proofs = [], title }:
         {title ? (
           <span className="inline-flex min-w-0 items-center gap-1.5 opacity-70">
             <span>·</span><FlagIcon size={14} /><span className="truncate">{title}</span>
+          </span>
+        ) : null}
+        {editable ? (
+          <span className="inline-flex min-w-0 items-center gap-1.5 opacity-70" data-thread-state-change-editable="true">
+            <span>·</span><SquarePenIcon size={14} />
+            <span className="truncate">{editable.length ? `always editable: ${editable.join(", ")}` : "always editable cleared"}</span>
           </span>
         ) : null}
       </span>

@@ -591,6 +591,7 @@ function joinWords(words: readonly string[], conjunction: string) {
 function describeDenial(token: string) {
   if (token === "edit") return "every file edit";
   if (token === "edit:claims") return "edits to Git-visible files";
+  if (token === "read") return "reading files with native tools";
   return `\`${token}\``;
 }
 

@@ -8,6 +8,7 @@
  * - WorkflowLedgerSource/WorkflowLedgerEntry/readWorkflowLedgerEntries: what one recorded Workbench call contributed to a thread's workflow.
  * - readThreadStateCall/readModeEntered/readFiledProofs: a transcript call's thread_state arguments, entered mode, and filed proofs.
  * - currentWorkflowMode/currentAlwaysEditable: a ledger's latest entered mode and always-editable paths.
+ * - effectiveWorkflowMode: the declared mode whose rules apply, falling back to the first declared one.
  * - findWorkflowMode: the definition a mode name selects.
  * - evaluateThreadStateTransition: whether one call may apply its mode and status from the current mode, naming every refusal.
  * - gatedProofWindows: per gated checklist family, the proofs its modes count.
@@ -142,6 +143,11 @@ export function currentWorkflowMode(ledger: readonly WorkflowLedgerEntry[]) {
   return null;
 }
 
+/** The declared mode whose rules apply: the current one, else the first declared, so skipping or inventing a mode escapes nothing. */
+export function effectiveWorkflowMode(ledger: readonly WorkflowLedgerEntry[], modes: readonly WorkflowMode[]) {
+  return findWorkflowMode(modes, currentWorkflowMode(ledger)) ?? modes[0] ?? null;
+}
+
 export function currentAlwaysEditable(ledger: readonly WorkflowLedgerEntry[]): readonly string[] {
   for (let index = ledger.length - 1; index >= 0; index -= 1) {
     const entry = ledger[index]!;
@@ -162,8 +168,8 @@ function proofsSinceReset(ledger: readonly WorkflowLedgerEntry[], resetOn: reado
 }
 
 /**
- * `ledger` already holds this call's proofs. Entering a mode needs its proof checklists resolved and, when it lists
- * `from` modes, the current mode among them; a mode paired with `completed` is entered only with that status, and while
+ * `ledger` already holds this call's proofs. Only declared modes can be entered. Entering one needs its proof checklists
+ * resolved and, when it lists `from` modes, the effective mode among them; a mode paired with `completed` is entered only with that status, and while
  * any mode is paired, `completed` needs one of them after the call.
  */
 export function evaluateThreadStateTransition(
@@ -181,10 +187,10 @@ export function evaluateThreadStateTransition(
     return ids.length ? [{ checklist: family, ids }] : [];
   });
   const needsStatus = target?.status && call.status !== target.status ? target : null;
-  const current = currentWorkflowMode(ledger);
+  const current = effectiveWorkflowMode(ledger, modes)?.name ?? null;
   const needsFrom = target?.from.length && !target.from.some(mode => current && sameMode(mode, current)) ? target.from : [];
   const paired = modes.filter(mode => mode.status === "completed");
-  const after = call.mode ?? current;
+  const after = call.mode ?? currentWorkflowMode(ledger);
   const needsMode = call.status === "completed" && paired.length && !paired.some(mode => after && sameMode(mode.name, after))
     ? paired.map(mode => mode.name)
     : [];
@@ -192,6 +198,7 @@ export function evaluateThreadStateTransition(
     target,
     unresolved,
     undeclared: (target?.proofs ?? []).filter(family => !declared.has(family)),
+    unknown: Boolean(call.mode && modes.length && !target),
     current,
     needsFrom,
     needsStatus: needsStatus?.status ?? null,

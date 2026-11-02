@@ -25,7 +25,7 @@ import { runProviderRelocation } from "./provider-relocation-journey";
 import { parseThreadTestArguments, type ThreadTestMode } from "../thread-test-arguments";
 import {
   createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
-  fakeCodexTool, fakeOpenCodeDirectTool, SCENARIO_COMPLETION, type ProviderBoundaryToolNames,
+  fakeCodexTool, fakeOpenCodeDirectTool, SCENARIO_COMPLETION, SCENARIO_IMPLEMENT, type ProviderBoundaryToolNames,
 } from "./provider-boundary-journey";
 import { OPENCODE_COMMENTARY_TOOL_NAME } from "../../daemon/server/providers/opencode/opencode-workbench-rpc";
 import { CLAUDE_COMMENTARY_TOOL_NAME } from "../../daemon/server/providers/claude/claude-commentary-tool";
@@ -208,6 +208,7 @@ async function verifyCodexMachineArcs(input: {
     const daemonProject = (await runtime.waitForProjects([])).find(project => project.kind === "daemon");
     assert.ok(daemonProject, "The clone catalogue must offer its daemon project");
     fakeModel.enqueue([
+      ...SCENARIO_IMPLEMENT.map(state => ({ tool: { nameSuffix: "thread_state", arguments: state } })),
       // Git arc tools are direct Codex tools, not code-mode ones.
       { tool: { nameSuffix: "git_plan_start", arguments: { intentName: "Machine edit", addPaths: [display] } } },
       { tool: { nameSuffix: "apply_patch", input: `*** Begin Patch\n*** Update File: ${display}\n@@\n-before\n+after\n*** End Patch\n` } },

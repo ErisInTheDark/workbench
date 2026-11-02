@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests thread_state ordering: a refused mode or status applies nothing else, a refused title
+ * No production exports. Tests thread_state ordering: a refused, undeclared or unpaired mode or status applies nothing else, a refused title
  * stops the status, and an accepted call retitles before setting status.
  */
 import assert from "node:assert/strict";
@@ -60,6 +60,14 @@ test("an accepted call retitles before setting status; a refused title stops the
   const result = await refused.call({ proofs: { "review.coverage": "ok" }, mode: "Review", status: "completed", title: "New" });
   assert.equal(result.status, 400);
   assert.deepEqual(refused.applied, []);
+});
+
+test("an undeclared mode is refused with the declared ones, applying nothing else", async () => {
+  const { applied, call } = fixture();
+  const result = await call({ mode: "Fixing", title: "New" });
+  assert.equal(result.status, 400);
+  assert.match(result.body, /Unknown mode "Fixing"; declared: Review\./u);
+  assert.deepEqual(applied, []);
 });
 
 test("invalid proofs are rejected before anything runs", async () => {

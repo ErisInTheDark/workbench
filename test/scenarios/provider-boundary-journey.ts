@@ -23,6 +23,21 @@ export const SCENARIO_COMPLETION = {
   mode: "Review",
   status: "completed",
 };
+/** Threads start under Inspect's rules, so scripted edits first pass Brief and Implement with every item not applicable. */
+export const SCENARIO_IMPLEMENT = [
+  {
+    notApplicable: [
+      "plan.requested_result", "plan.useful_result", "plan.existing_behavior", "plan.executable_path", "plan.failure_cases",
+      "plan.competing_explanations", "plan.verification", "plan.dead_code",
+      "quality.think_wider", "quality.avoid_tiny_patching", "quality.code_is_not_sacred", "quality.comments", "quality.refactor",
+      "quality.nearby_smells", "quality.boil_the_ocean", "quality.push_back", "quality.local_preference", "quality.dedupe",
+      "quality.migration", "quality.complexity", "quality.lifecycle", "quality.mirror_state", "quality.external_weirdness",
+      "quality.compiler_safety",
+    ],
+    mode: "Brief",
+  },
+  { notApplicable: ["approval.user_approved"], mode: "Implement" },
+];
 
 export interface ProviderBoundaryToolNames {
   search: string;

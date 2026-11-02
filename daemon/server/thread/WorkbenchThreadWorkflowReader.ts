@@ -8,7 +8,7 @@ import path from "node:path";
 import type { WorkbenchInstructionSelection } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import {
-  currentAlwaysEditable, currentWorkflowMode, findWorkflowMode, THREAD_STATE_TOOL,
+  currentAlwaysEditable, currentWorkflowMode, effectiveWorkflowMode, findWorkflowMode, THREAD_STATE_TOOL,
   type WorkflowLedgerEntry, type WorkflowMode,
 } from "workbench-shared/workbench/thread/workflow-modes";
 import {
@@ -33,6 +33,7 @@ export interface WorkbenchThreadWorkflow {
 }
 
 const GIT_ARC_EDIT_TOOL_PREFIX = "git_arc_edit_";
+const GIT_ARC_WORKTREE_TOOLS: ReadonlySet<string> = new Set(["git_arc_restore", "git_arc_stash", "git_arc_unstash"]);
 
 function comparable(value: string) {
   return path.resolve(value).replaceAll("\\", "/").toLowerCase();
@@ -58,13 +59,10 @@ export default class WorkbenchThreadWorkflowReader {
     return { overlays, ledger, mode, definition: findWorkflowMode(overlays.modes, mode), alwaysEditable: currentAlwaysEditable(ledger), projectRoot };
   }
 
-  /** Threads that never entered a mode skip resolving their instruction layers. */
+  /** Threads that skipped thread_state or sit in an undeclared mode follow the first declared mode's rules. */
   async #restrictions(threadId: string) {
-    const ledger = await this.ports.readLedger(threadId);
-    const mode = currentWorkflowMode(ledger);
-    if (!mode) return null;
-    const { overlays, projectRoot } = await this.readOverlays(threadId);
-    const definition = findWorkflowMode(overlays.modes, mode);
+    const [ledger, { overlays, projectRoot }] = await Promise.all([this.ports.readLedger(threadId), this.readOverlays(threadId)]);
+    const definition = effectiveWorkflowMode(ledger, overlays.modes);
     return definition?.deny.length ? { definition, alwaysEditable: currentAlwaysEditable(ledger), projectRoot } : null;
   }
 
@@ -81,12 +79,16 @@ export default class WorkbenchThreadWorkflowReader {
     return `${definition.name} mode denies ${what}: ${denied.join(", ")}. Switch modes with ${THREAD_STATE_TOOL}, or list committed process notes in alwaysEditable.`;
   }
 
-  /** thread_state can never be denied, so a denying mode can always be left; edit denials also cover Git arc edit sessions. */
+  /**
+   * thread_state can never be denied, so a denying mode can always be left. Edit denials also cover Git arc tools that
+   * write the worktree; `read` names native file-read tools.
+   */
   async readToolDenial(threadId: string, toolName: string) {
     if (toolName === THREAD_STATE_TOOL) return null;
     const restrictions = await this.#restrictions(threadId);
     const deny = restrictions?.definition.deny ?? [];
-    const editTool = toolName.startsWith(GIT_ARC_EDIT_TOOL_PREFIX) && deny.some(token => token === "edit" || token === "edit:claims");
+    const editTool = (toolName.startsWith(GIT_ARC_EDIT_TOOL_PREFIX) || GIT_ARC_WORKTREE_TOOLS.has(toolName))
+      && deny.some(token => token === "edit" || token === "edit:claims");
     if (!restrictions || (!deny.includes(toolName) && !editTool)) return null;
     return `${restrictions.definition.name} mode denies ${toolName}. Switch modes with ${THREAD_STATE_TOOL} first.`;
   }

@@ -820,15 +820,20 @@ export function getWorkbenchCommandRoute(
       // Mode switches draw as mode lines and refused calls draw nothing; these are the rest.
       const status = args.status === "completed" || args.status === "blocked" ? args.status : null;
       if (status) return specialized("workbench-cli.task-status", { kind: "threadStatus", status }, `Marking task ${status}`);
+      // Always-editable grants waive mode edit denials, so they outrank every other row.
+      if (Array.isArray(args.alwaysEditable)) {
+        const paths = args.alwaysEditable.filter((entry): entry is string => typeof entry === "string");
+        const target = paths.length ? `always editable: ${paths.join(", ")}` : "always-editable paths";
+        return paths.length
+          ? simple("workbench-cli.thread-state", actionTarget("Setting ", target), actionTarget("Set ", target))
+          : simple("workbench-cli.thread-state", actionTarget("Clearing ", target), actionTarget("Cleared ", target));
+      }
       const title = readString(args.title);
       if (title) return specialized("workbench-cli.task-title-set", { kind: "threadTitle", title }, "Naming task");
       const mode = readString(args.mode);
       if (mode) return simple("workbench-cli.thread-state", actionTarget("Entering ", mode), actionTarget("Entered ", mode));
       if (args.proofs || args.notApplicable || args.defer) {
         return simple("workbench-cli.thread-state", actionTarget("Filing ", "proof of work"), actionTarget("Filed ", "proof of work"));
-      }
-      if (args.alwaysEditable) {
-        return simple("workbench-cli.thread-state", actionTarget("Setting ", "always-editable paths"), actionTarget("Set ", "always-editable paths"));
       }
       return simple("workbench-cli.thread-state", actionTarget("Checking ", "thread state"), actionTarget("Checked ", "thread state"));
     }

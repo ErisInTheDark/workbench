@@ -4,7 +4,7 @@
  * - ClaudeToolBatchPort: the thread's provider tool batch, reached through the attached bridge.
  * - claudeToolUseIds/claudeToolResults: the ordered call ids one Claude message issues, and the call outcomes one reports.
  * - createClaudeSessionHooks: inject compact recovery context after Claude Code's own compaction, hint after plain assistant text,
- *   refuse a questionnaire whose introducing text went unseen,
+ *   refuse a questionnaire whose introducing text went unseen, deny native Read where the thread's mode denies `read`,
  *   skip native edits after an earlier failed call in their batch, deny native edits whose path no active claim covers or a pending
  *   proposal holds, and end finished batches.
  */
@@ -25,6 +25,7 @@ export interface ClaudeToolBatchPort {
 }
 
 const CLAUDE_QUESTIONNAIRE_TOOL_NAME = "mcp__wb__request_user_input";
+const NATIVE_READ_DENY_TOKEN = "read";
 
 export function claudeToolUseIds(content: SDKAssistantMessage["message"]["content"]) {
   return content.flatMap(block => block.type === "tool_use" ? [block.id] : []);
@@ -46,6 +47,8 @@ const deny = (reason: string): HookJSONOutput => ({
 export function createClaudeSessionHooks(options: {
   cwd: string;
   check: ClaudeFileClaimCheck;
+  /** Why the thread's mode denies a deny token, or null; native Read answers to `read`. */
+  readModeToolDenial(toolName: string): Promise<string | null>;
   onDenied(toolUseId: string): void;
   nudge: ClaudeCommentaryNudge;
   batch: ClaudeToolBatchPort;
@@ -85,6 +88,19 @@ export function createClaudeSessionHooks(options: {
         if (input.hook_event_name !== "PreToolUse" || input.tool_name !== CLAUDE_QUESTIONNAIRE_TOOL_NAME) return {};
         const hint = nudge.beforeQuestionnaire();
         return hint ? deny(hint) : {};
+      }],
+    }, {
+      matcher: "Read",
+      hooks: [async (input) => {
+        if (input.hook_event_name !== "PreToolUse" || input.tool_name !== "Read") return {};
+        try {
+          const denial = await options.readModeToolDenial(NATIVE_READ_DENY_TOKEN);
+          return denial ? deny(denial) : {};
+        } catch (error) {
+          const message = error instanceof Error ? error.message.slice(0, 500) : "unknown failure";
+          console.warn("[claude] mode check failed; read denied.", message);
+          return deny(`Workflow mode check failed. ${message}`);
+        }
       }],
     }, {
       matcher: "Edit|Write",
