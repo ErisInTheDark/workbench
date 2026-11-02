@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - foldGitArcHistories: fold failed arc starts, waits or continues (with the work between) into the start that finally
- *   succeeded, and failed restacks into the restack that succeeded, then fold the arc-only review steps leading into a
- *   completed proposal into it.
+ *   succeeded, failed restacks into the restack that succeeded and failed proposals into the proposal that succeeded, then
+ *   fold the arc-only review steps leading into a completed proposal into it.
  * - isGitArcCall: a block that is one Git arc call, drawn as one Git arc card.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -11,7 +11,7 @@ import {
   getGitArcMatcherAction, getThreadCommandDisplay, getThreadCommandExecutionOutcome, getThreadMcpToolCallOutcome,
   getWorkbenchMcpCommandRoute, isGitArcWaitMatcherClaim, type GitArcCommandAction,
 } from "../../../workbench/thread/thread-command-matchers";
-import { buildCardHistory } from "./thread-activity-runs";
+import { buildCardHistory, pushActivitySegment } from "./thread-activity-runs";
 import {
   getRenderableBlockItems, type CommandItem, type CommandSequenceItem, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
@@ -21,13 +21,13 @@ type ActivityRunBlock = Extract<ThreadRenderableBlock, { kind: "activityRun" }>;
 type ArcCallAction = GitArcCommandAction | "wait";
 type ArcCall = { action: ArcCallAction; item: CommandSequenceItem; outcome: "completed" | "failed" | "other" };
 
-type RetryFamily = "restack" | "start";
+type RetryFamily = "propose" | "restack" | "start";
 /**
  * Calls an agent retries until one works; failures fold only into a later success of their own family. Continues are run
  * steps, never cards of their own, so a failed continue opens a start retry that only a start completes.
  */
 const RETRY_FAMILIES: ReadonlyMap<ArcCallAction, RetryFamily> = new Map([
-  ["continue", "start"], ["planStart", "start"], ["restack", "restack"], ["start", "start"], ["wait", "start"],
+  ["continue", "start"], ["planStart", "start"], ["propose", "propose"], ["restack", "restack"], ["start", "start"], ["wait", "start"],
 ]);
 /** Reads an agent makes while working out why its attempt failed; they change nothing, so they fold into the retry. */
 const READS: ReadonlySet<ArcCallAction> = new Set(["status", "scope"]);
@@ -147,11 +147,26 @@ function foldRetries(blocks: readonly ThreadRenderableBlock[]): ThreadRenderable
 }
 
 /** A run of nothing but arc review calls (compare, diff, claims...) leading into a proposal; an edit session is work. */
-function isArcOnlyRun(block: ThreadRenderableBlock) {
+function isArcOnlyRun(block: ThreadRenderableBlock): block is ActivityRunBlock {
   return block.kind === "activityRun" && block.items.every(item => {
     const action = readArcItem(item)?.action;
     return action !== undefined && action !== "edit";
   });
+}
+
+/** A completed proposal card, alone or already holding the failed attempts it retried. */
+function isCompletedProposal(block: ThreadRenderableBlock): boolean {
+  if (block.kind === "cardHistory") return isCompletedProposal(block.success);
+  const call = readArcCall(block);
+  return call?.action === "propose" && call.outcome === "completed";
+}
+
+/** `card` opening onto `run` ahead of any steps it already holds. */
+function withLeadIn(run: ActivityRunBlock, card: ThreadRenderableBlock): ThreadRenderableBlock {
+  if (card.kind !== "cardHistory") return buildCardHistory([run], card, 0);
+  const merged = buildCardHistory([run], card.success, card.failedAttempts);
+  for (const segment of card.history) pushActivitySegment(merged.history, segment);
+  return { ...merged, items: [...run.items, ...card.items] };
 }
 
 /** A completed proposal opens onto the arc-only run right before it; anything else in that run keeps both apart. */
@@ -160,9 +175,8 @@ function foldLeadIns(blocks: readonly ThreadRenderableBlock[]): ThreadRenderable
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index]!;
     const next = blocks[index + 1];
-    const proposal = next ? readArcCall(next) : null;
-    if (next && isArcOnlyRun(block) && proposal?.action === "propose" && proposal.outcome === "completed") {
-      folded.push(historyBlock([block], next, "start"));
+    if (next && isArcOnlyRun(block) && isCompletedProposal(next)) {
+      folded.push(withLeadIn(block, next));
       index += 1;
       continue;
     }
@@ -176,7 +190,7 @@ export function isGitArcCall(block: ThreadRenderableBlock) {
   return readArcCall(block) !== null;
 }
 
-/** Fold retried starts, then proposals' lead-in steps, into their cards. */
+/** Fold retried starts, restacks and proposals, then proposals' lead-in steps, into their cards. */
 export function foldGitArcHistories(blocks: readonly ThreadRenderableBlock[]): ThreadRenderableBlock[] {
   return foldLeadIns(foldRetries(blocks));
 }

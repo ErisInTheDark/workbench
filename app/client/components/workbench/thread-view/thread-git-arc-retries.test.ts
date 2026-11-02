@@ -1,7 +1,7 @@
 /*
  * No production exports. Tests protect when failed Git arc starts fold into their successful retry: only a completed
- * retry folds, only work and arc reads fold between, waits and continues open retries, restacks retry only into restacks,
- * and MCP and CLI starts fold alike;
+ * retry folds, only work and arc reads fold between, waits and continues open retries, restacks and proposals retry only
+ * into their own kind, and MCP and CLI calls fold alike;
  * arc-only review steps (never edit sessions) fold into the completed proposal they lead into, and back-to-back arc cards
  * stitch into one.
  */
@@ -124,6 +124,30 @@ test("failed restacks fold into the restack that succeeded, never across into st
   for (const items of [
     [mcp("failed", "git_arc_start", "failed"), mcp("restacked", "git_arc_restack")],
     [mcp("conflict", "git_arc_restack", "failed"), mcp("started", "git_arc_start")],
+  ]) {
+    const [stitched] = fold(items);
+    assert.deepEqual(stitched?.kind === "cardSequence" ? stitched.blocks.map(block => block.kind) : null, ["item", "item"]);
+  }
+});
+
+test("failed proposals fold into the proposal that succeeded, with the review steps before them", () => {
+  const [retry, ...rest] = fold([
+    mcp("compared", "git_arc_compare"), mcp("diffed", "git_arc_diff"), mcp("pending", "git_arc_propose", "failed"),
+    thought("why"), mcp("status", "git_arc_status"), mcp("proposed", "git_arc_propose"),
+  ]);
+  assert.equal(rest.length, 0);
+  if (retry?.kind !== "cardHistory") return assert.fail("expected one proposal card");
+  assert.equal(retry.failedAttempts, 1);
+  assert.deepEqual(retry.items.map(item => item.id), ["compared", "diffed", "pending", "why", "status", "proposed"]);
+  assert.deepEqual(retry.history.flatMap(segment => "items" in segment ? segment.items.map(item => item.id) : [segment.item.id]),
+    ["compared", "diffed", "pending", "why", "status"]);
+  assert.deepEqual(fold([cli("pending", "wb git arc propose", 1), cli("proposed", "wb git arc propose")]).map(block => block.kind), ["cardHistory"]);
+});
+
+test("proposals and starts never complete each other's retries", () => {
+  for (const items of [
+    [mcp("pending", "git_arc_propose", "failed"), mcp("started", "git_arc_start")],
+    [mcp("failed", "git_arc_start", "failed"), mcp("proposed", "git_arc_propose")],
   ]) {
     const [stitched] = fold(items);
     assert.deepEqual(stitched?.kind === "cardSequence" ? stitched.blocks.map(block => block.kind) : null, ["item", "item"]);

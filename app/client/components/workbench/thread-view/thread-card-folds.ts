@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - foldCardBlocks: fold the steps leading into a card into that card's history (retried arc starts, proposal lead-ins,
- *   the todo listing before a change), then stitch back-to-back cards of one family (Git arc, todo, one skill's card family)
- *   into one card.
+ * - foldCardBlocks: fold the steps leading into a card into that card's history (retried arc starts, restacks and
+ *   proposals, proposal lead-ins, the todo listing before a change), then stitch back-to-back cards of one family (Git arc,
+ *   todo, one skill's card family) into one card.
  * - isCardBlock: a block drawn as one foldable card, which a later fold or stitch may absorb.
  * - getCardFoldAnchor: the card a folded or stitched block grew from.
  */
