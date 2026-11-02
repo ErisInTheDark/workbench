@@ -1,11 +1,14 @@
 /*
  * No production exports. Tests protect the app relay's trust rules: a relayed call's origin comes from the asking connection,
- * nothing is dispatched to a daemon the app does not reach, and approval writes the target's grant before answering the prompt.
+ * nothing is dispatched to a daemon the app does not reach, approval writes the target's grant before answering the prompt, and
+ * folder addresses reach other projects only by name, after the caller's own project.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { NetworkTarget } from "workbench-shared/workbench/network/network-access";
+import { RelayResolvedSchema } from "workbench-shared/workbench/network/network-relay-contracts";
+import { z } from "zod";
 import WorkbenchAgentRelay from "./WorkbenchAgentRelay";
 
 const originId = DaemonIdSchema.parse("11111111-1111-4111-8111-111111111111");
@@ -34,13 +37,27 @@ function source(id: typeof originId, hostname: string, log: string[], pending: u
   };
 }
 
-function relay(sources: ReturnType<typeof source>[]) {
+type Folder = { daemonId: typeof originId; projectId: string; hostname: string; rootPath: string; daemonProject?: boolean };
+
+/** Logical projects as the workspace snapshot lists them: each holds its folders' locations. */
+function projects(...groups: Folder[][]) {
+  return groups.map((folders, index) => ({
+    id: `logical-${index}`,
+    locations: folders.map(folder => ({
+      target: { daemonId: folder.daemonId, projectId: ProjectIdSchema.parse(folder.projectId) },
+      hostname: folder.hostname, rootPath: folder.rootPath,
+      project: { kind: folder.daemonProject ? "daemon" : "folder" },
+    })),
+  })) as never;
+}
+
+function relay(sources: ReturnType<typeof source>[], workspaceProjects: never = [] as never) {
   return new WorkbenchAgentRelay({
     sources: { all: () => sources as never, get: id => (sources.find(item => item.id === id) ?? null) as never },
     threads: { withThread: async (_id: string, action: (source: never, owner: never) => Promise<unknown>) => await action(sources[0] as never, {
       phase: "current", identity: { threadId, harness: "codex" }, location: { daemonId: originId, projectId: ProjectIdSchema.parse("p") }, logicalProjectId: null,
     } as never) } as never,
-    workspace: { getSnapshot: () => ({ projects: [] }) },
+    workspace: { getSnapshot: () => ({ projects: workspaceProjects }) },
     fetchPeer: async () => ({ kind: "failed", failure: "unused" }),
     signal: new AbortController().signal,
   });
@@ -88,6 +105,42 @@ test("approval writes the target's grant and the reply grant before answering th
   const sources = [source(originId, "home", log, pending), source(targetId, "tower", log)];
   await relay(sources).approve(threadId, "key");
   assert.deepEqual(log, ["tower:grant:thread", "home:grant:message", "home:respond"]);
+});
+
+const caller: Folder = { daemonId: originId, projectId: "p", hostname: "home", rootPath: "C:/git/web" };
+const ownOnTower: Folder = { daemonId: targetId, projectId: "p-tower", hostname: "tower", rootPath: "/git/web" };
+const otherOnHome: Folder = { daemonId: originId, projectId: "other", hostname: "home", rootPath: "C:/git/other" };
+const otherOnTower: Folder = { daemonId: targetId, projectId: "elsewhere", hostname: "tower", rootPath: "/srv/web" };
+const daemonOnHome: Folder = { daemonId: originId, projectId: "daemon", hostname: "home", rootPath: "C:/wb/daemon", daemonProject: true };
+
+async function resolveFolder(address: string) {
+  const log: string[] = [];
+  const origin = source(originId, "home", log);
+  const answer = await relay([origin, source(targetId, "tower", log)],
+    projects([caller, ownOnTower], [otherOnHome], [otherOnTower], [daemonOnHome])).answer(origin as never, {
+    kind: "resolve", targets: [{ kind: "folder", address, callerProjectId: ProjectIdSchema.parse("p") }],
+  }, () => undefined);
+  if (answer.kind !== "answered") assert.fail(`resolve was ${answer.kind}`);
+  const [resolved] = z.object({ targets: RelayResolvedSchema.array() }).parse(answer.result).targets;
+  return resolved?.kind === "resolved" && resolved.target.kind === "folder" ? resolved.target.projectId : "failed";
+}
+
+test("a named folder of another project resolves, on this device or another", async () => {
+  assert.equal(await resolveFolder("home:other"), "other");
+  assert.equal(await resolveFolder("tower:srv/web"), "elsewhere");
+});
+
+test("the caller's own project wins over another project's folder with the same name", async () => {
+  assert.equal(await resolveFolder("tower:web"), "p-tower");
+});
+
+test("a bare host never reaches another project", async () => {
+  assert.equal(await resolveFolder("tower"), "p-tower");
+  assert.equal(await resolveFolder("home"), "failed");
+});
+
+test("daemon projects stay out of reach", async () => {
+  assert.equal(await resolveFolder("home:wb/daemon"), "failed");
 });
 
 test("approval refuses a prompt that is no longer pending and writes nothing", async () => {

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchAgentRelay: answer daemons' agent relay requests (resolve targets, read summaries, forward calls to their target
+ * - default WorkbenchAgentRelay: answer daemons' agent relay requests (resolve targets, including other projects' named folders,
+ *   read summaries, forward calls to their target
  *   daemon, fetch peer branches) stamping each with the daemon whose connection asked; describe this app's reach to every daemon;
  *   and carry out users' network approvals and pill revocations, which write grants onto the daemons that enforce them.
  */
@@ -159,22 +160,42 @@ export default class WorkbenchAgentRelay {
           ? { kind: "resolved", target: { kind: "feedback", daemonId: source.id, hostname: source.getSnapshot().hostname, projectId: null, rootPath: null } }
           : { kind: "failed", failure: `No daemon this app reaches is named ${host}.` };
       }
-      const project = this.logicalProject(origin.id, target.callerProjectId);
-      if (!project) return { kind: "failed", failure: "The caller's folder is not part of any project this app knows." };
-      const folders = project.locations.filter(location => location.project?.kind !== "daemon"
-        && !(location.target.daemonId === origin.id && location.target.projectId === target.callerProjectId));
-      const matches = ProjectFolderAddress.matchHost(folders, host, folder);
-      const listed = folders.map(location => `${location.hostname}:${location.rootPath}`).join(", ") || "none";
-      if (matches.length !== 1) {
-        return { kind: "failed", failure: `${matches.length ? "Several" : "No"} folders of this project match ${target.address}; name one as <host>:<folder>. Folders: ${listed}.` };
-      }
-      const match = matches[0]!;
+      const resolved = this.resolveFolder(origin.id, target.callerProjectId, target.address, host, folder);
+      if ("failure" in resolved) return { kind: "failed", failure: resolved.failure };
+      const match = resolved.match;
       return { kind: "resolved", target: target.kind === "folder"
         ? { kind: "folder", daemonId: match.target.daemonId, hostname: match.hostname, projectId: match.target.projectId, rootPath: match.rootPath }
         : { kind: "feedback", daemonId: match.target.daemonId, hostname: match.hostname, projectId: match.target.projectId, rootPath: match.rootPath } };
     } catch (error) {
       return { kind: "failed", failure: bounded(error) };
     }
+  }
+
+  /**
+   * The caller's own project answers first; other projects' folders answer only an address naming a folder, so a bare
+   * host never lands in an unrelated project. Daemon projects and the caller's own folder are never targets.
+   */
+  private resolveFolder(originId: DaemonId, callerProjectId: string, address: string, host: string, folder: string | null):
+    { match: WorkbenchLogicalProjectLocation } | { failure: string } {
+    const own = this.logicalProject(originId, callerProjectId);
+    if (!own) return { failure: "The caller's folder is not part of any project this app knows." };
+    const targets = (project: WorkbenchLogicalProject) => project.locations.filter(location => location.project?.kind !== "daemon"
+      && !(location.target.daemonId === originId && location.target.projectId === callerProjectId));
+    const ownFolders = targets(own);
+    const listed = (folders: readonly WorkbenchLogicalProjectLocation[]) =>
+      folders.map(location => `${location.hostname}:${location.rootPath}`).join(", ") || "none";
+    const ownMatches = ProjectFolderAddress.matchHost(ownFolders, host, folder);
+    if (ownMatches.length > 1) {
+      return { failure: `Several folders of this project match ${address}; name one as <host>:<folder>. Folders: ${listed(ownFolders)}.` };
+    }
+    if (ownMatches.length) return { match: ownMatches[0]! };
+    const otherMatches = folder ? ProjectFolderAddress.matchHost(
+      this.options.workspace.getSnapshot().projects.filter(project => project.id !== own.id).flatMap(targets), host, folder) : [];
+    if (otherMatches.length === 1) return { match: otherMatches[0]! };
+    if (otherMatches.length > 1) {
+      return { failure: `Several folders of other projects match ${address}; name one by a longer path. Folders: ${listed(otherMatches)}.` };
+    }
+    return { failure: `No folder matches ${address}. Folders of this project: ${listed(ownFolders)}. Name another project's folder as <host>:<path>.` };
   }
 
   private logicalProject(daemonId: DaemonId, projectId: string) {

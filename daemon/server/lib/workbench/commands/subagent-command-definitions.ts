@@ -76,7 +76,7 @@ const list = defineWorkbenchAgentCommand({
   },
 });
 
-const folder = requiredText.describe("`<host>[:<folder>]`: another folder of this project, on this or another daemon. Needs the user's approval.");
+const folder = requiredText.describe("`<host>[:<folder>]`: another folder of this or another project, on this or another daemon; other projects need `<folder>`. Needs the user's approval.");
 
 const profiles = defineWorkbenchAgentCommand({
   description: "List the subagent profiles available to this thread, or to another folder's daemon with folder.",
@@ -99,7 +99,7 @@ const profiles = defineWorkbenchAgentCommand({
 });
 
 const create = defineWorkbenchAgentCommand({
-  description: "Create and start a direct child, then print its thread ID. folder places it in another folder of this project; use that folder's profiles.",
+  description: "Create and start a direct child, then print its thread ID. folder places it in another folder or project; use that folder's profiles.",
   helpGroups: ["subagent"],
   mcpWorkdir: true,
   words: ["subagent", "create"],

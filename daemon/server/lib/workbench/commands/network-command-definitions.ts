@@ -21,14 +21,14 @@ export type WorkbenchNetworkRequest = z.infer<typeof WorkbenchNetworkRequestSche
 const request = defineWorkbenchAgentCommand({
   words: ["network", "request"],
   usage: "wb network request (--thread <id>... | --folder <host>[:<folder>]... | --feedback <host>[:<folder>]...) --reason <text>",
-  description: "Ask the user, before you need it, to let this thread reach remote threads, folders of its project (for subagents) or another daemon's feedback, and wait for their answer.",
+  description: "Ask the user, before you need it, to let this thread reach remote threads, project folders (for subagents) or another daemon's feedback, and wait for their answer.",
   effects: { readOnly: false },
   helpGroups: ["network"],
   mcpCodeModeEligible: true,
   mcpRuntimeDrainPolicy: "preserve-across-reload",
   inputSchema: z.object({
     threadIds: targets.describe("Remote Workbench thread ids to message, wait on, recall or read transcripts of."),
-    folders: targets.describe("`<host>[:<folder>]` folders of this project to create subagents in."),
+    folders: targets.describe("`<host>[:<folder>]` folders to create subagents in; other projects' need `<folder>`."),
     feedback: targets.describe("`<host>` for a daemon's wb feedback, or `<host>:<folder>` for that folder's project feedback."),
     reason: text.describe("Why the task needs this access, shown to the user."),
   }).strict().refine(input => Boolean(input.threadIds?.length || input.folders?.length || input.feedback?.length), "Name at least one target."),
