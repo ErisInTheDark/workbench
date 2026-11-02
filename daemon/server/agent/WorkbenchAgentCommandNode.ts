@@ -120,7 +120,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           threadId: identity.threadId,
         };
       },
-      resolveProjectId: async (cwd) => (await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Feedback statistics" })).project.id,
+      resolveProjectId: async (cwd, endpointName) => (await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName })).project.id,
       projectName: (projectId) => projectCatalog.getCurrentSnapshot().data.find(({ id }) => id === projectId)?.name ?? null,
       record: async (entry) => await stats.recordFeedback(entry),
       read: async (request) => await stats.readFeedback(request),

@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect feedback scope, windows, filters, ordering, paging, single-report reads, resolution and its retention, and thread-independent retention.
+ * No exports. Tests protect feedback scope, cross-project authorship, windows, filters, ordering, paging, single-report reads, resolution and its retention, and thread-independent retention.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -117,6 +117,19 @@ test("wb reports belong to the Workbench project whichever project filed them", 
   }
 });
 
+test("project reports filed about another project read there and keep their authoring thread's project", () => {
+  const { database, repository } = setup();
+  try {
+    repository.record(report({ channel: "project", projectId: testProjectIds.other }), now);
+    const request = { category: null, channel: "project", page: 1, range: "all", sort: "newest" } as const;
+    assert.equal(repository.read({ ...request, projectIds: [testProjectIds.project] }, now).rows.length, 0);
+    const [row] = repository.read({ ...request, projectIds: [testProjectIds.other] }, now).rows;
+    assert.deepEqual([row?.projectId, row?.threadProjectId], [testProjectIds.other, testProjectIds.project]);
+  } finally {
+    database.close();
+  }
+});
+
 test("agent reads filter by channel and category and page within bounds", () => {
   const { database, repository } = setup();
   try {
@@ -202,6 +215,7 @@ test("feedback outlives its thread and rejects empty reports", () => {
     database.prepare("DELETE FROM workbench_threads WHERE id = 'thread'").run();
     const [row] = repository.summary(null, 0, now + 1, testProjectIds.project).items;
     assert.equal(row?.threadId, null);
+    assert.equal(row?.threadProjectId, null);
     assert.equal(row?.report, "diff printed lockfile churn");
     assert.throws(() => repository.record(report({ report: "" }), now), /CHECK/u);
   } finally {

@@ -16,7 +16,7 @@ import { FEEDBACK_TEXT_TONE_CLASS_NAME } from "../feedback-presentation";
 import useStats from "../stats/use-stats";
 import type { StatsFeedbackReportSnapshot } from "../stats/WorkbenchStatsStore";
 import { deleteFeedbackReports, setFeedbackReportsResolved } from "../stats/workspaces/feedback-report-mutations";
-import { feedbackReference } from "../stats/workspaces/stats-feedback-presentation";
+import { feedbackAuthorProjectId, feedbackOwnerProjectId, feedbackReference } from "../stats/workspaces/stats-feedback-presentation";
 import {
   WorkbenchFeedbackImportance,
   WorkbenchFeedbackReportBody,
@@ -47,7 +47,7 @@ function useStoredReport({ feedbackId, threadId }: ReportSource) {
 const LABELS = stepLabels("Reporting", "Reported", "Failed to report");
 
 /** The stats view's actions for one report, in its order. */
-function ReportActions({ modelName, projectId, report }: { modelName: string | null; projectId: string | null; report: Ready }) {
+function ReportActions({ modelName, report }: { modelName: string | null; report: Ready }) {
   const workspace = useContext(WorkbenchWorkspaceContext);
   const addressing = useContext(WorkbenchFeedbackAddressingContext);
   const { projectName } = useStats();
@@ -67,9 +67,8 @@ function ReportActions({ modelName, projectId, report }: { modelName: string | n
       setBusy(false);
     }
   };
-  const reference = () => feedbackReference(item, { daemonId, modelName, projectName: projectName(item.projectId, daemonId) });
-  // wb reports are about Workbench, so a new thread for one opens in Workbench's project.
-  const newThreadProjectId = item.channel === "wb" ? report.workbenchProjectId : projectId;
+  const reference = () => feedbackReference(item, { daemonId, modelName, projectName: projectName(feedbackAuthorProjectId(item), daemonId) });
+  const newThreadProjectId = feedbackOwnerProjectId(item, report.workbenchProjectId);
   const inNewThread = shiftHeld || !addressing.here;
   const addressBlocked = inNewThread
     ? !addressing.inNewThread ? "Open Workbench to address feedback in a new thread." : !newThreadProjectId ? "Workbench's project is not open here." : null
@@ -141,7 +140,7 @@ function ReportContent({ operation, outcome, projectId, source }: {
     const name = modelName(ready.item.harness, ready.item.model);
     return (
       <WorkbenchFeedbackReportBody
-        actions={<ReportActions modelName={name} projectId={projectId} report={ready} />}
+        actions={<ReportActions modelName={name} report={ready} />}
         clamp={false}
         heading={false}
         item={ready.item}

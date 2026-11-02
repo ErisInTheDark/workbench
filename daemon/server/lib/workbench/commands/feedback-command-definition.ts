@@ -23,6 +23,8 @@ const inputSchema = z.object({
     .describe("What you did, why, and what you suggest. Plain and specific."),
   title: WorkbenchFeedbackTitleSchema
     .describe("Short single-line title for the issue."),
+  path: z.string().trim().min(1).optional()
+    .describe("Project channel only: a file or folder inside the project the feedback is about; relative to cwd. Defaults to the cwd's project."),
 }).strict();
 
 export const WorkbenchFeedbackSubmitRequestSchema = inputSchema.extend({
@@ -33,17 +35,18 @@ export const WorkbenchFeedbackSubmitRequestSchema = inputSchema.extend({
 
 const feedback = defineWorkbenchAgentCommand({
   words: ["feedback"],
-  usage: "wb feedback --channel <wb|project> --category <bug|waste|confusion|opportunity> --title <short-title> -- <report>",
+  usage: "wb feedback --channel <wb|project> --category <bug|waste|confusion|opportunity> --title <short-title> [--path <project-path>] -- <report>",
   description: "Report avoidable friction once per issue: something broken, wasteful, confusing, or improvable in Workbench or project tooling or instructions.",
   effects: { readOnly: false },
   helpGroups: [],
   mcpCodeModeEligible: true,
   inputSchema,
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { trailing: true, values: ["--channel", "--category", "--title"] });
+    const flags = new WorkbenchAgentCommandFlags(args, { trailing: true, values: ["--channel", "--category", "--title", "--path"] });
     return inputSchema.parse({
       channel: flags.required("--channel"),
       category: flags.required("--category"),
+      path: flags.optional("--path") ?? undefined,
       report: flags.trailing.join(" "),
       title: flags.required("--title"),
     });

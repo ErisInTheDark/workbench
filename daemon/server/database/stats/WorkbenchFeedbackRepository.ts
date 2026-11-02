@@ -106,7 +106,7 @@ export default class WorkbenchFeedbackRepository {
   }
 
   /**
-   * The stats view's section. Project reports stay with the project that filed them; wb reports are about
+   * The stats view's section. Project reports stay with the project they are about; wb reports are about
    * Workbench itself, so they belong to the Workbench project whichever project filed them. Open reports follow the
    * period; resolved ones follow their retention window instead, so a resolution never hides behind an old filing date.
    */
@@ -198,12 +198,13 @@ export default class WorkbenchFeedbackRepository {
   #details(rows: readonly ScoredRow[]) {
     const scored = new Map(rows.map((row) => [row.id, row]));
     const found = this.database.prepare(`
-      SELECT f.id, f.project_id, f.thread_id, f.harness_id, f.model, f.reasoning_effort, f.report, f.title
+      SELECT f.id, f.project_id, f.thread_id, thread.project_id AS thread_project_id, f.harness_id, f.model, f.reasoning_effort, f.report, f.title
       FROM workbench_agent_feedback f
+      LEFT JOIN workbench_threads thread ON thread.id = f.thread_id
       WHERE f.id IN (SELECT value FROM json_each(?))
     `).all(JSON.stringify([...scored.keys()])) as Array<{
       harness_id: WorkbenchHarness; id: number; model: string | null; project_id: string; reasoning_effort: string | null;
-      report: string; thread_id: string | null; title: string;
+      report: string; thread_id: string | null; thread_project_id: string | null; title: string;
     }>;
     return new Map(found.map((row): [number, WorkbenchFeedbackItem] => {
       const score = scored.get(row.id)!;
@@ -222,6 +223,7 @@ export default class WorkbenchFeedbackRepository {
         resolvedAt: score.resolvedAt,
         scored: score.scored,
         threadId: row.thread_id,
+        threadProjectId: row.thread_project_id,
         title: row.title,
       }];
     }));

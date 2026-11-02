@@ -1,9 +1,12 @@
 /*
  * Exports:
  * - WorkbenchFeedbackCaller: the cwd-owned project, managed thread, and applied model settings behind one submission.
- * - default WorkbenchFeedbackCommandController: validate agent feedback, record it with its author's settings, and render paged reads for
- *   local and relayed callers.
+ * - default WorkbenchFeedbackCommandController: validate agent feedback, record it against the project it is about with its author's
+ *   settings, and render paged reads for local and relayed callers.
  */
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type {
@@ -35,7 +38,7 @@ function invalid(issues: readonly { message: string; path: readonly PropertyKey[
 export default class WorkbenchFeedbackCommandController {
   constructor(private readonly options: {
     resolveCaller(input: { cwd: string; harness: string; threadId: string }, signal: AbortSignal): Promise<WorkbenchFeedbackCaller>;
-    resolveProjectId(cwd: string): Promise<ProjectId>;
+    resolveProjectId(cwd: string, endpointName: string): Promise<ProjectId>;
     projectName(projectId: string): string | null;
     record(entry: WorkbenchFeedbackRecord): Promise<number>;
     read(request: WorkbenchFeedbackReadRequest): Promise<WorkbenchFeedbackReadResponse>;
@@ -44,15 +47,21 @@ export default class WorkbenchFeedbackCommandController {
   async submit(input: object, signal: AbortSignal) {
     const parsed = WorkbenchFeedbackSubmitRequestSchema.safeParse(input);
     if (!parsed.success) return invalid(parsed.error.issues);
+    if (parsed.data.path && parsed.data.channel !== "project") {
+      return invalid([{ message: "path applies only to project feedback", path: ["path"] }]);
+    }
     signal.throwIfAborted();
     const caller = await this.options.resolveCaller(parsed.data, signal);
+    signal.throwIfAborted();
+    const target = parsed.data.path ? await this.targetProjectId(path.resolve(parsed.data.cwd, parsed.data.path)) : caller.projectId;
+    if (target instanceof Response) return target;
     signal.throwIfAborted();
     const id = await this.options.record({
       category: parsed.data.category,
       channel: parsed.data.channel,
       harness: caller.harness,
       model: optionalSetting(caller.model, 200),
-      projectId: caller.projectId,
+      projectId: target,
       reasoningEffort: optionalSetting(caller.reasoningEffort, 50),
       report: parsed.data.report,
       threadId: caller.threadId,
@@ -66,8 +75,20 @@ export default class WorkbenchFeedbackCommandController {
     if (!parsed.success) return invalid(parsed.error.issues);
     signal.throwIfAborted();
     const { cwd, ...filters } = parsed.data;
-    // Workbench feedback concerns every project; project feedback stays with the project that owns the cwd.
-    return await this.render(filters, await this.options.resolveProjectId(cwd), signal);
+    // Workbench feedback concerns every project; project feedback is read by the project it is about.
+    return await this.render(filters, await this.options.resolveProjectId(cwd, "Feedback statistics"), signal);
+  }
+
+  /** A file targets its folder's project. */
+  private async targetProjectId(target: string): Promise<ProjectId | Response> {
+    let folder: string;
+    try {
+      folder = (await fs.stat(target)).isDirectory() ? target : path.dirname(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return invalid([{ message: `${target} does not exist`, path: ["path"] }]);
+    }
+    return await this.options.resolveProjectId(folder, "Feedback path");
   }
 
   /** Another daemon's thread reading this daemon's feedback: `null` is the wb channel across projects, a project its own feedback. */

@@ -33,7 +33,7 @@ export function testFeedbackItem(overrides: Partial<WorkbenchFeedbackItem> = {})
   return {
     category: "bug", channel: "wb", createdAt: 1_000, harness: "codex", id: 53, importance: 0.8, model: "openai/gpt-5.6",
     owned: false, projectId: "project-one", reasoningEffort: "high", report: "Stored report text.", resolvedAt: null, scored: true, threadId: "thread-one",
-    title: "Stored report title", ...overrides,
+    threadProjectId: "project-one", title: "Stored report title", ...overrides,
   };
 }
 

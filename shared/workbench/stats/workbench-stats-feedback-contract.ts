@@ -9,7 +9,7 @@
  * - WorkbenchFeedbackItemSchema/WorkbenchFeedbackItem: one report with its author, computed importance, merged thread ownership, and resolution time.
  * - WORKBENCH_RESOLVED_FEEDBACK_RETENTION_MS: how long a resolved report stays readable before retention deletes it.
  * - WorkbenchStatsFeedbackSchema/WorkbenchStatsFeedback/EMPTY_WORKBENCH_STATS_FEEDBACK/WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT: the stats view's open and recently resolved feedback with cross-daemon ownership evidence; wb reports belong to the Workbench project.
- * - WorkbenchFeedbackRecord: trusted, cwd-resolved feedback write.
+ * - WorkbenchFeedbackRecord: trusted feedback write, stored against the project it is about.
  * - WorkbenchFeedbackReadRequest/WorkbenchFeedbackReadResponse/WORKBENCH_FEEDBACK_PAGE_SIZE: paged agent read.
  */
 import { z } from "zod";
@@ -49,6 +49,7 @@ export const WorkbenchFeedbackItemSchema = z.object({
   model: z.string().max(200).nullable(),
   /** True once any connected daemon has a thread addressing this report. */
   owned: z.boolean().default(false),
+  /** The project the report is about; project reports may target another project than the one filing them. */
   projectId: z.string().min(1),
   reasoningEffort: z.string().max(50).nullable(),
   report: z.string().max(4_000),
@@ -58,6 +59,8 @@ export const WorkbenchFeedbackItemSchema = z.object({
   scored: z.boolean(),
   /** Null once the authoring thread is gone. */
   threadId: z.string().min(1).nullable(),
+  /** The authoring thread's project; null once the thread is gone or from servers predating it. */
+  threadProjectId: z.string().min(1).nullable().default(null),
   // Old servers send the source thread title (up to 500 chars) here; keep either reload order readable.
   title: z.string().max(500).nullable().transform((value) => value?.trim().slice(0, 120) || WORKBENCH_FEEDBACK_TITLE_FALLBACK),
 }).strict();

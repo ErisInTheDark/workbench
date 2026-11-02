@@ -18,7 +18,7 @@ User-added MCP server tools and deferred Workbench tools are not loaded directly
 </docs>
 
 <docs tools="feedback">
-Report each Workbench or project tooling/instruction bug, confusion, avoidable complexity or token waste once via <tool id="feedback" />: what you did, why, suggested fix.
+Report each Workbench or project tooling/instruction bug, confusion, avoidable complexity or token waste once via <tool id="feedback" />: what you did, why, suggested fix. For another local project, such as a dependency's clone, pass its path.
 </docs>
 
 <docs tools="todo">

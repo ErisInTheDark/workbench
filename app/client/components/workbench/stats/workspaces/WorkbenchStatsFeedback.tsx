@@ -28,6 +28,7 @@ import { WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID } from "../../../../workbench/
 import {
   FEEDBACK_CATEGORY_PRESENTATION,
   feedbackAddressProjectId,
+  feedbackAuthorProjectId,
   feedbackReference,
   feedbackSearchText,
   countFeedbackCategories,
@@ -94,7 +95,7 @@ export default function WorkbenchStatsFeedback() {
   const searching = TextSearch.isActive(search);
   const searchTexts = useMemo(() => new Map(items.map((item) => [item, feedbackSearchText(item, {
     modelName: modelName(item.harness, item.model),
-    projectName: projectName(item.projectId, item.daemonId),
+    projectName: projectName(feedbackAuthorProjectId(item), item.daemonId),
   })])), [items, modelName, projectName]);
   // Resolved reports keep their latest-resolution order and ignore ownership; a resolved report no longer needs an owner.
   const { searched, visible } = useMemo(
@@ -123,7 +124,7 @@ export default function WorkbenchStatsFeedback() {
     onAddress(addressProjectId, selected.map((item) => feedbackReference(item, {
       daemonId: item.daemonId ?? attached!,
       modelName: modelName(item.harness, item.model),
-      projectName: projectName(item.projectId, item.daemonId),
+      projectName: projectName(feedbackAuthorProjectId(item), item.daemonId),
     })));
     setSelectedKeys(new Set());
   };
@@ -245,7 +246,7 @@ export default function WorkbenchStatsFeedback() {
                         reference: feedbackReference(item, {
                           daemonId,
                           modelName: modelName(item.harness, item.model),
-                          projectName: projectName(item.projectId, item.daemonId),
+                          projectName: projectName(feedbackAuthorProjectId(item), item.daemonId),
                         }),
                         type: "feedback",
                       }}

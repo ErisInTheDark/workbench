@@ -107,7 +107,7 @@ test("feedback merges open reports by importance and resolved ones by latest res
   const item = (id: number, importance: number, resolvedAt: number | null = null) => ({
     category: "bug" as const, channel: "wb" as const, createdAt: 1, daemonId: null, harness: null, id, importance,
     model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", resolvedAt, scored: true, threadId: null,
-    title: "Stats action fails",
+    threadProjectId: null, title: "Stats action fails",
   });
   const feedback = (items: ReturnType<typeof item>[], resolved: ReturnType<typeof item>[] = []) => ({
     ...EMPTY.feedback,
@@ -132,7 +132,7 @@ test("feedback merges open reports by importance and resolved ones by latest res
 test("feedback ownership follows source daemon and id across machines", () => {
   const item = (title: string) => ({
     category: "bug" as const, channel: "wb" as const, createdAt: 1, daemonId: null, harness: null, id: 7, importance: 0.5,
-    model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", resolvedAt: null, scored: true, threadId: null, title,
+    model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", resolvedAt: null, scored: true, threadId: null, threadProjectId: null, title,
   });
   const feedback = (row: ReturnType<typeof item>, ownership: Array<{ daemonId: string; id: number }> = []) => ({
     ...EMPTY.feedback,

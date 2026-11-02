@@ -5,6 +5,7 @@
  * - FeedbackOwnershipFilter/FeedbackStatus/selectFeedbackItems: the reports a viewer sees for ownership, search, category, and sort filters.
  * - feedbackSearchText: folded text a search matches one report against.
  * - feedbackOwnerProjectId/feedbackAddressProjectId: the project a report, or a whole selection, is addressed in.
+ * - feedbackAuthorProjectId: the project a report was filed from.
  * - countFeedbackCategories: per-category counts of the given reports, empty categories omitted.
  * - feedbackReference: the composer reference a new thread receives when addressing one report.
  */
@@ -39,6 +40,11 @@ export function feedbackImportanceTone(importance: number, scored: boolean) {
 /** wb reports are about Workbench, so they are addressed in the Workbench project whichever project filed them. */
 export function feedbackOwnerProjectId(item: Pick<WorkbenchFeedbackItem, "channel" | "projectId">, workbenchProjectId: string | null) {
   return item.channel === "wb" ? workbenchProjectId : item.projectId;
+}
+
+/** The project whose thread filed a report; falls back to the report's project once that thread is gone. */
+export function feedbackAuthorProjectId(item: Pick<WorkbenchFeedbackItem, "projectId" | "threadProjectId">) {
+  return item.threadProjectId ?? item.projectId;
 }
 
 /** The one project a selection can be addressed in, or null when owners differ or are unknown. */
