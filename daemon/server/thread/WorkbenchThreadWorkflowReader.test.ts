@@ -9,7 +9,7 @@ import type { WorkflowLedgerEntry, WorkflowMode } from "workbench-shared/workben
 import WorkbenchThreadWorkflowReader from "./WorkbenchThreadWorkflowReader";
 
 const root = path.resolve("project");
-const review: WorkflowMode = { name: "Review", icon: "flag", color: null, proofs: [], resetOn: [], status: null, deny: ["shell", "edit:claims"] };
+const review: WorkflowMode = { name: "Review", icon: "flag", color: null, proofs: [], resetOn: [], from: [], status: null, deny: ["shell", "edit:claims"] };
 const locked: WorkflowMode = { ...review, name: "Locked", deny: ["edit"] };
 
 function reader(ledger: WorkflowLedgerEntry[]) {

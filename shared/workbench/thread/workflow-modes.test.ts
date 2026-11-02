@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests mode transitions: fresh proofs per loop, cross-turn filings, deferral, ungated modes,
- * the completed-status pairing, and what refused and legacy calls contribute to the ledger.
+ * entry sources, the completed-status pairing, and what refused and legacy calls contribute to the ledger.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -15,7 +15,7 @@ const plan: ProofOfWorkChecklist = {
 };
 const review: ProofOfWorkChecklist = { id: "review", hidden: false, items: [{ id: "review.coverage", label: "Coverage" }] };
 const defined = (name: string, rest: Partial<WorkflowMode> = {}): WorkflowMode => ({
-  name, icon: null, color: null, proofs: [], resetOn: [], status: null, deny: [], ...rest,
+  name, icon: null, color: null, proofs: [], resetOn: [], from: [], status: null, deny: [], ...rest,
 });
 const modes: WorkflowMode[] = [
   defined("Brief", { proofs: ["plan"], resetOn: ["Review"] }),
@@ -60,6 +60,16 @@ test("a completed-paired mode and completion require each other; blocked and unp
   assert.deepEqual(enter([mode("Implement")], { status: "blocked" }).needsMode, []);
   const unpaired = evaluateThreadStateTransition([], [defined("Brief")], [], { status: "completed" });
   assert.deepEqual(unpaired.needsMode, [], "workflows without a paired mode complete freely");
+});
+
+test("a mode listing its sources is entered only from them, however complete the filed proofs", () => {
+  const implement = defined("Implement", { from: ["Brief", "Implement"] });
+  const enterImplement = (ledger: WorkflowLedgerEntry[]) => evaluateThreadStateTransition(ledger, [implement], [plan], { mode: "Implement" }).needsFrom;
+  assert.deepEqual(enterImplement([complete, mode("Review")]), ["Brief", "Implement"], "plan proofs filed inline do not replace Brief");
+  assert.deepEqual(enterImplement([]), ["Brief", "Implement"], "no mode yet");
+  assert.deepEqual(enterImplement([mode("brief")]), []);
+  assert.deepEqual(enterImplement([mode("Implement")]), [], "re-entering for an addendum");
+  assert.deepEqual(enter([mode("Review")], { mode: "Brief" }).needsFrom, [], "modes without sources are entered from anywhere");
 });
 
 test("gated families report over the same window their modes count", () => {

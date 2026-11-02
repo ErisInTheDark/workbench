@@ -66,6 +66,9 @@ export default class WorkbenchThreadStateCommandController {
         `${transition.target!.name} needs checklists filed${transition.target!.resetOn.length ? ` since you last entered ${transition.target!.resetOn.join(" or ")}` : ""}; still unresolved:`,
         ...transition.unresolved.map(({ checklist, ids }) => `- ${checklist}: ${ids.join(", ")}`),
       ] : [],
+      ...transition.needsFrom.length
+        ? [`${transition.target!.name} is entered only from ${transition.needsFrom.join(" or ")}; current mode: ${transition.current ?? "none"}.`]
+        : [],
       ...transition.needsStatus ? [`${transition.target!.name} is entered together with status: "${transition.needsStatus}".`] : [],
       ...transition.needsMode.length ? [`Status completed needs mode ${transition.needsMode.join(" or ")} after this call.`] : [],
     ];
@@ -88,7 +91,7 @@ export default class WorkbenchThreadStateCommandController {
       `Mode: ${mode ?? "none"}. Status: ${status}${applied && state.status ? ` (${state.status} applies when the turn ends)` : ""}. Title: ${title || "none"}.`,
       `Always editable: ${editable.length ? editable.join(", ") : "none"}.`,
       ...proof ? [this.proofReport(proof, items, ledger, workflow)] : [],
-      ...this.owed(ledger, workflow, mode),
+      ...this.owed(applied && state.mode ? [...ledger, { kind: "mode", mode: state.mode }] : ledger, workflow, mode),
     ];
     return text(report.join("\n"), applied ? 200 : 400);
   }
@@ -112,15 +115,17 @@ export default class WorkbenchThreadStateCommandController {
     return formatProofOfWorkReport(reconcileProofOfWork(proofs, checklists), checklists).trimEnd();
   }
 
-  /** What every other gated mode still needs, so the agent can file it before switching. */
+  /** What every other gated mode still needs from here, so the agent can file it or route through its sources first. */
   private owed(ledger: readonly WorkflowLedgerEntry[], workflow: WorkbenchThreadWorkflow, mode: string | null) {
     const { checklists, modes } = workflow.overlays;
     return modes.flatMap((candidate) => {
-      if (!candidate.proofs.length || candidate.name.toLowerCase() === mode?.toLowerCase()) return [];
-      const { unresolved } = evaluateThreadStateTransition(ledger, modes, checklists, { mode: candidate.name, status: candidate.status ?? undefined });
-      return unresolved.length
-        ? [`${candidate.name} needs: ${unresolved.map(({ checklist, ids }) => `${checklist} (${ids.join(", ")})`).join("; ")}.`]
-        : [];
+      if ((!candidate.proofs.length && !candidate.from.length) || candidate.name.toLowerCase() === mode?.toLowerCase()) return [];
+      const { needsFrom, unresolved } = evaluateThreadStateTransition(ledger, modes, checklists, { mode: candidate.name, status: candidate.status ?? undefined });
+      const needs = [
+        ...needsFrom.length ? [`entering from ${needsFrom.join(" or ")}`] : [],
+        ...unresolved.map(({ checklist, ids }) => `${checklist} (${ids.join(", ")})`),
+      ];
+      return needs.length ? [`${candidate.name} needs: ${needs.join("; ")}.`] : [];
     });
   }
 }

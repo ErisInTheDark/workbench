@@ -16,11 +16,11 @@ This workflow is about control, context, and implementation discipline. Do not f
 
 # Default workflow
 
-<!-- Failure: agents filed plan and review checklists for early loops, then skipped them for "quick follow-up" loops late in long threads, deferring required work back to the user. Text tags could not refuse anything; mode gates make filing the price of entering the next mode, measured per loop so earlier loops' proofs never count. Denials stop out-of-mode edits mechanically instead of by reminder; Review also denies shell and rg, since inspecting after closing a loop means it wasn't closed. Decision mode was dropped once Implement required a quoted approval: it only added a switch before every questionnaire. -->
+<!-- Failure: agents filed plan and review checklists for early loops, then skipped them for "quick follow-up" loops late in long threads, deferring required work back to the user. Text tags could not refuse anything; mode gates make filing the price of entering the next mode, measured per loop so earlier loops' proofs never count. Denials stop out-of-mode edits mechanically instead of by reminder; Review also denies shell and rg, since inspecting after closing a loop means it wasn't closed. Implement is entered only from Brief or itself: agents jumped Review -> Implement filing plan proofs inline in the same call, so proofs alone cannot force a visible brief, but the path can. Decision mode was dropped once Implement required a quoted approval: it only added a switch before every questionnaire. -->
 Enter each workflow mode with <tool id="thread_state" /> `mode`, using its exact name: Inspect, Brief, Implement, or Review. Later instruction layers (project AGENTS files, then skills by activation) may redefine modes and checklists by name; the latest definition wins.
 <mode name="Inspect" icon="search" color="#71717a" deny="edit:claims" />
 <mode name="Brief" icon="clipboard" color="purple" proofs="plan quality" reset-on="Review" deny="edit:claims" />
-<mode name="Implement" icon="pen" color="blue" proofs="approval" reset-on="Implement" />
+<mode name="Implement" icon="pen" color="blue" proofs="approval" reset-on="Implement" from="Brief Implement" />
 <mode name="Review" icon="flag" color="green" proofs="review" reset-on="Brief" status="completed" deny="shell rg edit:claims" />
 
 <docs tools="thread_state">

@@ -4,12 +4,12 @@
  * - ThreadStateSchema/ThreadState: one thread_state call; no fields reads.
  * - ModeIconSchema/ModeIcon: the icons an instruction-declared mode may show beside its name.
  * - MODE_EDIT_DENIALS: deny tokens that restrict file edits rather than tools.
- * - WorkflowModeSchema/WorkflowMode: one instruction-declared mode: its icon, colour, proofs due on entry, resets, status pairing and denials.
+ * - WorkflowModeSchema/WorkflowMode: one instruction-declared mode: its icon, colour, proofs due on entry, resets, entry sources, status pairing and denials.
  * - WorkflowLedgerSource/WorkflowLedgerEntry/readWorkflowLedgerEntries: what one recorded Workbench call contributed to a thread's workflow.
  * - readThreadStateCall/readModeEntered/readFiledProofs: a transcript call's thread_state arguments, entered mode, and filed proofs.
  * - currentWorkflowMode/currentAlwaysEditable: a ledger's latest entered mode and always-editable paths.
  * - findWorkflowMode: the definition a mode name selects.
- * - evaluateThreadStateTransition: whether one call may apply its mode and status, naming every refusal.
+ * - evaluateThreadStateTransition: whether one call may apply its mode and status from the current mode, naming every refusal.
  * - gatedProofWindows: per gated checklist family, the proofs its modes count.
  */
 import { z } from "zod";
@@ -47,6 +47,8 @@ export const WorkflowModeSchema = z.object({
   color: z.string().trim().min(1).nullable(),
   proofs: z.array(ProofFamilySchema),
   resetOn: z.array(z.string().trim().min(1)),
+  /** Modes it may be entered from; empty means any. */
+  from: z.array(z.string().trim().min(1)),
   status: z.literal("completed").nullable(),
   deny: z.array(z.string().trim().min(1)),
 }).strict();
@@ -160,8 +162,9 @@ function proofsSinceReset(ledger: readonly WorkflowLedgerEntry[], resetOn: reado
 }
 
 /**
- * `ledger` already holds this call's proofs. Entering a mode needs its proof checklists resolved; a mode paired with
- * `completed` is entered only with that status, and while any mode is paired, `completed` needs one of them after the call.
+ * `ledger` already holds this call's proofs. Entering a mode needs its proof checklists resolved and, when it lists
+ * `from` modes, the current mode among them; a mode paired with `completed` is entered only with that status, and while
+ * any mode is paired, `completed` needs one of them after the call.
  */
 export function evaluateThreadStateTransition(
   ledger: readonly WorkflowLedgerEntry[],
@@ -178,8 +181,10 @@ export function evaluateThreadStateTransition(
     return ids.length ? [{ checklist: family, ids }] : [];
   });
   const needsStatus = target?.status && call.status !== target.status ? target : null;
+  const current = currentWorkflowMode(ledger);
+  const needsFrom = target?.from.length && !target.from.some(mode => current && sameMode(mode, current)) ? target.from : [];
   const paired = modes.filter(mode => mode.status === "completed");
-  const after = call.mode ?? currentWorkflowMode(ledger);
+  const after = call.mode ?? current;
   const needsMode = call.status === "completed" && paired.length && !paired.some(mode => after && sameMode(mode.name, after))
     ? paired.map(mode => mode.name)
     : [];
@@ -187,6 +192,8 @@ export function evaluateThreadStateTransition(
     target,
     unresolved,
     undeclared: (target?.proofs ?? []).filter(family => !declared.has(family)),
+    current,
+    needsFrom,
     needsStatus: needsStatus?.status ?? null,
     needsMode,
   };

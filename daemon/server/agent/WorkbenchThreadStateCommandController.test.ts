@@ -9,7 +9,7 @@ import type { WorkflowLedgerEntry, WorkflowMode } from "workbench-shared/workben
 import WorkbenchThreadStateCommandController from "./WorkbenchThreadStateCommandController";
 
 const review: ProofOfWorkChecklist = { id: "review", hidden: false, items: [{ id: "review.coverage", label: "Coverage" }] };
-const reviewMode: WorkflowMode = { name: "Review", icon: "flag", color: null, proofs: ["review"], resetOn: ["Brief"], status: "completed", deny: [] };
+const reviewMode: WorkflowMode = { name: "Review", icon: "flag", color: null, proofs: ["review"], resetOn: ["Brief"], from: [], status: "completed", deny: [] };
 
 function fixture(ledger: WorkflowLedgerEntry[] = [], { titleFails = false } = {}) {
   const applied: string[] = [];
