@@ -91,6 +91,7 @@ const ACTION_LABELS: Record<GitArcCommandAction, StepLabels> = {
   propose: stepLabels("Proposing", "Proposed", "Failed to propose"),
   release: stepLabels("Releasing", "Released", "Failed to release"),
   rescind: stepLabels("Rescinding", "Rescinded", "Failed to rescind"),
+  restack: stepLabels("Restacking", "Restacked", "Failed to restack"),
   restore: stepLabels("Restoring", "Restored", "Failed to restore"),
   scope: stepLabels("Reading scope", "Read scope", "Failed to read scope"),
   stack: stepLabels("Stacking", "Stacked", "Failed to stack"),
@@ -119,13 +120,13 @@ const ADOPT_AND_START_LABELS = stepLabels("Adopting changes and starting", "Adop
 
 const CARD_STYLES: Record<GitArcCommandAction, Exclude<GitArcCardStyle, "step">> = {
   adopt: "card", claims: "card", compare: "card", continue: "card", diff: "card", edit: "cardPreview", plan: "card",
-  planStart: "card", propose: "card", release: "card", rescind: "card", restore: "cardPreview", scope: "cardPreview",
+  planStart: "card", propose: "card", release: "card", rescind: "card", restack: "card", restore: "cardPreview", scope: "cardPreview",
   stack: "card", start: "card", stash: "card", status: "card", unknown: "card", unstack: "card", unstash: "card",
 };
 
 const FAILURE_ACTIONS: Record<Exclude<GitArcCommandAction, "edit">, GitArcFailureAction> = {
   adopt: "arcAdoptSource", claims: "arcClaims", compare: "compare", continue: "arcContinue", diff: "diff", plan: "planClaims",
-  planStart: "planStart", propose: "proposalCreate", release: "arcRelease", rescind: "proposalRescind", restore: "restore",
+  planStart: "planStart", propose: "proposalCreate", release: "arcRelease", rescind: "proposalRescind", restack: "arcRestack", restore: "restore",
   scope: "arcScope", stack: "arcStack", start: "arcStart", stash: "arcStash", status: "arcStatus", unknown: "unknown",
   unstack: "arcUnstack", unstash: "arcUnstash",
 };
@@ -317,7 +318,7 @@ export function buildGitArcCard(input: {
     style,
     label: stepLabel(stateLabels, state),
     transferTarget: transfer,
-    subject: action === "rescind" || action === "status" || action === "scope" || releasedCount !== null ? null : subjectName,
+    subject: action === "rescind" || action === "restack" || action === "status" || action === "scope" || releasedCount !== null ? null : subjectName,
     releasedCount,
     statusCounts: status ? createThreadGitArcStatusCounts(status) : null,
     iconLabel: transfer ? "release claims to subagent" : adoptFromSubagent ? "adopt claims from subagent" : `${action} git arc`,

@@ -12,7 +12,6 @@ import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rej
 
 import type { GitArcProposalCommitEntry, GitCheckpointProposal, GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
-import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitObjectReadSession from "./GitObjectReadSession";
 import type { GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
 import type { WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
@@ -26,6 +25,7 @@ import GitArcPublishState from "./GitArcPublishState";
 import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
 import GitArcRegistry, { REGISTRY_REF, getGitArcLiveClaimPaths, listGitArcUnclaimedPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcStackController, { type GitArcStackStatusResolver } from "./GitArcStackController";
+import GitArcStackEditor from "./GitArcStackEditor";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitCheckpointStore, {
   type GitArcProposalSummary,
@@ -216,47 +216,6 @@ function savedLifecycle(entry: GitArcRegistryEntry, saved: GitArcSavedStash | nu
     intentDescription: saved.intentDescription, intentName: saved.intentName,
     phase: "stashed" as const, proposalIds: saved.proposalIds,
   } : live;
-}
-
-function replaceProposalId(values: readonly string[], target: string, replacement: string) {
-  return values.map(id => id === target ? replacement : id);
-}
-
-function revisedRegistryEntry(
-  entry: GitArcRegistryEntry,
-  target: string,
-  replacement: string,
-  commits: ReadonlyMap<string, string>,
-): Omit<GitArcRegistryEntry, "updatedAt"> {
-  const targetIsStored = [
-    ...(entry.proposalIds ?? []),
-    ...(entry.retainedArc?.proposalIds ?? []),
-    ...(entry.savedStash?.proposalIds ?? []),
-  ].includes(target);
-  const proposalIds = targetIsStored
-    ? replaceProposalId(entry.proposalIds ?? [], target, replacement)
-    : [...(entry.proposalIds ?? []), replacement];
-  return {
-    ...entry,
-    checkpointCommit: commits.get(entry.checkpointCommit) ?? entry.checkpointCommit,
-    proposalId: proposalIds.at(-1) ?? null,
-    proposalIds,
-    ...(entry.stackTip ? { stackTip: commits.get(entry.stackTip) ?? entry.stackTip } : {}),
-    ...(entry.retainedArc ? {
-      retainedArc: {
-        ...entry.retainedArc,
-        checkpointCommit: commits.get(entry.retainedArc.checkpointCommit) ?? entry.retainedArc.checkpointCommit,
-        proposalIds: replaceProposalId(entry.retainedArc.proposalIds, target, replacement),
-      },
-    } : {}),
-    ...(entry.savedStash ? {
-      savedStash: {
-        ...entry.savedStash,
-        checkpointCommit: commits.get(entry.savedStash.checkpointCommit) ?? entry.savedStash.checkpointCommit,
-        proposalIds: replaceProposalId(entry.savedStash.proposalIds, target, replacement),
-      },
-    } : {}),
-  };
 }
 
 function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId: string; title: string }>, claimedPaths: string[]) {
@@ -1068,61 +1027,20 @@ export default class GitArcProposalController {
     ) {
       throw new GitArcRejectionError({ reason: "unchangedMessage" });
     }
-    const proposalId = randomUUID();
-    const metadata: ProposalMetadata = {
-      ...target.metadata,
-      committedSha: null,
-      description: proposalDescription,
-      livePaths: livePaths ?? target.metadata.livePaths,
-      paths: paths ?? target.metadata.paths,
-      proposalId,
-      sourceCheckpoint: sealingLayer
-        ? target.metadata.sourceCheckpoint
-        : lifecycleEntry(current)?.checkpointCommit ?? target.metadata.sourceCheckpoint,
-      status: "proposed",
-      supersededByProposalId: null,
-      supersededBySha: null,
-      title: proposalTitle,
-      unavailableReason: null,
-    };
-    const created = await this.store(repository).createProposalCommit(tree, metadata);
-    const proposalCommit = created.commit;
-    const replacement: StoredProposal = {
-      metadata: created.metadata,
-      proposalCommit,
-      proposalRef: await this.store(repository).proposalRefName(harness, threadId, proposalId),
-      tree,
-    };
-    const stackRevision = await stack.prepareProposalRevision(current, target.metadata.proposalId, replacement);
-    const excludedRefs = [
-      REGISTRY_REF,
-      target.proposalRef,
-      ...(stackRevision?.replacedRefs ?? []),
-    ];
-    const rewrite = await new GitArcHistoryRewriter(repository).prepare(
-      stackRevision?.commits ?? new Map(),
-      { excludeRefs: excludedRefs },
-    );
-    const nextEntry = revisedRegistryEntry(current, target.metadata.proposalId, proposalId, rewrite.commits);
-    const registryMutation = await registry.prepareClaim(nextEntry, {
-      commitRemaps: rewrite.commits,
-      expectedCheckpointCommit: current.checkpointCommit,
+    const edited = await new GitArcStackEditor(repository, this.resolveThreadIdentity).apply({ harness, threadId }, {
+      revise: {
+        description: proposalDescription,
+        livePaths: livePaths ?? target.metadata.livePaths,
+        paths: paths ?? target.metadata.paths,
+        proposalId: target.metadata.proposalId,
+        sourceCheckpoint: sealingLayer
+          ? target.metadata.sourceCheckpoint
+          : lifecycleEntry(current)?.checkpointCommit ?? target.metadata.sourceCheckpoint,
+        title: proposalTitle,
+        tree,
+      },
     });
-    const supersededMetadata: ProposalMetadata = {
-      ...remapProposalMetadata(target.metadata, rewrite.commits),
-      status: "superseded",
-      supersededByProposalId: proposalId,
-      supersededBySha: null,
-      unavailableReason: null,
-    };
-    const { commit: supersededCommit } = await this.store(repository).createProposalCommit(target.tree, supersededMetadata, { previous: target });
-    await repository.updateRefs([
-      ...(stackRevision?.updates ?? []),
-      ...rewrite.updates,
-      ...registryMutation.updates,
-      { newValue: supersededCommit, oldValue: target.proposalCommit, ref: target.proposalRef },
-      { newValue: proposalCommit, oldValue: null, ref: replacement.proposalRef },
-    ], [...(stackRevision?.deletes ?? []), ...rewrite.deletes]);
+    const [proposalId, metadata] = [...edited.replacements][0]!;
     return {
       baseCommit: metadata.baseCommit,
       description: metadata.description,

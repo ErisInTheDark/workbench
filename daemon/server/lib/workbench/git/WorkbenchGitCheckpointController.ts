@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitCheckpointController: route plan, lifecycle, stack, proposal, claim-view and edit-session owners; orchestrate inspection, edit-session claiming and restoration.
+ * - default WorkbenchGitCheckpointController: route plan, lifecycle, stack (including restacks), proposal, claim-view and edit-session owners; orchestrate inspection, edit-session claiming and restoration.
  * - GitArcNoopResult: ignored-path no-op result.
  * - GitArcLifecycleState: registered lifecycle projection.
  * - GitArcDurableProposalReader: permanent-history proposal ids that lifecycle projections leave out.
@@ -19,6 +19,8 @@ import fs from "node:fs/promises";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type {
   GitArcProposalCommitEntry,
+  GitArcRestackEdits,
+  GitArcRestackResult,
   GitArcStackResult,
   GitCheckpointFileChange,
   GitCheckpointProposal,
@@ -62,6 +64,7 @@ import {
 } from "./git-arc-thread-identity";
 import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcRetentionController";
 import GitArcStackController from "./GitArcStackController";
+import GitArcStackEditor from "./GitArcStackEditor";
 import GitArcClaimViewController, { type GitArcClaimViewInput, type GitArcHeldPathsInput } from "./GitArcClaimViewController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
@@ -336,6 +339,17 @@ export default class WorkbenchGitCheckpointController {
     const prepared = await this.prepareStackOperation(input, { action: "unstack" });
     if (!prepared) throw new GitArcRejectionError({ reason: "noOwnStackLayer" });
     return await prepared.apply();
+  }
+
+  async restackArc(input: ControllerInput & Partial<GitArcRestackEdits>): Promise<GitArcRestackResult> {
+    return await GitObjectReadSession.run(async () => {
+      const repository = await WorkbenchGitRepository.open(input.cwd);
+      const { replacements: _replacements, ...result } = await new GitArcStackEditor(repository, this.resolveThreadIdentity).apply(
+        { harness: normalizeHarness(input.harness), threadId: input.threadId },
+        { drop: input.drop ?? [], fold: input.fold ?? [], strip: input.strip ?? [] },
+      );
+      return result;
+    });
   }
 
   async createInspectionSnapshot(cwd: string, signal?: AbortSignal): Promise<GitArcInspectionSnapshot> {

@@ -116,6 +116,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_unstash",
   "git_arc_stack",
   "git_arc_unstack",
+  "git_arc_restack",
   "git_arc_wait",
   "git_arc_continue",
   "git_arc_edit_start",
@@ -147,7 +148,7 @@ export function isGitArcEditStep(value: string | null | undefined): value is Git
 }
 
 export type WorkbenchGitArcOperation = {
-  action: "adopt" | "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "edit" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "stack" | "start" | "stash" | "unstack" | "unstash" | "unknown";
+  action: "adopt" | "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "edit" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restack" | "restore" | "stack" | "start" | "stash" | "unstack" | "unstash" | "unknown";
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
@@ -545,6 +546,7 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_arc_unstash: "unstash",
     git_arc_stack: "stack",
     git_arc_unstack: "unstack",
+    git_arc_restack: "restack",
   };
   return actions[name] ?? null;
 }
@@ -561,6 +563,7 @@ const GIT_ARC_ONGOING: Record<WorkbenchGitArcOperation["action"], string> = {
   propose: "Proposing changes",
   release: "Releasing claims",
   rescind: "Rescinding proposal",
+  restack: "Restacking proposals",
   restore: "Restoring files",
   scope: "Scoping claims",
   stack: "Stacking proposals",
@@ -638,6 +641,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     propose: "git-arc.propose",
     release: "git-arc.release",
     rescind: "git-arc.rescind",
+    restack: "git-arc.restack",
     restore: "git-arc.restore",
     stack: "git-arc.stack",
     start: "git-arc.start",
@@ -650,7 +654,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ? { gitCheckpointDiffs: 1 }
     : action === "restore"
       ? { gitCheckpointRestores: 1 }
-      : action === "propose" || action === "rescind" || action === "scope" || action === "stack" || action === "unstack"
+      : action === "propose" || action === "rescind" || action === "restack" || action === "scope" || action === "stack" || action === "unstack"
         ? undefined
         : { gitCheckpointCreates: 1 };
   return specialized(matcherIds[action], { kind: "gitArc", operation }, GIT_ARC_ONGOING[action], stats);

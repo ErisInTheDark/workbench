@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, proposal-layer rewrites, rebases onto HEAD, arc drift and seal/reopen operations (sealing amendments as fresh commits).
- * - GitArcPreparedStackRevision: atomic ref and commit updates for one proposal revision or chain rebase.
+ * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, rebases onto HEAD, arc drift and seal/reopen operations (sealing amendments as fresh commits).
+ * - GitArcPreparedStackRevision: atomic ref and commit updates for one chain rebase.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
  * - GitArcStackedProposalState: waiting, replayable or broken stacked proposal classification.
@@ -171,46 +171,6 @@ export default class GitArcStackController {
       }
     });
     return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
-  }
-
-  /** Rebuild the target layer and every layer above it, preserving each layer's own scoped proposal content. */
-  async prepareProposalRevision(
-    entry: GitArcRegistryEntry,
-    targetProposalId: string,
-    replacement: StoredProposal,
-  ): Promise<GitArcPreparedStackRevision | null> {
-    const chain = await this.readChain(entry.stackTip);
-    const targetIndex = chain.findIndex(({ layer }) => layer.proposalIds.includes(targetProposalId));
-    if (targetIndex < 0) return null;
-    const store = this.store();
-    return await this.rebuildLayers(chain.slice(targetIndex), chain[targetIndex]!.parent, async (current, base, stored) => {
-      const proposalIds = current.layer.proposalIds.map(id => id === targetProposalId
-        ? replacement.metadata.proposalId
-        : id);
-      const proposals = await Promise.all(proposalIds.map(async proposalId => (
-        proposalId === replacement.metadata.proposalId
-          ? replacement
-          : await store.readProposal(current.layer.harness as GitArcHarness, current.layer.threadId, proposalId)
-      )));
-      let tree = await this.repository.resolveTree(base);
-      for (const proposal of proposals) {
-        tree = await this.repository.writeTreeWithPathsFromSource(tree, proposal.tree, proposal.metadata.paths);
-      }
-      const summaries = await Promise.all(proposals.map(async ({ metadata, tree: proposalTree }): Promise<GitArcStackedProposal> => ({
-        changes: await this.repository.buildChangeTotals(metadata.baseCommit, proposalTree, metadata.paths),
-        description: metadata.description,
-        proposalId: metadata.proposalId,
-        title: metadata.title,
-      })));
-      return {
-        metadata: {
-          ...stored,
-          scopePaths: [...new Set(proposals.flatMap(({ metadata }) => metadata.paths))].sort(),
-          stackLayer: { ...stored.stackLayer!, proposalIds, proposals: summaries },
-        },
-        tree,
-      };
-    });
   }
 
   /**

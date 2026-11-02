@@ -5,6 +5,7 @@
  * - CONTROLLER_OPERATIONS_FIXTURE: shared prepared histories for the controller battery.
  * - ControllerFixtureState: branch paths and prepared checkpoint/proposal identities.
  * - STACK_OPERATIONS_FIXTURE/StackFixtureState: prepared stack layer branches and their proposal identities.
+ * - STACK_EDITOR_FIXTURE/StackEditorFixtureState: stacks whose layers share files, for revision and restack rebuilds.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -308,3 +309,62 @@ export const STACK_OPERATIONS_FIXTURE = {
 } satisfies GitTestFixtureSpec<object>;
 
 export type StackFixtureState = Awaited<ReturnType<typeof STACK_OPERATIONS_FIXTURE.prepare>>;
+
+export const STACK_EDITOR_FIXTURE = {
+  commits: [{
+    files: { "doc.txt": "intro\n1\n2\n3\n4\n5\n6\n7\noutro\n", "lock.txt": "base\n", "shared.txt": "a\nb\nc\nd\ne\n" },
+    message: "base",
+  }],
+  name: "stack-editor-states",
+  revision: 1,
+  prepare: async ({ bundleRoot, repositoryRoot }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    const fork = async (name: string) => {
+      const root = path.join(bundleRoot, `r/${name}`);
+      await fs.cp(repositoryRoot, root, { recursive: true, errorOnExist: true, force: false });
+      return root;
+    };
+    const propose = async (cwd: string, paths: string[], title: string) => (
+      await controller.createProposal({ cwd, threadId: "owner", paths, title, description: "" })
+    ).proposalId;
+
+    // shared: two layers editing different lines of one file.
+    const shared = await fork("shared");
+    await controller.createAndStartPlan({ cwd: shared, threadId: "owner", intentName: "shared", paths: ["shared.txt"] });
+    await write(shared, "shared.txt", "A\nb\nc\nd\ne\n");
+    const lower = await propose(shared, ["shared.txt"], "lower");
+    await controller.stackArc({ cwd: shared, threadId: "owner", title: "layer one" });
+    await write(shared, "shared.txt", "A\nb\nc\nd\nE\n");
+    const upper = await propose(shared, ["shared.txt"], "upper");
+    await controller.stackArc({ cwd: shared, threadId: "owner", title: "layer two" });
+
+    // mod: a mod layer, a feature layer editing the mod and a doc, then unsealed work removing the mod again.
+    const mod = await fork("mod");
+    await controller.createAndStartPlan({
+      cwd: mod, threadId: "owner", intentName: "mod", paths: ["doc.txt", "feature.txt", "lock.txt", "mod"],
+    });
+    await write(mod, "mod/a.txt", "a\n");
+    await write(mod, "mod/b.txt", "b\n");
+    await write(mod, "lock.txt", "base\nmod\n");
+    await controller.editArcClaims({ cwd: mod, threadId: "owner", inherit: true, addPaths: ["mod/a.txt", "mod/b.txt"] });
+    const modProposal = await propose(mod, ["lock.txt", "mod"], "add mod");
+    await controller.stackArc({ cwd: mod, threadId: "owner", title: "mod" });
+    await write(mod, "mod/a.txt", "a\nfeature\n");
+    await write(mod, "doc.txt", "intro\n1 feature\n2\n3\n4\n5\n6\n7\noutro\n");
+    await write(mod, "feature.txt", "feature\n");
+    const feature = await propose(mod, ["doc.txt", "feature.txt", "mod/a.txt"], "feature");
+    await controller.stackArc({ cwd: mod, threadId: "owner", title: "feature" });
+    await fs.rm(path.join(mod, "mod"), { recursive: true });
+    await write(mod, "lock.txt", "base\n");
+    await write(mod, "doc.txt", "intro\n1 feature\n2\n3\n4\n5\n6\n7 cleanup\noutro\n");
+    const removal = await propose(mod, ["doc.txt", "lock.txt", "mod"], "remove mod");
+
+    const relative = (root: string) => path.relative(bundleRoot, root);
+    return {
+      mod: { feature, mod: modProposal, removal, root: relative(mod) },
+      shared: { lower, root: relative(shared), upper },
+    };
+  },
+} satisfies GitTestFixtureSpec<object>;
+
+export type StackEditorFixtureState = Awaited<ReturnType<typeof STACK_EDITOR_FIXTURE.prepare>>;

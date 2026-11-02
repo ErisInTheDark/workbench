@@ -6,7 +6,7 @@
 - Assume user does not want to contribute to remote repositories by default.
 </docs>
 <!-- Outer region: only policy that genuinely applies to every arc tool. Each line names the tools it is about, so prompt cost lands where it belongs. -->
-<docs tools="git_plan_claims git_plan_start git_arc_start git_arc_wait git_arc_continue git_arc_claims git_arc_adopt git_arc_stash git_arc_unstash git_arc_release git_arc_status git_arc_compare git_arc_diff git_arc_restore git_arc_propose git_arc_rescind git_arc_reword git_arc_stack git_arc_unstack">
+<docs tools="git_plan_claims git_plan_start git_arc_start git_arc_wait git_arc_continue git_arc_claims git_arc_adopt git_arc_stash git_arc_unstash git_arc_release git_arc_status git_arc_compare git_arc_diff git_arc_restore git_arc_propose git_arc_rescind git_arc_reword git_arc_stack git_arc_unstack git_arc_restack">
 ## Workbench Git Plans and Arcs
 
 ### lifecycle and claims
@@ -186,8 +186,9 @@ sealing a layer:
 constraints:
 - Do not seal impulsively; know whether seal is necessary yet. Optimal is multiple proposals per layer 
 </docs>
-<docs tools="git_arc_unstack">
-- Sealed proposals may be amended or reworded. They cannot be rescinded; <tool id="git_arc_unstack" /> reopens the top layer when nothing builds on it
+<docs tools="git_arc_unstack git_arc_restack">
+<!-- Failure: removing work from mid-stack meant unstacking every layer above, rescinding, then reviving from the worktree, which bakes later file states into lower proposals. Restack rebuilds from proposal trees instead. -->
+- Sealed proposals may be amended or reworded. <tool id="git_arc_restack" /> drops, strips paths from, or folds pending proposals anywhere in the own stack in one atomic call; <tool id="git_arc_unstack" /> reopens the top layer when nothing builds on it
 </docs>
 <docs tools="git_arc_stack">
 - Amend proposals cannot build on a pending stack. Stash is unavailable while a stack is pending

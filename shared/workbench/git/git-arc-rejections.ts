@@ -71,7 +71,10 @@ const simpleMessages = {
   stackedSource: "The source thread owns pending stack layers.",
   stackBaseMismatch: "The receiving thread builds on a different stack baseline.",
   noOwnStackLayer: "This thread has no stack layer of its own to unstack.",
-  stackLayerInUse: "Other work builds on the top stack layer.",
+  stackLayerInUse: "Other work builds on the affected stack layer.",
+  emptyRestack: "The restack requests no changes.",
+  invalidRestackTarget: "The restack names a proposal or edit it can't apply to this thread's pending stack.",
+  invalidFoldTarget: "A proposal can only fold into a pending proposal in its own or a lower stack layer.",
 } as const;
 
 export const GitArcRejectionSchema = z.discriminatedUnion("reason", [
@@ -81,6 +84,7 @@ export const GitArcRejectionSchema = z.discriminatedUnion("reason", [
     paths: facts,
   }).strict(),
   z.object({ reason: z.literal("proposalNotFound"), proposalId: fact }).strict(),
+  z.object({ reason: z.enum(["restackConflict", "proposalEmptied"]), proposalId: fact, paths: facts }).strict(),
   z.object({ reason: z.literal("publishedCommit"), refs: facts }).strict(),
   z.object({
     reason: z.enum(["unknownWorkspaceRoot", "rootNotRepository", "noClaimedRootPaths", "missingRestoreRef", "crossRootProposal"]),
@@ -109,6 +113,8 @@ const humanMessages = {
   baselineChanged: "The selected files changed since the arc's baseline.",
   sealedStackContent: "These files hold sealed stack-layer content that hasn't landed, so a thread must keep claiming them until the layer commits.",
   proposalNotFound: "The requested proposal could not be found.",
+  restackConflict: "A proposal's changes conflict with the restacked work beneath it.",
+  proposalEmptied: "The restack would leave a proposal with no changes.",
   publishedCommit: "The commit is already published, so it can't be amended.",
   unknownWorkspaceRoot: "The selected project is not in this workspace.",
   rootNotRepository: "The selected project is not in a Git repository.",

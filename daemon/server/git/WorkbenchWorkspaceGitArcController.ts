@@ -627,6 +627,7 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcDiscardStash": return await this.executeDiscardStash(project, members, request);
       case "arcStack":
       case "arcUnstack": return await this.executeStack(project, members, request);
+      case "arcRestack": return await this.executeRestack(project, members, request);
       case "arcAdoptSource": throw new Error("Source adoption requires canonical identity ingress.");
       case "arcTransferClaims": throw new Error("Selected claim transfer requires canonical child identity ingress.");
       case "arcStart":
@@ -1705,6 +1706,31 @@ export default class WorkbenchWorkspaceGitArcController {
     });
     const result = values[0]!.result;
     return { ...result, rootId: this.proposalRootId(member, "paths" in result && Array.isArray(result.paths) ? result.paths : []) };
+  }
+
+  /** A restack rewrites one repository's stack, so every named proposal must live in the same member. */
+  private async executeRestack(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    request: Extract<GitCheckpointRequest, { action: "arcRestack" }>,
+  ) {
+    const proposalIds = [...new Set([
+      ...request.drop,
+      ...request.strip.map(({ proposalId }) => proposalId),
+      ...request.fold.flatMap(({ into, proposalId }) => [proposalId, into]),
+    ])];
+    if (!proposalIds.length) throw new GitArcRejectionError({ reason: "emptyRestack" });
+    const owners = await Promise.all(proposalIds.map(async proposalId => await this.findProposalMember(members, { ...request, proposalId })));
+    const member = owners[0]!;
+    if (owners.some(owner => owner.repoRoot !== member.repoRoot)) {
+      throw new GitArcRejectionError({ reason: "invalidRestackTarget" }, "A restack can only edit proposals in one repository.");
+    }
+    const values = await this.runMembers([member], async () => await this.local.restackArc({ ...request, cwd: member.repoRoot }), undefined, "write", {
+      harness: request.harness,
+      project,
+      threadId: request.threadId,
+    });
+    return { ...values[0]!.result, rootId: this.proposalRootId(member, values[0]!.result.releasedClaims) };
   }
 
   private async executeRestore(

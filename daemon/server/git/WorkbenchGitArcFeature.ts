@@ -130,7 +130,7 @@ const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "arcAdoptSource",
   "arcTransferClaims",
   "planClaims", "arcClaims",
-  "arcAdd", "arcAdopt", "arcContinue", "arcRelease", "arcRemove", "arcStart", "arcStack", "arcStash", "arcUnstack", "arcUnstash", "arcDiscardStash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
+  "arcAdd", "arcAdopt", "arcContinue", "arcRelease", "arcRemove", "arcStart", "arcStack", "arcStash", "arcUnstack", "arcRestack", "arcUnstash", "arcDiscardStash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCommitMany", "proposalCreate", "proposalRescind", "restore",
 ]);
 const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState"]);
@@ -1215,6 +1215,9 @@ export default class WorkbenchGitArcFeature {
       case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown, paths: input.paths }));
       case "arcStack": return Response.json(await this.controller.stackArc({ ...common, title: input.title }));
       case "arcUnstack": return Response.json(await this.controller.unstackArc(common));
+      case "arcRestack": return Response.json(await this.controller.restackArc({
+        ...common, drop: input.drop, fold: input.fold, strip: input.strip,
+      }));
       case "arcStash": return Response.json(await this.controller.stashArc(common));
       case "arcUnstash": return Response.json(await this.controller.unstashArc(common));
       case "arcDiscardStash":

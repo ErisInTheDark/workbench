@@ -43,6 +43,7 @@ export type WorkbenchAgentCommandResponseKind =
   | "git-arc-stack"
   | "git-arc-stash"
   | "git-arc-unstack"
+  | "git-arc-restack"
   | "git-arc-unstash"
   | "git-arc-wait"
   | "json"

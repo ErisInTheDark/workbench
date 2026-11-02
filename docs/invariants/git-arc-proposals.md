@@ -30,7 +30,8 @@
 - Registry reload derives missing active ownership from guards, owned pending layers, and worktree changes without rewriting storage. Guard removal fails closed when proposal or stack evidence is incomplete.
 - Selected transfer may move active or baseline-only guards. The recipient gets active ownership on its inherited stack; the source loses the selected guard and matching active ownership.
 - Stack layers seal pending proposals into tip checkpoints; while any chain proposal is pending, sealed paths measure from the top tip, other paths from HEAD, and arc checkpoints keep real HEAD parents. Proposing on a pending stack first rebases its tips onto fast-forwarded HEAD when HEAD left sealed paths untouched or landed them. Arcs keep measuring claimed paths from their stack tip after it lands, until their checkpoint parent contains every landing commit.
-- Pending proposal revisions atomically supersede the target, rebuild affected stack layers and remap dependent refs; failure leaves every ref unchanged.
+- Pending proposal revisions and restacks atomically rewrite affected proposals and stack layers, rebasing later proposals by three-way merging their own changes, and remap dependent refs; any conflict leaves every ref unchanged. Neither touches worktree or index.
+- Restack drops become rescinded, folds supersede their source, and released paths return to active claims; restack rejects when another thread builds on an affected layer.
 - Content revision applies only worktree changes beyond represented proposals; later proposal content stays in its original layer.
 - Stacked proposals commit only after lower chain proposals resolve, replaying onto HEAD when their paths match the tip; otherwise unavailable.
 - Consecutive commit-mode acceptances in one repository land as one ref transaction with one claim transition and outcome; the first invalid entry publishes only the valid prefix.

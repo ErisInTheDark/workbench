@@ -56,6 +56,7 @@ const ARC_MATCHER_IDS = {
   unstash: "git-arc.unstash",
   planStart: "git-arc.plan-start",
   rescind: "git-arc.rescind",
+  restack: "git-arc.restack",
   unknown: "git-arc.unknown",
 } as const satisfies Record<GitArcCommandAction, string>;
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
@@ -180,6 +181,11 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: ARC_MATCHER_IDS.unstack,
     presentationName: "git_arc_unstack",
   }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+restack(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.restack,
+    presentationName: "git_arc_restack",
+  }),
   CommandMatcher({
     id: ARC_MATCHER_IDS.unknown,
     match: ({ stage }) => /^wb(?:\.cmd)?\s+git\s+(?:arc|plan)(?:\s|$)/iu.test(stage.text.trim())
@@ -257,6 +263,7 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   if (action === "unstack") {
     return cursor === tokens.length ? { action, intentName: null, paths: [], ref: null } : null;
   }
+  if (action === "restack") return { action, intentName: null, paths: [], ref: null };
   if (action === "adopt") {
     const [flag, value, ...extra] = tokens.slice(cursor);
     if (extra.length || !value || (flag !== "--name" && flag !== "--thread")) return null;

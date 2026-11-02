@@ -11,6 +11,8 @@
  * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: local and workspace inspection results.
  * - GitArcStashResultSchema/GitArcStashResult: browser-safe stash and unstash lifecycle result.
  * - GitArcStackResultSchema/GitArcStackResult: sealed or reopened stack layer receipt.
+ * - GitArcRestackEditsSchema/GitArcRestackEdits: drops, path strips and folds one restack applies together.
+ * - GitArcRestackResultSchema/GitArcRestackResult: per-proposal restack outcomes, rewritten layers and released claims.
  * - GitArcClaimViewSchema/GitArcClaimView/GitArcClaimViewResultSchema/GitArcClaimViewResult: per-repository build view tree, held owners and mirror counts.
  * - GitArcHeldPathsSchema/GitArcHeldPaths/GitArcHeldPathsResultSchema/GitArcHeldPathsResult: per-repository held owners, the baseline tree holding their view bytes, and those bytes on request.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
@@ -33,6 +35,13 @@ const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 const checkpointPaths = z.array(nonEmptyString).min(1);
 const optionalCheckpointPaths = z.array(nonEmptyString);
 const rootId = nonEmptyString;
+
+export const GitArcRestackEditsSchema = z.object({
+  drop: z.array(nonEmptyString).default([]),
+  fold: z.array(z.object({ into: nonEmptyString, proposalId: nonEmptyString }).strict()).default([]),
+  strip: z.array(z.object({ paths: checkpointPaths, proposalId: nonEmptyString }).strict()).default([]),
+}).strict();
+export type GitArcRestackEdits = z.infer<typeof GitArcRestackEditsSchema>;
 
 export const GitArcAdoptionSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("thread"), threadId: nonEmptyString }).strict(),
@@ -211,6 +220,11 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("arcStack"), title: nonEmptyString, ...checkpointBaseRequest }).strict(),
   z.object({ action: z.literal("arcUnstack"), ...checkpointBaseRequest }).strict(),
   z.object({
+    action: z.literal("arcRestack"),
+    ...GitArcRestackEditsSchema.shape,
+    ...checkpointBaseRequest,
+  }).strict(),
+  z.object({
     action: z.literal("arcEditStart"),
     operations: GitArcEditOperationsSchema,
     rootId: rootId.optional(),
@@ -381,6 +395,19 @@ export const GitArcStackResultSchema = z.object({
   stackTip: checkpointSha.nullable(),
 }).strict();
 export type GitArcStackResult = z.infer<typeof GitArcStackResultSchema>;
+
+export const GitArcRestackResultSchema = z.object({
+  /** Layers the restack rewrote, bottom first; lower layers and removed ones are omitted. */
+  layers: z.array(z.object({ proposalIds: z.array(nonEmptyString), title: nonEmptyString }).strict()),
+  proposals: z.array(z.discriminatedUnion("status", [
+    z.object({ proposalId: nonEmptyString, status: z.enum(["rebased", "rescinded"]) }).strict(),
+    z.object({ proposalId: nonEmptyString, replacementId: nonEmptyString, status: z.enum(["replaced", "superseded"]) }).strict(),
+  ])),
+  releasedClaims: optionalCheckpointPaths,
+  rootId: nonEmptyString.optional(),
+  stackTip: checkpointSha.nullable(),
+}).strict();
+export type GitArcRestackResult = z.infer<typeof GitArcRestackResultSchema>;
 
 export const GitArcClaimViewSchema = z.object({
   /** Mirrored files rewritten or removed; present only when the view was mirrored into a directory. */

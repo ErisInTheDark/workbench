@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - renderGitArcOutput/renderGitArcResponse: render CLI text and typed MCP facts from one Git arc or edit session response.
+ * - renderGitArcOutput/renderGitArcResponse: render CLI text and typed MCP facts from one Git arc, restack or edit session response.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands";
 import { formatGitArcEditText, GitArcEditResultSchema } from "workbench-shared/workbench/git/git-arc-edit-contracts";
@@ -10,6 +10,7 @@ import { normalizeDaemonReloadScopes } from "workbench-shared/workbench/daemon-r
 import { formatGitArcStatus, GitArcStatusFullSchema, GitArcStatusSchema, projectGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import { GitCheckpointFileChangeSchema } from "workbench-shared/workbench/git/git-checkpoint-file-change";
 import type { GitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
+import { GitArcRestackResultSchema, type GitArcRestackResult } from "workbench-shared/workbench/git/checkpoint-contracts";
 
 type Payload = Record<string, unknown>;
 const RETAINED_NOTICE_LIMIT = 10;
@@ -18,6 +19,20 @@ const string = (value: Payload | null | undefined, key: string) => typeof value?
 const paths = (value: Payload | null | undefined, key: string) => Array.isArray(value?.[key]) ? (value[key] as unknown[]).filter((item): item is string => typeof item === "string") : [];
 const rows = (value: Payload | null | undefined, key: string) => Array.isArray(value?.[key]) ? (value[key] as unknown[]).filter(record) : [];
 const number = (value: Payload | null | undefined, key: string) => typeof value?.[key] === "number" ? value[key] as number : undefined;
+
+const RESTACK_VERBS = { rebased: "rebased", replaced: "replaced", rescinded: "rescinded", superseded: "folded" } as const;
+
+function formatRestack({ layers, proposals, releasedClaims, stackTip }: GitArcRestackResult) {
+  return [
+    `restacked, stack tip ${stackTip ? stackTip.slice(0, 12) : "none"}`,
+    ...layers.map(({ proposalIds, title }) => `layer ${escapeGitArcValue(title)}: ${proposalIds.join(" ")}`),
+    ...proposals.map(outcome => "replacementId" in outcome
+      ? `${RESTACK_VERBS[outcome.status]} ${outcome.proposalId} -> ${outcome.replacementId}`
+      : `${RESTACK_VERBS[outcome.status]} ${outcome.proposalId}`),
+    `released claims ${releasedClaims.length}`,
+    ...releasedClaims.map(escapeGitArcValue),
+  ].join("\n");
+}
 
 export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: Payload | null) {
   return renderGitArcResponse(request, payload).text;
@@ -40,6 +55,12 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
     return {
       text: formatGitArcEditText(edit),
       structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null, edit },
+    };
+  }
+  if (request.responseKind === "git-arc-restack") {
+    return {
+      text: formatRestack(GitArcRestackResultSchema.parse(payload)),
+      structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null, edit: null },
     };
   }
   if (!payload) return {

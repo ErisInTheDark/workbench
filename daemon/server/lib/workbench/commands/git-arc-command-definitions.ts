@@ -6,7 +6,7 @@ import path from "node:path";
 import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
-import { GitArcClaimsSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { GitArcClaimsSchema, GitArcRestackEditsSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcEditOperationsSchema } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { GitArcStatusFullSchema } from "workbench-shared/workbench/git/git-arc-status";
 import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
@@ -478,6 +478,45 @@ const unstack = defineWorkbenchAgentCommand({
   },
 });
 
+function splitPair(flag: string, value: string) {
+  const separator = value.indexOf("=");
+  if (separator <= 0 || separator === value.length - 1) throw new Error(`${flag} takes <proposal-id>=<value>.`);
+  return [value.slice(0, separator), value.slice(separator + 1)] as const;
+}
+
+const restack = defineWorkbenchAgentCommand({
+  description: "Atomically drop pending proposals, strip paths from them, or fold one into another anywhere in the caller's own stack, rebasing later proposals by merge; the worktree is untouched and dropped or stripped paths return to active claims.",
+  helpGroups: ["git-arc"],
+  words: ["git", "arc", "restack"],
+  usage: "wb git arc restack [--drop <proposal-id>]... [--strip <proposal-id>=<path>]... [--fold <proposal-id>=<into-proposal-id>]...",
+  inputSchema: GitArcRestackEditsSchema.extend({
+    drop: GitArcRestackEditsSchema.shape.drop.describe("Proposals to remove; they become rescinded."),
+    fold: GitArcRestackEditsSchema.shape.fold.describe("Merge each proposal's changes into `into`, in its own or a lower layer."),
+    strip: GitArcRestackEditsSchema.shape.strip.describe("Path prefixes whose changes leave the proposal."),
+  }).strict().refine(({ drop, fold, strip }) => drop.length + fold.length + strip.length > 0, "Supply at least one drop, strip or fold."),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--drop", "--fold", "--strip"] });
+    const strip = new Map<string, string[]>();
+    for (const value of flags.repeated("--strip")) {
+      const [proposalId, stripPath] = splitPair("--strip", value);
+      strip.set(proposalId, [...strip.get(proposalId) ?? [], stripPath]);
+    }
+    return {
+      drop: flags.repeated("--drop"),
+      fold: flags.repeated("--fold").map(value => {
+        const [proposalId, into] = splitPair("--fold", value);
+        return { into, proposalId };
+      }),
+      strip: [...strip].map(([proposalId, stripPaths]) => ({ paths: stripPaths, proposalId })),
+    };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      action: "arcRestack", ...baseBody(callerHarness, callerThreadId, cwd), drop: input.drop, fold: input.fold, strip: input.strip,
+    }, "git-arc-restack");
+  },
+});
+
 const status = defineWorkbenchAgentCommand({
   description: "Read compact proposals, active unproposed-dirty/clean claims and unclaimed dirt for the caller or another Workbench thread. Use --full=baseline to list pending sealed-proposal guards. On follow-ups use status before rereading; lost claims include changes since their exact loss boundary.",
   effects: { readOnly: true, idempotent: true },
@@ -567,6 +606,7 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   unstash,
   stack,
   unstack,
+  restack,
   inspectionCommand("compare"),
   inspectionCommand("diff"),
   tree,
