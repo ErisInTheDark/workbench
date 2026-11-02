@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ProjectImportGraph: index current runtime imports and traverse either direction.
+ * - default ProjectImportGraph: index current runtime imports, traverse either direction, and explain how one file reaches another
+ *   or where a closure first leaves an allowed set.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -34,6 +35,39 @@ export default class ProjectImportGraph {
     const errors = [...found].flatMap(file => (this.failures.get(file) ?? []).map(specifier => `${path.relative(this.root, file)} -> ${specifier}`));
     if (errors.length) throw new Error(`Unresolved local imports:\n${errors.join("\n")}`);
     return found;
+  }
+
+  /** The shortest runtime import path from `from` to `to`, both included; null when `to` is unreachable. */
+  chain(from: string, to: string): string[] | null {
+    const previous = new Map<string, string | null>([[from, null]]);
+    const queue = [from];
+    for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+      if (file === to) {
+        const path: string[] = [];
+        for (let step: string | null = to; step !== null; step = previous.get(step) ?? null) path.unshift(step);
+        return path;
+      }
+      for (const next of this.imports.get(file) ?? []) {
+        if (previous.has(next)) continue;
+        previous.set(next, file);
+        queue.push(next);
+      }
+    }
+    return null;
+  }
+
+  /** Where `entry`'s runtime imports first leave `inside`: the chain to each first outside file, and how many outside files it brings. */
+  crossings(entry: string, inside: ReadonlySet<string>) {
+    const crossings = new Map<string, { chain: string[]; pulled: number }>();
+    for (const file of this.closure([entry])) {
+      if (inside.has(file)) continue;
+      const chain = this.chain(entry, file)!;
+      const first = chain.findIndex(step => !inside.has(step));
+      const crossing = crossings.get(chain[first]!) ?? { chain: chain.slice(0, first + 1), pulled: 0 };
+      crossing.pulled += 1;
+      crossings.set(chain[first]!, crossing);
+    }
+    return [...crossings.values()];
   }
 
   private read(file: string) {

@@ -1,4 +1,4 @@
-/* No exports. Tests protect forward/reverse import closure and fresh on-disk resolution. */
+/* No exports. Tests protect forward/reverse import closure, shortest runtime import chains, boundary crossings, and fresh on-disk resolution. */
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
@@ -24,6 +24,11 @@ test("walks runtime edges, cycles and importers without following erased types",
     const graph = new ProjectImportGraph(root, Object.keys(files).map(file));
     assert.deepEqual(graph.closure([file("owner")]), new Set(["owner", "input", "cycle", "dynamic"].map(file)));
     assert.deepEqual(graph.closure([file("input")], "importers"), new Set(["input", "owner", "cycle", "consumer"].map(file)));
+    assert.deepEqual(graph.chain(file("consumer"), file("dynamic")), ["consumer", "owner", "cycle", "dynamic"].map(file));
+    assert.equal(graph.chain(file("owner"), file("types")), null, "erased type imports are not runtime paths");
+    assert.deepEqual(graph.crossings(file("consumer"), new Set(["consumer", "owner", "input"].map(file))), [
+      { chain: ["consumer", "owner", "cycle"].map(file), pulled: 2 },
+    ]);
     await writeFile(file("owner"), 'import "./unrelated";');
     const fresh = new ProjectImportGraph(root, Object.keys(files).map(file));
     assert.deepEqual(fresh.closure([file("owner")]), new Set(["owner", "unrelated"].map(file)));

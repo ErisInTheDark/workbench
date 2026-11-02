@@ -3,7 +3,8 @@
  * - RelayUnavailableError: no connected app could take a relay request; nothing was dispatched.
  * - RelayOutcomeUnknownError: an app took a request and then disconnected or fell silent; it may have run.
  * - getProcessNetworkRelay: the process-wide relay to apps, kept across reloads of the module and socket routing.
- * - default WorkbenchNetworkRelayController: own each app connection's relay presence and every relay request's single dispatch.
+ * - default WorkbenchNetworkRelayController: own each app connection's relay presence and every relay request's single dispatch;
+ *   the process kernel reaches the same state through ProcessNetworkRelay instead.
  */
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
@@ -13,37 +14,15 @@ import {
   RELAY_REQUEST_METHOD, RelayOutcomeSchema, RelayPresenceSchema, RelayRequestSchema, relayResultSchemas,
   type RelayOutcome, type RelayPresence, type RelayRequest,
 } from "workbench-shared/workbench/network/network-relay-contracts";
+import ProcessNetworkRelay, { readProcessRelayState, type RelayPending, type RelayState } from "./network-relay-process-state";
 
 /** How long an app may take to accept a request before it counts as unable. */
 const RELAY_ACK_DEADLINE_MS = 5_000;
-const PROCESS_STATE_KEY = Symbol.for("workbench.networkRelay.v1");
 
 export class RelayUnavailableError extends Error {}
 export class RelayOutcomeUnknownError extends Error {}
 
 type Client = object;
-type Send = (client: Client, message: object) => void;
-interface Pending {
-  client: Client;
-  accepted: boolean;
-  settle(outcome: RelayOutcome | { kind: "disconnected" }): void;
-}
-interface RelayState {
-  presence: Map<Client, RelayPresence>;
-  pending: Map<string, Pending>;
-  send: Send | null;
-  /** Told whenever any connection's presence changes, such as daemon sleep re-checking attendance. */
-  listeners: Set<() => void>;
-}
-
-function processState(): RelayState {
-  let state = Reflect.get(globalThis, PROCESS_STATE_KEY) as RelayState | undefined;
-  if (!state) {
-    state = { presence: new Map(), pending: new Map(), send: null, listeners: new Set() };
-    Reflect.set(globalThis, PROCESS_STATE_KEY, state);
-  }
-  return state;
-}
 
 type ResultOf<Kind extends RelayRequest["kind"]> = z.infer<(typeof relayResultSchemas)[Kind]>;
 
@@ -71,28 +50,20 @@ const LOOKUPS: { [Kind in "resolve" | "summary"]: Lookup<ResultOf<Kind>> } = {
 };
 
 export default class WorkbenchNetworkRelayController {
+  readonly #process: ProcessNetworkRelay;
+
   constructor(private readonly state: RelayState, private readonly timers: {
     schedule(run: () => void, ms: number): unknown;
     cancel(timer: unknown): void;
-  } = { schedule: (run, ms) => setTimeout(run, ms), cancel: timer => clearTimeout(timer as ReturnType<typeof setTimeout>) }) {}
-
-  /** The process sends through whichever socket routing generation is current. */
-  attachTransport(send: Send) { this.state.send = send; }
-
-  subscribe(listener: () => void) {
-    this.state.listeners.add(listener);
-    return () => { this.state.listeners.delete(listener); };
+  } = { schedule: (run, ms) => setTimeout(run, ms), cancel: timer => clearTimeout(timer as ReturnType<typeof setTimeout>) }) {
+    this.#process = new ProcessNetworkRelay(state);
   }
 
   acceptPresence(client: Client, params: unknown) {
     const presence = conformToZodSchema(RelayPresenceSchema.nullable(), params, null).data;
     if (!presence) return;
     this.state.presence.set(client, presence);
-    this.changed();
-  }
-
-  private changed() {
-    for (const listener of [...this.state.listeners]) listener();
+    this.#process.presenceChanged();
   }
 
   acceptResult(client: Client, params: unknown) {
@@ -102,15 +73,6 @@ export default class WorkbenchNetworkRelayController {
     if (!parsed || !pending || pending.client !== client) return;
     pending.settle(parsed);
   }
-
-  disconnect(client: Client) {
-    const present = this.state.presence.delete(client);
-    for (const pending of [...this.state.pending.values()]) if (pending.client === client) pending.settle({ kind: "disconnected" });
-    if (present) this.changed();
-  }
-
-  /** True when the app holds this connection only to relay, so it must not keep the daemon awake. */
-  standbyOnly(client: Client) { return this.state.presence.get(client)?.standby === true; }
 
   /** This daemon's identity as connected apps name it; null until one has said. */
   self(): RelayPresence["self"] | null {
@@ -186,7 +148,7 @@ export default class WorkbenchNetworkRelayController {
         if (result instanceof Error) reject(result);
         else resolve(result);
       };
-      const pending: Pending = {
+      const pending: RelayPending = {
         client, accepted: false,
         settle: outcome => {
           if (outcome.kind === "accepted") {
@@ -220,7 +182,5 @@ export default class WorkbenchNetworkRelayController {
 }
 
 export function getProcessNetworkRelay() {
-  return new WorkbenchNetworkRelayController(processState());
+  return new WorkbenchNetworkRelayController(readProcessRelayState());
 }
-
-export type { RelayState };

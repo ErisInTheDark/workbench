@@ -1,6 +1,7 @@
 - STRONGLY prefer putting product behaviour in the reload graph. Keep non-reloadable process shells limited to bootstrapping, reload/restart control, and shutdown.
 - Reload ownership comes from imports. Nodes declare only `entries` (code run outside the process module graph: workers, child processes, plugins) and `assets` (non-module runtime inputs); never list imported modules.
 - Retired reload generations must become garbage. Non-reloadable code, including Node's `module.children`, must not keep references to retired modules or node objects.
+- Process kernels (`daemon/server/index.ts`, `app/server/index.ts`) import only stable process infrastructure; each `index.test.ts` pins the allowed closure. Share process-lifetime state through kernel-safe state modules, never by importing product controllers or contracts.
 - Unchanged `shared/` modules can outlive daemon reloads. Keep their module-level state constant or derived from inputs; mutable runtime state belongs to reloadable owners.
 - Long-lived work must not hold reloadable owners in closures; resolve owners through graph tools (`get`/`run`/leases) at each step.
 - Runtimes that outlive a reload, such as live provider turns, re-admit their identities to the replacement generation before resuming.

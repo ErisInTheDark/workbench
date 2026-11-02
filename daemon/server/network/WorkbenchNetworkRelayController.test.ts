@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DaemonIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { RelayPresence, RelayRequest } from "workbench-shared/workbench/network/network-relay-contracts";
-import WorkbenchNetworkRelayController, { RelayOutcomeUnknownError, RelayUnavailableError, type RelayState } from "./WorkbenchNetworkRelayController";
+import ProcessNetworkRelay, { type RelayState } from "./network-relay-process-state";
+import WorkbenchNetworkRelayController, { RelayOutcomeUnknownError, RelayUnavailableError } from "./WorkbenchNetworkRelayController";
 
 const self = DaemonIdSchema.parse("11111111-1111-4111-8111-111111111111");
 const target = DaemonIdSchema.parse("22222222-2222-4222-8222-222222222222");
@@ -26,10 +27,11 @@ function harness() {
     schedule: run => { timers.push(run); return run; },
     cancel: timer => { const index = timers.indexOf(timer as () => void); if (index >= 0) timers.splice(index, 1); },
   });
-  relay.attachTransport((client, message) => {
+  const kernel = new ProcessNetworkRelay(state);
+  kernel.attachTransport((client, message) => {
     sent.push({ client, requestId: (message as { params: { requestId: string } }).params.requestId });
   });
-  return { relay, sent, timers };
+  return { kernel, relay, sent, timers };
 }
 
 test("an execute goes only to apps that reach its target, and answers from the first that does", async () => {
@@ -61,14 +63,14 @@ test("an app that refuses before dispatching hands the request to the next app",
 });
 
 test("a request an app accepted is never sent again, even when that app disconnects", async () => {
-  const { relay, sent } = harness();
+  const { kernel, relay, sent } = harness();
   const first = {};
   relay.acceptPresence(first, presence([target]));
   relay.acceptPresence({}, presence([target]));
   const answer = relay.request(execute, new AbortController().signal);
   await Promise.resolve();
   relay.acceptResult(first, { requestId: sent[0]!.requestId, outcome: { kind: "accepted" } });
-  relay.disconnect(first);
+  kernel.disconnect(first);
   await assert.rejects(answer, RelayOutcomeUnknownError);
   assert.equal(sent.length, 1);
 });
@@ -120,10 +122,10 @@ test("results from another connection cannot answer a request", async () => {
 });
 
 test("without any app there is nothing to dispatch to, and standby connections are named as such", async () => {
-  const { relay } = harness();
+  const { kernel, relay } = harness();
   await assert.rejects(relay.request(execute, new AbortController().signal), RelayUnavailableError);
   const standby = {};
   relay.acceptPresence(standby, presence([target], true));
-  assert.equal(relay.standbyOnly(standby), true);
+  assert.equal(kernel.standbyOnly(standby), true);
   assert.equal(relay.self()?.daemonId, self);
 });
