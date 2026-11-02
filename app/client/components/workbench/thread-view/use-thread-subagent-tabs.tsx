@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default useThreadSubagentTabs: a thread's subagent tab strip: stable tab order, settled-tab reveal, labels (naming the host of
- *   children on other daemons), and pin/settle/link actions.
+ * - default useThreadSubagentTabs: a thread's subagent tab strip: stable tab order, settled-tab reveal, labels (placing children
+ *   in other folders by folder address, with their host only off this thread's daemon), and pin/settle/link actions.
  */
 "use client";
 
@@ -22,8 +22,10 @@ import {
   reconcileSubagentTabOrder,
 } from "../../../workbench/thread/thread-subagents";
 import ThreadSubagentTabMemory, { ThreadSubagentTabMemoryContext } from "../../../workbench/thread/ThreadSubagentTabMemory";
-import ThreadAgentTabs from "./ThreadAgentTabs";
-import { useNetworkReach } from "../../../workbench/network/use-network-reach";
+import { ProjectFolderAddress } from "workbench-shared/workbench/project/project-folder-address";
+import { useProjects } from "../use-projects";
+import { useWorkbenchClientController } from "../workbench-client-context";
+import ThreadAgentTabs, { type SubagentTabPlacement } from "./ThreadAgentTabs";
 
 /**
  * Order and reveal persist in the shell's memory: the whole thread surface remounts on every tab switch. Tabs keep their
@@ -80,8 +82,22 @@ export default function useThreadSubagentTabs ({
     return getSubagentThreadIds(getSubagentTabLayout(subagents, { order: order.order, revealedThreadIds }).visible);
   }, [activeThreadId, areSettledVisible, order, subagents, thread.id]);
 
-  const { hostname } = useNetworkReach();
+  const client = useWorkbenchClientController();
+  const projects = useProjects();
   const tabs = useMemo(() => {
+    const mounted = client.mounted;
+    const parentDaemonId = mounted?.threadOwnerFor(thread.id)?.daemonId ?? null;
+    const placementFor = (subagent: WorkbenchSubagentSummary | null): SubagentTabPlacement | null => {
+      const location = subagent?.location;
+      if (!location || !mounted) return null;
+      const owner = mounted.locationOwnerFor(location);
+      const project = projects.flatMap(item => item.locations)
+        .find(item => item.target.daemonId === location.daemonId && item.target.projectId === location.projectId)?.project ?? null;
+      return {
+        owner: { ...owner, displayPath: ProjectFolderAddress.displayPath(owner.displayPath, owner.hostname, location.daemonId !== parentDaemonId) },
+        project,
+      };
+    };
     const labelFor = (threadId: string) => getThreadAgentTabLabel(relatedThreadsById[threadId], getSubagentSummary(subagents, threadId));
     const labelCounts = new Map<string, number>();
     for (const threadId of visibleThreadIds) {
@@ -94,18 +110,17 @@ export default function useThreadSubagentTabs ({
       const nextCount = (usedLabels.get(label) ?? 0) + 1;
       usedLabels.set(label, nextCount);
       const subagent = getSubagentSummary(subagents, threadId);
-      // Children in other folders or on other daemons name where they run.
-      const host = subagent?.location ? ` · ${hostname(subagent.location.daemonId)}` : "";
       return {
         id: threadId,
         isLoading: !relatedThreadsById[threadId],
         isPinned: Boolean(subagent?.pinned),
+        placement: placementFor(subagent),
         subagent,
-        suffix: `${(labelCounts.get(label) ?? 0) > 1 ? ` ${nextCount}` : ""}${host}`,
+        suffix: (labelCounts.get(label) ?? 0) > 1 ? ` ${nextCount}` : "",
         thread: relatedThreadsById[threadId] ?? null,
       };
     });
-  }, [hostname, relatedThreadsById, subagents, visibleThreadIds]);
+  }, [client, projects, relatedThreadsById, subagents, thread.id, visibleThreadIds]);
 
   const toggleSettledVisible = useCallback(() => {
     const visible = !areSettledVisible;

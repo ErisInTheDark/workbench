@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadAgentTabs: render stably ordered agent tabs with a message board tab, Lock controls, status icons, thread tooltips, claim badges, and settled-history disclosure.
+ * - SubagentTabPlacement: the folder owner label a tab shows for a child running in another folder.
+ * - default ThreadAgentTabs: render stably ordered agent tabs with a message board tab, Lock controls, status icons, folder labels, thread tooltips, claim badges, and settled-history disclosure.
  */
 import type { MouseEvent } from "react";
 
@@ -10,7 +11,10 @@ import { ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from 
 import {
   getWorkbenchThreadSettlementHold, gitArcPreventsThreadSettlement, type WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchLocationOwner } from "../../../WorkbenchClient";
+import type { WorkbenchThreadProject } from "../../../workbench/WorkbenchThreadClient";
 import ContextMenuCapability from "../ContextMenuCapability";
+import WorkbenchThreadOwnerLabel from "../WorkbenchThreadOwnerLabel";
 import { useWorkbenchComposerDraftPresence } from "../WorkbenchComposerDraftPresenceProvider";
 import WorkbenchThreadEntryBadge from "../WorkbenchThreadEntryBadge";
 import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
@@ -21,10 +25,17 @@ import { useThread } from "../use-thread";
 import Tabs, { Tab, type TabUnderline } from "../../ui/Tabs";
 import ThreadAgentName from "./ThreadAgentName";
 
+export interface SubagentTabPlacement {
+  owner: WorkbenchLocationOwner;
+  project: WorkbenchThreadProject | null;
+}
+
 interface SubagentTab {
   id: string;
   isPinned: boolean;
   isLoading: boolean;
+  /** Where a child in another folder runs; null in the parent's own folder. */
+  placement: SubagentTabPlacement | null;
   subagent: WorkbenchSubagentSummary | null;
   suffix: string;
   thread: RelatedThread | null;
@@ -141,6 +152,7 @@ function SubagentTabLink({
           {tab.isPinned ? <LockIcon className="shrink-0" size={16} /> : null}
           <ThreadAgentName accentChromaPercent={accentChromaPercent} subagent={tab.subagent} thread={tab.thread} />
           {tab.suffix ? <span className="text-fg/muted">{tab.suffix}</span> : null}
+          {tab.placement ? <WorkbenchThreadOwnerLabel owner={tab.placement.owner} project={tab.placement.project} /> : null}
           <span className="text-[0.72rem] font-normal text-fg/muted empty:hidden">
             <WorkbenchThreadEntryBadge claimedCount={claimedCount} hasComposerDraft={hasComposerDraft} stashedCount={stashedCount}
               requiredTodoCount={summary?.facts.requiredTodoCount ?? 0} />

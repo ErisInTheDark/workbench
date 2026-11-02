@@ -19,6 +19,7 @@ import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, Workbench
 import type { DaemonId, LogicalProjectId, ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkspaceProjectGroups } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { ProjectLocationReference, WorkbenchProjectLocationsPayload } from "workbench-shared/workbench/project/project-location";
+import { ProjectFolderAddress } from "workbench-shared/workbench/project/project-folder-address";
 import type {
   WorkbenchProjectThreadSummaries, WorkbenchProjectThreadSummaryCounts,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -634,9 +635,8 @@ export function projectLogicalProjects(
     // A daemon project's root is a hidden scratch folder; its host is its whole location.
     const daemonProject = isDaemonProject(project.matchKey);
     for (const location of projectLocations) {
-      if (daemonProject) location.displayPath = location.hostname;
-      else if (showDaemon) location.displayPath = `${location.hostname}:${location.displayPath}`;
-      else if (location.displayPath?.startsWith("/")) location.displayPath = location.displayPath.slice(1);
+      location.displayPath = daemonProject ? location.hostname
+        : ProjectFolderAddress.displayPath(location.displayPath ?? location.rootPath, location.hostname, showDaemon);
     }
     const preferred = projectLocations.find(location => location.project) ?? projectLocations[0];
     const observed = (observedByKey.get(project.matchKey) ?? []).filter(location => !hide(project.id, {

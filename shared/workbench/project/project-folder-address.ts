@@ -2,7 +2,7 @@
  * Exports:
  * - ProjectFolderOption: one selectable daemon folder (location facts plus owning project identity); `byRecentLaunch` orders folders newest thread launch first.
  * - ProjectFolderAddress: per-daemon shortest folder suffixes, url-address derivation and resolution over a folder universe,
- *   and agents' `<host>[:<folder>]` addresses.
+ *   agents' `<host>[:<folder>]` addresses, and display paths with or without their daemon.
  * - projectFolderOptions: build the folder universe from logical and plain project facts.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "../../types.ts";
@@ -151,6 +151,17 @@ function normalizedPath(value: string) {
 }
 
 export namespace ProjectFolderAddress {
+  /**
+   * A folder's display path with its `<host>:` prefix shown or dropped: qualified paths read `host:/suffix` (absolute
+   * paths keep their own root), bare ones drop the leading slash. Accepts either form.
+   */
+  export function displayPath(path: string, hostname: string, showDaemon: boolean) {
+    const prefix = `${hostname}:`;
+    const unqualified = path.startsWith(prefix) ? path.slice(prefix.length) : path;
+    if (!showDaemon) return unqualified.startsWith("/") ? unqualified.slice(1) : unqualified;
+    return /^(?:\/|[A-Za-z]:\/)/u.test(unqualified) ? `${prefix}${unqualified}` : `${prefix}/${unqualified}`;
+  }
+
   /** Splits an agent's `<host>[:<folder>]` at its first colon; the folder may hold colons of its own, such as a drive letter. */
   export function parseHost(address: string): { host: string; folder: string | null } {
     const separator = address.indexOf(":");
