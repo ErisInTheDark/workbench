@@ -1,4 +1,5 @@
-/* Exports: none; real Git tests protect upstream counts, marked history, non-forced pushes, branch listings with their
+/* Exports: none; real Git tests protect upstream counts, marked history, non-forced pushes, fetch failures that keep
+ * git's reason, branch listings with their
  * occupying worktrees, stash listings, and commit/stash file sides including stashed untracked files. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -73,6 +74,12 @@ test("a push never overwrites upstream commits this branch lacks", async t => {
   await local.git("fetch", "--quiet");
   await assert.rejects(local.refs.push(), /pull them first/u);
   assert.equal((await execute("git", ["rev-parse", "main"], { cwd: origin, windowsHide: true })).stdout.trim(), theirs);
+});
+
+test("a failed fetch reports git's reason, not only the remote name", async t => {
+  const { temporary, local } = await withOrigin(t);
+  await local.git("remote", "set-url", "origin", path.join(temporary.path, "missing.git"));
+  await assert.rejects(local.refs.fetchUpstream(), /Could not fetch from origin: \S/u);
 });
 
 test("branches carry upstream counts and name the other worktree holding them", async t => {

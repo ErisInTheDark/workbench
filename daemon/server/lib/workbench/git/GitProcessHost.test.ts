@@ -1,5 +1,6 @@
 /*
- * No exports. Protect the git process host: bounded concurrency, execFile-compatible failures, abort kills, streaming
+ * No exports. Protect the git process host: bounded concurrency, execFile-compatible failures with masked URL
+ * credentials, abort kills, streaming
  * relays, worker loss, a real worker round trip, and real commands finishing while another process holds their pipes.
  */
 import assert from "node:assert/strict";
@@ -51,6 +52,21 @@ test("unsuccessful exits reject with execFile-shaped details", async () => {
   assert.equal(error.code, 1);
   assert.equal(error.stderr, "nope");
   assert.equal(error.stdout, "partial");
+});
+
+test("failures mask URL credentials in their message and stderr but keep stdout exact", async () => {
+  const { worker, host: git } = host();
+  const result = git.run({ args: ["fetch", "https://user:secret@example.invalid/x.git"], cwd: "." });
+  await flush();
+  worker.reply({
+    ...ok(worker.runs()[0]!.id, "https://data:kept@example.invalid"),
+    code: 128, stderr: "fatal: unable to access 'https://token@example.invalid/x.git/'",
+  });
+  const error = await result.then(() => null, (failure: unknown) => failure);
+  assert.ok(error instanceof GitProcessError);
+  assert.doesNotMatch(error.message, /secret|token/u);
+  assert.equal(error.stderr, "fatal: unable to access 'https://***@example.invalid/x.git/'");
+  assert.equal(error.stdout, "https://data:kept@example.invalid");
 });
 
 test("aborting a running command kills it and rejects", async () => {

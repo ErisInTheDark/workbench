@@ -12,11 +12,15 @@ import { listTreeFileChanges } from "./git-tree-file-changes";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitPeerTransport from "./WorkbenchGitPeerTransport";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import { GitProcessError } from "./GitProcessHost";
 
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
 /** Git Credential Manager would otherwise open a sign-in window for a fetch nobody is watching. */
 const FETCH_ENV = { ...GIT_ENV, GCM_INTERACTIVE: "never" };
 const FIELD = "\u001f";
+
+const gitFailureReason = (error: unknown) =>
+  (error instanceof GitProcessError && error.stderr.trim()) || (error instanceof Error ? error.message : String(error));
 
 export interface GitObjectSides {
   /** The base commit; null compares against the empty tree. */
@@ -257,9 +261,8 @@ export default class WorkbenchGitRefs {
     try {
       // No --prune: a remote-tracking ref is what marks its commits published, so a background fetch must not drop one.
       await this.repository.run(["fetch", "--quiet", target.remote], FETCH_ENV, signal);
-    } catch {
-      // Git stderr can echo remote URLs with embedded credentials, so only the remote name survives.
-      throw new Error(`Could not fetch from ${target.remote}.`);
+    } catch (error) {
+      throw new Error(`Could not fetch from ${target.remote}: ${gitFailureReason(error)}`);
     } finally {
       WorkbenchGitRepository.forgetRefFacts(this.repository.root);
     }
@@ -277,12 +280,10 @@ export default class WorkbenchGitRefs {
     try {
       await this.repository.run(["push", "--porcelain", remote, `refs/heads/${branch}:${merge}`], GIT_ENV, signal);
     } catch (error) {
-      // Git stderr can echo remote URLs with embedded credentials, so only the rejection survives.
-      const fields = error && typeof error === "object" ? error as { message?: unknown; stderr?: unknown; stdout?: unknown } : {};
-      const text = [fields.message, fields.stderr, fields.stdout].filter(value => typeof value === "string").join("\n");
+      const text = error instanceof GitProcessError ? `${error.message}\n${error.stdout}` : gitFailureReason(error);
       throw new Error(/\[rejected\]|non-fast-forward|fetch first/u.test(text)
         ? `${upstream.name} has commits this branch lacks; pull them first.`
-        : `Could not push to ${upstream.name}.`);
+        : `Could not push to ${upstream.name}: ${gitFailureReason(error)}`);
     } finally {
       WorkbenchGitRepository.forgetRefFacts(this.repository.root);
     }

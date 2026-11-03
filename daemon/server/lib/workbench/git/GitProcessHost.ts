@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - GitProcessError: a git command that exited unsuccessfully, carrying exit code, signal and output like `execFile`.
+ * - GitProcessError: a git command that exited unsuccessfully, carrying exit code, signal and output like `execFile`,
+ *   with URL credentials masked in its message and stderr so they are safe to surface; stdout stays exact command data.
  * - GitProcessRunOptions/GitProcessResult: one buffered git command and its output.
  * - GitWorkerProcess: a streaming git process whose spawning and I/O happen off the event loop.
  * - GitProcessWorkerRequest/GitProcessWorkerEvent: the worker message protocol.
@@ -42,6 +43,9 @@ export interface GitProcessResult {
   stderr: string;
 }
 
+const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu;
+const maskUrlCredentials = (text: string) => text.replace(URL_USERINFO, "$1***@");
+
 export class GitProcessError extends Error {
   readonly code: number | string | null;
   readonly signal: NodeJS.Signals | null;
@@ -49,12 +53,12 @@ export class GitProcessError extends Error {
   readonly stderr: string;
 
   constructor(message: string, details: { code: number | string | null; signal?: NodeJS.Signals | null; stdout?: string; stderr?: string }) {
-    super(message);
+    super(maskUrlCredentials(message));
     this.name = "GitProcessError";
     this.code = details.code;
     this.signal = details.signal ?? null;
     this.stdout = details.stdout ?? "";
-    this.stderr = details.stderr ?? "";
+    this.stderr = maskUrlCredentials(details.stderr ?? "");
   }
 }
 
@@ -192,7 +196,7 @@ export default class GitProcessHost {
     });
     this.#runs.delete(id);
     options.signal?.removeEventListener("abort", onAbort);
-    const command = `git ${options.args.join(" ")}`.slice(0, 300);
+    const command = maskUrlCredentials(`git ${options.args.join(" ")}`).slice(0, 300);
     if (options.signal?.aborted) {
       reject(abortError(options.signal));
       return;
