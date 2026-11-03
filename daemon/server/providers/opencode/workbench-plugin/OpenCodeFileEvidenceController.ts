@@ -5,7 +5,7 @@
 import type { Result, Error as ToolError } from "@opencode/plugin/promise/tool";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { diffGitContents } from "../../../lib/workbench/git/git-content-diff";
+import { diffGitContents } from "./open-code-content-diff";
 
 interface FileCall {
   tool: string;

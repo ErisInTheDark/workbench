@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
-import { diffGitContents } from "./git-content-diff";
+import { diffGitContents } from "./open-code-content-diff";
 
 test("Git diffs captured contents without retaining scratch files", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-diff-test-");
