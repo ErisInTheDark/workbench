@@ -13,6 +13,7 @@
 import { z } from "zod";
 import type { JsonValue } from "../thread/workbench-thread-items";
 import { ThreadComponentStyleSchema } from "../thread/thread-component-tree";
+import { QUICKJS_STACK_BYTES } from "./quickjs-sandbox";
 import { SkillMcpMatcherBundleSchema } from "./skill-mcp-matcher-contract";
 
 export const SKILL_COMPONENT_LIMITS = {
@@ -23,8 +24,7 @@ export const SKILL_COMPONENT_LIMITS = {
   /** Evaluating one invocation's attribute expressions. */
   propsDeadlineMs: 250,
   memoryBytes: 64 * 1024 * 1024,
-  /** Below the host's own stack, so deep recursion stops inside the sandbox instead of corrupting it. */
-  stackBytes: 256 * 1024,
+  stackBytes: QUICKJS_STACK_BYTES,
   /** A component body can name further invocations; this bounds that recursion. */
   nestedDepth: 8,
   bundleChars: 6 * 1024 * 1024,

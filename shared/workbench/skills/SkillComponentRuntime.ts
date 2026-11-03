@@ -9,7 +9,7 @@
 import { shouldInterruptAfterDeadline, type QuickJSContext, type QuickJSHandle, type QuickJSRuntime, type QuickJSWASMModule } from "quickjs-emscripten-core";
 import { readThreadComponentAttributes, readThreadComponentMarkup } from "../thread/thread-component-markup";
 import { readThreadComponentTree, type ThreadComponentNode, type ThreadComponentValue } from "../thread/thread-component-tree";
-import { describeQuickJSError, isQuickJSRunaway } from "./quickjs-error";
+import { describeQuickJSError, guardQuickJSHost, isQuickJSRunaway } from "./quickjs-sandbox";
 import { SKILL_COMPONENT_LIMITS, type SkillComponentBundle, type SkillComponentRequest } from "./skill-component-contract";
 
 export interface SkillComponentRuntimeOptions {
@@ -168,7 +168,12 @@ export default class SkillComponentRuntime {
     const deadline = Date.now() + SKILL_COMPONENT_LIMITS.propsDeadlineMs;
     runtime.setInterruptHandler(shouldInterruptAfterDeadline(deadline));
     const object = expressions.map(({ name, source }) => `${JSON.stringify(name)}: (${source}\n)`).join(", ");
-    const evaluated = context.evalCode(`JSON.stringify({ ${object} }, ${SERIALIZABLE})`, "component-attributes.js");
+    const guarded = guardQuickJSHost(() => context.evalCode(`JSON.stringify({ ${object} }, ${SERIALIZABLE})`, "component-attributes.js"));
+    if ("crashed" in guarded) {
+      this.#props = null;
+      throw new Error(`Component attributes crashed: ${guarded.crashed}`);
+    }
+    const evaluated = guarded.value;
     if (evaluated.error) {
       const message = describeQuickJSError(context, evaluated.error);
       evaluated.error.dispose();
@@ -188,6 +193,13 @@ export default class SkillComponentRuntime {
     this.#props = null;
   }
 
+  /** Its runtime is dropped undisposed: see guardQuickJSHost. */
+  #crash(index: number, reason: string) {
+    const broken = { kind: "broken" as const, message: `Skill ${this.#bundles[index]!.skillName} components crashed: ${reason}` };
+    this.#states[index] = broken;
+    return broken;
+  }
+
   #load(index: number): Extract<SkillState, { kind: "ready" | "broken" }> {
     const state = this.#states[index]!;
     if (state.kind !== "unloaded") return state;
@@ -197,7 +209,9 @@ export default class SkillComponentRuntime {
     runtime.setMaxStackSize(SKILL_COMPONENT_LIMITS.stackBytes);
     runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + SKILL_COMPONENT_LIMITS.loadDeadlineMs));
     const context = runtime.newContext();
-    const evaluated = context.evalCode(`${bundle.code}\n${PRELUDE}`, "skill-components.js");
+    const guarded = guardQuickJSHost(() => context.evalCode(`${bundle.code}\n${PRELUDE}`, "skill-components.js"));
+    if ("crashed" in guarded) return this.#crash(index, guarded.crashed);
+    const evaluated = guarded.value;
     let next: Extract<SkillState, { kind: "ready" | "broken" }>;
     if (evaluated.error) {
       next = { kind: "broken", message: `Skill ${bundle.skillName} components failed to load: ${describeQuickJSError(context, evaluated.error)}` };
@@ -219,14 +233,12 @@ export default class SkillComponentRuntime {
     runtime.setInterruptHandler(shouldInterruptAfterDeadline(deadline));
     const nameHandle = context.newString(name);
     const input = context.newString(JSON.stringify(props));
-    let called: ReturnType<QuickJSContext["callFunction"]>;
-    try {
-      called = context.callFunction(state.render, context.undefined, nameHandle, input);
-    } catch (error) {
-      // The host's own stack ran out mid-call; the context is unusable and disposing it would abort, so it is dropped.
-      this.#states[index] = { kind: "broken", message: `Skill ${this.#bundles[index]!.skillName} components crashed.` };
-      throw new Error(`${name} crashed: ${error instanceof Error ? error.message : String(error)}`);
+    const guarded = guardQuickJSHost(() => context.callFunction(state.render, context.undefined, nameHandle, input));
+    if ("crashed" in guarded) {
+      this.#crash(index, guarded.crashed);
+      throw new Error(`${name} crashed: ${guarded.crashed}`);
     }
+    const called = guarded.value;
     nameHandle.dispose();
     input.dispose();
     if (called.error) {

@@ -13,6 +13,7 @@
  */
 import { z } from "zod";
 import type { JsonValue } from "../thread/workbench-thread-items";
+import { QUICKJS_STACK_BYTES } from "./quickjs-sandbox";
 
 export const SKILL_MCP_CHIP_ICONS = [
   "terminal", "file", "search", "book", "folder", "eye", "git", "arc", "skill", "browser", "web", "image",
@@ -27,7 +28,7 @@ export const SKILL_MCP_MATCHER_LIMITS = {
   /** First evaluation of a bundle, which defines its matcher. */
   loadDeadlineMs: 250,
   memoryBytes: 16 * 1024 * 1024,
-  stackBytes: 512 * 1024,
+  stackBytes: QUICKJS_STACK_BYTES,
   /** Room for a brand icon drawn on both a chip and its rows. */
   outputChars: 32_000,
   bundleChars: 2 * 1024 * 1024,

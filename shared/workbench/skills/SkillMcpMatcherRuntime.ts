@@ -13,7 +13,7 @@
  */
 import { shouldInterruptAfterDeadline, type QuickJSContext, type QuickJSHandle, type QuickJSRuntime, type QuickJSWASMModule } from "quickjs-emscripten-core";
 import { z } from "zod";
-import { describeQuickJSError, isQuickJSRunaway } from "./quickjs-error";
+import { describeQuickJSError, guardQuickJSHost, isQuickJSRunaway } from "./quickjs-sandbox";
 import {
   SKILL_MCP_MATCHER_LIMITS, SkillMcpPresentationSchema,
   type SkillMcpCall, type SkillMcpMatcherBundle, type SkillMcpMemory, type SkillMcpPresentation,
@@ -159,6 +159,13 @@ export default class SkillMcpMatcherRuntime implements SkillMcpMatchers {
     this.#onFailure?.(failure);
   }
 
+  /** Its runtime is dropped undisposed: see guardQuickJSHost. */
+  #crash(index: number, reason: string) {
+    const broken = { kind: "broken" as const, message: `Matcher crashed: ${reason}` };
+    this.#states[index] = broken;
+    return broken;
+  }
+
   #load(index: number): Extract<BundleState, { kind: "ready" | "broken" }> {
     const state = this.#states[index]!;
     if (state.kind !== "unloaded") return state;
@@ -167,7 +174,9 @@ export default class SkillMcpMatcherRuntime implements SkillMcpMatchers {
     runtime.setMaxStackSize(SKILL_MCP_MATCHER_LIMITS.stackBytes);
     runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + SKILL_MCP_MATCHER_LIMITS.loadDeadlineMs));
     const context = runtime.newContext();
-    const evaluated = context.evalCode(`${this.#bundles[index]!.code}\n${PRELUDE}`, "skill-mcp-matchers.js");
+    const guarded = guardQuickJSHost(() => context.evalCode(`${this.#bundles[index]!.code}\n${PRELUDE}`, "skill-mcp-matchers.js"));
+    if ("crashed" in guarded) return this.#crash(index, guarded.crashed);
+    const evaluated = guarded.value;
     let next: Extract<BundleState, { kind: "ready" | "broken" }>;
     if (evaluated.error) {
       next = { kind: "broken", message: `Matcher failed to load: ${describeQuickJSError(context, evaluated.error)}` };
@@ -192,7 +201,9 @@ export default class SkillMcpMatcherRuntime implements SkillMcpMatchers {
     const { context, runtime } = state;
     runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + SKILL_MCP_MATCHER_LIMITS.callInputDeadlineMs));
     const argument = context.newString(input);
-    const loaded = context.callFunction(state.load, context.undefined, argument);
+    const guardedLoad = guardQuickJSHost(() => context.callFunction(state.load, context.undefined, argument));
+    if ("crashed" in guardedLoad) return { kind: "failed", message: this.#crash(index, guardedLoad.crashed).message };
+    const loaded = guardedLoad.value;
     argument.dispose();
     if (loaded.error) {
       const message = describeQuickJSError(context, loaded.error);
@@ -202,7 +213,9 @@ export default class SkillMcpMatcherRuntime implements SkillMcpMatchers {
     loaded.value.dispose();
     const deadline = Date.now() + SKILL_MCP_MATCHER_LIMITS.callDeadlineMs;
     runtime.setInterruptHandler(shouldInterruptAfterDeadline(deadline));
-    const called = context.callFunction(state.match, context.undefined);
+    const guardedMatch = guardQuickJSHost(() => context.callFunction(state.match, context.undefined));
+    if ("crashed" in guardedMatch) return { kind: "failed", message: this.#crash(index, guardedMatch.crashed).message };
+    const called = guardedMatch.value;
     if (called.error) {
       const message = describeQuickJSError(context, called.error);
       called.error.dispose();

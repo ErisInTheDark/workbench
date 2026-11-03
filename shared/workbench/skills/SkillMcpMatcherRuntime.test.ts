@@ -65,6 +65,15 @@ test("a runaway matcher stops answering instead of freezing its host", () => {
   assert.ok(Date.now() - started < 25, "a stopped matcher is skipped without running again");
 });
 
+test("a deeply recursing matcher fails only its skill instead of crashing its host", () => {
+  const failures: SkillMcpMatchFailure[] = [];
+  const matchers = runtime([bundle("deep", "() => { const deeper = depth => deeper(depth + 1); return deeper(0); }"), bundle("devops", listBuilds)], failures);
+  assert.equal(matchers.match(call)?.skillName, "devops");
+  assert.equal(failures.length, 1);
+  assert.match(failures[0]!.message, /Matcher stopped/u);
+  matchers.dispose();
+});
+
 test("output outside the presentation contract is rejected with its reason", () => {
   const failures: SkillMcpMatchFailure[] = [];
   const matchers = runtime([bundle("bad", `() => ({ verb: ["Listing", "Listed"], display: { card: "Not Valid" } })`)], failures);
