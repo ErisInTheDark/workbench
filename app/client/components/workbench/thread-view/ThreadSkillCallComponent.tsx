@@ -1,20 +1,18 @@
 /*
  * Exports:
- * - default ThreadSkillCallComponent: one settled MCP call's skill component, rendered once by the daemon and kept, given
- *   the call (and any props its matcher added); the call's own details show instead when it cannot render.
+ * - default ThreadSkillCallComponent: one settled MCP call's skill component, given the call (and any props its matcher
+ *   added), drawn from its kept snapshot once the call's result expired; the call's own details show instead when it
+ *   cannot render.
  * - ThreadSkillComponentPreview/ThreadSkillComponentPreviewContext: a vis preview's own drawing of call and inline components.
  */
 "use client";
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { createContext, useContext, type ReactNode } from "react";
 import type { SkillMcpCall } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
-import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import { readSkillMcpCallOutcome, readSkillMcpTextResult } from "../../../workbench/thread/command-matchers/skill-mcp";
 import { getThreadCommandExecutionOutcome, type ThreadCommandSkillMcp } from "../../../workbench/thread/thread-command-matchers";
-import WorkbenchWorkspaceContext, { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
-import { useTranscript } from "../use-transcript";
-import ThreadComponentTree, { useThreadComponentRender } from "./ThreadComponentTree";
+import ThreadComponentTree from "./ThreadComponentTree";
+import { useThreadSkillComponent } from "./ThreadSkillExtensions";
 import type { CommandSequenceItem } from "./thread-render-blocks";
 
 type CallItem = Extract<CommandSequenceItem, { type: "commandExecution" | "mcpToolCall" }>;
@@ -45,34 +43,26 @@ export const ThreadSkillComponentPreviewContext = createContext<ThreadSkillCompo
 
 export default function ThreadSkillCallComponent(props: SkillCallComponentProps) {
   const preview = useContext(ThreadSkillComponentPreviewContext);
-  if (!preview) return <DaemonSkillCallComponent {...props} />;
+  if (!preview) return <LiveSkillCallComponent {...props} />;
   const { fallback, item, skill } = props;
   return preview({ component: skill.component, fallback, props: { ...skill.props, call: readCall(item, skill) } });
 }
 
-function DaemonSkillCallComponent({ fallback, item, skill }: SkillCallComponentProps) {
-  const daemon = useWorkbenchDaemonClient();
-  const workspace = useContext(WorkbenchWorkspaceContext);
-  const { threadId } = useTranscript();
-  const query = useMemo(() => ({ kind: "thread" as const, threadId: ThreadReferenceSchema.parse(threadId) }), [threadId]);
-  const observed = useWorkspaceObservation(workspace, query);
+function LiveSkillCallComponent({ fallback, item, skill }: SkillCallComponentProps) {
   const call = readCall(item, skill);
-  const key = JSON.stringify([threadId, item.id, skill.skillPath, skill.component]);
-  const state = useThreadComponentRender({
-    key,
-    ready: call.status !== "inProgress",
-    refreshKey: JSON.stringify(observed.value?.runtime[threadId]?.skills ?? []),
-    request: () => daemon.threads.components.renderCall({
-      threadId: ThreadReferenceSchema.parse(threadId), itemId: item.id, skillPath: skill.skillPath, component: skill.component,
-      props: { ...skill.props, call },
-    }),
-  });
-  if (state.error) {
+  const ready = call.status !== "inProgress";
+  const expired = item.resultExpiredAt !== undefined;
+  const key = ready ? JSON.stringify(["call", item.id, skill.skillPath, skill.component, call.status, expired, skill.props ?? null]) : null;
+  const state = useThreadSkillComponent(key, ready ? {
+    kind: "call", itemId: item.id, skillPath: skill.skillPath, component: skill.component,
+    props: { ...skill.props, call }, keep: call.keep, expired,
+  } : null);
+  if (state.status === "failed") {
     return <>
       <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted" title={state.error}>{skill.component} could not render: {state.error.slice(0, 300)}</p>
       {fallback}
     </>;
   }
-  if (!state.result) return null;
-  return <ThreadComponentTree fallback={fallback} key={key} tree={state.result.tree} />;
+  if (state.status === "pending") return null;
+  return <ThreadComponentTree fallback={fallback} key={key} tree={state.tree} />;
 }

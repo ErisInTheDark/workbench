@@ -46,7 +46,7 @@ import WorkbenchThreadTodoController from "../thread/WorkbenchThreadTodoControll
 import type { WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
 import type WorkbenchCoreThreadLookup from "./WorkbenchCoreThreadLookup";
 
-/** Bounds one component image fetch; message renders have no caller signal. */
+/** Bounds one component image fetch; kept snapshots and browser image requests have no caller signal. */
 const COMPONENT_IMAGE_TIMEOUT_MS = 15_000;
 
 export default class WorkbenchThreadFactsFeature {
@@ -219,19 +219,22 @@ export default class WorkbenchThreadFactsFeature {
           await listProjectSkillsFromRoot(owner.rootPath), active.map(skill => skill.path),
         );
       },
-      compile: async (file, threadId, signal, skillRoot) => {
-        const parsed = conformToZodSchema(ThreadCompiledComponentSchema, await executeComponent(
-          threadId, ["compile", file, skillRoot ?? path.dirname(file)], signal,
-        ));
+      compileComponents: async (components, root, threadId) => await withComponentInput({ components, root }, async file => {
+        const parsed = conformToZodSchema(ThreadCompiledComponentSchema, await executeComponent(threadId, ["components", file]));
         if (!parsed.success || parsed.repairedPaths.length || parsed.discardedPaths.length) throw new Error("Component compiler returned invalid output.");
         return parsed.data;
-      },
+      }),
       compileStyles: async (files, threadId, root) => await withComponentInput({ files, root }, async file => {
         const parsed = conformToZodSchema(ThreadCompiledStyleSchema, await executeComponent(threadId, ["styles", file]));
         if (!parsed.success || parsed.repairedPaths.length || parsed.discardedPaths.length) throw new Error("Component styles compiler returned invalid output.");
         return parsed.data;
       }),
-      evaluate: async (compiled, name, markup, results, threadId, signal) => await withComponentInput({ compiled, name, markup, results }, async file =>
+      compileMatchers: async (files, root, threadId) => await withComponentInput({ files, root }, async file => {
+        const parsed = ThreadCompiledComponentSchema.safeParse(await executeComponent(threadId, ["matchers", file]));
+        if (!parsed.success) throw new Error("MCP matcher compiler returned invalid output.");
+        return parsed.data;
+      }),
+      render: async (input, threadId, signal) => await withComponentInput(input, async file =>
         readThreadComponentTree(await executeComponent(threadId, ["render", file], signal), { remoteImages: true })),
       results: async (threadId, names) => {
         const resolved = await target(threadId);
@@ -250,23 +253,13 @@ export default class WorkbenchThreadFactsFeature {
         if (!parsed.success || parsed.repairedPaths.length || parsed.discardedPaths.length) throw new Error("Component preview returned invalid output.");
         return parsed.data;
       }),
-      read: target => database.readTranscriptComponent(target),
-      write: (target, result) => database.writeTranscriptComponent(target, result),
-      calls: {
-        compileMatchers: async (files, root, threadId) => await withComponentInput({ files, root }, async file => {
-          const parsed = ThreadCompiledComponentSchema.safeParse(await executeComponent(threadId, ["matchers", file]));
-          if (!parsed.success) throw new Error("MCP matcher compiler returned invalid output.");
-          return parsed.data;
-        }),
-        renderProps: async (components, renders, threadId, signal) => await withComponentInput({ components, renders }, async file => {
-          const output = await executeComponent(threadId, ["render-props", file], signal);
-          if (!Array.isArray(output)) throw new Error("Component render returned invalid output.");
-          return output.map(tree => readThreadComponentTree(tree, { remoteImages: true }));
-        }),
-        quickjs: loadQuickJS,
-        read: target => database.readTranscriptCallComponent(target),
-        write: (target, result) => database.writeTranscriptCallComponent(target, result),
-      },
+      quickjs: loadQuickJS,
+      readKept: (threadId, target) => target.kind === "message"
+        ? database.readTranscriptComponent({ threadId, itemId: target.itemId, markup: target.markup })
+        : database.readTranscriptCallComponent({ threadId, itemId: target.itemId, skillPath: target.skillPath, component: target.component }),
+      writeKept: (threadId, target, tree) => target.kind === "message"
+        ? database.writeTranscriptComponent({ threadId, itemId: target.itemId, markup: target.markup }, tree)
+        : database.writeTranscriptCallComponent({ threadId, itemId: target.itemId, skillPath: target.skillPath, component: target.component }, tree),
     });
     const visLog = (message: string) => console.warn(`[vis] ${message.slice(0, 500)}`);
     const visPages = new WorkbenchVisHttpController({ serve: (sessionId, variant) => this.vis.serve(sessionId, variant) });

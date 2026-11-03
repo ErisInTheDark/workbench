@@ -165,7 +165,7 @@ function ThreadCommandStageParts ({
   /** Code reads as plain monospace text instead of a chip, as an unmatched command's own text does. */
   plainCode: boolean;
 }) {
-  const drawSkillComponent = useThreadSkillInlineParts(parts);
+  const drawSkillComponent = useThreadSkillInlineParts();
   return (
     <>
       {parts.map((part, index) => (

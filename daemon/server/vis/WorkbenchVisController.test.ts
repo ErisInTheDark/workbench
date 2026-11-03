@@ -8,7 +8,24 @@ import type { VisControls } from "workbench-shared/workbench/vis/vis-contract";
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
 import WorkbenchVisController from "./WorkbenchVisController";
 import WorkbenchComponentsController from "../skills/WorkbenchComponentsController";
-import { compileSkillStyles, compileSkillTemplate, renderSkillComponent, renderSkillComponentPreview } from "../../../scripts/skill-component-build.mts";
+import {
+  compileSkillComponents, compileSkillMcpMatchers, compileSkillStyles, renderSkillComponentPreview, renderSkillComponentRequest,
+} from "../../../scripts/skill-component-build.mts";
+
+/** Components compiled, rendered and previewed by the real build script, as the daemon runs them. */
+function realComponents(skills: Awaited<ReturnType<ConstructorParameters<typeof WorkbenchComponentsController>[0]["skills"]>>) {
+  const unused = async () => { throw new Error("Not used here."); };
+  return new WorkbenchComponentsController({
+    skills: async () => skills,
+    compileComponents: async (components, root) => await compileSkillComponents(components, root),
+    compileStyles: async (files, _threadId, root) => await compileSkillStyles(files, root),
+    compileMatchers: async (files, root) => await compileSkillMcpMatchers(files, root),
+    render: async ({ bundles, request }) => await renderSkillComponentRequest(bundles, request),
+    preview: async result => await renderSkillComponentPreview(result),
+    readKept: unused,
+    writeKept: unused,
+  });
+}
 
 function gate() {
   let open!: () => void;
@@ -177,15 +194,7 @@ test("vis markup test renders the active skill's real template and kit nodes", a
     export default function Card({ labels, content }: { labels: number[], content: string }) {
       return <div><span>{labels.join(",")}</span><Options label="pick"><Option title="one">{content}</Option></Options></div>
     }`);
-  const components = new WorkbenchComponentsController({
-    skills: async () => [{ path: skillPath, relativePath: "skill/SKILL.md", name: "cards", description: "", content }],
-    compile: async (file, _threadId, _signal, root) => await compileSkillTemplate(file, root),
-    compileStyles: async (files, _threadId, root) => await compileSkillStyles(files, root),
-    evaluate: async (compiled, name, markup) => await renderSkillComponent(compiled, name, markup),
-    preview: async result => await renderSkillComponentPreview(result),
-    read: async () => null,
-    write: async (_target, tree) => tree,
-  });
+  const components = realComponents([{ path: skillPath, relativePath: "skill/SKILL.md", name: "cards", description: "", content }]);
   const controller = f.create((threadId, markup, signal) => components.previewMarkup(threadId, markup, signal));
   const output = await controller.testMarkup({
     threadId: "thread", cwd: f.root, markup: '<Card labels={[1, 3, 4]} content="cool card" />',
@@ -205,17 +214,7 @@ test("vis markup renders nested skill components and markdown as children", asyn
   await writeFile(skillPath, content);
   await writeFile(path.join(folder, "FirstComponent.tsx"), "export default function First({ children }) { return <section>{children}</section>; }");
   await writeFile(path.join(folder, "SecondComponent.tsx"), "export default function Second() { return <div>nested card</div>; }");
-  let active = true;
-  const saved = new Map<string, import("workbench-shared/workbench/thread/thread-component-tree").ThreadComponentNode>();
-  const components = new WorkbenchComponentsController({
-    skills: async () => active ? [{ path: skillPath, relativePath: "skill/SKILL.md", name: "cards", description: "", content }] : [],
-    compile: async (file, _threadId, _signal, root) => await compileSkillTemplate(file, root),
-    compileStyles: async (files, _threadId, root) => await compileSkillStyles(files, root),
-    evaluate: async (compiled, name, markup) => await renderSkillComponent(compiled, name, markup),
-    preview: async result => await renderSkillComponentPreview(result),
-    read: async target => saved.get(target.markup) ?? null,
-    write: async (target, tree) => { saved.set(target.markup, tree); return tree; },
-  });
+  const components = realComponents([{ path: skillPath, relativePath: "skill/SKILL.md", name: "cards", description: "", content }]);
   const controller = f.create((threadId, markup, signal) => components.previewMarkup(threadId, markup, signal));
   const output = await controller.testMarkup({
     threadId: "thread", cwd: f.root,
@@ -232,14 +231,6 @@ test("vis markup renders nested skill components and markdown as children", asyn
   await assert.rejects(controller.testMarkup({
     threadId: "thread", cwd: f.root, markup: "<FirstComponent>\n<Missing />\n</FirstComponent>",
   }), /No active skill exposes component Missing/u);
-  const markup = "<FirstComponent>\n<SecondComponent />\n\n**markdown**\n</FirstComponent>";
-  const target = { threadId: "thread", itemId: "message", markup };
-  const shown = await components.renderMessage(target);
-  active = false;
-  assert.deepEqual((await components.renderMessage(target)).tree, shown.tree);
-  const retained = await renderSkillComponentPreview({ tree: shown.tree, css: "" });
-  assert.equal(retained.includes("nested card"), true);
-  assert.equal(retained.includes("<strong>markdown</strong>"), true);
 });
 
 test("a change keeps the last render while one is in flight, and a burst of changes renders once more", async context => {

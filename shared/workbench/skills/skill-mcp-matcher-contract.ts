@@ -9,11 +9,9 @@
  * - SkillMcpDisplaySchema/SkillMcpDisplay: where a matched call draws: a run step, hidden, or a stitched card.
  * - SkillMcpPresentationSchema/SkillMcpPresentation: everything one matcher says about one call.
  * - SkillMcpMatcherBundleSchema/SkillMcpMatcherBundle: one active skill's compiled matcher.
- * - SkillMcpMatcherCompilationSchema/SkillMcpMatcherCompilation: a thread's matcher bundles and compile failures.
- * - SkillMcpComponentPropsSchema/SkillMcpComponentRenderInputSchema: props for a call's skill component and its render input.
+ * - SkillMcpMatcherCompilation: a thread's matcher bundles and compile failures.
  */
 import { z } from "zod";
-import { ThreadCompiledComponentSchema } from "../thread/thread-component-tree";
 import type { JsonValue } from "../thread/workbench-thread-items";
 
 export const SKILL_MCP_CHIP_ICONS = [
@@ -33,7 +31,6 @@ export const SKILL_MCP_MATCHER_LIMITS = {
   /** Room for a brand icon drawn on both a chip and its rows. */
   outputChars: 32_000,
   bundleChars: 2 * 1024 * 1024,
-  componentPropsChars: 4 * 1024 * 1024,
   /** One skill's remembered facts in one thread; the oldest keys leave first. */
   memoryChars: 64_000,
 } as const;
@@ -117,18 +114,7 @@ export const SkillMcpMatcherBundleSchema = z.object({
 export type SkillMcpMatcherBundle = z.infer<typeof SkillMcpMatcherBundleSchema>;
 
 /** Every active skill's matcher outcome: a bundle when it compiled, else why not. */
-export const SkillMcpMatcherCompilationSchema = z.object({
-  bundles: z.array(SkillMcpMatcherBundleSchema),
-  failures: z.array(z.object({ skillName: z.string(), skillPath: z.string(), message: z.string().max(4_000) }).strict()),
-}).strict();
-export type SkillMcpMatcherCompilation = z.infer<typeof SkillMcpMatcherCompilationSchema>;
-
-/** A call component receives the call as `call`, beside any props its matcher added. */
-export const SkillMcpComponentPropsSchema = z.record(z.string(), jsonValue)
-  .refine(props => JSON.stringify(props).length <= SKILL_MCP_MATCHER_LIMITS.componentPropsChars, "Component props are too large.");
-
-/** One run rendering a skill's components straight from props: a call's own component, or its line's inline ones. */
-export const SkillMcpComponentRenderInputSchema = z.object({
-  components: z.record(componentName, ThreadCompiledComponentSchema),
-  renders: z.array(z.object({ component: componentName, props: SkillMcpComponentPropsSchema }).strict()).min(1).max(16),
-}).strict();
+export interface SkillMcpMatcherCompilation {
+  bundles: SkillMcpMatcherBundle[];
+  failures: { skillName: string; skillPath: string; message: string }[];
+}

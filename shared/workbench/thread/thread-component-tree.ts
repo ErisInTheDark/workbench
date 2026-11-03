@@ -4,12 +4,9 @@
  * - ThreadComponentNode: one native or kit element emitted by a component template.
  * - ThreadCompiledComponentSchema/ThreadCompiledComponent: compiled template code and input files.
  * - ThreadComponentStyleSchema/ThreadComponentStyle: one active skill's compiled styles.
- * - ThreadComponentStyleRevisionSchema/ThreadComponentStyleRevision: identify current skill styles.
- * - ThreadComponentRenderInputSchema: one invocation to render, with the kept results it references.
  * - ThreadComponentStyleBuildSchema/ThreadCompiledStyleSchema/ThreadCompiledStyle: stylesheet build input and output.
- * - ThreadComponentRenderSchema/ThreadComponentRender: a rendered tree and current skill style revisions.
  * - ThreadComponentPreviewSchema/ThreadComponentPreview: rendered tree and styles for a standalone preview.
- * - readThreadComponentRender/readThreadComponentStyle/readThreadComponentPreview: validate component data.
+ * - readThreadComponentStyle/readThreadComponentPreview: validate component data.
  * - ThreadComponentTreeOptions/readThreadComponentTree: validate a rendered node tree; template output may name public images.
  * - listThreadComponentImageUrls/inlineThreadComponentImages: find a tree's public images, then replace them with data URLs.
  */
@@ -27,10 +24,6 @@ export const ThreadCompiledComponentSchema = z.object({
   code: z.string().min(1).max(6 * 1024 * 1024),
   inputs: z.array(z.string().min(1).max(4_000)).max(5_000),
 }).strict();
-/** Kept MCP results referenced as `"@result:<name>"` prop values arrive in `results`, by name. */
-export const ThreadComponentRenderInputSchema = z.object({
-  compiled: ThreadCompiledComponentSchema, name: z.string().min(1), markup: z.string().min(1), results: z.record(z.string(), z.unknown()),
-}).strict();
 export const ThreadComponentStyleBuildSchema = z.object({
   files: z.array(z.string().min(1)).min(1), root: z.string().min(1),
 }).strict();
@@ -39,24 +32,15 @@ export const ThreadCompiledStyleSchema = z.object({
 }).strict();
 export type ThreadCompiledComponent = z.infer<typeof ThreadCompiledComponentSchema>;
 export type ThreadCompiledStyle = z.infer<typeof ThreadCompiledStyleSchema>;
-export const ThreadComponentStyleRevisionSchema = z.object({
-  path: z.string().min(1), revision: z.string().regex(/^[a-f0-9]{64}$/u),
-}).strict();
-export const ThreadComponentStyleSchema = ThreadComponentStyleRevisionSchema.extend({
-  css: z.string().max(6 * 1024 * 1024),
+export const ThreadComponentStyleSchema = z.object({
+  path: z.string().min(1), revision: z.string().regex(/^[a-f0-9]{64}$/u), css: z.string().max(6 * 1024 * 1024),
 }).strict();
 export type ThreadComponentStyle = z.infer<typeof ThreadComponentStyleSchema>;
-export type ThreadComponentStyleRevision = z.infer<typeof ThreadComponentStyleRevisionSchema>;
 
 const valueSchema: z.ZodType<ThreadComponentValue> = z.lazy(() => z.union([
   z.null(), z.boolean(), z.number().finite(), z.string(), z.array(valueSchema), z.record(z.string(), valueSchema),
 ]));
 const nodeSchema = z.object({ $workbench: z.literal("element"), type: z.string().min(1), props: z.record(z.string(), valueSchema) }).strict();
-export const ThreadComponentRenderSchema = z.object({
-  tree: nodeSchema,
-  styleRevisions: z.array(ThreadComponentStyleRevisionSchema),
-}).strict();
-export type ThreadComponentRender = z.infer<typeof ThreadComponentRenderSchema>;
 export const ThreadComponentPreviewSchema = z.object({
   tree: nodeSchema,
   css: z.string().max(6 * 1024 * 1024),
@@ -87,7 +71,7 @@ const STYLE_KEYS = ["color", "fill", "stroke", "filter", "mask", "clipPath", "cu
 const isStyleKey = (key: string) => /style$/iu.test(key) || STYLE_KEYS.includes(key);
 const unquote = (raw: string) => raw.trim().replace(/^(['"])([\s\S]*)\1$/u, "$2").trim();
 
-/** Template output may name public https images, which the daemon inlines before a tree is saved or shown. */
+/** Template output may name public https images; they only ever load through the daemon, proxied live or inlined when kept. */
 export interface ThreadComponentTreeOptions {
   remoteImages?: boolean;
 }
@@ -198,15 +182,6 @@ export function readThreadComponentTree(value: unknown, options: ThreadComponent
     throw new Error("Component output must be a serializable element tree.");
   }
   validateValue(result.data, options);
-  return result.data;
-}
-
-export function readThreadComponentRender(value: unknown): ThreadComponentRender {
-  const result = conformToZodSchema(ThreadComponentRenderSchema, value);
-  if (!result.success || result.discardedPaths.length || result.repairedPaths.length) {
-    throw new Error("Invalid rendered component.");
-  }
-  readThreadComponentTree(result.data.tree);
   return result.data;
 }
 

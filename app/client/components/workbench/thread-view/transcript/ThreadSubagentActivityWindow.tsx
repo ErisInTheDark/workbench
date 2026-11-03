@@ -5,12 +5,11 @@
  */
 "use client";
 
-import { useContext, useMemo } from "react";
+import { useContext, useId, useMemo } from "react";
 
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { RelatedThread } from "../../../../workbench/thread/ThreadStore";
-import useThreadSkillMcpMatchers from "../../../../workbench/skills/use-thread-skill-mcp-matchers";
 import { useThread } from "../../use-thread";
 import {
   TranscriptBodiesContext, TranscriptScopeContext, TranscriptTurnContext, useTranscript,
@@ -22,6 +21,7 @@ import { useProject } from "../../use-projects";
 import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
 import { useHiddenProofOfWorkFamilies } from "../use-proof-of-work-catalogue";
 import { getRenderableBlockKey, type ThreadRenderableBlock } from "../thread-render-blocks";
+import ThreadSkillExtensions, { useThreadSkillExtensionsOwner } from "../ThreadSkillExtensions";
 import ThreadRenderableBlockView from "./ThreadRenderableBlockView";
 import { ThreadContentLoadingSkeleton } from "./ThreadTurnLoadStates";
 import type { SubagentActivityProps } from "./subagent-activity-slot";
@@ -65,12 +65,17 @@ function LiveThreadSubagentActivityWindow ({ fallbackThread, subagent }: Subagen
   );
 }
 
-/** The child's paths resolve against its own working directory, and its calls present through its own active skills. */
+/** The child's paths resolve against its own working directory, and its calls and components draw through its own active skills. */
 function ThreadSubagentActivityWindowBody ({ thread }: { thread: RelatedThread | undefined }) {
-  const skillMcpMatchers = useThreadSkillMcpMatchers(thread?.id ?? null);
+  const skillExtensions = useThreadSkillExtensionsOwner(thread?.id ?? null);
+  const styleScope = useId();
   return (
-    <ContextualProjectProvider cwd={thread?.cwd} skillMcpMatchers={skillMcpMatchers}>
-      <ThreadSubagentActivityTail thread={thread} />
+    <ContextualProjectProvider cwd={thread?.cwd} skillMcpMatchers={skillExtensions.state.matchers}>
+      <ThreadSkillExtensions extensions={skillExtensions} scope={styleScope}>
+        <div className="contents" data-thread-component-style={styleScope}>
+          <ThreadSubagentActivityTail thread={thread} />
+        </div>
+      </ThreadSkillExtensions>
     </ContextualProjectProvider>
   );
 }

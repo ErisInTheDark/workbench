@@ -1,42 +1,36 @@
 /*
  * Exports:
- * - WorkbenchComponentTarget: message and markup identifying a rendered component.
- * - WorkbenchCallComponentTarget: MCP call item, skill, component and inline slot identifying a call's rendered component.
- * - WorkbenchInlineComponent: one skill component a call's line draws inline, with its props.
+ * - WorkbenchComponentRenderInput: bundles and one request, rendered outside the browser for previews.
  * - WorkbenchMatcherTest: an MCP matcher test's report and component preview.
- * - WorkbenchComponentsOptions: skill, compilation, kept-result, image, transcript asset and MCP call presentation ports.
- * - default WorkbenchComponentsController: resolve active templates, feed them referenced kept MCP results, inline their
- *   images and retain their rendered results; compile active skills' MCP matchers, render and retain MCP call
- *   components and the components their lines draw inline, and test matchers against a sample call.
+ * - WorkbenchComponentsOptions: skill, compilation, kept-result, image, kept-snapshot and preview ports.
+ * - default WorkbenchComponentsController: compile active skills' extensions (matchers, one component bundle per skill,
+ *   styles), each reused until an input it read changes; serve kept results and public images to components drawn in
+ *   the browser; keep a component's snapshot while its inputs live; preview markup and test matchers against a call.
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkbenchSkillDefinition } from "workbench-shared/types";
-import { readThreadComponentMarkup } from "workbench-shared/workbench/thread/thread-component-markup";
-import { readThreadComponentRender, readThreadComponentStyle, readThreadComponentTree } from "workbench-shared/workbench/thread/thread-component-tree";
+import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { listThreadComponentResultNames } from "workbench-shared/workbench/thread/thread-component-markup";
+import { readThreadComponentStyle, readThreadComponentTree } from "workbench-shared/workbench/thread/thread-component-tree";
 import type {
-  ThreadCompiledComponent, ThreadCompiledStyle, ThreadComponentNode, ThreadComponentPreview, ThreadComponentRender,
-  ThreadComponentStyle, ThreadComponentValue,
+  ThreadCompiledComponent, ThreadCompiledStyle, ThreadComponentNode, ThreadComponentPreview, ThreadComponentStyle,
 } from "workbench-shared/workbench/thread/thread-component-tree";
 import type { QuickJSWASMModule } from "quickjs-emscripten-core";
 import {
-  SkillMcpMatcherBundleSchema, type SkillMcpCall, type SkillMcpIcon, type SkillMcpMatcherCompilation, type SkillMcpPart,
+  SkillComponentBundleSchema, type SkillComponentBundle, type SkillComponentRequest, type SkillComponentTarget,
+  type SkillExtensionFailure, type SkillExtensions,
+} from "workbench-shared/workbench/skills/skill-component-contract";
+import {
+  SkillMcpMatcherBundleSchema, type SkillMcpCall, type SkillMcpIcon, type SkillMcpMatcherBundle, type SkillMcpPart,
 } from "workbench-shared/workbench/skills/skill-mcp-matcher-contract";
 import SkillMcpMatcherRuntime, { type SkillMcpMatch } from "workbench-shared/workbench/skills/SkillMcpMatcherRuntime";
-import { readSkillComponentPaths, resolveSkillComponents } from "../lib/workbench/skills/skill-components";
+import { readSkillComponentPaths, resolveSkillComponents, type SkillComponent } from "../lib/workbench/skills/skill-components";
 import { resolveSkillMcpMatchers } from "../lib/workbench/skills/skill-mcp-matchers";
-import { inlineComponentImages, type ComponentImageFetch } from "./component-images";
+import { fetchComponentImages, inlineComponentImages, type ComponentImageFetch } from "./component-images";
 
 const MAX_COMPILED_CACHE_BYTES = 16 * 1024 * 1024;
-/** A template can emit a markdown body naming its own invocation; this bounds that recursion. */
-const MAX_NESTED_COMPONENT_DEPTH = 8;
-
-function markdownProps(value: { [key: string]: ThreadComponentValue }): Record<string, ThreadComponentValue> | null {
-  const { props } = value;
-  return value.$workbench === "element" && value.type === "workbench:markdown"
-    && props && typeof props === "object" && !Array.isArray(props) ? props : null;
-}
 
 function formatPart(part: SkillMcpPart) {
   if (typeof part === "string") return part;
@@ -70,28 +64,12 @@ function formatSkillMcpMatch({ presentation, skillName }: SkillMcpMatch) {
   ].join("\n");
 }
 
-export interface WorkbenchComponentTarget {
-  threadId: string;
-  itemId: string;
-  markup: string;
-}
+const failureMessage = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 4_000);
 
-/** One MCP call's skill component, owned by the call's item; `slot` tells apart components drawn inline in its line. */
-export interface WorkbenchCallComponentTarget {
-  threadId: string;
-  itemId: string;
-  skillPath: string;
-  component: string;
-  slot?: string;
+export interface WorkbenchComponentRenderInput {
+  bundles: readonly SkillComponentBundle[];
+  request: SkillComponentRequest;
 }
-
-/** One skill component a call's line draws inline, with its props. */
-export interface WorkbenchInlineComponent {
-  component: string;
-  props: Record<string, unknown>;
-}
-
-const MAX_INLINE_COMPONENTS = 16;
 
 /** What `wb vis match` reports: every skill's say about the call, and its component rendered for a screenshot. */
 export interface WorkbenchMatcherTest {
@@ -101,28 +79,19 @@ export interface WorkbenchMatcherTest {
 
 export interface WorkbenchComponentsOptions {
   skills(threadId: string): Promise<readonly WorkbenchSkillDefinition[]>;
-  /** MCP call presentation; absent where only message components render. */
-  calls?: {
-    compileMatchers(files: readonly string[], root: string, threadId: string): Promise<ThreadCompiledComponent>;
-    /** Renders each request in order from its component's compiled code, all in one run. */
-    renderProps(
-      components: Readonly<Record<string, ThreadCompiledComponent>>, renders: readonly WorkbenchInlineComponent[], threadId: string, signal?: AbortSignal,
-    ): Promise<ThreadComponentNode[]>;
-    quickjs(): Promise<QuickJSWASMModule>;
-    read(target: WorkbenchCallComponentTarget): Promise<ThreadComponentNode | null>;
-    write(target: WorkbenchCallComponentTarget, tree: ThreadComponentNode): Promise<ThreadComponentNode>;
-  };
-  compile(file: string, threadId: string, signal?: AbortSignal, skillRoot?: string): Promise<ThreadCompiledComponent>;
+  /** One skill's components as one bundle script, compiled in one run. */
+  compileComponents(components: readonly { name: string; file: string }[], root: string, threadId: string): Promise<ThreadCompiledComponent>;
   compileStyles(files: string[], threadId: string, skillRoot: string): Promise<ThreadCompiledStyle>;
-  evaluate(
-    compiled: ThreadCompiledComponent, name: string, markup: string, results: Record<string, unknown>, threadId: string, signal?: AbortSignal,
-  ): Promise<ThreadComponentNode>;
+  compileMatchers(files: readonly string[], root: string, threadId: string): Promise<ThreadCompiledComponent>;
+  /** Renders one request from bundles, as the browser would, for previews. */
+  render?(input: WorkbenchComponentRenderInput, threadId: string, signal?: AbortSignal): Promise<ThreadComponentNode>;
   /** The thread's kept MCP result for each name it has; missing names are absent. */
   results?(threadId: string, names: readonly string[]): Promise<Record<string, unknown>>;
   fetchImage?: ComponentImageFetch;
   preview?(result: ThreadComponentPreview, threadId: string, signal?: AbortSignal): Promise<string>;
-  read(target: WorkbenchComponentTarget): Promise<ThreadComponentNode | null>;
-  write(target: WorkbenchComponentTarget, tree: ThreadComponentNode): Promise<ThreadComponentNode>;
+  quickjs?(): Promise<QuickJSWASMModule>;
+  readKept(threadId: string, target: SkillComponentTarget): Promise<ThreadComponentNode | null>;
+  writeKept(threadId: string, target: SkillComponentTarget, tree: ThreadComponentNode): Promise<ThreadComponentNode>;
 }
 
 export default class WorkbenchComponentsController {
@@ -132,41 +101,155 @@ export default class WorkbenchComponentsController {
 
   constructor(private readonly options: WorkbenchComponentsOptions) {}
 
-  async renderMessage(target: WorkbenchComponentTarget): Promise<ThreadComponentRender> {
-    const saved = await this.options.read(target);
-    if (saved) return { tree: saved, styleRevisions: [] };
-    const result = await this.#render(target.threadId, target.markup);
-    const tree = await this.options.write(target, await this.#inline(result.tree));
-    return readThreadComponentRender({ tree, styleRevisions: result.styles.map(({ path, revision }) => ({ path, revision })) });
+  /** Every active skill's matchers, components and styles; one skill's failing part never hides the rest. */
+  async extensions(threadId: string): Promise<SkillExtensions> {
+    const skills = await this.options.skills(threadId);
+    const failures: SkillExtensionFailure[] = [];
+    const attempt = async <Value>(skill: WorkbenchSkillDefinition, kind: SkillExtensionFailure["kind"], build: () => Promise<Value | null>) => {
+      try { return await build(); }
+      catch (error) {
+        failures.push({ skillName: skill.name, skillPath: skill.path, kind, message: failureMessage(error) });
+        return null;
+      }
+    };
+    const outcomes = await Promise.all(skills.map(async skill => await Promise.all([
+      attempt(skill, "matchers", () => this.#matcherBundle(skill, threadId)),
+      attempt(skill, "components", () => this.#componentBundle(skill, threadId)),
+      attempt(skill, "styles", () => this.#style(skill, threadId)),
+    ] as const)));
+    return {
+      matchers: outcomes.flatMap(([matcher]) => matcher ? [matcher] : []),
+      components: outcomes.flatMap(([, bundle]) => bundle ? [bundle] : []),
+      styles: outcomes.flatMap(([, , style]) => style ? [style] : []),
+      failures,
+    };
+  }
+
+  async results(threadId: string, names: readonly string[]): Promise<Record<string, unknown>> {
+    if (!this.options.results) throw new Error("Kept MCP results are unavailable.");
+    return await this.options.results(threadId, names);
+  }
+
+  async images(urls: readonly string[], signal?: AbortSignal): Promise<Record<string, string | null>> {
+    return Object.fromEntries(await fetchComponentImages(urls, this.#fetchImage(), signal));
+  }
+
+  /** Keeps the first tree a target shows, its images inlined, so it still draws once its inputs expire. */
+  async keep(threadId: string, target: SkillComponentTarget, tree: unknown): Promise<void> {
+    const inlined = await this.#inline(readThreadComponentTree(tree, { remoteImages: true }));
+    await this.options.writeKept(threadId, target, inlined);
+  }
+
+  async kept(threadId: string, target: SkillComponentTarget): Promise<ThreadComponentNode | null> {
+    return await this.options.readKept(threadId, target);
   }
 
   async previewMarkup(threadId: string, markup: string, signal?: AbortSignal): Promise<string> {
-    if (!this.options.preview) throw new Error("Component preview is unavailable.");
-    const result = await this.#render(threadId, markup, signal);
-    const css = [...new Set(result.styles.map(style => style.css))].filter(Boolean).join("\n");
-    return await this.options.preview({ tree: await this.#inline(result.tree, signal), css }, threadId, signal);
+    const names = listThreadComponentResultNames(markup);
+    const results = names.length ? await this.results(threadId, names) : {};
+    return await this.#preview(threadId, { kind: "markup", markup, results }, signal);
+  }
+
+  /** Run active skills' matchers on one call as the client would, then render the named component for a screenshot. */
+  async testMatcher(threadId: string, call: SkillMcpCall, signal?: AbortSignal): Promise<WorkbenchMatcherTest> {
+    const skills = await this.options.skills(threadId);
+    const outcomes = await Promise.all(skills.map(async skill => {
+      try { return { skill, bundle: await this.#matcherBundle(skill, threadId) }; }
+      catch (error) { return { skill, error: failureMessage(error) }; }
+    }));
+    signal?.throwIfAborted();
+    const bundles = outcomes.flatMap(outcome => "bundle" in outcome && outcome.bundle ? [outcome.bundle] : []);
+    const lines = outcomes.flatMap(outcome => "error" in outcome ? [`Skill ${outcome.skill.name} matchers failed to compile:\n${outcome.error}`] : []);
+    if (!bundles.length) {
+      lines.push(lines.length ? "No other active skill has MCP matchers." : "No active skill has MCP matchers.");
+      return { report: `${lines.join("\n\n")}\n`, preview: null };
+    }
+    if (!this.options.quickjs) throw new Error("Matcher tests are unavailable.");
+    const runtime = new SkillMcpMatcherRuntime(await this.options.quickjs(), bundles);
+    let report: ReturnType<SkillMcpMatcherRuntime["report"]>;
+    try { report = runtime.report(call); }
+    finally { runtime.dispose(); }
+    lines.push(...report.failures.map(failure => `Skill ${failure.skillName}: ${failure.message}`));
+    const match = report.match;
+    if (!match) {
+      lines.push("No active skill matcher presents this call; it shows with the generic MCP summary.");
+      return { report: `${lines.join("\n\n")}\n`, preview: null };
+    }
+    lines.push(formatSkillMcpMatch(match));
+    const component = match.presentation.component;
+    if (!component || call.status !== "completed") return { report: `${lines.join("\n\n")}\n`, preview: null };
+    const props = await this.#withKeptResult(threadId, { ...match.presentation.props, call });
+    const preview = await this.#preview(threadId, { kind: "props", skillPath: match.skillPath, component, props }, signal);
+    return { report: `${lines.join("\n\n")}\n`, preview };
+  }
+
+  async #preview(threadId: string, request: SkillComponentRequest, signal?: AbortSignal) {
+    if (!this.options.preview || !this.options.render) throw new Error("Component preview is unavailable.");
+    const skills = await this.options.skills(threadId);
+    const [bundles, styles] = await Promise.all([
+      Promise.all(skills.map(skill => this.#componentBundle(skill, threadId))),
+      Promise.all(skills.map(skill => this.#style(skill, threadId))),
+    ]);
+    signal?.throwIfAborted();
+    const tree = await this.options.render({ bundles: bundles.filter(bundle => bundle !== null), request }, threadId, signal);
+    const css = [...new Set(styles.map(style => style?.css ?? ""))].filter(Boolean).join("\n");
+    return await this.options.preview({ tree: await this.#inline(tree, signal), css }, threadId, signal);
+  }
+
+  /** A call that kept its result under a name previews with that kept result, not the stub its inline answer carried. */
+  async #withKeptResult(threadId: string, props: Record<string, JsonValue>): Promise<Record<string, JsonValue>> {
+    const call = props.call;
+    const keep = call && typeof call === "object" && !Array.isArray(call) && typeof call.keep === "string" ? call.keep : null;
+    if (!call || typeof call !== "object" || Array.isArray(call) || !keep || !this.options.results) return props;
+    const kept = await this.options.results(threadId, [keep]);
+    // Kept results are the JSON an MCP call returned.
+    return Object.hasOwn(kept, keep) ? { ...props, call: { ...call, result: kept[keep] as JsonValue } } : props;
+  }
+
+  #fetchImage(): ComponentImageFetch {
+    return this.options.fetchImage ?? (async () => { throw new Error("Component images are unavailable."); });
   }
 
   async #inline(tree: ThreadComponentNode, signal?: AbortSignal) {
-    const fetchImage = this.options.fetchImage ?? (async () => { throw new Error("Component images are unavailable."); });
-    return await inlineComponentImages(tree, fetchImage, signal);
+    return await inlineComponentImages(tree, this.#fetchImage(), signal);
   }
 
-  async #results(threadId: string, opening: string): Promise<Record<string, unknown>> {
-    const names = [...new Set([...opening.matchAll(/["']@result:([A-Za-z0-9_-]{1,64})["']/gu)].map(match => match[1]!))];
-    if (!names.length) return {};
-    if (!this.options.results) throw new Error("Kept MCP results are unavailable.");
-    const results = await this.options.results(threadId, names);
-    const missing = names.find(name => !Object.hasOwn(results, name));
-    if (missing) throw new Error(`No kept MCP result named ${missing} in this thread.`);
-    return results;
+  /** A skill's declared components that exist; a missing file leaves out only itself. */
+  async #declaredComponents(skill: WorkbenchSkillDefinition): Promise<SkillComponent[]> {
+    const components: SkillComponent[] = [];
+    for (const declared of readSkillComponentPaths(skill.content)) {
+      const normalized = declared.replaceAll("\\", "/");
+      const name = path.posix.basename(normalized, path.posix.extname(normalized));
+      try {
+        components.push(...await resolveSkillComponents(skill.path, skill.content, name));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return components;
   }
 
-  async styles(threadId: string, signal?: AbortSignal): Promise<ThreadComponentStyle[]> {
-    signal?.throwIfAborted();
-    const values = await Promise.all((await this.options.skills(threadId)).map(skill => this.#style(skill, threadId)));
-    signal?.throwIfAborted();
-    return values.filter((value): value is ThreadComponentStyle => value !== null);
+  async #componentBundle(skill: WorkbenchSkillDefinition, threadId: string): Promise<SkillComponentBundle | null> {
+    const components = await this.#declaredComponents(skill);
+    if (!components.length) return null;
+    const files = components.map(component => component.path);
+    const compiled = await this.#cached(`components\0${skill.path}\0${files.join("\0")}`, files, () => this.options.compileComponents(
+      components.map(({ name, path: file }) => ({ name, file })), components[0]!.root, threadId,
+    ));
+    return SkillComponentBundleSchema.parse({
+      skillName: skill.name, skillPath: skill.path, components: components.map(component => component.name),
+      code: compiled.code, revision: createHash("sha256").update(compiled.code).digest("hex"),
+    });
+  }
+
+  async #matcherBundle(skill: WorkbenchSkillDefinition, threadId: string): Promise<SkillMcpMatcherBundle | null> {
+    const resolved = await resolveSkillMcpMatchers(skill.path, skill.content);
+    if (!resolved) return null;
+    const compiled = await this.#cached(`matchers\0${skill.path}\0${resolved.files.join("\0")}`, resolved.files,
+      () => this.options.compileMatchers(resolved.files, resolved.root, threadId));
+    return SkillMcpMatcherBundleSchema.parse({
+      skillName: skill.name, skillPath: skill.path, code: compiled.code, revision: createHash("sha256").update(compiled.code).digest("hex"),
+    });
   }
 
   async #style(skill: WorkbenchSkillDefinition, threadId: string): Promise<ThreadComponentStyle | null> {
@@ -180,18 +263,9 @@ export default class WorkbenchComponentsController {
   }
 
   async #buildStyle(skill: WorkbenchSkillDefinition, threadId: string): Promise<ThreadComponentStyle | null> {
-    const files: string[] = [];
-    let root = path.dirname(skill.path);
-    for (const declared of readSkillComponentPaths(skill.content)) {
-      const normalized = declared.replaceAll("\\", "/");
-      const name = path.posix.basename(normalized, path.posix.extname(normalized));
-      try {
-        const resolved = await resolveSkillComponents(skill.path, skill.content, name);
-        for (const component of resolved) { files.push(component.path); root = component.root; }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
+    const components = await this.#declaredComponents(skill);
+    const files = components.map(component => component.path);
+    const root = components.at(-1)?.root ?? path.dirname(skill.path);
     if (!files.length) { this.#styles.delete(skill.path); return null; }
     const fileKey = JSON.stringify(files);
     const cached = this.#styles.get(skill.path);
@@ -225,13 +299,12 @@ export default class WorkbenchComponentsController {
    * One compiled output per key, reused until any input it read changes; `sources` must not change while compiling.
    * Least recently used outputs leave first once the cache passes its byte budget.
    */
-  async #cached(key: string, sources: readonly string[], compile: () => Promise<ThreadCompiledComponent>, signal?: AbortSignal) {
+  async #cached(key: string, sources: readonly string[], compile: () => Promise<ThreadCompiledComponent>) {
     let cached = this.#compiled.get(key);
     if (cached) {
       try {
         if (await this.#fingerprint(cached.compiled.inputs) !== cached.fingerprint) cached = undefined;
       } catch {
-        signal?.throwIfAborted();
         cached = undefined;
       }
       if (!cached) this.#compiled.delete(key);
@@ -243,7 +316,6 @@ export default class WorkbenchComponentsController {
     }
     const before = await this.#fingerprint(sources);
     const compiled = await compile();
-    signal?.throwIfAborted();
     if (before !== await this.#fingerprint(sources)) throw new Error("Skill code changed while it was being compiled.");
     this.#compiled.set(key, { compiled, fingerprint: await this.#fingerprint(compiled.inputs) });
     let bytes = [...this.#compiled.values()].reduce((sum, value) => sum + Buffer.byteLength(value.compiled.code), 0);
@@ -256,127 +328,6 @@ export default class WorkbenchComponentsController {
     return compiled;
   }
 
-  #calls() {
-    if (!this.options.calls) throw new Error("MCP call presentation is unavailable.");
-    return this.options.calls;
-  }
-
-  /** Every active skill's compiled MCP matchers, in catalogue order; a skill whose matchers fail reports why instead. */
-  async matchers(threadId: string): Promise<SkillMcpMatcherCompilation> {
-    const calls = this.#calls();
-    const outcomes = await Promise.all((await this.options.skills(threadId)).map(async skill => {
-      try {
-        const resolved = await resolveSkillMcpMatchers(skill.path, skill.content);
-        if (!resolved) return null;
-        const compiled = await this.#cached(`matchers\0${skill.path}\0${resolved.files.join("\0")}`, resolved.files,
-          () => calls.compileMatchers(resolved.files, resolved.root, threadId));
-        const bundle = SkillMcpMatcherBundleSchema.parse({
-          skillName: skill.name, skillPath: skill.path, code: compiled.code, revision: createHash("sha256").update(compiled.code).digest("hex"),
-        });
-        return { kind: "bundle" as const, bundle };
-      } catch (error) {
-        const message = (error instanceof Error ? error.message : String(error)).slice(0, 4_000);
-        return { kind: "failure" as const, failure: { skillName: skill.name, skillPath: skill.path, message } };
-      }
-    }));
-    return {
-      bundles: outcomes.flatMap(outcome => outcome?.kind === "bundle" ? [outcome.bundle] : []),
-      failures: outcomes.flatMap(outcome => outcome?.kind === "failure" ? [outcome.failure] : []),
-    };
-  }
-
-  /**
-   * A call's skill component, rendered once from the active skill that named it and kept on the call's item. A call that
-   * kept its result under a name gets that kept result, not the stub its inline answer carried.
-   */
-  async renderCall(target: WorkbenchCallComponentTarget & { props: Record<string, unknown> }): Promise<ThreadComponentRender> {
-    const calls = this.#calls();
-    const stored = await calls.read(target);
-    if (stored) return { tree: stored, styleRevisions: [] };
-    const props = await this.#withKeptResult(target.threadId, target.props);
-    const result = await this.#renderProps(target.threadId, target.skillPath, [{ component: target.component, props }]);
-    const tree = await calls.write(target, await this.#inline(result.trees[0]!));
-    return readThreadComponentRender({ tree, styleRevisions: result.styles.map(({ path, revision }) => ({ path, revision })) });
-  }
-
-  /**
-   * The components a call's line draws inline, each kept on the call's item by its props, so the same props always find
-   * the same render; whatever is missing renders in one run.
-   */
-  async renderInline(target: Omit<WorkbenchCallComponentTarget, "component" | "slot"> & { parts: readonly WorkbenchInlineComponent[] }): Promise<ThreadComponentRender[]> {
-    const calls = this.#calls();
-    if (target.parts.length > MAX_INLINE_COMPONENTS) throw new Error(`A line draws at most ${MAX_INLINE_COMPONENTS} inline components.`);
-    const slots = target.parts.map(part => ({ ...target, component: part.component, slot: JSON.stringify(part.props) }));
-    const stored = await Promise.all(slots.map(slot => calls.read(slot)));
-    const missing = target.parts.flatMap((part, index) => stored[index] ? [] : [{ index, part }]);
-    if (!missing.length) return stored.map(tree => ({ tree: tree!, styleRevisions: [] }));
-    const result = await this.#renderProps(target.threadId, target.skillPath, missing.map(({ part }) => part));
-    const styleRevisions = result.styles.map(({ path, revision }) => ({ path, revision }));
-    const trees = [...stored];
-    await Promise.all(missing.map(async ({ index }, rendered) => {
-      trees[index] = await calls.write(slots[index]!, await this.#inline(result.trees[rendered]!));
-    }));
-    return trees.map(tree => readThreadComponentRender({ tree: tree!, styleRevisions }));
-  }
-
-  /** Run active skills' matchers on one call as the client would, then render the named component for a screenshot. */
-  async testMatcher(threadId: string, call: SkillMcpCall, signal?: AbortSignal): Promise<WorkbenchMatcherTest> {
-    const calls = this.#calls();
-    const { bundles, failures } = await this.matchers(threadId);
-    signal?.throwIfAborted();
-    const lines = failures.map(failure => `Skill ${failure.skillName} matchers failed to compile:\n${failure.message}`);
-    if (!bundles.length) {
-      lines.push(failures.length ? "No other active skill has MCP matchers." : "No active skill has MCP matchers.");
-      return { report: `${lines.join("\n\n")}\n`, preview: null };
-    }
-    const runtime = new SkillMcpMatcherRuntime(await calls.quickjs(), bundles);
-    let report: ReturnType<SkillMcpMatcherRuntime["report"]>;
-    try { report = runtime.report(call); }
-    finally { runtime.dispose(); }
-    lines.push(...report.failures.map(failure => `Skill ${failure.skillName}: ${failure.message}`));
-    const match = report.match;
-    if (!match) {
-      lines.push("No active skill matcher presents this call; it shows with the generic MCP summary.");
-      return { report: `${lines.join("\n\n")}\n`, preview: null };
-    }
-    lines.push(formatSkillMcpMatch(match));
-    const component = match.presentation.component;
-    if (!component || call.status !== "completed") return { report: `${lines.join("\n\n")}\n`, preview: null };
-    if (!this.options.preview) throw new Error("Component preview is unavailable.");
-    const props = await this.#withKeptResult(threadId, { ...match.presentation.props, call });
-    const rendered = await this.#renderProps(threadId, match.skillPath, [{ component, props }], signal);
-    const css = [...new Set(rendered.styles.map(style => style.css))].filter(Boolean).join("\n");
-    const preview = await this.options.preview({ tree: await this.#inline(rendered.trees[0]!, signal), css }, threadId, signal);
-    return { report: `${lines.join("\n\n")}\n`, preview };
-  }
-
-  async #withKeptResult(threadId: string, props: Record<string, unknown>) {
-    const call = props.call;
-    const keep = call && typeof call === "object" && !Array.isArray(call) && "keep" in call && typeof call.keep === "string" ? call.keep : null;
-    if (!keep || !this.options.results) return props;
-    const kept = await this.options.results(threadId, [keep]);
-    return Object.hasOwn(kept, keep) ? { ...props, call: { ...call as object, result: kept[keep] } } : props;
-  }
-
-  /** Renders one skill's components straight from props, every request in one run. */
-  async #renderProps(threadId: string, skillPath: string, renders: readonly WorkbenchInlineComponent[], signal?: AbortSignal) {
-    const calls = this.#calls();
-    const skill = (await this.options.skills(threadId)).find(candidate => candidate.path === skillPath);
-    if (!skill) throw new Error(`The skill presenting this call is not active in this thread: ${skillPath}`);
-    const names = [...new Set(renders.map(render => render.component))];
-    const compiled = Object.fromEntries(await Promise.all(names.map(async name => {
-      const component = (await resolveSkillComponents(skill.path, skill.content, name)).find(candidate => candidate.name === name);
-      if (!component) throw new Error(`Skill ${skill.name} exposes no component ${name}.`);
-      return [name, await this.#cached(component.path, [component.path], () => this.options.compile(component.path, threadId, signal, component.root), signal)] as const;
-    })));
-    const rendered = await calls.renderProps(compiled, renders, threadId, signal);
-    if (rendered.length !== renders.length) throw new Error("Component render returned the wrong number of results.");
-    const trees = rendered.map(tree => readThreadComponentTree(tree, { remoteImages: true }));
-    const style = await this.#style(skill, threadId);
-    signal?.throwIfAborted();
-    return { trees, styles: style ? [style] : [] };
-  }
-
   async #fingerprint(inputs: readonly string[]): Promise<string> {
     const hash = createHash("sha256");
     for (const file of [...inputs].sort()) {
@@ -384,49 +335,5 @@ export default class WorkbenchComponentsController {
       hash.update(await readFile(file));
     }
     return hash.digest("hex");
-  }
-
-  async #render(
-    threadId: string, markup: string, signal?: AbortSignal, depth = 0,
-  ): Promise<{ tree: ThreadComponentNode; styles: ThreadComponentStyle[] }> {
-    signal?.throwIfAborted();
-    const source = markup.trim();
-    const invocation = readThreadComponentMarkup(source);
-    if (!invocation || invocation.end !== source.length) throw new Error("Expected one complete component invocation.");
-    const skills = await this.options.skills(threadId);
-    const matches = (await Promise.all(skills.map(async skill => {
-      const components = await resolveSkillComponents(skill.path, skill.content, invocation.name);
-      return components.filter(component => component.name === invocation.name).map(component => ({ component, skill }));
-    }))).flat();
-    if (!matches.length) throw new Error(`No active skill exposes component ${invocation.name}.`);
-    if (matches.length > 1) throw new Error(`More than one active skill exposes component ${invocation.name}.`);
-    const { component, skill } = matches[0]!;
-    const compiled = await this.#cached(component.path, [component.path], () => this.options.compile(component.path, threadId, signal, component.root), signal);
-    const results = await this.#results(threadId, invocation.opening);
-    const evaluated = readThreadComponentTree(
-      await this.options.evaluate(compiled, invocation.name, source, results, threadId, signal), { remoteImages: true },
-    );
-    const styles = new Map<string, ThreadComponentStyle>();
-    const ownStyle = await this.#style(skill, threadId);
-    if (ownStyle) styles.set(ownStyle.path, ownStyle);
-    const resolveNested = async (value: ThreadComponentValue): Promise<ThreadComponentValue> => {
-      if (Array.isArray(value)) return await Promise.all(value.map(resolveNested));
-      if (!value || typeof value !== "object") return value;
-      const props = markdownProps(value);
-      const components = props?.components;
-      if (!props || !components || typeof components !== "object" || Array.isArray(components)) {
-        return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([key, child]) => [key, await resolveNested(child)])));
-      }
-      if (depth >= MAX_NESTED_COMPONENT_DEPTH) throw new Error(`Components nest deeper than ${MAX_NESTED_COMPONENT_DEPTH} levels.`);
-      const resolved = await Promise.all(Object.keys(components).map(async markup => {
-        const nested = await this.#render(threadId, markup, signal, depth + 1);
-        for (const style of nested.styles) styles.set(style.path, style);
-        return [markup, { ...nested.tree }] as const;
-      }));
-      return { ...value, props: { ...props, components: Object.fromEntries(resolved) } };
-    };
-    const tree = readThreadComponentTree(await resolveNested({ ...evaluated }), { remoteImages: true });
-    signal?.throwIfAborted();
-    return { tree, styles: [...styles.values()] };
   }
 }

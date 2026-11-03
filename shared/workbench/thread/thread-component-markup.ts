@@ -4,8 +4,87 @@
  * - readThreadComponentMarkup: read one complete component invocation at an offset.
  * - ThreadComponentSource/resolveThreadComponentSource: identify the original message owning a displayed invocation.
  * - mapThreadComponentSources: locate original message text within a combined message.
+ * - ThreadComponentAttribute/readThreadComponentAttributes: an opening tag's attributes: quoted text, `{expression}`
+ *   source for a sandbox to evaluate, or a bare flag.
+ * - listThreadComponentResultNames: the kept MCP results an invocation (or its nested ones) names as `"@result:<name>"`.
  */
 import { createCodeFenceTracker } from "./markdown-code-fences";
+
+export type ThreadComponentAttribute =
+  | { name: string; kind: "text"; value: string }
+  | { name: string; kind: "expression"; source: string }
+  | { name: string; kind: "flag" };
+
+const ENTITIES: Readonly<Record<string, string>> = { amp: "&", apos: "'", gt: ">", lt: "<", quot: "\"" };
+
+function decodeEntities(value: string) {
+  return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/giu, (match, decimal?: string, hex?: string, name?: string) => {
+    const code = decimal ? Number.parseInt(decimal, 10) : hex ? Number.parseInt(hex, 16) : null;
+    if (code !== null) return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+    return ENTITIES[name!.toLowerCase()] ?? match;
+  });
+}
+
+/** Where a `{` expression's matching `}` sits, skipping braces inside quotes, as `readTag` reads them. */
+function expressionEnd(source: string, open: number) {
+  let braces = 0;
+  let quote = "";
+  for (let index = open; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = "";
+      continue;
+    }
+    if (character === "\"" || character === "'" || character === "`") quote = character;
+    else if (character === "{") braces += 1;
+    else if (character === "}" && --braces === 0) return index;
+  }
+  throw new Error("Unclosed component attribute expression.");
+}
+
+export function readThreadComponentAttributes(opening: string): ThreadComponentAttribute[] {
+  const tag = /^<[A-Za-z][A-Za-z0-9_.-]*/u.exec(opening);
+  if (!tag) throw new Error("Expected a component opening tag.");
+  const attributes: ThreadComponentAttribute[] = [];
+  let index = tag[0].length;
+  const skipSpace = () => { while (index < opening.length && /\s/u.test(opening[index]!)) index += 1; };
+  for (;;) {
+    skipSpace();
+    const rest = opening.slice(index);
+    if (/^\/?>\s*$/u.test(rest)) return attributes;
+    if (rest.startsWith("{")) throw new Error("Component spread attributes are not supported.");
+    const name = /^[A-Za-z_][A-Za-z0-9_:.-]*/u.exec(rest)?.[0];
+    if (!name) throw new Error("Invalid component attribute.");
+    index += name.length;
+    skipSpace();
+    if (opening[index] !== "=") {
+      attributes.push({ name, kind: "flag" });
+      continue;
+    }
+    index += 1;
+    skipSpace();
+    const start = opening[index];
+    if (start === "\"" || start === "'") {
+      const end = opening.indexOf(start, index + 1);
+      if (end < 0) throw new Error(`Unclosed component attribute: ${name}`);
+      attributes.push({ name, kind: "text", value: decodeEntities(opening.slice(index + 1, end)) });
+      index = end + 1;
+    } else if (start === "{") {
+      const end = expressionEnd(opening, index);
+      const source = opening.slice(index + 1, end).trim();
+      if (!source) throw new Error(`Empty component attribute expression: ${name}`);
+      attributes.push({ name, kind: "expression", source });
+      index = end + 1;
+    } else {
+      throw new Error(`Invalid component attribute value: ${name}`);
+    }
+  }
+}
+
+export function listThreadComponentResultNames(source: string): string[] {
+  return [...new Set([...source.matchAll(/["']@result:([A-Za-z0-9_-]{1,64})["']/gu)].map(match => match[1]!))];
+}
 
 export interface ThreadComponentMarkup {
   name: string;

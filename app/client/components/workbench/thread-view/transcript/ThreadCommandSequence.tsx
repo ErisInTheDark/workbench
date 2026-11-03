@@ -91,7 +91,7 @@ export function ThreadRegularCommandItem ({
   itemTimeline: Timeline;
 }) {
   return (
-    // Skill components drawn inline in the call's line are kept on this item.
+    // Skill components drawn inline draw only in a call's own line.
     <ThreadSkillItemContext value={item.id}>
       {item.type === "mcpToolCall" ? <ThreadMcpItem item={item} itemTimeline={itemTimeline} />
         : item.type === "dynamicToolCall" ? <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)} item={item} />

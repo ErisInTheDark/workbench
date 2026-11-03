@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - ComponentImageFetch: fetch one public image's type and bytes.
- * - inlineComponentImages: replace a rendered tree's public https images with data URLs, once, so nothing loads remotely when
- *   the saved tree is shown; images that fail, are not png/jpeg/gif/webp, or exceed the caps are dropped.
+ * - fetchComponentImages: public https images as data URLs, null for any that fail, are not png/jpeg/gif/webp, or exceed
+ *   the caps, so a browser drawing a component never loads them remotely.
+ * - inlineComponentImages: replace a tree's public https images with those data URLs, dropping the ones that are null.
  */
 import {
   inlineThreadComponentImages, listThreadComponentImageUrls, type ThreadComponentNode,
@@ -18,7 +19,12 @@ const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp
 export async function inlineComponentImages(
   tree: ThreadComponentNode, fetchImage: ComponentImageFetch, signal?: AbortSignal,
 ): Promise<ThreadComponentNode> {
-  const urls = listThreadComponentImageUrls(tree);
+  return inlineThreadComponentImages(tree, await fetchComponentImages(listThreadComponentImageUrls(tree), fetchImage, signal));
+}
+
+export async function fetchComponentImages(
+  urls: readonly string[], fetchImage: ComponentImageFetch, signal?: AbortSignal,
+): Promise<Map<string, string | null>> {
   const fetched = await Promise.all(urls.slice(0, MAX_IMAGES).map(async url => {
     try {
       const image = await fetchImage(url, MAX_IMAGE_BYTES, signal);
@@ -36,5 +42,5 @@ export async function inlineComponentImages(
     total += image.bytes.byteLength;
     images.set(image.url, `data:${image.type};base64,${image.bytes.toString("base64")}`);
   }
-  return inlineThreadComponentImages(tree, images);
+  return images;
 }

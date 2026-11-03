@@ -1,7 +1,30 @@
-/* No production exports. Protect JSX invocation boundaries around quoted values and expressions. */
+/* No production exports. Protect JSX invocation boundaries and attribute reading around quoted values and expressions. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mapThreadComponentSources, readThreadComponentMarkup, resolveThreadComponentSource } from "./thread-component-markup";
+import {
+  listThreadComponentResultNames, mapThreadComponentSources, readThreadComponentAttributes, readThreadComponentMarkup,
+  resolveThreadComponentSource,
+} from "./thread-component-markup";
+
+test("attributes keep expressions whole across nested braces and quoted delimiters", () => {
+  assert.deepEqual(readThreadComponentAttributes(`<Board cards={[{ a: "}" }, { b: '{' }]} title="x &amp; y" open data-id='7' />`), [
+    { name: "cards", kind: "expression", source: `[{ a: "}" }, { b: '{' }]` },
+    { name: "title", kind: "text", value: "x & y" },
+    { name: "open", kind: "flag" },
+    { name: "data-id", kind: "text", value: "7" },
+  ]);
+  assert.deepEqual(readThreadComponentAttributes("<Card>"), []);
+});
+
+test("attributes refuse spreads and unterminated values", () => {
+  assert.throws(() => readThreadComponentAttributes("<Card {...props} />"), /spread/u);
+  assert.throws(() => readThreadComponentAttributes("<Card a=b />"), /Invalid component attribute value/u);
+  assert.throws(() => readThreadComponentAttributes("<Card a={} />"), /Empty/u);
+});
+
+test("result references are found in nested invocations once each", () => {
+  assert.deepEqual(listThreadComponentResultNames(`<A x="@result:one">\n<B y={'@result:two'} z="@result:one" />\n</A>`), ["one", "two"]);
+});
 
 test("component invocation consumes the complete tag, not delimiters in props", () => {
   const markup = '<TrelloCard labels={[1, 3]} content="a /> b" />';

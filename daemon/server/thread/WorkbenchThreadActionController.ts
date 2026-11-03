@@ -42,7 +42,7 @@ import { assertWorkbenchSkillActivations } from "workbench-shared/workbench/thre
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 
 export interface WorkbenchThreadActionOwners {
-  components: Pick<import("../skills/WorkbenchComponentsController").default, "matchers" | "renderCall" | "renderInline" | "renderMessage" | "styles">;
+  components: Pick<import("../skills/WorkbenchComponentsController").default, "extensions" | "images" | "keep" | "kept" | "results">;
   /** Messages a held questionnaire keeps for its answer, released undelivered when stop dismisses it. */
   questionnaireSteers: Pick<WorkbenchQuestionnaireSteerController, "hold" | "release">;
   autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe" | "submit" | "adopt">;
@@ -240,11 +240,14 @@ export default class WorkbenchThreadActionController {
       await this.owners.vis.setControl(input.threadId, input.sessionId, input.controlId, input.value);
       return { ok: true };
     },
-    "thread/components/render": input => this.owners.components.renderMessage(input),
-    "thread/components/styles": async input => ({ styles: await this.owners.components.styles(input.threadId) }),
-    "thread/components/render-call": input => this.owners.components.renderCall(input),
-    "thread/components/render-inline": async input => ({ renders: await this.owners.components.renderInline(input) }),
-    "thread/components/matchers": input => this.owners.components.matchers(input.threadId),
+    "thread/skills/extensions": input => this.owners.components.extensions(input.threadId),
+    "thread/components/results": async input => ({ results: await this.owners.components.results(input.threadId, input.names) }),
+    "thread/components/images": async input => ({ images: await this.owners.components.images(input.urls) }),
+    "thread/components/keep": async input => {
+      await this.owners.components.keep(input.threadId, input.target, input.tree);
+      return { ok: true };
+    },
+    "thread/components/kept": async input => ({ tree: await this.owners.components.kept(input.threadId, input.target) }),
     "thread/skills/read": async input => ({ skills: await this.owners.skills.read(input.threadId) }),
     "thread/skills/deactivate": async input => ({ skills: await this.owners.skills.deactivate(input.threadId, input.path) }),
     "thread/steer/resend": input => this.resendSteer(input),

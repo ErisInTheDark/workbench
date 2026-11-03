@@ -22,7 +22,7 @@ import { useThreads } from "../use-threads";
 import { useTranscript } from "../use-transcript";
 import type DraftSessionController from "./DraftSessionController";
 import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
-import ThreadComponentStyles from "./ThreadComponentStyles";
+import ThreadSkillExtensions, { useThreadSkillExtensionsOwner } from "./ThreadSkillExtensions";
 import { ThreadStoreGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import getThreadGitArcProposalPresentation from "./thread-git-arc-presentation";
@@ -37,7 +37,6 @@ import useThreadEntryMotion from "./use-thread-entry-motion";
 import useThreadReferenceSelection from "./use-thread-reference-selection";
 import useThreadSubagentTabs from "./use-thread-subagent-tabs";
 import useWorkbenchSkillCatalogue from "./use-workbench-skill-catalogue";
-import useThreadSkillMcpMatchers from "../../../workbench/skills/use-thread-skill-mcp-matchers";
 import useProofOfWorkCatalogue, { ThreadProofOfWorkCatalogueContext } from "./use-proof-of-work-catalogue";
 import useWorkflowModeCatalogue, { ThreadWorkflowModeCatalogueContext } from "./use-workflow-mode-catalogue";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
@@ -154,7 +153,8 @@ export default memo(function ThreadViewContent ({
   const [workbenchSkills, reconcileRejectedSkills] = useWorkbenchSkillCatalogue(projectId, activeThread?.harness ?? thread.harness);
   const proofOfWorkChecklists = useProofOfWorkCatalogue(projectId);
   const workflowModes = useWorkflowModeCatalogue(projectId);
-  const skillMcpMatchers = useThreadSkillMcpMatchers(activeThread && !activeThread.isDraft ? activeThreadId : null);
+  const skillExtensions = useThreadSkillExtensionsOwner(activeThread && !activeThread.isDraft ? activeThreadId : null);
+  const skillMcpMatchers = skillExtensions.state.matchers;
   const loadedTurns = activeThread?.isDraft || activeTranscriptProjection ? activeTurns.turns : EMPTY_TURNS;
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const showDraftComposer = isDraftThreadView && loadedTurns.length === 0;
@@ -269,7 +269,7 @@ export default memo(function ThreadViewContent ({
       skills={workbenchSkills}
       workspaceRoots={workspaceFileLinkRoots}
     >
-      <ThreadComponentStyles key={activeThreadId} threadId={activeThreadId} skills={activeThread?.skills ?? []} scope={styleScope}>
+      <ThreadSkillExtensions extensions={skillExtensions} scope={styleScope}>
       <ThreadStoreGitArcObservationProvider thread={active}>
       <ThreadGitArcPresentationContext.Provider value={{
         gitArcPlan: active.entry?.gitArcPlan ?? null,
@@ -380,7 +380,7 @@ export default memo(function ThreadViewContent ({
       </>
       </ThreadGitArcPresentationContext.Provider>
       </ThreadStoreGitArcObservationProvider>
-      </ThreadComponentStyles>
+      </ThreadSkillExtensions>
     </ContextualProjectProvider>
     </ThreadScrollViewportContext.Provider>
     </ThreadWorkflowModeCatalogueContext.Provider>

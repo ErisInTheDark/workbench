@@ -2,11 +2,10 @@
  * Exports:
  * - CompiledSkillComponent: compiled template code and dependencies.
  * - compileSkillTemplate: compile TSX and identify its input files.
+ * - compileSkillComponents: compile one skill's components into one bundle script that registers each by name.
  * - compileSkillStyles: compile only the utilities used by one skill's templates.
  * - compileSkillMcpMatchers: bundle one skill's MCP matcher files into one sandbox-ready script and identify its input files.
- * - renderSkillComponent: render an invocation into native component nodes; its body lists nested invocations to resolve.
- * - renderSkillComponentProps: render a template straight from props, as an MCP call's component.
- * - renderSkillComponentPropsList: several renders from props in one run, as a call's component or its line's inline ones.
+ * - renderSkillComponentRequest: render one request from bundles in the sandboxed runtime the browser uses, for previews.
  * - renderSkillComponentPreview: render native component nodes as a screenshot document.
  */
 import { spawn } from "node:child_process";
@@ -14,20 +13,21 @@ import { readFile, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Script } from "node:vm";
 import type * as Esbuild from "../app/node_modules/esbuild/lib/main";
 import { projectRoot } from "../shared/project-root.ts";
 import {
-  readThreadComponentTree, ThreadComponentRenderInputSchema, ThreadComponentStyleBuildSchema, readThreadComponentPreview,
+  ThreadComponentStyleBuildSchema, readThreadComponentPreview,
   type ThreadComponentNode, type ThreadCompiledComponent, type ThreadCompiledStyle, type ThreadComponentPreview,
 } from "../shared/workbench/thread/thread-component-tree.ts";
 import { conformToZodSchema } from "../shared/workbench/zod-schema-conformer.ts";
 import { expandVariantGroupsInSource } from "../app/server/variant-group-source.ts";
 import { collectTailwindCandidates } from "./tailwind-candidates.mts";
-import { readThreadComponentMarkup } from "../shared/workbench/thread/thread-component-markup.ts";
-import { SkillMcpComponentRenderInputSchema } from "../shared/workbench/skills/skill-mcp-matcher-contract.ts";
+import {
+  SkillComponentBuildSchema, SkillComponentRenderInputSchema, type SkillComponentBundle, type SkillComponentRequest,
+} from "../shared/workbench/skills/skill-component-contract.ts";
+import SkillComponentRuntime from "../shared/workbench/skills/SkillComponentRuntime.ts";
 import { WORKBENCH_SKILL_MODULE_SOURCE } from "../shared/workbench/skills/workbench-skill-module.ts";
-import { parseBlocks, type ParsedBlock } from "../app/client/workbench/markdown/markdown-parse.ts";
+import { listMarkdownComponentInvocations } from "../app/client/workbench/markdown/markdown-component-invocations.ts";
 
 const scriptPath = /^skill-component-build\.(?:mts|ts)$/u.test(path.basename(process.argv[1] ?? ""))
   ? path.resolve(process.argv[1]!) : null;
@@ -36,26 +36,8 @@ const app = path.join(root, "app");
 const requireFromApp = createRequire(path.join(app, "package.json"));
 const esbuild: typeof Esbuild = requireFromApp("esbuild");
 const tailwindCli = path.join(path.dirname(requireFromApp.resolve("@tailwindcss/cli/package.json")), "dist", "index.mjs");
-const COMPONENT_EXECUTION_TIMEOUT_MS = 5_000;
 
 export type CompiledSkillComponent = ThreadCompiledComponent;
-
-/** A body's markdown node lists its nested invocations, found by the thread parser, for the daemon to resolve. */
-function childMarkdown(source: string): ThreadComponentNode {
-  const components: Record<string, null> = {};
-  const walk = (blocks: ParsedBlock[]) => {
-    for (const block of blocks) {
-      if (block.type === "component") components[block.text] = null;
-      else if (block.type === "notice" || block.type === "details" || block.type === "plan") {
-        walk(parseBlocks(block.text, { profile: "thread" }));
-      } else if (block.type === "ul" || block.type === "ol") {
-        for (const item of block.items) walk(item.children);
-      }
-    }
-  };
-  walk(parseBlocks(source, { profile: "thread" }));
-  return { $workbench: "element", type: "workbench:markdown", props: { source, components } };
-}
 
 export async function compileSkillTemplate(file: string, rootPath = path.dirname(file)): Promise<CompiledSkillComponent> {
   const entry = await realpath(file);
@@ -237,88 +219,42 @@ export async function compileSkillMcpMatchers(files: readonly string[], rootPath
   return { code: built.outputFiles[0]!.text, inputs: [...new Set([...inputs, ...entries])] };
 }
 
-/** The sandboxed program evaluating a compiled template; `body` builds `__wbResult.exports` from `__wbDefault`. */
-function templateProgram(compiled: CompiledSkillComponent, body: string) {
-  return `
-    const __wbTemplate = { exports: {} };
-    (function(module, exports) { ${compiled.code}\n })(__wbTemplate, __wbTemplate.exports);
-    const __wbDefault = __wbTemplate.exports.default;
-    if (typeof __wbDefault !== "function") throw new Error("Component must have a default function export.");
-    const __wbResult = { exports: {} };
-    ${body}
-    JSON.stringify(__wbResult.exports, (_key, value) => {
-      if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
-        throw new Error("Component output contains a non-serializable function or value.");
-      }
-      return value;
-    });
-  `;
+/**
+ * One skill's components as one script for the sandboxed runtime: each compiled template runs in its own module scope
+ * and registers its default export by name on `__wbSkillComponents`.
+ */
+export async function compileSkillComponents(
+  components: readonly { name: string; file: string }[], rootPath: string,
+): Promise<CompiledSkillComponent> {
+  const compiled = await Promise.all(components.map(async ({ name, file }) => ({ name, compiled: await compileSkillTemplate(file, rootPath) })));
+  const code = [
+    "globalThis.__wbSkillComponents = {};",
+    ...compiled.map(({ name, compiled: template }) => `(function () {
+  var module = { exports: {} };
+  (function (module, exports) { ${template.code}\n })(module, module.exports);
+  globalThis.__wbSkillComponents[${JSON.stringify(name)}] = module.exports.default;
+})();`),
+  ].join("\n");
+  return { code, inputs: [...new Set(compiled.flatMap(({ compiled: template }) => template.inputs))] };
 }
 
-function runTemplateProgram(program: string, filename: string): ThreadComponentNode {
-  const serialized: unknown = new Script(program, { filename }).runInNewContext(Object.create(null), {
-    timeout: COMPONENT_EXECUTION_TIMEOUT_MS, contextCodeGeneration: { strings: false, wasm: false }, microtaskMode: "afterEvaluate",
-  });
-  if (typeof serialized !== "string") throw new Error("Component output must be a serializable element tree.");
-  return readThreadComponentTree(JSON.parse(serialized), { remoteImages: true });
+type QuickJSWASMModule = ConstructorParameters<typeof SkillComponentRuntime>[0];
+let quickjs: Promise<QuickJSWASMModule> | null = null;
+function loadQuickJS() {
+  quickjs ??= (async () => {
+    const core: { newQuickJSWASMModuleFromVariant(variant: unknown): Promise<QuickJSWASMModule> } = requireFromApp("quickjs-emscripten-core");
+    return await core.newQuickJSWASMModuleFromVariant(requireFromApp("@jitl/quickjs-wasmfile-release-sync"));
+  })();
+  return quickjs;
 }
 
-/** Render a template straight from props, as a call's component receives its call. */
-export function renderSkillComponentProps(compiled: CompiledSkillComponent, props: Readonly<Record<string, unknown>>): ThreadComponentNode {
-  return runTemplateProgram(templateProgram(compiled, `
-    const __wbCreateElement = (type, props, ...children) => {
-      const value = { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) };
-      return typeof type === "function" ? type(value) : { $workbench: "element", type, props: value };
-    };
-    __wbResult.exports = __wbCreateElement(__wbDefault, ${JSON.stringify(props)});
-  `), "component-props.cjs");
-}
-
-/** Several renders straight from props in one run, each from its named component, in request order. */
-export function renderSkillComponentPropsList(
-  components: Readonly<Record<string, CompiledSkillComponent>>,
-  renders: readonly { component: string; props: Readonly<Record<string, unknown>> }[],
-): ThreadComponentNode[] {
-  return renders.map(({ component, props }) => {
-    const compiled = components[component];
-    if (!compiled) throw new Error(`No compiled component ${component} was given.`);
-    return renderSkillComponentProps(compiled, props);
-  });
-}
-
-export async function renderSkillComponent(
-  compiled: CompiledSkillComponent, name: string, markup: string, results: Readonly<Record<string, unknown>> = {},
+/** One request rendered exactly as the browser renders it, in a runtime that lives only for the call. */
+export async function renderSkillComponentRequest(
+  bundles: readonly SkillComponentBundle[], request: SkillComponentRequest,
 ): Promise<ThreadComponentNode> {
-  if (!/^[A-Z][A-Za-z0-9_]*$/u.test(name)) throw new Error("Invalid component name.");
-  const parsed = readThreadComponentMarkup(markup);
-  if (!parsed || parsed.end !== markup.length || parsed.name !== name) throw new Error("Expected one complete component invocation.");
-  const opening = parsed.body === null ? parsed.opening : parsed.opening.replace(/>\s*$/u, " />");
-  const invocation = await esbuild.transform(`module.exports = (${opening});`, {
-    loader: "tsx", format: "cjs", jsx: "transform", jsxFactory: "__wbCreateElement", logLevel: "silent",
-  });
-  return runTemplateProgram(templateProgram(compiled, `
-    const __wbChildren = ${JSON.stringify(parsed.body === null ? null : childMarkdown(parsed.body.trim()))};
-    const __wbResults = ${JSON.stringify(results)};
-    const __wbResolve = value => {
-      if (typeof value === "string") {
-        const reference = /^@result:([A-Za-z0-9_-]{1,64})$/.exec(value);
-        if (!reference) return value;
-        if (!Object.hasOwn(__wbResults, reference[1])) throw new Error("No kept MCP result named " + reference[1] + " in this thread.");
-        return __wbResults[reference[1]];
-      }
-      if (Array.isArray(value)) return value.map(__wbResolve);
-      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, __wbResolve(item)]));
-      return value;
-    };
-    const __wbCreateElement = (type, props, ...children) => {
-      if (type === __wbDefault) props = __wbResolve(props ?? {});
-      if (type === __wbDefault && __wbChildren !== null) children = [__wbChildren];
-      const value = { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) };
-      return typeof type === "function" ? type(value) : { $workbench: "element", type, props: value };
-    };
-    (function(module, exports, __wbCreateElement, ${name}) { ${invocation.code}\n })
-      (__wbResult, __wbResult.exports, __wbCreateElement, __wbDefault);
-  `), "component-markup.cjs");
+  const runtime = new SkillComponentRuntime(await loadQuickJS(), bundles, { nestedInvocations: listMarkdownComponentInvocations });
+  try { return runtime.render(request); }
+  finally { runtime.dispose(); }
 }
 
 export async function renderSkillComponentPreview(
@@ -344,24 +280,19 @@ export async function renderSkillComponentPreview(
 }
 
 async function main() {
-  const [action, file, name, markup] = process.argv.slice(2);
-  if (action === "compile" && file) process.stdout.write(JSON.stringify(await compileSkillTemplate(file, name)));
-  else if (action === "styles" && file) {
+  const [action, file] = process.argv.slice(2);
+  if (action === "components" && file) {
+    const parsed = SkillComponentBuildSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
+    if (!parsed.success) throw new Error("Invalid component build.");
+    process.stdout.write(JSON.stringify(await compileSkillComponents(parsed.data.components, parsed.data.root)));
+  } else if (action === "styles" && file) {
     const parsed = conformToZodSchema(ThreadComponentStyleBuildSchema, JSON.parse(await readFile(file, "utf8")));
     if (!parsed.success || parsed.discardedPaths.length || parsed.repairedPaths.length) throw new Error("Invalid component style build.");
     process.stdout.write(JSON.stringify(await compileSkillStyles(parsed.data.files, parsed.data.root)));
-  }
-  else if (action === "render" && file) {
-    const parsed = conformToZodSchema(ThreadComponentRenderInputSchema, JSON.parse(await readFile(file, "utf8")));
-    if (!parsed.success || parsed.discardedPaths.length || parsed.repairedPaths.length) {
-      throw new Error("Component render input is invalid.");
-    }
-    const input = parsed.data;
-    process.stdout.write(JSON.stringify(await renderSkillComponent(input.compiled, input.name, input.markup, input.results)));
-  } else if (action === "render-props" && file) {
-    const parsed = SkillMcpComponentRenderInputSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
-    if (!parsed.success) throw new Error("Component props render input is invalid.");
-    process.stdout.write(JSON.stringify(renderSkillComponentPropsList(parsed.data.components, parsed.data.renders)));
+  } else if (action === "render" && file) {
+    const parsed = SkillComponentRenderInputSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
+    if (!parsed.success) throw new Error("Component render input is invalid.");
+    process.stdout.write(JSON.stringify(await renderSkillComponentRequest(parsed.data.bundles, parsed.data.request)));
   } else if (action === "matchers" && file) {
     const parsed = ThreadComponentStyleBuildSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
     if (!parsed.success) throw new Error("Invalid MCP matcher build.");
@@ -370,7 +301,7 @@ async function main() {
     const result = readThreadComponentPreview(JSON.parse(await readFile(file, "utf8")));
     process.stdout.write(JSON.stringify(await renderSkillComponentPreview(result)));
   } else {
-    throw new Error("Usage: skill-component-build.mts compile <file> | styles <input> | render <input> | render-props <input> | matchers <input> | preview <result>");
+    throw new Error("Usage: skill-component-build.mts components <input> | styles <input> | render <input> | matchers <input> | preview <result>");
   }
 }
 

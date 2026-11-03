@@ -30,6 +30,8 @@ test("grouped classes appear in browser output and generated Tailwind CSS", asyn
     .replaceAll("\\", "/");
   await mkdir(path.join(clientDirectoryPath, "static"), { recursive: true });
   await mkdir(path.join(clientDirectoryPath, "workbench", "voice"), { recursive: true });
+  await mkdir(path.join(clientDirectoryPath, "workbench", "skills"), { recursive: true });
+  await writeFile(path.join(clientDirectoryPath, "workbench", "skills", "skill-component-worker.ts"), "console.log('components');");
   await writeFile(path.join(clientDirectoryPath, "static", "index.html"), "<div></div>");
   await writeFile(path.join(clientDirectoryPath, "browser-entry.tsx"), [
     'document.body.className = "hover:(bg-red-500 text-white) [& li > details > summary]:(flex cursor-pointer)";',
@@ -232,6 +234,8 @@ test("a native source event rebuilds real esbuild output after creating a missin
   const client = path.join(repositoryRootPath, "app/client");
   await mkdir(path.join(client, "static"), { recursive: true });
   await mkdir(path.join(client, "workbench/voice"), { recursive: true });
+  await mkdir(path.join(client, "workbench/skills"), { recursive: true });
+  await writeFile(path.join(client, "workbench/skills/skill-component-worker.ts"), "console.log('components');");
   await writeFile(path.join(client, "static/index.html"), "<main></main>");
   await writeFile(path.join(client, "browser-entry.tsx"), "console.log('initial');");
   await writeFile(path.join(client, "tailwind.css"), "");

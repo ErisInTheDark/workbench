@@ -22,8 +22,7 @@
  * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry (including whole accepted-commit ref reads); actions route by thread unless they name another route.
  */
 import { z } from "zod";
-import { ThreadComponentRenderSchema, ThreadComponentStyleSchema } from "./thread-component-tree";
-import { SkillMcpComponentPropsSchema, SkillMcpMatcherCompilationSchema } from "../skills/skill-mcp-matcher-contract";
+import { SkillComponentTargetSchema, SkillExtensionsSchema } from "../skills/skill-component-contract";
 import type {
   ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry, WorkbenchThreadContextEntryScope, WorkbenchPendingUserInputRequest,
@@ -268,32 +267,25 @@ export const workbenchThreadActions = {
     params: WorkbenchThreadTargetSchema.extend({ sessionId: z.uuid(), controlId: VisControlIdSchema, value: VisControlValueSchema }),
     result: ok,
   },
-  "thread/components/render": {
-    params: WorkbenchThreadTargetSchema.extend({ itemId: z.string().min(1), markup: z.string().min(1).max(16_000) }),
-    result: ThreadComponentRenderSchema,
+  /** The thread's active skills' compiled matchers, components and styles, in catalogue order, and why any failed. */
+  "thread/skills/extensions": { params: WorkbenchThreadTargetSchema, result: SkillExtensionsSchema },
+  /** The thread's kept MCP results for the names it has; missing names are absent. */
+  "thread/components/results": {
+    params: WorkbenchThreadTargetSchema.extend({ names: z.array(z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u)).min(1).max(64) }),
+    result: z.object({ results: z.record(z.string(), z.unknown()) }).strict(),
   },
-  "thread/components/styles": {
-    params: WorkbenchThreadTargetSchema, result: z.object({ styles: z.array(ThreadComponentStyleSchema) }).strict(),
+  /** Public https images a component draws, as data URLs; null for any that failed, were not images, or were too big. */
+  "thread/components/images": {
+    params: WorkbenchThreadTargetSchema.extend({ urls: z.array(z.string().regex(/^https:\/\/[^\s"'()\\]+$/u)).min(1).max(32) }),
+    result: z.object({ images: z.record(z.string(), z.string().nullable()) }).strict(),
   },
-  /** One call's skill component, rendered once from the props the client built and kept on the call's item. */
-  "thread/components/render-call": {
-    params: WorkbenchThreadTargetSchema.extend({
-      itemId: z.string().min(1), skillPath: z.string().min(1), component: z.string().regex(/^[A-Z][A-Za-z0-9_]*$/u),
-      props: SkillMcpComponentPropsSchema,
-    }),
-    result: ThreadComponentRenderSchema,
+  /** Keep a component's tree on its item while its inputs live; the first kept tree stays. */
+  "thread/components/keep": {
+    params: WorkbenchThreadTargetSchema.extend({ target: SkillComponentTargetSchema, tree: z.unknown() }), result: ok,
   },
-  /** The skill components one call's line draws inline, each rendered once per props and kept on the call's item. */
-  "thread/components/render-inline": {
-    params: WorkbenchThreadTargetSchema.extend({
-      itemId: z.string().min(1), skillPath: z.string().min(1),
-      parts: z.array(z.object({ component: z.string().regex(/^[A-Z][A-Za-z0-9_]*$/u), props: SkillMcpComponentPropsSchema }).strict()).min(1).max(16),
-    }),
-    result: z.object({ renders: z.array(ThreadComponentRenderSchema) }).strict(),
-  },
-  /** The thread's active skills' compiled MCP matchers, in catalogue order, and why any failed to compile. */
-  "thread/components/matchers": {
-    params: WorkbenchThreadTargetSchema, result: SkillMcpMatcherCompilationSchema,
+  "thread/components/kept": {
+    params: WorkbenchThreadTargetSchema.extend({ target: SkillComponentTargetSchema }),
+    result: z.object({ tree: z.unknown() }).strict(),
   },
   "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },
   "thread/skills/deactivate": { params: WorkbenchThreadTargetSchema.extend({ path: z.string().min(1) }), result: skillsResult },

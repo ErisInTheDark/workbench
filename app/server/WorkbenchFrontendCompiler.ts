@@ -278,6 +278,7 @@ export default class WorkbenchFrontendCompiler {
       entryPoints: {
         app: path.join(this.appDirectoryPath, "browser-entry.tsx"),
         "voice-capture": path.join(this.appDirectoryPath, "workbench", "voice", "voice-capture-worklet.ts"),
+        "skill-components": path.join(this.appDirectoryPath, "workbench", "skills", "skill-component-worker.ts"),
       },
       format: "esm",
       jsx: "automatic",

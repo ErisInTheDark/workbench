@@ -174,16 +174,16 @@ class WorkbenchDaemonClient {
       control: (params: WorkbenchDaemonParams<"thread/vis/control">) => this.request("thread/vis/control", params),
     },
     components: {
-      render: (params: WorkbenchDaemonParams<"thread/components/render">) => this.request("thread/components/render", params),
-      renderCall: (params: WorkbenchDaemonParams<"thread/components/render-call">) => this.request("thread/components/render-call", params),
-      renderInline: (params: WorkbenchDaemonParams<"thread/components/render-inline">) => this.request("thread/components/render-inline", params),
-      matchers: (params: WorkbenchDaemonParams<"thread/components/matchers">) => this.request("thread/components/matchers", params),
-      styles: (params: WorkbenchDaemonParams<"thread/components/styles">, options?: WorkbenchDaemonRequestOptions) =>
-        this.request("thread/components/styles", params, options),
+      results: (params: WorkbenchDaemonParams<"thread/components/results">) => this.request("thread/components/results", params),
+      images: (params: WorkbenchDaemonParams<"thread/components/images">) => this.request("thread/components/images", params),
+      keep: (params: WorkbenchDaemonParams<"thread/components/keep">) => this.request("thread/components/keep", params),
+      kept: (params: WorkbenchDaemonParams<"thread/components/kept">) => this.request("thread/components/kept", params),
     },
     skills: {
       read: (params: WorkbenchDaemonParams<"thread/skills/read">) => this.request("thread/skills/read", params),
       deactivate: (params: WorkbenchDaemonParams<"thread/skills/deactivate">) => this.request("thread/skills/deactivate", params),
+      extensions: (params: WorkbenchDaemonParams<"thread/skills/extensions">, options?: WorkbenchDaemonRequestOptions) =>
+        this.request("thread/skills/extensions", params, options),
     },
   };
 
