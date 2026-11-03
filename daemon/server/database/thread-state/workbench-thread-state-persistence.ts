@@ -47,6 +47,8 @@ export interface WorkbenchStoredThreadDraft {
 export interface WorkbenchThreadStateCommit {
   projectId?: ProjectId;
   records?: readonly WorkbenchThreadStateRecord[];
+  /** Subagents whose top-level records in `records` promote them; any other subagent refuses a top-level write. */
+  promotedThreadIds?: readonly WorkbenchThreadId[];
   deletedThreadIds?: readonly WorkbenchThreadId[];
   drafts?: readonly WorkbenchStoredThreadDraft[];
   deletedDraftIds?: readonly DraftId[];

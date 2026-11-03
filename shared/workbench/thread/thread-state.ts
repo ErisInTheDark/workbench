@@ -6,6 +6,7 @@
  * - WorkbenchSidebarGitArcSchema/WorkbenchSidebarGitArc: the lean Git work sidebar rows and pinned summaries carry.
  * - WorkbenchGitArcProposalState/WorkbenchGitArcProposalSummary: one observed lifecycle proposal and its Git-derived message and totals.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
+ * - CommandActionSchema: one parsed action of an approval's command.
  * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
  * - WorkbenchShellQueueEntrySchema/WorkbenchShellQueueEntry: one live wb shell's expensive-queue timing.
  * - WorkbenchShellOutputEntrySchema/WorkbenchShellOutputEntry: one running wb shell's newest output.
@@ -505,7 +506,7 @@ export const WorkbenchDurableQuestionnaireSchema = z.object({
 }).strict();
 export type WorkbenchDurableQuestionnaire = z.infer<typeof WorkbenchDurableQuestionnaireSchema>;
 
-const CommandActionSchema = z.discriminatedUnion("type", [
+export const CommandActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("read"), command: z.string(), name: z.string(), path: z.string() }).strict(),
   z.object({ type: z.literal("listFiles"), command: z.string(), path: z.string().nullable() }).strict(),
   z.object({ type: z.literal("search"), command: z.string(), query: z.string().nullable(), path: z.string().nullable() }).strict(),

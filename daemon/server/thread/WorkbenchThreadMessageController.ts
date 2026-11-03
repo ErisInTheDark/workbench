@@ -69,12 +69,9 @@ export interface WorkbenchThreadMessageControllerOptions {
   };
 }
 
+/** Names no workflow, so the child keeps the one it was created with. */
 function buildSubagentPromptContext(name: string, workbenchOrigin: string | undefined): WorkbenchMessageContext {
-  return {
-    subagentName: name,
-    workbenchOrigin: workbenchOrigin ?? null,
-    workflowIds: ["subagent"],
-  };
+  return { subagentName: name, workbenchOrigin: workbenchOrigin ?? null };
 }
 
 export default class WorkbenchThreadMessageController {

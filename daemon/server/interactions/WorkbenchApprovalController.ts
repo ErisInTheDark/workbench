@@ -3,7 +3,7 @@
  * - WorkbenchApprovalControllerOptions: lifecycle, presentation, saved-rule, delivery, and outcome ports.
  * - WorkbenchApprovalOpenResult: whether an opened approval was decided automatically, shown, or closed meanwhile.
  * - WorkbenchApprovalHandoff: opaque pending-approval state a successor controller adopts across core reloads.
- * - default WorkbenchApprovalController: own every live approval across providers, auto-allow patches inside approved claims, apply the thread's approval mode, and wait in-process for Workbench-hosted ones; transports only adapt native requests and decisions.
+ * - default WorkbenchApprovalController: own every live approval across providers, auto-allow patches inside approved claims, apply the thread's approval mode, wait in-process for Workbench-hosted ones, and expose shown requests a parent agent may decide for its child; transports only adapt native requests and decisions.
  */
 import { randomUUID } from "node:crypto";
 import type {
@@ -67,6 +67,7 @@ type PendingApproval = {
   turnId: WorkbenchTurnId | null;
   itemId: string | null;
   requestKey: string;
+  subject: WorkbenchApprovalSubject;
   request: WorkbenchUserInputRequest | null;
   remember: { projectId: ProjectId; workdir: string; candidates: RememberCandidate[] } | null;
   status: "opening" | "shown" | "responding";
@@ -162,7 +163,7 @@ export default class WorkbenchApprovalController {
     if (existing) return { kind: "shown" };
     const entry: PendingApproval = {
       harness: input.harness, threadId: input.threadId, turnId: input.turnId, itemId: input.itemId,
-      requestKey: input.requestKey, request: null, remember: null, status: "opening", waiter,
+      requestKey: input.requestKey, subject: input.subject, request: null, remember: null, status: "opening", waiter,
     };
     this.pending.set(key(input.harness, input.requestKey), entry);
     const isCurrent = () => this.pending.get(key(input.harness, input.requestKey)) === entry && !this.shared.ended;
@@ -234,10 +235,15 @@ export default class WorkbenchApprovalController {
     }] : []);
   }
 
+  /** One thread's shown approvals with what each asks, for a parent forwarding or denying its child's. */
+  pendingFor(threadId: string): Array<{ requestKey: string; subject: WorkbenchApprovalSubject }> {
+    return [...this.pending.values()].flatMap(entry => entry.threadId === threadId && entry.status === "shown"
+      ? [{ requestKey: entry.requestKey, subject: entry.subject }] : []);
+  }
+
   async respond(input: { threadId: string; requestKey: string; response: WorkbenchUserInputResponse }) {
-    const entry = [...this.pending.values()].find(candidate => candidate.threadId === input.threadId && candidate.requestKey === input.requestKey);
-    if (!entry || entry.status !== "shown" || !entry.request) throw new Error("That approval is no longer pending.");
-    const question = entry.request.questions.find(candidate => candidate.id === WORKBENCH_APPROVAL_DECISION_QUESTION_ID);
+    const entry = this.shownEntry(input.threadId, input.requestKey);
+    const question = entry.request!.questions.find(candidate => candidate.id === WORKBENCH_APPROVAL_DECISION_QUESTION_ID);
     const offered = new Set(question?.options.map(option => option.label) ?? []);
     const selected = (input.response.answers[WORKBENCH_APPROVAL_DECISION_QUESTION_ID]?.answers ?? []).filter(answer => offered.has(answer));
     if (selected.length !== 1) throw new Error("Choose exactly one offered approval option.");
@@ -249,13 +255,27 @@ export default class WorkbenchApprovalController {
         ? { kind: "allowSession" }
         : choice === WORKBENCH_APPROVAL_DECLINE_LABEL ? { kind: "decline" } : null;
     if (!decision) throw new Error("Choose exactly one offered approval option.");
+    return await this.settle(entry, decision, remembered && entry.remember
+      ? () => this.options.commandApprovals.save(entry.remember!.projectId, entry.remember!.workdir, remembered.prefix) : null);
+  }
+
+  /** Decide a shown approval without its questionnaire, as a parent agent does for its child; nothing is remembered. */
+  async decide(input: { threadId: string; requestKey: string; decision: WorkbenchApprovalDecision }) {
+    return await this.settle(this.shownEntry(input.threadId, input.requestKey), input.decision, null);
+  }
+
+  private shownEntry(threadId: string, requestKey: string) {
+    const entry = [...this.pending.values()].find(candidate => candidate.threadId === threadId && candidate.requestKey === requestKey);
+    if (!entry || entry.status !== "shown" || !entry.request) throw new Error("That approval is no longer pending.");
+    return entry;
+  }
+
+  private async settle(entry: PendingApproval, decision: WorkbenchApprovalDecision, remember: (() => Promise<unknown>) | null) {
     const gone = () => new Error("That approval is no longer pending.");
     const isCurrent = () => this.pending.get(key(entry.harness, entry.requestKey)) === entry && !this.shared.ended;
     entry.status = "responding";
     try {
-      if (remembered && entry.remember) {
-        await this.options.commandApprovals.save(entry.remember.projectId, entry.remember.workdir, remembered.prefix);
-      }
+      if (remember) await remember();
       try {
         await this.options.collectAnswerContext(entry.harness, entry.threadId, this.lifetime.signal);
       } catch (error) {

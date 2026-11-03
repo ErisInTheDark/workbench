@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchSubagentControllerOptions: provider operations, durable store, message-wait observations, settle handover ports and validated project dependencies.
- * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, and waits that end on caller abort or runtime drain; children in other folders or on other daemons go through WorkbenchRemoteSubagents.
+ * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, one-way promotion into top-level threads, forwarding or denying children's approvals, and waits that end on caller abort or runtime drain; children in other folders or on other daemons go through WorkbenchRemoteSubagents.
  */
 import { randomUUID } from "node:crypto";
 
@@ -38,6 +38,8 @@ import type { RemoteChildRow } from "workbench-shared/workbench/network/network-
 import { formatUntrustedRemoteOutput } from "../network/network-untrusted-output";
 import type WorkbenchRemoteSubagents from "./WorkbenchRemoteSubagents";
 import type { RemoteSubagentNetwork } from "./WorkbenchRemoteSubagents";
+import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
+import { resolveSubagentApproval, type SubagentApprovalChoice } from "./subagent-approvals";
 
 interface PendingQuestionnaireList {
   data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
@@ -83,6 +85,14 @@ export interface WorkbenchSubagentControllerOptions {
   /** Settle handover: move every todo from one thread to another, returning the ids they received. */
   moveTodos?(fromThreadId: WorkbenchThreadId, toThreadId: WorkbenchThreadId): Promise<number[]>;
   messageWaits?: Pick<WorkbenchMessageWaitController, "isWaitingFor" | "subscribePending">;
+  /** One way into a top-level thread for a child in this folder; refuses settled children. */
+  promoteThread?(threadId: WorkbenchThreadId): Promise<void>;
+  /** Shown outside-sandbox requests: read and decide a child's, and ask the user on a parent's thread. */
+  approvals?: {
+    pendingFor(threadId: WorkbenchThreadId): ReadonlyArray<{ requestKey: string; subject: WorkbenchApprovalSubject }>;
+    decide(input: { threadId: WorkbenchThreadId; requestKey: string; decision: WorkbenchApprovalDecision }): Promise<unknown>;
+    ask(parent: { harness: WorkbenchHarness; threadId: WorkbenchThreadId }, subject: WorkbenchApprovalSubject, signal: AbortSignal): Promise<WorkbenchApprovalDecision>;
+  };
   /** Children in other folders or on other daemons; absent where no relay exists. */
   remote?: WorkbenchRemoteSubagents;
   network?: Pick<RemoteSubagentNetwork, "self">;
@@ -155,6 +165,8 @@ export default class WorkbenchSubagentController {
   private readonly messageWaits: WorkbenchSubagentControllerOptions["messageWaits"];
   private readonly remote: WorkbenchSubagentControllerOptions["remote"];
   private readonly network: WorkbenchSubagentControllerOptions["network"];
+  private readonly promoteThread: WorkbenchSubagentControllerOptions["promoteThread"];
+  private readonly approvals: WorkbenchSubagentControllerOptions["approvals"];
   /** Aborts every wait when the runtime drains, so long waits re-enter the next generation. */
   private readonly lifetime = new AbortController();
   private active = true;
@@ -179,9 +191,13 @@ export default class WorkbenchSubagentController {
     messageWaits,
     remote,
     network,
+    promoteThread,
+    approvals,
   }: WorkbenchSubagentControllerOptions) {
     this.remote = remote;
     this.network = network;
+    this.promoteThread = promoteThread;
+    this.approvals = approvals;
     this.provider = provider;
     this.liveApprovals = liveApprovals;
     this.publicThreadId = publicThreadId;
@@ -224,6 +240,12 @@ export default class WorkbenchSubagentController {
       if (message.method === "workbench/subagent/wait") {
         const signal = callerSignal ? AbortSignal.any([callerSignal, this.lifetime.signal]) : this.lifetime.signal;
         return { id, result: await untilAborted(this.canonicalParams(params).then(canonical => this.wait(canonical, signal)), signal) };
+      }
+      if (message.method === "workbench/subagent/approval" || message.method === "workbench/subagent/promote") {
+        const signal = callerSignal ? AbortSignal.any([callerSignal, this.lifetime.signal]) : this.lifetime.signal;
+        await this.canonicalParams(params);
+        return { id, result: message.method === "workbench/subagent/approval"
+          ? await this.approval(params, signal) : await this.promote(params, signal) };
       }
       await this.canonicalParams(params);
       switch (message.method) {
@@ -692,6 +714,50 @@ export default class WorkbenchSubagentController {
   private withQueueNote(threadId: WorkbenchThreadId, output: string) {
     const note = this.queueReleaseNote?.(threadId);
     return note ? `${output}\n\nQueue: ${note}` : output;
+  }
+
+  /** One way: each child becomes a user-owned top-level thread and leaves this parent, freeing its name. */
+  private async promote(params: Record<string, unknown>, signal: AbortSignal) {
+    const records = await this.ownedRecords(params);
+    const caller = records.some(record => record.location) ? await this.remoteCaller(params) : null;
+    const lines: string[] = [];
+    for (const record of records) {
+      const threadId = record.location ? record.threadId : await this.publicThreadId(record.threadId, record.projectId);
+      try {
+        if (record.location) await this.requireRemote().promote(caller!, record, signal);
+        else if (this.promoteThread) await this.promoteThread(record.threadId);
+        else throw new Error("promotion is unavailable in this runtime.");
+        await this.subagentStore.remove(record.parentThreadId, record.threadId);
+        lines.push(`${record.name} is now a sidebar thread (${threadId}); you no longer manage it. Message it by thread id.`);
+      } catch (error) {
+        lines.push(`${record.name} was not promoted: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (caller) await this.requireRemote().pushRosters(caller, signal);
+    return { output: lines.join("\n") };
+  }
+
+  /** Forward one child's outside-sandbox request to the user on this thread, or deny it. */
+  private async approval(params: Record<string, unknown>, signal: AbortSignal) {
+    const approvals = this.approvals;
+    if (!approvals) throw new Error("Subagent approvals are unavailable in this runtime.");
+    const records = await this.ownedRecords(params);
+    if (records.length !== 1) throw new Error("Name exactly one subagent.");
+    const record = records[0]!;
+    const text = (key: string) => typeof params[key] === "string" && params[key].trim() ? params[key].trim() : null;
+    const choice: SubagentApprovalChoice = params.decision === "deny"
+      ? { kind: "deny", feedback: text("feedback") }
+      : { kind: "forward", justification: text("justification") };
+    const parent = await this.resolveCaller(params);
+    const remote = record.location ? { owner: this.requireRemote(), caller: await this.remoteCaller(params) } : null;
+    return { output: await resolveSubagentApproval({
+      name: record.name,
+      read: async () => remote ? await remote.owner.approvals(remote.caller, record, signal) : approvals.pendingFor(record.threadId),
+      decide: async (requestKey, decision) => remote
+        ? await remote.owner.decideApproval(remote.caller, record, requestKey, decision, signal)
+        : await approvals.decide({ threadId: record.threadId, requestKey, decision }),
+      ask: (subject, askSignal) => approvals.ask({ harness: parent.harness, threadId: parent.callerThreadId }, subject, askSignal),
+    }, choice, signal) };
   }
 
   private async stop(params: Record<string, unknown>, signal: AbortSignal) {

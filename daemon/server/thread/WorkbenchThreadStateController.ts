@@ -2123,6 +2123,33 @@ export default class WorkbenchThreadStateController {
   }
 
   /**
+   * One way: an unsettled subagent becomes a top-level thread, keeping its turn, Git work and questions. The subagent lock
+   * is dropped, since top-level pins are app-owned; ending the parent relationship is the caller's.
+   */
+  async promoteSubagent(projectId: ProjectId, identity: { harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }) {
+    projectId = this.canonicalProjectId(projectId);
+    const state = await this.getProject(projectId);
+    const key = getThreadDisplayThreadKey(identity.harness, identity.threadId);
+    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+      const entry = state.entries.get(key);
+      if (entry?.entryKind !== "subagent" || entry.lifecycle.settled) return { accepted: false };
+      const {
+        createdAt: _createdAt, cwd: _cwd, directSubagentIndex: _index, name: _name, parentThreadId: _parent,
+        parentDaemonId: _parentDaemon, parentHostname: _parentHost, pinned: _pinned, profileId: _profileId,
+        profileName: _profileName, projectId: _projectId, updatedAt: _updatedAt, ...thread
+      } = entry;
+      const parsed = safeParseWorkbenchThreadStateEntry({
+        ...thread, entryKind: "thread", metadata: { archived: false, pinned: false, snoozed: false },
+      });
+      if (!parsed.success) return { accepted: false };
+      state.entries.set(key, parsed.data);
+      await this.persist(projectId, state, [key], { promotedThreadIds: [identity.threadId] });
+      this.publish(projectId, state, state.entries.get(key));
+      return { accepted: true };
+    });
+  }
+
+  /**
    * Loading and reconciling normally change a few threads; rewriting most of a project holds the database writer, so a
    * bulk rewrite names where the first rewritten thread differed.
    */
@@ -2143,7 +2170,7 @@ export default class WorkbenchThreadStateController {
     projectId: ProjectId,
     state: ProjectState,
     keys: Iterable<string>,
-    options: { layout?: boolean; profile?: boolean } = {},
+    options: { layout?: boolean; profile?: boolean; promotedThreadIds?: readonly WorkbenchThreadId[] } = {},
   ) {
     return state.commit(projectId, keys, options, {
       beforeWrite: () => this.assertActive(),

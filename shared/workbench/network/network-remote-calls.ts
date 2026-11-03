@@ -5,10 +5,12 @@
  * - RemoteCallSchema/RemoteCall: every call a daemon executes for another daemon's thread; anything else is refused.
  * - RemoteCallOutcomeSchema/RemoteCallOutcome: a call's text or data, a denial naming the grant it needs, or a failure.
  * - RemoteChildRowSchema/RemoteChildRow: a remote child's lifecycle as its own daemon reports it to the parent.
+ * - RemoteChildApprovalSchema/RemoteChildApproval: one shown outside-sandbox request of a remote child.
  */
 import { z } from "zod";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "../identity";
 import { WorkbenchThreadLifecycleSchema } from "../thread/thread-state";
+import { WorkbenchApprovalDecisionSchema, WorkbenchApprovalSubjectSchema } from "../provider/provider-approval";
 import { NetworkNeedSchema } from "./network-grants";
 
 const text = z.string().trim().min(1);
@@ -47,6 +49,13 @@ export const RemoteCallSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("childStop"), threadIds: z.array(WorkbenchThreadIdSchema).min(1) }).strict(),
   z.object({ kind: z.literal("childSettle"), threadId: WorkbenchThreadIdSchema }).strict(),
   z.object({ kind: z.literal("siblingRoster"), threadId: WorkbenchThreadIdSchema, siblings: z.array(SiblingRosterEntrySchema) }).strict(),
+  /** One way: the child becomes a top-level thread on its own daemon and leaves its parent. */
+  z.object({ kind: z.literal("childPromote"), threadId: WorkbenchThreadIdSchema }).strict(),
+  /** The child's shown outside-sandbox requests, for its parent to forward or deny. */
+  z.object({ kind: z.literal("childApprovals"), threadId: WorkbenchThreadIdSchema }).strict(),
+  z.object({
+    kind: z.literal("childApprovalDecide"), threadId: WorkbenchThreadIdSchema, requestKey: text, decision: WorkbenchApprovalDecisionSchema,
+  }).strict(),
   /** A remote child tells its parent's daemon that its lifecycle changed, waking the parent's waits. */
   z.object({ kind: z.literal("childChanged") }).strict(),
   /** A remote child's `wb subagent queue|dequeue`, executed by its parent's daemon. */
@@ -67,6 +76,9 @@ export const RemoteChildRowSchema = z.object({
   needsInteraction: z.boolean(),
 }).strict();
 export type RemoteChildRow = z.infer<typeof RemoteChildRowSchema>;
+
+export const RemoteChildApprovalSchema = z.object({ requestKey: text, subject: WorkbenchApprovalSubjectSchema }).strict();
+export type RemoteChildApproval = z.infer<typeof RemoteChildApprovalSchema>;
 
 export const RemoteCallOutcomeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("ok"), text: z.string().nullable(), data: z.json().nullable() }).strict(),

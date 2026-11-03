@@ -96,6 +96,13 @@ const SUBAGENT_ACTION_METHODS = {
   stop: "workbench/subagent/stop",
 } as const;
 
+/** Actions that answer in text and may wait, so they follow the caller's cancellation. */
+const SUBAGENT_TEXT_ACTION_METHODS = {
+  approval: "workbench/subagent/approval",
+  promote: "workbench/subagent/promote",
+  wait: "workbench/subagent/wait",
+} as const;
+
 async function readBody(request: http.IncomingMessage, limit = MAX_REQUEST_BODY_BYTES) {
   const chunks: Buffer[] = [];
   let length = 0;
@@ -556,7 +563,8 @@ export default class WorkbenchAgentCommandController {
     }
 
     const action = typeof body.action === "string" ? body.action : "";
-    if (action !== "wait") {
+    const textMethod = SUBAGENT_TEXT_ACTION_METHODS[action as keyof typeof SUBAGENT_TEXT_ACTION_METHODS];
+    if (!textMethod) {
       const method = SUBAGENT_ACTION_METHODS[action as keyof typeof SUBAGENT_ACTION_METHODS];
       if (!method) {
         return Response.json({ error: "Unsupported Workbench subagent action." }, { status: 400 });
@@ -568,7 +576,7 @@ export default class WorkbenchAgentCommandController {
       return Response.json(response.result ?? {});
     }
 
-    const response = await requestManagedThread({ id: 0, method: "workbench/subagent/wait", params: body }, signal);
+    const response = await requestManagedThread({ id: 0, method: textMethod, params: body }, signal);
     if (response.error) {
       return Response.json({ error: response.error.message }, { status: 400 });
     }
@@ -576,7 +584,7 @@ export default class WorkbenchAgentCommandController {
       ? response.result as { output?: unknown }
       : null;
     if (typeof result?.output !== "string") {
-      return Response.json({ error: "Workbench subagent wait returned no output." }, { status: 400 });
+      return Response.json({ error: `Workbench subagent ${action} returned no output.` }, { status: 400 });
     }
     return new Response(result.output, {
       headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },

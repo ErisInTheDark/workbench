@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSubagentFeatureContext: current-generation project, relationship, settle handover and thread-state ports.
+ * - WorkbenchSubagentFeatureContext: current-generation project, relationship, settle handover, promotion, approval and thread-state ports.
  * - default WorkbenchSubagentFeature: own the reloadable subagent controller, its cross-folder and cross-daemon children, and the
  *   durable relationship-store wrapper.
  */
@@ -15,12 +15,12 @@ import type WorkbenchThreadIdentityController from "../thread/WorkbenchThreadIde
 import type { WorkbenchSubagentControllerOptions } from "./WorkbenchSubagentController";
 import type { WorkbenchSubagentPersistence } from "../database/thread-state/workbench-thread-state-persistence";
 import type { ProjectId, ThreadReference, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import WorkbenchRemoteSubagents, { type RemoteSubagentNetwork } from "./WorkbenchRemoteSubagents";
 
 export interface WorkbenchSubagentFeatureContext {
   identities: WorkbenchThreadIdentityController;
   provider: WorkbenchSubagentControllerOptions["provider"];
-  liveApprovals: NonNullable<WorkbenchSubagentControllerOptions["liveApprovals"]>;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: WorkbenchComposerProfileStore;
   resolveProjectFromCwd: AgentEndpointProjectResolver;
@@ -35,6 +35,12 @@ export interface WorkbenchSubagentFeatureContext {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     mutate(request: WorkbenchThreadStateRequest): Promise<{ accepted: boolean }>;
     subscribe(listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void): () => void;
+  };
+  /** One way into a top-level thread; a former parent on another daemon stays in its network history. */
+  promoteThread(threadId: WorkbenchThreadId, formerParent: NetworkTarget | null): Promise<void>;
+  /** Live Workbench-owned approvals: listed, read and decided per thread, and asked on a parent's thread. */
+  approvals: NonNullable<WorkbenchSubagentControllerOptions["approvals"]> & {
+    list: NonNullable<WorkbenchSubagentControllerOptions["liveApprovals"]>;
   };
   /** Relayed calls to other folders and daemons. */
   network: RemoteSubagentNetwork;
@@ -70,12 +76,18 @@ export default class WorkbenchSubagentFeature {
       installChild: context.onRelationshipCommitted,
       threadState: context.threadState,
       stopThread: context.stopThread,
+      promoteThread: context.promoteThread,
+      approvals: {
+        list: context.approvals.list,
+        pendingFor: threadId => [...context.approvals.pendingFor(threadId)],
+        decide: context.approvals.decide,
+      },
       workbenchOrigin: context.workbenchOrigin,
       warn: message => { console.warn("[remote-subagents]", message.slice(0, 500)); },
     });
     this.controller = new WorkbenchSubagentController({
       provider: context.provider,
-      liveApprovals: context.liveApprovals,
+      liveApprovals: context.approvals.list,
       identities: context.identities,
       remote: this.remote,
       network: context.network,
@@ -91,6 +103,8 @@ export default class WorkbenchSubagentFeature {
       moveTodos: context.moveTodos,
       threadState: context.threadState,
       messageWaits: context.messageWaits,
+      promoteThread: threadId => context.promoteThread(threadId, null),
+      approvals: context.approvals,
     });
   }
 

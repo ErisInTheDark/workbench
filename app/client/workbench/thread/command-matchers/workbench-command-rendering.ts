@@ -88,6 +88,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "subagent_wait",
   "subagent_stop",
   "subagent_settle",
+  "subagent_promote",
+  "subagent_approval",
   "subagent_queue",
   "subagent_dequeue",
   "task_get",

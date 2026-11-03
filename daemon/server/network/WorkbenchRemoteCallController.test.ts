@@ -33,6 +33,9 @@ function harness(options: {
     recall: async () => { executed.push("recall"); return "history"; },
     message: async () => { executed.push("message"); },
     childStop: async () => { executed.push("stop"); },
+    childPromote: async () => { executed.push("promote"); },
+    childApprovals: () => { executed.push("approvals"); return []; },
+    childApprovalDecide: async () => { executed.push("decide"); },
     subagentCreate: async () => { executed.push("create"); return { threadId: id("child"), cwd: "/p", harness: "codex" }; },
     release: async () => { executed.push("release"); return 0; },
   } as unknown as RemoteCallPorts;
@@ -71,6 +74,22 @@ test("only a child's recorded parent may stop it", async () => {
   assert.equal((await run(controller, { kind: "childStop", threadIds: [id("child")] }, { ...caller, daemonId: self })).kind, "denied");
   assert.equal((await run(controller, { kind: "childStop", threadIds: [id("child")] })).kind, "ok");
   assert.deepEqual(executed, ["stop"]);
+});
+
+test("only a child's recorded parent may promote it or read and decide its approvals; a thread grant is not enough", async () => {
+  const calls: RemoteCall[] = [
+    { kind: "childPromote", threadId: id("child") },
+    { kind: "childApprovals", threadId: id("child") },
+    { kind: "childApprovalDecide", threadId: id("child"), requestKey: "key", decision: { kind: "allowOnce" } },
+  ];
+  const stranger = harness({
+    threads: { child: { threadId: id("caller"), daemonId: remote } }, grants: [grant({ targetThreadId: id("child") })],
+  });
+  for (const call of calls) assert.equal((await run(stranger.controller, call, { ...caller, threadId: id("stranger") })).kind, "denied");
+  assert.deepEqual(stranger.executed, []);
+  const parent = harness({ threads: { child: { threadId: id("caller"), daemonId: remote } } });
+  for (const call of calls) assert.equal((await run(parent.controller, call)).kind, "ok");
+  assert.deepEqual(parent.executed, ["promote", "approvals", "decide"]);
 });
 
 test("a sibling on the child's parent-pushed roster may message it; anyone else needs a grant and gets no prompt-free path", async () => {

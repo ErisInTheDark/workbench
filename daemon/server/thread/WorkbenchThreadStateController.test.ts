@@ -3130,6 +3130,30 @@ test("provider rows cannot end or revive a lifecycle whose turn Workbench knows"
   }
 });
 
+test("promotion turns an unsettled subagent into a top-level thread that keeps its turn, and refuses settled ones", async () => {
+  const { child, controller, project, read, working } = lifecycleFixture("subagent-promotion");
+  const identity = { harness: "codex" as const, threadId: fixtureThreadIds["child"] };
+  try {
+    await controller.ensureProviderEntry(project, { ...child(working("child-turn")), pinned: true });
+    assert.deepEqual(await controller.promoteSubagent(project, identity), { accepted: true });
+    const promoted = await read("child");
+    assert.equal(promoted?.entryKind, "thread");
+    assert.deepEqual(promoted?.lifecycle, working("child-turn"));
+    assert.deepEqual(promoted?.entryKind === "thread" ? promoted.metadata : null, { archived: false, pinned: false, snoozed: false });
+    assert.deepEqual(await controller.promoteSubagent(project, identity), { accepted: false }, "promotion is one way");
+  } finally {
+    await controller.dispose();
+  }
+  const settled = lifecycleFixture("settled-subagent-promotion");
+  try {
+    await settled.controller.ensureProviderEntry(settled.project, settled.child({ kind: "completed", reason: "userCompleted", settled: true }));
+    assert.deepEqual(await settled.controller.promoteSubagent(settled.project, identity), { accepted: false });
+    assert.equal((await settled.read("child"))?.entryKind, "subagent");
+  } finally {
+    await settled.controller.dispose();
+  }
+});
+
 test("provider rows still end a working lifecycle whose turn Workbench cannot identify", async () => {
   const { child, controller, project, read, top, working } = lifecycleFixture("unknown-turn-lifecycle");
   try {

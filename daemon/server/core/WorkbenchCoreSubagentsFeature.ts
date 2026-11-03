@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchCoreSubagentsFeature: build subagent relationships and settle/handover, agent messages and their waits, and subagent turn queues.
+ * - default WorkbenchCoreSubagentsFeature: build subagent relationships and settle/handover, promotion, approval forwarding, agent messages and their waits, and subagent turn queues.
  */
-import { ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
 import type WorkbenchApprovalController from "../interactions/WorkbenchApprovalController";
@@ -37,10 +37,10 @@ export default class WorkbenchCoreSubagentsFeature {
     projectCatalog: WorkbenchProjectCatalogController;
     profileStore: WorkbenchComposerProfileStore;
     threadState: WorkbenchThreadStateFeature;
-    facts: Pick<WorkbenchThreadFactsFeature, "settlementHold" | "todos" | "networkHistory">;
+    facts: Pick<WorkbenchThreadFactsFeature, "settlementHold" | "todos" | "networkHistory" | "instructionSelection">;
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
     /** Built after this feature, read at call time. */
-    approvals: () => Pick<WorkbenchApprovalController, "list">;
+    approvals: () => Pick<WorkbenchApprovalController, "list" | "pendingFor" | "decide" | "request">;
     questionnaires: () => Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver">;
     threadActions: () => Pick<WorkbenchThreadActionController, "stopThread">;
     network: WorkbenchCoreNetworkFeature;
@@ -76,7 +76,29 @@ export default class WorkbenchCoreSubagentsFeature {
       },
       moveTodos: (fromThreadId, toThreadId) => facts.todos.moveAll(fromThreadId, toThreadId),
       provider: harness => lookup.provider(harness),
-      liveApprovals: () => ports.approvals().list(),
+      approvals: {
+        list: () => ports.approvals().list(),
+        pendingFor: threadId => ports.approvals().pendingFor(threadId),
+        decide: input => ports.approvals().decide(input),
+        ask: async (parent, subject, signal) => {
+          const turn = await lookup.provider(parent.harness).threads.latestTurn(parent.threadId);
+          return await ports.approvals().request({
+            harness: parent.harness, threadId: parent.threadId, itemId: null, subject,
+            turnId: turn?.status === "inProgress" ? WorkbenchTurnIdSchema.parse(turn.id) : null,
+          }, signal);
+        },
+      },
+      promoteThread: async (threadId, formerParent) => {
+        const identity = await identities.resolve({ threadId });
+        const harness = identity?.bindings[0]?.harness;
+        if (!identity || !harness) throw new Error("the subagent is not on this daemon.");
+        const { accepted } = await threadState.controller.promoteSubagent(identity.projectId, { harness, threadId });
+        if (!accepted) throw new Error("only an unsettled subagent can be promoted.");
+        // A proper thread runs the default workflow; its next message launches with it.
+        await facts.instructionSelection.record(threadId, { workflowIds: ["default"] });
+        if (formerParent) await facts.networkHistory.record(threadId, formerParent);
+        else await facts.networkHistory.refresh(threadId);
+      },
       onRelationshipCommitted: async (record) => {
         await threadState.installSubagentRelationship(record);
         // A parent on another daemon networks the child from its first moment, so apps reaching only this daemon see its summary alone.

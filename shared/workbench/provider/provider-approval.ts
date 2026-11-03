@@ -1,30 +1,37 @@
 /*
  * Exports:
- * - WorkbenchApprovalSubject: provider-neutral description of one action awaiting approval.
- * - WorkbenchApprovalDecision: Workbench decision a transport carries back to its native request.
+ * - WorkbenchApprovalSubjectSchema/WorkbenchApprovalSubject: provider-neutral description of one action awaiting approval.
+ * - WorkbenchApprovalDecisionSchema/WorkbenchApprovalDecision: Workbench decision a transport carries back to its native request.
  * - WorkbenchApprovalOutcome/WORKBENCH_APPROVAL_OUTCOMES: recorded per-tool-item approval result.
  * - WorkbenchApprovalOutcomeEntry: one recorded outcome bound to a stable transcript item identity.
  */
-import type { CommandAction } from "../thread/workbench-thread-items.ts";
+import { z } from "zod";
+import { CommandActionSchema } from "../thread/thread-state.ts";
 
-export type WorkbenchApprovalSubject =
-  | {
-    kind: "command";
-    command: string;
-    cwd: string;
-    commandActions: CommandAction[];
-    justification: string | null;
-    networkTarget: string | null;
+const text = z.string().max(100_000);
+
+export const WorkbenchApprovalSubjectSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("command"),
+    command: text,
+    cwd: text,
+    commandActions: z.array(CommandActionSchema),
+    justification: text.nullable(),
+    networkTarget: text.nullable(),
     /** Whether saved command rules may decide or be offered for this request. */
-    rememberable: boolean;
-  }
-  | { kind: "fileChange"; reason: string | null; grantRoot: string | null }
-  | { kind: "permissions"; cwd: string; reason: string | null; permissions: string | null }
-  | { kind: "patch"; reason: string | null; grantRoot: string | null; paths: string[] };
+    rememberable: z.boolean(),
+  }).strict(),
+  z.object({ kind: z.literal("fileChange"), reason: text.nullable(), grantRoot: text.nullable() }).strict(),
+  z.object({ kind: z.literal("permissions"), cwd: text, reason: text.nullable(), permissions: text.nullable() }).strict(),
+  z.object({ kind: z.literal("patch"), reason: text.nullable(), grantRoot: text.nullable(), paths: z.array(text) }).strict(),
+]);
+export type WorkbenchApprovalSubject = z.infer<typeof WorkbenchApprovalSubjectSchema>;
 
-export type WorkbenchApprovalDecision =
-  | { kind: "allowOnce" | "allowSession" }
-  | { kind: "decline"; feedback?: string };
+export const WorkbenchApprovalDecisionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.enum(["allowOnce", "allowSession"]) }).strict(),
+  z.object({ kind: z.literal("decline"), feedback: text.optional() }).strict(),
+]);
+export type WorkbenchApprovalDecision = z.infer<typeof WorkbenchApprovalDecisionSchema>;
 
 export const WORKBENCH_APPROVAL_OUTCOMES = ["approved", "autoApproved", "denied"] as const;
 export type WorkbenchApprovalOutcome = typeof WORKBENCH_APPROVAL_OUTCOMES[number];

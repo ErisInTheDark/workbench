@@ -58,6 +58,49 @@ test("subagent disposal drains admitted requests and rejects new admission", asy
   }
 });
 
+test("promotion ends the relationship only for children whose thread actually became top-level", async () => {
+  const parentThreadId = identitySchemas.WorkbenchThreadIdSchema.parse("parent");
+  const child = (name: string): WorkbenchSubagentRelationship => ({
+    createdAt: 1, updatedAt: 1, cwd: "C:/repo", directSubagentIndex: 0, harness: "codex", name, parentThreadId, projectId,
+    threadId: identitySchemas.WorkbenchThreadIdSchema.parse(name), profileId: "profile", profileName: "profile", title: name,
+  });
+  const children = [child("mira"), child("settled")];
+  const removed: string[] = [];
+  const controller = new WorkbenchSubagentController({
+    provider: () => { throw new Error("No provider turn is needed."); },
+    stopThread: async () => { throw new Error("No thread stop is needed."); },
+    onRelationshipCommitted: async () => {},
+    identities: {
+      knownThread: (threadId: string) => ({ threadId }) as never,
+      resolve: async ({ threadId }: { threadId: string }) => ({ threadId }) as never,
+    },
+    publicThreadId: async threadId => identitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    profileStore: { read: async () => ({ profiles: [] }), mutate: async () => { throw new Error("Unexpected profile mutation."); } },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: projectId, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    subagentStore: {
+      getOwnedMany: async (_parent, _project, ids) => children.filter(record => ids.includes(record.threadId)),
+      list: async () => ({ nextCursor: null, subagents: children }),
+      remove: async (_parent, threadId) => { removed.push(threadId); },
+      replace: async () => {}, reserve: async record => ({ ...record, directSubagentIndex: 0 }),
+    },
+    promoteThread: async threadId => { if (threadId === "settled") throw new Error("only an unsettled subagent can be promoted."); },
+  });
+  try {
+    const response = await controller.handleRequest({ id: 1, method: "workbench/subagent/promote", params: {
+      cwd: "C:/repo", callerThreadId: "parent", threadIds: ["mira", "settled"],
+    } });
+    assert.equal(response.error, undefined);
+    const output = (response.result as { output: string }).output;
+    assert.match(output, /mira is now a sidebar thread/u);
+    assert.match(output, /settled was not promoted: only an unsettled/u);
+    assert.deepEqual(removed, ["mira"]);
+  } finally { await controller.dispose(); }
+});
+
 test("Git adoption names resolve only an unsettled unlocked direct child", async () => {
   const parentThreadId = identitySchemas.WorkbenchThreadIdSchema.parse("parent");
   const childThreadId = identitySchemas.WorkbenchThreadIdSchema.parse("child");

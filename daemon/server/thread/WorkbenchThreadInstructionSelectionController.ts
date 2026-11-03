@@ -42,12 +42,13 @@ export default class WorkbenchThreadInstructionSelectionController {
 
   /**
    * A context carrying a selection launches as sent; otherwise the thread's recorded selection, or its kind's default, applies.
+   * A selection naming no workflows keeps the recorded ones: senders that do not choose a workflow must not reset it.
    * User input being admitted activates the skills it names, so merged messages need no stored activations.
    */
   async resolve(
     threadId: WorkbenchThreadId, context: WorkbenchMessageContext | undefined, input?: readonly WorkbenchUserInput[],
   ): Promise<WorkbenchMessageContext> {
-    const selection = readWorkbenchInstructionSelection(context) ?? await this.readSelection(threadId);
+    const selection = await this.withRecordedWorkflows(threadId, readWorkbenchInstructionSelection(context));
     const named = input
       ? readWorkbenchSkillMentionPaths(input.flatMap(part => part.type === "text" ? [part.text] : []), await this.ports.readSkills(threadId))
       : [];
@@ -55,11 +56,21 @@ export default class WorkbenchThreadInstructionSelectionController {
     return { ...selection, ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}) };
   }
 
+  private async withRecordedWorkflows(threadId: WorkbenchThreadId, sent: WorkbenchInstructionSelection | null) {
+    if (sent?.workflowIds) return sent;
+    const recorded = await this.readSelection(threadId);
+    if (!sent) return recorded;
+    const workflowIds = recorded.workflowIds
+      ?? defaultThreadInstructionSelection(await this.ports.readThreadKind(threadId)).workflowIds;
+    return { ...sent, workflowIds };
+  }
+
   /** Record an accepted message's selection and activations; the message already landed, so failed writes only warn. */
   async record(threadId: WorkbenchThreadId, context: WorkbenchMessageContext | undefined, activatedSkillPaths: readonly string[] = []) {
-    const selection = readWorkbenchInstructionSelection(context);
-    if (selection) {
+    const sent = readWorkbenchInstructionSelection(context);
+    if (sent) {
       try {
+        const selection = await this.withRecordedWorkflows(threadId, sent);
         await this.ports.store({ kind: "record", threadId, selection, at: this.ports.now() });
       } catch (error) {
         this.ports.warn(`Instruction selection was not recorded for ${threadId}: ${failure(error)}`);

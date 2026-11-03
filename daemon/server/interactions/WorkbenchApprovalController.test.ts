@@ -162,6 +162,19 @@ test("a shown approval carries command context, offers one-shot and remember cho
   await assert.rejects(h.choose("first", ["Allow once"]), /no longer pending/u);
 });
 
+test("a parent reads its child's shown request and decides it directly, carrying feedback and saving no rule", async () => {
+  const h = harness();
+  await h.open("child", command({ justification: "Install deps." }));
+  assert.deepEqual(h.controller.pendingFor(threadId), [{ requestKey: "child", subject: command({ justification: "Install deps." }) }]);
+  assert.deepEqual(h.controller.pendingFor("someone-else"), []);
+  await h.controller.decide({ threadId, requestKey: "child", decision: { kind: "decline", feedback: "Use the sandbox." } });
+  assert.deepEqual(h.delivered, [{ kind: "decline", feedback: "Use the sandbox." }]);
+  assert.deepEqual(h.saves, []);
+  assert.deepEqual(h.outcomes.map(({ outcome }) => outcome), ["denied"]);
+  assert.deepEqual(h.controller.pendingFor(threadId), []);
+  await assert.rejects(h.controller.decide({ threadId, requestKey: "child", decision: { kind: "allowOnce" } }), /no longer pending/u);
+});
+
 test("the agent receives a decision only after its thread has left pending input", async () => {
   let leavePendingInput!: () => void;
   const h = harness({ resolvingLifecycle: new Promise(resolve => { leavePendingInput = resolve; }) });

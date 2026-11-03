@@ -437,6 +437,42 @@ test("permanent commit history is promoted on write but only read per thread, ne
   } finally { database.close(); }
 });
 
+test("only a promotion turns a subagent's stored state top-level, for local and remote parents alike", () => {
+  const database = openDatabase();
+  try {
+    const [parentId, localId, remoteId] = seedIdentities(database, "project", "parent", "local-child", "remote-child");
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    const lifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false } as const;
+    const internal = { profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null };
+    const top = (threadId: string, title: string): WorkbenchThreadStateRecord => ({
+      entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
+      title, activityAt: 1, lifecycle, metadata: { archived: false, pinned: false, snoozed: false }, ...internal,
+    });
+    const child = (threadId: string, parent: Record<string, string>): WorkbenchThreadStateRecord => ({
+      entryKind: "subagent", identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
+      title: threadId, activityAt: 1, lifecycle, createdAt: 1, updatedAt: 1, cwd: "C:/project", directSubagentIndex: 0,
+      name: threadId, parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(parent.threadId!), pinned: true,
+      profileId: "default", profileName: "Default", projectId: testProjectIds.project, ...internal,
+      ...(parent.daemonId ? { parentDaemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(parent.daemonId), parentHostname: "tower" } : {}),
+    });
+    repository.writeRecords([
+      top(parentId!, "parent"), child(localId!, { threadId: parentId! }),
+      child(remoteId!, { threadId: "remote-parent", daemonId: "22222222-2222-4222-8222-222222222222" }),
+    ]);
+    assert.throws(() => repository.writeRecords([top(localId!, "discovered")]), /subagent cannot be replaced/u);
+    repository.commit({
+      projectId: testProjectIds.project, records: [top(localId!, "local"), top(remoteId!, "remote")],
+      promotedThreadIds: [localId!, remoteId!],
+    });
+    const kinds = repository.readRecords({ selection: "threads", threadIds: [localId!, remoteId!] })
+      .map(record => [record.identity.threadId, record.entryKind] as const);
+    assert.deepEqual(new Map(kinds), new Map([[localId, "thread"], [remoteId, "thread"]]));
+    assert.deepEqual(database.prepare(`SELECT COUNT(*) AS count FROM workbench_subagent_thread_states`).get(), { count: 0 });
+    assert.deepEqual(database.prepare(`SELECT COUNT(*) AS count FROM workbench_remote_subagent_thread_states`).get(), { count: 0 });
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
 test("affected-record writes preserve unchanged caches and roll back an entire failed batch", () => {
   const database = openDatabase();
   try {

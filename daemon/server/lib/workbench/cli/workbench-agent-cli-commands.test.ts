@@ -351,6 +351,8 @@ test("CLI help and dispatch enforce every command audience", async () => {
     ["subagent_settle", ["--id", "child"]],
     ["subagent_stop", ["--id", "child"]],
     ["subagent_wait", ["--id", "child"]],
+    ["subagent_promote", ["--id", "child"]],
+    ["subagent_approval", ["--id", "child", "--deny"]],
   ]);
   assert.deepEqual([...WORKBENCH_PARENT_ONLY_TOOLS].sort(), [...argumentsByTool.keys()].sort());
   for (const tool of WORKBENCH_PARENT_ONLY_TOOLS) {

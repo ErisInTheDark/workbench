@@ -636,6 +636,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       childStop: threadIds => subagents.remote.stopChildren(threadIds),
       childSettle: threadId => subagents.remote.settleChild(threadId),
       writeRoster: (threadId, siblings) => subagents.remote.writeRoster(threadId, siblings),
+      childPromote: (caller, threadId) => subagents.remote.promoteForRemoteParent(caller, threadId),
+      childApprovals: threadId => subagents.remote.approvalsOf(threadId),
+      childApprovalDecide: call => subagents.remote.decideApprovalOf(call),
       childChanged: parentThreadIds => subagents.remote.childChanged(parentThreadIds),
       queue: async (caller, parentThreadId, body, signal) => {
         const parent = await heldThread(parentThreadId);

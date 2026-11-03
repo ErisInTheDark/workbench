@@ -1,4 +1,4 @@
-<docs tools="subagent_create subagent_list subagent_profiles subagent_stop subagent_settle subagent_wait">
+<docs tools="subagent_create subagent_list subagent_profiles subagent_stop subagent_settle subagent_promote subagent_approval subagent_wait">
 ## Subagents
 
 Subagents require **Feature Activation**. 
@@ -22,6 +22,13 @@ A subagent's directory is its creating call's cwd, or `workdir` when given; targ
 </docs>
 <docs tools="subagent_settle">
 - <tool id="subagent_settle" /> settles completed or stopped direct children and releases their names. `handover: true` first adopts each child's claims and stash and moves its todos to you; children it cannot fully hand over stay unsettled and untouched.
+</docs>
+<!-- Children in other folders cannot hand over claims, so their proposals and questions can need the user directly. -->
+<docs tools="subagent_promote">
+- <tool id="subagent_promote" /> turns a child into a user-owned sidebar thread; you stop managing it. Promote children whose proposals or questions need the user.
+</docs>
+<docs tools="subagent_approval">
+- <tool id="subagent_approval" /> forwards a child's outside-sandbox request to the user, optionally with your own justification, or denies it with feedback.
 </docs>
 
 <docs tools="subagent_create">

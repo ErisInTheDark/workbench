@@ -46,7 +46,8 @@ export interface ObservedThreadSourcePorts {
     onText: (update: TranscriptTextUpdate, canonicalText: string) => void,
   ) => { controller: ThreadTranscriptProjectionController; stopAvailability: () => void };
   presentText: (harness: WorkbenchHarness, update: TranscriptTextUpdate, canonicalText: string) => void;
-  messageContext: (options: { workflowIds: readonly string[]; instructionInjections?: Record<string, string>; activatedSkillPaths?: readonly string[] }) => WorkbenchMessageContext;
+  /** Absent `workflowIds` keeps the thread's recorded workflows. */
+  messageContext: (options: { workflowIds?: readonly string[]; instructionInjections?: Record<string, string>; activatedSkillPaths?: readonly string[] }) => WorkbenchMessageContext;
   readRateLimits: (harness: WorkbenchHarness) => WorkbenchRateLimitSnapshot | null;
   /** Demand the provider's account limits while a view shows them (idempotent). */
   watchRateLimits: (harness: WorkbenchHarness) => void;
@@ -319,7 +320,8 @@ export default function createObservedThreadSource(
             input: normalized,
             threadId: entry.identity.threadId,
             context: ports.messageContext({
-              workflowIds: options.workflowIds ?? [entry.entryKind === "subagent" ? "subagent" : "default"],
+              // A subagent keeps the workflow it was created with; a user's steer must not reset it.
+              workflowIds: options.workflowIds ?? (entry.entryKind === "subagent" ? undefined : ["default"]),
               ...(options.instructionInjections ? { instructionInjections: options.instructionInjections } : {}),
               ...(options.activatedSkillPaths ? { activatedSkillPaths: options.activatedSkillPaths } : {}),
             }),

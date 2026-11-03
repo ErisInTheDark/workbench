@@ -6,7 +6,7 @@
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { NetworkGrant, type NetworkNeed, type NetworkGrant as Grant } from "workbench-shared/workbench/network/network-grants";
 import type {
-  RemoteCall, RemoteCaller, RemoteCallOutcome, RemoteChildRow, SiblingRosterEntry,
+  RemoteCall, RemoteCaller, RemoteCallOutcome, RemoteChildApproval, RemoteChildRow, SiblingRosterEntry,
 } from "workbench-shared/workbench/network/network-remote-calls";
 
 /** A local thread's subagent facts, as authorization reads them. */
@@ -36,6 +36,9 @@ export interface RemoteCallPorts {
   childStop(threadIds: readonly WorkbenchThreadId[]): Promise<void>;
   childSettle(threadId: WorkbenchThreadId): Promise<string>;
   writeRoster(threadId: WorkbenchThreadId, siblings: readonly SiblingRosterEntry[]): Promise<void>;
+  childPromote(caller: RemoteCaller, threadId: WorkbenchThreadId): Promise<void>;
+  childApprovals(threadId: WorkbenchThreadId): RemoteChildApproval[];
+  childApprovalDecide(input: Extract<RemoteCall, { kind: "childApprovalDecide" }>): Promise<void>;
   childChanged(parentThreadIds: readonly WorkbenchThreadId[]): void;
   queue(caller: RemoteCaller, parentThreadId: WorkbenchThreadId, body: Record<string, unknown>, signal: AbortSignal): Promise<string>;
   release(caller: RemoteCaller): Promise<number>;
@@ -149,6 +152,24 @@ export const remoteCallRegistry: { [Kind in RemoteCall["kind"]]: RemoteCallEntry
     execute: async (ports, _caller, call) => {
       await ports.writeRoster(call.threadId, call.siblings);
       return text("Recorded.");
+    },
+  },
+  childPromote: {
+    authorize: (ports, caller, call) => ownChildren(ports, caller, [call.threadId]),
+    execute: async (ports, caller, call) => {
+      await ports.childPromote(caller, call.threadId);
+      return text("Promoted.");
+    },
+  },
+  childApprovals: {
+    authorize: (ports, caller, call) => ownChildren(ports, caller, [call.threadId]),
+    execute: async (ports, _caller, call) => data(ports.childApprovals(call.threadId)),
+  },
+  childApprovalDecide: {
+    authorize: (ports, caller, call) => ownChildren(ports, caller, [call.threadId]),
+    execute: async (ports, _caller, call) => {
+      await ports.childApprovalDecide(call);
+      return text("Decided.");
     },
   },
   childChanged: {

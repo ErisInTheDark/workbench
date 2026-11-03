@@ -317,7 +317,7 @@ export default class WorkbenchThreadStateRelationalRepository {
         }
       }
       this.writeDrafts(changes.drafts ?? []);
-      this.writeRecords(changes.records ?? []);
+      this.writeRecords(changes.records ?? [], new Set(changes.promotedThreadIds ?? []));
       for (const { projectId, profile } of changes.projectProfiles ?? []) {
         if (profile) {
           this.database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(profile.settings.harness);
@@ -528,20 +528,23 @@ export default class WorkbenchThreadStateRelationalRepository {
     return this.hydrate(rows).map((record, index) => ({ projectId: rows[index]!.project_id, record }));
   }
 
-  writeRecords(records: readonly WorkbenchThreadStateRecord[]) {
+  writeRecords(records: readonly WorkbenchThreadStateRecord[], promoted: ReadonlySet<string> = new Set()) {
     this.database.transaction(() => {
-      for (const record of records) this.writeThreadIdentityState(record);
+      for (const record of records) this.writeThreadIdentityState(record, promoted.has(record.identity.threadId));
       for (const record of records) this.writeThreadState(record);
     })();
   }
 
-  private writeThreadIdentityState(record: WorkbenchThreadStateRecord) {
+  private writeThreadIdentityState(record: WorkbenchThreadStateRecord, promoted: boolean) {
     const threadId = record.identity.threadId;
     const existing = this.database.prepare("SELECT thread_kind FROM workbench_thread_states WHERE thread_id = ?")
       .get(threadId) as { thread_kind: "topLevel" | "subagent" } | undefined;
     const threadKind = record.entryKind === "thread" ? "topLevel" : "subagent";
     if (existing?.thread_kind === "subagent" && threadKind !== "subagent") {
-      throw new Error("A subagent cannot be replaced by a provider discovery row.");
+      if (!promoted) throw new Error("A subagent cannot be replaced by a provider discovery row.");
+      // Promotion is the one way out of subagent state; its sibling roster cascades with the remote-parent row.
+      this.database.prepare("DELETE FROM workbench_subagent_thread_states WHERE thread_id = ?").run(threadId);
+      this.database.prepare("DELETE FROM workbench_remote_subagent_thread_states WHERE thread_id = ?").run(threadId);
     }
     if (existing?.thread_kind === "topLevel" && threadKind === "subagent") {
       this.database.prepare("DELETE FROM workbench_top_level_thread_states WHERE thread_id = ?").run(threadId);

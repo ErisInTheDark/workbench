@@ -40,6 +40,8 @@ const EXPECTED_PARENT_ONLY_TOOLS = [
   "subagent_settle",
   "subagent_stop",
   "subagent_wait",
+  "subagent_promote",
+  "subagent_approval",
 ] as const;
 
 /** A prepared shell whose run is opaque to the MCP layer; the injected `executeShell` supplies its result. */
@@ -1025,6 +1027,8 @@ test("stale parent-only tools cannot dispatch for a canonical child caller", asy
       subagent_settle: { threadIds: ["child"] },
       subagent_stop: { threadIds: ["child"] },
       subagent_wait: { threadIds: ["child"] },
+      subagent_promote: { threadIds: ["child"] },
+      subagent_approval: { threadId: "child", decision: "deny" },
     };
     for (const name of EXPECTED_PARENT_ONLY_TOOLS) {
       const result = await client.callTool({

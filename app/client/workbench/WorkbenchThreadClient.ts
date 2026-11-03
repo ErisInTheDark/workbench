@@ -419,7 +419,7 @@ function WorkbenchThreadClient(
           },
           messageContext: ({ workflowIds, instructionInjections, activatedSkillPaths }) => ({
             workbenchOrigin: readLocalWorkbenchOrigin(), instructionScope: "full", instructionInjections,
-            workflowIds: [...workflowIds], activatedSkillPaths: activatedSkillPaths ? [...activatedSkillPaths] : undefined,
+            workflowIds: workflowIds ? [...workflowIds] : undefined, activatedSkillPaths: activatedSkillPaths ? [...activatedSkillPaths] : undefined,
           }),
           readRateLimits: harness => account.getRateLimits(harness),
           watchRateLimits: harness => account.watchRateLimits(harness),

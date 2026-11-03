@@ -60,6 +60,15 @@ test("an explicit empty workflow choice is a selection: it launches as sent and 
   assert.deepEqual(stored(), { workflowIds: [] });
 });
 
+test("a selection without workflows keeps the recorded workflows, for launching and for later messages", async () => {
+  const { owner, stored } = fixture("subagent", { stored: { workflowIds: ["default"], subagentName: "Marigold" } });
+  const parentMessage = { subagentName: "Marigold", workbenchOrigin: "https://wb.local" };
+  assert.deepEqual(await owner.resolve(threadId, parentMessage), { ...parentMessage, workflowIds: ["default"] });
+  await owner.record(threadId, parentMessage);
+  assert.deepEqual(stored(), { ...parentMessage, workflowIds: ["default"] });
+  assert.deepEqual(await owner.resolve(threadId, undefined), { ...parentMessage, workflowIds: ["default"] });
+});
+
 test("a failed record only warns, since its message already landed", async () => {
   const { owner, warnings } = fixture("thread", { failWrites: true });
   await owner.record(threadId, { workflowIds: ["review"] });

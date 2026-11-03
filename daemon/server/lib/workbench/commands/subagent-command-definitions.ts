@@ -180,6 +180,62 @@ const settle = defineWorkbenchAgentCommand({
   },
 });
 
+const promote = defineWorkbenchAgentCommand({
+  description: "Turn direct children into user-owned sidebar threads in their own projects, one way; you stop managing them and their names free up.",
+  helpGroups: ["subagent"],
+  words: ["subagent", "promote"],
+  usage: "wb subagent promote (--id <id> | --name <name>) [...]",
+  inputSchema: targetsSchema,
+  parseCliArgs: parseTargets,
+  buildRequest(input, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/subagents", {
+      action: "promote", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...targetsBody(input),
+    });
+  },
+});
+
+const approval = defineWorkbenchAgentCommand({
+  description: "Answer one direct child's pending outside-sandbox request: forward it to the user on this thread and wait for their decision, or deny it.",
+  helpGroups: ["subagent"],
+  words: ["subagent", "approval"],
+  usage: "wb subagent approval (--id <id> | --name <name>) (--forward [--justification <text>] | --deny [--feedback <text>])",
+  inputSchema: z.object({
+    name: requiredText.optional(),
+    threadId: requiredText.optional(),
+    decision: z.enum(["forward", "deny"]),
+    justification: requiredText.optional().describe("Forward only: replaces the child's justification; otherwise the user sees `<name>: <its justification>`."),
+    feedback: requiredText.optional().describe("Deny only: told to the child."),
+  }).strict().superRefine((input, context) => {
+    if (Boolean(input.name) === Boolean(input.threadId)) context.addIssue({ code: "custom", message: "Name exactly one subagent by name or thread ID." });
+    if (input.justification && input.decision !== "forward") context.addIssue({ code: "custom", message: "justification needs forward." });
+    if (input.feedback && input.decision !== "deny") context.addIssue({ code: "custom", message: "feedback needs deny." });
+  }),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, {
+      boolean: ["--forward", "--deny"], values: ["--id", "--name", "--justification", "--feedback"],
+    });
+    if (flags.has("--forward") === flags.has("--deny")) {
+      throw new WorkbenchCommandArgumentError("missingArgument", "--forward | --deny", "Choose exactly one of --forward or --deny.");
+    }
+    return {
+      name: flags.optional("--name") ?? undefined,
+      threadId: flags.optional("--id") ?? undefined,
+      decision: flags.has("--forward") ? "forward" as const : "deny" as const,
+      justification: flags.optional("--justification") ?? undefined,
+      feedback: flags.optional("--feedback") ?? undefined,
+    };
+  },
+  buildRequest(input, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/subagents", {
+      action: "approval", callerThreadId: requireCallerThreadId(callerThreadId), cwd,
+      ...targetsBody({ names: input.name ? [input.name] : [], threadIds: input.threadId ? [input.threadId] : [] }),
+      decision: input.decision,
+      ...(input.justification ? { justification: input.justification } : {}),
+      ...(input.feedback ? { feedback: input.feedback } : {}),
+    });
+  },
+});
+
 /** Split the leading `<queue>` operand from the flag grammar. */
 function splitQueueOperand(args: string[]) {
   const [queue, ...rest] = args;
@@ -232,4 +288,4 @@ const dequeue = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_SUBAGENT_COMMANDS = [list, profiles, create, wait, stop, settle, queue, dequeue] as const;
+export const WORKBENCH_SUBAGENT_COMMANDS = [list, profiles, create, wait, stop, settle, promote, approval, queue, dequeue] as const;

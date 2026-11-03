@@ -22,6 +22,8 @@ export const WORKBENCH_PARENT_ONLY_TOOLS: readonly string[] = [
   "subagent_settle",
   "subagent_stop",
   "subagent_wait",
+  "subagent_promote",
+  "subagent_approval",
 ];
 const parentOnly = new Set(WORKBENCH_PARENT_ONLY_TOOLS);
 

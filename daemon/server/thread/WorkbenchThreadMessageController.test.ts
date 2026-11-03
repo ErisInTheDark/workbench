@@ -435,9 +435,8 @@ test("relationship shortcuts preserve child and parent attribution", async () =>
   const childDelivery = child.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.equal(childDelivery.threadId, "child");
   assert.equal(childDelivery.message.senderName, "parent agent");
-  assert.deepEqual(childDelivery.context, {
-    subagentName: "luna", workbenchOrigin: "http://localhost:3000", workflowIds: ["subagent"],
-  });
+  // Naming no workflow keeps the one the child was created with.
+  assert.deepEqual(childDelivery.context, { subagentName: "luna", workbenchOrigin: "http://localhost:3000" });
   await child.controller.dispose();
 
   const parent = fixture();

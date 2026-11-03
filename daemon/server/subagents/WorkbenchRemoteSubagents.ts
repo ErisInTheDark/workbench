@@ -3,18 +3,23 @@
  * - RemoteSubagentNetwork: relayed calls a parent's daemon makes to its children's daemons.
  * - RemoteSubagentCaller: the local parent thread behind one cross-folder subagent command.
  * - default WorkbenchRemoteSubagents: own subagents whose parent and child live in different folders or daemons: the parent side
- *   creates, reads, stops, settles and pushes sibling rosters through relayed calls; the child side executes those calls and
- *   tells the parent's daemon when a child changes. The child's daemon owns its lifecycle; the parent's owns the relationship.
+ *   creates, reads, stops, settles, promotes, decides approvals and pushes sibling rosters through relayed calls; the child side
+ *   executes those calls and tells the parent's daemon when a child changes. The child's daemon owns its lifecycle; the parent's
+ *   owns the relationship.
  */
 import { randomUUID } from "node:crypto";
-import type { WorkbenchComposerProfile, WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type {
+  WorkbenchComposerProfile, WorkbenchHarness, WorkbenchPendingUserInputRequest, WorkbenchSubagentRelationship,
+} from "workbench-shared/types";
 import {
   ThreadReferenceSchema, WorkbenchThreadIdSchema, type DaemonId, type ProjectId, type ThreadReference, type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
 import type { NetworkTarget } from "workbench-shared/workbench/network/network-access";
 import {
-  RemoteChildRowSchema, type RemoteCall, type RemoteCaller, type RemoteChildRow, type SiblingRosterEntry,
+  RemoteChildApprovalSchema, RemoteChildRowSchema, type RemoteCall, type RemoteCaller, type RemoteChildApproval, type RemoteChildRow,
+  type SiblingRosterEntry,
 } from "workbench-shared/workbench/network/network-remote-calls";
+import type { WorkbenchApprovalDecision } from "workbench-shared/workbench/provider/provider-approval";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
@@ -43,8 +48,9 @@ export interface RemoteSubagentNetwork {
 }
 
 const PARENT_AGENT_NAME = "parent agent";
+/** Handover never crosses folders, so these children propose their own work under the default workflow. */
 const subagentContext = (name: string, workbenchOrigin: string | null): WorkbenchMessageContext => ({
-  subagentName: name, workbenchOrigin, workflowIds: ["subagent"],
+  subagentName: name, workbenchOrigin, workflowIds: ["default"],
 });
 
 export default class WorkbenchRemoteSubagents {
@@ -66,6 +72,13 @@ export default class WorkbenchRemoteSubagents {
       subscribe(listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void): () => void;
     };
     stopThread(threadId: WorkbenchThreadId): Promise<void>;
+    /** One way into a top-level thread; a former parent on another daemon stays in its network history. */
+    promoteThread(threadId: WorkbenchThreadId, formerParent: NetworkTarget | null): Promise<void>;
+    approvals: {
+      list(): readonly WorkbenchPendingUserInputRequest[];
+      pendingFor(threadId: WorkbenchThreadId): RemoteChildApproval[];
+      decide(input: { threadId: WorkbenchThreadId; requestKey: string; decision: WorkbenchApprovalDecision }): Promise<unknown>;
+    };
     workbenchOrigin: string | null;
     warn(message: string): void;
   }) {
@@ -166,6 +179,23 @@ export default class WorkbenchRemoteSubagents {
     return outcome.text ?? "Settled.";
   }
 
+  /** Turns a remote child into a top-level thread on its own daemon; ending the relationship stays with the caller. */
+  async promote(caller: RemoteSubagentCaller, record: WorkbenchSubagentRelationship, signal: AbortSignal) {
+    await this.ports.network.family(caller, record.location!.daemonId, { kind: "childPromote", threadId: record.threadId }, signal);
+  }
+
+  async approvals(caller: RemoteSubagentCaller, record: WorkbenchSubagentRelationship, signal: AbortSignal) {
+    const outcome = await this.ports.network.family(caller, record.location!.daemonId, { kind: "childApprovals", threadId: record.threadId }, signal);
+    return RemoteChildApprovalSchema.array().parse(outcome.data);
+  }
+
+  async decideApproval(caller: RemoteSubagentCaller, record: WorkbenchSubagentRelationship, requestKey: string,
+    decision: WorkbenchApprovalDecision, signal: AbortSignal) {
+    await this.ports.network.family(caller, record.location!.daemonId, {
+      kind: "childApprovalDecide", threadId: record.threadId, requestKey, decision,
+    }, signal);
+  }
+
   /** Pushes the full unsettled family to every remote child's daemon; a failed push leaves that child's older roster. */
   async pushRosters(caller: RemoteSubagentCaller, signal: AbortSignal) {
     const children = (await this.ports.store.list({ parentThreadId: caller.threadId, projectId: caller.projectId })).subagents;
@@ -244,7 +274,8 @@ export default class WorkbenchRemoteSubagents {
       if (!resolved || entry?.entryKind !== "subagent") throw new Error(`Subagent ${threadId} is not on this daemon.`);
       const working = entry.lifecycle.kind === "working";
       const pending = entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"
-        ? (await this.ports.provider(resolved.harness).interactions?.pending({ background: true }) ?? []).find(item => item.threadId === threadId) ?? null
+        ? [...this.ports.approvals.list(), ...await this.ports.provider(resolved.harness).interactions?.pending({ background: true }) ?? []]
+          .find(item => item.threadId === threadId) ?? null
         : null;
       const thread = working ? null : await this.ports.provider(resolved.harness).threads.readLatest(threadId);
       return {
@@ -270,6 +301,23 @@ export default class WorkbenchRemoteSubagents {
 
   writeRoster(threadId: WorkbenchThreadId, siblings: readonly SiblingRosterEntry[]) {
     return this.ports.store.writeRoster(threadId, siblings);
+  }
+
+  async promoteForRemoteParent(caller: RemoteCaller, threadId: WorkbenchThreadId) {
+    // The thread may hold what its parent sent, so a parent on another daemon keeps it networked with that daemon.
+    const formerParent: NetworkTarget | null = this.ports.network.self()?.daemonId === caller.daemonId ? null : {
+      kind: "thread", daemonId: caller.daemonId, hostname: caller.hostname, threadId: caller.threadId,
+      title: caller.title, projectName: "former parent", daemonProject: false,
+    };
+    await this.ports.promoteThread(threadId, formerParent);
+  }
+
+  approvalsOf(threadId: WorkbenchThreadId) {
+    return this.ports.approvals.pendingFor(threadId);
+  }
+
+  async decideApprovalOf(call: Extract<RemoteCall, { kind: "childApprovalDecide" }>) {
+    await this.ports.approvals.decide({ threadId: call.threadId, requestKey: call.requestKey, decision: call.decision });
   }
 
   parentsOf(caller: RemoteCaller) {

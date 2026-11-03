@@ -6,7 +6,7 @@
  */
 
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { DraftIdSchema, type DraftId, type ProjectId } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, type DraftId, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadDisplayOrder } from "workbench-shared/workbench/thread/thread-display-order";
 import type {
   WorkbenchComposerProfileSelectionState,
@@ -25,6 +25,8 @@ import type {
 interface ProjectCommitOptions {
   layout?: boolean;
   profile?: boolean;
+  /** Subagents these entries promote to top-level threads; storage converts only these. */
+  promotedThreadIds?: readonly WorkbenchThreadId[];
 }
 
 export interface WorkbenchProjectThreadStateOptions {
@@ -124,7 +126,7 @@ export default class WorkbenchProjectThreadState {
   selectedCommit(
     projectId: ProjectId,
     keys: Iterable<string>,
-    options: Pick<ProjectCommitOptions, "layout" | "profile"> = {},
+    options: ProjectCommitOptions = {},
   ): Omit<WorkbenchThreadStateCommit, "projectId"> {
     const records: WorkbenchThreadStateRecord[] = [];
     const drafts: NonNullable<WorkbenchThreadStateCommit["drafts"]>[number][] = [];
@@ -147,6 +149,7 @@ export default class WorkbenchProjectThreadState {
       ...(records.length ? { records } : {}),
       ...(drafts.length ? { drafts } : {}),
       ...(deletedDraftIds.length ? { deletedDraftIds } : {}),
+      ...(options.promotedThreadIds?.length ? { promotedThreadIds: options.promotedThreadIds } : {}),
       ...(options.profile ? { projectProfiles: [{ projectId, profile: this.newThreadProfile }] } : {}),
       ...(options.layout
         ? { layouts: [{ owner: { kind: "project" as const, projectId }, revision: 0, displayOrder: this.displayOrder }] }
