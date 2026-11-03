@@ -272,9 +272,31 @@ test("current-plan requests encode adoption, revision, atomic start, and ref-fre
   assert.equal(GitCheckpointRequestSchema.safeParse({ action: "arcWait", ...common }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "arcWait",
+    proposalId: "proposal-one",
+    ...common,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcWait",
+    proposalId: "*",
+    ...common,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcWait",
+    checkpointCommit: "abcdef1",
+    proposalId: "proposal-one",
+    ...common,
+  }).success, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcWait",
     refs: [{ ref: "a".repeat(40), rootId: "api" }],
     ...common,
   }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcWait",
+    proposalId: "*",
+    refs: [{ ref: "a".repeat(40), rootId: "api" }],
+    ...common,
+  }).success, false);
   const workspacePlan = GitCheckpointRequestSchema.safeParse({
     action: "plan",
     intentName: "Workspace change",

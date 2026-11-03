@@ -90,18 +90,42 @@ const start = defineWorkbenchAgentCommand({
 });
 
 const wait = defineWorkbenchAgentCommand({
-  description: "Wait until sibling claims no longer intersect the current or selected inactive plan, then start it.",
+  description: "With proposalId, wait for that owned proposal or every currently pending proposal (`*`) to commit; otherwise wait until sibling claims clear, then start the inactive plan.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "wait"],
-  usage: "wb git arc wait [--ref <ref>]",
-  inputSchema: z.object({ ref: requiredText.optional(), refs: z.array(memberRefSchema).default([]) }).strict(),
+  usage: "wb git arc wait [--ref <ref> | --proposal <proposal-id|*>]",
+  inputSchema: z.object({
+    proposalId: requiredText.optional(),
+    ref: requiredText.optional(),
+    refs: z.array(memberRefSchema).default([]),
+  }).strict().superRefine((input, context) => {
+    if (input.proposalId && (input.ref || input.refs.length)) {
+      context.addIssue(gitArcRejectionIssue(
+        { reason: "invalidArguments", fields: ["proposalId", "ref", "refs"] },
+        "proposalId cannot be combined with plan refs.",
+      ));
+    }
+  }),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--ref"] });
-    return { ref: flags.optional("--ref") ?? undefined, refs: [] };
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--proposal", "--ref"] });
+    const proposalId = flags.optional("--proposal") ?? undefined;
+    const ref = flags.optional("--ref") ?? undefined;
+    if (proposalId && ref) {
+      throw new GitArcRejectionError(
+        { reason: "invalidArguments", fields: ["proposalId", "ref"] },
+        "proposalId cannot be combined with plan refs.",
+      );
+    }
+    return {
+      proposalId,
+      ref,
+      refs: [],
+    };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
       action: "arcWait", ...(input.ref ? { checkpointCommit: input.ref } : {}),
+      ...(input.proposalId ? { proposalId: input.proposalId } : {}),
       ...(input.refs.length ? { refs: input.refs } : {}), ...baseBody(callerHarness, callerThreadId, cwd),
     }, "git-arc-wait");
   },

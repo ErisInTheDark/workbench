@@ -84,8 +84,9 @@ activating:
 
 <docs tools="git_arc_wait">
 waiting:
-- <tool id="git_arc_wait" /> waits for sibling claims, then activates the inactive plan. Do not republish that plan for collisions; if requested scope has no inactive plan, publish it first.
-- Waiting never refreshes baselines. Treat it as a Workbench Long Wait.
+- For an inactive plan blocked by sibling claims, use <tool id="git_arc_wait" /> instead of republishing; waiting never refreshes baselines.
+- After proposing, pass its returned id; use `"*"` only when every pending proposal must land before continuing.
+- Treat this as a Workbench Long Wait.
 </docs>
 
 ### continue or extend an active arc

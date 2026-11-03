@@ -50,6 +50,19 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
       structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null, edit: null, restack },
     };
   }
+  if (request.responseKind === "git-arc-wait" && string(request.body, "proposalId")) {
+    const accepted = GitArcStatusSchema.shape.accepted.parse(payload?.accepted ?? []);
+    return {
+      text: accepted.length
+        ? ["Proposal acceptance complete:", ...accepted.map(proposal =>
+          `${escapeGitArcValue(proposal.proposalId)} ${escapeGitArcValue(proposal.title)} as ${proposal.commitSha}`)].join("\n")
+        : "No proposals pending acceptance.",
+      structuredContent: {
+        kind: "success", version: 1, receipt: null, status: { accepted },
+        changes: [], diff: null, edit: null, restack: null,
+      },
+    };
+  }
   if (!payload) return {
     text: "No registered Git arc.",
     structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null, edit: null, restack: null },

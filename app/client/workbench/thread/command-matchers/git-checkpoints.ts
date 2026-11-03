@@ -2,7 +2,7 @@
  * Exports:
  * - GIT_CHECKPOINT_COMMAND_MATCHERS: named arc command presentation.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: specialised arc routes.
- * - isGitArcWaitMatcherClaim/parseGitArcWaitRef: identify a CLI arc wait and its target plan ref.
+ * - isGitArcWaitMatcherClaim/parseGitArcWaitRef/parseGitArcWaitProposalId: identify a CLI arc wait and its target.
  * - parseGitArcCommand/GitArcCommandIntent/GitArcCommandAction: canonical arc command intent.
  * - parseGitArcReceipt: persisted successful arc facts.
  * - parseGitCheckpointCompareOutput: per-file change counts.
@@ -113,10 +113,27 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: ARC_MATCHER_IDS.start,
     presentationName: "git_arc_start",
   }),
-  createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+wait(?:\s|$)/iu,
+  CommandMatcher({
+    id: "git-arc.wait-proposal",
+    match: ({ stage }) => {
+      const command = stage.text.trim();
+      if (!/^wb(?:\.cmd)?\s+git\s+arc\s+wait(?:\s|$)/iu.test(command)) return null;
+      const proposalId = parseGitArcWaitProposalId(command);
+      if (!proposalId) return null;
+      return getWorkbenchCommandRendering("git_arc_wait", {
+        proposalId,
+      })?.result ?? null;
+    },
+  }),
+  CommandMatcher({
     id: "git-arc.wait",
-    presentationName: "git_arc_wait",
+    match: ({ stage }) => {
+      const command = stage.text.trim();
+      if (!/^wb(?:\.cmd)?\s+git\s+arc\s+wait(?:\s|$)/iu.test(command) || parseGitArcWaitProposalId(command)) return null;
+      return getWorkbenchCommandRendering("git_arc_wait", {
+        ref: parseGitArcWaitRef(command),
+      })?.result ?? null;
+    },
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+continue(?:\s|$)/iu,
@@ -218,6 +235,13 @@ export function isGitArcWaitMatcherClaim(claimedBy: string | null | undefined) {
 export function parseGitArcWaitRef(command: string) {
   const tokens = tokenizeCommand(String(command ?? "").trim()) ?? [];
   const index = tokens.indexOf("--ref");
+  return index >= 0 ? tokens[index + 1] ?? null : null;
+}
+
+/** The exact proposal, or `*`, a proposal acceptance wait targets. */
+export function parseGitArcWaitProposalId(command: string) {
+  const tokens = tokenizeCommand(String(command ?? "").trim()) ?? [];
+  const index = tokens.indexOf("--proposal");
   return index >= 0 ? tokens[index + 1] ?? null : null;
 }
 

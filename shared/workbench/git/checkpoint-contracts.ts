@@ -186,8 +186,16 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("arcWait"),
     checkpointCommit: checkpointSha.optional(),
+    proposalId: nonEmptyString.optional(),
     refs: z.array(GitArcMemberRefSchema).default([]),
     ...checkpointBaseRequest,
+  }).strict().superRefine((input, context) => {
+    if (input.proposalId && (input.checkpointCommit || input.refs.length)) {
+      context.addIssue(gitArcRejectionIssue(
+        { reason: "invalidArguments", fields: ["proposalId", "checkpointCommit", "refs"] },
+        "proposalId cannot be combined with plan refs.",
+      ));
+    }
   }),
   z.object({
     action: z.literal("arcAdd"),

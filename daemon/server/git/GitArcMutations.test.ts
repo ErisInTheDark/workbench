@@ -1,8 +1,8 @@
-/* No production exports. Wards that claim waits retry only after a claim mutation, never miss one that races an attempt, and stop on abort. */
+/* No production exports. Wards that blocked lifecycle checks retry only after a Git arc mutation, never miss a racing mutation, and stop on abort. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import GitArcClaimMutations from "./GitArcClaimMutations.ts";
+import GitArcMutations from "./GitArcMutations.ts";
 
 type Attempt = { kind: "blocked" } | { kind: "done"; attempts: number };
 
@@ -24,8 +24,8 @@ function attempts(results: Array<(count: number) => Attempt>) {
   };
 }
 
-test("a blocked attempt waits for the next claim mutation before retrying", async () => {
-  const mutations = new GitArcClaimMutations();
+test("a blocked attempt waits for the next Git arc mutation before retrying", async () => {
+  const mutations = new GitArcMutations();
   const sequence = attempts([() => ({ kind: "blocked" }), count => ({ attempts: count, kind: "done" })]);
   const firstAttempt = sequence.nextAttempt();
   const waiting = mutations.waitUntil(sequence.run, new AbortController().signal);
@@ -37,7 +37,7 @@ test("a blocked attempt waits for the next claim mutation before retrying", asyn
 });
 
 test("a mutation that lands during a blocked attempt retries immediately", async () => {
-  const mutations = new GitArcClaimMutations();
+  const mutations = new GitArcMutations();
   const sequence = attempts([() => {
     mutations.notify();
     return { kind: "blocked" };
@@ -46,7 +46,7 @@ test("a mutation that lands during a blocked attempt retries immediately", async
 });
 
 test("aborting a waiting caller rejects with the abort reason", async () => {
-  const mutations = new GitArcClaimMutations();
+  const mutations = new GitArcMutations();
   const controller = new AbortController();
   const sequence = attempts([() => ({ kind: "blocked" })]);
   const firstAttempt = sequence.nextAttempt();

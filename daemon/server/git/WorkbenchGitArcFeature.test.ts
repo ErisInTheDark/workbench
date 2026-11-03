@@ -89,6 +89,25 @@ function waitFeature(extraOptions: object = {}) {
   });
 }
 
+function proposalWaitStatus(overrides: Partial<{
+  accepted: Array<{ commitSha: string; proposalId: string; title: string }>;
+  pending: Array<{ proposalId: string; title: string }>;
+  stacked: Array<{ pending: Array<{ proposalId: string; title: string }>; title: string }>;
+  unavailable: Array<{ proposalId: string; reason: string; title: string }>;
+}> = {}) {
+  return {
+    accepted: [],
+    cleanClaims: [],
+    dirtyClaims: [],
+    pending: [],
+    recovery: [],
+    stashedClaims: [],
+    unavailableRecovery: [],
+    unclaimedDirt: [],
+    ...overrides,
+  };
+}
+
 const passthroughTransitions = {
   run: async <T>(_key: string, operation: () => Promise<T>) => await operation(),
   ownership: async <T>(_threadIds: readonly string[], operation: () => Promise<T>) => await operation(),
@@ -521,6 +540,135 @@ test("Git arc wait stops on caller cancellation and feature disposal", async () 
   await disposed.read;
   disposed.feature.dispose();
   assert.equal((await disposedResponse).status, 400);
+});
+
+test("Git arc wait accepts one already committed proposal", async () => {
+  const feature = waitFeature();
+  const proposal = {
+    commitSha: "c".repeat(40),
+    proposalId: "proposal-one",
+    title: "land the wait",
+  };
+  (feature as unknown as {
+    controller: { readStatus: () => Promise<object> };
+  }).controller.readStatus = async () => proposalWaitStatus({ accepted: [proposal] });
+
+  const response = await feature.executeRequest({
+    action: "arcWait",
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    proposalId: proposal.proposalId,
+    threadId: "thread-one",
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { accepted: [proposal] });
+});
+
+test("Git arc wait for every proposal returns when none are pending", async () => {
+  const feature = waitFeature();
+  (feature as unknown as {
+    controller: { readStatus: () => Promise<object> };
+  }).controller.readStatus = async () => proposalWaitStatus();
+
+  const response = await feature.executeRequest({
+    action: "arcWait",
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    proposalId: "*",
+    threadId: "thread-one",
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { accepted: [] });
+});
+
+test("Git arc wait for every proposal freezes unsealed and stacked targets", async () => {
+  const feature = waitFeature();
+  const first = { proposalId: "proposal-one", title: "first" };
+  const second = { proposalId: "proposal-two", title: "second" };
+  let status = proposalWaitStatus({
+    pending: [first],
+    stacked: [{ pending: [second], title: "layer" }],
+  });
+  let reportFirstRead!: () => void;
+  const firstRead = new Promise<void>((resolve) => { reportFirstRead = resolve; });
+  const internal = feature as unknown as {
+    controller: { readStatus: () => Promise<object> };
+    mutations: { notify(): void };
+  };
+  internal.controller.readStatus = async () => {
+    reportFirstRead();
+    return status;
+  };
+
+  const waiting = feature.executeRequest({
+    action: "arcWait",
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    proposalId: "*",
+    threadId: "thread-one",
+  });
+  await firstRead;
+  let finished = false;
+  void waiting.then(() => { finished = true; });
+  await Promise.resolve();
+  assert.equal(finished, false);
+
+  status = proposalWaitStatus({
+    accepted: [
+      { ...first, commitSha: "a".repeat(40) },
+      { ...second, commitSha: "b".repeat(40) },
+    ],
+    pending: [{ proposalId: "proposal-later", title: "later" }],
+  });
+  internal.mutations.notify();
+
+  const response = await waiting;
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    accepted: [
+      { ...first, commitSha: "a".repeat(40) },
+      { ...second, commitSha: "b".repeat(40) },
+    ],
+  });
+});
+
+test("Git arc proposal wait fails when a target becomes unavailable", async () => {
+  const feature = waitFeature();
+  const proposal = { proposalId: "proposal-one", title: "first" };
+  let status = proposalWaitStatus({ pending: [proposal] });
+  let reportFirstRead!: () => void;
+  const firstRead = new Promise<void>((resolve) => { reportFirstRead = resolve; });
+  const internal = feature as unknown as {
+    controller: { readStatus: () => Promise<object> };
+    mutations: { notify(): void };
+  };
+  internal.controller.readStatus = async () => {
+    reportFirstRead();
+    return status;
+  };
+
+  const waiting = feature.executeRequest({
+    action: "arcWait",
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    proposalId: proposal.proposalId,
+    threadId: "thread-one",
+  });
+  await firstRead;
+  status = proposalWaitStatus({
+    unavailable: [{ ...proposal, reason: "Proposal paths changed." }],
+  });
+  internal.mutations.notify();
+
+  const response = await waiting;
+  const { gitArcFailure } = await response.json() as GitArcFailureEnvelope;
+  assert.deepEqual([
+    response.status,
+    gitArcFailure.action,
+    gitArcFailure.code === "rejection" && gitArcFailure.rejection.reason,
+  ], [400, "arcWait", "proposalUnavailable"]);
 });
 
 test("sibling thread card reads share the Git read lease instead of taking the writer lane", async () => {

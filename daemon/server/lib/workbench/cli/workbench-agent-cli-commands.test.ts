@@ -28,6 +28,7 @@ import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-ar
 import { parseGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import { parseGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
+import { renderGitArcResponse } from "./git-arc-output.ts";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 import { publishDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
@@ -961,6 +962,25 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     threadId: "thread-1",
   });
   assert.equal(wait.request.responseKind, "git-arc-wait");
+
+  const proposalWait = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "wait", "--proposal", "*",
+  ], gitOptions);
+  assert.equal(proposalWait.kind, "request");
+  assert.deepEqual(proposalWait.request.body, {
+    action: "arcWait",
+    cwd: "C:/workspace",
+    harness: "codex",
+    proposalId: "*",
+    threadId: "thread-1",
+  });
+  assert.equal(proposalWait.request.responseKind, "git-arc-wait");
+
+  const conflictingWait = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "wait", "--proposal", "proposal-one", "--ref", "abc",
+  ], gitOptions);
+  assert.equal(conflictingWait.kind, "error");
+  assert.match(conflictingWait.error, /proposalId cannot be combined with plan refs/u);
 
   const continuedArc = await parseWorkbenchAgentCliCommand([
     "git", "arc", "continue", "--ref", "abc",
@@ -1919,6 +1939,21 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
       { ref: planRef, rootId: "api" },
       { ref: successorRef, rootId: "web" },
   ]);
+  const proposalWaitResponse = adapt("git-arc-wait", {
+    accepted: [{ commitSha: "c".repeat(40), proposalId: "proposal-one", title: "Accept one" }],
+  }, { action: "arcWait", proposalId: "proposal-one" });
+  assert.match(proposalWaitResponse.stdout, /Proposal acceptance complete:\nproposal-one Accept one as c{40}/u);
+  assert.deepEqual(renderGitArcResponse(request("git-arc-wait", {
+    action: "arcWait", proposalId: "proposal-one",
+  }), {
+    accepted: [{ commitSha: "c".repeat(40), proposalId: "proposal-one", title: "Accept one" }],
+  }).structuredContent.status.accepted, [{
+    commitSha: "c".repeat(40), proposalId: "proposal-one", title: "Accept one",
+  }]);
+  const emptyProposalWaitResponse = adapt("git-arc-wait", {
+    accepted: [],
+  }, { action: "arcWait", proposalId: "*" });
+  assert.equal(emptyProposalWaitResponse.stdout, "No proposals pending acceptance.\n");
   const editPreview = adapt("git-arc-edit", {
     additions: 1, collisions: [{ owner: "other work", paths: ["src/b.ts"], threadId: "sibling" }], deletions: 1,
     diffs: [{ path: "src/b.ts", patch: "@@ -1 +1 @@\n-old\n+new" }], fileCount: 1, ignoredFileCount: 0,

@@ -4,7 +4,7 @@
  * - WorkbenchGitArcLifecycleState: public lifecycle with canonical owner and member identities.
  * - WorkbenchGitArcPlanState: public plan with canonical owner and member identities.
  * - default WorkbenchGitArcFeature: own Git arc dispatch, canonical identity ingress and registry owner resolution, nested
- *   worktree and machine roots, machine claim approval, proposal diff lifecycle, and waits on claim mutations. Thread-state
+ *   worktree and machine roots, machine claim approval, proposal diff lifecycle, and mutation-driven waits. Thread-state
  *   reads name their project by id; cwd requests resolve shared roots toward the acting thread's project.
  */
 import type http from "node:http";
@@ -37,13 +37,14 @@ import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import {
+  GitCheckpointProposalSchema,
   GitCheckpointRequestSchema,
   type GitArcClaimViewResult,
   type GitArcHeldPathsResult,
   type GitArcProposalCommitManyResult,
   type GitCheckpointRequest,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
-import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
+import { GitArcStatusSchema, type GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { WorkbenchContextAdmission } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchAgentContextTarget } from "../agent/WorkbenchAgentContextController";
 import type WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
@@ -59,7 +60,7 @@ import { installedProviderKeys } from "workbench-shared/workbench/provider/provi
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import GitArcProposalDiffController, { type GitArcProposalDiffStore } from "../lib/workbench/git/GitArcProposalDiffController";
-import GitArcClaimMutations from "./GitArcClaimMutations";
+import GitArcMutations from "./GitArcMutations";
 import type { GitArcEditOwner, GitArcEditPendingCheck } from "../lib/workbench/git/GitArcEditSessionController";
 import type { GitArcResolvedThreadIdentity } from "../lib/workbench/git/git-arc-thread-identity";
 import {
@@ -174,6 +175,13 @@ function mutatesGitArcState(request: GitCheckpointRequest) {
   return GIT_ARC_STATE_MUTATION_ACTIONS.has(request.action);
 }
 
+function pendingProposalIds(status: GitArcStatus) {
+  return [...new Set([
+    ...status.pending.map(({ proposalId }) => proposalId),
+    ...(status.stacked?.flatMap(({ pending }) => pending.map(({ proposalId }) => proposalId)) ?? []),
+  ])];
+}
+
 type GitArcEditRequest = Extract<GitCheckpointRequest, { action: `arcEdit${string}` }>;
 
 function isGitArcEditRequest(request: GitCheckpointRequest): request is GitArcEditRequest {
@@ -247,7 +255,7 @@ export default class WorkbenchGitArcFeature {
   }>>();
   /** Running batched acceptances by owner: process-local facts overlaid on the observed lifecycle. */
   private readonly acceptances = new GitArcAcceptanceProgress();
-  private readonly claimMutations = new GitArcClaimMutations();
+  private readonly mutations = new GitArcMutations();
 
   constructor(private readonly options: WorkbenchGitArcFeatureOptions) {
     this.proposalDiffs = new GitArcProposalDiffController({ store: options.proposalDiffStore });
@@ -545,7 +553,10 @@ export default class WorkbenchGitArcFeature {
       await this.approveMachineClaims(project, effectiveRequest, owner, adoptionSource, this.lifecycleSignal(signal));
       if (effectiveRequest.action === "arcWait") {
         try {
-          return Response.json(await this.waitForPlanAndStart(project, effectiveRequest, owner, signal));
+          const proposalId = effectiveRequest.proposalId;
+          return Response.json(proposalId
+            ? await this.waitForProposalAcceptance(project, { ...effectiveRequest, proposalId }, signal)
+            : await this.waitForPlanAndStart(project, effectiveRequest, owner, signal));
         } catch (error) {
           throw new GitArcFailureException(await this.createFailure(project.project.id, effectiveRequest, error));
         }
@@ -690,7 +701,7 @@ export default class WorkbenchGitArcFeature {
           return response;
         } finally {
           if (mutatesGitArcState(effectiveRequest)) {
-            this.claimMutations.notify();
+            this.mutations.notify();
             await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
             if (adoptionSource) await this.refreshThreadGitArcState(project.project.id, adoptionSource.harness, adoptionSource.threadId);
             if (transferDestination) await this.refreshThreadGitArcState(project.project.id, transferDestination.harness, transferDestination.threadId);
@@ -714,15 +725,108 @@ export default class WorkbenchGitArcFeature {
     callerSignal?: AbortSignal,
   ) {
     const signal = this.lifecycleSignal(callerSignal);
-    const attempt = await this.claimMutations.waitUntil(async () => await this.tryStartWaitingPlan(project, request, owner, signal), signal);
+    const attempt = await this.mutations.waitUntil(async () => await this.tryStartWaitingPlan(project, request, owner, signal), signal);
     return attempt.result;
+  }
+
+  private async waitForProposalAcceptance(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "arcWait" }> & { proposalId: string },
+    callerSignal?: AbortSignal,
+  ) {
+    const signal = this.lifecycleSignal(callerSignal);
+    let targetIds = request.proposalId === "*" ? null : [request.proposalId];
+    const attempt = await this.mutations.waitUntil(async () => {
+      signal.throwIfAborted();
+      const status = await this.readProposalWaitStatus(project, request);
+      targetIds ??= pendingProposalIds(status);
+      if (!targetIds.length) return { kind: "accepted" as const, result: { accepted: [] } };
+
+      const acceptedById = new Map(status.accepted.map(proposal => [proposal.proposalId, proposal]));
+      const pendingIds = new Set(pendingProposalIds(status));
+      const unavailableById = new Map(status.unavailable?.map(proposal => [proposal.proposalId, proposal]) ?? []);
+      const accepted: GitArcStatus["accepted"] = [];
+      let blocked = false;
+      for (const proposalId of targetIds) {
+        const unavailable = unavailableById.get(proposalId);
+        if (unavailable) {
+          throw new GitArcRejectionError({ reason: "proposalUnavailable" }, unavailable.reason);
+        }
+        const acceptedProposal = acceptedById.get(proposalId);
+        if (acceptedProposal) {
+          accepted.push(acceptedProposal);
+          continue;
+        }
+        if (pendingIds.has(proposalId)) {
+          blocked = true;
+          continue;
+        }
+        const proposal = await this.readProposalWaitState(project, request, proposalId);
+        if (proposal.status === "proposed") {
+          blocked = true;
+          continue;
+        }
+        if (proposal.status === "committed" && proposal.committedSha) {
+          accepted.push({
+            commitSha: proposal.committedSha,
+            proposalId: proposal.proposalId,
+            title: proposal.title,
+          });
+          continue;
+        }
+        throw new GitArcRejectionError(
+          { reason: "proposalUnavailable" },
+          proposal.unavailableReason || `Proposal ${proposal.proposalId} became ${proposal.status} before acceptance.`,
+        );
+      }
+      return blocked ? { kind: "blocked" as const } : { kind: "accepted" as const, result: { accepted } };
+    }, signal);
+    return attempt.result;
+  }
+
+  private async readProposalWaitStatus(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "arcWait" }>,
+  ) {
+    const statusRequest = {
+      action: "arcStatus" as const,
+      cwd: request.cwd,
+      full: [],
+      harness: request.harness,
+      threadId: request.threadId,
+    };
+    if (usesWorkspaceController(project, request)) {
+      return GitArcStatusSchema.parse(await this.workspaceController.execute(project, statusRequest));
+    }
+    const response = await this.readUnderGate(project.cwd, async () => await this.dispatch(statusRequest));
+    return GitArcStatusSchema.parse(await response.json());
+  }
+
+  private async readProposalWaitState(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "arcWait" }>,
+    proposalId: string,
+  ) {
+    const proposalRequest = {
+      action: "proposalState" as const,
+      cwd: request.cwd,
+      harness: request.harness,
+      includeNewer: false,
+      proposalId,
+      threadId: request.threadId,
+    };
+    if (usesWorkspaceController(project, request)) {
+      return GitCheckpointProposalSchema.parse(await this.workspaceController.execute(project, proposalRequest));
+    }
+    const response = await this.readUnderGate(project.cwd, async () => await this.dispatch(proposalRequest));
+    return GitCheckpointProposalSchema.parse(await response.json());
   }
 
   /** Re-runs a blocked check after each claim mutation, for other owners that wait on sibling claims clearing. */
   async waitForClaimChanges<Result extends { kind: string }>(
     attempt: () => Promise<Result | { kind: "blocked" }>, callerSignal?: AbortSignal,
   ) {
-    return await this.claimMutations.waitUntil(attempt, this.lifecycleSignal(callerSignal));
+    return await this.mutations.waitUntil(attempt, this.lifecycleSignal(callerSignal));
   }
 
   private lifecycleSignal(callerSignal?: AbortSignal) {
@@ -757,7 +861,7 @@ export default class WorkbenchGitArcFeature {
       try {
         return await this.options.transitions.run(project.cwd, operation);
       } finally {
-        this.claimMutations.notify();
+        this.mutations.notify();
         await this.observeLocalClaimSnapshot(project, owner.harness, owner.threadId);
         await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
       }
@@ -775,12 +879,12 @@ export default class WorkbenchGitArcFeature {
         const before = await this.options.getThreadClaimContext(project.project.id, owner.harness, owner.threadId);
         if (!before) throw new Error("The managed thread is not available for Git arc ownership.");
         if (before.lifecycle.settled) throw new Error("A settled thread cannot apply an edit session.");
-        const applied = await this.claimMutations.waitUntil(async () => await this.options.transitions.run(project.cwd, async () => {
+        const applied = await this.mutations.waitUntil(async () => await this.options.transitions.run(project.cwd, async () => {
           const attempt = await sessions.tryApply({ checkPending, owner: editOwner, signal });
           if (attempt.kind === "applied") this.fencePendingCardReads(project.cwd);
           return attempt;
         }), signal);
-        this.claimMutations.notify();
+        this.mutations.notify();
         await this.observeLocalClaimSnapshot(project, owner.harness, owner.threadId);
         await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
         return applied.result;
@@ -854,7 +958,7 @@ export default class WorkbenchGitArcFeature {
       return attempt;
     } finally {
       if (mutationStarted) {
-        this.claimMutations.notify();
+        this.mutations.notify();
         await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
       }
     }
@@ -863,7 +967,7 @@ export default class WorkbenchGitArcFeature {
   dispose() {
     this.disposal.abort(new Error("Git arc feature disposed."));
     this.proposalDiffs.dispose();
-    this.claimMutations.notify();
+    this.mutations.notify();
   }
 
   private async coalesceCardRead(cwd: string, request: GitCheckpointRequest, execute: () => Promise<Response>) {

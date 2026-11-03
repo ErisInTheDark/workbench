@@ -555,6 +555,19 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
   }
 });
 
+test("proposal acceptance waits share simple CLI and MCP rendering", () => {
+  const command = 'wb git arc wait --proposal "*"';
+  const cli = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: { proposalId: "*" },
+    server: "wbex",
+    tool: "git_arc_wait",
+  });
+
+  assert.equal(route?.kind, "simple");
+  assert.equal(route?.rendering.claimedBy, cli.claimedBy);
+});
+
 test("non-wb and unknown MCP tools keep generic rendering", () => {
   assert.equal(getWorkbenchMcpCommandDisplay({ argumentsValue: {}, server: "other", tool: "git_arc_compare" }), null);
   assert.equal(getWorkbenchMcpCommandDisplay({ argumentsValue: {}, server: "wb", tool: "future_command" }), null);
@@ -703,11 +716,15 @@ test("failed Recall MCP calls use the generic error renderer", () => {
   const recallRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "thread_recall" });
   const gitRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "git_arc_compare" });
   const waitRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wbex", tool: "git_arc_wait" });
+  const proposalWaitRoute = getWorkbenchMcpCommandRoute({
+    argumentsValue: { proposalId: "proposal-one" }, server: "wbex", tool: "git_arc_wait",
+  });
 
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, false), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), true);
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(proposalWaitRoute, true), false);
   const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { status: "blocked" }, server: "wbex", tool: "thread_state" });
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), true);
 });

@@ -207,7 +207,6 @@ Unexpected omitted paths:
 - Report each path and reason.
 - No material change: acquire the path and continue. No new approval.
 - Material or uncertain change: keep work; use inherited <tool id="git_plan_claims" />; return to Brief.
-- For collisions, wait on the inactive plan with <tool id="git_arc_wait" />, without republishing it. If requested scope has no inactive plan, publish it first.
 - For incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded arc safety. Continue without it only after explicit user approval.
 

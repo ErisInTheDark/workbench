@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default GitArcClaimMutations: own the claim-mutation revision that wakes callers waiting for sibling claims to clear.
+ * - default GitArcMutations: own the Git arc mutation revision that wakes blocked lifecycle checks without polling.
  */
-export default class GitArcClaimMutations {
+export default class GitArcMutations {
   private revision = 0;
   private readonly waiters = new Set<() => void>();
 
@@ -12,7 +12,7 @@ export default class GitArcClaimMutations {
   }
 
   /**
-   * Repeat `attempt` until it is no longer blocked, waiting for a claim mutation between attempts. A mutation that
+   * Repeat `attempt` until it is no longer blocked, waiting for a Git arc mutation between attempts. A mutation that
    * lands while an attempt runs triggers the next attempt immediately.
    */
   async waitUntil<Result extends { kind: string }>(

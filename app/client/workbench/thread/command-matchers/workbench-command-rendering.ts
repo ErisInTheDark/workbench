@@ -775,8 +775,18 @@ export function getWorkbenchCommandRoute(
       return hidden("workbench-cli.shell-stop");
     case "skill":
       return renderSkill(readString(args.name), args.locate === true, context);
-    case "git_arc_wait":
+    case "git_arc_wait": {
+      const proposalId = readString(args.proposalId);
+      if (proposalId) {
+        const target = proposalId === "*" ? "all pending proposals" : proposalId;
+        return simple(
+          "git-arc.wait-proposal",
+          actionTarget("Waiting for acceptance of ", target),
+          actionTarget("Waited for acceptance of ", target),
+        );
+      }
       return specialized("git-arc.wait", { kind: "gitArcWait", ref: readString(args.ref) }, "Waiting for claims");
+    }
     case "request_user_input":
       return hidden("workbench-cli.questionnaire");
     case "toc": {
