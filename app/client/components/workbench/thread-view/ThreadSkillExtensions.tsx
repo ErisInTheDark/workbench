@@ -3,7 +3,8 @@
  * - ThreadSkillExtensionsHandle/useThreadSkillExtensionsOwner: one thread's skill extensions owner following its active
  *   skills, and its matchers and css; no owner for drafts.
  * - useThreadSkillComponent: one component's render through the nearest thread's owner, held while shown.
- * - default ThreadSkillExtensions: share an owner with the transcript below it and mount its skills' scoped stylesheet.
+ * - default ThreadSkillExtensions: share an owner with the transcript below it and mount its skills' stylesheet scoped to their
+ *   component markup.
  */
 "use client";
 
@@ -87,7 +88,9 @@ export default function ThreadSkillExtensions({ extensions, scope, children }: {
 }) {
   const { css } = extensions.state;
   return <ThreadSkillExtensionsContext.Provider value={extensions.owner}>
-    {css ? <style>{`@scope ([data-thread-component-style="${scope}"]) {${css}}`}</style> : null}
+    {/* Skill utilities land in the app's own utilities layer and arrive later, so the scope stops at component markup: a
+        thread-wide scope would let a plain utility (such as .flex) override the app's variant of it (such as a container query). */}
+    {css ? <style>{`@scope ([data-thread-component-style="${scope}"] [data-wb-component="true"]) {${css}}`}</style> : null}
     {children}
   </ThreadSkillExtensionsContext.Provider>;
 }
