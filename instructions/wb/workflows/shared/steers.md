@@ -46,7 +46,6 @@ Restore current request, approval boundary, and file state before risky work.
 
 On follow-ups, call <tool id="git_arc_status" /> before rereading prior work. Retained claims: reuse known context. Lost claims: inspect the reported changes and reread affected files only when needed or the baseline is unavailable. Status does not replace approval recovery or mutation safety checks.
 
-- After compaction, use Thread Recall through complete approval boundary
 - After other resume or delay, verify newest request
 - If exact approval boundary known, keep approval; stale or missing arc ref alone does not invalidate it
 - If approval boundary missing or ambiguous, return to Brief

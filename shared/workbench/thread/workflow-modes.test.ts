@@ -1,14 +1,14 @@
 /*
  * No production exports. Tests mode transitions: fresh proofs per loop, cross-turn filings, missing items, ungated modes, retired defer arguments,
- * entry sources, user and parent message preconditions, undeclared and unentered modes, the completed-status pairing, and what refused, legacy and
- * parent-message calls contribute to the ledger.
+ * entry sources, user and parent message preconditions, undeclared and unentered modes, the completed-status pairing, compaction recovery, and what
+ * refused, legacy, parent-message and recall calls contribute to the ledger.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProofOfWork, ProofOfWorkChecklist } from "./proof-of-work";
 import {
-  currentAlwaysEditable, effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows, readFiledProofs, readModeEntered, readWorkflowLedgerEntries,
-  type ThreadState, type WorkflowLedgerEntry, type WorkflowMode,
+  awaitsFirstMode, compactionRecoveryNeeds, currentAlwaysEditable, effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows,
+  readFiledProofs, readModeEntered, readWorkflowLedgerEntries, type ThreadState, type WorkflowLedgerEntry, type WorkflowMode,
 } from "./workflow-modes";
 
 const plan: ProofOfWorkChecklist = {
@@ -95,7 +95,7 @@ test("a mode entered after a parent message needs one since the latest mode entr
 });
 
 test("only successful messages addressed to the parent join the ledger", () => {
-  const sent = (args: object, failed = false) => readWorkflowLedgerEntries({ tool: "message_agent", args, failed });
+  const sent = (args: object, failed = false) => readWorkflowLedgerEntries({ threadId: "thread", tool: "message_agent", args, failed });
   assert.deepEqual(sent({ parent: true, message: "plan", userVisibleSimpleVersion: "plan" }), [{ kind: "message", audience: "parent" }]);
   assert.deepEqual(sent({ parent: true, message: "plan" }, true), []);
   assert.deepEqual(sent({ name: "sibling", message: "plan" }), []);
@@ -113,6 +113,41 @@ test("only declared modes can be entered, and only while the workflow declares a
   );
 });
 
+test("only a workflow declaring modes awaits its first one", () => {
+  assert.equal(awaitsFirstMode([complete, { kind: "message", audience: "user" }], modes), true);
+  assert.equal(awaitsFirstMode([mode("Ghost")], modes), false, "an undeclared mode was still entered; it falls back instead");
+  assert.equal(awaitsFirstMode([], []), false);
+});
+
+test("only successful unfiltered recalls of the thread's own history join the ledger", () => {
+  const recalled = (args: object, failed = false) => readWorkflowLedgerEntries({ threadId: "own", tool: "thread_recall", args, failed });
+  assert.deepEqual([recalled({}), recalled({ threadId: "own", before: "ref" })], [[{ kind: "recall" }], [{ kind: "recall" }]]);
+  assert.deepEqual([recalled({ threadId: "other" }), recalled({ kinds: ["plan"] }), recalled({}, true)], [[], [], []]);
+});
+
+test("compaction recovery needs a recall and answered checklist after the latest compaction", () => {
+  const compaction: ProofOfWorkChecklist = { id: "compaction", hidden: false, items: [{ id: "compaction.narrative", label: "Narrative" }] };
+  const compacted: WorkflowLedgerEntry = { kind: "compaction" };
+  const recall: WorkflowLedgerEntry = { kind: "recall" };
+  const narrated = proof({ proofs: { "compaction.narrative": "request, plan" } });
+  const needs = (ledger: WorkflowLedgerEntry[], catalogue = [compaction]) => compactionRecoveryNeeds(ledger, catalogue);
+  assert.equal(needs([recall, narrated]), null, "never compacted");
+  assert.deepEqual(needs([recall, narrated, compacted]), { recall: true, proofs: ["compaction.narrative"] }, "earlier recovery does not count");
+  assert.deepEqual(needs([compacted, recall]), { recall: false, proofs: ["compaction.narrative"] });
+  assert.deepEqual(needs([compacted, narrated]), { recall: true, proofs: [] });
+  assert.deepEqual(needs([compacted, recall, proof({ notApplicable: ["compaction.narrative"] })])?.proofs, ["compaction.narrative"]);
+  assert.equal(needs([compacted, narrated, recall]), null);
+  assert.equal(needs([compacted, recall], []), null, "without a declared checklist the recall alone recovers");
+  assert.deepEqual(needs([compacted, recall, narrated, compacted, recall])?.proofs, ["compaction.narrative"], "each compaction needs its own");
+
+  const gated = (ledger: WorkflowLedgerEntry[], target: string) => evaluateThreadStateTransition(
+    ledger, [defined("Inspect"), ...modes], [plan, review, compaction], { mode: target },
+  ).needsRecovery;
+  assert.deepEqual(gated([mode("Inspect"), compacted, complete], "Brief"), { recall: true, proofs: ["compaction.narrative"] });
+  assert.equal(gated([mode("Brief"), compacted], "Inspect"), null, "modes without checklists stay enterable");
+  assert.equal(gated([mode("Inspect"), compacted, recall, complete, narrated], "Brief"), null);
+});
+
 test("gated families report over the same window their modes count", () => {
   const windows = gatedProofWindows([complete, mode("Review"), proof({ notApplicable: ["plan.verify"] })], modes);
   assert.deepEqual(windows.get("plan"), [{ notApplicable: ["plan.verify"] }]);
@@ -121,20 +156,20 @@ test("gated families report over the same window their modes count", () => {
 
 test("refused thread_state calls keep only their proofs; legacy calls count only on success", () => {
   const args = { proofs: { "review.coverage": "ok" }, mode: "Review", status: "completed", alwaysEditable: ["notes.md"] };
-  assert.deepEqual(readWorkflowLedgerEntries({ tool: "thread_state", args, failed: true }), [reviewed]);
-  assert.deepEqual(readWorkflowLedgerEntries({ tool: "thread_state", args, failed: false }), [
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "thread_state", args, failed: true }), [reviewed]);
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "thread_state", args, failed: false }), [
     reviewed, { kind: "editable", paths: ["notes.md"] }, mode("Review"),
   ]);
-  assert.deepEqual(readWorkflowLedgerEntries({ tool: "mode_set", args: { mode: "Brief" }, failed: false }), [mode("Brief")]);
-  assert.deepEqual(readWorkflowLedgerEntries({ tool: "mode_set", args: { mode: "Brief" }, failed: true }), []);
-  assert.deepEqual(readWorkflowLedgerEntries({ tool: "proof_of_work", args: { proofs: {} }, failed: false }), []);
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "mode_set", args: { mode: "Brief" }, failed: false }), [mode("Brief")]);
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "mode_set", args: { mode: "Brief" }, failed: true }), []);
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "proof_of_work", args: { proofs: {} }, failed: false }), []);
   assert.deepEqual(currentAlwaysEditable([{ kind: "editable", paths: ["a.md"] }, { kind: "editable", paths: [] }]), []);
 });
 
 test("recorded calls that sent the retired defer bucket keep their mode and other proofs", () => {
   const args = { proofs: { "review.coverage": "ok" }, defer: ["review.other"], mode: "Review" };
-  assert.deepEqual(readWorkflowLedgerEntries({ tool: "thread_state", args, failed: false }), [reviewed, mode("Review")]);
-  assert.deepEqual(readWorkflowLedgerEntries({ tool: "proof_of_work", args: { proofs: { "review.coverage": "ok" }, defer: ["review.other"] }, failed: false }), [reviewed]);
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "thread_state", args, failed: false }), [reviewed, mode("Review")]);
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "proof_of_work", args: { proofs: { "review.coverage": "ok" }, defer: ["review.other"] }, failed: false }), [reviewed]);
 });
 
 test("transcript calls enter modes only when applied, but file proofs once settled", () => {

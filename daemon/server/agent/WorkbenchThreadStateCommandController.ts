@@ -9,7 +9,7 @@ import {
   type ProofOfWork, type ProofState,
 } from "workbench-shared/workbench/thread/proof-of-work";
 import {
-  effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows, MODE_AFTER, readFiledProofs,
+  describeCompactionRecovery, effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows, MODE_AFTER, readFiledProofs,
   type ThreadState, type WorkflowLedgerEntry, type WorkflowMode,
 } from "workbench-shared/workbench/thread/workflow-modes";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -87,6 +87,9 @@ export default class WorkbenchThreadStateCommandController {
         : [],
       ...transition.needsStatus ? [`${transition.target!.name} is entered together with status: "${transition.needsStatus}".`] : [],
       ...transition.needsMode.length ? [`Status completed needs mode ${transition.needsMode.join(" or ")} after this call.`] : [],
+      ...transition.needsRecovery
+        ? [`Context was compacted; ${transition.target!.name} needs ${describeCompactionRecovery(transition.needsRecovery)} first.`]
+        : [],
     ];
 
     let titleFailure: string | null = null;
@@ -141,7 +144,7 @@ export default class WorkbenchThreadStateCommandController {
     const { checklists, modes } = workflow.overlays;
     return modes.flatMap((candidate) => {
       if ((!candidate.proofs.length && !candidate.from.length && !candidate.after) || candidate.name.toLowerCase() === mode?.toLowerCase()) return [];
-      const { current, needsFrom, needsMessage, unresolved } = evaluateThreadStateTransition(
+      const { current, needsFrom, needsMessage, needsRecovery, unresolved } = evaluateThreadStateTransition(
         ledger, modes, checklists, { mode: candidate.name, status: candidate.status ?? undefined },
       );
       const message = needsMessage ? messageNeed(candidate) : null;
@@ -149,6 +152,7 @@ export default class WorkbenchThreadStateCommandController {
         ...needsFrom.length ? [`entering from ${needsFrom.join(" or ")}`] : [],
         ...message && !needsFrom.length ? [`${message.label} since entering ${current ?? "the current mode"}`] : [],
         ...unresolved.map(({ checklist, ids }) => `${checklist} (${ids.join(", ")})`),
+        ...needsRecovery ? [`after compaction, ${describeCompactionRecovery(needsRecovery)}`] : [],
       ];
       return needs.length ? [`${candidate.name} needs: ${needs.join("; ")}.`] : [];
     });

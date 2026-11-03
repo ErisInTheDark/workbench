@@ -7,12 +7,18 @@
  * - ModeAfterSchema/ModeAfter/MODE_AFTER: the message preconditions a mode may declare, each with its audience and readable label.
  * - WorkflowModeSchema/WorkflowMode: one instruction-declared mode: its icon, colour, proofs due on entry, resets, entry sources, message precondition, status pairing and denials.
  * - WorkflowLedgerSource/WorkflowLedgerEntry/readWorkflowLedgerEntries: what one recorded Workbench call contributed to a thread's workflow;
- *   user-visible agent messages join the ledger as user message entries, successful messages to the parent as parent ones.
+ *   user-visible agent messages join the ledger as user message entries, successful messages to the parent as parent ones,
+ *   completed compactions as compaction entries and unfiltered recalls of the thread's own history as recall entries.
+ * - PRE_MODE_TOOLS: the only tools a thread runs before it first enters a declared mode.
+ * - COMPACTION_CHECKLIST: the checklist family a compaction needs resolved before edits or checklist-gated modes.
+ * - awaitsFirstMode: whether a workflow declaring modes has never entered one.
+ * - CompactionRecovery/compactionRecoveryNeeds/describeCompactionRecovery: what the latest compaction still needs, and its readable form.
  * - readThreadStateCall/readModeEntered/readFiledProofs: a transcript call's thread_state arguments, entered mode, and filed proofs.
  * - currentWorkflowMode/currentAlwaysEditable: a ledger's latest entered mode and always-editable paths.
  * - effectiveWorkflowMode: the declared mode whose rules apply, falling back to the first declared one.
  * - findWorkflowMode: the definition a mode name selects.
- * - evaluateThreadStateTransition: whether one call may apply its mode and status from the current mode, naming every refusal.
+ * - evaluateThreadStateTransition: whether one call may apply its mode and status from the current mode, naming every refusal,
+ *   including compaction recovery a checklist-gated target still needs.
  * - gatedProofWindows: per gated checklist family, the proofs its modes count.
  */
 import { z } from "zod";
@@ -27,6 +33,12 @@ export const THREAD_STATE_TOOL = "thread_state";
 const LEGACY_MODE_TOOL = "mode_set";
 const LEGACY_PROOF_TOOL = "proof_of_work";
 const MESSAGE_AGENT_TOOL = "message_agent";
+const RECALL_TOOL = "thread_recall";
+
+export const PRE_MODE_TOOLS: ReadonlySet<string> = new Set([
+  THREAD_STATE_TOOL, RECALL_TOOL, "thread_recall_search", "message_user", MESSAGE_AGENT_TOOL,
+]);
+export const COMPACTION_CHECKLIST = "compaction";
 
 export const ThreadStateSchema = z.object({
   ...ProofOfWorkBuckets,
@@ -70,6 +82,8 @@ export const WorkflowModeSchema = z.object({
 export type WorkflowMode = z.infer<typeof WorkflowModeSchema>;
 
 export interface WorkflowLedgerSource {
+  /** The thread whose ledger holds the call. */
+  readonly threadId: string;
   readonly tool: string;
   readonly args: unknown;
   readonly failed: boolean;
@@ -79,9 +93,12 @@ export type WorkflowLedgerEntry =
   | { readonly kind: "proof"; readonly proof: ProofOfWork }
   | { readonly kind: "mode"; readonly mode: string }
   | { readonly kind: "editable"; readonly paths: readonly string[] }
-  | { readonly kind: "message"; readonly audience: MessageAudience };
+  | { readonly kind: "message"; readonly audience: MessageAudience }
+  | { readonly kind: "compaction" }
+  | { readonly kind: "recall" };
 
 const ParentMessageSchema = z.object({ parent: z.literal(true) }).passthrough();
+const RecallSchema = z.object({ threadId: z.string().optional(), kinds: z.array(z.string()).optional() }).passthrough();
 
 function proofOf(state: ThreadState): ProofOfWork | null {
   const parsed = ProofOfWorkSchema.safeParse({
@@ -92,7 +109,7 @@ function proofOf(state: ThreadState): ProofOfWork | null {
 }
 
 /** A refused thread_state call still files its proofs; its other changes never applied. Legacy calls count only on success. */
-export function readWorkflowLedgerEntries({ tool, args, failed }: WorkflowLedgerSource): WorkflowLedgerEntry[] {
+export function readWorkflowLedgerEntries({ threadId, tool, args, failed }: WorkflowLedgerSource): WorkflowLedgerEntry[] {
   if (tool === THREAD_STATE_TOOL) {
     const parsed = ThreadStateSchema.safeParse(withoutRetiredProofFields(args));
     if (!parsed.success) return [];
@@ -105,6 +122,11 @@ export function readWorkflowLedgerEntries({ tool, args, failed }: WorkflowLedger
   }
   if (failed) return [];
   if (tool === MESSAGE_AGENT_TOOL) return ParentMessageSchema.safeParse(args).success ? [{ kind: "message", audience: "parent" }] : [];
+  if (tool === RECALL_TOOL) {
+    const parsed = RecallSchema.safeParse(args);
+    if (!parsed.success || parsed.data.kinds?.length) return [];
+    return !parsed.data.threadId || parsed.data.threadId === threadId ? [{ kind: "recall" }] : [];
+  }
   if (tool === LEGACY_MODE_TOOL) {
     const parsed = z.object({ mode: z.string().trim().min(1) }).strict().safeParse(args);
     return parsed.success ? [{ kind: "mode", mode: parsed.data.mode }] : [];
@@ -165,6 +187,39 @@ export function effectiveWorkflowMode(ledger: readonly WorkflowLedgerEntry[], mo
   return findWorkflowMode(modes, currentWorkflowMode(ledger)) ?? modes[0] ?? null;
 }
 
+export function awaitsFirstMode(ledger: readonly WorkflowLedgerEntry[], modes: readonly WorkflowMode[]) {
+  return modes.length > 0 && currentWorkflowMode(ledger) === null;
+}
+
+export interface CompactionRecovery {
+  /** No unfiltered recall of the thread's own history followed the compaction. */
+  readonly recall: boolean;
+  /** Declared compaction checklist items not answered since the compaction. */
+  readonly proofs: readonly string[];
+}
+
+/** Null when the thread never compacted or has recovered since its latest compaction; not-applicable never resolves an item. */
+export function compactionRecoveryNeeds(
+  ledger: readonly WorkflowLedgerEntry[], catalogue: readonly ProofOfWorkChecklist[],
+): CompactionRecovery | null {
+  let boundary = ledger.length - 1;
+  while (boundary >= 0 && ledger[boundary]!.kind !== "compaction") boundary -= 1;
+  if (boundary < 0) return null;
+  const after = ledger.slice(boundary + 1);
+  const recall = !after.some(entry => entry.kind === "recall");
+  const filed = mergeProofs(after.flatMap(entry => entry.kind === "proof" ? [entry.proof] : []));
+  const proofs = catalogue.find(checklist => checklist.id === COMPACTION_CHECKLIST)?.items
+    .map(item => item.id).filter(id => filed.get(id)?.kind !== "answered") ?? [];
+  return recall || proofs.length ? { recall, proofs } : null;
+}
+
+export function describeCompactionRecovery({ recall, proofs }: CompactionRecovery) {
+  return [
+    recall ? `an unfiltered ${RECALL_TOOL} of this thread` : "",
+    proofs.length ? `the ${COMPACTION_CHECKLIST} checklist (${proofs.join(", ")})` : "",
+  ].filter(Boolean).join(" and ");
+}
+
 export function currentAlwaysEditable(ledger: readonly WorkflowLedgerEntry[]): readonly string[] {
   for (let index = ledger.length - 1; index >= 0; index -= 1) {
     const entry = ledger[index]!;
@@ -197,7 +252,8 @@ function proofsSinceReset(ledger: readonly WorkflowLedgerEntry[], resetOn: reado
  * `ledger` already holds this call's proofs. Only declared modes can be entered. Entering one needs its proof checklists
  * resolved, when it lists `from` modes, the effective mode among them, and with `after`, a message to that audience
  * since the latest mode entry; a mode paired with `completed` is entered only with that status, and while
- * any mode is paired, `completed` needs one of them after the call.
+ * any mode is paired, `completed` needs one of them after the call. After a compaction, modes requiring checklists
+ * also need its recovery.
  */
 export function evaluateThreadStateTransition(
   ledger: readonly WorkflowLedgerEntry[],
@@ -233,6 +289,7 @@ export function evaluateThreadStateTransition(
     needsMessage,
     needsStatus: needsStatus?.status ?? null,
     needsMode,
+    needsRecovery: target?.proofs.length ? compactionRecoveryNeeds(ledger, catalogue) : null,
   };
 }
 

@@ -296,16 +296,6 @@ Bundled calls can result in one command failing and wasting time on pointless va
 - Prioritize bugs, behavioral regressions, missing tests, safety risks, broken contracts, and maintainability risks.
 - If you find no issues, say so directly and name any remaining test gaps or residual risk.
 
-## Resuming After Context Compaction
-
-Generically: Apply **Newest Instruction Wins** and **Shared Workspace**.
-
-Specifically:
-- IMPORTANT: Call <tool id="thread_recall" /> and read its Markdown IMMEDIATELY, before relying on memory, continuing work, or responding to user. Thread Recall is authoritative source; compaction summary is untrusted reference material.
-- Verify newest request and approval boundary; follow active workflow state-recovery rules before risky work.
-- DO NOT trust user messages/steers in compaction summary! Compaction summaries act as though steers are most important current thing; Thread Recall gives most recent user-visible text in thread and thereby a more accurate view of what's relevant. DO NOT return from context compaction by restating your context compaction summary, or replying to old message in summaries, as it will confuse you and the user. Continue from where Thread Recall shows you left off.
-- CRITICAL: DO NOT RESPOND TO PRIOR STEERS MENTIONED BY CONTEXT COMPACTION SUMMARY UNLESS THREAD RECALL PROVES THERE WAS NEVER A RESPONSE.
-
 ## User-Visible Context
 
 **Hard rule: the user does not see your tool stream.**

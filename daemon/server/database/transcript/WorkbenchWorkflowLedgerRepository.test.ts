@@ -1,6 +1,7 @@
 /*
- * No production exports. Tests the workflow ledger keeps Workbench filings, only successful switches, user-visible agent messages and
- * successful messages to the parent, in transcript order across turns.
+ * No production exports. Tests the workflow ledger keeps Workbench filings, only successful switches, user-visible agent messages,
+ * successful messages to the parent, completed compactions and own unfiltered recalls, in transcript order across turns, anchored by
+ * a mode entered before its window.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -96,6 +97,49 @@ test("user-visible agent messages join the ledger in order; blank text and the b
       { kind: "message", audience: "user" }, { kind: "mode", mode: "Brief" },
       { kind: "message", audience: "user" }, { kind: "mode", mode: "Implement" },
     ]);
+  } finally { database.close(); }
+});
+
+test("completed compactions and unfiltered recalls of the thread's own history join the ledger in order", () => {
+  const database = new Database(":memory:");
+  const compaction = (id: string): FixtureItem => ({ type: "contextCompaction", id, status: "completed" });
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    seedThread(database, "thread");
+    settleTurn(database, "thread", 0, [call("inspect", "thread_state", { mode: "Inspect" }), compaction("failed")]);
+    database.prepare(`UPDATE thread_item_context_compactions SET state = 'failed', error_text = 'Compaction failed.'
+      WHERE item_id IN (SELECT id FROM thread_items WHERE turn_id = 'thread-0')`).run();
+    settleTurn(database, "thread", 1, [
+      compaction("compacted"),
+      call("filtered", "thread_recall", { kinds: ["plan"] }),
+      call("foreign", "thread_recall", { threadId: "other" }),
+      call("broken", "thread_recall", {}, { failed: true }),
+      call("recall", "thread_recall", { before: "ref" }),
+    ]);
+
+    assert.deepEqual(new WorkbenchWorkflowLedgerRepository(database).read("thread"), [
+      { kind: "mode", mode: "Inspect" }, { kind: "compaction" }, { kind: "recall" },
+    ]);
+  } finally { database.close(); }
+});
+
+test("a mode entered before the ledger window still governs the thread, without reopening older proofs", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    seedThread(database, "thread");
+    settleTurn(database, "thread", 0, [
+      call("plan", "proof_of_work", { proofs: { "plan.result": "done" } }),
+      call("implement", "thread_state", { mode: "Implement" }),
+    ]);
+    settleTurn(database, "thread", 1, Array.from({ length: 1000 }, (_, index): FixtureItem => ({
+      type: "agentMessage", id: `m${index}`, text: "Working.", phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+    })));
+
+    const ledger = new WorkbenchWorkflowLedgerRepository(database).read("thread");
+    assert.deepEqual([ledger.length, ledger[0], ledger.some(entry => entry.kind === "proof")], [1001, { kind: "mode", mode: "Implement" }, false]);
   } finally { database.close(); }
 });
 

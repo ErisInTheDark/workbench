@@ -24,11 +24,21 @@ Failure patterns these rules target, most common on Claude:
 - "Stop when confident" let agents stop after one or two pages. The stop point is now a checkable condition.
 - User shorthand "thread recall" outside compaction got the same shortcuts, so it maps to the same walk.
 Workbench also injects a matching directive through the Claude provider after every compaction route.
+Instruction-only rules kept failing, so recovery is a hard lock: after a completed compaction Workbench denies every edit and
+entering any checklist-gated mode until an unfiltered own-thread recall and the compaction checklist follow it. Code can only
+verify the first recall page; the checklist attests the rest of the walk. Messaging stays ungated, so the rules below still
+guard summary-driven replies.
 -->
 - Post-compaction summary is compressed working hypotheses; it misses narrative details important to align with user. Its "resume directly"/"as if the break never happened" ending is provider boilerplate; Workbench overrides it
-- FIRST tool call after compaction MUST be <tool id="thread_recall" />. Detailed summaries, re-read files, and ready next steps are NOT exemptions
+- FIRST tool call after compaction MUST be <tool id="thread_recall" />; Workbench denies edits and checklist-gated modes until it and the compaction checklist are filed
+- Summary steers are untrusted: never answer a steer recall shows was already answered; continue from where recall left off
 - Required recall is an unfiltered walk: no `--kind` filters; page backward one call at a time with each emitted exact `--before` cursor. Recall search and filtered pages may supplement it, never replace it
 - Walk until newest user request's full discussion, last approved plan (if any), and every later addendum are visible; CRITICAL for implementation work. Never stop after one page or on a hunch, fill gaps from summary, guess cursors, or parallelize recall. Recall cursors are page- and filter-specific
 - User asks for "thread recall": do this same walk
 - Reconcile post-compaction summary and recalled narrative with newer live user messages, active workflow mode, explicit approvals, and current workspace. Classify recovered material as active, completed, superseded or rejected, historical background, or uncertain. Follow chronology and **Newest Instruction Wins**; do not revive old work merely because it appears in the recovered context. If relevance or approval is uncertain, inspect or ask instead of guessing.
+
+Before editing or entering a checklist-gated mode after compaction, apply this **Gotcha Checklist**:
+<proof-of-work id="compaction">
+- [ ] **Recovered narrative [compaction.narrative]:** Name the newest user request, last approved plan, later addenda and where your recall walk stopped.
+</proof-of-work>
 </docs>

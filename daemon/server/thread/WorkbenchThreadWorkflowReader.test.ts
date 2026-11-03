@@ -1,11 +1,12 @@
 /*
  * No production exports. Tests pinned instruction layers over current files, and mode denials: claimed edits vs gitignored ones,
- * always-editable exemptions, tool and arc worktree denials, the first declared mode standing in for none, and that thread_state
- * is never denied.
+ * always-editable exemptions, tool and arc worktree denials, the pre-mode and compaction locks, the first declared mode standing in
+ * for an undeclared one, and that thread_state is never denied.
  */
 import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
+import type { ProofOfWorkChecklist } from "workbench-shared/workbench/thread/proof-of-work";
 import type { WorkflowLedgerEntry, WorkflowMode } from "workbench-shared/workbench/thread/workflow-modes";
 import type { StoredThreadInstructionOverlays } from "../database/thread-state/WorkbenchThreadInstructionOverlayStore";
 import WorkbenchThreadInstructionPins from "./WorkbenchThreadInstructionPins";
@@ -16,14 +17,14 @@ const review: WorkflowMode = { name: "Review", icon: "flag", color: null, proofs
 const locked: WorkflowMode = { ...review, name: "Locked", deny: ["edit"] };
 const nothingPinned = { base: null, skills: new Map() };
 
-function reader(ledger: WorkflowLedgerEntry[], modes: WorkflowMode[] = [review, locked]) {
+function reader(ledger: WorkflowLedgerEntry[], modes: WorkflowMode[] = [review, locked], checklists: ProofOfWorkChecklist[] = []) {
   return new WorkbenchThreadWorkflowReader({
     readSelection: async () => ({ workflowIds: ["default"] }),
     readSkills: async () => [],
     readProjectRoot: async () => root,
     readLedger: async () => ledger,
     readPins: async () => nothingPinned,
-    readBaseLayers: async () => [{ checklists: [], modes }],
+    readBaseLayers: async () => [{ checklists, modes }],
     readSkillLayers: async () => [],
   });
 }
@@ -97,10 +98,33 @@ test("edit denies gitignored edits too", async () => {
   assert.notEqual(await reader([{ kind: "mode", mode: "Locked" }]).readEditDenial("t", [ignored], []), null);
 });
 
-test("skipping thread_state or sitting in an undeclared mode applies the first declared mode; mode-free workflows deny nothing", async () => {
-  assert.notEqual(await reader([]).readEditDenial("t", [claimed], [claimed]), null);
-  assert.notEqual(await reader([{ kind: "mode", mode: "Decision" }]).readToolDenial("t", "shell"), null);
+test("before a first mode only state, recall and messaging tools run and nothing is edited; mode-free workflows deny nothing", async () => {
+  const fresh = reader([{ kind: "message", audience: "user" }], [{ ...review, deny: [] }]);
+  for (const tool of ["thread_state", "thread_recall", "thread_recall_search", "message_user", "message_agent"]) {
+    assert.equal(await fresh.readToolDenial("t", tool), null, tool);
+  }
+  for (const tool of ["shell", "rg", "read", "skill"]) assert.notEqual(await fresh.readToolDenial("t", tool), null, tool);
+  assert.notEqual(await fresh.readEditDenial("t", [notes], []), null, "always-editable or unclaimed, nothing is edited");
   assert.equal(await reader([], []).readEditDenial("t", [claimed], [claimed]), null);
+  assert.equal(await reader([], []).readToolDenial("t", "shell"), null);
+});
+
+test("an undeclared current mode applies the first declared mode", async () => {
+  assert.notEqual(await reader([{ kind: "mode", mode: "Decision" }]).readToolDenial("t", "shell"), null);
+});
+
+test("an unrecovered compaction denies every edit and worktree tool until a recall and its checklist follow it", async () => {
+  const open: WorkflowMode = { ...review, name: "Open", deny: [] };
+  const checklist = { id: "compaction", hidden: false, items: [{ id: "compaction.narrative", label: "Narrative" }] };
+  const compacted = (...after: WorkflowLedgerEntry[]) => reader(
+    [{ kind: "editable", paths: ["docs/plan.md"] }, { kind: "mode", mode: "Open" }, { kind: "compaction" }, ...after], [open], [checklist],
+  );
+  assert.notEqual(await compacted().readEditDenial("t", [notes], []), null, "always-editable paths are locked too");
+  assert.notEqual(await compacted({ kind: "recall" }).readToolDenial("t", "git_arc_restore"), null, "the checklist is still owed");
+  assert.equal(await compacted().readToolDenial("t", "shell"), null, "inspection stays open");
+  const recovered = compacted({ kind: "recall" }, { kind: "proof", proof: { proofs: { "compaction.narrative": "request, plan" } } });
+  assert.equal(await recovered.readEditDenial("t", [claimed], [claimed]), null);
+  assert.equal(await recovered.readToolDenial("t", "git_arc_restore"), null);
 });
 
 test("a mode denies its listed tools and, with edit denials, arc tools that write the worktree; never thread_state", async () => {

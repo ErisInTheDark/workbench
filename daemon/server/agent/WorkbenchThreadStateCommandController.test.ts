@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests thread_state ordering: a refused, undeclared, unpaired or unannounced mode or status applies nothing else, a refused title
+ * No production exports. Tests thread_state ordering: a refused, undeclared, unpaired, unannounced or unrecovered mode or status applies nothing else, a refused title
  * stops the status, and an accepted call retitles before setting status.
  */
 import assert from "node:assert/strict";
@@ -51,6 +51,17 @@ test("entering the paired mode needs completion in the same call, and completion
   assert.equal((await call({ status: "completed" })).status, 400);
   assert.equal((await call({ status: "blocked" })).status, 200);
   assert.deepEqual(applied, ["status:blocked"]);
+});
+
+test("after a compaction a checklist-gated mode is refused until a recall follows it, applying nothing else", async () => {
+  const entering = { proofs: { "review.coverage": "ok" }, mode: "Review", status: "completed" };
+  const compacted = fixture([{ kind: "mode", mode: "Implement" }, { kind: "compaction" }]);
+  const refused = await compacted.call(entering);
+  assert.equal(refused.status, 400);
+  assert.match(refused.body, /thread_recall/u);
+  assert.deepEqual(compacted.applied, []);
+  const recovered = fixture([{ kind: "mode", mode: "Implement" }, { kind: "compaction" }, { kind: "recall" }]);
+  assert.equal((await recovered.call(entering)).status, 200);
 });
 
 test("an accepted call retitles before setting status; a refused title stops the status", async () => {
