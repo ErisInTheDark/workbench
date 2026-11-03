@@ -1,12 +1,14 @@
 /*
  * Exports:
  * - WorkbenchAgentCommandLiveScenarioControllerOptions: inject filesystem, process and retirement boundaries.
- * - default WorkbenchAgentCommandLiveScenarioController: own one allowlisted live scenario run and its bounded diagnostics.
+ * - default WorkbenchAgentCommandLiveScenarioController: run allowlisted live scenarios one at a time in arrival order, streaming
+ *   each run's output (saying at once when it must wait) and ending it with its exit line.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 
+import { LiveScenarioExit } from "workbench-shared/workbench/commands/live-scenario-exit";
 import {
   WORKBENCH_LIVE_SCENARIOS,
   WorkbenchLiveScenarioRequestSchema,
@@ -15,8 +17,7 @@ import {
 import { createSpawnOptions, killProcessTreeAsync } from "../process-helpers";
 import WorkbenchTestProcessResources from "../runtime/WorkbenchTestProcessResources";
 
-const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
-const OUTPUT_TRUNCATED = "\n[workbench live scenario output truncated]\n";
+type Write = (chunk: Buffer | string) => void;
 
 export interface WorkbenchAgentCommandLiveScenarioControllerOptions {
   realpath?: (value: string) => Promise<string>;
@@ -30,8 +31,21 @@ function samePath(left: string, right: string) {
     : left === right;
 }
 
+/** Settles with `operation`, or rejects as soon as `signal` aborts. */
+function untilAborted(operation: Promise<void>, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 export default class WorkbenchAgentCommandLiveScenarioController {
-  private active = false;
+  /** Settles once every run admitted so far has finished, including its service cleanup. */
+  private tail: Promise<void> = Promise.resolve();
+  /** Runs admitted and not yet finished, running or waiting. */
+  private admitted = 0;
   private activeAbort: AbortController | null = null;
   private readonly readRealpath: NonNullable<WorkbenchAgentCommandLiveScenarioControllerOptions["realpath"]>;
   private readonly retireProcess: NonNullable<WorkbenchAgentCommandLiveScenarioControllerOptions["retireProcess"]>;
@@ -46,40 +60,73 @@ export default class WorkbenchAgentCommandLiveScenarioController {
     this.spawnProcess = options.spawnProcess ?? spawn;
   }
 
-  async execute(input: object, signal: AbortSignal) {
+  /**
+   * Streams one run; its HTTP status is sent before the scenario runs, so the final exit line carries the result. A caller that
+   * disconnects while queued leaves the queue without spawning.
+   */
+  execute(input: object, signal: AbortSignal) {
     const request = WorkbenchLiveScenarioRequestSchema.parse(input);
-    if (this.active) throw new Error("A live scenario is already running.");
-    this.active = true;
-    const cancellation = new AbortController();
-    this.activeAbort = cancellation;
-    const activeSignal = AbortSignal.any([signal, cancellation.signal]);
+    const encoder = new TextEncoder();
+    return new Response(new ReadableStream<Uint8Array>({
+      start: async stream => {
+        const write: Write = chunk => {
+          try { stream.enqueue(typeof chunk === "string" ? encoder.encode(chunk) : new Uint8Array(chunk)); }
+          catch { /* The caller disconnected; its signal owns stopping the run. */ }
+        };
+        let exitCode = 1;
+        try {
+          exitCode = await this.queued(request, signal, write);
+        } catch (error) {
+          write(`\nLive scenario failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        } finally {
+          write(LiveScenarioExit.format(exitCode));
+          try { stream.close(); } catch { /* Already cancelled downstream. */ }
+        }
+      },
+    }), { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
+  }
+
+  private async queued(request: WorkbenchLiveScenarioRequest, signal: AbortSignal, write: Write) {
+    const [root, cwd] = await Promise.all([this.readRealpath(this.projectRoot), this.readRealpath(request.cwd)]);
+    if (!samePath(root, cwd)) throw new Error("Live scenarios only run from the Workbench repository root.");
+    const previous = this.tail;
+    const turn = Promise.withResolvers<void>();
+    this.tail = previous.then(() => turn.promise);
     try {
-      const [root, cwd] = await Promise.all([this.readRealpath(this.projectRoot), this.readRealpath(request.cwd)]);
-      if (!samePath(root, cwd)) throw new Error("Live scenarios only run from the Workbench repository root.");
-      activeSignal.throwIfAborted();
-      return await this.run(root, request, activeSignal);
+      if (this.admitted++ > 0) write("Another live scenario is running; this one waits for it to finish.\n");
+      await untilAborted(previous, signal);
+      const cancellation = new AbortController();
+      this.activeAbort = cancellation;
+      try {
+        return await this.run(root, request, AbortSignal.any([signal, cancellation.signal]), write);
+      } finally {
+        if (this.activeAbort === cancellation) this.activeAbort = null;
+      }
     } finally {
-      if (this.activeAbort === cancellation) this.activeAbort = null;
-      this.active = false;
+      this.admitted -= 1;
+      turn.resolve();
     }
   }
 
+  /** Cancels only the running scenario; queued ones still run after it. */
   cancel() {
     if (!this.activeAbort || this.activeAbort.signal.aborted) return false;
     this.activeAbort.abort(new Error("Live scenario cancelled."));
     return true;
   }
 
-  private async run(root: string, request: WorkbenchLiveScenarioRequest, signal: AbortSignal) {
+  private async run(root: string, request: WorkbenchLiveScenarioRequest, signal: AbortSignal, write: Write) {
     const services = await WorkbenchTestProcessResources.create(false, root);
     try {
-      return await this.runOwned(root, request, signal, services.environment);
+      return await this.runOwned(root, request, signal, services.environment, write);
     } finally {
       await services.dispose();
     }
   }
 
-  private async runOwned(root: string, request: WorkbenchLiveScenarioRequest, signal: AbortSignal, environment: NodeJS.ProcessEnv) {
+  private async runOwned(
+    root: string, request: WorkbenchLiveScenarioRequest, signal: AbortSignal, environment: NodeJS.ProcessEnv, write: Write,
+  ) {
     const entry = path.join(root, WORKBENCH_LIVE_SCENARIOS[request.file].entry);
     const providers = "providers" in request
       ? Object.entries(request.providers).map(([provider, mode]) => `--${provider}=${mode}`)
@@ -95,19 +142,7 @@ export default class WorkbenchAgentCommandLiveScenarioController {
       ...createSpawnOptions(root, { ...process.env, ...environment }, true),
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let output = Buffer.alloc(0);
-    let truncated = false;
-    const capture = (chunk: Buffer | string) => {
-      if (truncated) return;
-      const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const remaining = MAX_OUTPUT_BYTES - output.byteLength;
-      if (next.byteLength <= remaining) {
-        output = Buffer.concat([output, next]);
-        return;
-      }
-      output = Buffer.concat([output, next.subarray(0, Math.max(0, remaining)), Buffer.from(OUTPUT_TRUNCATED)]);
-      truncated = true;
-    };
+    const capture = (chunk: Buffer | string) => write(chunk);
     child.stdout?.on("data", capture);
     child.stderr?.on("data", capture);
 
@@ -125,14 +160,9 @@ export default class WorkbenchAgentCommandLiveScenarioController {
       });
       if (retirement) await retirement;
       signal.throwIfAborted();
-      const successful = result.exitCode === 0 && result.signal === null;
-      if (!successful) {
-        capture(`\nLive scenario exited with code ${result.exitCode ?? "null"} and signal ${result.signal ?? "none"}.\n`);
-      }
-      return new Response(output, {
-        headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
-        status: successful ? 200 : 400,
-      });
+      if (result.exitCode === 0 && result.signal === null) return 0;
+      write(`\nLive scenario exited with code ${result.exitCode ?? "null"} and signal ${result.signal ?? "none"}.\n`);
+      return result.exitCode || 1;
     } finally {
       signal.removeEventListener("abort", abort);
       child.stdout?.removeListener("data", capture);
