@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchProjectLabel: render identity-level or concrete project labels without inventing a representative folder.
+ * - default WorkbenchProjectLabel: render identity-level or concrete project labels without inventing a representative folder;
+ *   `describeLogical` gives a logical project's name and the folder or remote label shown beside it, for non-visual labels.
  */
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
@@ -22,6 +23,39 @@ function getWorkbenchProjectFullPath(project: WorkbenchProjectOption) {
     : project.rootPath;
 }
 
+type LogicalProjectSecondary =
+  | { kind: "remote"; label: string }
+  | { kind: "location"; displayPath: string; hostname: string };
+
+/** A source row's own folder outranks the shared remote label, so rows on different daemons stay distinguishable. */
+function describeLogicalProject(project: WorkbenchLogicalProject, source?: ProjectLocationReference): {
+  name: string;
+  secondary: LogicalProjectSecondary | null;
+  text: string | null;
+} {
+  const sourceLocation = source ? [
+    ...project.locations,
+    ...(project.observedLocations ?? []),
+  ].find(item => item.daemonId === source.daemonId
+    && ("target" in item ? item.target.projectId : item.projectId) === source.projectId) : null;
+  const location = sourceLocation ?? project.locations.find(item => item.project)
+    ?? project.observedLocations?.[0] ?? project.locations[0];
+  const name = project.displayName ?? project.label;
+  const displayPath = sourceLocation
+    ? "displayPath" in sourceLocation && sourceLocation.displayPath
+      ? sourceLocation.displayPath
+      : `${sourceLocation.hostname}:${sourceLocation.rootPath}`
+    : project.displayPath ?? null;
+  const secondary: LogicalProjectSecondary | null = !sourceLocation
+    && project.matchKey.startsWith("remote://") && project.label !== name
+    ? { kind: "remote", label: project.label }
+    : displayPath && displayPath !== name
+      ? { kind: "location", displayPath, hostname: location?.hostname ?? "" }
+      : null;
+  const text = secondary?.kind === "remote" ? secondary.label : secondary?.displayPath ?? null;
+  return { name, secondary, text };
+}
+
 const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
   active = false,
   project,
@@ -35,22 +69,7 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
   variant?: "card" | "heading" | "tab" | "thread";
 }) {
   if ("matchKey" in project) {
-    const sourceLocation = source ? [
-      ...project.locations,
-      ...(project.observedLocations ?? []),
-    ].find(item => item.daemonId === source.daemonId
-      && ("target" in item ? item.target.projectId : item.projectId) === source.projectId) : null;
-    const location = sourceLocation ?? project.locations.find(item => item.project)
-      ?? project.observedLocations?.[0] ?? project.locations[0];
-    const name = project.displayName ?? project.label;
-    const hasDistinctRemoteLabel = project.matchKey.startsWith("remote://") && project.label !== name;
-    const secondary = hasDistinctRemoteLabel
-      ? project.label
-      : sourceLocation
-        ? "displayPath" in sourceLocation && sourceLocation.displayPath
-          ? sourceLocation.displayPath
-          : `${sourceLocation.hostname}:${sourceLocation.rootPath}`
-        : project.displayPath ?? null;
+    const { name, secondary } = describeLogicalProject(project, source);
     return (
       <span className={`flex min-w-0 items-center ${variant === "tab" ? "gap-1" : "gap-2"}`} title={[
         ...project.locations, ...(project.observedLocations ?? []),
@@ -60,9 +79,9 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate text-text${active || variant === "heading" ? " font-semibold" : ""}`}>
             {name}
           </span>
-          {secondary && secondary !== name ? <span className="min-w-0 flex-1 text-[0.72rem] font-normal text-fg/muted">
-            {hasDistinctRemoteLabel ? secondary
-              : <WorkbenchProjectLocationLabel displayPath={secondary} hostname={location?.hostname ?? ""} />}
+          {secondary ? <span className="min-w-0 flex-1 text-[0.72rem] font-normal text-fg/muted">
+            {secondary.kind === "remote" ? secondary.label
+              : <WorkbenchProjectLocationLabel displayPath={secondary.displayPath} hostname={secondary.hostname} />}
           </span> : null}
         </span>
       </span>
@@ -103,6 +122,7 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
     </span>
   );
 }, {
+  describeLogical: describeLogicalProject,
   getDisplayPath: getWorkbenchProjectDisplayPath,
   getFullPath: getWorkbenchProjectFullPath,
 });

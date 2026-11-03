@@ -283,7 +283,7 @@ test("logical thread eyebrows use each thread's daemon-qualified location", () =
   ];
   const project: WorkbenchLogicalProject = {
     id: logicalProjectId, matchKey: "remote://example.test/workbench",
-    label: "workbench", displayName: "workbench", displayPath: "laptop:/wb", locations,
+    label: "example/workbench", displayName: "workbench", displayPath: "laptop:/wb", locations,
   };
   const emptyProject: WorkbenchLogicalProject = {
     id: emptyProjectId, matchKey: "local://empty", label: "empty",

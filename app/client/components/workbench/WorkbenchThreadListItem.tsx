@@ -206,8 +206,10 @@ export default function WorkbenchThreadListItem({
   const priority = group === "snoozed" ? "snoozed" : showPinPriorityIcon && pinned ? "pinned" : null;
   const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;
   const actionDisplay = action ? THREAD_ACTIONS[action] : null;
-  const projectName = project ? "matchKey" in project ? `${project.label}, `
-    : `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
+  const logicalLabel = project && "matchKey" in project ? WorkbenchProjectLabel.describeLogical(project, projectSource) : null;
+  const projectLabelParts = logicalLabel ? [logicalLabel.name, logicalLabel.text]
+    : project && !("matchKey" in project) ? [project.name || project.id, WorkbenchProjectLabel.getDisplayPath(project)] : [];
+  const projectName = projectLabelParts.flatMap(part => part ? [`${part}, `] : []).join("");
   const gitWorkLabels = [
     hasComposerDraft ? "unsent draft" : "",
     requiredTodoCount ? `${requiredTodoCount} required ${requiredTodoCount === 1 ? "todo" : "todos"}` : "",
