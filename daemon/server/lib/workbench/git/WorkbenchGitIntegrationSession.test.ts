@@ -1,4 +1,7 @@
-/* Exports: none; real Git tests protect scratch conflict resolution, stale-HEAD rejection, claim-aware carrying and merge mode. */
+/*
+ * Exports: none; real Git tests protect scratch conflict resolution, stale-HEAD rejection, resolved accepted-proposal
+ * remapping, claim-aware carrying and merge mode.
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
@@ -6,6 +9,7 @@ import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitIntegrationSession, { type WorkbenchGitIntegrationClaim } from "./WorkbenchGitIntegrationSession";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
@@ -66,6 +70,33 @@ test("apply refuses once HEAD moved after start", async t => {
   await f.git("add", "other.txt");
   await f.git("commit", "-m", "late");
   await assert.rejects(f.session.apply(), /HEAD moved/u);
+  assert.doesNotMatch(await f.session.view(), /Run `wb git integrate apply`/u);
+});
+
+test("a resolved replay of accepted proposals applies and carries the resolution into their proposals", async t => {
+  const f = await fixture(t, { incoming: { "shared.txt": "theirs\n" }, local: {} });
+  const controller = new WorkbenchGitCheckpointController();
+  const identity = { cwd: f.root, threadId: "thread-a" };
+  await controller.createAndStartPlan({ ...identity, intentName: "local", paths: ["notes.txt", "shared.txt"] });
+  await f.write("notes.txt", "local\n");
+  await f.write("shared.txt", "mine\n");
+  const accept = async (paths: string[]) => {
+    const { proposalId } = await controller.createProposal({ ...identity, title: "local", description: "", paths });
+    await controller.commitProposal({ ...identity, proposalId, title: "local", description: "", includeNewer: false });
+    return proposalId;
+  };
+  await accept(["notes.txt"]);
+  const conflicting = await accept(["shared.txt"]);
+
+  await f.session.start({ incoming: f.incoming, source, mode: "replay", carryOwn: false });
+  await fs.writeFile(path.join(f.root, ".workbench", "integrate", "thread-a", "shared.txt"), "both\n");
+  await f.session.resolve();
+  await f.session.apply();
+  const proposalRef = (await f.git("for-each-ref", "--format=%(refname)", "refs/worktree/agents"))
+    .split("\n").find(ref => ref.endsWith(`/checkpoint-proposals/${conflicting}`));
+  assert.ok(proposalRef);
+  assert.equal(await f.git("rev-parse", `${proposalRef}^{tree}`), await f.git("rev-parse", "HEAD^{tree}"));
+  assert.match(await f.git("log", "-1", "--format=%B", proposalRef), new RegExp(await f.git("rev-parse", "HEAD"), "u"));
 });
 
 test("only the caller's own dirty claimed files carry; other owners and unclaimed dirt block", async t => {

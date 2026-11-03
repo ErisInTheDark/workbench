@@ -1017,13 +1017,13 @@ export default class WorkbenchGitRepository {
       .split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
   }
 
+  /** Clean three-way merge tree; any conflict rejects, naming its paths. */
   async mergeTree(base: string, left: string, right: string) {
-    try {
-      const output = await this.run(["merge-tree", "--write-tree", `--merge-base=${base}`, left, right]);
-      return output.trim().split(/\r?\n/u)[0] ?? "";
-    } catch (error) {
-      throw new Error(`Commit rewrite conflicts while merging changes after ${base}.`, { cause: error });
+    const merged = await this.mergeWorktreeTrees(base, left, right);
+    if (merged.conflictedPaths.length || merged.unsupportedConflictTypes.length) {
+      throw new Error(`Commit rewrite conflicts in ${merged.conflictedPaths.join(", ") || "unlisted paths"} while merging changes after ${base}.`);
     }
+    return merged.tree;
   }
 
   async mergeWorktreeTrees(

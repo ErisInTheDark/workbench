@@ -267,10 +267,15 @@ export default class GitArcHistoryRewriter {
       const metadataChanged = remapped && proposalMessage(remapped) !== proposalMessage(metadata!);
       if (!newParent && !metadataChanged) continue;
       const parent = newParent ?? oldParent;
+      // A committed proposal mirrors its commit's tree, so that commit's rewrite already carries any resolved conflicts.
+      const committed = metadata?.committedSha ?? null;
+      const rewrittenCommit = committed === null ? undefined : commits.get(committed);
       // An amend's tree holds its target's content, so a rewritten target (which includes any rewritten parent) must flow in.
       const oldTarget = metadata?.amendTargetSha ?? null;
       const newTarget = oldTarget === null ? undefined : commits.get(oldTarget);
-      const tree = oldTarget !== null && newTarget
+      const tree = committed !== null && rewrittenCommit && oldCommit.tree === treeOf(committed)
+        ? treeOf(rewrittenCommit)
+        : oldTarget !== null && newTarget
         ? await this.repository.mergeTree(oldTarget, newTarget, entry.value)
         : newParent && oldParent && treeOf(newParent) !== treeOf(oldParent)
         ? await this.repository.mergeTree(oldParent, newParent, entry.value)

@@ -270,11 +270,12 @@ export default class WorkbenchGitIntegrationSession {
         ...session.pending.conflicts.map(file => `  ${this.scratchPath(file)}`), "Then run `wb git integrate resolve`.");
       return `${lines.join("\n")}\n`;
     }
-    const blockers = await this.blockers(session);
-    lines.push(`Ready: ${branch} moves ${session.oldHead.slice(0, 12)} -> ${session.newHead!.slice(0, 12)}.`);
     if (await this.repository.currentHead() !== session.oldHead) {
       lines.push(`${branch} moved since start; run \`wb git integrate end\`, then start again.`);
+      return `${lines.join("\n")}\n`;
     }
+    const blockers = await this.blockers(session);
+    lines.push(`Ready: ${branch} moves ${session.oldHead.slice(0, 12)} -> ${session.newHead!.slice(0, 12)}.`);
     if (blockers.carried.length) lines.push("Your dirty claimed files, carried three-way on apply:", ...blockers.carried.map(file => `  ${file}`));
     if (blockers.own.length) lines.push("Your dirty claimed files block apply; commit them, or end and restart with --carry-own:",
       ...blockers.own.map(file => `  ${file}`));
@@ -286,12 +287,12 @@ export default class WorkbenchGitIntegrationSession {
     return `${lines.join("\n")}\n`;
   }
 
-  /** One check for `wait`: blocked while other threads' claims still hold dirty incoming paths. */
+  /** One check for `wait`: blocked while HEAD is unchanged and other threads' claims still hold dirty incoming paths. */
   async waitAttempt(): Promise<{ kind: "blocked" } | { kind: "clear"; text: string }> {
     const session = await this.require();
     if (session.pending) throw new Error("Resolve the pending conflicts first; `wb git integrate view` lists them.");
-    const blockers = await this.blockers(session);
-    if (blockers.others.length) return { kind: "blocked" };
+    const moved = await this.repository.currentHead() !== session.oldHead;
+    if (!moved && (await this.blockers(session)).others.length) return { kind: "blocked" };
     return { kind: "clear", text: await this.view() };
   }
 
