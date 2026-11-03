@@ -131,6 +131,7 @@ test("modes render as one agent sentence without their icon or colour and declar
     { name: "Review", icon: "flag", color: "#16a34a", proofs: ["review"], resetOn: ["Brief"], from: [], after: null, status: "completed", deny: ["shell", "edit:claims"] },
   ]);
   assert.deepEqual(filter("<mode name=\"Brief\" proofs=\"Plan\" />").warnings.map(warning => warning.message), ["Malformed instruction selector"]);
+  assert.deepEqual(collectWorkbenchInstructionModes("<mode name=\"Implement\" after=\"parent-message\" />").map(mode => mode.after), ["parent-message"]);
 });
 
 test("invalid tool references stay visible and report their source", () => {

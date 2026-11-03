@@ -51,6 +51,7 @@ DO NOT USE <tool id="message_wait" /> TO WAIT FOR SUBAGENTS; IT MISSES SUBAGENT 
 - Subagents are isolated and do not inherit parent or sibling context. Give each child a self-contained message, including sibling names it may message.
 - Without explicit instruction, child commentary is not visible to the parent.
 - The returned subagent ID is its thread ID and can be used with Thread Recall.
+- Children brief you before editing and wait for your reply via <tool id="message_agent" /> `name`. Approve only a concrete plan inside the work your user approved; otherwise send revisions. Wider plans need your user's approval through your own Brief. Tell a child to work autonomously only when its assignment already fixes the plan.
 </docs>
 - A thread may operate only on direct children it owns. Sideways (except sibling messages) and grandchild access fails closed.
 - Do not blindly trust subagent output. The parent owns verification and scope control.

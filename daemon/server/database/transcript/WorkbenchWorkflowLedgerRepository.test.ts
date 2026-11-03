@@ -1,6 +1,6 @@
 /*
- * No production exports. Tests the workflow ledger keeps Workbench filings, only successful switches and user-visible agent messages,
- * in transcript order across turns.
+ * No production exports. Tests the workflow ledger keeps Workbench filings, only successful switches, user-visible agent messages and
+ * successful messages to the parent, in transcript order across turns.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -93,7 +93,28 @@ test("user-visible agent messages join the ledger in order; blank text and the b
     settleTurn(database, "thread", 1, [message("plan", "The plan."), call("implement", "thread_state", { mode: "Implement" })]);
 
     assert.deepEqual(new WorkbenchWorkflowLedgerRepository(database).read("thread"), [
-      { kind: "message" }, { kind: "mode", mode: "Brief" }, { kind: "message" }, { kind: "mode", mode: "Implement" },
+      { kind: "message", audience: "user" }, { kind: "mode", mode: "Brief" },
+      { kind: "message", audience: "user" }, { kind: "mode", mode: "Implement" },
+    ]);
+  } finally { database.close(); }
+});
+
+test("messages to the parent join the ledger in order; sibling and failed messages do not", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    seedThread(database, "thread");
+    settleTurn(database, "thread", 0, [
+      call("brief", "thread_state", { mode: "Brief" }),
+      call("sibling", "message_agent", { name: "mira", message: "hi", userVisibleSimpleVersion: "hi" }),
+      call("dropped", "message_agent", { parent: true, message: "plan", userVisibleSimpleVersion: "plan" }, { failed: true }),
+      call("plan", "message_agent", { parent: true, message: "plan", userVisibleSimpleVersion: "plan" }),
+      call("implement", "thread_state", { mode: "Implement" }),
+    ]);
+
+    assert.deepEqual(new WorkbenchWorkflowLedgerRepository(database).read("thread"), [
+      { kind: "mode", mode: "Brief" }, { kind: "message", audience: "parent" }, { kind: "mode", mode: "Implement" },
     ]);
   } finally { database.close(); }
 });

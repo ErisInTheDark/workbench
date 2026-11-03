@@ -13,7 +13,7 @@
 import os from "node:os";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { ProofOfWorkChecklist } from "workbench-shared/workbench/thread/proof-of-work";
-import { ModeIconSchema, type WorkflowMode } from "workbench-shared/workbench/thread/workflow-modes";
+import { MODE_AFTER, ModeAfterSchema, ModeIconSchema, type WorkflowMode } from "workbench-shared/workbench/thread/workflow-modes";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
@@ -91,7 +91,7 @@ const DENY_TOKENS = "[a-z][a-z0-9_]*(?::[a-z]+)?(?: [a-z][a-z0-9_]*(?::[a-z]+)?)
 /** Attributes are optional but ordered, so one declaration always reads the same way. */
 const MODE_TAG = new RegExp(
   `<mode name="([A-Za-z][A-Za-z0-9_-]*)"(?: icon="([a-z]+)")?(?: color="([a-z]+|#[0-9a-f]{3,8})")?(?: proofs="(${FAMILY_NAMES})")?`
-    + `(?: reset-on="(${MODE_NAMES})")?(?: from="(${MODE_NAMES})")?(?: after="(message)")?(?: status="(completed)")?(?: deny="(${DENY_TOKENS})")?\\s*/>`,
+    + `(?: reset-on="(${MODE_NAMES})")?(?: from="(${MODE_NAMES})")?(?: after="(message|parent-message)")?(?: status="(completed)")?(?: deny="(${DENY_TOKENS})")?\\s*/>`,
   "uy",
 );
 const PROOF_OPEN_TAG = /<proof-of-work id="([a-z][a-z0-9_]*)"( hidden)?>/uy;
@@ -572,6 +572,7 @@ function readModeTag(tag: string): WorkflowMode | null {
   if (!match) return null;
   const words = (value: string | undefined) => value?.split(" ") ?? [];
   const icon = ModeIconSchema.safeParse(match[2]);
+  const after = ModeAfterSchema.safeParse(match[7]);
   return {
     name: match[1]!,
     icon: icon.success ? icon.data : null,
@@ -579,7 +580,7 @@ function readModeTag(tag: string): WorkflowMode | null {
     proofs: words(match[4]),
     resetOn: words(match[5]),
     from: words(match[6]),
-    after: match[7] === "message" ? "message" : null,
+    after: after.success ? after.data : null,
     status: match[8] === "completed" ? "completed" : null,
     deny: words(match[9]),
   };
@@ -604,7 +605,7 @@ function describeMode(mode: WorkflowMode) {
         + (mode.resetOn.length ? `, filed since you last entered ${joinWords(mode.resetOn, "or")}` : "")
       : "",
     mode.from.length ? `it is entered only from ${joinWords(mode.from, "or")}` : "",
-    mode.after === "message" ? "it is entered only after a user-visible message sent since you entered the current mode" : "",
+    mode.after ? `it is entered only after ${MODE_AFTER[mode.after].label} sent since you entered the current mode` : "",
     mode.status ? `it is entered together with status ${mode.status}, which needs it` : "",
     mode.deny.length ? `it denies ${joinWords(mode.deny.map(describeDenial), "and")}` : "",
   ].filter(Boolean);

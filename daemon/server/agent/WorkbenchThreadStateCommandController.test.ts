@@ -79,7 +79,7 @@ test("a mode entered only after a message refuses a silent hop, applying nothing
   assert.equal(result.status, 400);
   assert.match(result.body, /since you entered Review/u);
   assert.deepEqual(silent.applied, []);
-  assert.equal((await fixture([{ kind: "mode", mode: "Review" }, { kind: "message" }]).call({ mode: "Implement" })).status, 200);
+  assert.equal((await fixture([{ kind: "mode", mode: "Review" }, { kind: "message", audience: "user" }]).call({ mode: "Implement" })).status, 200);
 });
 
 test("invalid proofs are rejected before anything runs", async () => {

@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchWorkflowLedgerRepository: read what a thread's recent settled Workbench workflow calls and user-visible agent
- *   messages contributed, in transcript order.
+ * - default WorkbenchWorkflowLedgerRepository: read what a thread's recent settled Workbench workflow calls, messages to its parent
+ *   and user-visible agent messages contributed, in transcript order.
  */
 import type Database from "better-sqlite3";
 import { WORKBENCH_TURN_END_MARKER } from "workbench-shared/workbench/thread/thread-recovery-message";
@@ -10,8 +10,8 @@ import { WORKBENCH_TOOL_SERVERS } from "../stats/WorkbenchToolStatsRepository.ts
 
 /** Enough for many loops of every checklist and their messages; a longer thread only narrows the window, so gates ask for fresh proofs. */
 const LEDGER_ROW_LIMIT = 1000;
-/** Legacy names keep gate windows and modes of threads that filed before thread_state. */
-const LEDGER_TOOLS = [THREAD_STATE_TOOL, "proof_of_work", "mode_set"];
+/** `proof_of_work` and `mode_set` keep gate windows and modes of threads that filed before thread_state; `message_agent` opens parent-message gates. */
+const LEDGER_TOOLS = [THREAD_STATE_TOOL, "proof_of_work", "mode_set", "message_agent"];
 
 type LedgerRow =
   | { kind: "call"; tool_name: string; arguments_json: string; failed: number }
@@ -42,7 +42,7 @@ export default class WorkbenchWorkflowLedgerRepository {
       ORDER BY turn_index DESC, item_position DESC
       LIMIT ?
     `).all(threadId, ...WORKBENCH_TOOL_SERVERS, ...LEDGER_TOOLS, threadId, WORKBENCH_TURN_END_MARKER, LEDGER_ROW_LIMIT) as LedgerRow[];
-    return rows.reverse().flatMap(row => row.kind === "message" ? [{ kind: "message" } as const] : readWorkflowLedgerEntries({
+    return rows.reverse().flatMap(row => row.kind === "message" ? [{ kind: "message", audience: "user" } as const] : readWorkflowLedgerEntries({
       tool: row.tool_name, args: JSON.parse(row.arguments_json), failed: row.failed !== 0,
     }));
   }

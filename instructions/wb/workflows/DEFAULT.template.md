@@ -26,5 +26,6 @@ Related files:
 - AGENTS.md is the universal base prompt.
 - agents/default.md is the default agent identity.
 - SUBAGENT.md is the subagent workflow.
+- `shared/*.md` holds loop text DEFAULT.md and SUBAGENT.md both import, written for the approver each workflow defines. Edits there change both workflows.
 - DEFAULT.override.md replaces DEFAULT.md when present.
 

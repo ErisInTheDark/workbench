@@ -1,6 +1,7 @@
 /*
  * No production exports. Tests mode transitions: fresh proofs per loop, cross-turn filings, missing items, ungated modes, retired defer arguments,
- * entry sources, message preconditions, undeclared and unentered modes, the completed-status pairing, and what refused and legacy calls contribute to the ledger.
+ * entry sources, user and parent message preconditions, undeclared and unentered modes, the completed-status pairing, and what refused, legacy and
+ * parent-message calls contribute to the ledger.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -75,12 +76,30 @@ test("a mode listing its sources is entered only from them, however complete the
 test("a mode entered after a message needs one since the latest mode entry, so a silent hop through its source is refused", () => {
   const declared = [defined("Brief"), defined("Implement", { from: ["Brief"], after: "message" })];
   const enterImplement = (ledger: WorkflowLedgerEntry[]) => evaluateThreadStateTransition(ledger, declared, [], { mode: "Implement" }).needsMessage;
-  const message: WorkflowLedgerEntry = { kind: "message" };
+  const message: WorkflowLedgerEntry = { kind: "message", audience: "user" };
   assert.equal(enterImplement([mode("Brief")]), true);
   assert.equal(enterImplement([message, mode("Review"), message, mode("Brief"), complete]), true, "messages before entering Brief do not count");
   assert.equal(enterImplement([mode("Brief"), message, complete]), false);
   assert.equal(enterImplement([message]), false, "with no mode entered yet, any message counts");
+  assert.equal(enterImplement([mode("Brief"), { kind: "message", audience: "parent" }]), true, "a parent brief is not a user-visible message");
   assert.equal(evaluateThreadStateTransition([mode("Brief")], declared, [], { mode: "Brief" }).needsMessage, false);
+});
+
+test("a mode entered after a parent message needs one since the latest mode entry; commentary never opens it", () => {
+  const declared = [defined("Brief"), defined("Implement", { from: ["Brief"], after: "parent-message" })];
+  const enterImplement = (ledger: WorkflowLedgerEntry[]) => evaluateThreadStateTransition(ledger, declared, [], { mode: "Implement" }).needsMessage;
+  const brief: WorkflowLedgerEntry = { kind: "message", audience: "parent" };
+  assert.equal(enterImplement([mode("Brief"), { kind: "message", audience: "user" }]), true);
+  assert.equal(enterImplement([brief, mode("Brief")]), true, "a brief before entering Brief does not count");
+  assert.equal(enterImplement([mode("Brief"), brief]), false);
+});
+
+test("only successful messages addressed to the parent join the ledger", () => {
+  const sent = (args: object, failed = false) => readWorkflowLedgerEntries({ tool: "message_agent", args, failed });
+  assert.deepEqual(sent({ parent: true, message: "plan", userVisibleSimpleVersion: "plan" }), [{ kind: "message", audience: "parent" }]);
+  assert.deepEqual(sent({ parent: true, message: "plan" }, true), []);
+  assert.deepEqual(sent({ name: "sibling", message: "plan" }), []);
+  assert.deepEqual(sent({ threadId: "thread", message: "plan" }), []);
 });
 
 test("only declared modes can be entered, and only while the workflow declares any", () => {

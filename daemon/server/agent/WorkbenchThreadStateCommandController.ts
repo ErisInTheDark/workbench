@@ -9,7 +9,8 @@ import {
   type ProofOfWork, type ProofState,
 } from "workbench-shared/workbench/thread/proof-of-work";
 import {
-  effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows, readFiledProofs, type ThreadState, type WorkflowLedgerEntry,
+  effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows, MODE_AFTER, readFiledProofs,
+  type ThreadState, type WorkflowLedgerEntry, type WorkflowMode,
 } from "workbench-shared/workbench/thread/workflow-modes";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { WorkbenchThreadStateRequestSchema } from "../lib/workbench/commands/thread-state-command-definition";
@@ -32,6 +33,16 @@ const TEXT_HEADERS = { "Cache-Control": "no-store", "Content-Type": "text/plain;
 
 function text(body: string, status = 200) {
   return new Response(`${body.trimEnd()}\n`, { headers: TEXT_HEADERS, status });
+}
+
+const MESSAGE_FIRST = {
+  user: "show the user your plan, or what approved work you are resuming, first",
+  parent: "brief your parent, or tell it what approved work you are resuming, first",
+} as const;
+
+/** The message a mode's `after` precondition asks for; null when it has none. */
+function messageNeed(mode: WorkflowMode | null) {
+  return mode?.after ? MODE_AFTER[mode.after] : null;
 }
 
 /** Null when the call files no proof ids; empty buckets file nothing. */
@@ -59,6 +70,7 @@ export default class WorkbenchThreadStateCommandController {
     const unknown = proof ? reconcileProofOfWork(mergeProofs([proof]), checklists).unknownItems : [];
     const ledger: WorkflowLedgerEntry[] = proof ? [...workflow.ledger, { kind: "proof", proof }] : workflow.ledger;
     const transition = evaluateThreadStateTransition(ledger, modes, checklists, state);
+    const message = transition.needsMessage ? messageNeed(transition.target) : null;
     if (transition.undeclared.length) console.warn(`[thread-state] ${state.mode} requires undeclared checklists: ${transition.undeclared.join(", ")}.`);
     const refusals = [
       ...unknown.length ? [`Unknown checklist ids: ${unknown.join(", ")}.`] : [],
@@ -70,8 +82,8 @@ export default class WorkbenchThreadStateCommandController {
       ...transition.needsFrom.length
         ? [`${transition.target!.name} is entered only from ${transition.needsFrom.join(" or ")}; current mode: ${transition.current ?? "none"}.`]
         : [],
-      ...transition.needsMessage && !transition.needsFrom.length
-        ? [`${transition.target!.name} needs a user-visible message since you entered ${transition.current ?? "the current mode"}: show the user your plan, or what approved work you are resuming, first.`]
+      ...message && !transition.needsFrom.length
+        ? [`${transition.target!.name} needs ${message.label} since you entered ${transition.current ?? "the current mode"}: ${MESSAGE_FIRST[message.audience]}.`]
         : [],
       ...transition.needsStatus ? [`${transition.target!.name} is entered together with status: "${transition.needsStatus}".`] : [],
       ...transition.needsMode.length ? [`Status completed needs mode ${transition.needsMode.join(" or ")} after this call.`] : [],
@@ -132,9 +144,10 @@ export default class WorkbenchThreadStateCommandController {
       const { current, needsFrom, needsMessage, unresolved } = evaluateThreadStateTransition(
         ledger, modes, checklists, { mode: candidate.name, status: candidate.status ?? undefined },
       );
+      const message = needsMessage ? messageNeed(candidate) : null;
       const needs = [
         ...needsFrom.length ? [`entering from ${needsFrom.join(" or ")}`] : [],
-        ...needsMessage && !needsFrom.length ? [`a user-visible message since entering ${current ?? "the current mode"}`] : [],
+        ...message && !needsFrom.length ? [`${message.label} since entering ${current ?? "the current mode"}`] : [],
         ...unresolved.map(({ checklist, ids }) => `${checklist} (${ids.join(", ")})`),
       ];
       return needs.length ? [`${candidate.name} needs: ${needs.join("; ")}.`] : [];
