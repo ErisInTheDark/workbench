@@ -29,14 +29,15 @@ export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
   | "editorFontSize" | WorkbenchFileOpenSettingKey | "gitPeerSyncMode"
   | "showUnopenableFiles" | "threadAnimationStyle" | "threadAnimationPerParagraph" | "threadCodeBlockWrap" | "threadCodeDetails"
-  | "userName" | "markTags";
+  | "threadModeDenials" | "threadUnknownToolCalls" | "userName" | "markTags";
 
+const GLOBAL_ONLY_SETTING_KEYS = ["threadAnimationStyle", "threadAnimationPerParagraph", "threadModeDenials", "threadUnknownToolCalls"] as const;
 /** Personal preferences that projects never override. */
-export type WorkbenchGlobalOnlySettingKey = "threadAnimationStyle" | "threadAnimationPerParagraph";
+export type WorkbenchGlobalOnlySettingKey = typeof GLOBAL_ONLY_SETTING_KEYS[number];
 export type WorkbenchProjectSettingKey = Exclude<WorkbenchSettingKey, WorkbenchGlobalOnlySettingKey>;
 
 export function isWorkbenchGlobalOnlySettingKey(key: WorkbenchSettingKey): key is WorkbenchGlobalOnlySettingKey {
-  return key === "threadAnimationStyle" || key === "threadAnimationPerParagraph";
+  return (GLOBAL_ONLY_SETTING_KEYS as readonly WorkbenchSettingKey[]).includes(key);
 }
 
 export const WORKBENCH_FILE_OPEN_SETTING_KEYS = {
@@ -63,6 +64,10 @@ export interface WorkbenchGlobalSettings {
   threadAnimationPerParagraph: boolean;
   threadCodeBlockWrap: boolean;
   threadCodeDetails: boolean;
+  /** Show tool calls a workflow mode or lock refused. */
+  threadModeDenials: boolean;
+  /** Show calls to tools the provider does not have. */
+  threadUnknownToolCalls: boolean;
   /** Signs new markdown comments; empty leaves them unsigned. */
   userName: string;
 }
@@ -149,7 +154,9 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     ],
   },
   threadCodeBlockWrap: { description: "Controls whether thread markdown code blocks wrap long lines instead of using horizontal scrolling.", key: "threadCodeBlockWrap", label: "Wrap thread code blocks", type: "boolean" },
-  threadCodeDetails: { description: "Show code-mode source and raw output alongside captured tool calls. Failed executions and calls without captured tool results remain visible.", key: "threadCodeDetails", label: "Show code details", type: "boolean" },
+  threadCodeDetails: { description: "", key: "threadCodeDetails", label: "Code details", type: "boolean" },
+  threadModeDenials: { description: "", key: "threadModeDenials", label: "Mode denials", type: "boolean" },
+  threadUnknownToolCalls: { description: "", key: "threadUnknownToolCalls", label: "Unknown tool calls", type: "boolean" },
   editorSpellCheck: { description: "Controls browser spellcheck in the rich markdown editor.", key: "editorSpellCheck", label: "Editor spellcheck", type: "boolean" },
   userName: { description: "", key: "userName", label: "Name", maxLength: USER_NAME_MAX_LENGTH, placeholder: "User", type: "text" },
   theme: {

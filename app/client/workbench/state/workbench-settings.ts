@@ -183,6 +183,8 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
     threadAnimationPerParagraph: typeof candidate.threadAnimationPerParagraph === "boolean" ? candidate.threadAnimationPerParagraph : false,
     threadCodeBlockWrap: typeof candidate.threadCodeBlockWrap === "boolean" ? candidate.threadCodeBlockWrap : false,
     threadCodeDetails: typeof candidate.threadCodeDetails === "boolean" ? candidate.threadCodeDetails : false,
+    threadModeDenials: typeof candidate.threadModeDenials === "boolean" ? candidate.threadModeDenials : false,
+    threadUnknownToolCalls: typeof candidate.threadUnknownToolCalls === "boolean" ? candidate.threadUnknownToolCalls : false,
     userName: normalizeUserName(candidate.userName),
   };
 }
@@ -242,6 +244,8 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     threadAnimationPerParagraph: false,
     threadCodeBlockWrap: false,
     threadCodeDetails: false,
+    threadModeDenials: false,
+    threadUnknownToolCalls: false,
     userName: "",
   };
 }
@@ -552,6 +556,8 @@ export function resolveWorkbenchSettings(
     threadAnimationPerParagraph: globalSettings.threadAnimationPerParagraph,
     threadCodeBlockWrap: projectSettings.threadCodeBlockWrap.enabled ? projectSettings.threadCodeBlockWrap.value : globalSettings.threadCodeBlockWrap,
     threadCodeDetails: projectSettings.threadCodeDetails.enabled ? projectSettings.threadCodeDetails.value : globalSettings.threadCodeDetails,
+    threadModeDenials: globalSettings.threadModeDenials,
+    threadUnknownToolCalls: globalSettings.threadUnknownToolCalls,
     userName: projectSettings.userName.enabled ? projectSettings.userName.value : globalSettings.userName,
   };
 }

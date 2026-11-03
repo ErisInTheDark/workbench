@@ -17,6 +17,7 @@ import WorkbenchEnvironmentSettings from "./environment/WorkbenchEnvironmentSett
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings, { VoiceInputSetting } from "./voice/VoiceSettings";
 import ThreadAutoCompactSettings from "./ThreadAutoCompactSettings";
+import Disclosure from "../ui/Disclosure";
 import FormSection from "../ui/FormSection";
 import WorkbenchBrowseCapabilitySetting from "./WorkbenchBrowseCapabilitySetting";
 import WorkbenchInstallationSettings from "./WorkbenchInstallationSettings";
@@ -243,7 +244,9 @@ export default function WorkbenchSettingsView({
         </FormSection>
         <FormSection id="settings-voice" title="Voice"><VoiceInputSetting /></FormSection>
         <FormSection id="settings-advanced" title="Advanced">
-          {preferences(["threadCodeDetails"])}
+          <Disclosure summary="Hidden thread details" summaryClassName="py-2 text-sm" contentClassName="pl-6">
+            {preferences(["threadCodeDetails", "threadModeDenials", "threadUnknownToolCalls"])}
+          </Disclosure>
           <WorkbenchReactDevelopmentModeSetting projectRootPaths={logicalProject?.iconProject.locations.map(location => location.rootPath) ?? []} />
         </FormSection>
       </> : null}

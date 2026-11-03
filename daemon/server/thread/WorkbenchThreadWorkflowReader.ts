@@ -9,8 +9,11 @@ import path from "node:path";
 import type { WorkbenchInstructionSelection } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import {
-  awaitsFirstMode, compactionRecoveryNeeds, currentAlwaysEditable, currentWorkflowMode, describeCompactionRecovery,
-  effectiveWorkflowMode, findWorkflowMode, PRE_MODE_TOOLS, THREAD_STATE_TOOL, type WorkflowLedgerEntry, type WorkflowMode,
+  describeCompactionEditDenial, describeModeEditDenial, describeModeToolDenial, PRE_MODE_DENIAL,
+} from "workbench-shared/workbench/thread/workflow-denials";
+import {
+  awaitsFirstMode, compactionRecoveryNeeds, currentAlwaysEditable, currentWorkflowMode, effectiveWorkflowMode, findWorkflowMode,
+  PRE_MODE_TOOLS, THREAD_STATE_TOOL, type WorkflowLedgerEntry, type WorkflowMode,
 } from "workbench-shared/workbench/thread/workflow-modes";
 import {
   mergeWorkbenchInstructionLayers, readWorkbenchInstructionBaseLayers, readWorkbenchSkillLayers, type WorkbenchInstructionOverlays,
@@ -40,8 +43,6 @@ type GateState = Pick<WorkbenchThreadWorkflow, "ledger" | "overlays" | "projectR
 
 const GIT_ARC_EDIT_TOOL_PREFIX = "git_arc_edit_";
 const GIT_ARC_WORKTREE_TOOLS: ReadonlySet<string> = new Set(["git_arc_restore", "git_arc_stash", "git_arc_unstash"]);
-
-const PRE_MODE_DENIAL = `No mode entered yet; only ${[...PRE_MODE_TOOLS].join(", ")} run. Enter a mode with ${THREAD_STATE_TOOL} first.`;
 
 function comparable(value: string) {
   return path.resolve(value).replaceAll("\\", "/").toLowerCase();
@@ -94,7 +95,7 @@ export default class WorkbenchThreadWorkflowReader {
   #lockDenial({ ledger, overlays }: GateState, edit: boolean) {
     if (awaitsFirstMode(ledger, overlays.modes)) return PRE_MODE_DENIAL;
     const recovery = edit ? compactionRecoveryNeeds(ledger, overlays.checklists) : null;
-    return recovery ? `Context was compacted; edits need ${describeCompactionRecovery(recovery)} first.` : null;
+    return recovery ? describeCompactionEditDenial(recovery) : null;
   }
 
   /**
@@ -114,8 +115,7 @@ export default class WorkbenchThreadWorkflowReader {
     const exempt = new Set(alwaysEditable.map(entry => comparable(projectRoot ? path.resolve(projectRoot, entry) : entry)));
     const denied = scope.filter(candidate => !exempt.has(comparable(candidate)));
     if (!denied.length) return null;
-    const what = definition.deny.includes("edit") ? "file edits" : "edits to Git-visible files";
-    return `${definition.name} mode denies ${what}: ${denied.join(", ")}. Switch modes with ${THREAD_STATE_TOOL}, or list committed process notes in alwaysEditable.`;
+    return describeModeEditDenial(definition.name, definition.deny.includes("edit") ? "file edits" : "edits to Git-visible files", denied);
   }
 
   /**
@@ -133,6 +133,6 @@ export default class WorkbenchThreadWorkflowReader {
     const deny = definition?.deny ?? [];
     const editTool = worktreeTool && deny.some(token => token === "edit" || token === "edit:claims");
     if (!definition || (!deny.includes(toolName) && !editTool)) return null;
-    return `${definition.name} mode denies ${toolName}. Switch modes with ${THREAD_STATE_TOOL} first.`;
+    return describeModeToolDenial(definition.name, toolName);
   }
 }

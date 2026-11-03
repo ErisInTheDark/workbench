@@ -24,7 +24,7 @@ import ThreadProgressiveWindow, { type ThreadProgressiveWindowChunk } from "../T
 import ThreadAnimationStyleContext from "../ThreadAnimationStyleContext";
 import { ThreadEntryAnimation, ThreadStreamCaretSlot } from "../ThreadRevealText";
 import ThreadStableChunkIdentities, { ThreadStableKeys } from "../ThreadStableChunkIdentities";
-import { useThreadCodeDetails } from "../WorkbenchThreadDisplaySettingsContext";
+import { useThreadCodeDetails, useThreadShownRejections } from "../WorkbenchThreadDisplaySettingsContext";
 import { useHiddenProofOfWorkFamilies } from "../use-proof-of-work-catalogue";
 import type { ThreadReasoningStepReference } from "../thread-reasoning-display";
 import { getCardFoldAnchor, isCardBlock } from "../thread-card-folds";
@@ -90,11 +90,13 @@ export default memo(function ThreadTurnItems({
   // Yielded shells stop with their turn, so only a running turn's waits can need them.
   const yieldedShells = turnStatus === "inProgress" ? threadYieldedShells : NO_YIELDED_SHELLS;
   const hiddenProofOfWorkFamilies = useHiddenProofOfWorkFamilies();
+  const shownRejections = useThreadShownRejections();
   const entries = useMemo(
     () => buildTranscriptEntries(items, {
-      browseResultEntries, codeDetails, hiddenProofOfWorkFamilies, hiddenReasoningStep, project, turnLive: turnStatus === "inProgress", yieldedShells,
+      browseResultEntries, codeDetails, hiddenProofOfWorkFamilies, hiddenReasoningStep, project, shownRejections,
+      turnLive: turnStatus === "inProgress", yieldedShells,
     }),
-    [browseResultEntries, codeDetails, hiddenProofOfWorkFamilies, hiddenReasoningStep, items, project, turnStatus, yieldedShells],
+    [browseResultEntries, codeDetails, hiddenProofOfWorkFamilies, hiddenReasoningStep, items, project, shownRejections, turnStatus, yieldedShells],
   );
   const stableBlocks = useStableRenderableBlocks(entries.flatMap(entry => entry.kind === "block" ? [entry.block] : []), "identity");
   let stableBlockIndex = 0;

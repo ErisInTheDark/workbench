@@ -37,6 +37,8 @@ const KEY_RELEASES: Partial<Record<WorkbenchSettingKey, number>> = {
   threadAnimationStyle: appStateReleases.threadAnimationStyle.version,
   threadAnimationPerParagraph: appStateReleases.threadAnimationPerParagraph.version,
   threadCodeDetails: appStateReleases.threadCodeDetails.version,
+  threadModeDenials: appStateReleases.threadHiddenDetails.version,
+  threadUnknownToolCalls: appStateReleases.threadHiddenDetails.version,
   userName: appStateReleases.userName.version,
 };
 

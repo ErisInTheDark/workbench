@@ -39,6 +39,7 @@ const appStateReleases = Object.freeze({
   markTags: release(29, "a1cd8c4419af799ba9ab691c2a3b59d4b58f86d308f96bcee150744b2650606d"),
   threadAnimationStyle: release(30, "f9508fa690d598edf193f50c151007c2871a9e00d4899ef6bf738d8303fc95af"),
   threadAnimationPerParagraph: release(31, "1701ccc998c312ba6a30863753c04fdc367f7ce8e07502f2b070625c13571683"),
+  threadHiddenDetails: release(32, "c235be8fdf6cd191b72a23d62a6d9b3d07798be08a983bad8a6c4b0e1dc75b3d"),
 });
 
 export default appStateReleases;
