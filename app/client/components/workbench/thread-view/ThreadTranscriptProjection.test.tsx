@@ -20,6 +20,7 @@ import type {
   WorkbenchTranscriptProjection,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
+import ThreadExpandedContext from "./ThreadExpandedContext";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import ContextualProjectProvider from "../ContextualProjectProvider";
 import { ThreadTestOpenActivityRuns } from "./thread-view-test-render";
@@ -65,7 +66,8 @@ function renderItems(
   items: ThreadItem[],
   hiddenReasoningStep: ThreadReasoningStepReference | null = null,
   durableItemCount = items.length,
-  { status = "completed", liveTurnId = null, openActivityRunIds = [] }: {
+  { expanded = false, status = "completed", liveTurnId = null, openActivityRunIds = [] }: {
+    expanded?: boolean;
     status?: WorkbenchProjectedTranscriptTurn["status"];
     liveTurnId?: string | null;
     openActivityRunIds?: readonly string[];
@@ -104,6 +106,7 @@ function renderItems(
   return renderToStaticMarkup(
     <WorkbenchDaemonAssetOriginContext.Provider value={{ kind: "source", daemonId: assetDaemonId }}>
     <ThreadTestOpenActivityRuns runIds={openActivityRunIds}>
+    <ThreadExpandedContext value={expanded}>
     <ContextualProjectProvider filePaths={[]} id="project" rootPath="C:/project" skills={[]} workspaceRoots={[]}>
     <ThreadTranscriptProjection
       canLoadPreviousTurn={false}
@@ -116,6 +119,7 @@ function renderItems(
       subagents={[]}
     />
     </ContextualProjectProvider>
+    </ThreadExpandedContext>
     </ThreadTestOpenActivityRuns>
     </WorkbenchDaemonAssetOriginContext.Provider>,
   );
@@ -339,9 +343,14 @@ test("SQLite normal projection keeps command runs and reasoning closed until ope
     id: "reasoning",
     summary: ["Careful title\nUseful description."],
     type: "reasoning",
-  }], null, 1, openRun);
-  assert.equal((detailedHtml.match(/Careful title/gu) ?? []).length, 1);
-  assert.doesNotMatch(detailedHtml, /<details[^>]*\bopen=/u);
+  }], null, 1, { ...openRun, expanded: true });
+  assert.equal(
+    (detailedHtml.match(/Careful title/gu) ?? []).length,
+    2,
+    "opened reasoning keeps the complete title in both its preview and full display",
+  );
+  assert.match(detailedHtml, /Useful description\./u);
+  assert.match(detailedHtml, /<details[^>]*\bopen=/u);
   assert.match(detailedHtml, /<details/u);
 
   const staticHtml = renderItems([{

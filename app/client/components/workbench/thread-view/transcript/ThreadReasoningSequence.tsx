@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default ThreadReasoningSequence: consecutive reasoning as one step row: a single step reads as its title and streams its body,
- *   several steps open onto each item's reasoning; while live, the row reads as its latest sentence. Rows open only when clicked,
- *   and opening a settled preview loads its full text.
+ * - default ThreadReasoningSequence: consecutive reasoning as one step row: a single step reads as its title and opens onto its
+ *   complete section, several steps open onto each item's reasoning; while live, the row reads as its latest sentence. Rows open
+ *   only when clicked, and opening a settled preview loads its full text.
  */
 "use client";
 
@@ -29,11 +29,11 @@ function ReasoningSentence({ sentence }: { sentence: string }) {
     : part);
 }
 
-/** The opened body of a lone step; a deferred item swaps its preview for the full section once it hydrates. */
-function ReasoningStepBody({ body, item, live, step, streaming }: {
-  body: string | null;
+/** The opened full section of a lone step; a deferred item swaps its preview for the complete text once it hydrates. */
+function ReasoningStepBody({ item, live, markdown, step, streaming }: {
   item: ReasoningItem;
   live: boolean;
+  markdown: string;
   step: ThreadReasoningStepReference;
   streaming: boolean;
 }) {
@@ -45,7 +45,7 @@ function ReasoningStepBody({ body, item, live, step, streaming }: {
       <MarkdownRender
         className="text-[0.8em] text-fg/muted"
         live={live}
-        markdown={(hydratedSection === undefined || hydratedSection === null ? body : projectThreadReasoningMarkdown(hydratedSection).body) ?? ""}
+        markdown={hydratedSection ?? markdown}
         streaming={streaming}
       />
       <ThreadDeferredBodyAlert body={hydration} noun="Reasoning" />
@@ -116,9 +116,9 @@ export default function ThreadReasoningSequence ({
     <ThreadStepRow icon={icon} live={live} summary={summary}>
       {onlyStep ? (
         <ReasoningStepBody
-          body={onlyStep.body}
           item={visibleItems.find(item => item.id === onlyStep.itemId)!}
           live={Boolean(presentationSource)}
+          markdown={onlyStep.markdown}
           step={onlyStep}
           streaming={Boolean(presentationSource) && (isMostRecent || presentedOnlyStepMarkdown !== canonicalOnlyStep?.markdown)}
         />
