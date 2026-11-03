@@ -2,7 +2,8 @@
  * Exports:
  * - default WorkbenchBranchPositionController: own demanded checkout ref facts (branch positions, peer commit previews,
  *   HEAD history, local branches and stashes), refreshed by one checkout ref watcher, and a checkout's upstream network
- *   I/O: pushes, on-demand fetches and observation-driven background fetches, one per repository at a time.
+ *   I/O: pushes, on-demand fetches that may sign in, and silent observation-driven background fetches, one per
+ *   repository at a time.
  * - WorkbenchBranchPositionFact: one observation's freshness, failure and position.
  */
 import path from "node:path";
@@ -106,7 +107,7 @@ export default class WorkbenchBranchPositionController {
     const root = await this.options.resolveRoot(projectId);
     const key = root ? await this.commonDir(root) : null;
     if (!root || !key) throw new Error("This folder is not a Git checkout.");
-    await this.fetchRepository(root, key);
+    await this.fetchRepository(root, key, true);
   }
 
   /**
@@ -175,13 +176,15 @@ export default class WorkbenchBranchPositionController {
     return clock;
   }
 
-  private async fetchRepository(root: string, key: string) {
+  private async fetchRepository(root: string, key: string, interactive = false) {
     const clock = this.clock(key);
+    // A user fetch may sign in, so it never settles for a running background fetch that could not.
+    if (interactive) while (clock.running) await clock.running.catch(() => undefined);
     clock.running ??= (async () => {
       try {
         const repository = await WorkbenchGitRepository.tryOpen(root);
         if (!repository) throw new Error("This folder is not a Git checkout.");
-        await new WorkbenchGitRefs(repository).fetchUpstream(this.lifetime.signal);
+        await new WorkbenchGitRefs(repository).fetchUpstream(this.lifetime.signal, { interactive });
         clock.failures = 0;
       } catch (error) {
         clock.failures++;

@@ -15,7 +15,7 @@ import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { GitProcessError } from "./GitProcessHost";
 
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
-/** Git Credential Manager would otherwise open a sign-in window for a fetch nobody is watching. */
+/** Git Credential Manager would otherwise open a sign-in window for a background fetch nobody is watching. */
 const FETCH_ENV = { ...GIT_ENV, GCM_INTERACTIVE: "never" };
 const FIELD = "\u001f";
 
@@ -252,15 +252,15 @@ export default class WorkbenchGitRefs {
   }
 
   /**
-   * Fetches the checked-out branch's upstream remote without prompting, since background fetches have nobody to answer.
-   * Returns false when the branch has no fetchable upstream.
+   * Fetches the checked-out branch's upstream remote. Only `interactive` fetches, which a user started, may open a
+   * credential sign-in window; background fetches have nobody to answer it. Returns false without a fetchable upstream.
    */
-  async fetchUpstream(signal?: AbortSignal) {
+  async fetchUpstream(signal?: AbortSignal, { interactive = false } = {}) {
     const target = await this.upstreamTarget();
     if (!target) return false;
     try {
       // No --prune: a remote-tracking ref is what marks its commits published, so a background fetch must not drop one.
-      await this.repository.run(["fetch", "--quiet", target.remote], FETCH_ENV, signal);
+      await this.repository.run(["fetch", "--quiet", target.remote], interactive ? GIT_ENV : FETCH_ENV, signal);
     } catch (error) {
       throw new Error(`Could not fetch from ${target.remote}: ${gitFailureReason(error)}`);
     } finally {
