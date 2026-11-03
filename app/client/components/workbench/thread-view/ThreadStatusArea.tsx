@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - getThreadStatusAttention: the panel an idle thread opens by itself: pending proposals, then required todos or addressed feedback, then dirty claims.
+ * - getThreadStatusAttention: the panel a thread opens by itself: pending proposals (kept open while its turn waits on acceptance), then required todos or addressed feedback, then dirty claims.
  * - default ThreadStatusArea: compose a thread's status row from its live verb, skills, live vis (and its theatre width),
  *   Git arc work (claim intersections, proposals, claims, stash, accepted commits) and goal/todos with addressed feedback.
  */
@@ -45,14 +45,20 @@ function count(value: number) {
 }
 
 /** First match wins; each target's key changes when its work does, so new work reopens a panel the user closed. */
-export function getThreadStatusAttention({ dirtyClaimedPaths, feedbackCount, pendingProposalIds, requiredTodoCount }: {
+export function getThreadStatusAttention({ dirtyClaimedPaths, feedbackCount, pendingProposalIds, requiredTodoCount, waitingForProposalAcceptance }: {
   /** Null while dirtiness is unknown or the claims are clean. */
   dirtyClaimedPaths: readonly string[] | null;
   feedbackCount: number;
   pendingProposalIds: readonly string[];
   requiredTodoCount: number;
+  /** The live turn is blocked on this thread's proposals, so the panel opens before the turn ends. */
+  waitingForProposalAcceptance: boolean;
 }): ThreadStatusAttention | null {
-  if (pendingProposalIds.length) return { key: `proposals:${pendingProposalIds.join("\0")}`, panel: "arc" };
+  if (pendingProposalIds.length) return {
+    key: `proposals:${pendingProposalIds.join("\0")}`,
+    panel: "arc",
+    ...(waitingForProposalAcceptance ? { whileBusy: true } : {}),
+  };
   if (requiredTodoCount || feedbackCount) return { key: `todos:${requiredTodoCount}:${feedbackCount}`, panel: "todos" };
   if (dirtyClaimedPaths?.length) return { key: `claims:${dirtyClaimedPaths.join("\0")}`, panel: "arc" };
   return null;
@@ -69,6 +75,7 @@ export default function ThreadStatusArea({
   threadLifecycle,
   todos,
   vis,
+  waitingForProposalAcceptance = false,
 }: {
   /** Remote targets the user let this thread reach; absent for drafts. */
   network?: { history: readonly NetworkHistoryEntry[]; onRevoke(entry: NetworkHistoryEntry): Promise<void> } | null;
@@ -83,6 +90,8 @@ export default function ThreadStatusArea({
   /** Absent where a thread has no goal or todos to manage; the panel also lists the feedback the thread addresses. */
   todos: { count: number; feedbackCount: number; goalSet: boolean; renderPanel(): ReactNode } | null;
   vis: { onControl: (sessionId: string, controlId: string, value: string) => Promise<void>; onEnd: (sessionId: string) => void; sessions: readonly VisLiveSession[] } | null;
+  /** The live turn is blocked on this thread's proposal acceptance, so the arc panel opens for it. */
+  waitingForProposalAcceptance?: boolean;
 }) {
   const { intersections, logicalProjectId, ownerProjectId } = useThread.claimIntersections(threadId, harness, "plan");
   const overlapCount = intersections.hasScope ? intersections.activeEntries.length : 0;
@@ -112,6 +121,7 @@ export default function ThreadStatusArea({
     feedbackCount,
     pendingProposalIds: proposals.map(({ proposalId }) => proposalId),
     requiredTodoCount,
+    waitingForProposalAcceptance,
   });
 
   const arcSegments: ThreadStatusPanel["segments"][number][] = [

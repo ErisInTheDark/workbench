@@ -1,10 +1,10 @@
-/* No exports. Protect the live status verb: reasoning first, then the newest running call's simplest action. */
+/* No exports. Protect the live status verb: reasoning first, then the newest running call's simplest action, and which waits block on the user. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { getLiveThreadVerb } from "./thread-live-activity";
+import { getLiveThreadVerb, isLiveThreadWaitingForProposalAcceptance } from "./thread-live-activity";
 
 const context = { cwd: "/project", projectRootPath: "/project" };
 
@@ -29,9 +29,14 @@ function fileChange(...kinds: Array<"add" | "delete" | "update">): ThreadItem {
   };
 }
 const reasoning: ThreadItem = { id: "reasoning", type: "reasoning", summary: ["**Considering**\nMore."], content: [] };
+function liveTurn(items: ThreadItem[]): Turn {
+  return { id: "turn", status: "inProgress", items, itemsView: "full", error: null, startedAt: 0, completedAt: null, durationMs: null };
+}
 function verb(items: ThreadItem[]) {
-  const turn: Turn = { id: "turn", status: "inProgress", items, itemsView: "full", error: null, startedAt: 0, completedAt: null, durationMs: null };
-  return getLiveThreadVerb({ context, pendingUserInputRequest: null, turn });
+  return getLiveThreadVerb({ context, pendingUserInputRequest: null, turn: liveTurn(items) });
+}
+function waitingForProposal(items: ThreadItem[]) {
+  return isLiveThreadWaitingForProposalAcceptance({ context, turn: liveTurn(items) });
 }
 
 test("running calls read as their simplest action, newest first", () => {
@@ -44,6 +49,22 @@ test("running calls read as their simplest action, newest first", () => {
   assert.equal(verb([mcp("a", "wb", "browse_run", { commands: ["open https://example.com"] })]), "Browsing");
   assert.equal(verb([mcp("a", "custom", "frobnicate")]), "Executing");
   assert.equal(verb([command("a", "wb thread recall", "inProgress", "/elsewhere")]), "Recalling");
+});
+
+test("only a live proposal acceptance wait blocks on the user", () => {
+  assert.equal(waitingForProposal([mcp("wait", "wb", "git_arc_wait", { proposalId: "p" })]), true);
+  assert.equal(waitingForProposal([mcp("wait", "wb", "git_arc_wait", { proposalId: "*" })]), true);
+  assert.equal(waitingForProposal([mcp("wait", "wbex", "git_arc_wait", { proposalId: "p" })]), true);
+  assert.equal(waitingForProposal([mcp("call", "wb", "mcp_call", { server: "wb", tool: "git_arc_wait", arguments: { proposalId: "p" } })]), true);
+  assert.equal(waitingForProposal([command("wait", "wb git arc wait --proposal p")]), true);
+  // Claims waits, settled waits and ordinary work are not the user's decision to make.
+  assert.equal(waitingForProposal([mcp("wait", "wb", "git_arc_wait", { ref: "a".repeat(40) })]), false);
+  assert.equal(waitingForProposal([command("wait", "wb git arc wait")]), false);
+  assert.equal(waitingForProposal([mcp("wait", "wb", "git_arc_wait", { proposalId: "p" }, { status: "completed" })]), false);
+  assert.equal(waitingForProposal([mcp("wait", "wb", "git_arc_wait", { proposalId: "p" }, { error: { message: "stopped" } })]), false);
+  assert.equal(waitingForProposal([command("wait", "wb git arc wait --proposal p", "completed")]), false);
+  assert.equal(waitingForProposal([]), false);
+  assert.equal(isLiveThreadWaitingForProposalAcceptance({ context, turn: null }), false);
 });
 
 test("file patches name what they do to the files", () => {

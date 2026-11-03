@@ -1,4 +1,4 @@
-/* No production exports. Protect addressed feedback lifecycle visibility, planned-claim intersection status states and idle auto-open priority. */
+/* No production exports. Protect addressed feedback lifecycle visibility, planned-claim intersection status states, idle auto-open priority and a proposal acceptance wait holding the arc panel open. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
@@ -42,7 +42,7 @@ test("working and completed threads both expose their addressed feedback count",
 
 test("idle auto-open prefers proposals, then required todos or feedback, then dirty claims", () => {
   const idle: Parameters<typeof getThreadStatusAttention>[0] = {
-    dirtyClaimedPaths: null, feedbackCount: 0, pendingProposalIds: [], requiredTodoCount: 0,
+    dirtyClaimedPaths: null, feedbackCount: 0, pendingProposalIds: [], requiredTodoCount: 0, waitingForProposalAcceptance: false,
   };
   const panel = (work: Partial<typeof idle>) => getThreadStatusAttention({ ...idle, ...work })?.panel ?? null;
 
@@ -56,6 +56,16 @@ test("idle auto-open prefers proposals, then required todos or feedback, then di
     getThreadStatusAttention({ ...idle, pendingProposalIds: ["p"], dirtyClaimedPaths: ["a.ts"] })?.key,
     getThreadStatusAttention({ ...idle, dirtyClaimedPaths: ["a.ts"] })?.key,
   );
+});
+
+test("a proposal acceptance wait holds its proposal panel open beside a running turn", () => {
+  const idle: Parameters<typeof getThreadStatusAttention>[0] = {
+    dirtyClaimedPaths: null, feedbackCount: 0, pendingProposalIds: [], requiredTodoCount: 0, waitingForProposalAcceptance: false,
+  };
+  assert.equal(getThreadStatusAttention({ ...idle, pendingProposalIds: ["p"], waitingForProposalAcceptance: true })?.whileBusy, true);
+  assert.equal(getThreadStatusAttention({ ...idle, pendingProposalIds: ["p"] })?.whileBusy, undefined);
+  // The wait alone decides nothing: without pending proposals there is no panel to keep open.
+  assert.equal(getThreadStatusAttention({ ...idle, waitingForProposalAcceptance: true }), null);
 });
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;

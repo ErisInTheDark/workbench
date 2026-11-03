@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadViewStatus: the shown thread's status row (live verb, git arc work, vis, skills, network access, todos and feedback) and
- *   its error card.
+ * - default ThreadViewStatus: the shown thread's status row (live verb, git arc work, vis, skills, network access, todos and feedback, with
+ *   its Git arc panel opened while the live turn waits for proposal acceptance) and its error card.
  */
 "use client";
 
@@ -22,7 +22,7 @@ import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadStatusArea from "./ThreadStatusArea";
 import ThreadTodoPanel from "./ThreadTodoPanel";
 import { getThreadGitArcWork } from "./thread-git-arc-presentation";
-import { getLiveThreadVerb } from "./thread-live-activity";
+import { getLiveThreadVerb, isLiveThreadWaitingForProposalAcceptance } from "./thread-live-activity";
 import type { ThreadTodoControls } from "./thread-todo-controls";
 import type { ThreadReferenceSelection } from "./use-thread-reference-selection";
 import { readActiveTranscript } from "./ThreadViewTranscript";
@@ -85,6 +85,9 @@ export default function ThreadViewStatus ({
   const liveVerb = useMemo(() => getLiveThreadVerb({
     context: commandContext, pendingUserInputRequest, turn: liveTurn,
   }), [commandContext, pendingUserInputRequest, liveTurn]);
+  const waitingForProposalAcceptance = useMemo(() => isLiveThreadWaitingForProposalAcceptance({
+    context: commandContext, turn: liveTurn,
+  }), [commandContext, liveTurn]);
 
   const entry = active.entry;
   const gitCommitHistory = entry?.gitCommitHistory;
@@ -114,6 +117,7 @@ export default function ThreadViewStatus ({
         skills={entry && !isDraftThreadView ? { onDeactivate: active.actions.deactivateSkill, skills: active.head?.skills ?? [] } : null}
         threadId={activeThread.id}
         threadLifecycle={entry?.lifecycle ?? null}
+        waitingForProposalAcceptance={waitingForProposalAcceptance}
         network={entry && !isDraftThreadView && active.head?.networkHistory?.length ? {
           history: active.head.networkHistory,
           onRevoke: async target => {

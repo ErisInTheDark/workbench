@@ -2,6 +2,7 @@
  * Exports:
  * - ThreadLiveCommandContext: matcher context for naming running calls.
  * - getLiveThreadVerb: a live turn's simplest current action (Thinking, Reading, Proposing...), or null when nothing is live.
+ * - isLiveThreadWaitingForProposalAcceptance: whether the live turn is stopped on the user accepting a Git arc proposal.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
@@ -12,7 +13,7 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/thread-optimistic-items";
 import {
   getNativeToolDisplay, getThreadCommandDisplay, getThreadCommandExecutionOutcome,
-  getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
+  getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, isGitArcWaitProposalMatcherClaim,
 } from "../../../workbench/thread/thread-command-matchers";
 import { summarizeDisplayParts } from "../../../workbench/thread/command-matchers/helpers";
 import { isThreadWebSearchPlaceholder } from "./thread-web-search-state";
@@ -85,6 +86,27 @@ function newestRunningCallVerb(items: readonly ThreadItem[], context: ThreadLive
   return running.findLast(({ item }) => !(item.type === "dynamicToolCall" && item.namespace === "opencode"
     && item.tool === "execute" && item.toolCallGroupId
     && (childGroups.has(item.toolCallGroupId) || rolloverGroups.has(item.toolCallGroupId))))?.verb ?? null;
+}
+
+/** Whether the live turn is stopped on the user accepting a Git arc proposal, as CLI or MCP wait. */
+export function isLiveThreadWaitingForProposalAcceptance({ context, turn }: {
+  context: ThreadLiveCommandContext;
+  /** The thread's live turn; null when the thread is not working. */
+  turn: ThreadPayload["turns"][number] | null;
+}): boolean {
+  if (!turn) return false;
+  return turn.items.some(item => {
+    if (item.type === "mcpToolCall") {
+      if (item.status !== "inProgress" || item.error) return false;
+      const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, context, item, server: item.server, tool: item.tool });
+      return route?.kind === "simple" && isGitArcWaitProposalMatcherClaim(route.rendering.claimedBy);
+    }
+    if (item.type !== "commandExecution") return false;
+    if (getThreadCommandExecutionOutcome(item.status, item.exitCode) !== "inProgress") return false;
+    return isGitArcWaitProposalMatcherClaim(getThreadCommandDisplay({
+      ...context, command: item.command, commandActions: item.commandActions, cwd: item.cwd,
+    }).claimedBy);
+  });
 }
 
 export function getLiveThreadVerb({ context, pendingUserInputRequest, turn }: {

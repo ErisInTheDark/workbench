@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - ThreadStatusPanel: one status-row control: its segmented pill and the panel it opens.
- * - ThreadStatusAttention: the panel an idle thread wants open, keyed so each change opens it once.
+ * - ThreadStatusAttention: the panel a thread wants open, keyed so each change opens it once, and whether its paused turn keeps it open.
+ * - getThreadStatusAttentionAction: what new attention does to the row's open panel.
  * - threadStatusSegmentClassName/threadStatusPressedClassName: the default pill segment and open-control looks, for status
  *   pills elsewhere that extend them.
  * - default ThreadStatusRow: a thread's persistent status row; its live verb (or a leading notice that opens a panel) and each segmented pill
@@ -37,9 +38,22 @@ export interface ThreadStatusPanel {
 export interface ThreadStatusAttention {
   key: string;
   panel: string;
+  /** The thread is paused on the user, so a running turn opens this panel instead of closing it. */
+  whileBusy?: boolean;
 }
 
-/** Who opened the panel: an auto-opened panel yields as soon as its thread gets busy, a user-opened one stays. */
+/** What new attention does: open the named panel, close one attention opened, or leave the row as the user left it. */
+export function getThreadStatusAttentionAction({ busy, panel, whileBusy }: {
+  busy: boolean;
+  /** Null when nothing new needs attention. */
+  panel: string | null;
+  whileBusy: boolean;
+}): { kind: "close" } | { kind: "open"; panel: string } | null {
+  if (!panel) return busy ? { kind: "close" } : null;
+  return busy && !whileBusy ? { kind: "close" } : { kind: "open", panel };
+}
+
+/** Who opened the panel: an auto-opened panel yields once its thread resumes busy work, a user-opened one stays. */
 type OpenPanel = { id: string; openedBy: "attention" | "user" };
 
 // Segments sit close together; only the pill's outer edges keep the full inset.
@@ -52,9 +66,9 @@ export const threadStatusPressedClassName = "!border-[color-mix(in_srgb,var(--te
 const titleClassName = "flex min-w-0 flex-1 items-center text-left text-[0.92em] font-medium leading-[1.6] text-fg/muted";
 
 export default function ThreadStatusRow({ attention = null, busy = false, inline, leading = null, liveVerb, panels = [] }: {
-  /** While idle, opens its panel on mount, whenever its key changes, and again once the thread goes idle. */
+  /** Opens its panel on mount, whenever its key changes, and again once the thread goes idle; one waiting on the user also opens beside a running turn. */
   attention?: ThreadStatusAttention | null;
-  /** A busy thread opens panels only by user action, and closes the ones attention opened. */
+  /** A busy thread opens panels only by user action, and closes the ones attention opened, unless that attention waits on the user. */
   busy?: boolean;
   /** Wide rows only, just left of the pills, such as the thread's active skill pills. */
   inline?: ReactNode;
@@ -70,11 +84,13 @@ export default function ThreadStatusRow({ attention = null, busy = false, inline
   const [mounted, setMounted] = useState<readonly string[]>([]);
   const attentionKey = attention?.key ?? null;
   const attentionPanel = attention?.panel ?? null;
+  const attentionWhileBusy = attention?.whileBusy ?? false;
   const panelId = panel?.id ?? null;
   useEffect(() => {
-    if (busy) setPanel(current => current?.openedBy === "attention" ? null : current);
-    else if (attentionKey && attentionPanel) setPanel({ id: attentionPanel, openedBy: "attention" });
-  }, [attentionKey, attentionPanel, busy]);
+    const action = getThreadStatusAttentionAction({ busy, panel: attentionPanel, whileBusy: attentionWhileBusy });
+    if (action?.kind === "close") setPanel(current => current?.openedBy === "attention" ? null : current);
+    else if (action) setPanel({ id: action.panel, openedBy: "attention" });
+  }, [attentionKey, attentionPanel, attentionWhileBusy, busy]);
   useEffect(() => {
     if (panelId !== null) setMounted(current => current.includes(panelId) ? current : [...current, panelId]);
   }, [panelId]);

@@ -11,7 +11,7 @@
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text.
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output.
- * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim/isGitArcWaitMatcherClaim/parseGitArcWaitRef: detect arc matcher ids for specialised rendering.
+ * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim/isGitArcWaitMatcherClaim/isGitArcWaitProposalMatcherClaim/parseGitArcWaitRef: detect arc matcher ids for specialised rendering.
  * - isThreadContextMatcherClaim/parseWorkbenchThreadRecallCommand/getWorkbenchThreadRecallSummaryDisplay: parse and present dedicated thread recall commands.
  * - parseWorkbenchFeedbackId: read the stored report id from a wb feedback acknowledgement.
  * - parseWorkbenchVisCommand/WorkbenchVisOperation: parse a `wb vis` call for its vis item.
@@ -54,6 +54,7 @@ import {
     isGitCheckpointCompareMatcherClaim,
     isGitCheckpointDiffMatcherClaim,
     isGitArcWaitMatcherClaim,
+    isGitArcWaitProposalMatcherClaim,
     parseGitArcCommand,
     parseGitArcReceipt,
     parseGitArcWaitRef,
@@ -172,6 +173,7 @@ export {
     isGitCheckpointCompareMatcherClaim,
     isGitCheckpointDiffMatcherClaim,
     isGitArcWaitMatcherClaim,
+    isGitArcWaitProposalMatcherClaim,
     isThreadContextMatcherClaim,
     isWorkbenchTaskStatusMatcherClaim,
     isWorkbenchTaskTitleSetMatcherClaim,

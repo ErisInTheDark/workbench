@@ -2,7 +2,7 @@
  * Exports:
  * - GIT_CHECKPOINT_COMMAND_MATCHERS: named arc command presentation.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: specialised arc routes.
- * - isGitArcWaitMatcherClaim/parseGitArcWaitRef/parseGitArcWaitProposalId: identify a CLI arc wait and its target.
+ * - isGitArcWaitMatcherClaim/isGitArcWaitProposalMatcherClaim/parseGitArcWaitRef/parseGitArcWaitProposalId: identify a CLI arc wait, its target and a proposal acceptance wait.
  * - parseGitArcCommand/GitArcCommandIntent/GitArcCommandAction: canonical arc command intent.
  * - parseGitArcReceipt: persisted successful arc facts.
  * - parseGitCheckpointCompareOutput: per-file change counts.
@@ -59,6 +59,8 @@ const ARC_MATCHER_IDS = {
   restack: "git-arc.restack",
   unknown: "git-arc.unknown",
 } as const satisfies Record<GitArcCommandAction, string>;
+const GIT_ARC_WAIT_MATCHER_ID = "git-arc.wait";
+const GIT_ARC_WAIT_PROPOSAL_MATCHER_ID = "git-arc.wait-proposal";
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
 const CHECKPOINT_PROPOSAL_PATTERN = /^Workbench arc proposal:\s*([A-Za-z0-9._-]+)\s*$/im;
 const CHECKPOINT_COMPARE_LINE_PATTERN = /^([ADMU])\t\+(\d+)\t-(\d+)\t(.+)$/u;
@@ -114,7 +116,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     presentationName: "git_arc_start",
   }),
   CommandMatcher({
-    id: "git-arc.wait-proposal",
+    id: GIT_ARC_WAIT_PROPOSAL_MATCHER_ID,
     match: ({ stage }) => {
       const command = stage.text.trim();
       if (!/^wb(?:\.cmd)?\s+git\s+arc\s+wait(?:\s|$)/iu.test(command)) return null;
@@ -126,7 +128,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     },
   }),
   CommandMatcher({
-    id: "git-arc.wait",
+    id: GIT_ARC_WAIT_MATCHER_ID,
     match: ({ stage }) => {
       const command = stage.text.trim();
       if (!/^wb(?:\.cmd)?\s+git\s+arc\s+wait(?:\s|$)/iu.test(command) || parseGitArcWaitProposalId(command)) return null;
@@ -228,7 +230,11 @@ export function isGitCheckpointCommitMatcherClaim(claimedBy: string | null | und
 }
 
 export function isGitArcWaitMatcherClaim(claimedBy: string | null | undefined) {
-  return includesMatcher(claimedBy, "git-arc.wait");
+  return includesMatcher(claimedBy, GIT_ARC_WAIT_MATCHER_ID);
+}
+
+export function isGitArcWaitProposalMatcherClaim(claimedBy: string | null | undefined) {
+  return includesMatcher(claimedBy, GIT_ARC_WAIT_PROPOSAL_MATCHER_ID);
 }
 
 /** The inactive plan `wb git arc wait` targets; null waits on the registered plan. */
