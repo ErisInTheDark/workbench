@@ -47,16 +47,17 @@ export interface WorkbenchQuestionnaireRespondRequest {
   requestKey: string;
   response: WorkbenchUserInputResponse;
   skipAutoCompact?: boolean;
+  /** Whether the answer form showed that answering compacts first; false bounces an answer that is due to. */
+  expectAutoCompact?: boolean;
   supplementalInput?: WorkbenchUserInput[];
   threadId: string;
   turnId?: string | null;
 }
 
-export interface WorkbenchQuestionnaireRespondResult {
-  ok: true;
-  route: "admitted" | "live" | "provider";
-  warning?: string;
-}
+/** A bounced answer left the questionnaire pending; the thread now reports it will compact. */
+export type WorkbenchQuestionnaireRespondResult =
+  | { ok: true; route: "admitted" | "live" | "provider"; warning?: string }
+  | { ok: false; reason: "autoCompactDue" };
 
 type BrowseSessionParams = Omit<WorkbenchBrowseSessionControlRequest, "action">;
 const recordSchema = z.object({}).passthrough();
@@ -85,7 +86,10 @@ export const threadDaemonRequests = {
   }),
   "questionnaire/respond": defineDaemonRequest<WorkbenchQuestionnaireRespondRequest, WorkbenchQuestionnaireRespondResult>()({
     route: "thread",
-    result: z.object({ ok: z.literal(true), route: z.enum(["admitted", "live", "provider"]), warning: z.string().optional() }).strict(),
+    result: z.union([
+      z.object({ ok: z.literal(true), route: z.enum(["admitted", "live", "provider"]), warning: z.string().optional() }).strict(),
+      z.object({ ok: z.literal(false), reason: z.literal("autoCompactDue") }).strict(),
+    ]),
   }),
   // App-only: relayed calls and network grants are written by apps, never by browsers or other daemons.
   [RELAY_EXECUTE_METHOD]: defineDaemonRequest<RelayExecuteParams, RemoteCallOutcome>()({

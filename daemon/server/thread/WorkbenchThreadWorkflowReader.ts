@@ -1,10 +1,9 @@
 /*
  * Exports:
- * - WorkbenchThreadWorkflowPorts: where one thread's instruction selection, skills, pinned layers and workflow ledger come from.
+ * - WorkbenchThreadWorkflowPorts: where one thread's instruction selection, skills, pinned instructions and workflow ledger come from.
  * - WorkbenchThreadWorkflow: a thread's resolved overlays, ledger, current mode and always-editable paths.
- * - WorkbenchInstructionPin: the layers one instruction build delivered: base layers, or activated skills' layers.
- * - default WorkbenchThreadWorkflowReader: own pinning the instruction layers a thread was given, reading its workflow state from them,
- *   and the edit and tool denials its current mode imposes.
+ * - default WorkbenchThreadWorkflowReader: own reading a thread's workflow state from the instructions it was given, and the edit and
+ *   tool denials its current mode imposes.
  */
 import path from "node:path";
 import type { WorkbenchInstructionSelection } from "workbench-shared/workbench/provider/provider-input";
@@ -13,24 +12,19 @@ import {
   currentAlwaysEditable, currentWorkflowMode, effectiveWorkflowMode, findWorkflowMode, THREAD_STATE_TOOL,
   type WorkflowLedgerEntry, type WorkflowMode,
 } from "workbench-shared/workbench/thread/workflow-modes";
-import type {
-  StoredThreadInstructionOverlays, ThreadInstructionOverlayCommand,
-} from "../database/thread-state/WorkbenchThreadInstructionOverlayStore";
 import {
-  mergeWorkbenchInstructionLayers, readWorkbenchInstructionBaseLayers, readWorkbenchSkillLayers,
-  WorkbenchInstructionOverlaysSchema, type WorkbenchInstructionOverlays,
+  mergeWorkbenchInstructionLayers, readWorkbenchInstructionBaseLayers, readWorkbenchSkillLayers, type WorkbenchInstructionOverlays,
 } from "../lib/workbench/instructions/instruction-overlay-catalogue";
-import type { WorkbenchSkillLayer } from "../lib/workbench/instructions/workbench-prompt-types";
+import { comparableSkillPath, type PinnedInstructions } from "./WorkbenchThreadInstructionPins";
 
 export interface WorkbenchThreadWorkflowPorts {
   readSelection(threadId: string): Promise<WorkbenchInstructionSelection>;
   readSkills(threadId: string): Promise<readonly WorkbenchThreadSkill[]>;
   readProjectRoot(threadId: string): Promise<string | null>;
   readLedger(threadId: string): Promise<WorkflowLedgerEntry[]>;
-  executePins(command: ThreadInstructionOverlayCommand): Promise<StoredThreadInstructionOverlays | null>;
+  readPins(threadId: string): Promise<PinnedInstructions>;
   readBaseLayers?: typeof readWorkbenchInstructionBaseLayers;
   readSkillLayers?: typeof readWorkbenchSkillLayers;
-  now?: () => number;
 }
 
 export interface WorkbenchThreadWorkflow {
@@ -42,37 +36,15 @@ export interface WorkbenchThreadWorkflow {
   projectRoot: string | null;
 }
 
-export type WorkbenchInstructionPin =
-  | { base: readonly WorkbenchInstructionOverlays[] }
-  | { skills: readonly WorkbenchSkillLayer[] };
-
 const GIT_ARC_EDIT_TOOL_PREFIX = "git_arc_edit_";
 const GIT_ARC_WORKTREE_TOOLS: ReadonlySet<string> = new Set(["git_arc_restore", "git_arc_stash", "git_arc_unstash"]);
-const PinnedBaseSchema = WorkbenchInstructionOverlaysSchema.array();
 
 function comparable(value: string) {
   return path.resolve(value).replaceAll("\\", "/").toLowerCase();
 }
 
-function pinnedLayer(value: unknown) {
-  const parsed = WorkbenchInstructionOverlaysSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
-
 export default class WorkbenchThreadWorkflowReader {
   constructor(private readonly ports: WorkbenchThreadWorkflowPorts) {}
-
-  /** Builders report what they delivered; a failed pin only leaves this thread on current files, so it never fails the build. */
-  async pin(threadId: string, pin: WorkbenchInstructionPin) {
-    const at = (this.ports.now ?? Date.now)();
-    try {
-      await this.ports.executePins("base" in pin
-        ? { kind: "pinBase", threadId, layers: pin.base, at }
-        : { kind: "pinSkills", threadId, skills: Object.fromEntries(pin.skills.map(skill => [comparable(skill.path), skill.layer])), at });
-    } catch (error) {
-      console.warn(`[thread-workflow] Instruction pin failed for ${threadId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
 
   /**
    * Gates follow the instructions the thread was last given, so file edits apply from its next build. Pieces never pinned,
@@ -81,18 +53,16 @@ export default class WorkbenchThreadWorkflowReader {
   async readOverlays(threadId: string) {
     const [selection, skills, projectRoot, pinned] = await Promise.all([
       this.ports.readSelection(threadId), this.ports.readSkills(threadId), this.ports.readProjectRoot(threadId),
-      this.ports.executePins({ kind: "read", threadId }),
+      this.ports.readPins(threadId),
     ]);
-    const pinnedBase = PinnedBaseSchema.safeParse(pinned?.base);
-    const base = pinnedBase.success ? pinnedBase.data
-      : await (this.ports.readBaseLayers ?? readWorkbenchInstructionBaseLayers)({ projectRoot, workflowIds: selection.workflowIds ?? [] });
+    const base = pinned.base
+      ?? await (this.ports.readBaseLayers ?? readWorkbenchInstructionBaseLayers)({ projectRoot, workflowIds: selection.workflowIds ?? [] });
     const paths = skills.map(skill => skill.path);
-    const pinnedSkills = paths.map(skillPath => pinnedLayer(pinned?.skills[comparable(skillPath)]));
-    const missing = paths.filter((_, index) => !pinnedSkills[index]);
+    const missing = paths.filter(skillPath => !pinned.skills.has(comparableSkillPath(skillPath)));
     const live = missing.length ? await (this.ports.readSkillLayers ?? readWorkbenchSkillLayers)(projectRoot, missing) : [];
-    const liveByPath = new Map(live.map(skill => [comparable(skill.path), skill.layer]));
-    const skillLayers = paths.flatMap((skillPath, index) => {
-      const layer = pinnedSkills[index] ?? liveByPath.get(comparable(skillPath));
+    const liveByPath = new Map(live.map(skill => [comparableSkillPath(skill.path), skill.layer]));
+    const skillLayers = paths.flatMap((skillPath): WorkbenchInstructionOverlays[] => {
+      const layer = pinned.skills.get(comparableSkillPath(skillPath)) ?? liveByPath.get(comparableSkillPath(skillPath));
       return layer ? [layer] : [];
     });
     return { overlays: mergeWorkbenchInstructionLayers([...base, ...skillLayers]), projectRoot };

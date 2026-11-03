@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests pinned instruction layers: base replaces, skills merge per path, and rows follow their thread.
+ * No production exports. Tests pinned instruction layers: base and prefix replace together, skills merge per path, and rows follow their thread.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchThreadInstructionOverlayStore from "./WorkbenchThreadInstructionOverlayStore.ts";
 
-test("base pins replace, skill pins merge per path, and a deleted thread takes its pins with it", () => {
+test("base pins replace with their prefix, skill pins merge per path, and a deleted thread takes its pins with it", () => {
   const database = new Database(":memory:");
   try {
     database.pragma("foreign_keys = ON");
@@ -22,11 +22,11 @@ test("base pins replace, skill pins merge per path, and a deleted thread takes i
 
     assert.equal(store.execute({ kind: "read", threadId: "thread" }), null);
     store.execute({ kind: "pinSkills", threadId: "thread", skills: { a: layer("A1") }, at: 1 });
-    store.execute({ kind: "pinBase", threadId: "thread", layers: [layer("Old")], at: 2 });
-    store.execute({ kind: "pinBase", threadId: "thread", layers: [layer("New")], at: 3 });
+    store.execute({ kind: "pinBase", threadId: "thread", layers: [layer("Old")], prefix: { hash: "old" }, at: 2 });
+    store.execute({ kind: "pinBase", threadId: "thread", layers: [layer("New")], prefix: { hash: "new" }, at: 3 });
     store.execute({ kind: "pinSkills", threadId: "thread", skills: { a: layer("A2"), b: layer("B") }, at: 4 });
     assert.deepEqual(store.execute({ kind: "read", threadId: "thread" }), {
-      base: [layer("New")], skills: { a: layer("A2"), b: layer("B") },
+      base: [layer("New")], skills: { a: layer("A2"), b: layer("B") }, prefix: { hash: "new" },
     });
 
     database.prepare("DELETE FROM workbench_threads WHERE id = 'thread'").run();

@@ -336,8 +336,11 @@ export default class WorkbenchThreadActionController {
     const held = await this.owners.questionnaireSteers.hold(threadId, message);
     mark("questionnaire-hold");
     if (held) return { kind: "queued" };
-    const result = await this.owners.autoCompact.submit(threadId, provider, message, this.delivery(harness, threadId),
-      { mark, ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}) });
+    const result = await this.owners.autoCompact.submit(threadId, provider, message, this.delivery(harness, threadId), {
+      mark,
+      ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}),
+      ...(input.expectAutoCompact !== undefined ? { expectAutoCompact: input.expectAutoCompact } : {}),
+    });
     mark("delivered");
     return result;
   }

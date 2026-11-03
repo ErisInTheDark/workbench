@@ -19,7 +19,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       context.legacyMigrationProjectRoot,
       () => settings.readLocalCapabilities(),
       () => build.run("mcp", mcp => mcp.listInstructionTools(), "Codex instruction tool catalogue"),
-      async (threadId, pin) => await build.get("threadWorkflow").pin(threadId, pin),
+      async (threadId, pin) => await build.get("threadInstructionPins").pin(threadId, pin),
     );
     return {
       dispose: () => undefined,
@@ -30,7 +30,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Codex instruction adaptation and its bridge dependant.",
   lifecycle: "atomic",
   provides: ["codexInstructions"],
-  requires: ["database", "threadWorkflow"],
+  requires: ["database", "threadInstructionPins"],
   safeAll: true,
   scope: "server:codex/instructions",
 });

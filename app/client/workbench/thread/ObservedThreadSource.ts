@@ -326,7 +326,10 @@ export default function createObservedThreadSource(
               ...(options.activatedSkillPaths ? { activatedSkillPaths: options.activatedSkillPaths } : {}),
             }),
             ...(options.skipAutoCompact ? { skipAutoCompact: true } : {}),
+            ...(options.expectAutoCompact !== undefined ? { expectAutoCompact: options.expectAutoCompact } : {}),
           });
+          // Compaction turned out to be due; the thread now says so, and the draft stays for a deliberate resend.
+          if (result.kind === "autoCompactDue") throw new ThreadMessageNotSentError();
           if (result.warning) ports.reportError(result.warning);
           const overlay = pending.get(clientId);
           if (result.kind === "started" && overlay) {
@@ -379,10 +382,12 @@ export default function createObservedThreadSource(
           requestKey: durable.requestKey,
           response,
           ...(options.skipAutoCompact ? { skipAutoCompact: true } : {}),
+          ...(options.expectAutoCompact !== undefined ? { expectAutoCompact: options.expectAutoCompact } : {}),
           ...(supplementalInput.length ? { supplementalInput } : {}),
           threadId,
           turnId: options.turnId ?? durable.turnId,
         });
+        if (!result.ok) throw new ThreadMessageNotSentError();
         if (result.warning) ports.reportError(result.warning);
       },
       async snooze(requestKey) {

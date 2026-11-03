@@ -1076,6 +1076,8 @@ export interface WorkbenchSendThreadMessageOptions {
   selectThread?: boolean;
   stayInCreate?: boolean;
   skipAutoCompact?: boolean;
+  /** Whether the composer showed that sending compacts first; a mismatch bounces the send back unsent. */
+  expectAutoCompact?: boolean;
   startNewTurn?: boolean;
   workflowIds?: string[];
 }
@@ -1173,6 +1175,8 @@ export interface WorkbenchSubmitUserInputRequestOptions {
   activatedSkillPaths?: string[];
   /** A held answer that starts a turn skips due auto-compaction, like a shift-sent message. */
   skipAutoCompact?: boolean;
+  /** Whether the form showed that answering compacts first; a mismatch bounces the answer back unsent. */
+  expectAutoCompact?: boolean;
   turnId?: string | null;
   insertAfterItemId?: string | null;
   insertAfterItemIndex?: number | null;

@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchThreadMessageSchema/WorkbenchThreadMessage: user intent submitted to a WB thread.
  * - WorkbenchThreadMessageResultSchema/WorkbenchThreadMessageResult: accepted start or steer.
- * - WorkbenchThreadMessageSubmitResultSchema/WorkbenchThreadMessageSubmitResult: user submission outcome, including a message queued behind compaction.
+ * - WorkbenchThreadMessageSubmitResultSchema/WorkbenchThreadMessageSubmitResult: user submission outcome, including a message queued behind
+ *   compaction, or bounced because compaction is due but the sender expected none.
  * - WorkbenchThreadCreateSchema/WorkbenchThreadCreate: project/profile selection for creation.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: existing WB thread selection.
  * - WorkbenchThreadPageSchema/WorkbenchThreadPage: opaque history continuation.
@@ -82,6 +83,8 @@ const message = {
   input: z.array(WorkbenchUserInputSchema),
   context: WorkbenchMessageContextSchema.optional(),
   skipAutoCompact: z.boolean().optional(),
+  /** Whether the sender showed that this send compacts first; false bounces a send that is due to. Absent never bounces. */
+  expectAutoCompact: z.boolean().optional(),
 };
 export const WorkbenchThreadMessageSchema = z.discriminatedUnion("intent", [
   z.object({ ...message, intent: z.literal("continue") }),
@@ -97,6 +100,7 @@ export type WorkbenchThreadMessageResult = z.infer<typeof WorkbenchThreadMessage
 export const WorkbenchThreadMessageSubmitResultSchema = z.union([
   WorkbenchThreadMessageResultSchema,
   z.object({ kind: z.literal("queued"), warning: z.string().optional() }),
+  z.object({ kind: z.literal("autoCompactDue") }),
 ]);
 export type WorkbenchThreadMessageSubmitResult = z.infer<typeof WorkbenchThreadMessageSubmitResultSchema>;
 

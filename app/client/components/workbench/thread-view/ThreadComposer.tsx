@@ -168,7 +168,7 @@ export default function ThreadComposer ({
   onSendMessage: (
     threadId: string,
     input: UserInput[],
-    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched" | "stayInCreate">,
+    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "expectAutoCompact" | "onThreadLaunched" | "stayInCreate">,
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadSettled?: (target: WorkbenchThreadTarget, ownerProjectId: string) => void;
@@ -490,6 +490,7 @@ export default function ThreadComposer ({
     const send = (onThreadLaunched?: WorkbenchSendThreadMessageOptions["onThreadLaunched"]) => onSendMessage(thread.id, input, {
       activatedSkillPaths,
       ...(!thread.isDraft && shiftKey ? { skipAutoCompact: true } : {}),
+      ...(!thread.isDraft && !shiftKey ? { expectAutoCompact: willAutoCompactOnSend } : {}),
       ...(thread.isDraft && shiftKey ? { stayInCreate: true } : {}),
       onThreadLaunched,
     }).catch((sendError: unknown) => {

@@ -25,6 +25,7 @@ import WorkbenchTranscriptReader, { threadPayloadStatus } from "../transcript/Wo
 import WorkbenchTranscriptReconciliationController from "../transcript/WorkbenchTranscriptReconciliationController";
 import WorkbenchTurnContinuationController from "../turn/WorkbenchTurnContinuationController";
 import WorkbenchTurnSettlementController from "../turn/WorkbenchTurnSettlementController";
+import type WorkbenchThreadInstructionPins from "../thread/WorkbenchThreadInstructionPins";
 import type WorkbenchCoreThreadLookup from "./WorkbenchCoreThreadLookup";
 
 export type WorkbenchCoreTranscript = Pick<DaemonTranscriptRegistration,
@@ -74,6 +75,8 @@ export default class WorkbenchTurnRuntimeFeature {
     /** Live wb shells' expensive-queue timing, newest output and yields, owned by the process-wide MCP request registry. */
     shells: Pick<WorkbenchAgentMcpRequestRegistry,
       "readShellQueue" | "subscribeShellQueue" | "readShellOutput" | "readYieldedShells" | "subscribeShellOutput">;
+    /** Whether a thread's next prefix would differ from what it was last given. */
+    prefixes: Pick<WorkbenchThreadInstructionPins, "prefixStale" | "knownPrefixStale">;
     warn(message: string): void;
   }) {
     this.#shells = ports.shells;
@@ -113,6 +116,8 @@ export default class WorkbenchTurnRuntimeFeature {
         return { latestTurn, status: threadPayloadStatus(entry), turnLive: await turnLiveness.read(target.threadId, target.harness) };
       },
       publish: (target, willAutoCompact) => this.publish(target.threadId, { willAutoCompact }),
+      prefixStale: threadId => ports.prefixes.prefixStale(threadId),
+      knownPrefixStale: threadId => ports.prefixes.knownPrefixStale(threadId),
       now: Date.now,
       warn: message => console.warn(`[auto-compact] ${message.slice(0, 500)}`),
     });

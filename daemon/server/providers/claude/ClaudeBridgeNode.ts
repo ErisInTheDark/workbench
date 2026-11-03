@@ -73,13 +73,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const instructions = await buildWorkbenchManagedThreadInstructions(
           await promptContext(input), () => settings.readLocalCapabilities(),
         );
-        await build.get("threadWorkflow").pin(input.threadId, { base: instructions.overlayLayers });
+        await build.get("threadInstructionPins").pin(input.threadId, { base: instructions.overlayLayers, prefix: instructions.prefix });
         return [instructions.baseInstructions, instructions.developerInstructions]
           .filter((part): part is string => Boolean(part?.trim())).join("\n\n");
       },
       buildActivatedSkills: async input => {
         const built = await buildWorkbenchManagedThreadActivatedSkills(await promptContext(input), () => settings.readLocalCapabilities());
-        await build.get("threadWorkflow").pin(input.threadId, { skills: built.skillLayers });
+        await build.get("threadInstructionPins").pin(input.threadId, { skills: built.skillLayers });
         return built.catalog;
       },
       collectInputContext: (threadId, trigger, signal) => (
@@ -146,7 +146,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [
     "claudeSessions", "gitArc", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity", "database",
     "threadState", "transcript", "transcriptReader", "transcriptReconciliation", "providerObservations", "agentContext",
-    "threadWorkflow",
+    "threadWorkflow", "threadInstructionPins",
   ],
   safeAll: true,
   scope: "server:claude",

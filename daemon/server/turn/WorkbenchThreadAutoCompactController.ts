@@ -3,8 +3,11 @@
  * - ThreadAutoCompactEvidence: canonical activity and current-context measurement.
  * - ThreadAutoCompactTarget: observed thread identity for status publication.
  * - ThreadAutoCompactRuntime: latest turn, status and liveness a decision weighs.
+ * - AutoCompactAdmissionOptions/AutoCompactDueError: a send's compaction policy and expectation, and the bounce when it expected none.
  * - QueuedMessageDelivery: admit one message directly, or inside the admission whose ticket it carries.
- * - default WorkbenchThreadAutoCompactController: own observed eligibility (singly or from batched facts) and compact-before-message policy, including held questionnaire answers, user messages queued behind compaction and queues handed over by a retiring generation.
+ * - default WorkbenchThreadAutoCompactController: own observed eligibility (singly or from batched facts; idle or stale-prefix due) and
+ *   compact-before-message policy, including held questionnaire answers, user messages queued behind compaction, queues handed over by a
+ *   retiring generation, and bouncing sends that expected no compaction.
  */
 import type { ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -54,6 +57,20 @@ interface ObservedThread {
   willAutoCompact: boolean | null;
 }
 
+export interface AutoCompactAdmissionOptions {
+  skipAutoCompact?: boolean;
+  /** What the sender showed; false bounces a send that is due to compact. Absent compacts without asking, as agents do. */
+  expectAutoCompact?: boolean;
+}
+
+/** A send expected no compaction but one is due; nothing was delivered, and the thread now reports it will compact. */
+export class AutoCompactDueError extends Error {
+  constructor() {
+    super("Context compaction is due before this message; nothing was sent.");
+    this.name = "AutoCompactDueError";
+  }
+}
+
 export type QueuedMessageDelivery = (
   message: QueuedThreadMessage,
   options: { skipAutoCompact?: boolean; admission?: WorkbenchThreadAdmissionTicket },
@@ -76,6 +93,10 @@ export default class WorkbenchThreadAutoCompactController {
     readEvidence(threadId: string): Promise<ThreadAutoCompactEvidence | null>;
     readRuntime(target: ThreadAutoCompactTarget): Promise<ThreadAutoCompactRuntime>;
     publish(target: ThreadAutoCompactTarget, willAutoCompact: boolean): void;
+    /** Exact: rebuilds when needed. Only sends pay for it. Absent: prefixes are never stale. */
+    prefixStale?(threadId: string): Promise<boolean>;
+    /** What the last exact check found; observation reads only this. */
+    knownPrefixStale?(threadId: string): boolean;
     schedule?(callback: () => void, delayMs: number): unknown;
     cancel?(timer: unknown): void;
     now(): number;
@@ -143,7 +164,7 @@ export default class WorkbenchThreadAutoCompactController {
     threadId: string,
     provider: AdmissionProvider,
     admit: () => Promise<T>,
-    options: { skipAutoCompact?: boolean; admission?: WorkbenchThreadAdmissionTicket } = {},
+    options: AutoCompactAdmissionOptions & { admission?: WorkbenchThreadAdmissionTicket } = {},
   ): Promise<T> {
     this.lifetime.signal.throwIfAborted();
     if (options.admission) {
@@ -156,7 +177,12 @@ export default class WorkbenchThreadAutoCompactController {
       const signal = this.lifetime.signal;
       signal.throwIfAborted();
       await this.compaction.retireStranded(threadId);
-      const result = !options.skipAutoCompact && (await this.decide(threadId, provider)).willAutoCompact
+      const compacts = !options.skipAutoCompact && (await this.decide(threadId, provider, undefined, true)).willAutoCompact;
+      if (compacts && options.expectAutoCompact === false) {
+        await this.refreshAfterAdmission(threadId, provider);
+        throw new AutoCompactDueError();
+      }
+      const result = compacts
         ? await this.compaction.compactInsideAdmission(threadId, provider, ticket, {
           signal, then: async () => { signal.throwIfAborted(); return await admit(); },
         }) as T
@@ -175,7 +201,7 @@ export default class WorkbenchThreadAutoCompactController {
     provider: AdmissionProvider,
     message: QueuedThreadMessage,
     deliver: QueuedMessageDelivery,
-    options: { skipAutoCompact?: boolean; mark?: (phase: string) => void } = {},
+    options: AutoCompactAdmissionOptions & { mark?: (phase: string) => void } = {},
   ): Promise<WorkbenchThreadMessageSubmitResult> {
     this.lifetime.signal.throwIfAborted();
     const mark = options.mark ?? (() => {});
@@ -184,17 +210,22 @@ export default class WorkbenchThreadAutoCompactController {
     mark("compaction-queue");
     if (joinedQueue) return { kind: "queued" };
     if (options.skipAutoCompact) return await deliver(message, { skipAutoCompact: true });
-    const queued = Promise.withResolvers<boolean>();
+    const queued = Promise.withResolvers<boolean | "due">();
     const compaction = this.admission.run(threadId, async ticket => {
       mark("admission");
       const signal = this.lifetime.signal;
       signal.throwIfAborted();
       await this.compaction.retireStranded(threadId);
       mark("stranded");
-      const decision = await this.decide(threadId, provider);
+      const decision = await this.decide(threadId, provider, undefined, true);
       mark("decision");
       if (!decision.willAutoCompact) {
         queued.resolve(false);
+        return;
+      }
+      if (options.expectAutoCompact === false) {
+        await this.refreshAfterAdmission(threadId, provider);
+        queued.resolve("due");
         return;
       }
       const compacting = this.compaction.compactInsideAdmission(threadId, provider, ticket, { signal });
@@ -211,7 +242,9 @@ export default class WorkbenchThreadAutoCompactController {
       queued.reject(error);
       if (!this.lifetime.signal.aborted && !(error instanceof WorkbenchAdmissionDrainingError)) this.warn(threadId, error);
     });
-    if (await queued.promise) return { kind: "queued" };
+    const outcome = await queued.promise;
+    if (outcome === "due") return { kind: "autoCompactDue" };
+    if (outcome) return { kind: "queued" };
     return await deliver(message, {});
   }
 
@@ -229,7 +262,7 @@ export default class WorkbenchThreadAutoCompactController {
     await this.admission.run(threadId, async ticket => {
       const signal = this.lifetime.signal;
       signal.throwIfAborted();
-      if (!remaining.compacted && (await this.decide(threadId, provider)).willAutoCompact) {
+      if (!remaining.compacted && (await this.decide(threadId, provider, undefined, true)).willAutoCompact) {
         // The adopted queue settles its own holds even when compaction fails, so the handoff itself succeeded.
         await this.compaction.compactInsideAdmission(threadId, provider, ticket, {
           signal, adopted: { handoff: remaining, deliver: deliverQueued },
@@ -255,6 +288,7 @@ export default class WorkbenchThreadAutoCompactController {
     threadId: string,
     provider?: { threads: Pick<WorkbenchProvider["threads"], "read" | "latestTurn" | "isTurnLive"> },
     facts?: ThreadAutoCompactFacts,
+    checkPrefix = false,
   ): Promise<ThreadAutoCompactDecision> {
     const signal = this.lifetime.signal;
     signal.throwIfAborted();
@@ -264,7 +298,12 @@ export default class WorkbenchThreadAutoCompactController {
     if (!evidence || evidence.contextTokens === null || evidence.contextTokens < settings.tokenThreshold) {
       return { dueAt: null, willAutoCompact: false };
     }
-    const dueAt = evidence.activityAt + settings.idleMinutes * 60_000;
+    const idleDueAt = evidence.activityAt + settings.idleMinutes * 60_000;
+    // A prefix that changed since the last build misses the provider's cache just like an expired one.
+    const stale = this.ports.now() < idleDueAt
+      && (checkPrefix ? await this.ports.prefixStale?.(threadId) ?? false : this.ports.knownPrefixStale?.(threadId) ?? false);
+    signal.throwIfAborted();
+    const dueAt = stale ? evidence.activityAt : idleDueAt;
     if (this.ports.now() < dueAt) return { dueAt, willAutoCompact: false };
     const target = this.observed.get(threadId)?.target;
     const runtime = facts ? facts.runtime : provider

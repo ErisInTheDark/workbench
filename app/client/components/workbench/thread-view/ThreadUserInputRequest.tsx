@@ -95,7 +95,7 @@ type InteractiveThreadUserInputRequestProps = {
   onDraftClear: () => Promise<void> | void;
   onSubmit: (
     response: WorkbenchUserInputResponse,
-    options: Pick<WorkbenchSubmitUserInputRequestOptions, "activatedSkillPaths" | "skipAutoCompact" | "supplementalInput">,
+    options: Pick<WorkbenchSubmitUserInputRequestOptions, "activatedSkillPaths" | "skipAutoCompact" | "expectAutoCompact" | "supplementalInput">,
   ) => Promise<void>;
   presentation?: "compact" | "full";
   request: WorkbenchUserInputRequest;
@@ -308,7 +308,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
         ...(supplementalInput.length ? { supplementalInput } : {}),
         // Always claimed, even when empty, so the daemon can check them against its own skill catalog.
         activatedSkillPaths,
-        ...(skipAutoCompact ? { skipAutoCompact: true } : {}),
+        ...(skipAutoCompact ? { skipAutoCompact: true } : { expectAutoCompact: Boolean(interactiveProps.willAutoCompact) }),
       });
     }, interactiveProps.onDraftClear);
   };

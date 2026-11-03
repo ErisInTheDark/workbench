@@ -256,7 +256,7 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
       })();
       return true;
     } catch (error) {
-      if (subject !== "message" || !isThreadMessageNotSentError(error)) {
+      if (!isThreadMessageNotSentError(error)) {
         this.reportError(error, `Unable to submit the ${subject}.`);
       }
       this.#publish({ isSubmitting: false });

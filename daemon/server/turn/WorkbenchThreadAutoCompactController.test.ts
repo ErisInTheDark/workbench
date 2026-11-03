@@ -45,6 +45,7 @@ function fixture() {
   const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
   let settingsReads = 0;
   let publicationListener = () => {};
+  const prefix = { stale: false, known: false, exactChecks: 0 };
   const admission = new WorkbenchThreadAdmissionController();
   const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
     readSettings: async () => {
@@ -70,6 +71,12 @@ function fixture() {
       const index = scheduled.findIndex(candidate => candidate === timer);
       if (index >= 0) scheduled.splice(index, 1);
     },
+    prefixStale: async () => {
+      prefix.exactChecks += 1;
+      if (prefix.stale) prefix.known = true;
+      return prefix.stale;
+    },
+    knownPrefixStale: () => prefix.known,
     now: () => now,
     warn: () => {},
   });
@@ -80,7 +87,7 @@ function fixture() {
     compact: async () => compact(),
   } };
   return {
-    owner, admission, provider, calls, publications, scheduled,
+    owner, admission, provider, calls, publications, scheduled, prefix,
     settingsReads: () => settingsReads,
     onPublication: (listener: () => void) => { publicationListener = listener; },
     now: (next: number) => { now = next; },
@@ -104,6 +111,53 @@ test("inactive completed, failed and interrupted turns compact at both exact thr
     assert.deepEqual(f.calls, ["compact", "admit"]);
     await f.owner.dispose();
   }
+});
+
+test("a stale prefix makes a recently active thread due, found exactly only by sends and remembered for observation", async () => {
+  const f = fixture();
+  f.evidence({ activityAt: 29 * 60_000, contextTokens: 200_000 });
+  assert.equal(await f.owner.observe({ harness: "claude", threadId: "thread" }), false);
+  f.prefix.stale = true;
+  assert.equal(await f.owner.observe({ harness: "claude", threadId: "thread" }), false, "observation never rebuilds");
+  assert.equal(f.prefix.exactChecks, 0);
+  assert.equal(await f.owner.run("thread", f.provider, f.admit), "started");
+  assert.deepEqual(f.calls, ["compact", "admit"], "the send checked exactly and compacted first");
+  assert.equal(f.prefix.exactChecks, 1);
+  await f.owner.dispose();
+
+  const small = fixture();
+  small.evidence({ activityAt: 29 * 60_000, contextTokens: 1_000 });
+  small.prefix.stale = true;
+  await small.owner.run("thread", small.provider, small.admit);
+  assert.deepEqual(small.calls, ["admit"], "below the token threshold a stale prefix changes nothing");
+  assert.equal(small.prefix.exactChecks, 0, "and is never rebuilt");
+  await small.owner.dispose();
+});
+
+test("a send that expected no compaction bounces undelivered and the thread starts reporting it; expected or unstated sends compact", async () => {
+  const bounced = fixture();
+  bounced.evidence({ activityAt: 29 * 60_000, contextTokens: 200_000 });
+  assert.equal(await bounced.owner.observe({ harness: "claude", threadId: "thread" }), false);
+  bounced.prefix.stale = true;
+  const delivered: string[] = [];
+  const deliver: QueuedMessageDelivery = async () => {
+    delivered.push("deliver");
+    return { kind: "started", turn: { id: "turn", status: "inProgress" } as Turn };
+  };
+  const message: QueuedThreadMessage = { clientMessageId: "m", input: [], intent: "continue" };
+  assert.deepEqual(await bounced.owner.submit("thread", bounced.provider, message, deliver, { expectAutoCompact: false }), { kind: "autoCompactDue" });
+  assert.deepEqual([bounced.calls, delivered], [[], []], "nothing compacted or delivered");
+  assert.deepEqual(bounced.publications, [true], "the composer learns compaction is due");
+  await assert.rejects(bounced.owner.run("thread", bounced.provider, bounced.admit, { expectAutoCompact: false }), { name: "AutoCompactDueError" });
+  assert.deepEqual(bounced.calls, []);
+  assert.equal(await bounced.owner.run("thread", bounced.provider, bounced.admit, { expectAutoCompact: true }), "started");
+  assert.deepEqual(bounced.calls, ["compact", "admit"], "the deliberate resend compacts first");
+  await bounced.owner.dispose();
+
+  const unstated = fixture();
+  assert.equal(await unstated.owner.run("thread", unstated.provider, unstated.admit), "started");
+  assert.deepEqual(unstated.calls, ["compact", "admit"], "agents and older senders never bounce");
+  await unstated.owner.dispose();
 });
 
 test("a held questionnaire compacts before its answer, while a live one stays ineligible", async () => {

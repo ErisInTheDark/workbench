@@ -193,7 +193,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     readLatest: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.readLatest(threadId), `${this.key}: threads.readLatest`),
     latestTurn: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.latestTurn(threadId), `${this.key}: threads.latestTurn`),
     admitTurn: (threadId, turnReference) => this.run(providerRegistrations[this.key], provider => provider.threads.admitTurn(threadId, turnReference), `${this.key}: threads.admitTurn`),
-    submit: input => this.submitUserMessage(input, { skipAutoCompact: input.skipAutoCompact }),
+    submit: input => this.submitUserMessage(input, { skipAutoCompact: input.skipAutoCompact, expectAutoCompact: input.expectAutoCompact }),
     messageAgent: async input => {
       const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => (
         this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) }))
@@ -225,7 +225,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   }
 
   private async submitUserMessage(input: WorkbenchThreadMessage, options: Parameters<WorkbenchThreadAutoCompactController["run"]>[3]) {
-    const { skipAutoCompact: _policy, ...providerInput } = input;
+    const { skipAutoCompact: _policy, expectAutoCompact: _expected, ...providerInput } = input;
     const result = this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
       this.admitMessage(input.threadId, provider, () => this.withSelection(input.threadId, input.context, context => (
         provider.threads.submit({ ...providerInput, ...(context ? { context } : {}) })

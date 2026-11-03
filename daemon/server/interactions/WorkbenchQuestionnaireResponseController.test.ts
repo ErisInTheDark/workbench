@@ -10,6 +10,7 @@ import WorkbenchThreadStateQuestionnaireRepository from "../database/thread-stat
 
 import type { JsonRpcRequest } from "../bridge-types";
 import type WorkbenchProvider from "../providers/WorkbenchProvider";
+import { AutoCompactDueError } from "../turn/WorkbenchThreadAutoCompactController";
 import WorkbenchQuestionnaireResponseController, {
   type WorkbenchQuestionnaireResponseStatePort,
 } from "./WorkbenchQuestionnaireResponseController";
@@ -57,6 +58,8 @@ const questionnaire = {
 
 function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
   admissionError?: string;
+  /** Admission finds compaction due while the answer expected none. */
+  autoCompactDue?: boolean;
   admissionWarning?: string;
   admissionKind?: "started" | "steered";
   missingTurnIdentity?: boolean;
@@ -127,6 +130,7 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
       compact: unused, relocate: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
       submit: async input => {
         observe("submit", input);
+        if (options.autoCompactDue && input.expectAutoCompact === false) throw new AutoCompactDueError();
         if (options.admissionError) throw new Error(options.admissionError);
         if (options.missingTurnIdentity) throw new Error("The accepted turn has no canonical identity.");
         return options.admissionKind === "steered"
@@ -283,7 +287,7 @@ test("interrupted lifecycle admits even when the daemon still exposes an orphan 
 
   const result = await harness.controller.respond(request());
 
-  assert.equal(result.route, "admitted");
+  assert.equal(result.ok && result.route,"admitted");
   assert.equal(harness.events.includes("waiter"), false);
   assert.deepEqual(harness.events.slice(0, 2), ["submit", "settled"]);
   const admission = harness.requests.find(({ method }) => method === "submit");
@@ -307,7 +311,7 @@ test("blocked and completed questionnaires retain live answer delivery", async (
   ] satisfies WorkbenchThreadLifecycle[]) {
     const harness = createHarness(lifecycle);
     const result = await harness.controller.respond({ ...request(), supplementalInput: undefined, activatedSkillPaths: undefined });
-    assert.equal(result.route, "live");
+    assert.equal(result.ok && result.route,"live");
     assert.deepEqual(harness.events, ["waiter", "settled", "record"]);
   }
 });
@@ -323,7 +327,7 @@ test("matching pending-input lifecycle resolves its live waiter before settlemen
 
   const result = await harness.controller.respond({ ...request(), activatedSkillPaths: undefined, supplementalInput: undefined });
 
-  assert.equal(result.route, "live");
+  assert.equal(result.ok && result.route,"live");
   assert.deepEqual(harness.events, ["waiter", "settled", "record"]);
   assert.equal(harness.requests.some(({ method }) => method === "submit"), false);
   const recorded = harness.requests.find(({ method }) => method === "record");
@@ -358,7 +362,7 @@ test("detached admission stamps a steered response onto the accepted active turn
 
   const result = await harness.controller.respond(request());
 
-  assert.equal(result.route, "admitted");
+  assert.equal(result.ok && result.route,"admitted");
   const recorded = harness.requests.find(({ method }) => method === "record");
   assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, admittedTurnId);
 });
@@ -377,7 +381,7 @@ test("detached provider admission stamps its response onto the started turn", as
     requestKey,
   });
 
-  assert.equal(result.route, "admitted");
+  assert.equal(result.ok && result.route,"admitted");
   assert.equal(harness.historyTurnId(), admittedTurnId);
   assert.equal(harness.requests.some(({ method }) => method === "submit"), true);
 });
@@ -394,7 +398,7 @@ test("provider questionnaire with pending lifecycle but no live waiter admits a 
 
   const result = await harness.controller.respond({ ...request(), requestKey });
 
-  assert.equal(result.route, "admitted");
+  assert.equal(result.ok && result.route,"admitted");
   assert.deepEqual(harness.events.slice(0, 2), ["submit", "settled"]);
   assert.equal(harness.requests.some(({ method }) => method === "respond"), false);
 });
@@ -449,7 +453,8 @@ test("live approval and provider-native answers check claimed skill activations 
   assert.deepEqual(native.events, []);
 
   const accepted = createHarness(lifecycle, { providerPendingKey: "native-question" });
-  assert.equal((await accepted.controller.respond({ ...request(), requestKey: "native-question" })).route, "provider");
+  const routed = await accepted.controller.respond({ ...request(), requestKey: "native-question" });
+  assert.equal(routed.ok && routed.route, "provider");
 });
 
 test("live approvals answer through their owner and never touch durable questionnaire state", async () => {
@@ -462,7 +467,7 @@ test("live approvals answer through their owner and never touch durable question
   }, { liveApprovalKey: questionnaire.requestKey });
 
   const result = await live.controller.respond(request());
-  assert.equal(result.route, "live");
+  assert.equal(result.ok && result.route,"live");
   assert.deepEqual(live.events, ["supplement", "approval"]);
   const steer = live.requests.find(({ method }) => method === "supplement");
   assert.equal((steer?.params as { turnId?: string } | undefined)?.turnId, turnId);
@@ -482,6 +487,21 @@ test("failed detached admission leaves durable settlement untouched", async () =
 
   assert.equal(harness.settled(), false);
   assert.deepEqual(harness.events, ["submit"]);
+});
+
+test("an answer bounced for due compaction leaves the questionnaire pending for its deliberate resend", async () => {
+  const harness = createHarness({
+    agent: { agentStatus: "blocked", turnId },
+    kind: "needsAttention",
+    reason: "agentBlocked",
+    settled: false,
+  }, { autoCompactDue: true, deliverable: false });
+
+  assert.deepEqual(await harness.controller.respond({ ...request(), expectAutoCompact: false }), { ok: false, reason: "autoCompactDue" });
+  assert.equal(harness.settled(), false);
+  const resent = await harness.controller.respond({ ...request(), expectAutoCompact: true });
+  assert.equal(resent.ok && resent.route, "admitted");
+  assert.equal(harness.settled(), true);
 });
 
 test("missing accepted turn identity cannot settle history with a native id", async () => {
@@ -533,7 +553,7 @@ test("accepted continuation warnings survive successful history recording withou
     kind: "stopped", reason: "userMarkedStopped", settled: false,
   }, { admissionWarning: "Accepted, but provider metadata settlement failed." });
   const result = await harness.controller.respond(request());
-  assert.equal(result.warning, "Accepted, but provider metadata settlement failed.");
+  assert.equal(result.ok && result.warning, "Accepted, but provider metadata settlement failed.");
   assert.equal(harness.requests.filter(({ method }) => method === "submit").length, 1);
   assert.equal(harness.settled(), true);
 });

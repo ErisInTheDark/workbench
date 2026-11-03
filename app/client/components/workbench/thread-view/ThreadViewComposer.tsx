@@ -123,7 +123,7 @@ export default function ThreadViewComposer ({
   const handleSendMessage = useCallback(async (
     _threadId: string,
     input: UserInput[],
-    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched" | "stayInCreate">,
+    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "expectAutoCompact" | "onThreadLaunched" | "stayInCreate">,
   ) => {
     if (!resolvedActiveThread || !activeProfileSlot) {
       throw new ThreadMessageNotSentError();

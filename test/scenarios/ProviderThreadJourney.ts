@@ -193,8 +193,9 @@ export default class ProviderThreadJourney {
     return found;
   }
 
-  answer(question: WorkbenchPendingUserInputRequest, id: string, proof: string, supplementalInput?: string) {
-    return this.runtime.daemon.threads.questionnaire.respond({
+  /** Scenario answers carry no compaction expectation, so they are never bounced. */
+  async answer(question: WorkbenchPendingUserInputRequest, id: string, proof: string, supplementalInput?: string) {
+    const result = await this.runtime.daemon.threads.questionnaire.respond({
       projectId: this.projectId,
       threadId: this.threadId,
       requestKey: question.requestKey,
@@ -203,6 +204,8 @@ export default class ProviderThreadJourney {
         supplementalInput: [{ type: "text" as const, text: supplementalInput, text_elements: [] }],
       } : {}),
     });
+    if (!result.ok) throw new Error(`${this.provider} bounced an answer that expected nothing: ${result.reason}.`);
+    return result;
   }
 
   unsubscribe() {

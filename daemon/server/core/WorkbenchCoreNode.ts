@@ -68,6 +68,7 @@ import WorkbenchCoreThreadLookup from "./WorkbenchCoreThreadLookup";
 import WorkbenchInteractionsFeature from "./WorkbenchInteractionsFeature";
 import WorkbenchThreadFactsFeature from "./WorkbenchThreadFactsFeature";
 import WorkbenchThreadWorkflowReader from "../thread/WorkbenchThreadWorkflowReader";
+import WorkbenchThreadInstructionPins from "../thread/WorkbenchThreadInstructionPins";
 import WorkbenchTurnRuntimeFeature, { type WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
@@ -97,6 +98,7 @@ function createWorkbenchCoreFeature(
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
   threadTransitions: DaemonRuntimeObjects["threadTransitions"],
+  toolRevision: DaemonRuntimeObjects["toolRevision"],
   /** A fresh daemon process: no turn a previous process left running is owned here unless its provider says so. */
   coldStart: boolean,
   initialCatalog?: WorkbenchProjectStartup,
@@ -123,12 +125,25 @@ function createWorkbenchCoreFeature(
     if (facts.compacting !== undefined) threadBusy?.setCompacting(threadId, facts.compacting);
   };
   const lookup = new WorkbenchCoreThreadLookup({ identities: threadIdentity, providers: () => providers, threadState: () => threadState });
+  const threadInstructionPins = new WorkbenchThreadInstructionPins({
+    execute: async command => await database.executeThreadInstructionOverlays(command),
+    readToolRevision: () => toolRevision.revision,
+    rebuildPrefixHash: async prefixContext => {
+      const { prefix } = await workbenchPromptFiles.buildWorkbenchManagedThreadInstructions({
+        ...prefixContext,
+        readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Thread prefix instruction tool catalogue"),
+      }, () => settings.readLocalCapabilities());
+      if (!prefix) throw new Error("The rebuilt prefix has no storable input.");
+      return prefix.hash;
+    },
+  });
   const turns = new WorkbenchTurnRuntimeFeature({
     context, database, transcript, turnRecovery, identities: threadIdentity, lookup, settings, projectCatalog, run,
     providers: () => providers,
     setSummaryFacts,
     readPendingApproval: threadId => interactions.readPendingApproval(threadId),
     shells: getProcessWorkbenchAgentMcpRequestRegistry(),
+    prefixes: threadInstructionPins,
     warn: logThreadStateWarning,
   });
   let stopShellObservation: (() => void) | null = null;
@@ -142,7 +157,7 @@ function createWorkbenchCoreFeature(
     keptResults: () => mcpDownloads,
     publishRuntime: (threadId, change) => turns.publish(threadId, change),
     setSummaryFacts,
-    pinSkills: async (threadId, skills) => await threadWorkflow.pin(threadId, { skills }),
+    pinSkills: async (threadId, skills) => await threadInstructionPins.pin(threadId, { skills }),
   });
   const { agentContext, skillCatalog, vis } = facts;
   const threadWorkflow = new WorkbenchThreadWorkflowReader({
@@ -150,7 +165,7 @@ function createWorkbenchCoreFeature(
     readSkills: async threadId => await facts.skills.read(threadId),
     readProjectRoot: async threadId => (await lookup.identity(threadId))?.projectRoot ?? null,
     readLedger: async threadId => await database.readWorkflowLedger(threadId),
-    executePins: async command => await database.executeThreadInstructionOverlays(command),
+    readPins: async threadId => await threadInstructionPins.read(threadId),
   });
   const providers = new WorkbenchProviderDispatcher(run, {
     nativeLocations: {
@@ -432,7 +447,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, network, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, threadWorkflow, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, network, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, threadWorkflow, threadInstructionPins, transcriptReader, transcriptReconciliation,
     vis,
     threadContextRollover,
     workingTree,
@@ -618,6 +633,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       get("transcriptIdentity"),
       get("turnRecovery"),
       get("threadTransitions"),
+      get("toolRevision"),
       mode === "initial",
       isReplacing("server:database") ? undefined : reloadState?.projectStartup,
       reloadState?.approvals,
@@ -634,7 +650,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   ],
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity", "turnRecovery", "threadTransitions"],
+  requires: [
+    "database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity", "turnRecovery", "threadTransitions",
+    "toolRevision",
+  ],
   safeAll: true,
   scope: "server:core",
 });

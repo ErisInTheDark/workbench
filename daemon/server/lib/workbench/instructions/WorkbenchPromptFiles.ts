@@ -18,8 +18,11 @@ export {
   buildWorkbenchManagedThreadActivatedSkills,
   buildWorkbenchManagedThreadInstructions,
 } from "./workbench-managed-thread-instructions";
+export { WorkbenchInstructionPrefixContextSchema } from "./workbench-managed-thread-instructions";
 export type {
   ManagedThreadInstructionContext,
+  WorkbenchInstructionPrefix,
+  WorkbenchInstructionPrefixContext,
   WorkbenchManagedThreadActivatedSkills,
   WorkbenchManagedThreadInstructions,
 } from "./workbench-managed-thread-instructions";

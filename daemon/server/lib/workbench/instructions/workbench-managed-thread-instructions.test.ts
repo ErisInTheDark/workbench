@@ -137,6 +137,24 @@ ${bodyMarker}
   }
 });
 
+test("a prefix rebuilt from its stored input hashes the same until the instructions change", async () => {
+  const override = path.join(libraryRoot, "AGENTS.override.md");
+  await fs.mkdir(libraryRoot, { recursive: true });
+  await fs.writeFile(override, "first policy\n", "utf8");
+  try {
+    const built = await managed.buildWorkbenchManagedThreadInstructions(createContext(), readNoLocalCapabilities);
+    assert.ok(built.prefix);
+    const rebuild = async () => (await managed.buildWorkbenchManagedThreadInstructions({
+      ...built.prefix!.context, readInstructionTools: createContext().readInstructionTools,
+    }, readNoLocalCapabilities)).prefix?.hash;
+    assert.equal(await rebuild(), built.prefix.hash, "an unchanged prefix must never read as stale");
+    await fs.writeFile(override, "second policy\n", "utf8");
+    assert.notEqual(await rebuild(), built.prefix.hash);
+  } finally {
+    await fs.rm(override, { force: true });
+  }
+});
+
 test("builds report the modes their own rendered text declares, base and each activated skill apart", async () => {
   const override = path.join(libraryRoot, "AGENTS.override.md");
   const skillPath = path.join(projectRoot, ".agents", "skills", "moded", "SKILL.md");

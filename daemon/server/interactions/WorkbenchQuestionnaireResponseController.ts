@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchQuestionnaireResponseStatePort: atomic durable questionnaire settlement boundary.
  * - WorkbenchQuestionnaireResponseControllerOptions: approval owner, questionnaire waiter, harness, virtual-steer, and durable-state ports.
- * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation (carrying virtual steers), recording skills it activates.
+ * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation (carrying virtual steers), recording skills it activates;
+ *   a continuation bounced for due compaction leaves the questionnaire pending.
  */
 import type {
   WorkbenchQuestionnaireRespondRequest,
@@ -35,6 +36,7 @@ import type WorkbenchApprovalController from "./WorkbenchApprovalController";
 import type WorkbenchHarnessController from "../providers/WorkbenchHarnessController";
 import type WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { AutoCompactDueError } from "../turn/WorkbenchThreadAutoCompactController";
 
 export interface WorkbenchQuestionnaireResponseStatePort {
   resolvePendingQuestionnaire<TDelivery>(
@@ -125,6 +127,7 @@ export default class WorkbenchQuestionnaireResponseController {
       return { ok: true, route: "live" };
     }
     const interactions = this.interactions(input.harness);
+    // A bounced continuation throws before resolution commits, so the questionnaire stays pending for the retry.
     const resolved = await this.options.state.resolvePendingQuestionnaire<QuestionnaireDelivery>({
       harness: input.harness,
       projectId,
@@ -167,7 +170,11 @@ export default class WorkbenchQuestionnaireResponseController {
       }
       const accepted = await this.admitContinuation(input);
       return settle({ route: "admitted" as const, ...(accepted.warning ? { warning: accepted.warning } : {}) }, accepted.turnId);
+    }).catch((error: unknown) => {
+      if (error instanceof AutoCompactDueError) return "autoCompactDue" as const;
+      throw error;
     });
+    if (resolved === "autoCompactDue") return { ok: false, reason: "autoCompactDue" };
     if (!resolved) {
       if (workbenchMcp) throw new Error("That questionnaire is no longer pending.");
       return await this.respondToProvider(input);
@@ -269,6 +276,7 @@ export default class WorkbenchQuestionnaireResponseController {
         input: joinUserInputs([createWorkbenchQuestionnaireResponseInput(input.response), input.supplementalInput ?? [], ...steers]),
         ...(activatedSkillPaths.length ? { context: { activatedSkillPaths } } : {}),
         ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}),
+        ...(input.expectAutoCompact !== undefined ? { expectAutoCompact: input.expectAutoCompact } : {}),
       })
     ));
     return {

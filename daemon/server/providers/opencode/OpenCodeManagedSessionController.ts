@@ -15,10 +15,11 @@ import { OPENCODE_WORKBENCH_DIRECT_NAMESPACE, OPENCODE_WORKBENCH_NAMESPACE } fro
 import {
   buildWorkbenchManagedThreadActivatedSkills,
   buildWorkbenchManagedThreadInstructions,
+  type WorkbenchInstructionPrefix,
   type WorkbenchSkillLayer,
 } from "../../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchInstructionOverlays } from "../../lib/workbench/instructions/instruction-overlay-catalogue";
-import type { WorkbenchInstructionPin } from "../../thread/WorkbenchThreadWorkflowReader";
+import type { WorkbenchInstructionPin } from "../../thread/WorkbenchThreadInstructionPins";
 
 const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
 // A tool's permission action is its effective name, which carries its code-mode or direct namespace.
@@ -57,6 +58,7 @@ interface BuiltInstructions {
   developerInstructions: string | null;
   activatedSkills: string | null;
   overlayLayers: readonly WorkbenchInstructionOverlays[];
+  prefix: WorkbenchInstructionPrefix | null;
   skillLayers: readonly WorkbenchSkillLayer[];
 }
 
@@ -107,7 +109,7 @@ export default class OpenCodeManagedSessionController {
       key: "workbench",
       value,
     });
-    await this.options.pin?.(input.threadId, { base: built.overlayLayers });
+    await this.options.pin?.(input.threadId, { base: built.overlayLayers, prefix: built.prefix });
     await this.options.pin?.(input.threadId, { skills: built.skillLayers });
     return { activatedSkills: built.activatedSkills?.trim() ? built.activatedSkills : null };
   }
@@ -141,6 +143,7 @@ export default class OpenCodeManagedSessionController {
       developerInstructions: instructions.developerInstructions,
       activatedSkills: activatedSkills.catalog,
       overlayLayers: instructions.overlayLayers,
+      prefix: instructions.prefix,
       skillLayers: activatedSkills.skillLayers,
     };
   }

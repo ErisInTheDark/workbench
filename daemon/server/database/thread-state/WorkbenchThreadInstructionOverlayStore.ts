@@ -1,22 +1,23 @@
 /*
  * Exports:
- * - ThreadInstructionOverlayCommand: read one thread's pinned instruction layers, replace its base layers, or merge skill layers by path.
+ * - ThreadInstructionOverlayCommand: read one thread's pins, replace its base layers and prefix fingerprint, or merge skill layers by path.
  * - StoredThreadInstructionOverlays: the stored JSON as written; its owner validates it.
- * - default WorkbenchThreadInstructionOverlayStore: own each thread's pinned instruction layers in SQLite.
+ * - default WorkbenchThreadInstructionOverlayStore: own each thread's pinned instruction layers and prefix fingerprint in SQLite.
  */
 import type Database from "better-sqlite3";
 
 export type ThreadInstructionOverlayCommand =
   | { kind: "read"; threadId: string }
-  | { kind: "pinBase"; threadId: string; layers: readonly object[]; at: number }
+  | { kind: "pinBase"; threadId: string; layers: readonly object[]; prefix: object | null; at: number }
   | { kind: "pinSkills"; threadId: string; skills: Readonly<Record<string, object>>; at: number };
 
 export interface StoredThreadInstructionOverlays {
   base: unknown;
   skills: Readonly<Record<string, unknown>>;
+  prefix: unknown;
 }
 
-type Row = { base_json: string | null; skills_json: string };
+type Row = { base_json: string | null; skills_json: string; prefix_json: string | null };
 
 function parse(json: string | null): unknown {
   if (json === null) return null;
@@ -36,16 +37,17 @@ export default class WorkbenchThreadInstructionOverlayStore {
 
   execute(command: ThreadInstructionOverlayCommand): StoredThreadInstructionOverlays | null {
     if (command.kind === "pinBase") {
-      this.database.prepare(`INSERT INTO workbench_thread_instruction_overlays (thread_id, base_json, skills_json, updated_at)
-        VALUES (?, ?, '{}', ?) ON CONFLICT(thread_id) DO UPDATE SET base_json = excluded.base_json, updated_at = excluded.updated_at`)
-        .run(command.threadId, JSON.stringify(command.layers), command.at);
+      this.database.prepare(`INSERT INTO workbench_thread_instruction_overlays (thread_id, base_json, skills_json, prefix_json, updated_at)
+        VALUES (?, ?, '{}', ?, ?) ON CONFLICT(thread_id) DO UPDATE SET
+          base_json = excluded.base_json, prefix_json = excluded.prefix_json, updated_at = excluded.updated_at`)
+        .run(command.threadId, JSON.stringify(command.layers), command.prefix ? JSON.stringify(command.prefix) : null, command.at);
       return null;
     }
     if (command.kind === "pinSkills") {
       const current = this.read(command.threadId);
       const skills = { ...current?.skills, ...command.skills };
-      this.database.prepare(`INSERT INTO workbench_thread_instruction_overlays (thread_id, base_json, skills_json, updated_at)
-        VALUES (?, NULL, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET skills_json = excluded.skills_json, updated_at = excluded.updated_at`)
+      this.database.prepare(`INSERT INTO workbench_thread_instruction_overlays (thread_id, base_json, skills_json, prefix_json, updated_at)
+        VALUES (?, NULL, ?, NULL, ?) ON CONFLICT(thread_id) DO UPDATE SET skills_json = excluded.skills_json, updated_at = excluded.updated_at`)
         .run(command.threadId, JSON.stringify(skills), command.at);
       return null;
     }
@@ -53,8 +55,8 @@ export default class WorkbenchThreadInstructionOverlayStore {
   }
 
   private read(threadId: string): StoredThreadInstructionOverlays | null {
-    const row = this.database.prepare("SELECT base_json, skills_json FROM workbench_thread_instruction_overlays WHERE thread_id = ?")
+    const row = this.database.prepare("SELECT base_json, skills_json, prefix_json FROM workbench_thread_instruction_overlays WHERE thread_id = ?")
       .get(threadId) as Row | undefined;
-    return row ? { base: parse(row.base_json), skills: asRecord(parse(row.skills_json)) } : null;
+    return row ? { base: parse(row.base_json), skills: asRecord(parse(row.skills_json)), prefix: parse(row.prefix_json) } : null;
   }
 }

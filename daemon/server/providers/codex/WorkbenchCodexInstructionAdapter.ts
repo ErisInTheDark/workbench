@@ -18,7 +18,7 @@ import { listWorkbenchInstructionTools, type WorkbenchInstructionTool } from "..
 import { listWorkbenchAgentCommands } from "../../lib/workbench/commands/workbench-agent-command-registry";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "../../bridge-types";
-import type { WorkbenchInstructionPin } from "../../thread/WorkbenchThreadWorkflowReader";
+import type { WorkbenchInstructionPin } from "../../thread/WorkbenchThreadInstructionPins";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "../workbench-prompt-context";
 import { withWorkbenchCodexSandboxConfig } from "./codex-sandbox-policy";
@@ -190,7 +190,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       context,
       this.readLocalCapabilities,
     );
-    if (context.threadId) await this.pin(context.threadId, { base: promptInstructions.overlayLayers });
+    if (context.threadId) await this.pin(context.threadId, { base: promptInstructions.overlayLayers, prefix: promptInstructions.prefix });
     return {
       ...message,
       params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, promptInstructions), context.cwd, context.subagentName),

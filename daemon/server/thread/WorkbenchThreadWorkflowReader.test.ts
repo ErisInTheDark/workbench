@@ -7,14 +7,14 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import type { WorkflowLedgerEntry, WorkflowMode } from "workbench-shared/workbench/thread/workflow-modes";
-import type {
-  StoredThreadInstructionOverlays, ThreadInstructionOverlayCommand,
-} from "../database/thread-state/WorkbenchThreadInstructionOverlayStore";
+import type { StoredThreadInstructionOverlays } from "../database/thread-state/WorkbenchThreadInstructionOverlayStore";
+import WorkbenchThreadInstructionPins from "./WorkbenchThreadInstructionPins";
 import WorkbenchThreadWorkflowReader from "./WorkbenchThreadWorkflowReader";
 
 const root = path.resolve("project");
 const review: WorkflowMode = { name: "Review", icon: "flag", color: null, proofs: [], resetOn: [], from: [], after: null, status: null, deny: ["shell", "edit:claims"] };
 const locked: WorkflowMode = { ...review, name: "Locked", deny: ["edit"] };
+const nothingPinned = { base: null, skills: new Map() };
 
 function reader(ledger: WorkflowLedgerEntry[], modes: WorkflowMode[] = [review, locked]) {
   return new WorkbenchThreadWorkflowReader({
@@ -22,29 +22,34 @@ function reader(ledger: WorkflowLedgerEntry[], modes: WorkflowMode[] = [review, 
     readSkills: async () => [],
     readProjectRoot: async () => root,
     readLedger: async () => ledger,
-    executePins: async () => null,
+    readPins: async () => nothingPinned,
     readBaseLayers: async () => [{ checklists: [], modes }],
     readSkillLayers: async () => [],
   });
 }
 
-/** A thread whose pins live in memory the way the store keeps them, over "live files" the test can change. */
+/** A thread pinned through the real pin owner over an in-memory store, beside "current files" the test can change. */
 function pinned(skillPaths: string[]) {
   const layer = (...names: string[]) => ({ checklists: [], modes: names.map(name => ({ ...review, name, deny: [] })) });
   const files = { base: layer("Inspect"), skills: new Map<string, ReturnType<typeof layer>>() };
   let stored: StoredThreadInstructionOverlays | null = null;
+  const pins = new WorkbenchThreadInstructionPins({
+    execute: async command => {
+      if (command.kind === "read") return stored;
+      stored = command.kind === "pinBase"
+        ? { base: structuredClone(command.layers), skills: stored?.skills ?? {}, prefix: null }
+        : { base: stored?.base ?? null, skills: { ...stored?.skills, ...structuredClone(command.skills) }, prefix: null };
+      return null;
+    },
+    readToolRevision: () => "tools",
+    rebuildPrefixHash: async () => "hash",
+  });
   const workflow = new WorkbenchThreadWorkflowReader({
     readSelection: async () => ({ workflowIds: ["default"] }),
     readSkills: async () => skillPaths.map((skillPath, index) => ({ path: skillPath, name: `skill${index}`, source: "user" as const, activatedAt: index })),
     readProjectRoot: async () => root,
     readLedger: async () => [],
-    executePins: async (command: ThreadInstructionOverlayCommand) => {
-      if (command.kind === "read") return stored;
-      stored = command.kind === "pinBase"
-        ? { base: structuredClone(command.layers), skills: stored?.skills ?? {} }
-        : { base: stored?.base ?? null, skills: { ...stored?.skills, ...structuredClone(command.skills) } };
-      return null;
-    },
+    readPins: threadId => pins.read(threadId),
     readBaseLayers: async () => [files.base],
     readSkillLayers: async (_root, paths) => (paths ?? []).flatMap(skillPath => {
       const found = files.skills.get(skillPath);
@@ -52,16 +57,16 @@ function pinned(skillPaths: string[]) {
     }),
   });
   const modes = async () => (await workflow.read("t")).overlays.modes.map(mode => mode.name);
-  return { files, layer, modes, workflow, corrupt: () => { stored = { base: [{ modes: "broken" }], skills: {} }; } };
+  return { files, layer, modes, pins, corrupt: () => { stored = { base: [{ modes: "broken" }], skills: {}, prefix: null }; } };
 }
 
 test("gates follow the pinned base until the next build pins again; never-pinned threads and unreadable pins use current files", async () => {
   const thread = pinned([]);
   assert.deepEqual(await thread.modes(), ["Inspect"], "nothing pinned yet");
-  await thread.workflow.pin("t", { base: [thread.layer("Brief")] });
+  await thread.pins.pin("t", { base: [thread.layer("Brief")], prefix: null });
   thread.files.base = thread.layer("Edited");
   assert.deepEqual(await thread.modes(), ["Brief"], "a mid-turn edit does not reach the turn");
-  await thread.workflow.pin("t", { base: [thread.layer("Edited")] });
+  await thread.pins.pin("t", { base: [thread.layer("Edited")], prefix: null });
   assert.deepEqual(await thread.modes(), ["Edited"], "the next build delivers it");
   thread.corrupt();
   assert.deepEqual(await thread.modes(), ["Edited"], "a stored shape this daemon cannot read falls back to current files");
@@ -73,7 +78,7 @@ test("active skills layer over the base in activation order, each from its pin o
   const thread = pinned([first, second]);
   thread.files.skills.set(first, thread.layer("FirstLive"));
   thread.files.skills.set(second, thread.layer("SecondLive"));
-  await thread.workflow.pin("t", { skills: [{ path: first, layer: thread.layer("FirstPinned") }] });
+  await thread.pins.pin("t", { skills: [{ path: first, layer: thread.layer("FirstPinned") }] });
   assert.deepEqual(await thread.modes(), ["Inspect", "FirstPinned", "SecondLive"]);
 });
 
