@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchInstructionPin: what one instruction build delivered: base layers with the prefix fingerprint, or activated skills' layers.
- * - WorkbenchThreadInstructionPinsPorts: storage, the live tool catalogue revision, and a rebuild of a stored prefix.
+ * - WorkbenchThreadInstructionPinsPorts: storage, a content fingerprint of the tools a prefix's audience is served, and a rebuild of a stored prefix.
  * - PinnedInstructions: one thread's validated pins; skills keyed by comparable path.
  * - comparableSkillPath: the key a skill's pinned layer is stored and found under.
  * - default WorkbenchThreadInstructionPins: own what instructions each thread was last given, and whether its next prefix would differ.
@@ -24,8 +24,8 @@ export type WorkbenchInstructionPin =
 
 export interface WorkbenchThreadInstructionPinsPorts {
   execute(command: ThreadInstructionOverlayCommand): Promise<StoredThreadInstructionOverlays | null>;
-  /** Changes whenever the shared tool catalogue does; tools are part of every provider's prefix. */
-  readToolRevision(): string;
+  /** Hash of the tool specs this input's audience is served now; tools are part of every provider's prefix. */
+  readToolFingerprint(context: WorkbenchInstructionPrefixContext): Promise<string>;
   /** The hash a build from this input would deliver now. */
   rebuildPrefixHash(context: WorkbenchInstructionPrefixContext): Promise<string>;
   now?: () => number;
@@ -37,9 +37,10 @@ export interface PinnedInstructions {
   skills: ReadonlyMap<string, WorkbenchInstructionOverlays>;
 }
 
+/** Absent toolHash: tools were unreadable at pin time, or the pin predates fingerprints; only instructions are compared. */
 const StoredPrefixSchema = z.object({
   hash: z.string().min(1),
-  toolRevision: z.string(),
+  toolHash: z.string().min(1).optional(),
   context: WorkbenchInstructionPrefixContextSchema,
 });
 const PinnedBaseSchema = WorkbenchInstructionOverlaysSchema.array();
@@ -62,7 +63,7 @@ export default class WorkbenchThreadInstructionPins {
         this.#stale.delete(threadId);
         await this.ports.execute({
           kind: "pinBase", threadId, layers: pin.base, at,
-          prefix: pin.prefix ? { ...pin.prefix, toolRevision: this.ports.readToolRevision() } : null,
+          prefix: pin.prefix ? { ...pin.prefix, toolHash: await this.#readToolHash(threadId, pin.prefix.context) } : null,
         });
       } else {
         await this.ports.execute({
@@ -93,24 +94,33 @@ export default class WorkbenchThreadInstructionPins {
   }
 
   /**
-   * Exact: the tool catalogue moved, or rebuilding from the stored input now hashes differently. Threads never pinned, and
-   * failed rebuilds, count as fresh, so nothing compacts on a guess.
+   * Exact: the stored input's audience is now served different tool specs, or rebuilding it hashes differently. Threads never
+   * pinned, and failed reads, count as fresh, so nothing compacts on a guess.
    */
   async prefixStale(threadId: string) {
     if (this.#stale.has(threadId)) return true;
     const stored = StoredPrefixSchema.safeParse((await this.ports.execute({ kind: "read", threadId }))?.prefix);
     if (!stored.success) return false;
-    let stale = stored.data.toolRevision !== this.ports.readToolRevision();
-    if (!stale) {
-      try {
-        stale = await this.ports.rebuildPrefixHash(stored.data.context) !== stored.data.hash;
-      } catch (error) {
-        this.#warn(`Prefix rebuild failed for ${threadId}`, error);
-        return false;
-      }
+    const { context, hash, toolHash } = stored.data;
+    let stale: boolean;
+    try {
+      stale = (toolHash !== undefined && await this.ports.readToolFingerprint(context) !== toolHash)
+        || await this.ports.rebuildPrefixHash(context) !== hash;
+    } catch (error) {
+      this.#warn(`Prefix staleness check failed for ${threadId}`, error);
+      return false;
     }
     if (stale) this.#stale.add(threadId);
     return stale;
+  }
+
+  async #readToolHash(threadId: string, context: WorkbenchInstructionPrefixContext) {
+    try {
+      return await this.ports.readToolFingerprint(context);
+    } catch (error) {
+      this.#warn(`Tool fingerprint failed for ${threadId}`, error);
+      return undefined;
+    }
   }
 
   #warn(what: string, error: unknown) {

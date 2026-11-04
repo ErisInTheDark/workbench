@@ -9,6 +9,7 @@
 import path from "node:path";
 import { ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { isSamePath } from "workbench-shared/same-path";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchProjectStartup } from "../database/project/workbench-project-persistence";
 import BrowseSessionCleanupSupervisor from "../browse/BrowseSessionCleanupSupervisor";
@@ -98,7 +99,6 @@ function createWorkbenchCoreFeature(
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
   threadTransitions: DaemonRuntimeObjects["threadTransitions"],
-  toolRevision: DaemonRuntimeObjects["toolRevision"],
   /** A fresh daemon process: no turn a previous process left running is owned here unless its provider says so. */
   coldStart: boolean,
   initialCatalog?: WorkbenchProjectStartup,
@@ -127,7 +127,11 @@ function createWorkbenchCoreFeature(
   const lookup = new WorkbenchCoreThreadLookup({ identities: threadIdentity, providers: () => providers, threadState: () => threadState });
   const threadInstructionPins = new WorkbenchThreadInstructionPins({
     execute: async command => await database.executeThreadInstructionOverlays(command),
-    readToolRevision: () => toolRevision.revision,
+    readToolFingerprint: async prefixContext => await run("mcp", mcp => mcp.toolFingerprint({
+      provider: prefixContext.harness,
+      subagent: Boolean(prefixContext.subagentName?.trim()),
+      projectLocal: Boolean(prefixContext.cwd?.trim()) && isSamePath(prefixContext.cwd ?? "", context.legacyMigrationProjectRoot),
+    }), "Thread prefix tool fingerprint"),
     rebuildPrefixHash: async prefixContext => {
       const { prefix } = await workbenchPromptFiles.buildWorkbenchManagedThreadInstructions({
         ...prefixContext,
@@ -636,7 +640,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       get("transcriptIdentity"),
       get("turnRecovery"),
       get("threadTransitions"),
-      get("toolRevision"),
       mode === "initial",
       isReplacing("server:database") ? undefined : reloadState?.projectStartup,
       reloadState?.approvals,
@@ -655,7 +658,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   provides: WORKBENCH_CORE_FEATURE_KEYS,
   requires: [
     "database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity", "turnRecovery", "threadTransitions",
-    "toolRevision",
   ],
   safeAll: true,
   scope: "server:core",

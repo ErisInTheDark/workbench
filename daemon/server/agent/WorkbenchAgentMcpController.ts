@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, caller audience, cancellation, wait deadlines, hosted-shell approval, and command execution ports.
- * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, per-caller audience gates, wait timeouts with non-error timed-out results, the transcript-free user-message acknowledgement for providers that host it, text-only results for providers whose model reads structured content, plus the served tool specs for prompt-cost accounting.
+ * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, per-caller audience gates, wait timeouts with non-error timed-out results, the transcript-free user-message acknowledgement for providers that host it, text-only results for providers whose model reads structured content, plus the served tool specs for prompt-cost accounting and their per-audience content fingerprint for prefix staleness.
  */
+import { createHash } from "node:crypto";
 import type http from "node:http";
 
 import { getParseErrorMessage, normalizeObjectSchema, safeParseAsync, type AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
@@ -888,9 +889,16 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
 
   /** The exact tool list a root Workbench-project thread on this provider is served, for prompt-cost accounting. */
   async listToolSpecs(provider: string, signal: AbortSignal = new AbortController().signal) {
-    return (await this.describe(
-      { clientScope: LEGACY_MCP_CLIENT_SCOPE, projectLocal: true, provider, subagent: false }, signal, { batchTurns: true, shellYields: true },
-    )).tools;
+    return await this.listAudienceToolSpecs({ provider, subagent: false, projectLocal: true }, signal);
+  }
+
+  /** Hash of the tool specs one audience is served; equal across restarts and reloads unless a served spec changed. */
+  async toolFingerprint(audience: Omit<WorkbenchMcpScope, "clientScope">) {
+    return createHash("sha256").update(JSON.stringify(await this.listAudienceToolSpecs(audience))).digest("hex");
+  }
+
+  private async listAudienceToolSpecs(audience: Omit<WorkbenchMcpScope, "clientScope">, signal: AbortSignal = new AbortController().signal) {
+    return (await this.describe({ clientScope: LEGACY_MCP_CLIENT_SCOPE, ...audience }, signal, { batchTurns: true, shellYields: true })).tools;
   }
 
   listInstructionTools(): WorkbenchInstructionTool[] {

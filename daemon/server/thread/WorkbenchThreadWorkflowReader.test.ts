@@ -42,7 +42,7 @@ function pinned(skillPaths: string[]) {
         : { base: stored?.base ?? null, skills: { ...stored?.skills, ...structuredClone(command.skills) }, prefix: null };
       return null;
     },
-    readToolRevision: () => "tools",
+    readToolFingerprint: async () => "tools",
     rebuildPrefixHash: async () => "hash",
   });
   const workflow = new WorkbenchThreadWorkflowReader({

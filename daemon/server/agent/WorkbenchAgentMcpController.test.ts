@@ -708,6 +708,26 @@ test("git_repo exists only while the virtual repository runtime is available", a
   }
 });
 
+test("the tool fingerprint follows served specs, not controller generations", async () => {
+  let available = false;
+  const create = () => new WorkbenchAgentMcpController({
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    virtualReposAvailable: () => available,
+    executeCommand: async () => { throw new Error("unexpected command"); },
+    tools: () => ({
+      describe: async () => ({ shellDescription: "sandboxed execution" }),
+      caller: async () => { throw new Error("unexpected caller"); },
+      patchClaims: async () => { throw new Error("unexpected patch"); },
+    }),
+  });
+  const audience = { provider: "codex", subagent: false, projectLocal: true };
+  const before = await create().toolFingerprint(audience);
+  assert.equal(await create().toolFingerprint(audience), before, "a restarted or reloaded server serving the same tools");
+  available = true;
+  assert.notEqual(await create().toolFingerprint(audience), before, "a newly served tool");
+});
+
 test("lists one typed tool per eligible command and dispatches with trusted thread cwd", async () => {
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];
