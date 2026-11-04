@@ -851,8 +851,16 @@ test("selected providers complete the shared thread boundary journey in one clon
     const heldProof = passphrase();
     if (fakeModel) fakeModel.enqueue(journey.fake.held(prefixProof, heldProof));
     if (fakeModel && provider !== "codex") {
-      fakeModel.expectNextPromptText(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, "<wb:questionnaire-response>");
+      fakeModel.expectNextConversationText(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, "<wb:questionnaire-response>");
     }
+    // A new project skill legitimately joins the instructions' skill list, so it exists before the held window starts.
+    const skillName = `scenario-proof-${provider}`;
+    const skillProof = `skill-body-${randomUUID()}`;
+    const skillPath = path.join(runtime.project, ".agents.local", "skills", skillName, "SKILL.md");
+    await fs.mkdir(path.dirname(skillPath), { recursive: true });
+    await fs.writeFile(skillPath, `---\nname: ${skillName}\ndescription: Scenario proof skill.\n---\n\n${skillProof}\n`);
+    // From the continuation through the stopped turn, hidden context and activated skill bodies must never change the cached prefix.
+    fakeModel?.holdSystemPrompt();
     step("answering the retained held question");
     assert.equal((await answer(
       retainedQuestion,
@@ -887,20 +895,22 @@ test("selected providers complete the shared thread boundary journey in one clon
     step("waiting for the provider to settle the snoozed turn");
     await owner.waitProviderIdle();
 
-    step("running the stopped turn");
+    step("running the stopped turn with a newly activated skill");
     if (fakeModel) fakeModel.enqueue(journey.fake.stop(stopProof));
     const stopText = journey.stop(stopProof);
-    let stoppedTurn: string;
-    if (attachmentInput.length) {
-      fakeModel!.expectNextClaudeImages(stopProof, attachmentData);
-      const started = await runtime.daemon.threads.message({
-        threadId, clientMessageId: randomUUID(), intent: "continue",
-        input: [{ type: "text", text: stopText, text_elements: [] }, ...attachmentInput],
-        context: { workflowIds: [] },
-      });
-      assert.ok(started.kind === "started");
-      stoppedTurn = started.turn.id;
-    } else stoppedTurn = await submit(stopText);
+    fakeModel?.expectNextConversationText(skillProof);
+    if (attachmentInput.length) fakeModel!.expectNextClaudeImages(stopProof, attachmentData);
+    const started = await runtime.daemon.threads.message({
+      threadId, clientMessageId: randomUUID(), intent: "continue",
+      input: [
+        { type: "text", text: stopText, text_elements: [] },
+        { type: "skill", name: skillName, path: skillPath },
+        ...attachmentInput,
+      ],
+      context: { workflowIds: [] },
+    });
+    assert.ok(started.kind === "started");
+    const stoppedTurn = started.turn.id;
     await waitHeldTool(stoppedTurn, stopProof);
     if (attachmentInput.length) {
       const userMessage = (await durable()).turns.find(turn => turn.id === stoppedTurn)?.items.find(item => item.type === "userMessage");
@@ -912,6 +922,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     await journeyGate.release(stopProof);
     await waitTurn(stoppedTurn, "interrupted");
     fakeModel?.forgetInterruptedTool();
+    fakeModel?.releaseSystemPrompt();
     step("waiting for second cold reopen");
     await coordinator.reopen(1);
     step("compacting");

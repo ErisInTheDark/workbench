@@ -1,11 +1,13 @@
 /*
  * Exports:
  * - WorkbenchThreadSkillsOptions: persistence, skill resolution, agent-context delivery and publication ports.
- * - default WorkbenchThreadSkillsController: own thread active skills, their compaction re-send and deactivation notices.
+ * - default WorkbenchThreadSkillsController: own thread active skills and the delivery of their bodies (first send of user activations,
+ *   compaction re-send) and deactivation notices at the agent's input boundaries.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchContextAdmission } from "workbench-shared/workbench/provider/provider-context";
 import {
+  createWorkbenchActivatedSkillsInput,
   createWorkbenchPreviouslyActivatedSkillsText,
   createWorkbenchSkillDeactivatedText,
 } from "workbench-shared/workbench/thread/thread-activated-skills";
@@ -15,7 +17,7 @@ import type {
   WorkbenchAgentContextSource,
   WorkbenchAgentContextTarget,
 } from "../agent/WorkbenchAgentContextController";
-import type { ThreadSkillCommand, ThreadSkillState } from "../database/skills/WorkbenchThreadSkillStore";
+import type { ThreadSkillCommand, ThreadSkillNotice, ThreadSkillState } from "../database/skills/WorkbenchThreadSkillStore";
 
 export interface WorkbenchThreadSkillsOptions {
   store(command: ThreadSkillCommand): Promise<ThreadSkillState>;
@@ -54,9 +56,10 @@ export default class WorkbenchThreadSkillsController {
     if (!target) return;
     const skills = await this.options.resolve(target, paths);
     if (!skills.length) return;
+    // An agent's own activation returned the body as its tool result; a user's is owed at the agent's next input.
     const state = await this.options.store({
       kind: "activate", threadId: target.threadId, at: this.options.now?.() ?? Date.now(),
-      skills: skills.map(skill => ({ ...skill, source })),
+      skills: skills.map(skill => ({ ...skill, source })), deliver: source === "user",
     });
     this.options.broadcast(target, state.skills);
   }
@@ -102,20 +105,23 @@ export default class WorkbenchThreadSkillsController {
 
   async #contributions(target: WorkbenchAgentContextTarget): Promise<WorkbenchAgentContextContribution[]> {
     const { pending } = await this.options.store({ kind: "read", threadId: target.threadId });
-    const acknowledge = (notice: "redeliver" | "deactivated", paths: readonly string[]) => async () => {
+    const acknowledge = (notice: ThreadSkillNotice, paths: readonly string[]) => async () => {
       await this.options.store({ kind: "acknowledge", threadId: target.threadId, notice, paths });
     };
     const contributions: WorkbenchAgentContextContribution[] = pending.deactivated.map(skill => ({
       text: createWorkbenchSkillDeactivatedText(skill.name),
       admitted: acknowledge("deactivated", [skill.path]),
     }));
-    if (pending.redeliver.length) {
-      const paths = pending.redeliver.map(skill => skill.path);
+    const bodies = async (notice: "deliver" | "redeliver", skills: readonly WorkbenchThreadSkill[], wrap: (catalog: string) => string) => {
+      if (!skills.length) return;
+      const paths = skills.map(skill => skill.path);
       const catalog = await this.options.buildCatalog(target, paths);
-      // Skills deleted from disk since activation leave nothing to re-send.
-      if (catalog) contributions.push({ text: createWorkbenchPreviouslyActivatedSkillsText(catalog), admitted: acknowledge("redeliver", paths) });
-      else await acknowledge("redeliver", paths)();
-    }
+      // Skills deleted from disk since activation leave nothing to send.
+      if (catalog) contributions.push({ text: wrap(catalog), admitted: acknowledge(notice, paths) });
+      else await acknowledge(notice, paths)();
+    };
+    await bodies("deliver", pending.deliver, catalog => createWorkbenchActivatedSkillsInput(catalog).text);
+    await bodies("redeliver", pending.redeliver, createWorkbenchPreviouslyActivatedSkillsText);
     return contributions;
   }
 }

@@ -46,7 +46,7 @@ export interface WorkbenchProviderNativeLocations {
 export interface WorkbenchProviderHandleOptions {
   interruptSteerWaits: (threadId: string, senderThreadId?: string) => void;
   nativeLocations?: WorkbenchProviderNativeLocations;
-  instructionSelection?: Pick<WorkbenchThreadInstructionSelectionController, "resolve" | "record">;
+  instructionSelection?: Pick<WorkbenchThreadInstructionSelectionController, "resolve" | "activateSkills" | "record">;
   messageAdmission?: WorkbenchThreadAutoCompactController["run"];
   /** An agent message steered a live turn; its model sees it only at a later input boundary. */
   onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void;
@@ -88,8 +88,10 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     await this.options.nativeLocations!.settle(threadId, native);
   }
 
-  /** Inside the admission lane, so a selection recorded by an earlier message is the one this message sees. */
-  /** User input passed here activates the skills it names; agent messages pass none. */
+  /**
+   * Inside the admission lane, so a selection recorded by an earlier message is the one this message sees. Named skills
+   * activate before the provider admits, so the message's own input boundary delivers their bodies; agent messages pass no input.
+   */
   private async withSelection<T>(
     threadId: string, context: WorkbenchMessageContext | undefined,
     admit: (context: WorkbenchMessageContext | undefined) => Promise<T>,
@@ -99,8 +101,9 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     if (!selection) return await admit(context);
     const id = WorkbenchThreadIdSchema.parse(threadId);
     const resolved = await selection.resolve(id, context, input);
+    await selection.activateSkills(id, resolved.activatedSkillPaths ?? []);
     const result = await admit(resolved);
-    await selection.record(id, context, resolved.activatedSkillPaths ?? []);
+    await selection.record(id, context);
     return result;
   }
 

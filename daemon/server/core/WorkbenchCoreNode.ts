@@ -71,6 +71,7 @@ import WorkbenchInteractionsFeature from "./WorkbenchInteractionsFeature";
 import WorkbenchThreadFactsFeature from "./WorkbenchThreadFactsFeature";
 import WorkbenchThreadWorkflowReader from "../thread/WorkbenchThreadWorkflowReader";
 import WorkbenchThreadInstructionPins from "../thread/WorkbenchThreadInstructionPins";
+import WorkbenchThreadInstructionBuilder from "../thread/WorkbenchThreadInstructionBuilder";
 import WorkbenchTurnRuntimeFeature, { type WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
@@ -136,14 +137,20 @@ function createWorkbenchCoreFeature(
       subagent: Boolean(prefixContext.subagentName?.trim()),
       projectLocal: Boolean(prefixContext.cwd?.trim()) && isSamePath(prefixContext.cwd ?? "", context.legacyMigrationProjectRoot),
     }), "Thread prefix tool fingerprint"),
-    rebuildPrefixHash: async prefixContext => {
-      const { prefix } = await workbenchPromptFiles.buildWorkbenchManagedThreadInstructions({
-        ...prefixContext,
-        readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Thread prefix instruction tool catalogue"),
-      }, () => settings.readLocalCapabilities());
-      if (!prefix) throw new Error("The rebuilt prefix has no storable input.");
-      return prefix.hash;
+    rebuildPrefixHash: async prefixContext => await threadInstructions.prefixHash(prefixContext),
+  });
+  const threadInstructions = new WorkbenchThreadInstructionBuilder({
+    readRoots: async projectId => {
+      const project = await projectCatalog.resolveProjectById(projectId);
+      return project.roots.map(root => ({
+        id: root.id, name: root.name, relativePath: root.relativePath ?? ".",
+        rootPath: root.rootPath, isPrimary: root.rootPath === project.rootPath,
+      }));
     },
+    readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Thread instruction tool catalogue"),
+    readLocalCapabilities: () => settings.readLocalCapabilities(),
+    workbenchOrigin: context.localDaemonOrigin,
+    pin: async (threadId, pin) => await threadInstructionPins.pin(threadId, pin),
   });
   const turns = new WorkbenchTurnRuntimeFeature({
     context, database, transcript, turnRecovery, identities: threadIdentity, lookup, settings, projectCatalog, run,
@@ -165,7 +172,7 @@ function createWorkbenchCoreFeature(
     keptResults: () => mcpDownloads,
     publishRuntime: (threadId, change) => turns.publish(threadId, change),
     setSummaryFacts,
-    pinSkills: async (threadId, skills) => await threadInstructionPins.pin(threadId, { skills }),
+    threadInstructions,
     heldAgentContext,
   });
   const { agentContext, skillCatalog, vis } = facts;
@@ -459,7 +466,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, network, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, threadWorkflow, threadInstructionPins, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, network, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, threadWorkflow, threadInstructions, transcriptReader, transcriptReconciliation,
     vis,
     threadContextRollover,
     workingTree,

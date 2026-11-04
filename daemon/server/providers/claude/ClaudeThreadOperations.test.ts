@@ -133,9 +133,6 @@ function fixture({
       captured?.instructionNames?.push(Reflect.get(input, "subagentName") ?? null);
       return "instructions";
     },
-    buildActivatedSkills: async ({ activatedSkillPaths }: { activatedSkillPaths: readonly string[] }) => (
-      activatedSkillPaths.length ? activatedSkillPaths.map(path => `<skill path="${path}" />`).join("\n") : null
-    ),
     collectInputContext: async (_threadId: string, trigger: string) => { captured?.collected.push(trigger); },
     state: { controller: {
       getCanonicalThreadEntry: async () => ({
@@ -342,23 +339,6 @@ test("Claude launches with the configured window, or the model's default, and re
   assert.equal(configured.windows[0], 300_000);
 });
 
-test("Claude delivers activated skills in the new turn's conversation content, not its per-launch system prompt", async () => {
-  const captured: Captured = { systemPrompts: [], pushed: [], collected: [] };
-  const owner = fixture({ usage: [], captured });
-  await owner.submit({ threadId, clientMessageId: "message", intent: "newTurn",
-    input: [{ type: "text", text: "hello", text_elements: [] }, { type: "skill", name: "review", path: "skills/review" }],
-    context: { activatedSkillPaths: ["skills/react"] } });
-  await owner.dispose();
-  assert.equal(captured.systemPrompts.length, 1);
-  assert.doesNotMatch(captured.systemPrompts[0]!, /wb:activated-skills|skills\/re/u);
-  const skillMessages = captured.pushed.filter(text => text.includes("<wb:activated-skills>"));
-  assert.equal(skillMessages.length, 1);
-  assert.match(skillMessages[0]!, /skills\/react/u);
-  assert.match(skillMessages[0]!, /skills\/review/u);
-  assert.match(skillMessages[0]!, /hello/u);
-  assert.deepEqual(captured.collected, ["start"]);
-});
-
 test("context is refused without a live turn, and context collected at launch rides in the prompt, not the cached system prompt", async () => {
   const captured: Captured = { systemPrompts: [], pushed: [], collected: [] };
   const owner = fixture({ usage: [], captured });
@@ -376,7 +356,7 @@ test("context is refused without a live turn, and context collected at launch ri
   assert.ok(launch?.includes(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE));
 });
 
-test("a Claude steer delivers the skills it activates and collects pending agent context", async () => {
+test("a Claude steer reaches the live turn and then collects pending agent context", async () => {
   const captured: Captured = { systemPrompts: [], pushed: [], collected: [] };
   const release = Promise.withResolvers<void>();
   const owner = fixture({ usage: [], captured, hold: release.promise });
@@ -388,9 +368,7 @@ test("a Claude steer delivers the skills it activates and collects pending agent
   await (Reflect.get(owner, "live") as Map<string, { whenSettled(): Promise<void> }>).get(threadId)?.whenSettled();
   await owner.dispose();
   assert.equal(steered.kind, "steered");
-  const steer = captured.pushed.find(text => text.includes("also this"));
-  assert.ok(steer);
-  assert.match(steer, /<wb:activated-skills>[\s\S]*skills\/review/u);
+  assert.ok(captured.pushed.some(text => text.includes("also this")));
   assert.deepEqual(captured.collected, ["start", "steer"]);
 });
 

@@ -143,7 +143,7 @@ export interface DaemonRuntimeObjects {
   agentContext: import("./agent/WorkbenchAgentContextController").default;
   threadSkills: import("./thread/WorkbenchThreadSkillsController").default;
   threadWorkflow: import("./thread/WorkbenchThreadWorkflowReader").default;
-  threadInstructionPins: import("./thread/WorkbenchThreadInstructionPins").default;
+  threadInstructions: import("./thread/WorkbenchThreadInstructionBuilder").default;
   threadTodos: import("./thread/WorkbenchThreadTodoController").default;
   mcpServers: import("./mcp-servers/WorkbenchMcpServerController").default;
   vis: import("./vis/WorkbenchVisController").default;

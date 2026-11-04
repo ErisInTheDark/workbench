@@ -30,7 +30,7 @@ function fixture(kind: "thread" | "subagent", options: { stored?: WorkbenchInstr
   return { owner, warnings, activations, stored: () => stored };
 }
 
-test("admitted input activates the skills it names, with or without its own selection", async () => {
+test("input resolves the skills it names, with or without its own selection, and activating them records them", async () => {
   const text = (value: string) => [{ type: "text" as const, text: value, text_elements: [] }];
   const { owner, activations } = fixture("thread", { stored: { workflowIds: ["review"] } });
   assert.deepEqual(await owner.resolve(threadId, undefined, text("answer\n\n/review this")), {
@@ -40,7 +40,8 @@ test("admitted input activates the skills it names, with or without its own sele
     workflowIds: [], activatedSkillPaths: [review.path],
   });
   assert.deepEqual(await owner.resolve(threadId, undefined), { workflowIds: ["review"] }, "agent messages are not parsed");
-  await owner.record(threadId, undefined, [review.path]);
+  await owner.activateSkills(threadId, []);
+  await owner.activateSkills(threadId, [review.path]);
   assert.deepEqual(activations, [[review.path]]);
 });
 

@@ -7,19 +7,15 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../dae
 import CodexBridgeNode from "./CodexBridgeNode";
 import ReloadableNode from "../../runtime/ReloadableNode";
 import WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
-import WorkbenchServerSettings from "../../lib/workbench/settings/WorkbenchServerSettings";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [CodexBridgeNode],
   create: (context, build) => {
-    const settings = new WorkbenchServerSettings(build.get("database"));
     const codexInstructions = new WorkbenchCodexInstructionAdapter(
       context.webSocketUrl,
       context.legacyMigrationProjectRoot,
-      () => settings.readLocalCapabilities(),
-      () => build.run("mcp", mcp => mcp.listInstructionTools(), "Codex instruction tool catalogue"),
-      async (threadId, pin) => await build.get("threadInstructionPins").pin(threadId, pin),
+      build.get("threadInstructions"),
     );
     return {
       dispose: () => undefined,
@@ -30,7 +26,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Codex instruction adaptation and its bridge dependant.",
   lifecycle: "atomic",
   provides: ["codexInstructions"],
-  requires: ["database", "threadInstructionPins"],
+  requires: ["threadInstructions"],
   safeAll: true,
   scope: "server:codex/instructions",
 });

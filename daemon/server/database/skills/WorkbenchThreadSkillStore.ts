@@ -9,7 +9,8 @@
 import type Database from "better-sqlite3";
 import type { WorkbenchThreadSkill, WorkbenchThreadSkillSource } from "workbench-shared/workbench/thread/thread-skill-state";
 
-export type ThreadSkillNotice = "redeliver" | "deactivated";
+/** `deliver`: activated by user input and not yet sent; `redeliver`: re-send after compaction. */
+export type ThreadSkillNotice = "deliver" | "redeliver" | "deactivated";
 
 export interface ThreadSkillActivation {
   path: string;
@@ -19,7 +20,8 @@ export interface ThreadSkillActivation {
 
 export type ThreadSkillCommand =
   | { kind: "read"; threadId: string }
-  | { kind: "activate"; threadId: string; skills: readonly ThreadSkillActivation[]; at: number }
+  /** `deliver`: the body is still owed to the agent; false when the activation itself carried it. */
+  | { kind: "activate"; threadId: string; skills: readonly ThreadSkillActivation[]; at: number; deliver: boolean }
   | { kind: "deactivate"; threadId: string; path: string }
   | { kind: "markCompacted"; threadId: string }
   /** Clears only the notices that were actually delivered; newer transitions survive. */
@@ -52,12 +54,13 @@ export default class WorkbenchThreadSkillStore {
         case "read":
           break;
         case "activate": {
-          // Reactivation cancels any undelivered notice and moves the skill to the top instruction layer; the activation carries the body.
+          // Reactivation replaces any undelivered notice and moves the skill to the top instruction layer.
           const upsert = this.database.prepare(`INSERT INTO workbench_thread_skills
-            (thread_id, path, name, source, activated_at, active, pending_notice) VALUES (?, ?, ?, ?, ?, 1, NULL)
+            (thread_id, path, name, source, activated_at, active, pending_notice) VALUES (?, ?, ?, ?, ?, 1, ?)
             ON CONFLICT(thread_id, path) DO UPDATE SET name = excluded.name, source = excluded.source,
-              activated_at = excluded.activated_at, active = 1, pending_notice = NULL`);
-          for (const skill of command.skills) upsert.run(command.threadId, skill.path, skill.name, skill.source, command.at);
+              activated_at = excluded.activated_at, active = 1, pending_notice = excluded.pending_notice`);
+          const notice = command.deliver ? "deliver" : null;
+          for (const skill of command.skills) upsert.run(command.threadId, skill.path, skill.name, skill.source, command.at, notice);
           break;
         }
         case "deactivate":
@@ -65,16 +68,20 @@ export default class WorkbenchThreadSkillStore {
             WHERE thread_id = ? AND path = ? AND active = 1`).run(command.threadId, command.path);
           break;
         case "markCompacted":
+          // A skill whose first delivery is still owed keeps it; that delivery already carries the body.
           this.database.prepare(`UPDATE workbench_thread_skills SET pending_notice = 'redeliver'
-            WHERE thread_id = ? AND active = 1`).run(command.threadId);
+            WHERE thread_id = ? AND active = 1 AND pending_notice IS NULL`).run(command.threadId);
           break;
         case "acknowledge": {
           const statement = command.notice === "deactivated"
             ? this.database.prepare(`DELETE FROM workbench_thread_skills
               WHERE thread_id = ? AND path = ? AND active = 0 AND pending_notice = 'deactivated'`)
             : this.database.prepare(`UPDATE workbench_thread_skills SET pending_notice = NULL
-              WHERE thread_id = ? AND path = ? AND active = 1 AND pending_notice = 'redeliver'`);
-          for (const path of command.paths) statement.run(command.threadId, path);
+              WHERE thread_id = ? AND path = ? AND active = 1 AND pending_notice = ?`);
+          for (const path of command.paths) {
+            if (command.notice === "deactivated") statement.run(command.threadId, path);
+            else statement.run(command.threadId, path, command.notice);
+          }
           break;
         }
       }
@@ -96,6 +103,7 @@ export default class WorkbenchThreadSkillStore {
     return {
       skills: rows.filter(row => row.active === 1).map(toSkill),
       pending: {
+        deliver: rows.filter(row => row.active === 1 && row.pending_notice === "deliver").map(toSkill),
         redeliver: rows.filter(row => row.active === 1 && row.pending_notice === "redeliver").map(toSkill),
         deactivated: rows.filter(row => row.active === 0 && row.pending_notice === "deactivated").map(toSkill),
       },

@@ -1,4 +1,7 @@
-/* No production exports. Tests protect immediate and next-input delivery of compaction re-sends and deactivation notices, and acknowledgement only after admission. */
+/*
+ * No production exports. Tests protect next-input first delivery of user activations, immediate and next-input delivery of
+ * compaction re-sends and deactivation notices, and acknowledgement only after admission.
+ */
 import assert from "node:assert/strict";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -54,11 +57,26 @@ async function fixture(context: TestContext) {
   };
 }
 
+test("a user activation owes its body until the agent's next input admits it; an agent activation owes nothing", async context => {
+  const { controller, target, threadId, published } = await fixture(context);
+  await controller.recordActivations(threadId, ["skills/review/SKILL.md"], "agent");
+  assert.deepEqual(await controller.contextSource.collect(target, "start", new AbortController().signal), []);
+  await controller.recordActivations(threadId, ["skills/react/SKILL.md"], "user");
+  const [first, ...rest] = await controller.contextSource.collect(target, "start", new AbortController().signal);
+  assert.deepEqual(rest, []);
+  const body = WORKBENCH_ACTIVATED_SKILLS_TAG_WRAPPER.read(first!.text)?.body ?? "";
+  assert.match(body, /name="react"/u);
+  assert.doesNotMatch(body, /previously activated|name="review"/u);
+  assert.equal(published.length, 0, "activation waits for an input boundary instead of publishing");
+  await first!.admitted?.();
+  assert.deepEqual(await controller.contextSource.collect(target, "steer", new AbortController().signal), []);
+});
+
 test("a live thread receives active skills again after each compaction, with the previously-activated note", async context => {
   const { controller, threadId, published, broadcasts } = await fixture(context);
-  await controller.recordActivations(threadId, ["skills/react/SKILL.md", "skills/missing/SKILL.md"], "user");
+  await controller.recordActivations(threadId, ["skills/react/SKILL.md", "skills/missing/SKILL.md"], "agent");
   await controller.recordActivations(threadId, ["skills/review/SKILL.md"], "agent");
-  assert.deepEqual((await controller.read(threadId)).map(skill => [skill.name, skill.source]), [["react", "user"], ["review", "agent"]]);
+  assert.deepEqual((await controller.read(threadId)).map(skill => [skill.name, skill.source]), [["react", "agent"], ["review", "agent"]]);
   assert.equal(broadcasts.length, 2);
 
   await controller.observeCompaction(threadId);
@@ -72,7 +90,7 @@ test("a live thread receives active skills again after each compaction, with the
 
 test("an idle thread keeps a deactivation notice pending until its next input admits it", async context => {
   const { controller, target, threadId, published, broadcasts, setAdmission } = await fixture(context);
-  await controller.recordActivations(threadId, ["skills/react/SKILL.md", "skills/review/SKILL.md"], "user");
+  await controller.recordActivations(threadId, ["skills/react/SKILL.md", "skills/review/SKILL.md"], "agent");
   setAdmission("unsupported");
   const remaining = await controller.deactivate(threadId, "skills/react/SKILL.md");
   assert.deepEqual(remaining.map(skill => skill.name), ["review"]);

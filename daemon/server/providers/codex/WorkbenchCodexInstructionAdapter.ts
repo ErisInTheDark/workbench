@@ -3,22 +3,17 @@
  * - WorkbenchCodexInstructionSource: request-inherited or cwd-owned context for internal resume configuration.
  * - WorkbenchCodexInstructionPort: request-augmentation boundary consumed by the bridge.
  * - WorkbenchCodexThreadConfiguration: daemon-resolved settings and validated thread ownership.
- * - default WorkbenchCodexInstructionAdapter: adapt model-filtered thread instructions, skills, settings and project-local MCP config into Codex requests,
- *   pinning the instruction layers each build delivers.
+ * - default WorkbenchCodexInstructionAdapter: place Workbench-built thread instructions, settings and project-local MCP config into Codex requests.
  */
 import path from "node:path";
 import { isSamePath } from "workbench-shared/same-path";
 import buildWorkbenchOwnedPromptFields from "./codex-owned-prompt";
-import type { WorkbenchComposerSettings, WorkbenchProjectRoot, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
+import type { WorkbenchComposerSettings, WorkbenchProjectRoot } from "workbench-shared/types";
 import { contextCompactionThreshold } from "workbench-shared/workbench/thread/thread-context-rollover";
 
-import * as workbenchPromptFiles from "../../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "../../lib/workbench/instructions/WorkbenchPromptFiles";
-import { listWorkbenchInstructionTools, type WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
-import { listWorkbenchAgentCommands } from "../../lib/workbench/commands/workbench-agent-command-registry";
-import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "../../bridge-types";
-import type { WorkbenchInstructionPin } from "../../thread/WorkbenchThreadInstructionPins";
+import type WorkbenchThreadInstructionBuilder from "../../thread/WorkbenchThreadInstructionBuilder";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "../workbench-prompt-context";
 import { withWorkbenchCodexSandboxConfig } from "./codex-sandbox-policy";
@@ -45,10 +40,6 @@ function isPromptAugmentedThreadMethod(method: string | null) {
   return method === "thread/start" || method === "thread/resume" || method === "thread/fork";
 }
 
-function isPromptAugmentedTurnMethod(method: string | null) {
-  return method === "turn/start" || method === "turn/steer";
-}
-
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -63,7 +54,9 @@ function buildWorkbenchManagedThreadConfig(params: Record<string, unknown>, over
   };
 }
 
-function buildWorkbenchOwnedPromptParams(params: Record<string, unknown>, promptInstructions: WorkbenchPromptInstructions) {
+function buildWorkbenchOwnedPromptParams(
+  params: Record<string, unknown>, promptInstructions: Pick<WorkbenchPromptInstructions, "baseInstructions" | "developerInstructions">,
+) {
   const fields = buildWorkbenchOwnedPromptFields(promptInstructions.baseInstructions, promptInstructions.developerInstructions);
   return {
     ...params,
@@ -72,19 +65,14 @@ function buildWorkbenchOwnedPromptParams(params: Record<string, unknown>, prompt
   };
 }
 
-function readDefaultInstructionTools(): Promise<readonly WorkbenchInstructionTool[]> {
-  return Promise.resolve(listWorkbenchInstructionTools(listWorkbenchAgentCommands()));
-}
-
 export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexInstructionPort {
   private readonly workbenchRoot: string;
 
   constructor(
     private readonly bridgeUrl: string,
     workbenchRoot: string,
-    private readonly readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>,
-    private readonly readInstructionTools: () => Promise<readonly WorkbenchInstructionTool[]> = readDefaultInstructionTools,
-    private readonly pin: (threadId: string, pin: WorkbenchInstructionPin) => Promise<void> = async () => undefined,
+    /** Builds and pins the thread's instructions. */
+    private readonly instructions: Pick<WorkbenchThreadInstructionBuilder, "build">,
   ) {
     this.workbenchRoot = path.resolve(workbenchRoot);
   }
@@ -153,47 +141,23 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     };
   }
 
+  /** Thread creation, resume and fork carry Workbench-built instructions; turns carry nothing extra, since context arrives as developer items. */
   async augment(message: JsonRpcRequest, method: string | null) {
-    if (!isPromptAugmentedThreadMethod(method) && !isPromptAugmentedTurnMethod(method)) return message;
+    if (!isPromptAugmentedThreadMethod(method)) return message;
     const promptContext = readWorkbenchPromptContext(message);
     if (!promptContext) return message;
     const params = asRecord(message.params);
     // This adapter installs Workbench MCP even before native creation returns an id.
-    const context = {
-      ...promptContext,
-      harness: "codex" as const,
-      managedThread: true,
+    const { activatedSkillPaths: _skills, ...request } = promptContext;
+    const promptInstructions = await this.instructions.build({
+      ...request,
+      harness: "codex",
       model: typeof params.model === "string" ? params.model : null,
-      readInstructionTools: this.readInstructionTools,
-    };
-    if (isPromptAugmentedTurnMethod(method)) {
-      const { catalog: activatedSkillCatalog, skillLayers } = await workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills(
-        context,
-        this.readLocalCapabilities,
-      );
-      if (context.threadId) await this.pin(context.threadId, { skills: skillLayers });
-      if (!activatedSkillCatalog) return message;
-      const input = Array.isArray(params.input) ? params.input : [];
-      return {
-        ...message,
-        params: {
-          ...params,
-          input: [
-            ...input,
-            createWorkbenchActivatedSkillsInput(activatedSkillCatalog),
-          ],
-        },
-      };
-    }
-
-    const promptInstructions = await workbenchPromptFiles.buildWorkbenchManagedThreadInstructions(
-      context,
-      this.readLocalCapabilities,
-    );
-    if (context.threadId) await this.pin(context.threadId, { base: promptInstructions.overlayLayers, prefix: promptInstructions.prefix });
+      threadId: promptContext.threadId ?? null,
+    });
     return {
       ...message,
-      params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, promptInstructions), context.cwd, context.subagentName),
+      params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, promptInstructions), promptContext.cwd, promptContext.subagentName),
     };
   }
 }

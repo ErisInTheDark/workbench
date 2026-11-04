@@ -39,7 +39,7 @@ test("one read returns every requested thread's own goal, skills, todos, feedbac
     transcript.settle([{ kind: "threadContextUsage", threadId: child, initialise: false, snapshot: { tokenUsage: usage(1234) } }]);
     new WorkbenchThreadGoalStore(database).execute({ kind: "set", threadId: parent, objective: "ship it", at: 5 });
     new WorkbenchThreadSkillStore(database).execute({
-      kind: "activate", threadId: child, at: 6, skills: [{ path: "skills/a/SKILL.md", name: "a", source: "user" }],
+      kind: "activate", threadId: child, at: 6, skills: [{ path: "skills/a/SKILL.md", name: "a", source: "user" }], deliver: false,
     });
     new WorkbenchThreadTodoStore(database).execute({ kind: "add", threadId: parent, text: "follow up", required: true, at: 7 });
     new WorkbenchThreadAddressedFeedbackStore(database).execute({ kind: "record", threadId: child, feedback: [{

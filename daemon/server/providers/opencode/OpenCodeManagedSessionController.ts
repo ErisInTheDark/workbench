@@ -2,23 +2,15 @@
  * Exports:
  * - OpenCodeManagedSessionContext: provider-local instruction refresh input.
  * - OpenCodeManagedSessionControllerOptions: injectable managed-session boundaries.
- * - default OpenCodeManagedSessionController: own OpenCode session marking, native command and per-audience tool denial, fresh instructions, and activated skill builds,
- *   pinning the instruction layers each refresh delivers.
+ * - default OpenCodeManagedSessionController: own OpenCode session marking, native command and per-audience tool denial, and placing
+ *   Workbench-built instructions as the session's instruction entry.
  */
-import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
 import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
 import { isSamePath } from "workbench-shared/same-path";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import { OPENCODE_WORKBENCH_DIRECT_NAMESPACE, OPENCODE_WORKBENCH_NAMESPACE } from "./opencode-workbench-rpc";
-import {
-  buildWorkbenchManagedThreadActivatedSkills,
-  buildWorkbenchManagedThreadInstructions,
-  type WorkbenchInstructionPrefix,
-  type WorkbenchSkillLayer,
-} from "../../lib/workbench/instructions/WorkbenchPromptFiles";
-import type { WorkbenchInstructionOverlays } from "../../lib/workbench/instructions/instruction-overlay-catalogue";
-import type { WorkbenchInstructionPin } from "../../thread/WorkbenchThreadInstructionPins";
+import type WorkbenchThreadInstructionBuilder from "../../thread/WorkbenchThreadInstructionBuilder";
 
 const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
 // A tool's permission action is its effective name, which carries its code-mode or direct namespace.
@@ -47,29 +39,16 @@ export interface OpenCodeManagedSessionContext {
   model: string | null;
   agentPath: string | null;
   workflowIds: readonly string[];
-  activatedSkillPaths: readonly string[];
   subagentName?: string | null;
-}
-
-interface BuiltInstructions {
-  baseInstructions: string | null;
-  developerInstructions: string | null;
-  activatedSkills: string | null;
-  overlayLayers: readonly WorkbenchInstructionOverlays[];
-  prefix: WorkbenchInstructionPrefix | null;
-  skillLayers: readonly WorkbenchSkillLayer[];
 }
 
 export interface OpenCodeManagedSessionControllerOptions {
   acquire: () => Promise<WorkbenchOpenCodeClient>;
-  build?: (context: OpenCodeManagedSessionContext & { harness: "opencode" }) => Promise<BuiltInstructions>;
+  /** Builds and pins the thread's instructions. */
+  instructions: Pick<WorkbenchThreadInstructionBuilder, "build">;
   readInstructionTools: () => Promise<readonly WorkbenchInstructionTool[]>;
-  readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>;
   /** Workbench repository root; sessions elsewhere are denied its root-only tools. */
   workbenchRoot: string;
-  workbenchOrigin?: string;
-  /** Records the instruction layers a build delivered to the thread. */
-  pin?: (threadId: string, pin: WorkbenchInstructionPin) => Promise<void>;
 }
 
 export default class OpenCodeManagedSessionController {
@@ -82,17 +61,14 @@ export default class OpenCodeManagedSessionController {
     };
   }
 
-  /**
-   * Replace the session's managed instructions. Activated skill bodies are returned for the prompt instead: they
-   * must stay in conversation history, not in instructions the next refresh replaces.
-   */
-  async refresh(input: OpenCodeManagedSessionContext): Promise<{ activatedSkills: string | null }> {
-    const context = { ...input, harness: "opencode" as const };
-    const built = await (this.options.build ?? (value => this.build(value)))(context);
-    const value = [
-      built.baseInstructions,
-      built.developerInstructions,
-    ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
+  /** Replace the session's managed instructions and per-audience permissions before a prompt. */
+  async refresh(input: OpenCodeManagedSessionContext) {
+    const built = await this.options.instructions.build({
+      harness: "opencode", model: input.model, threadId: input.threadId, projectId: input.projectId, cwd: input.cwd,
+      agentPath: input.agentPath, workflowIds: input.workflowIds, subagentName: input.subagentName,
+    });
+    const value = [built.baseInstructions, built.developerInstructions]
+      .filter((part): part is string => Boolean(part?.trim())).join("\n\n");
     const session = (await this.options.acquire()).session;
     await session.update({
       sessionID: input.sessionID,
@@ -101,47 +77,11 @@ export default class OpenCodeManagedSessionController {
         rootOnlyTools: isSamePath(input.cwd, this.options.workbenchRoot) ? [] : await this.directRootOnlyTools(),
       }),
     });
-    await session.instructions.entry.put({
-      sessionID: input.sessionID,
-      key: "workbench",
-      value,
-    });
-    await this.options.pin?.(input.threadId, { base: built.overlayLayers, prefix: built.prefix });
-    await this.options.pin?.(input.threadId, { skills: built.skillLayers });
-    return { activatedSkills: built.activatedSkills?.trim() ? built.activatedSkills : null };
+    await session.instructions.entry.put({ sessionID: input.sessionID, key: "workbench", value });
   }
 
   /** Deferred root-only tools run through `mcp_call`, which the MCP server gates per caller instead. */
   private async directRootOnlyTools() {
     return (await this.options.readInstructionTools()).filter(tool => tool.rootOnly && !tool.deferred).map(tool => tool.id);
-  }
-
-  private async build(context: OpenCodeManagedSessionContext & { harness: "opencode" }): Promise<BuiltInstructions> {
-    const promptContext = {
-      agentPath: context.agentPath,
-      activatedSkillPaths: context.activatedSkillPaths,
-      cwd: context.cwd,
-      harness: context.harness,
-      managedThread: true,
-      model: context.model,
-      readInstructionTools: this.options.readInstructionTools,
-      projectId: context.projectId,
-      threadId: context.threadId,
-      workbenchOrigin: this.options.workbenchOrigin,
-      workflowIds: context.workflowIds,
-      subagentName: context.subagentName,
-    };
-    const [instructions, activatedSkills] = await Promise.all([
-      buildWorkbenchManagedThreadInstructions(promptContext, this.options.readLocalCapabilities),
-      buildWorkbenchManagedThreadActivatedSkills(promptContext, this.options.readLocalCapabilities),
-    ]);
-    return {
-      baseInstructions: instructions.baseInstructions,
-      developerInstructions: instructions.developerInstructions,
-      activatedSkills: activatedSkills.catalog,
-      overlayLayers: instructions.overlayLayers,
-      prefix: instructions.prefix,
-      skillLayers: activatedSkills.skillLayers,
-    };
   }
 }

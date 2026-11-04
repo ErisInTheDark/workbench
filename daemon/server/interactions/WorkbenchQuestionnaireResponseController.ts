@@ -233,13 +233,9 @@ export default class WorkbenchQuestionnaireResponseController {
     const supplementalInput = input.supplementalInput ?? [];
     if (!supplementalInput.length && !activatedSkillPaths.length) return;
     if (!turnId) throw new Error("Questionnaire supplemental input requires an owning turn.");
-    await this.interactions(input.harness).supplement({
-        turnId,
-        input: supplementalInput,
-        threadId: input.threadId,
-        activatedSkillPaths,
-    });
+    // Recorded first: the answer's input boundary delivers the skill bodies, with or without supplemental text.
     await this.recordSkillActivations(input.threadId, collectActivatedSkillPaths(supplementalInput, { activatedSkillPaths }));
+    if (supplementalInput.length) await this.interactions(input.harness).supplement({ turnId, input: supplementalInput, threadId: input.threadId });
   }
 
   private async recordSkillActivations(threadId: string, paths: readonly string[]) {

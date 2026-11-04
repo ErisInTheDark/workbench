@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - tests: protect managed OpenCode metadata, parent-only and root-only permissions, fresh instruction entries, and prompt-bound activated skills.
+ * - tests: protect managed OpenCode metadata, parent-only and root-only permissions, and fresh instruction entries.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,7 +9,7 @@ import { listWorkbenchAgentCommands } from "../../lib/workbench/commands/workben
 import { listWorkbenchInstructionTools } from "../../lib/workbench/instructions/instruction-tool-reference";
 import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 
-test("marks managed sessions and refreshes filtered instructions before each prompt", async () => {
+test("marks managed sessions and refreshes Workbench-built instructions before each prompt", async () => {
   const puts: object[] = [];
   const updates: object[] = [];
   const operations: string[] = [];
@@ -31,16 +31,13 @@ test("marks managed sessions and refreshes filtered instructions before each pro
         },
       },
     } as never),
-    build: async context => ({
-      baseInstructions: `base-${++generation}-${context.harness}`,
-      developerInstructions: `developer-${context.model}`,
-      activatedSkills: context.activatedSkillPaths?.join(",") ?? null,
-      overlayLayers: [],
-      prefix: null,
-      skillLayers: [],
-    }),
+    instructions: {
+      build: async request => ({
+        baseInstructions: `base-${++generation}-${request.harness}`,
+        developerInstructions: `developer-${request.model}`,
+      }),
+    },
     readInstructionTools: async () => [],
-    readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
     workbenchRoot: "C:/project",
   });
 
@@ -60,13 +57,10 @@ test("marks managed sessions and refreshes filtered instructions before each pro
     model: "opencode/model",
     agentPath: null,
     workflowIds: ["default"],
-    activatedSkillPaths: ["C:/skills/one/SKILL.md"],
   };
-  const first = await controller.refresh(context);
+  await controller.refresh(context);
   await controller.refresh(context);
   await controller.refresh({ ...context, subagentName: "mira" });
-  // Skill bodies belong in the prompt, not in instructions the next refresh replaces.
-  assert.deepEqual(first, { activatedSkills: "C:/skills/one/SKILL.md" });
   assert.deepEqual((updates[0] as { permissions: object[] }).permissions, controller.creation().permissions);
   assert.deepEqual((updates[1] as { permissions: object[] }).permissions, controller.creation().permissions);
   assert.deepEqual((updates[2] as { permissions: object[] }).permissions, [
@@ -75,21 +69,9 @@ test("marks managed sessions and refreshes filtered instructions before each pro
   ]);
   assert.deepEqual(operations, ["permissions", "instructions", "permissions", "instructions", "permissions", "instructions"]);
   assert.deepEqual(puts, [
-    {
-      sessionID: "session",
-      key: "workbench",
-      value: "base-1-opencode\n\ndeveloper-opencode/model",
-    },
-    {
-      sessionID: "session",
-      key: "workbench",
-      value: "base-2-opencode\n\ndeveloper-opencode/model",
-    },
-    {
-      sessionID: "session",
-      key: "workbench",
-      value: "base-3-opencode\n\ndeveloper-opencode/model",
-    },
+    { sessionID: "session", key: "workbench", value: "base-1-opencode\n\ndeveloper-opencode/model" },
+    { sessionID: "session", key: "workbench", value: "base-2-opencode\n\ndeveloper-opencode/model" },
+    { sessionID: "session", key: "workbench", value: "base-3-opencode\n\ndeveloper-opencode/model" },
   ]);
 });
 
@@ -102,15 +84,11 @@ test("sessions outside the Workbench repository root are denied its root-only to
         instructions: { entry: { put: async () => undefined } },
       },
     } as never),
-    build: async () => ({ baseInstructions: null, developerInstructions: null, activatedSkills: null, overlayLayers: [], prefix: null, skillLayers: [] }),
+    instructions: { build: async () => ({ baseInstructions: null, developerInstructions: null }) },
     readInstructionTools: async () => listWorkbenchInstructionTools(listWorkbenchAgentCommands()),
-    readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
     workbenchRoot: "C:/workbench",
   });
-  const context = {
-    sessionID: "session", projectId: "project", threadId: "thread", model: null, agentPath: null,
-    workflowIds: [], activatedSkillPaths: [],
-  };
+  const context = { sessionID: "session", projectId: "project", threadId: "thread", model: null, agentPath: null, workflowIds: [] };
   await controller.refresh({ ...context, cwd: "C:/elsewhere" });
   await controller.refresh({ ...context, cwd: "C:/workbench" });
   const denied = updates.map(({ permissions }) => new Set(permissions.map(({ action }) => action)));

@@ -1,5 +1,5 @@
 /*
- * No exports. Protect scripted model-tool progress, protocol routing and disposal.
+ * No exports. Protect scripted model-tool progress, protocol routing, context-placement and system-stability checks, and disposal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -192,6 +192,48 @@ test("fake Claude Messages stream requires the matching tool result before advan
     }]);
     assert.equal(next.status, 200);
     assert.match(await next.text(), /after/u);
+  } finally { await server.close(); }
+});
+
+test("conversation context must be in the conversation, and a held system prompt rejects any change", async context => {
+  const reported = captureRejections(context);
+  const server = await FakeThreadModelServer.start();
+  try {
+    const request = (system: string, text: string) => fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-4-6", stream: true, system, messages: [{ role: "user", content: text }] }),
+    });
+    server.enqueue([{ text: "one" }, { text: "two" }, { text: "three" }]);
+    server.expectNextConversationText("notice-proof");
+    assert.equal((await request("instructions notice-proof", "hello")).status, 400, "a system-only copy is not conversation");
+    assert.equal((await request("instructions quoting notice-proof", "hello notice-proof")).status, 200);
+
+    server.holdSystemPrompt();
+    assert.equal((await request("instructions", "next")).status, 200);
+    assert.equal((await request("instructions changed", "next")).status, 400);
+    server.releaseSystemPrompt();
+    assert.equal((await request("instructions changed", "next")).status, 200);
+    assert.equal(reported.length, 2);
+  } finally { await server.close(); }
+});
+
+test("a chat system message after the conversation starts counts as conversation, not the cached prefix", async () => {
+  const server = await FakeThreadModelServer.start();
+  try {
+    const request = (messages: object[]) => fetch(`${server.baseUrl}/v1/chat/completions`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "fake", stream: true, tools: [{ type: "function", function: { name: "shell" } }], messages }),
+    });
+    server.enqueue([{ text: "one" }, { text: "two" }]);
+    server.holdSystemPrompt();
+    server.expectNextConversationText("steer-proof");
+    assert.equal((await request([
+      { role: "system", content: "instructions" }, { role: "user", content: "go" }, { role: "system", content: "steer-proof" },
+    ])).status, 200);
+    assert.equal((await request([
+      { role: "system", content: "instructions" }, { role: "user", content: "go" }, { role: "system", content: "steer-proof" },
+      { role: "user", content: "more" },
+    ])).status, 200, "an appended steer leaves the prefix unchanged");
   } finally { await server.close(); }
 });
 

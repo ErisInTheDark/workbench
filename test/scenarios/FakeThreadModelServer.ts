@@ -3,7 +3,8 @@
  * - FakeThreadAction: one test-authored model response and optional tool request.
  * - FakeThreadWire: model wire selected by the request route.
  * - default FakeThreadModelServer: own a disposable loopback model endpoint for provider scenarios, optionally speaking commentary through a commentary tool,
- *   with marker-routed lanes for conversations that run at the same time.
+ *   with marker-routed lanes for conversations that run at the same time, and checks that hidden context reaches the conversation
+ *   and that a held system prompt stays byte-identical.
  */
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
@@ -40,6 +41,8 @@ type ModelRequest = {
     content?: string | Array<{ type?: string; tool_use_id?: string; text?: string; source?: { type?: string; data?: string } }>;
   }>;
   model?: string;
+  /** Responses-wire system instructions. */
+  instructions?: string;
   stream?: boolean;
   system?: string | Array<{ text?: string }>;
   systemInstruction?: { parts?: Array<{ text?: string }> };
@@ -51,6 +54,25 @@ type ToolCall = { id: string; name: string; arguments: Record<string, unknown> }
 type PendingResult = { callId: string; provider: ProviderWire; endAfter: boolean };
 /** One conversation's script; `marker` routes requests carrying it, and the unmarked lane takes the rest. */
 type Lane = { marker: string | null; actions: FakeThreadAction[]; pendingResult: PendingResult | null };
+
+/**
+ * A request's cached instruction prefix and its conversation. Chat wires lead with their system messages; a system message
+ * after the conversation starts (such as OpenCode's synthetic steers) is conversation. Codex carries Workbench developer
+ * instructions as conversation items, so only its `instructions` field counts as system there.
+ */
+function splitModelRequest(provider: ProviderWire, body: ModelRequest) {
+  switch (provider) {
+    case "claude": return { system: body.system ?? null, conversation: body.messages ?? [] };
+    case "opencode": {
+      const messages = body.messages ?? [];
+      const start = messages.findIndex(message => message.role !== "system");
+      const prefix = start === -1 ? messages.length : start;
+      return { system: messages.slice(0, prefix), conversation: messages.slice(prefix) };
+    }
+    case "codex": return { system: body.instructions ?? null, conversation: body.input ?? [] };
+    case "gemini": return { system: body.systemInstruction ?? null, conversation: body.contents ?? [] };
+  }
+}
 
 function toolName(tool: Tool) {
   return tool.name ?? tool.function?.name ?? "";
@@ -100,6 +122,9 @@ export default class FakeThreadModelServer {
   private forbiddenPromptText: string | null = null;
   private requiredPromptText: string | null = null;
   private readonly nextPromptText: string[][] = [];
+  private readonly nextConversationText: string[][] = [];
+  /** While held, every request's system part must equal the first one seen; null text until that first request. */
+  private systemHold: { text: string | null } | null = null;
   private readonly nextClaudeImages: Array<{ marker: string; data: readonly string[] }> = [];
   private readonly holds = new EventEmitter();
 
@@ -181,6 +206,23 @@ export default class FakeThreadModelServer {
 
   expectNextPromptText(...texts: string[]) {
     this.nextPromptText.push(texts);
+  }
+
+  /**
+   * The next request must carry each text in its conversation. Instructions may quote the same text, so a copy in the system part
+   * is caught by holding the system prompt instead.
+   */
+  expectNextConversationText(...texts: string[]) {
+    this.nextConversationText.push(texts);
+  }
+
+  /** Until released, the system part of every request must stay byte-identical, as a cacheable prefix must. */
+  holdSystemPrompt() {
+    this.systemHold = { text: null };
+  }
+
+  releaseSystemPrompt() {
+    this.systemHold = null;
   }
 
   expectNextClaudeImages(marker: string, data: readonly string[]) {
@@ -267,6 +309,25 @@ export default class FakeThreadModelServer {
       const missing = missingFrom(body, expected);
       if (missing) throw new Error(`Hidden Workbench context missing from next model request: ${missing}`);
       this.nextPromptText.shift();
+    }
+    const { system, conversation } = splitModelRequest(provider, body);
+    const expectedConversation = this.nextConversationText[0];
+    if (expectedConversation) {
+      const missing = missingFrom(conversation, expectedConversation);
+      if (missing) throw new Error(`Hidden Workbench context missing from the next request's conversation: ${missing}`);
+      this.nextConversationText.shift();
+    }
+    if (this.systemHold) {
+      const text = JSON.stringify(system);
+      if (this.systemHold.text === null) this.systemHold.text = text;
+      else if (this.systemHold.text !== text) {
+        const held = this.systemHold.text;
+        let at = 0;
+        while (at < held.length && held[at] === text[at]) at++;
+        const around = (value: string) => value.slice(Math.max(0, at - 120), at + 120);
+        throw new Error(`The ${provider} system prompt changed while held, so its cached prefix would be rewritten. `
+          + `Held: …${around(held)}… Now: …${around(text)}…`);
+      }
     }
     const action = lane.actions[0];
     if (!action) {

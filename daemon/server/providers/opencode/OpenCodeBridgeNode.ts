@@ -9,7 +9,6 @@ import OpenCodeEventStreamController from "./OpenCodeEventStreamController";
 import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
-import WorkbenchServerSettings from "../../lib/workbench/settings/WorkbenchServerSettings";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import { logError } from "../../process-helpers";
@@ -58,14 +57,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const readWorkingRecords = () => build.get("database").readThreadStateRecords({
       selection: "working", harness: "opencode",
     });
-    const settings = new WorkbenchServerSettings(build.get("database"));
     const managed = new OpenCodeManagedSessionController({
       acquire,
+      instructions: build.get("threadInstructions"),
       readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "OpenCode instruction tool catalogue"),
-      readLocalCapabilities: () => settings.readLocalCapabilities(),
       workbenchRoot: context.legacyMigrationProjectRoot,
-      workbenchOrigin: context.localDaemonOrigin,
-      pin: async (threadId, pin) => await build.get("threadInstructionPins").pin(threadId, pin),
     });
     const threads = new OpenCodeThreadOperations({
       acquire,
@@ -151,7 +147,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [
     "openCodeService", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity",
     "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database",
-    "threadContextRollover", "threadInstructionPins", "agentContext",
+    "threadContextRollover", "threadInstructions", "agentContext",
   ],
   safeAll: true,
   scope: "server:opencode",

@@ -128,9 +128,6 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       await this.mapped({
         method: "turn/steer",
         params: { threadId: input.threadId, expectedTurnId: input.turnId, input: input.input },
-        ...(input.activatedSkillPaths.length ? {
-          workbenchPromptContext: { activatedSkillPaths: input.activatedSkillPaths },
-        } : {}),
       });
     },
     record: async entry => this.interactionResult(await this.mapped({

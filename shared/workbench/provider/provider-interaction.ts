@@ -27,7 +27,6 @@ export interface WorkbenchProviderInteractions {
     threadId: string;
     turnId: string;
     input: WorkbenchUserInput[];
-    activatedSkillPaths: string[];
   }): Promise<void>;
   record(entry: WorkbenchQuestionnaireHistoryEntryState): Promise<WorkbenchProviderInteractionResponse>;
   /** Carry one Workbench approval decision to its live native request; false when the request is gone. Providers that never raise approvals omit it. */

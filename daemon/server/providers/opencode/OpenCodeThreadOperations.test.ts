@@ -314,7 +314,7 @@ function operations(
         metadata: { workbench: { managed: true, provider: "opencode", version: 1 } },
         permissions: [],
       }),
-      refresh: lifecycle.refresh ?? (async () => ({ activatedSkills: null })),
+      refresh: lifecycle.refresh ?? (async () => undefined),
     },
     questionnaires: lifecycle.questionnaires as never ?? {
       canDeliver: () => false,
@@ -520,7 +520,7 @@ test("fails a public read when no OpenCode binding exists", async () => {
         metadata: { workbench: { managed: true, provider: "opencode", version: 1 } },
         permissions: [],
       }),
-      refresh: async () => ({ activatedSkills: null }),
+      refresh: async () => undefined,
     },
     questionnaires: {
       canDeliver: () => false,
@@ -696,7 +696,7 @@ test("managed prompt refresh receives the canonical subagent name rather than na
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       profile: { settings: { harness: "opencode", model: null, agentPath: null } },
     }) },
-  }, { refresh: async input => { names.push(input.subagentName); return { activatedSkills: null }; } });
+  }, { refresh: async input => { names.push(input.subagentName); } });
   await owner.submit({
     threadId, clientMessageId: "child-audience", intent: "continue",
     input: [{ type: "text", text: "work", text_elements: [] }],
@@ -845,7 +845,7 @@ test("execution events are accepted once per durable sequence", async () => {
   await owner.settle();
 });
 
-test("activated skills ride in the prompt once, beside the submitted workflow instructions", async () => {
+test("a submission refreshes its workflow instructions once, and Workbench context collected at its boundary leads the prompt", async () => {
   const refreshes: Parameters<OpenCodeManagedSessionController["refresh"]>[0][] = [];
   const prompts: string[] = [];
   const owner = operations({
@@ -853,16 +853,15 @@ test("activated skills ride in the prompt once, beside the submitted workflow in
     message: { list: async () => ({ data: [], cursor: {} }) },
   }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
   { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
-  { refresh: async input => {
-    refreshes.push(input);
-    return { activatedSkills: input.activatedSkillPaths.length ? input.activatedSkillPaths.join("\n") : null };
-  } });
+  {
+    refresh: async input => { refreshes.push(input); },
+    collect: async (_threadId, _trigger, deliver) => { deliver("<wb:activated-skills>react</wb:activated-skills>"); },
+  });
   await owner.submit({ threadId, clientMessageId: "user", intent: "newTurn",
-    input: [{ type: "skill", name: "review", path: "skills/review" }],
-    context: { workflowIds: ["default"], activatedSkillPaths: ["skills/react"] } });
+    input: [{ type: "text", text: "build it", text_elements: [] }], context: { workflowIds: ["default"] } });
   assert.equal(refreshes.length, 1);
   assert.deepEqual(refreshes[0]!.workflowIds, ["default"]);
-  assert.match(prompts[0]!, /<wb:activated-skills>[\s\S]*skills\/react[\s\S]*skills\/review/u);
+  assert.match(prompts[0]!, /^<wb:activated-skills>react<\/wb:activated-skills>\n\nbuild it/u);
   await owner.settle();
 });
 

@@ -21,8 +21,6 @@ import type { WorkbenchThreadMessageResult } from "workbench-shared/workbench/th
 import type { WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchTextInput, WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
-import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
-import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type WorkbenchThreadIdentityController from "../../thread/WorkbenchThreadIdentityController";
@@ -341,7 +339,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         input: input.input,
         intent: "steer",
         expectedTurnId: input.turnId,
-        context: { activatedSkillPaths: input.activatedSkillPaths },
       });
     },
     record: async entry => {
@@ -481,8 +478,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const native = await this.native(input.threadId);
     const execution = this.execution(native.binding.nativeThreadId);
     execution.intentVersion++;
-    const context = { ...input.context, activatedSkillPaths: collectActivatedSkillPaths(input.input, input.context) };
-    return this.admit(execution, () => this.submitNative({ ...input, context }, native, execution));
+    return this.admit(execution, () => this.submitNative(input, native, execution));
   }
 
   private async admit<T>(execution: SessionExecution, operation: () => Promise<T>): Promise<T> {
@@ -531,7 +527,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : undefined;
     const subagentName = entry?.entryKind === "subagent" ? entry.name : null;
-    const managed = await this.options.managed.refresh({
+    await this.options.managed.refresh({
       sessionID: binding.nativeThreadId,
       cwd: session.location.directory,
       projectId: identity.projectId,
@@ -539,15 +535,12 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       model: settings?.model ?? null,
       agentPath: settings?.agentPath ?? null,
       workflowIds: input.context?.workflowIds ?? [],
-      activatedSkillPaths: input.context?.activatedSkillPaths ?? [],
       subagentName,
     });
+    // Display reads metadata input, so collected hidden context reaches only the model.
     const preamble = await this.collectInputContext(identity.threadId, delivery === "steer" ? "steer" : "start");
     const nativePrompt = prompt(input.input);
-    // Display reads metadata input, so the hidden skill block reaches only the model.
-    const skillText = managed.activatedSkills
-      ? createWorkbenchActivatedSkillsInput(managed.activatedSkills).text : null;
-    const request = { ...nativePrompt, text: [...preamble, nativePrompt.text, skillText].filter(Boolean).join("\n\n") };
+    const request = { ...nativePrompt, text: [...preamble, nativePrompt.text].filter(Boolean).join("\n\n") };
     const messageId = nativeMessageId(input.clientMessageId);
     const itemId = WorkbenchItemIdSchema.parse(randomUUID());
     const metadata = {

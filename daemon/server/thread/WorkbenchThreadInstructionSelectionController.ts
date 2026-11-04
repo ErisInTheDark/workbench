@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadInstructionSelectionPorts: durable store, thread kind, skill catalog, activation recording and warning ports.
  * - defaultThreadInstructionSelection: the workflows a thread with no recorded selection runs, by thread kind.
- * - default WorkbenchThreadInstructionSelectionController: remember each thread's chosen instructions, supply them to messages that carry none, and activate the skills an admitted message names.
+ * - default WorkbenchThreadInstructionSelectionController: remember each thread's chosen instructions, supply them to messages that carry none, and activate the skills a message names before it is admitted.
  */
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -66,19 +66,23 @@ export default class WorkbenchThreadInstructionSelectionController {
   }
 
   /** Record an accepted message's selection and activations; the message already landed, so failed writes only warn. */
-  async record(threadId: WorkbenchThreadId, context: WorkbenchMessageContext | undefined, activatedSkillPaths: readonly string[] = []) {
+  /** After admission: remember the selection the message launched with. */
+  async record(threadId: WorkbenchThreadId, context: WorkbenchMessageContext | undefined) {
     const sent = readWorkbenchInstructionSelection(context);
-    if (sent) {
-      try {
-        const selection = await this.withRecordedWorkflows(threadId, sent);
-        await this.ports.store({ kind: "record", threadId, selection, at: this.ports.now() });
-      } catch (error) {
-        this.ports.warn(`Instruction selection was not recorded for ${threadId}: ${failure(error)}`);
-      }
-    }
-    if (!activatedSkillPaths.length) return;
+    if (!sent) return;
     try {
-      await this.ports.recordSkillActivations(threadId, activatedSkillPaths);
+      const selection = await this.withRecordedWorkflows(threadId, sent);
+      await this.ports.store({ kind: "record", threadId, selection, at: this.ports.now() });
+    } catch (error) {
+      this.ports.warn(`Instruction selection was not recorded for ${threadId}: ${failure(error)}`);
+    }
+  }
+
+  /** Before admission, so the message's own input boundary delivers the bodies; a failure only warns. */
+  async activateSkills(threadId: WorkbenchThreadId, paths: readonly string[]) {
+    if (!paths.length) return;
+    try {
+      await this.ports.recordSkillActivations(threadId, paths);
     } catch (error) {
       this.ports.warn(`Skill activations were not recorded for ${threadId}: ${failure(error)}`);
     }
