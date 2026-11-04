@@ -28,7 +28,7 @@ import {
   CommandApprovalSnapshotSchema,
   type CommandApprovalPatch, type CommandApprovalRead, type CommandApprovalRemove, type CommandApprovalSnapshot,
 } from "../../settings/command-approvals.ts";
-import { ThreadAutoCompactSettingsSchema, type ThreadAutoCompactSettings } from "../../settings/thread-auto-compact.ts";
+import { ThreadAutoCompactSettingsSchema, type ThreadAutoCompactSettings, type ThreadAutoCompactUpdate } from "../../settings/thread-auto-compact.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../../thread/thread-state.ts";
 import { defineDaemonRequest } from "../define-daemon-request.ts";
 
@@ -78,7 +78,7 @@ export const settingsDaemonRequests = {
     route: "installation", result: localCapabilities,
   }),
   "thread-auto-compact/read": defineDaemonRequest<object, { settings: ThreadAutoCompactSettings }>()({ route: "installation", result: autoCompact }),
-  "thread-auto-compact/update": defineDaemonRequest<{ settings: Partial<ThreadAutoCompactSettings> }, { settings: ThreadAutoCompactSettings }>()({
+  "thread-auto-compact/update": defineDaemonRequest<ThreadAutoCompactUpdate, { settings: ThreadAutoCompactSettings }>()({
     route: "installation", result: autoCompact,
   }),
   "profiles/read": defineDaemonRequest<object, WorkbenchComposerProfileStorePayload>()({ route: "installation", result: profiles, parsed: true }),

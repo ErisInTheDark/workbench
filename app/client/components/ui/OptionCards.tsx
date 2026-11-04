@@ -107,7 +107,7 @@ export function OptionCard ({
       )}
     />
   ) : showMarker ? (
-    <WorkbenchCheckboxMarker checked={isChecked} className={compactInline ? undefined : "mt-1"} disabled={disabled} />
+    <WorkbenchCheckboxMarker checked={isChecked} className={compactInline || density === "tight" ? undefined : "mt-1"} disabled={disabled} />
   ) : null;
   const optionBody = (
     <>

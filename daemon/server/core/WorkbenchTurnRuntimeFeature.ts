@@ -105,7 +105,10 @@ export default class WorkbenchTurnRuntimeFeature {
         const entry = await lookup.entry(reference);
         if (!entry) return null;
         const usage = await database.readThreadContextUsage(entry.identity.threadId);
-        return { activityAt: entry.activityAt, contextTokens: usage?.tokenUsage?.last.inputTokens ?? null };
+        return {
+          harness: WorkbenchHarnessSchema.parse(entry.identity.harness),
+          activityAt: entry.activityAt, contextTokens: usage?.tokenUsage?.last.inputTokens ?? null,
+        };
       },
       // Status comes from the saved Workbench lifecycle; only the latest turn and its liveness are provider facts.
       readRuntime: async target => {
@@ -224,11 +227,14 @@ export default class WorkbenchTurnRuntimeFeature {
             return undefined;
           }
         }));
-        const willAutoCompact = await autoCompact.observeMany(entries.map((entry, index) => ({
-          target: { harness: WorkbenchHarnessSchema.parse(entry.identity.harness), threadId: entry.identity.threadId },
-          evidence: { activityAt: entry.activityAt, contextTokens: facts[index]!.tokenUsage?.last.inputTokens ?? null },
-          runtime: { latestTurn: facts[index]!.latestTurn, status: threadPayloadStatus(entry), turnLive: turnLive[index] ?? false },
-        })));
+        const willAutoCompact = await autoCompact.observeMany(entries.map((entry, index) => {
+          const harness = WorkbenchHarnessSchema.parse(entry.identity.harness);
+          return {
+            target: { harness, threadId: entry.identity.threadId },
+            evidence: { harness, activityAt: entry.activityAt, contextTokens: facts[index]!.tokenUsage?.last.inputTokens ?? null },
+            runtime: { latestTurn: facts[index]!.latestTurn, status: threadPayloadStatus(entry), turnLive: turnLive[index] ?? false },
+          };
+        }));
         return new Map(entries.map(({ identity: { threadId } }, index) => {
           const { addressedFeedback, goal, networkHistory, skills, todos, tokenUsage } = facts[index]!;
           const live = turnLive[index];

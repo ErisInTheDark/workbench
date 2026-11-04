@@ -5,7 +5,7 @@ import { workspaceObservationShape } from "workbench-shared/workbench/workspace/
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
 import { createWorkspaceClientFixture } from "./workspace-client-fixture";
 import { DaemonIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { THREAD_AUTO_COMPACT_DEFAULTS } from "workbench-shared/workbench/settings/thread-auto-compact";
 
 test("working-tree reads cross the workspace socket with their folder scope and validate replies", async context => {
   const fixture = createWorkspaceClientFixture();
@@ -50,15 +50,16 @@ test("auto-compaction settings cross the workspace facade to the selected daemon
     read.then(() => assert.fail("settings resolved before the workspace replied")),
   ]);
   assert.deepEqual(request.params.scope, { kind: "installation", daemonId });
-  socket.reply(request, { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
-  assert.deepEqual(await read, { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
-  const patch = { tokenThreshold: 250_000, enabled: false };
-  const update = daemon.threadAutoCompact.update({ settings: patch });
+  socket.reply(request, { settings: THREAD_AUTO_COMPACT_DEFAULTS });
+  assert.deepEqual(await read, { settings: THREAD_AUTO_COMPACT_DEFAULTS });
+  const edit = { provider: "codex" as const, settings: { enabled: false } };
+  const update = daemon.threadAutoCompact.update(edit);
   const next = await socket.request("workspace/command", socket.sent.indexOf(request) + 1);
   assert.deepEqual(next.params.scope, { kind: "installation", daemonId });
-  assert.deepEqual(next.params.params, { settings: patch });
-  socket.reply(next, { settings: { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch } });
-  assert.deepEqual((await update).settings, { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch });
+  assert.deepEqual(next.params.params, edit);
+  const saved = { ...THREAD_AUTO_COMPACT_DEFAULTS, codex: { ...THREAD_AUTO_COMPACT_DEFAULTS.codex, enabled: false } };
+  socket.reply(next, { settings: saved });
+  assert.deepEqual((await update).settings, saved);
 });
 
 test("thread-scoped commands keep the identity they name and fall back to the scope thread", async context => {
@@ -92,8 +93,8 @@ test("daemon requests made before the app connection opens are sent once it open
   assert.equal(socket.sent.length, 0);
   socket.open();
   const request = await socket.request("workspace/command");
-  socket.reply(request, { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
-  assert.deepEqual(await read, { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
+  socket.reply(request, { settings: THREAD_AUTO_COMPACT_DEFAULTS });
+  assert.deepEqual(await read, { settings: THREAD_AUTO_COMPACT_DEFAULTS });
 });
 
 test("closing the workspace releases requests still waiting for a connection", async context => {

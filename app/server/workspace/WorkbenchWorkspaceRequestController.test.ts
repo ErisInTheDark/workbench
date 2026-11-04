@@ -17,7 +17,7 @@ import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
 import WorkbenchThreadPlacementController from "../state/WorkbenchThreadPlacementController";
 import WorkbenchWorkspaceRequestController from "./WorkbenchWorkspaceRequestController";
 import { WorkspaceCommandSchema } from "workbench-shared/workbench/workspace/workspace-commands";
-import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { THREAD_AUTO_COMPACT_DEFAULTS } from "workbench-shared/workbench/settings/thread-auto-compact";
 import { EMPTY_WORKBENCH_STATS_FEEDBACK } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import {
   emptyTranscriptSnapshotRows,
@@ -182,23 +182,25 @@ test("daemon compaction settings route to the selected installation without a pr
   const calls: Array<{ method: string; params: object }> = [];
   const source = {
     available: true,
-    request: async (method: string, params: { settings?: object }) => {
+    request: async (method: string, params: { provider?: "claude"; settings?: { enabled?: boolean } }) => {
       calls.push({ method, params });
-      return { settings: { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...params.settings } };
+      return { settings: params.provider
+        ? { ...THREAD_AUTO_COMPACT_DEFAULTS, [params.provider]: { ...THREAD_AUTO_COMPACT_DEFAULTS[params.provider], ...params.settings } }
+        : THREAD_AUTO_COMPACT_DEFAULTS };
     },
   };
   const f = await fixture(context, { get: id => id === daemonId ? source : undefined });
   const scope = { kind: "installation", daemonId };
   assert.deepEqual(await f.owner.command(WorkspaceCommandSchema.parse({
     method: "thread-auto-compact/read", scope, params: {},
-  })), { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
-  const patch = { enabled: false, idleMinutes: 40 };
+  })), { settings: THREAD_AUTO_COMPACT_DEFAULTS });
+  const update = { provider: "claude" as const, settings: { enabled: false } };
   assert.deepEqual(await f.owner.command(WorkspaceCommandSchema.parse({
-    method: "thread-auto-compact/update", scope, params: { settings: patch },
-  })), { settings: { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch } });
+    method: "thread-auto-compact/update", scope, params: update,
+  })), { settings: { ...THREAD_AUTO_COMPACT_DEFAULTS, claude: { ...THREAD_AUTO_COMPACT_DEFAULTS.claude, enabled: false } } });
   assert.deepEqual(calls, [
     { method: "thread-auto-compact/read", params: {} },
-    { method: "thread-auto-compact/update", params: { settings: patch } },
+    { method: "thread-auto-compact/update", params: update },
   ]);
 });
 

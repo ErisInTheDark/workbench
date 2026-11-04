@@ -9,9 +9,12 @@ import { deleteRows, insertRow, selectRows, upsertRow } from "workbench-shared/d
 import { localCapabilities } from "../database/schema/local-capability-schema";
 import { projectDiscoveryRoots } from "../database/schema/project-discovery-settings-schema";
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
-import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ThreadAutoCompactSettingsPatchSchema, ThreadAutoCompactSettingsSchema, type ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
-import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
-import { threadAutoCompactSettings } from "../database/schema/thread-auto-compact-schema";
+import { installedProviderKeys, type WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import {
+  THREAD_AUTO_COMPACT_DEFAULTS, ThreadAutoCompactPatchSchema, ThreadAutoCompactRules, ThreadAutoCompactRulesSchema,
+  type ThreadAutoCompactPatch, type ThreadAutoCompactSettings,
+} from "workbench-shared/workbench/settings/thread-auto-compact";
+import { threadAutoCompactProviders } from "../database/schema/thread-auto-compact-schema";
 
 export const DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
   browseRawCommandsEnabled: false,
@@ -38,22 +41,36 @@ export default class WorkbenchServerSettings {
     return { browseRawCommandsEnabled: row?.browse_raw_commands_enabled === 1 };
   }
 
+  /** Providers without a row, or whose stored rules no longer fit their rule set, use their defaults. */
   async readThreadAutoCompact(): Promise<ThreadAutoCompactSettings> {
-    const [row] = await this.database.query(selectRows(threadAutoCompactSettings, { where: { id: "global" } }));
-    return conformToZodSchema(ThreadAutoCompactSettingsSchema, row
-      ? { enabled: row.enabled === 1, tokenThreshold: row.token_threshold, idleMinutes: row.idle_minutes }
-      : {}, DEFAULT_THREAD_AUTO_COMPACT_SETTINGS).data;
+    const rows = new Map((await this.database.query(selectRows(threadAutoCompactProviders))).map(row => [row.provider, row]));
+    return Object.fromEntries(installedProviderKeys.map(provider => {
+      const fallback = THREAD_AUTO_COMPACT_DEFAULTS[provider];
+      const row = rows.get(provider);
+      const stored = row && (row.idle_token_threshold === null) === (fallback.idle === null) && ThreadAutoCompactRulesSchema.safeParse({
+        enabled: row.enabled === 1,
+        idle: row.idle_token_threshold === null ? null : { tokenThreshold: row.idle_token_threshold, minutes: row.idle_minutes },
+        turnEndTokenThreshold: row.turn_end_token_threshold,
+      });
+      return [provider, stored && stored.success ? stored.data : fallback];
+    })) as ThreadAutoCompactSettings;
   }
 
-  async updateThreadAutoCompact(patch: Partial<ThreadAutoCompactSettings>): Promise<ThreadAutoCompactSettings> {
-    const edit = ThreadAutoCompactSettingsPatchSchema.parse(patch);
+  async updateThreadAutoCompact(provider: WorkbenchProviderKey, patch: ThreadAutoCompactPatch): Promise<ThreadAutoCompactSettings> {
+    const edit = ThreadAutoCompactPatchSchema.parse(patch);
     let settings!: ThreadAutoCompactSettings;
     await this.enqueueWrite(async () => {
-      settings = ThreadAutoCompactSettingsSchema.parse({ ...await this.readThreadAutoCompact(), ...edit });
-      await this.database.executeTransaction([upsertRow(threadAutoCompactSettings, {
-        id: "global", enabled: settings.enabled ? 1 : 0,
-        token_threshold: settings.tokenThreshold, idle_minutes: settings.idleMinutes,
-      }, { conflictColumns: ["id"], updateColumns: ["enabled", "token_threshold", "idle_minutes"] })]);
+      const current = await this.readThreadAutoCompact();
+      const rules = ThreadAutoCompactRules.apply(current[provider], edit);
+      await this.database.executeTransaction([upsertRow(threadAutoCompactProviders, {
+        provider, enabled: rules.enabled ? 1 : 0,
+        idle_token_threshold: rules.idle?.tokenThreshold ?? null, idle_minutes: rules.idle?.minutes ?? null,
+        turn_end_token_threshold: rules.turnEndTokenThreshold,
+      }, {
+        conflictColumns: ["provider"],
+        updateColumns: ["enabled", "idle_token_threshold", "idle_minutes", "turn_end_token_threshold"],
+      })]);
+      settings = { ...current, [provider]: rules };
     });
     return settings;
   }

@@ -1,8 +1,11 @@
 /*
  * Exports:
- * - default ThreadAutoCompactSettingsController: own daemon settings load/save state, ordered edits and their optimistic display.
+ * - default ThreadAutoCompactSettingsController: own one daemon's per-provider settings load/save state, ordered edits and their optimistic display.
  */
-import type { ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
+import type { WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import {
+  ThreadAutoCompactRules, type ThreadAutoCompactPatch, type ThreadAutoCompactSettings, type ThreadAutoCompactUpdate,
+} from "workbench-shared/workbench/settings/thread-auto-compact";
 
 export default class ThreadAutoCompactSettingsController {
   private snapshot = { settings: null as ThreadAutoCompactSettings | null, pending: true, error: "" };
@@ -13,10 +16,10 @@ export default class ThreadAutoCompactSettingsController {
   private readonly pending = new Set<Promise<void>>();
   /** Last daemon-acknowledged settings; `snapshot.settings` layers queued edits over it. */
   private confirmed: ThreadAutoCompactSettings | null = null;
-  private edits: Partial<ThreadAutoCompactSettings>[] = [];
+  private edits: ThreadAutoCompactUpdate[] = [];
   constructor(private readonly daemon: {
     read(): Promise<{ settings: ThreadAutoCompactSettings }>;
-    update(input: { settings: Partial<ThreadAutoCompactSettings> }): Promise<{ settings: ThreadAutoCompactSettings }>;
+    update(input: ThreadAutoCompactUpdate): Promise<{ settings: ThreadAutoCompactSettings }>;
   }) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.snapshot;
@@ -26,11 +29,11 @@ export default class ThreadAutoCompactSettingsController {
     this.edits = [];
     return this.enqueue(revision, () => this.daemon.read());
   }
-  update(settings: Partial<ThreadAutoCompactSettings>) {
+  update(provider: WorkbenchProviderKey, settings: ThreadAutoCompactPatch) {
     if (!this.active || !this.confirmed) return Promise.resolve();
-    const edit = { ...settings };
+    const edit = { provider, settings: { ...settings } };
     this.edits.push(edit);
-    return this.enqueue(this.revision, () => this.daemon.update({ settings }), edit);
+    return this.enqueue(this.revision, () => this.daemon.update(edit), edit);
   }
   dispose() { this.active = false; this.revision++; }
 
@@ -57,7 +60,11 @@ export default class ThreadAutoCompactSettingsController {
   }
 
   private publish() {
-    const settings = this.confirmed && Object.assign({}, this.confirmed, ...this.edits) as ThreadAutoCompactSettings;
+    // An edit the daemon would refuse shows nothing until its error arrives.
+    const settings = this.confirmed && this.edits.reduce((shown, { provider, settings: patch }) => {
+      try { return { ...shown, [provider]: ThreadAutoCompactRules.apply(shown[provider], patch) }; }
+      catch { return shown; }
+    }, this.confirmed);
     this.snapshot = { ...this.snapshot, settings, pending: this.pending.size > 0 };
     for (const listener of this.listeners) listener();
   }

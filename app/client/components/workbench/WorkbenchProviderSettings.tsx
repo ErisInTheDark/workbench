@@ -13,6 +13,7 @@ import {
 } from "workbench-shared/workbench/provider/provider-runtime";
 import ProviderAccountController, { type ProviderAccountState } from "../../workbench/ProviderAccountController";
 import { AccountName } from "../../workbench/account-name";
+import { providerLabels } from "../../workbench/provider-labels";
 import IconButton, { iconButtonClassName } from "../ui/IconButton";
 import PressDragMenu from "../ui/PressDragMenu";
 import PrimaryButton from "../ui/PrimaryButton";
@@ -22,7 +23,6 @@ import { KeyRoundIcon, KeyRoundOffIcon, MoreVerticalIcon, RefreshCwIcon } from "
 import WorkbenchSettingsStatusRow, { type WorkbenchSettingsStatusTone } from "./WorkbenchSettingsStatusRow";
 import WorkbenchAccountName from "./WorkbenchAccountName";
 
-const labels: Record<WorkbenchProviderKey, string> = { codex: "Codex", claude: "Claude Code", opencode: "OpenCode" };
 
 interface RowView { tone: WorkbenchSettingsStatusTone; status: string; detail: string }
 
@@ -37,7 +37,7 @@ function failureMessage(failure: unknown, fallback: string) {
 }
 
 function runtimeView(status: ProviderRuntimeStatus, installing: boolean): RowView & { action: string | null } {
-  const label = labels[status.provider];
+  const label = providerLabels[status.provider];
   if (installing || status.state === "installing") {
     return { tone: "pending", status: "Installing", detail: `Downloading ${label} ${status.version} onto this daemon...`, action: null };
   }
@@ -56,7 +56,7 @@ function runtimeView(status: ProviderRuntimeStatus, installing: boolean): RowVie
 }
 
 function accountView(provider: WorkbenchProviderKey, account: ProviderAccountState, runtime: ProviderRuntimeStatus | null): RowView {
-  const label = labels[provider];
+  const label = providerLabels[provider];
   const build = runtime ? ` · ${runtime.version}` : "";
   const primary = account.snapshot?.integrations.find(integration => integration.primary) ?? null;
   if (account.snapshot?.attempt?.state === "pending") {
@@ -156,7 +156,7 @@ function ProviderRow({ provider, runtime, installing, checking, account, control
   onRecheck: () => void;
 }) {
   const [keyTarget, setKeyTarget] = useState<ProviderKeyTarget | null>(null);
-  const label = labels[provider];
+  const label = providerLabels[provider];
   const runtimeReady = !runtime || (runtime.state === "ready" && !installing);
   const recheck = <IconButton display="hover-border" size="small" label={checking ? `Checking ${label}` : `Recheck ${label}`}
     disabled={checking} aria-busy={checking} onClick={onRecheck}>

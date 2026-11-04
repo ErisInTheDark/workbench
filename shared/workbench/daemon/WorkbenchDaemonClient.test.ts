@@ -13,7 +13,7 @@ test("auto-compact replies validate daemon thresholds without leaking rejected v
   const diagnostics: string[] = [];
   context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
   const client = new WorkbenchDaemonClient({
-    request: async <TResponse>() => ({ settings: { enabled: true, tokenThreshold: "private-value", idleMinutes: 30 } }) as TResponse,
+    request: async <TResponse>() => ({ settings: { claude: { enabled: true, idle: { tokenThreshold: "private-value", minutes: 30 }, turnEndTokenThreshold: 500_000 } } }) as TResponse,
   });
   await assert.rejects(client.threadAutoCompact.read());
   assert.equal(diagnostics.length, 1);

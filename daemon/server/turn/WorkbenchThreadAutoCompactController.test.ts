@@ -1,7 +1,7 @@
 /* Exports: none. Protect conjunctive idle compaction, message ordering, queued user messages, generation handoff, overlap and failures. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { THREAD_AUTO_COMPACT_DEFAULTS, type ThreadAutoCompactRules } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { ThreadPayload } from "workbench-shared/types";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type WorkbenchProvider from "../providers/WorkbenchProvider";
@@ -30,9 +30,9 @@ const compaction = {
 
 function fixture() {
   let now = 30 * 60_000;
-  let settings = { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS };
+  let rules: ThreadAutoCompactRules = { ...THREAD_AUTO_COMPACT_DEFAULTS.opencode };
   let evidence: ThreadAutoCompactEvidence | null = {
-    activityAt: 0, contextTokens: 200_000,
+    harness: "opencode", activityAt: 0, contextTokens: 200_000,
   };
   let active = false;
   let waitingOnInput = false;
@@ -50,7 +50,7 @@ function fixture() {
   const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
     readSettings: async () => {
       settingsReads += 1;
-      return settings;
+      return { ...THREAD_AUTO_COMPACT_DEFAULTS, opencode: rules };
     },
     readEvidence: async () => evidence,
     readRuntime: async () => ({
@@ -91,8 +91,15 @@ function fixture() {
     settingsReads: () => settingsReads,
     onPublication: (listener: () => void) => { publicationListener = listener; },
     now: (next: number) => { now = next; },
-    settings: (next: Partial<typeof settings>) => { settings = { ...settings, ...next }; },
-    evidence: (next: ThreadAutoCompactEvidence | null) => { evidence = next; },
+    settings: (next: { enabled?: boolean; idleMinutes?: number }) => {
+      rules = {
+        ...rules, enabled: next.enabled ?? rules.enabled,
+        idle: rules.idle && { ...rules.idle, minutes: next.idleMinutes ?? rules.idle.minutes },
+      };
+    },
+    evidence: (next: Omit<ThreadAutoCompactEvidence, "harness"> | null, harness: ThreadAutoCompactEvidence["harness"] = "opencode") => {
+      evidence = next && { harness, ...next };
+    },
     active: () => { active = true; },
     inactive: () => { active = false; },
     waitingOnInput: () => { waitingOnInput = true; },
@@ -111,6 +118,31 @@ test("inactive completed, failed and interrupted turns compact at both exact thr
     assert.deepEqual(f.calls, ["compact", "admit"]);
     await f.owner.dispose();
   }
+});
+
+test("a turn that ends over the turn-end threshold compacts before the next message without waiting for idle", async () => {
+  const f = fixture();
+  f.latest("completed");
+  f.evidence({ activityAt: 30 * 60_000, contextTokens: 500_000 });
+  assert.equal(await f.owner.observe({ harness: "opencode", threadId: "thread" }), true, "the composer learns at once");
+  assert.equal(await f.owner.run("thread", f.provider, f.admit), "started");
+  assert.deepEqual(f.calls, ["compact", "admit"]);
+  assert.equal(f.prefix.exactChecks, 0, "a due turn-end needs no prefix rebuild");
+  await f.owner.dispose();
+});
+
+test("a provider without an idle rule compacts only over its turn-end threshold, never on idle or a stale prefix", async () => {
+  const f = fixture();
+  f.now(10 * 60 * 60_000);
+  f.prefix.stale = true;
+  f.evidence({ activityAt: 0, contextTokens: 475_000 }, "codex");
+  await f.owner.run("thread", f.provider, f.admit);
+  assert.deepEqual(f.calls, ["admit"]);
+  f.inactive();
+  f.evidence({ activityAt: 0, contextTokens: 500_000 }, "codex");
+  await f.owner.run("thread", f.provider, f.admit);
+  assert.deepEqual(f.calls, ["admit", "compact", "admit"]);
+  await f.owner.dispose();
 });
 
 test("a stale prefix makes a recently active thread due, found exactly only by sends and remembered for observation", async () => {
@@ -180,7 +212,7 @@ test("a held questionnaire compacts before its answer, while a live one stays in
 test("observing many threads decides from supplied facts with one settings read and no per-thread port reads", async () => {
   let settingsReads = 0;
   const owner = new WorkbenchThreadAutoCompactController(new WorkbenchThreadAdmissionController(), compaction, {
-    readSettings: async () => { settingsReads += 1; return { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS }; },
+    readSettings: async () => { settingsReads += 1; return THREAD_AUTO_COMPACT_DEFAULTS; },
     readEvidence: async () => { throw new Error("Supplied evidence is never reread."); },
     readRuntime: async () => { throw new Error("Supplied runtime is never reread."); },
     publish: () => {},
@@ -191,9 +223,9 @@ test("observing many threads decides from supplied facts with one settings read 
   });
   const settled = { latestTurn: { id: "turn" }, status: "idle", turnLive: false };
   const decisions = await owner.observeMany([
-    { target: { harness: "claude", threadId: "due" }, evidence: { activityAt: 0, contextTokens: 200_000 }, runtime: settled },
-    { target: { harness: "claude", threadId: "small" }, evidence: { activityAt: 0, contextTokens: 10 }, runtime: settled },
-    { target: { harness: "claude", threadId: "live" }, evidence: { activityAt: 0, contextTokens: 200_000 },
+    { target: { harness: "opencode", threadId: "due" }, evidence: { harness: "opencode", activityAt: 0, contextTokens: 200_000 }, runtime: settled },
+    { target: { harness: "opencode", threadId: "small" }, evidence: { harness: "opencode", activityAt: 0, contextTokens: 10 }, runtime: settled },
+    { target: { harness: "opencode", threadId: "live" }, evidence: { harness: "opencode", activityAt: 0, contextTokens: 200_000 },
       runtime: { ...settled, status: "active", turnLive: true } },
   ]);
   assert.deepEqual(Object.fromEntries(decisions), { due: true, small: false, live: false });
@@ -364,8 +396,8 @@ function queueFixture(due = true) {
     now: () => 1,
   });
   const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
-    readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
-    readEvidence: async () => ({ activityAt: 0, contextTokens: due ? 200_000 : 0 }),
+    readSettings: async () => THREAD_AUTO_COMPACT_DEFAULTS,
+    readEvidence: async () => ({ harness: "opencode", activityAt: 0, contextTokens: due ? 200_000 : 0 }),
     readRuntime: async () => ({ latestTurn: null, status: "idle", turnLive: false }),
     publish: () => {},
     now: () => 30 * 60_000,
@@ -426,8 +458,8 @@ test("a queued message cut off by a generation swap is delivered by the replacem
       ...(handoff ? { handoff } : {}),
     });
     const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
-      readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
-      readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+      readSettings: async () => THREAD_AUTO_COMPACT_DEFAULTS,
+      readEvidence: async () => ({ harness: "opencode", activityAt: 0, contextTokens: 200_000 }),
       readRuntime: async () => ({ latestTurn: null, status: "idle", turnLive: false }),
       publish: () => {},
       now: () => 30 * 60_000,

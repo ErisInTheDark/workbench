@@ -5,24 +5,28 @@ import path from "node:path";
 import { test } from "node:test";
 import WorkbenchServerSettings from "./WorkbenchServerSettings.ts";
 import WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController.ts";
-import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { THREAD_AUTO_COMPACT_DEFAULTS } from "workbench-shared/workbench/settings/thread-auto-compact";
 
-test("daemon compaction thresholds merge independent edits and persist while disabled across reopen", async () => {
+test("per-provider compaction rules merge independent edits, leave other providers on defaults, and persist across reopen", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-auto-compact-");
   const options = { databasePath: path.join(temporary.path, "workbench.sqlite3") };
   let database = new WorkbenchDatabaseController(options);
   try {
     const settings = new WorkbenchServerSettings(database);
-    assert.deepEqual(await settings.readThreadAutoCompact(), DEFAULT_THREAD_AUTO_COMPACT_SETTINGS);
+    assert.deepEqual(await settings.readThreadAutoCompact(), THREAD_AUTO_COMPACT_DEFAULTS);
     await Promise.all([
-      settings.updateThreadAutoCompact({ tokenThreshold: 250_000 }),
-      settings.updateThreadAutoCompact({ idleMinutes: 40 }),
-      settings.updateThreadAutoCompact({ enabled: false }),
+      settings.updateThreadAutoCompact("claude", { tokenThreshold: 250_000 }),
+      settings.updateThreadAutoCompact("claude", { idleMinutes: 40 }),
+      settings.updateThreadAutoCompact("claude", { enabled: false }),
+      settings.updateThreadAutoCompact("codex", { turnEndTokenThreshold: 300_000 }),
     ]);
+    await assert.rejects(settings.updateThreadAutoCompact("codex", { idleMinutes: 30 }), /no idle compaction rule/);
     await database.close();
     database = new WorkbenchDatabaseController(options);
     assert.deepEqual(await new WorkbenchServerSettings(database).readThreadAutoCompact(), {
-      enabled: false, tokenThreshold: 250_000, idleMinutes: 40,
+      ...THREAD_AUTO_COMPACT_DEFAULTS,
+      claude: { enabled: false, idle: { tokenThreshold: 250_000, minutes: 40 }, turnEndTokenThreshold: 500_000 },
+      codex: { ...THREAD_AUTO_COMPACT_DEFAULTS.codex, turnEndTokenThreshold: 300_000 },
     });
   } finally {
     await database.close();

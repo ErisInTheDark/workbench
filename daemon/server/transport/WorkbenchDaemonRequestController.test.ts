@@ -16,6 +16,7 @@ import WorkbenchThreadStateStore from "../thread/WorkbenchThreadStateStore.ts";
 import WorkbenchThreadStateRelationalRepository from "../database/thread-state/WorkbenchThreadStateRelationalRepository.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import { THREAD_AUTO_COMPACT_DEFAULTS, ThreadAutoCompactRules } from "workbench-shared/workbench/settings/thread-auto-compact";
 
 test("installation request registrations survive rollback and never revive retired generations", async () => {
   const { controller } = createController();
@@ -268,8 +269,10 @@ function createController(options: {
     settings: {
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
       updateLocalCapabilities: async (update) => update({ browseRawCommandsEnabled: false }),
-      readThreadAutoCompact: async () => ({ enabled: true, tokenThreshold: 200_000, idleMinutes: 30 }),
-      updateThreadAutoCompact: async edit => ({ enabled: true, tokenThreshold: 200_000, idleMinutes: 30, ...edit }),
+      readThreadAutoCompact: async () => THREAD_AUTO_COMPACT_DEFAULTS,
+      updateThreadAutoCompact: async (provider, edit) => ({
+        ...THREAD_AUTO_COMPACT_DEFAULTS, [provider]: ThreadAutoCompactRules.apply(THREAD_AUTO_COMPACT_DEFAULTS[provider], edit),
+      }),
     },
   });
   return {
@@ -770,16 +773,23 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
   });
 }
 
-test("auto-compact settings dispatch accepts daemon-wide field edits and rejects invalid increments", async () => {
+test("auto-compact settings dispatch accepts one provider's field edits and rejects invalid increments or providers", async () => {
   const { controller, autoCompactRefreshes } = createController();
   assert.deepEqual((await controller.handle({ id: 1, method: "thread-auto-compact/read", params: {} })).result,
-    { settings: { enabled: true, tokenThreshold: 200_000, idleMinutes: 30 } });
+    { settings: THREAD_AUTO_COMPACT_DEFAULTS });
   assert.deepEqual((await controller.handle({ id: 2, method: "thread-auto-compact/update", params: {
-    settings: { enabled: false, idleMinutes: 40 },
-  } })).result, { settings: { enabled: false, tokenThreshold: 200_000, idleMinutes: 40 } });
+    provider: "opencode", settings: { enabled: false, idleMinutes: 40 },
+  } })).result, { settings: {
+    ...THREAD_AUTO_COMPACT_DEFAULTS,
+    opencode: { ...THREAD_AUTO_COMPACT_DEFAULTS.opencode, enabled: false, idle: { tokenThreshold: 200_000, minutes: 40 } },
+  } });
   assert.equal(autoCompactRefreshes(), 1);
+  const unknown = await controller.handle({ id: 4, method: "thread-auto-compact/update", params: {
+    provider: "copilot", settings: { enabled: false },
+  } });
+  assert.equal(unknown.error?.code, -32602);
   const rejected = await controller.handle({ id: 3, method: "thread-auto-compact/update", params: {
-    settings: { tokenThreshold: 200_001 },
+    provider: "claude", settings: { tokenThreshold: 200_001 },
   } });
   assert.equal(rejected.error?.code, -32602);
   assert.equal(autoCompactRefreshes(), 1);

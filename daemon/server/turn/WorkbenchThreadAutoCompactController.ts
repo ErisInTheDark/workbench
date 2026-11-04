@@ -1,15 +1,16 @@
 /*
  * Exports:
- * - ThreadAutoCompactEvidence: canonical activity and current-context measurement.
+ * - ThreadAutoCompactEvidence: the thread's provider, canonical activity and current-context measurement.
  * - ThreadAutoCompactTarget: observed thread identity for status publication.
  * - ThreadAutoCompactRuntime: latest turn, status and liveness a decision weighs.
  * - AutoCompactAdmissionOptions/AutoCompactDueError: a send's compaction policy and expectation, and the bounce when it expected none.
  * - QueuedMessageDelivery: admit one message directly, or inside the admission whose ticket it carries.
- * - default WorkbenchThreadAutoCompactController: own observed eligibility (singly or from batched facts; idle or stale-prefix due) and
+ * - default WorkbenchThreadAutoCompactController: own observed eligibility (singly or from batched facts; turn-end, idle or stale-prefix due) and
  *   compact-before-message policy, including held questionnaire answers, user messages queued behind compaction, queues handed over by a
  *   retiring generation, and bouncing sends that expected no compaction.
  */
-import type { ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { ThreadAutoCompactRules, type ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   WorkbenchThreadMessageResult, WorkbenchThreadMessageSubmitResult,
@@ -23,6 +24,8 @@ import { hasThreadActiveFlag, isThreadStatusActive } from "workbench-shared/work
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
 export interface ThreadAutoCompactEvidence {
+  /** Picks the provider's rules; a provider without rules never compacts. */
+  harness: WorkbenchHarness;
   activityAt: number;
   contextTokens: number | null;
 }
@@ -293,17 +296,16 @@ export default class WorkbenchThreadAutoCompactController {
     const signal = this.lifetime.signal;
     signal.throwIfAborted();
     const settings = facts?.settings ?? await this.ports.readSettings();
-    const evidence = !settings.enabled ? null : facts ? facts.evidence : await this.ports.readEvidence(threadId);
+    const evidence = facts ? facts.evidence : await this.ports.readEvidence(threadId);
     signal.throwIfAborted();
-    if (!evidence || evidence.contextTokens === null || evidence.contextTokens < settings.tokenThreshold) {
-      return { dueAt: null, willAutoCompact: false };
-    }
-    const idleDueAt = evidence.activityAt + settings.idleMinutes * 60_000;
+    const providerKey = evidence && installedProviderKeys.find(key => key === evidence.harness);
+    const timing = evidence ? ThreadAutoCompactRules.timing(providerKey ? settings[providerKey] : undefined, evidence) : null;
+    if (!evidence || !timing) return { dueAt: null, willAutoCompact: false };
     // A prefix that changed since the last build misses the provider's cache just like an expired one.
-    const stale = this.ports.now() < idleDueAt
+    const stale = timing.rule === "idle" && this.ports.now() < timing.dueAt
       && (checkPrefix ? await this.ports.prefixStale?.(threadId) ?? false : this.ports.knownPrefixStale?.(threadId) ?? false);
     signal.throwIfAborted();
-    const dueAt = stale ? evidence.activityAt : idleDueAt;
+    const dueAt = stale ? evidence.activityAt : timing.dueAt;
     if (this.ports.now() < dueAt) return { dueAt, willAutoCompact: false };
     const target = this.observed.get(threadId)?.target;
     const runtime = facts ? facts.runtime : provider

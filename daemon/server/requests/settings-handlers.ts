@@ -10,7 +10,7 @@ import {
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
-import { ThreadAutoCompactSettingsPatchSchema } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { ThreadAutoCompactUpdateSchema } from "workbench-shared/workbench/settings/thread-auto-compact";
 import { isSelectableContextWindow } from "workbench-shared/workbench/thread/thread-profile";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
@@ -122,9 +122,9 @@ export const settingsRequestHandlers = defineDaemonRequestHandlers({
   },
   "thread-auto-compact/read": async (_params, { owners }) => ({ settings: await owners.settings.readThreadAutoCompact() }),
   "thread-auto-compact/update": async (params, { owners }) => {
-    const edit = ThreadAutoCompactSettingsPatchSchema.safeParse(params.settings);
+    const edit = ThreadAutoCompactUpdateSchema.safeParse(params);
     if (!edit.success) throw new InvalidParamsError("Invalid auto-compact settings.");
-    const settings = await owners.settings.updateThreadAutoCompact(edit.data);
+    const settings = await owners.settings.updateThreadAutoCompact(edit.data.provider, edit.data.settings);
     await owners.autoCompact?.refreshObserved();
     return { settings };
   },

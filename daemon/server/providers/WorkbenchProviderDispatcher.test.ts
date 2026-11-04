@@ -14,7 +14,7 @@ import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchToolTranscriptReference } from "./provider-execution";
 import WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCompactController";
 import WorkbenchThreadAdmissionController from "../thread/WorkbenchThreadAdmissionController";
-import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { THREAD_AUTO_COMPACT_DEFAULTS } from "workbench-shared/workbench/settings/thread-auto-compact";
 import WorkbenchMessageWaitController from "../agent/WorkbenchMessageWaitController";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
 import { listWorkbenchAgentCommands } from "../lib/workbench/commands/workbench-agent-command-registry";
@@ -150,8 +150,8 @@ test("user and agent messages on every provider share compact-before-start admis
       } } as unknown as WorkbenchProvider;
       const admission = new WorkbenchThreadAdmissionController();
       const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
-        readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
-        readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+        readSettings: async () => THREAD_AUTO_COMPACT_DEFAULTS,
+        readEvidence: async () => ({ harness: "opencode", activityAt: 0, contextTokens: 200_000 }),
         readRuntime: async () => ({ latestTurn: { id: "previous" }, status: active ? "active" : "idle", turnLive: active }),
         publish: () => {},
         now: () => 30 * 60_000,
@@ -196,8 +196,8 @@ test("user bypass skips Workbench compaction and is stripped before provider sub
   } } as unknown as WorkbenchProvider;
   const admission = new WorkbenchThreadAdmissionController();
   const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
-    readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
-    readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+    readSettings: async () => THREAD_AUTO_COMPACT_DEFAULTS,
+    readEvidence: async () => ({ harness: "opencode", activityAt: 0, contextTokens: 200_000 }),
     readRuntime: async () => ({ latestTurn: { id: "previous" }, status: "idle", turnLive: false }),
     publish: () => {},
     now: () => 30 * 60_000,
@@ -235,8 +235,8 @@ test("a compaction queue's delivery admits inside the admission its compaction h
   } } as unknown as WorkbenchProvider;
   const admission = new WorkbenchThreadAdmissionController();
   const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
-    readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
-    readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+    readSettings: async () => THREAD_AUTO_COMPACT_DEFAULTS,
+    readEvidence: async () => ({ harness: "opencode", activityAt: 0, contextTokens: 200_000 }),
     readRuntime: async () => ({ latestTurn: { id: "previous" }, status: "idle", turnLive: false }),
     publish: () => {},
     now: () => 30 * 60_000,
