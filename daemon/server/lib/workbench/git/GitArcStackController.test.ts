@@ -450,15 +450,26 @@ test("arc tree and held-path composition and mirroring stop once their caller di
   await assert.rejects(fs.access(out), "nothing is mirrored for a departed caller");
 });
 
-test("held-path contents are the view's bytes, null where another thread created the file, and only on request", async () => {
+test("held paths cover other threads' whole claims at the view's bytes, before and after those threads edit them", async () => {
   const { cwd, git } = branch("stacked");
-  await controller.editArcClaims({ cwd, threadId: "other", inherit: true, addPaths: ["fresh.txt"] });
+  await fs.mkdir(path.join(cwd, "empty-folder"));
+  await controller.editArcClaims({ cwd, threadId: "other", inherit: true, addPaths: ["empty-folder", "fresh.txt", "planned.txt"] });
+  const read = async () => await controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: true });
+  const expected = {
+    "fresh.txt": null,
+    "planned.txt": null,
+    "two.txt": Buffer.from(await git("show", "HEAD:two.txt")).toString("base64"),
+  };
+  const clean = await read();
+  assert.deepEqual(clean.contents, expected, "clean and not-yet-created claims hold, while a folder on disk stays readable");
   await fs.writeFile(path.join(cwd, "two.txt"), "other edit\n");
   await fs.writeFile(path.join(cwd, "fresh.txt"), "new\n");
-  const held = await controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: true });
-  assert.deepEqual(held.contents, {
-    "fresh.txt": null,
-    "two.txt": Buffer.from(await git("show", "HEAD:two.txt")).toString("base64"),
-  });
+  assert.deepEqual((await read()).contents, expected, "editing a claim changes nothing the caller's build reads");
+  const listed = (held: ReadonlyArray<{ paths: string[] }>) => held.flatMap(({ paths }) => paths).sort();
+  assert.deepEqual(
+    listed((await controller.readClaimView({ cwd, threadId: "owner", holdOwn: false })).held),
+    listed(clean.held),
+    "arc trees list the same held paths",
+  );
   assert.equal((await controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: false })).contents, undefined);
 });

@@ -39,7 +39,7 @@
 - Proposal waits target one owned ID or every proposal pending when an all-target wait attaches. They complete only after every target commits, fail when any target becomes terminal without committing, and wake from Git arc mutations without polling.
 - Arc tree and held-path composition and mirroring stop once their caller disconnects.
 - Held-path reads list exactly an arc tree's held paths, and their baseline holds the arc tree's bytes there, without snapshotting the worktree.
-- Arc trees hold other threads' live claims at HEAD plus the caller's own or inherited sealed layers, never those threads' unrelated sealed layers.
+- Arc trees hold every file of other threads' live claims, clean and planned new files included, at HEAD plus the caller's own or inherited sealed layers, never those threads' unrelated sealed layers.
 - Stacking rewrites pending content amends into fresh-commit proposals over their live base and paths, using their fresh message; message-only amends stay unsealed. Sealed proposals never rewrite history.
 - Stash creation and restoration reject while any pending stack layer shapes the thread baseline; stacking rejects while saved work exists. Saved work may transfer onto inherited pending layers, but not onto recipient-owned pending layers.
 - Agent file edits and removals reject paths in the owner's unsealed pending proposals; stacking or rescinding unblocks them. Amend on a rescinded proposal revives it over current work and supersedes the original.

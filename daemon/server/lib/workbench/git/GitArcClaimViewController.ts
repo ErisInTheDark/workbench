@@ -2,9 +2,9 @@
  * Exports:
  * - GitArcClaimViewInput: owner and hold-own choice for a build view.
  * - GitArcHeldPathsInput: that choice plus whether held paths' view bytes are read too.
- * - default GitArcClaimViewController: write the worktree as one owner builds it (every other live owner's dirty claims at
- *   HEAD plus the caller's own or inherited sealed layers, written through one index); list just those held paths and
- *   the baseline holding their view bytes (with those bytes as a checkout writes them on request), diffing only
+ * - default GitArcClaimViewController: write the worktree as one owner builds it (every file of other live owners' claims
+ *   at HEAD plus the caller's own or inherited sealed layers, written through one index); list just those held paths
+ *   and the baseline holding their view bytes (with those bytes as a checkout writes them on request), diffing only
  *   claimed paths; and mirror selected paths of a view into an
  *   ignored directory, checking out only files whose content differs and removing only files its own record says it
  *   wrote. All stop once the caller's signal aborts.
@@ -146,11 +146,10 @@ export default class GitArcClaimViewController {
         this.readOwners(repository, input),
       ]);
       input.signal?.throwIfAborted();
-      // Held paths are exactly the claimed paths that differ from the caller's baseline.
       const { changedPaths, tree } = await repository.writeTreeWithPathSources(
         snapshot.tree, owners.map(({ claimed }) => ({ paths: claimed, source: baseline })),
       );
-      const held = owners.flatMap(({ threadId }, index) => changedPaths[index]!.length ? [{ paths: changedPaths[index]!, threadId }] : []);
+      const held = await this.heldFiles(repository, baseline, owners, changedPaths.flat());
       return { head: snapshot.head, held, repoRoot: repository.root, tree };
     });
   }
@@ -164,17 +163,37 @@ export default class GitArcClaimViewController {
       const claimed = [...new Set(owners.flatMap(({ claimed }) => claimed))];
       input.signal?.throwIfAborted();
       const changed = claimed.length ? await repository.listWorktreeChangedPaths(baseline, claimed, input.signal) : [];
-      const held = owners.flatMap(({ claimed: scopes, threadId }) => {
-        const scope = new GitArcPathSet(scopes);
-        const paths = changed.filter(candidate => scope.covers(candidate));
-        return paths.length ? [{ paths, threadId }] : [];
-      });
+      const held = await this.heldFiles(repository, baseline, owners, changed);
       const tree = await repository.resolveTree(baseline);
       const paths = [...new Set(held.flatMap(({ paths }) => paths))];
       return {
         baseline: tree, head, held, repoRoot: repository.root,
         ...input.contents ? { contents: await this.readContents(repository, tree, paths, input.signal) } : {},
       };
+    });
+  }
+
+  /**
+   * A claim announces intent to edit, so clean claims hold too: builds reading disk must not see edits made after this
+   * read. Claims with no file yet are planned new files; links and empty folders exist on disk and stay readable there.
+   */
+  private async heldFiles(
+    repository: WorkbenchGitRepository,
+    baseline: string | null,
+    owners: ReadonlyArray<{ claimed: string[]; threadId: string }>,
+    changed: readonly string[],
+  ) {
+    const claimed = [...new Set(owners.flatMap(({ claimed }) => claimed))];
+    if (!claimed.length) return [];
+    const known = new GitArcPathSet([...await repository.listTreePaths(baseline, claimed), ...changed]);
+    const planned = await Promise.all(claimed.filter(claim => !known.overlaps(claim)).map(async claim => (
+      await lstatOrNull(repository.resolvePath(claim)) ? [] : [claim]
+    )));
+    const files = [...known.values(), ...planned.flat()];
+    return owners.flatMap(({ claimed: scopes, threadId }) => {
+      const scope = new GitArcPathSet(scopes);
+      const paths = files.filter(file => scope.covers(file));
+      return paths.length ? [{ paths, threadId }] : [];
     });
   }
 

@@ -594,7 +594,7 @@ const tree = defineWorkbenchAgentCommand({
 });
 
 const held = defineWorkbenchAgentCommand({
-  description: "Print JSON with the paths `wb git arc tree` holds (other live threads' claimed changes) and a baseline tree whose bytes at those paths match the caller's view, without composing the view. --contents adds `contents`: each held path's bytes as a checkout writes them (base64), null when absent in the view. --hold-own holds the caller's back too.",
+  description: "Print JSON with the paths `wb git arc tree` holds (other live threads' claimed files, clean ones included) and a baseline tree whose bytes at those paths match the caller's view, without composing the view. --contents adds `contents`: each held path's bytes as a checkout writes them (base64), null when absent in the view. --hold-own holds the caller's back too.",
   effects: { idempotent: true },
   helpGroups: ["git-arc"],
   mcpDeferred: true,
