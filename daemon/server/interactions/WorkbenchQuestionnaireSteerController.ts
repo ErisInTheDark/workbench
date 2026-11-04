@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - joinUserInputs: join messages into one input, adjacent text separated by a blank line.
- * - default WorkbenchQuestionnaireSteerController: own virtual steers: hold messages sent while a held questionnaire's turn is not live, hand them to the answer's continuation, and release them undelivered once no questionnaire waits.
+ * - default WorkbenchQuestionnaireSteerController: own virtual steers: report when a held questionnaire's turn is not live, hold messages sent meanwhile, hand them to the answer's continuation, and release them undelivered once no questionnaire waits.
  */
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import {
@@ -57,12 +57,26 @@ export default class WorkbenchQuestionnaireSteerController {
     warn(message: string): void;
   }) {}
 
+  /**
+   * True while only an answer can continue the thread. Callers inside the thread's admission use this: it stays off the
+   * per-thread chain, because an answer holds that chain while waiting for the same admission.
+   */
+  async awaitsAnswer(threadId: string) {
+    return Boolean(await this.heldTurn(threadId));
+  }
+
+  /** The ended turn a pending questionnaire outlived, if any. */
+  private async heldTurn(threadId: string) {
+    if (!await this.ports.hasPendingQuestionnaire(threadId)) return null;
+    const turn = await this.ports.latestTurn(threadId);
+    return turn && !turn.live ? turn : null;
+  }
+
   /** True when the message became a virtual steer instead of provider input. */
   hold(threadId: string, message: QueuedThreadMessage) {
     return this.serial(threadId, async () => {
-      if (!await this.ports.hasPendingQuestionnaire(threadId)) return false;
-      const turn = await this.ports.latestTurn(threadId);
-      if (!turn || turn.live) return false;
+      const turn = await this.heldTurn(threadId);
+      if (!turn) return false;
       const turnId = turn.id;
       const pending = (await this.ports.readSteers(threadId)).filter(entry => entry.status === "pending");
       const now = this.ports.now();

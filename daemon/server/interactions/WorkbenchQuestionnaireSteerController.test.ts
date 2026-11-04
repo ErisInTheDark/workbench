@@ -48,6 +48,19 @@ test("messages become virtual steers only while a held questionnaire's turn is n
   assert.deepEqual([...live.steers, ...noQuestion.steers], []);
 });
 
+test("a questionnaire awaits its answer only while its turn is not live, and asking never queues behind an answer in flight", async () => {
+  const held = setup();
+  assert.equal(await held.controller.awaitsAnswer("thread"), true);
+  assert.equal(await setup({ live: true }).controller.awaitsAnswer("thread"), false);
+  assert.equal(await setup({ questionnaire: false }).controller.awaitsAnswer("thread"), false);
+
+  const admitted = Promise.withResolvers<void>();
+  const answer = held.controller.deliverWith("thread", async () => { await admitted.promise; });
+  assert.equal(await held.controller.awaitsAnswer("thread"), true, "the answer's admission waits on the lane this asker holds");
+  admitted.resolve();
+  await answer;
+});
+
 test("the answer's continuation carries virtual steers in send order and retires them once accepted", async () => {
   const { controller, steers, message } = setup();
   await controller.hold("thread",message("a", "first"));

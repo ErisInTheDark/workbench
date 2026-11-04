@@ -3,7 +3,7 @@
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
  * - default WorkbenchThreadMessageController: own message admission (including messages to and from threads on other daemons), Workbench
  *   notices, sender lookup, message waits and their undelivered mail, parent questionnaire settlement, holding messages for users whose
- *   sidebar thread is due to compact, and reload drain.
+ *   sidebar thread is due to compact or awaits a questionnaire answer, and reload drain.
  */
 import type {
   WorkbenchHarness,
@@ -70,7 +70,7 @@ export interface WorkbenchThreadMessageControllerOptions {
   };
 }
 
-/** What the sender learns: `held` when its message waits for the target's user instead of compacting their thread. */
+/** What the sender learns: `held` when its message waits for the target's user instead of compacting their thread or dropping its questionnaire. */
 type WorkbenchThreadMessageSendResult = { held?: true };
 
 /** Names no workflow, so the child keeps the one it was created with. */
@@ -159,6 +159,7 @@ export default class WorkbenchThreadMessageController {
     if (!this.active) return Promise.reject(new Error("Thread message controller is draining for runtime reload."));
     const operation = (async () => {
       const target = await this.resolveThread(input.threadId, "Workbench notice target");
+      const entry = await this.options.threadState.getEntry(target.projectId, target.harness, target.threadId);
       await this.options.provider(target.harness).threads.messageAgent({
         cwd: target.thread.cwd,
         threadId: target.threadId,
@@ -168,6 +169,7 @@ export default class WorkbenchThreadMessageController {
           senderThreadId: input.senderThreadId,
           userVisibleSimpleVersion: input.userVisibleSimpleVersion,
         },
+        ...(entry?.entryKind === "thread" ? { holdForUser: true } : {}),
       });
     })();
     this.requests.add(operation);
@@ -325,7 +327,8 @@ export default class WorkbenchThreadMessageController {
 
   /**
    * Delivers one attributed message; a parent's message also settles its child's held questionnaire. A user's sidebar
-   * thread is never compacted by an agent: when compaction is due the message is held for the user's next turn.
+   * thread is never compacted by an agent, nor its held questionnaire dropped: the message is held for the user's next
+   * turn instead.
    */
   private async admit(
     target: Awaited<ReturnType<WorkbenchThreadMessageController["resolveThread"]>>,

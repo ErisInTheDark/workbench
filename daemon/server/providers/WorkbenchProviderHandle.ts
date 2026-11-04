@@ -6,7 +6,8 @@
  * - WorkbenchProviderHandleOptions: post-admission hooks, agent-message holds, instruction selection, native relocation and shared message admission policy.
  * - default WorkbenchProviderHandle: forward operations through the current definition lease, move a merged thread's native session
  *   before its next turn or compaction, supply thread instruction selections, admit compaction-queue deliveries inside their
- *   compaction's admission, hold agent messages for the user instead of compacting, and wake waits after accepted steers.
+ *   compaction's admission, hold agent messages for the user instead of compacting or dropping their held questionnaire, and wake waits
+ *   after accepted steers.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
@@ -52,6 +53,8 @@ export interface WorkbenchProviderHandleOptions {
   onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void;
   /** Inside the thread's admission: keep a held agent message for its user's next running turn. */
   holdAgentMessage?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void>;
+  /** Inside the thread's admission: a started turn would drop a questionnaire that only an answer can continue. */
+  awaitsQuestionnaireAnswer?: (threadId: string) => Promise<boolean>;
   onMessageAdmitted?: (admission: WorkbenchProviderMessageAdmission) => Promise<void> | void;
 }
 
@@ -203,10 +206,15 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     submit: input => this.submitUserMessage(input, { skipAutoCompact: input.skipAutoCompact, expectAutoCompact: input.expectAutoCompact }),
     messageAgent: async ({ holdForUser, ...input }) => {
       const hold = holdForUser && this.options.holdAgentMessage;
+      const holdMessage = hold
+        ? async (): Promise<WorkbenchAgentMessageResult> => { await hold(input.threadId, input.message); return { kind: "held" }; }
+        : undefined;
       const result: WorkbenchAgentMessageResult = await this.run(providerRegistrations[this.key], provider => this.admitMessage<WorkbenchAgentMessageResult>(
         input.threadId, provider,
-        () => this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) })),
-        hold ? { hold: async () => { await hold(input.threadId, input.message); return { kind: "held" }; } } : undefined,
+        async () => holdMessage && await this.options.awaitsQuestionnaireAnswer?.(input.threadId)
+          ? await holdMessage()
+          : await this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) })),
+        holdMessage ? { hold: holdMessage } : undefined,
       ), `${this.key}: threads.messageAgent`);
       if (result.kind === "held") return result;
       // A message that starts a turn is that turn's prompt, so the model already has it.

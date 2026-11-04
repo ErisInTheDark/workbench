@@ -33,6 +33,7 @@ export default class WorkbenchProviderDispatcher {
       messageAdmission: this.options.messageAdmission,
       onAgentMessageAdmitted: this.options.onAgentMessageAdmitted,
       holdAgentMessage: this.options.holdAgentMessage,
+      awaitsQuestionnaireAnswer: this.options.awaitsQuestionnaireAnswer,
       onMessageAdmitted: this.options.onMessageAdmitted,
     });
   }

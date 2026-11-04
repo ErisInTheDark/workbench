@@ -195,6 +195,7 @@ function createWorkbenchCoreFeature(
       "messages", owner => { owner.receive(threadId, message); }, "agent message admission",
     ),
     holdAgentMessage: async (threadId, message) => await threadActions.holdAgentMessage(threadId, message),
+    awaitsQuestionnaireAnswer: async threadId => await interactions.questionnaireSteers.awaitsAnswer(threadId),
     onMessageAdmitted: async admitted => {
       const identity = await threadIdentity.resolve({
         harness: admitted.harness,

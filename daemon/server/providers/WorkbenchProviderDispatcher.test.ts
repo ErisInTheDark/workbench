@@ -37,6 +37,36 @@ const compaction = {
   retireStranded: async () => {},
 };
 
+test("an agent message to a sidebar thread awaiting a questionnaire answer is held inside admission instead of starting a turn", async () => {
+  const threadId = WorkbenchThreadIdSchema.parse("questionnaire-thread");
+  const send = async ({ awaiting, holdForUser }: { awaiting: boolean; holdForUser: boolean }) => {
+    const effects: string[] = [];
+    let inAdmission = false;
+    const provider = { threads: {
+      messageAgent: async () => { effects.push("provider"); return { kind: "started", turnId: "turn" }; },
+    } } as unknown as WorkbenchProvider;
+    const dispatcher = new WorkbenchProviderDispatcher(async (_definition, operation) => operation(provider), {
+      messageAdmission: async (_thread, _provider, admit) => {
+        inAdmission = true;
+        try { return await admit(); } finally { inAdmission = false; }
+      },
+      awaitsQuestionnaireAnswer: async () => { assert.equal(inAdmission, true); return awaiting; },
+      holdAgentMessage: async () => { effects.push("hold"); },
+      onMessageAdmitted: () => { effects.push("admitted"); },
+    });
+    const result = await dispatcher.get("claude").threads.messageAgent({
+      threadId, cwd: "C:/repo", message: { senderThreadId: "sender", senderName: "clover", message: "hello" },
+      ...(holdForUser ? { holdForUser } : {}),
+    });
+    return { kind: result.kind, effects };
+  };
+
+  assert.deepEqual(await send({ awaiting: true, holdForUser: true }), { kind: "held", effects: ["hold"] });
+  assert.deepEqual(await send({ awaiting: false, holdForUser: true }), { kind: "started", effects: ["provider", "admitted"] });
+  assert.deepEqual(await send({ awaiting: true, holdForUser: false }), { kind: "started", effects: ["provider", "admitted"] },
+    "a subagent's question ends only when its parent's message settles it");
+});
+
 test("accepted agent messages wake matching message waits and end others without registry cancellation, while user steers still cancel", async () => {
   const definition = listWorkbenchAgentCommands().find(command => getWorkbenchAgentCommandToolName(command) === "message_wait");
   assert.ok(definition);

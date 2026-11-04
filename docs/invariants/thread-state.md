@@ -16,7 +16,7 @@
 - Thread activity time advances only when the canonical transcript admits a new thread item, to that item's observed time. Providers and lifecycle transitions never set it.
 - A dependent-snooze source owns its target set; targets may live on any daemon. Target readiness removes one membership. Only an empty set wakes the source. Unreachable targets keep waiting.
 - A thread has one live turn: admitting a turn settles earlier unsettled turns, and their undelivered agent-message steers resend into the new turn.
-- Agent messages never compact a sidebar thread: when compaction is due they are held pending and the send succeeds; a completed thread needs attention; the holds steer its next running turn.
+- Agent messages never compact a sidebar thread or start a turn over its held questionnaire: when compaction is due or a questionnaire's turn is not live they are held pending and the send succeeds; a completed thread needs attention; the holds steer its next running turn.
 - Before a thread first enters a declared mode, only thread_state, recall and messaging tools run. After a completed compaction, edits and entering checklist-gated modes wait until an unfiltered own-thread recall and the compaction checklist follow it.
 - A thread's workflow selection is recorded at creation; messages without `workflowIds` keep it. Cross-folder subagents start on the default workflow.
 - Promotion is one-way and owned by the child's daemon: an unsettled subagent becomes a top-level thread, its parent relationship ends, and a former remote parent stays in its network history.

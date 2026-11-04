@@ -476,6 +476,17 @@ test("messages to a user's sidebar thread hold instead of compacting it, and rep
   await idle.controller.dispose();
 });
 
+test("queue notices follow the same hold policy: sidebar threads hold, subagents do not", async () => {
+  const { calls, controller } = fixture();
+  const notice = { senderThreadId: identitySchemas.WorkbenchThreadIdSchema.parse("reviewer"), senderName: "queue", message: "Your turn.", userVisibleSimpleVersion: "Your turn." };
+  await controller.sendNotice({ ...notice, threadId: identitySchemas.WorkbenchThreadIdSchema.parse("reviewer") });
+  await controller.sendNotice({ ...notice, threadId: identitySchemas.WorkbenchThreadIdSchema.parse("child") });
+  const [sidebar, child] = calls.map(call => call.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0]);
+  assert.equal(sidebar?.holdForUser, true);
+  assert.equal(child?.holdForUser, undefined);
+  await controller.dispose();
+});
+
 test("subagents reach unsettled siblings by name without reaching other parents' children", async () => {
   const sibling = fixture({ withSibling: true });
   await sibling.controller.send({ callerThreadId: "child", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message: "Peer note.", name: "NOVA" });

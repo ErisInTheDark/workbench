@@ -66,14 +66,14 @@ export interface WorkbenchAgentMessageAdmission {
   kind: "started" | "steered";
   turnId: string;
 }
-/** An agent message's outcome: admitted, or held for its user's next turn because compaction was due. */
+/** An agent message's outcome: admitted, or held for its user's next turn because compaction was due or a questionnaire awaits its answer. */
 export type WorkbenchAgentMessageResult = WorkbenchAgentMessageAdmission | { kind: "held" };
 export interface WorkbenchAgentMessageInput {
   threadId: string;
   cwd: string;
   message: WorkbenchAgentMessage;
   context?: WorkbenchMessageContext;
-  /** Workbench admission policy, never seen by providers: a due compaction holds the message instead of running. */
+  /** Workbench admission policy, never seen by providers: a due compaction or a questionnaire awaiting its answer holds the message instead of running. */
   holdForUser?: boolean;
 }
 export interface WorkbenchProviderThreads {
