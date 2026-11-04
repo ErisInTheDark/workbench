@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadComposer: render thread composer controls, message input, attachments, composer reference pills, and questionnaire handoff;
- *   a send that compacts context first needs Enter held, or on touch a choice from the send menu.
+ *   a send that compacts context first needs Enter held, or on touch a choice from the send menu; resume shows and declares the same.
  */
 "use client";
 
@@ -38,6 +38,7 @@ import {
 import { toInlineMentionOverlayHighlights } from "../../../workbench/thread/inline-mention-styles";
 import {
   createThreadComposerMessageInput,
+  isThreadMessageNotSentError,
   runThreadComposerSubmission,
 } from "../../../workbench/thread/thread-message-submission";
 import {
@@ -329,6 +330,11 @@ export default function ThreadComposer ({
     && !isSendDisabled
     && !isShiftPressed;
   const compactSendHold = useCompactSendHold(willAutoCompactOnSend, onCompactSendHoldChange);
+  const willAutoCompactOnResume = Boolean(thread.willAutoCompact)
+    && canRecoverInterruptedTurn
+    && !isRecoveringInterruptedTurn
+    && hasEffectiveProfile
+    && !isShiftPressed;
   const sendButtonLabel = isSending
     ? "Sending..."
     : isAttaching
@@ -545,7 +551,7 @@ export default function ThreadComposer ({
     }
   };
 
-  const recoverInterruptedTurn = async () => {
+  const recoverInterruptedTurn = async (shiftKey = isShiftPressed) => {
     if (!canRecoverInterruptedTurn || isRecoveringInterruptedTurn || !hasEffectiveProfile) {
       return;
     }
@@ -553,8 +559,11 @@ export default function ThreadComposer ({
     setIsRecoveringInterruptedTurn(true);
     setError("");
     try {
-      await onSendMessage(thread.id, createWorkbenchThreadRecoveryInput());
+      await onSendMessage(thread.id, createWorkbenchThreadRecoveryInput(),
+        shiftKey ? { skipAutoCompact: true } : { expectAutoCompact: willAutoCompactOnResume });
     } catch (resumeError) {
+      // A resume bounced because compaction became due leaves the compact badge showing for a deliberate retry.
+      if (isThreadMessageNotSentError(resumeError)) return;
       setError(resumeError instanceof Error ? resumeError.message : "Unable to resume that interrupted turn.");
     } finally {
       setIsRecoveringInterruptedTurn(false);
@@ -655,20 +664,27 @@ export default function ThreadComposer ({
       <stopPresentation.Icon size={18} />
     </PrimaryButton>
   ) : null;
-  const resumeButton = canRecoverInterruptedTurn ? (
-    <PrimaryButton
-      type="button"
-      aria-label={isRecoveringInterruptedTurn ? "Resuming thread" : "Resume thread"}
-      title={isRecoveringInterruptedTurn ? "Resuming thread" : "Resume thread"}
-      disabled={isRecoveringInterruptedTurn || !hasEffectiveProfile}
-      shape="circle"
-      onClick={() => {
-        void recoverInterruptedTurn();
-      }}
-    >
-      <PlayIcon size={18} />
-    </PrimaryButton>
-  ) : null;
+  const resumeButtonLabel = isRecoveringInterruptedTurn ? "Resuming thread"
+    : autoCompactSendLabel("Resume thread", willAutoCompactOnResume);
+  const resumeButton = !canRecoverInterruptedTurn ? null
+    : willAutoCompactOnResume && isMobileTextInput ? (
+      <AutoCompactSendMenu label="Resume" Icon={PlayIcon} iconSize={18}
+        onSend={skipAutoCompact => { void recoverInterruptedTurn(skipAutoCompact); }} />
+    ) : (
+      <PrimaryButton
+        type="button"
+        aria-label={resumeButtonLabel}
+        title={resumeButtonLabel}
+        disabled={isRecoveringInterruptedTurn || !hasEffectiveProfile}
+        shape="circle"
+        onClick={event => {
+          void recoverInterruptedTurn(event.shiftKey);
+        }}
+      >
+        <PlayIcon size={18} />
+        {willAutoCompactOnResume ? <AutoCompactSendBadge /> : null}
+      </PrimaryButton>
+    );
   const questionnaireToggleButton = hasVisiblePendingUserInputRequest ? (
     <button
       type="button"
