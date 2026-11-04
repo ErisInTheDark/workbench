@@ -50,7 +50,7 @@ export function parseWorkbenchThreadRecallCommand(command: string): WorkbenchThr
   };
 }
 
-const GROUP_ORDER: WorkbenchThreadRecallRecordGroup[] = ["user", "agent", "plan", "questionnaire"];
+const GROUP_ORDER: WorkbenchThreadRecallRecordGroup[] = ["user", "agent", "plan", "questionnaire", "proof"];
 
 function pluralize(count: number, singular: string, plural = `${singular}s`) {
   return count === 1 ? singular : plural;
@@ -62,6 +62,7 @@ function fullGroupLabel(group: WorkbenchThreadRecallRecordGroup, count: number) 
     case "agent": return `${count} ${pluralize(count, "agent message")}`;
     case "questionnaire": return `${count} ${pluralize(count, "questionnaire response")}`;
     case "plan": return `${count} ${pluralize(count, "plan")}`;
+    case "proof": return `${count} proof-of-work ${pluralize(count, "filing")}`;
   }
 }
 

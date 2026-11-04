@@ -1231,7 +1231,7 @@ export interface WorkbenchThreadContextEntryScope {
 export const WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS = 20_000;
 
 export const WORKBENCH_THREAD_RECALL_KINDS = [
-  "user-message", "user-steer", "agent-message", "commentary", "final-answer", "plan", "questionnaire",
+  "user-message", "user-steer", "agent-message", "commentary", "final-answer", "plan", "questionnaire", "proof-of-work",
 ] as const;
 
 export type WorkbenchThreadRecallKind = typeof WORKBENCH_THREAD_RECALL_KINDS[number];

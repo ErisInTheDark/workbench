@@ -13,11 +13,12 @@
 import { z } from "zod";
 import { WORKBENCH_THREAD_RECALL_KINDS, type WorkbenchThreadRecallKind } from "workbench-shared/types";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
+import { ProofOfWorkChecklistSchema } from "workbench-shared/workbench/thread/proof-of-work";
 
 const text = z.string().min(1).max(4096);
 export const HISTORY_ITEM_KINDS = [
   "user-message", "user-steer", "agent-message", "commentary", "final-answer", "plan", "reasoning", "process", "tool",
-  "collaboration", "tool-output", "file-change", "web-search", "questionnaire", "approval", "compaction", "unknown",
+  "collaboration", "tool-output", "file-change", "web-search", "questionnaire", "approval", "compaction", "unknown", "proof-of-work",
 ] as const;
 export type HistoryItemKind = typeof HISTORY_ITEM_KINDS[number];
 export const HISTORY_NARRATIVE_KINDS = WORKBENCH_THREAD_RECALL_KINDS satisfies readonly HistoryItemKind[];
@@ -54,6 +55,8 @@ const queryFields = {
 export const HistoryQuerySchema = z.object({
   action: z.enum(HISTORY_QUERY_ACTIONS),
   ...queryFields,
+  /** Checklists whose proofs the narrative view leaves out; set by Thread Recall from the thread's instructions, never a command option. */
+  hiddenChecklists: z.array(ProofOfWorkChecklistSchema).default([]),
 }).strict().superRefine((query, context) => {
   const fail = (message: string) => context.addIssue({ code: "custom", message });
   if (["read", "show", "turns"].includes(query.action) && query.threads.length !== 1) fail("Pass exactly one --thread <wb-thread-id>.");

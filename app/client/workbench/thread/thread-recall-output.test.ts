@@ -66,14 +66,19 @@ test("summarises captured recall records by semantic speaker group", () => {
     '<plan id="ref:plan:one">',
     "Plan",
     "</plan>",
+    "",
+    '<proof-of-work id="ref:call:one">',
+    "- **plan.verification:** ran it",
+    "</proof-of-work>",
   ].join("\n"));
 
   assert.deepEqual(summary, {
     mode: "history",
-    recordCount: 4,
+    recordCount: 5,
     recordCounts: {
       agent: 1,
       plan: 1,
+      proof: 1,
       questionnaire: 0,
       user: 2,
     },

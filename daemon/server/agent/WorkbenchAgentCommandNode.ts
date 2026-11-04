@@ -279,6 +279,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const thread = (await transcript.read({ threadId, turnIds: [], turnLimit: 1 }))?.thread;
         return thread ? { id: thread.id, projectRoot: thread.project_root } : null;
       },
+      readHiddenChecklists: async (threadId) => (await threadWorkflow.readOverlays(threadId)).overlays.checklists.filter(checklist => checklist.hidden),
       resolveProjectFromCwd: async (cwd) => {
         await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, {
           endpointName: "Thread Recall",

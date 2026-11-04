@@ -8,7 +8,9 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import { WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS } from "workbench-shared/types";
 import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
+import { THREAD_STATE_TOOL } from "workbench-shared/workbench/thread/workflow-modes";
 import { foldSearchText, parseSearchQuery, searchBodyQuality, searchCorrections, searchExcerpt, type SearchClause } from "../search/workbench-search-ranking.ts";
+import { WORKBENCH_TOOL_SERVERS } from "../stats/WorkbenchToolStatsRepository.ts";
 import { agentMessageOutputSql, registerTranscriptAgentMessageFunction } from "../transcript/transcript-agent-message-sql.ts";
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 import { historyKindSql } from "./history-fields.ts";
@@ -68,8 +70,14 @@ const itemJoins = `FROM thread_items i
   LEFT JOIN thread_item_assistant_messages a ON a.item_id = i.id
   LEFT JOIN thread_operation_process_sources p ON p.item_id = i.id
   LEFT JOIN thread_operation_tool_sources t ON t.item_id = i.id`;
+const sqlList = (values: readonly string[]) => values.map(value => `'${value}'`).join(", ");
+/** Calls that may hold filings; `narrativeRecords` decides from their arguments whether one does. */
+const proofFilingCall = `EXISTS (SELECT 1 FROM thread_operation_callable_tool_sources c WHERE c.item_id = i.id
+  AND c.callable_kind = 'mcp' AND c.server_name IN (${sqlList(WORKBENCH_TOOL_SERVERS)})
+  AND c.tool_name IN (${sqlList([THREAD_STATE_TOOL, "proof_of_work"])}))`;
 const narrativeTypes = `(i.type IN ('userMessage', 'assistantMessage', 'questionnaire', 'approval')
-  OR (i.type = 'functionCallOutput' AND ${agentMessageOutputSql("i")}))`;
+  OR (i.type = 'functionCallOutput' AND ${agentMessageOutputSql("i")})
+  OR (i.type = 'operation' AND ${proofFilingCall}))`;
 const retainedTurn = "(SELECT alias.turn_id FROM workbench_transcript_item_source_aliases alias WHERE alias.item_identity_id = r.item_public_id LIMIT 1)";
 const liveCopy = "EXISTS (SELECT 1 FROM thread_items live WHERE live.public_id = r.item_public_id)";
 
@@ -402,7 +410,8 @@ export default class WorkbenchHistoryQueryRepository {
   }
 
   /** Records of narrative rows in their given order; projection and turn-opening facts are read in one pass. */
-  private narrativeRecordsOf(threadId: string, rows: readonly NarrativeRow[], kinds: ReadonlySet<HistoryNarrativeKind>) {
+  private narrativeRecordsOf(query: HistoryQuery, rows: readonly NarrativeRow[], kinds: ReadonlySet<HistoryNarrativeKind>) {
+    const threadId = query.threads[0]!;
     const live = rows.filter(row => row.key > 0);
     const items = new Map<number, WorkbenchProjectedTranscriptItem>();
     const repository = new WorkbenchTranscriptRepository(this.database);
@@ -429,8 +438,8 @@ export default class WorkbenchHistoryQueryRepository {
       }
       const item = items.get(row.key);
       return [row.key, item ? narrativeRecords({
-        harness: row.harness, inputKind: row.inputKind, item, opensTurn: openers.get(row.turnId) === row.publicId,
-        publicId: row.publicId, threadId, turnId: row.turnId,
+        harness: row.harness, hiddenChecklists: query.hiddenChecklists, inputKind: row.inputKind, item,
+        opensTurn: openers.get(row.turnId) === row.publicId, publicId: row.publicId, threadId, turnId: row.turnId,
       }, kinds) : []];
     }));
   }
@@ -440,13 +449,12 @@ export default class WorkbenchHistoryQueryRepository {
    * Returned records are nearest-first.
    */
   private gatherNarrative(query: HistoryQuery, direction: Direction, from: Position | null, kinds: ReadonlySet<HistoryNarrativeKind>, enough: (records: readonly HistoryRecord[]) => boolean) {
-    const threadId = query.threads[0]!;
     const records: HistoryRecord[] = [];
     const turns: number[] = [];
     let batch: NarrativeRow[] = [];
     let satisfied = false;
     const flush = () => {
-      const byKey = this.narrativeRecordsOf(threadId, batch, kinds);
+      const byKey = this.narrativeRecordsOf(query, batch, kinds);
       for (const row of batch) {
         const own = byKey.get(row.key) ?? [];
         if (!own.length) continue;
@@ -472,7 +480,7 @@ export default class WorkbenchHistoryQueryRepository {
     const anchor = anchorRef ? readHistoryAnchor(anchorRef) : null;
     const anchorRow = anchor ? this.locateNarrative(query, anchor.itemId) : null;
     const position: Position | null = anchorRow ? [anchorRow.turnIndex, anchorRow.position, anchorRow.key] : null;
-    const own = anchorRow ? this.narrativeRecordsOf(query.threads[0]!, [anchorRow], kinds).get(anchorRow.key) ?? [] : [];
+    const own = anchorRow ? this.narrativeRecordsOf(query, [anchorRow], kinds).get(anchorRow.key) ?? [] : [];
     const byText = (limit: number) => (records: readonly HistoryRecord[]) => records.reduce((sum, record) => sum + record.text.length, 0) >= limit;
     // A `ref@offset` continuation re-reads the split record; the front-end shows only its unshown side.
     const split = anchor && anchor.offset !== null ? own.findIndex(record => record.ref === (anchor.part ? `${anchor.itemId}:${anchor.part}` : anchor.itemId)) : -1;
@@ -645,7 +653,7 @@ export default class WorkbenchHistoryQueryRepository {
       const chunk = ranked.slice(consumed, consumed + query.limit * 2).map(entry => entry.row);
       projected += chunk.length;
       if (query.view === "narrative") {
-        const byKey = this.narrativeRecordsOfSearch(query.threads[0]!, chunk, kinds);
+        const byKey = this.narrativeRecordsOfSearch(query, chunk, kinds);
         for (const row of chunk) {
           consumed += 1;
           const record = byKey.get(row.id);
@@ -670,13 +678,13 @@ export default class WorkbenchHistoryQueryRepository {
   }
 
   /** The one record a narrative search hit shows: its message, or its first plan when only plans are selected. */
-  private narrativeRecordsOfSearch(threadId: string, rows: readonly ItemRow[], kinds: ReadonlySet<HistoryNarrativeKind>) {
+  private narrativeRecordsOfSearch(query: HistoryQuery, rows: readonly ItemRow[], kinds: ReadonlySet<HistoryNarrativeKind>) {
     const narrativeRows = rows.map((row): NarrativeRow => ({
       harness: row.harness, inputKind: row.inputKind, key: row.id, position: row.position, publicId: row.publicId,
       role: "role" in row ? row.role as NarrativeRow["role"] : null, text: "text" in row ? row.text as string : null,
       turnId: row.turnId, turnIndex: row.turnIndex,
     }));
-    const byKey = this.narrativeRecordsOf(threadId, narrativeRows, kinds);
+    const byKey = this.narrativeRecordsOf(query, narrativeRows, kinds);
     return new Map(rows.flatMap(row => {
       const first = byKey.get(row.id)?.[0];
       return first ? [[row.id, first] as const] : [];

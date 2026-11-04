@@ -781,7 +781,7 @@ test("Thread Recall result summaries expose useful captured-result statistics", 
     {
       mode: "search",
       recordCount: 5,
-      recordCounts: { agent: 3, plan: 0, questionnaire: 0, user: 2 },
+      recordCounts: { agent: 3, plan: 0, proof: 0, questionnaire: 0, user: 2 },
       searchMatches: { shown: 5, total: 20 },
     },
   );
@@ -796,7 +796,7 @@ test("Thread Recall result summaries expose useful captured-result statistics", 
       {
         mode: "search",
         recordCount: 0,
-        recordCounts: { agent: 0, plan: 0, questionnaire: 0, user: 0 },
+        recordCounts: { agent: 0, plan: 0, proof: 0, questionnaire: 0, user: 0 },
         searchMatches: { shown: 0, total: 0 },
       },
     ).summaryText,

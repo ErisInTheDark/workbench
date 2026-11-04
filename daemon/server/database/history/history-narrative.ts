@@ -3,13 +3,14 @@
  * - HistoryNarrativeItem: one stored item with the facts narrative classification needs.
  * - isNarrativeUserMessage: whether a user message reads as user-visible conversation, deciding each turn's first message.
  * - narrativeRecords: the user-visible records of one item under selected kinds: messages, steers, agent messages,
- *   questionnaire answers and extracted plans, with plans dropped when their parent message is already selected.
+ *   questionnaire answers, proof-of-work filings and extracted plans, with plans dropped when their parent message is already selected.
  * - retainedNarrativeRecord: best-effort record for retained text of a retention-expired item.
  * - extractPlanBlocks: collect outer `<plan>` blocks from assistant Markdown, ignoring fenced code.
  */
 import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import { readWorkbenchAgentMessageInput, readWorkbenchAgentMessageItem, type WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
+import { mergeProofs, presentProofOfWork, type ProofOfWork, type ProofOfWorkChecklist } from "workbench-shared/workbench/thread/proof-of-work";
 import { isThreadItemVisible } from "workbench-shared/workbench/thread/thread-item-visibility";
 import {
   getQuestionnairePromptText,
@@ -20,6 +21,7 @@ import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/th
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { readFiledProofs } from "workbench-shared/workbench/thread/workflow-modes";
 import type { HistoryNarrativeKind, HistoryRecord } from "./history-query-contract.ts";
 
 const IMAGE_PLACEHOLDER = "<an image was sent>";
@@ -34,6 +36,7 @@ export interface HistoryNarrativeItem {
   inputKind: string | null;
   /** The turn's first user-visible user message opens it; every later one is a steer. */
   opensTurn: boolean;
+  hiddenChecklists: readonly ProofOfWorkChecklist[];
 }
 
 export function isNarrativeUserMessage(item: WorkbenchProjectedTranscriptItem) {
@@ -76,6 +79,15 @@ function renderQuestionnaire(request: WorkbenchUserInputRequest, response: Workb
     }).join("; ");
     return `**Q: ${prompt}**\n\nA: ${rendered}`;
   }).filter(Boolean).join("\n\n");
+}
+
+/** Empty when every filed proof belongs to a hidden checklist. */
+function renderProofOfWork(proof: ProofOfWork, hiddenChecklists: readonly ProofOfWorkChecklist[]) {
+  const { answered, notApplicable } = presentProofOfWork(mergeProofs([proof]), hiddenChecklists);
+  return [
+    answered.map(({ answer, id }) => `- **${id}:** ${answer}`).join("\n"),
+    notApplicable.length ? `Not applicable: ${notApplicable.map(({ id }) => id).join(", ")}` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 interface CodeFence { marker: "`" | "~"; size: number }
@@ -134,6 +146,10 @@ function primaryRecord(source: HistoryNarrativeItem): { kind: HistoryNarrativeKi
       return "request" in item ? { kind: "questionnaire", text: renderQuestionnaire(item.request, item.response) } : null;
     case "agentMessage":
       return { kind: item.phase === "final_answer" ? "final-answer" : "commentary", text: item.text };
+    case "mcpToolCall": {
+      const proof = readFiledProofs(item);
+      return proof ? { kind: "proof-of-work", text: renderProofOfWork(proof, source.hiddenChecklists) } : null;
+    }
     default:
       return null;
   }

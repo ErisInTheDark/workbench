@@ -57,6 +57,7 @@ export default function ThreadRecallItem({ record }: { record: WorkbenchThreadRe
     case "plan":
       return <ThreadRecallPlanItem markdown={record.text} />;
     case "questionnaire":
+    case "proof-of-work":
       return null;
   }
 }

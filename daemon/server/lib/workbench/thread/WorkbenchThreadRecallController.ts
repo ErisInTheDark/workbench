@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import { WORKBENCH_THREAD_RECALL_KINDS, type WorkbenchThreadRecallKind } from "workbench-shared/types";
+import type { ProofOfWorkChecklist } from "workbench-shared/workbench/thread/proof-of-work";
 import {
   HistoryQuerySchema,
   readHistoryAnchor,
@@ -31,6 +32,8 @@ export interface WorkbenchThreadRecallControllerOptions {
   materializeTurn(threadId: string, turnId: string | null, signal: AbortSignal): Promise<void>;
   /** The stored thread's canonical id and project root, or null when the thread has no stored history yet. */
   readThread(threadId: string): Promise<{ id: string; projectRoot: string } | null>;
+  /** Checklists the thread's instructions hide; their proofs never reach recall. */
+  readHiddenChecklists(threadId: string): Promise<readonly ProofOfWorkChecklist[]>;
   resolveProjectFromCwd(cwd: string): Promise<void>;
 }
 
@@ -73,7 +76,7 @@ function issues(error: z.ZodError) {
 export default class WorkbenchThreadRecallController {
   constructor(private readonly options: WorkbenchThreadRecallControllerOptions) {}
 
-  /** Bootstrap a thread with no stored history, resolve its project like any agent endpoint, and return its stored id. */
+  /** Bootstrap a thread with no stored history, resolve its project like any agent endpoint, and return its stored id and hidden checklists. */
   async #prepare(threadId: string, signal: AbortSignal) {
     let stored = await this.options.readThread(threadId);
     if (stored === null) {
@@ -84,7 +87,9 @@ export default class WorkbenchThreadRecallController {
     if (stored === null) throw new Error(`Thread Recall could not materialize thread ${threadId}.`);
     await this.options.resolveProjectFromCwd(stored.projectRoot);
     signal.throwIfAborted();
-    return stored.id;
+    const hiddenChecklists = [...await this.options.readHiddenChecklists(stored.id)];
+    signal.throwIfAborted();
+    return { hiddenChecklists, storedId: stored.id };
   }
 
   /**
@@ -155,13 +160,13 @@ export default class WorkbenchThreadRecallController {
       signal.throwIfAborted();
       if (request.method === "GET") {
         const { kinds, query, walk } = this.#historyRequest(threadId, request.searchParams);
-        const storedId = await this.#prepare(threadId, signal);
-        const { page, warnings } = await this.#readWindow({ ...query, threads: [storedId] }, signal);
+        const { hiddenChecklists, storedId } = await this.#prepare(threadId, signal);
+        const { page, warnings } = await this.#readWindow({ ...query, hiddenChecklists, threads: [storedId] }, signal);
         return markdownResponse(renderThreadRecallHistory({ kinds, page, threadId: storedId, walk, warnings }));
       }
       const { kinds, limit, query, text } = this.#searchRequest(threadId, await request.body);
-      const storedId = await this.#prepare(threadId, signal);
-      const page = await this.options.queryHistory({ ...query, threads: [storedId] });
+      const { hiddenChecklists, storedId } = await this.#prepare(threadId, signal);
+      const page = await this.options.queryHistory({ ...query, hiddenChecklists, threads: [storedId] });
       return markdownResponse(renderThreadRecallSearch({ kinds, limit, page, query: text, threadId: storedId }));
     } catch (error) {
       if (signal.aborted) throw error;

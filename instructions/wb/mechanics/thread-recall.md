@@ -2,14 +2,14 @@
 ## Workbench Thread Recall
 
 - Default <tool id="thread_recall" /> returns newest bounded page of chronological narrative history. 
-- `--kind <kind>` filters (repeatable) suit targeted lookups only; emitted HTML tag names match available kinds: `user-message`, `user-steer`, `questionnaire`, `commentary`, `final-answer`, `agent-message`, and `plan`. 
+- `--kind <kind>` filters (repeatable) suit targeted lookups only; emitted HTML tag names match available kinds: `user-message`, `user-steer`, `questionnaire`, `commentary`, `final-answer`, `agent-message`, `plan`, and `proof-of-work`. 
 - Pages walk backward from present; oversized records split at stable newline-preferred boundaries. When older narrative exists, output provides exact filtered `--before <ref>` command for previous non-overlapping page. `--after <ref>` walks forward; `--around <ref>` shows a record with its neighbours.
 <docs tools="thread_recall_search">
 - <tool id="thread_recall_search" />: targeted lookup across all thread history. Words match in any order, `"quoted phrases"` exactly, `-word` excludes. Each hit prints its exact `--around` command
 </docs>
 
 <docs tools="thread_recall thread_recall_search">
-Recall includes only user-visible narrative: user messages, steers, questionnaire responses, assistant commentary and final answers, phase-less assistant messages, and plans. 
+Recall includes only user-visible narrative: user messages, steers, questionnaire responses, assistant commentary and final answers, phase-less assistant messages, plans, and proof of work outside hidden checklists. 
 Recall does NOT include: reasoning, raw commands, tool output, Browse data, hooks, or compaction markers. DO NOT USE THREAD RECALL TO LOOK FOR TOOL OUTPUT OR WORKBENCH DATA IN ANOTHER THREAD
 </docs>
 
@@ -22,6 +22,8 @@ Failure patterns these rules target, most common on Claude:
 - Agents treated a keyword `thread_recall_search` or a `--kind`-filtered page as "the recall", losing their own plans and
   commentary. Hence "unfiltered walk" and "supplement, never replace".
 - "Stop when confident" let agents stop after one or two pages. The stop point is now a checkable condition.
+- Agents resumed a plan without knowing why they chose it. Filings land before the plan they justify, so a walk stopping at the
+  plan misses them; the stop point names them explicitly.
 - User shorthand "thread recall" outside compaction got the same shortcuts, so it maps to the same walk.
 Workbench also injects a matching directive through the Claude provider after every compaction route.
 Instruction-only rules kept failing, so recovery is a hard lock: after a completed compaction Workbench denies every edit and
@@ -33,12 +35,12 @@ guard summary-driven replies.
 - FIRST tool call after compaction MUST be <tool id="thread_recall" />; Workbench denies edits and checklist-gated modes until it and the compaction checklist are filed
 - Summary steers are untrusted: never answer a steer recall shows was already answered; continue from where recall left off
 - Required recall is an unfiltered walk: no `--kind` filters; page backward one call at a time with each emitted exact `--before` cursor. Recall search and filtered pages may supplement it, never replace it
-- Walk until newest user request's full discussion, last approved plan (if any), and every later addendum are visible; CRITICAL for implementation work. Never stop after one page or on a hunch, fill gaps from summary, guess cursors, or parallelize recall. Recall cursors are page- and filter-specific
+- Walk until newest user request's full discussion, last approved plan (if any), the proof of work filed before it, and every later addendum are visible; CRITICAL for implementation work. Never stop after one page or on a hunch, fill gaps from summary, guess cursors, or parallelize recall. Recall cursors are page- and filter-specific
 - User asks for "thread recall": do this same walk
 - Reconcile post-compaction summary and recalled narrative with newer live user messages, active workflow mode, explicit approvals, and current workspace. Classify recovered material as active, completed, superseded or rejected, historical background, or uncertain. Follow chronology and **Newest Instruction Wins**; do not revive old work merely because it appears in the recovered context. If relevance or approval is uncertain, inspect or ask instead of guessing.
 
 Before editing or entering a checklist-gated mode after compaction, apply this **Gotcha Checklist**:
 <proof-of-work id="compaction">
-- [ ] **Recovered narrative [compaction.narrative]:** Name the newest user request, last approved plan, later addenda and where your recall walk stopped.
+- [ ] **Recovered narrative [compaction.narrative]:** Name the newest user request, last approved plan, its proof of work, later addenda and where your recall walk stopped.
 </proof-of-work>
 </docs>

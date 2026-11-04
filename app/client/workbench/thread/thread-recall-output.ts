@@ -19,7 +19,7 @@ export type WorkbenchThreadRecallOutputSegment =
   | { markdown: string; type: "markdown" }
   | { record: WorkbenchThreadRecallOutputRecord; type: "record" };
 
-export type WorkbenchThreadRecallRecordGroup = "agent" | "plan" | "questionnaire" | "user";
+export type WorkbenchThreadRecallRecordGroup = "agent" | "plan" | "proof" | "questionnaire" | "user";
 
 export interface WorkbenchThreadRecallOutputSummary {
   mode: "context" | "history" | "record" | "search";
@@ -107,6 +107,7 @@ function getRecordGroup(kind: WorkbenchThreadRecallKind): WorkbenchThreadRecallR
   if (kind === "user-message" || kind === "user-steer") return "user";
   if (kind === "plan") return "plan";
   if (kind === "questionnaire") return "questionnaire";
+  if (kind === "proof-of-work") return "proof";
   return "agent";
 }
 
@@ -140,6 +141,7 @@ export function summarizeWorkbenchThreadRecallOutput(markdown: string): Workbenc
   const recordCounts: WorkbenchThreadRecallOutputSummary["recordCounts"] = {
     agent: 0,
     plan: 0,
+    proof: 0,
     questionnaire: 0,
     user: 0,
   };

@@ -5,6 +5,7 @@
 "use client";
 
 import { type ReactNode } from "react";
+import type { WorkbenchThreadRecallKind } from "workbench-shared/types";
 import {
   parseWorkbenchThreadRecallOutput,
   type WorkbenchThreadRecallOutputRecord,
@@ -22,12 +23,17 @@ function RecallRecord({ record, index, renderRecord }: {
   return renderRecord(record, index);
 }
 
-function ThreadRecallQuestionnaire({ record }: { record: WorkbenchThreadRecallOutputRecord }) {
+const COLLAPSED_RECORD_LABELS: Partial<Record<WorkbenchThreadRecallKind, string>> = {
+  questionnaire: "Questionnaire response",
+  "proof-of-work": "Proof of work",
+};
+
+function ThreadRecallCollapsedRecord({ label, record }: { label: string; record: WorkbenchThreadRecallOutputRecord }) {
   return (
     <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
-      summary={<ThreadSummaryText text="Questionnaire response" />}
+      summary={<ThreadSummaryText text={label} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <MarkdownRender markdown={record.text} />
@@ -53,8 +59,9 @@ export default function ThreadRecallOutput({
             </ThreadMeasuredContent>
           );
         }
-        if (segment.record.kind === "questionnaire") {
-          return <ThreadRecallQuestionnaire key={`record:${segment.record.ref}:${index}`} record={segment.record} />;
+        const collapsedLabel = COLLAPSED_RECORD_LABELS[segment.record.kind];
+        if (collapsedLabel) {
+          return <ThreadRecallCollapsedRecord key={`record:${segment.record.ref}:${index}`} label={collapsedLabel} record={segment.record} />;
         }
         return (
           <ThreadMeasuredContent key={`record:${segment.record.ref}:${index}`}>

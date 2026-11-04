@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import { WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS } from "workbench-shared/types";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import WorkbenchHistoryIndex from "../../../database/history/WorkbenchHistoryIndex.ts";
 import WorkbenchHistoryQueryRepository from "../../../database/history/WorkbenchHistoryQueryRepository.ts";
 import WorkbenchThreadIdentityRepository from "../../../database/thread-identity/WorkbenchThreadIdentityRepository.ts";
@@ -50,6 +51,17 @@ function item(turnId: string, itemId: string, value: string, type: "agent" | "us
   };
 }
 
+function filing(turnId: string, itemId: string, itemPosition: number, args: JsonValue): ItemObservation {
+  return {
+    item: {
+      appContext: null, arguments: args, durationMs: null, error: null, id: itemId, pluginId: null, readOnlyHint: null,
+      result: null, server: "wb", status: "completed", tool: "thread_state", type: "mcpToolCall",
+    },
+    itemPosition, kind: "item", lifecycle: "completed", observedAt: 5,
+    threadId, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
+  };
+}
+
 function window(observations: WorkbenchTranscriptAtomicObservation[], materializedTurnIds: string[], id = threadId): WorkbenchTranscriptObservation {
   return {
     contentVersion: 3, kind: "canonicalWindow", observations, threadId: id,
@@ -61,13 +73,14 @@ function createHarness({
   seeded = true,
   latestText = "latest agent words",
   failRecovery = false,
-}: { seeded?: boolean; latestText?: string; failRecovery?: boolean } = {}) {
+  latestItems,
+}: { seeded?: boolean; latestText?: string; failRecovery?: boolean; latestItems?: ItemObservation[] } = {}) {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
   const repository = new WorkbenchTranscriptRepository(database);
   const index = new WorkbenchHistoryIndex(database);
-  const latestWindow = window([thread(), turn("turn-old", 0), turn("turn-new", 1), item("turn-new", "agent-new", latestText, "agent")], ["turn-new"]);
+  const latestWindow = window([thread(), turn("turn-old", 0), turn("turn-new", 1), ...latestItems ?? [item("turn-new", "agent-new", latestText, "agent")]], ["turn-new"]);
   if (seeded) repository.settle([latestWindow]);
   const materializations: Array<string | null> = [];
   let queries = 0;
@@ -98,6 +111,7 @@ function createHarness({
       const stored = repository.read({ threadId: id, turnIds: [], turnLimit: 1 })?.thread;
       return stored ? { id: stored.id, projectRoot: stored.project_root } : null;
     },
+    readHiddenChecklists: async () => [{ id: "recovery", hidden: true, items: [{ id: "recovery.user_said", label: "What has the user said" }] }],
     resolveProjectFromCwd: async () => {},
   });
   const canonicalId = () => canonical()?.threadId ?? "thread-one";
@@ -109,6 +123,35 @@ function createHarness({
   }, new AbortController().signal);
   return { close: () => database.close(), database, get, index, materializations, queries: () => queries, search };
 }
+
+test("recall shows filed proofs in order, by kind, by ref and by search, without hidden checklists or proofless calls", async () => {
+  const harness = createHarness({ latestItems: [
+    { ...item("turn-new", "agent-before", "words before filing", "agent"), itemPosition: 0 },
+    filing("turn-new", "filing-visible", 1, { proofs: { "plan.verification": "zebrafinding", "recovery.user_said": "hiddentonenote" }, notApplicable: ["plan.dead_code"] }),
+    filing("turn-new", "filing-hidden", 2, { proofs: { "recovery.user_said": "onlyhiddennote" } }),
+    filing("turn-new", "filing-none", 3, { mode: "Brief" }),
+    { ...item("turn-new", "agent-after", "words after filing", "agent"), itemPosition: 4 },
+  ] });
+  try {
+    const page = await (await harness.get()).text();
+    const opening = page.indexOf("<proof-of-work ");
+    assert.ok(page.indexOf("words before filing") < opening && opening < page.indexOf("words after filing"), page);
+    assert.equal(page.split("<proof-of-work ").length, 2, "only the filing with visible proofs is a record");
+    assert.match(page, /- \*\*plan\.verification:\*\* zebrafinding/u);
+    assert.match(page, /Not applicable: plan\.dead_code/u);
+    assert.doesNotMatch(page, /hiddentonenote|onlyhiddennote/u);
+
+    const filtered = await (await harness.get({ kind: "proof-of-work" })).text();
+    assert.match(filtered, /zebrafinding/u);
+    assert.doesNotMatch(filtered, /words before filing/u);
+
+    const ref = /<proof-of-work id="ref:([^"]+)"/u.exec(page)![1]!;
+    assert.match(await (await harness.get({ around: ref })).text(), /zebrafinding/u);
+
+    assert.match(await (await harness.search({ action: "search", query: "zebrafinding" })).text(), /<proof-of-work [^>]*>\n[^\n]*zebrafinding/u);
+    assert.doesNotMatch(await (await harness.search({ action: "search", query: "onlyhiddennote" })).text(), /<proof-of-work /u);
+  } finally { harness.close(); }
+});
 
 test("an oversized newest record splits inside the budget and its older continuation resumes the unshown head", async () => {
   const harness = createHarness({ latestText: `LATEST_HEAD\n${"N".repeat(WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS + 2_000)}\nLATEST_TAIL` });

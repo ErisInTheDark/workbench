@@ -4,14 +4,23 @@ import test from "node:test";
 
 import { WORKBENCH_THREAD_RECALL_KINDS, type WorkbenchThreadRecallKind } from "workbench-shared/types";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
-import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { narrativeRecords, type HistoryNarrativeItem } from "./history-narrative";
 
 const ALL = new Set<WorkbenchThreadRecallKind>(WORKBENCH_THREAD_RECALL_KINDS);
 
 function source(item: ThreadItem, overrides: Partial<HistoryNarrativeItem> = {}): HistoryNarrativeItem {
-  return { harness: "codex", inputKind: null, item, opensTurn: true, publicId: "item", threadId: "thread", turnId: "turn", ...overrides };
+  return { harness: "codex", hiddenChecklists: [], inputKind: null, item, opensTurn: true, publicId: "item", threadId: "thread", turnId: "turn", ...overrides };
 }
+
+function filing(args: JsonValue, overrides: Partial<Extract<ThreadItem, { type: "mcpToolCall" }>> = {}): ThreadItem {
+  return {
+    id: "call", type: "mcpToolCall", server: "wb", tool: "thread_state", status: "completed", arguments: args, appContext: null,
+    pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null, ...overrides,
+  };
+}
+
+const HIDDEN = [{ id: "recovery", hidden: true, items: [{ id: "recovery.user_said", label: "What has the user said" }] }];
 
 function agent(text: string, phase: "commentary" | "final_answer" | null): ThreadItem {
   return { id: "agent", type: "agentMessage", phase, text, memoryCitation: null, delivery: null, questions: null };
@@ -44,6 +53,31 @@ test("a turn's opening user message is a message, later ones and stored steers a
   const [record] = narrativeRecords(source(user(envelope)), ALL);
   assert.equal(record?.kind, "agent-message");
   assert.match(record?.text ?? "", /Agent message from Fern \(child\)\n\nchild done/u);
+});
+
+test("a filing reads as proof of work with its ids, leaving out hidden checklists", () => {
+  const item = filing({
+    mode: "Brief",
+    proofs: { "plan.verification": "ran it", "recovery.user_said": "terse" },
+    notApplicable: ["plan.dead_code"],
+  });
+  const [record, ...rest] = narrativeRecords(source(item, { hiddenChecklists: HIDDEN }), ALL);
+  assert.deepEqual(rest, []);
+  assert.equal(record?.kind, "proof-of-work");
+  assert.equal(record?.text, "- **plan.verification:** ran it\n\nNot applicable: plan.dead_code");
+  assert.deepEqual(narrativeRecords(source(item), new Set(["commentary"])), []);
+});
+
+test("only settled Workbench calls that file visible proofs become records", () => {
+  const proofs = { proofs: { "plan.verification": "ran it" } };
+  const kinds = (item: ThreadItem, overrides: Partial<HistoryNarrativeItem> = {}) => narrativeRecords(source(item, overrides), ALL).map(record => record.kind);
+  assert.deepEqual(kinds(filing(proofs, { status: "failed" })), ["proof-of-work"], "a refused call still filed its proofs");
+  assert.deepEqual(kinds(filing(proofs, { tool: "proof_of_work" })), ["proof-of-work"], "legacy filings stay readable");
+  assert.deepEqual(kinds(filing(proofs, { status: "inProgress" })), []);
+  assert.deepEqual(kinds(filing({ mode: "Brief" })), []);
+  assert.deepEqual(kinds(filing(proofs, { server: "elsewhere" })), []);
+  assert.deepEqual(kinds(filing(proofs, { tool: "git_arc_status" })), []);
+  assert.deepEqual(kinds(filing({ proofs: { "recovery.user_said": "terse" } }), { hiddenChecklists: HIDDEN }), []);
 });
 
 test("kind selection drops records instead of relabelling them, and non-narrative items never appear", () => {
