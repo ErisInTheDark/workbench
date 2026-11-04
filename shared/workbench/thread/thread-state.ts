@@ -1044,6 +1044,8 @@ export type WorkbenchLifecycleEvent =
   | { kind: "recoveryFailed" }
   | { kind: "providerSystemError" }
   | { kind: "userNeedsAttention" }
+  /** An agent message waits for the user's next turn instead of compacting their thread. */
+  | { kind: "agentMessageHeld" }
   | { kind: "userCompleted" }
   | { kind: "userStopped" }
   | { kind: "settle"; entryKind: "thread" | "subagent" }
@@ -1168,6 +1170,8 @@ export function reduceWorkbenchThreadLifecycle(
     case "userNeedsAttention":
       if (current?.kind !== "completed" && current?.kind !== "stopped") return current!;
       return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+    case "agentMessageHeld":
+      return current?.kind === "completed" ? { kind: "needsAttention", reason: "noActiveTurn", settled: false } : current!;
     case "userCompleted": {
       const agent = current && "agent" in current && current.agent
         ? current.agent

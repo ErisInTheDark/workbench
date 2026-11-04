@@ -1,11 +1,18 @@
 /*
  * Exports:
- * - default WorkbenchThreadEntryBadge: show ordered draft, required-todo, feedback, proposal, live-claim, and saved-stash indicators.
+ * - default WorkbenchThreadEntryBadge: show ordered draft, held agent message, required-todo, feedback, proposal, live-claim, and saved-stash indicators.
+ * - heldAgentMessageLabel: name a thread's count of agent messages waiting for the user.
  */
 "use client";
 
-import { ArchiveIcon, ClipboardListIcon, ComposerDraftIcon, GitArcProposalIcon, MegaphoneIcon, PennantIcon } from "./workbench-icons";
+import {
+  ArchiveIcon, ClipboardListIcon, ComposerDraftIcon, GitArcProposalIcon, MegaphoneIcon, MessageCircleMoreIcon, PennantIcon,
+} from "./workbench-icons";
 import { FEEDBACK_TEXT_TONE_CLASS_NAME } from "./feedback-presentation";
+
+export function heldAgentMessageLabel(count: number) {
+  return `${count} waiting agent ${count === 1 ? "message" : "messages"}`;
+}
 
 function FileCount({ count, kind }: { count: number; kind: "claimed" | "stashed" }) {
   const Icon = kind === "stashed" ? ArchiveIcon : PennantIcon;
@@ -32,6 +39,7 @@ export default function WorkbenchThreadEntryBadge({
   claimedCount,
   feedbackCount = 0,
   hasComposerDraft,
+  heldAgentMessageCount = 0,
   proposalCount = 0,
   stashedCount,
   requiredTodoCount = 0,
@@ -41,18 +49,30 @@ export default function WorkbenchThreadEntryBadge({
   /** Addressed feedback shown only when the parent row's lifecycle makes cleanup relevant. */
   feedbackCount?: number;
   hasComposerDraft: boolean;
+  /** Agent messages waiting for the user's next turn instead of compacting the thread. */
+  heldAgentMessageCount?: number;
   /** Lifecycle proposals, including proposals grouped into sealed stack layers. */
   proposalCount?: number;
   stashedCount: number;
   /** Required follow-up todos the thread still holds; optional ones stay in the thread's own panel. */
   requiredTodoCount?: number;
 }) {
-  if (!hasComposerDraft && !requiredTodoCount && !feedbackCount && !proposalCount && !claimedCount && !stashedCount) return null;
+  if (!hasComposerDraft && !heldAgentMessageCount && !requiredTodoCount && !feedbackCount && !proposalCount && !claimedCount && !stashedCount) return null;
   return (
     <span className="inline-flex items-center gap-1.5">
       {hasComposerDraft ? (
         <span data-role="thread-composer-draft" className="inline-flex size-4 items-center justify-center" title="Unsent draft">
           <ComposerDraftIcon size={16} />
+        </span>
+      ) : null}
+      {heldAgentMessageCount ? (
+        <span
+          aria-label={heldAgentMessageLabel(heldAgentMessageCount)}
+          className="inline-flex items-center gap-0.5"
+          data-role="thread-held-agent-messages"
+          title={heldAgentMessageLabel(heldAgentMessageCount)}
+        >
+          <MessageCircleMoreIcon size={16} /><span>{heldAgentMessageCount}</span>
         </span>
       ) : null}
       {requiredTodoCount ? (

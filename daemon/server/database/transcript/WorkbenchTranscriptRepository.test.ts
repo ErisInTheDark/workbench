@@ -24,9 +24,10 @@ import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
 import WorkbenchTranscriptRetentionRepository from "../retention/WorkbenchTranscriptRetentionRepository.ts";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
-import type {
-  WorkbenchTranscriptAtomicObservation,
-  WorkbenchTranscriptObservation,
+import {
+  AGENT_HOLD_ENTRY_PREFIX,
+  type WorkbenchTranscriptAtomicObservation,
+  type WorkbenchTranscriptObservation,
 } from "./workbench-transcript-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -3174,6 +3175,35 @@ test("abandoned holds on settled turns end undelivered and interrupted, sparing 
     assert.deepEqual(readCompactions(repository), [{ turnId: "first", status: "failed", startedAt: 100, completedAt: 250 }]);
     assert.deepEqual(repository.readAbandonedHoldThreadIds(200), []);
     assert.deepEqual(repository.settle([{ kind: "abandonedHolds", threadId: thread, before: 200, endedAt: 260 }]).changedThreadIds, []);
+  } finally {
+    database.close();
+  }
+});
+
+test("agent messages held for the user survive a restart's abandoned-hold sweep and are counted until they retire", () => {
+  const { database, repository } = createRepository();
+  try {
+    const thread = fixtureIdentityValues.WorkbenchThreadId.thread;
+    const held = (entryKey: string, attemptedAt: number): StoredSteerEntry => ({
+      attemptedAt, canonicalItemId: null, clientUserMessageId: null, entryKey, error: null,
+      input: [{ type: "text", text: entryKey, text_elements: [] }], requestId: null, resolvedAt: null,
+      status: "pending", threadId: thread, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("first"),
+    });
+    repository.settle([threadObservation(), turnObservation("first", 0)]);
+    repository.settle([
+      { kind: "steer", entry: held(`${AGENT_HOLD_ENTRY_PREFIX}one`, 110), observedAt: 110 },
+      { kind: "steer", entry: held(`${AGENT_HOLD_ENTRY_PREFIX}two`, 120), observedAt: 120 },
+      { kind: "steer", entry: held("stale", 130), observedAt: 130 },
+    ]);
+    assert.equal(repository.countHeldAgentMessages(thread), 2);
+    assert.deepEqual(repository.heldAgentMessageCounts(), { [thread]: 2 });
+    repository.settle([{ kind: "abandonedHolds", threadId: thread, before: 200, endedAt: 250 }]);
+    assert.deepEqual(heldSteerRows(database).map(({ entry_key, state }) => `${entry_key}:${state}`),
+      [`${AGENT_HOLD_ENTRY_PREFIX}one:pending`, `${AGENT_HOLD_ENTRY_PREFIX}two:pending`, "stale:interrupted"]);
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(200), []);
+    repository.settle([{ kind: "steer", entry: { ...held(`${AGENT_HOLD_ENTRY_PREFIX}one`, 110), status: "dismissed", resolvedAt: 300 },
+      publicItemId: fixtureIdentitySchemas.WorkbenchItemIdSchema.parse(heldSteerRows(database)[0]!.public_id), observedAt: 300 }]);
+    assert.equal(repository.countHeldAgentMessages(thread), 1);
   } finally {
     database.close();
   }

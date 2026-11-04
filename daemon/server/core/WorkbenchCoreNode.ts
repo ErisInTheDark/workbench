@@ -177,6 +177,7 @@ function createWorkbenchCoreFeature(
     onAgentMessageAdmitted: (threadId, message) => run(
       "messages", owner => { owner.receive(threadId, message); }, "agent message admission",
     ),
+    holdAgentMessage: async (threadId, message) => await threadActions.holdAgentMessage(threadId, message),
     onMessageAdmitted: async admitted => {
       const identity = await threadIdentity.resolve({
         harness: admitted.harness,
@@ -374,6 +375,8 @@ function createWorkbenchCoreFeature(
   // Held steers live outside the transcript stream, so open views learn about them from this push.
   const unsubscribeHeldSteers = transcript.subscribeHeldSteers(async ({ threadId, turnId }) => {
     if (!lease.isCurrent()) return;
+    const heldAgentMessageCount = await database.readTranscriptHeldAgentMessageCount(threadId);
+    if (lease.isCurrent()) setSummaryFacts(threadId, { heldAgentMessageCount });
     const harness = (await lookup.identity(threadId))?.bindings[0]?.harness;
     if (harness && lease.isCurrent()) {
       context.broadcastProviderNotification(WorkbenchHarnessSchema.parse(harness), {

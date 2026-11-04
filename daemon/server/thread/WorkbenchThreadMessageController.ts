@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
  * - default WorkbenchThreadMessageController: own message admission (including messages to and from threads on other daemons), Workbench
- *   notices, sender lookup, message waits and their undelivered mail, parent questionnaire settlement, and reload drain.
+ *   notices, sender lookup, message waits and their undelivered mail, parent questionnaire settlement, holding messages for users whose
+ *   sidebar thread is due to compact, and reload drain.
  */
 import type {
   WorkbenchHarness,
@@ -69,6 +70,9 @@ export interface WorkbenchThreadMessageControllerOptions {
   };
 }
 
+/** What the sender learns: `held` when its message waits for the target's user instead of compacting their thread. */
+type WorkbenchThreadMessageSendResult = { held?: true };
+
 /** Names no workflow, so the child keeps the one it was created with. */
 function buildSubagentPromptContext(name: string, workbenchOrigin: string | undefined): WorkbenchMessageContext {
   return { subagentName: name, workbenchOrigin: workbenchOrigin ?? null };
@@ -76,7 +80,7 @@ function buildSubagentPromptContext(name: string, workbenchOrigin: string | unde
 
 export default class WorkbenchThreadMessageController {
   private active = true;
-  private readonly requests = new Set<Promise<void>>();
+  private readonly requests = new Set<Promise<unknown>>();
   private readonly waits: WorkbenchMessageWaitController;
   /** Cancels network prompts still awaiting the user when the runtime drains. */
   private readonly lifetime = new AbortController();
@@ -239,12 +243,12 @@ export default class WorkbenchThreadMessageController {
     }
   }
 
-  private async sendOwned(request: WorkbenchThreadMessageRequest) {
+  private async sendOwned(request: WorkbenchThreadMessageRequest): Promise<WorkbenchThreadMessageSendResult> {
     const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message", ownerThreadId: request.callerThreadId });
     const caller = await this.resolveThread(request.callerThreadId, "Workbench message caller", requestedProject.project);
     const relationships = (await this.options.listSubagents(caller.projectId)).subagents;
     const callerName = caller.thread.name?.trim() || caller.thread.agentNickname?.trim() || "agent";
-    if (await this.sendAcrossDaemons(request, { ...caller, name: callerName }, relationships)) return;
+    if (await this.sendAcrossDaemons(request, { ...caller, name: callerName }, relationships)) return {};
     const target = await this.resolveTarget(request, caller.threadId, relationships);
     if (target.threadId === caller.threadId) throw new Error("A thread cannot message itself.");
 
@@ -260,7 +264,7 @@ export default class WorkbenchThreadMessageController {
     const callerRelationship = relationships.find(record => record.threadId === caller.threadId) ?? null;
     const directParent = callerRelationship?.parentThreadId === target.threadId ? callerRelationship : null;
     const senderName = directChild ? PARENT_AGENT_NAME : directParent?.name ?? callerName;
-    await this.admit(target, { senderName, senderThreadId: caller.threadId }, directChild, request);
+    return await this.admit(target, { senderName, senderThreadId: caller.threadId }, directChild, request);
   }
 
   /**
@@ -319,13 +323,16 @@ export default class WorkbenchThreadMessageController {
     }, directChild, { message: call.message, userVisibleSimpleVersion: call.userVisibleSimpleVersion });
   }
 
-  /** Delivers one attributed message; a parent's message also settles its child's held questionnaire. */
+  /**
+   * Delivers one attributed message; a parent's message also settles its child's held questionnaire. A user's sidebar
+   * thread is never compacted by an agent: when compaction is due the message is held for the user's next turn.
+   */
   private async admit(
     target: Awaited<ReturnType<WorkbenchThreadMessageController["resolveThread"]>>,
     sender: { senderName: string; senderThreadId: WorkbenchThreadId; senderHost?: string },
     directChild: WorkbenchSubagentRelationship | null,
     request: { message: string; userVisibleSimpleVersion: string; workbenchOrigin?: string | undefined },
-  ) {
+  ): Promise<WorkbenchThreadMessageSendResult> {
     const provider = this.options.provider(target.harness);
     const input = {
       cwd: target.thread.cwd,
@@ -333,10 +340,8 @@ export default class WorkbenchThreadMessageController {
       message: { message: request.message, ...sender, userVisibleSimpleVersion: request.userVisibleSimpleVersion },
     };
     const active = isThreadStatusActive(target.thread.status);
-    const entry = directChild
-      ? await this.options.threadState.getEntry(target.projectId, target.harness, target.threadId)
-      : null;
-    const stored = entry && entry.entryKind !== "draft" ? entry.pendingQuestionnaire : null;
+    const entry = await this.options.threadState.getEntry(target.projectId, target.harness, target.threadId);
+    const stored = directChild && entry && entry.entryKind !== "draft" ? entry.pendingQuestionnaire : null;
     const question = stored && isWorkbenchMcpQuestionnaireRequestKey(stored.requestKey) ? stored : null;
     const nativeQuestion = directChild && active && !question
       ? (await provider.interactions?.pending({ background: true }) ?? [])
@@ -345,7 +350,9 @@ export default class WorkbenchThreadMessageController {
     const admitted = await provider.threads.messageAgent({
       ...input,
       ...(directChild && !active ? { context: buildSubagentPromptContext(directChild.name, request.workbenchOrigin) } : {}),
+      ...(entry?.entryKind === "thread" ? { holdForUser: true } : {}),
     });
+    if (admitted.kind === "held") return { held: true };
     if (question) {
       const response = createEmptySubagentQuestionnaireResponse(question.request);
       const replaced = new Error("The captured questionnaire was replaced.");
@@ -394,5 +401,6 @@ export default class WorkbenchThreadMessageController {
         insertAfterItemIndex: null,
       });
     }
+    return {};
   }
 }

@@ -4,10 +4,11 @@
  * - ThreadAutoCompactTarget: observed thread identity for status publication.
  * - ThreadAutoCompactRuntime: latest turn, status and liveness a decision weighs.
  * - AutoCompactAdmissionOptions/AutoCompactDueError: a send's compaction policy and expectation, and the bounce when it expected none.
+ * - AutoCompactRunOptions: one admission's policy, held lane ticket, and hold run instead of compacting a due thread.
  * - QueuedMessageDelivery: admit one message directly, or inside the admission whose ticket it carries.
  * - default WorkbenchThreadAutoCompactController: own observed eligibility (singly or from batched facts; turn-end, idle or stale-prefix due) and
  *   compact-before-message policy, including held questionnaire answers, user messages queued behind compaction, queues handed over by a
- *   retiring generation, and bouncing sends that expected no compaction.
+ *   retiring generation, bouncing sends that expected no compaction, and holding messages whose sender holds rather than compacts.
  */
 import { ThreadAutoCompactRules, type ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -65,6 +66,15 @@ export interface AutoCompactAdmissionOptions {
   /** What the sender showed; false bounces a send that is due to compact. Absent compacts without asking, as agents do. */
   expectAutoCompact?: boolean;
 }
+
+/**
+ * One admission's options: its compaction policy, the lane ticket it already holds, and `hold`, which a due thread runs
+ * inside the admission instead of compacting, returning what it returns.
+ */
+export type AutoCompactRunOptions<T> = AutoCompactAdmissionOptions & {
+  admission?: WorkbenchThreadAdmissionTicket;
+  hold?: () => Promise<T>;
+};
 
 /** A send expected no compaction but one is due; nothing was delivered, and the thread now reports it will compact. */
 export class AutoCompactDueError extends Error {
@@ -167,7 +177,7 @@ export default class WorkbenchThreadAutoCompactController {
     threadId: string,
     provider: AdmissionProvider,
     admit: () => Promise<T>,
-    options: AutoCompactAdmissionOptions & { admission?: WorkbenchThreadAdmissionTicket } = {},
+    options: AutoCompactRunOptions<T> = {},
   ): Promise<T> {
     this.lifetime.signal.throwIfAborted();
     if (options.admission) {
@@ -181,8 +191,9 @@ export default class WorkbenchThreadAutoCompactController {
       signal.throwIfAborted();
       await this.compaction.retireStranded(threadId);
       const compacts = !options.skipAutoCompact && (await this.decide(threadId, provider, undefined, true)).willAutoCompact;
-      if (compacts && options.expectAutoCompact === false) {
+      if (compacts && (options.hold || options.expectAutoCompact === false)) {
         await this.refreshAfterAdmission(threadId, provider);
+        if (options.hold) return await options.hold();
         throw new AutoCompactDueError();
       }
       const result = compacts

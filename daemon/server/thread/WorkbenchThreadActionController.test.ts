@@ -5,7 +5,8 @@ import WorkbenchThreadActionController, { type WorkbenchThreadActionOwners } fro
 import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
 import type WorkbenchProvider from "../providers/WorkbenchProvider";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { createWorkbenchAgentMessageText, readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { AGENT_HOLD_ENTRY_PREFIX } from "../database/transcript/workbench-transcript-types";
 import { WorkbenchSkillActivationMismatchError } from "workbench-shared/workbench/thread/thread-skill-mentions";
 
 const review = { name: "review", description: "", path: "C:/skills/review/SKILL.md", relativePath: "skills/review/SKILL.md" };
@@ -83,6 +84,7 @@ function fixture(providerWarning?: string) {
     readSkills: async () => [review],
     state: {
       getCanonicalThreadEntry: async () => null,
+      reportAgentMessageHeld: unused,
       listPendingQuestionnaires: () => [],
       readGitCommitDetails: unused,
       readGitCommitRefs: unused,
@@ -511,6 +513,33 @@ test("agent messages stay undelivered when the new turn already ended or the ste
   failed.provider.threads.submit = async () => { throw new Error("turn ended meanwhile"); };
   await assert.rejects(failed.controller.resendUndeliveredAgentMessages("wb-thread", "new-turn"), /turn ended meanwhile/);
   assert.deepEqual(failed.recorded, []);
+});
+
+test("a held agent message is recorded pending on the latest turn, needs the user's attention, and steers the next running turn", async () => {
+  const f = fixture();
+  const attention: string[] = [];
+  f.owners.state.reportAgentMessageHeld = async (projectId, harness, threadId) => { attention.push(`${projectId}:${harness}:${threadId}`); return null as never; };
+  f.owners.transcript.read = async () => ({ turns: [{ id: "ended-turn" }] }) as never;
+  await f.controller.holdAgentMessage("wb-thread", { message: "review is done", senderName: "Rose", senderThreadId: "child" });
+  const [held] = f.recorded as Array<{ kind: string; entry: { entryKey: string; status: string; turnId: string; input: Array<{ text: string }> } }>;
+  assert.equal(held?.kind, "steer");
+  assert.equal(held!.entry.status, "pending");
+  assert.equal(held!.entry.turnId, "ended-turn");
+  assert.ok(held!.entry.entryKey.startsWith(AGENT_HOLD_ENTRY_PREFIX));
+  assert.deepEqual(readWorkbenchAgentMessageInput(held!.entry.input as never)?.message, "review is done");
+  assert.deepEqual(attention, ["project:codex:wb-thread"]);
+
+  const next = fixture();
+  next.provider.threads.isTurnLive = async () => true;
+  next.owners.transcripts.history = async () => ({ steerEntries: [
+    { ...agentSteer("waiting", "pending", 1), entryKey: `${AGENT_HOLD_ENTRY_PREFIX}waiting` },
+    agentSteer("other-pending", "pending", 2),
+  ] }) as never;
+  await next.controller.resendUndeliveredAgentMessages("wb-thread", "new-turn");
+  assert.deepEqual((next.messages as Array<{ intent: string; input: Array<{ text: string }> }>)
+    .map(message => [message.intent, message.input[0]!.text.includes("note waiting")]), [["steer", true]]);
+  assert.deepEqual((next.recorded as Array<{ publicItemId: string; entry: { status: string } }>)
+    .map(entry => [entry.publicItemId, entry.entry.status]), [["waiting", "dismissed"]]);
 });
 
 test("overlapping turn starts resend each stranded agent message once", async () => {

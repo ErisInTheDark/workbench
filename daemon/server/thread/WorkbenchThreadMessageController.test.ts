@@ -77,6 +77,7 @@ function thread(id: string, cwd: string, active = false, name: string | null = n
 
 function fixture({
   activeChild = false,
+  compactionDue = false,
   childCwd = "C:/repo",
   childHarness = harness,
   childPinned = false,
@@ -91,6 +92,8 @@ function fixture({
   waitHandoff,
 }: {
   activeChild?: boolean;
+  /** Admission finds compaction due, so a holding message is held. */
+  compactionDue?: boolean;
   childCwd?: string;
   childHarness?: WorkbenchHarness;
   childPinned?: boolean;
@@ -133,6 +136,7 @@ function fixture({
         await onDelivery?.();
         await deliveryGate;
         if (rejectDelivery) throw new Error("delivery rejected");
+        if (compactionDue && input.holdForUser) return { kind: "held" };
         return { kind: threads.get(input.threadId)?.status === "active" ? "steered" : "started", turnId: `delivered-${input.threadId}` };
       },
       rename: unused, list: unused, submit: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
@@ -206,7 +210,7 @@ function fixture({
           lifecycle: { agent: { agentStatus: "working" as const }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
           name: relationship.name, parentThreadId: relationship.parentThreadId, pinned: childPinned,
           profileId: relationship.profileId, profileName: relationship.profileName, projectId: relationship.projectId, title: relationship.title, updatedAt: 2,
-        } : null,
+        } : threadId === "reviewer" ? { entryKind: "thread" } as never : null,
       resolvePendingQuestionnaire: questionnaireState
         ? questionnaireState.resolvePendingQuestionnaire.bind(questionnaireState)
         : (async () => null) satisfies WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"],
@@ -449,6 +453,27 @@ test("relationship shortcuts preserve child and parent attribution", async () =>
     message: "Review ready.", senderName: "luna", senderThreadId: "child", userVisibleSimpleVersion: "Summary.",
   });
   await parent.controller.dispose();
+});
+
+test("messages to a user's sidebar thread hold instead of compacting it, and report the hold; subagents keep compacting", async () => {
+  const due = fixture({ compactionDue: true });
+  assert.deepEqual(await due.controller.send({
+    callerThreadId: "child", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message: "Review ready.", parent: true,
+  }), { held: true });
+  const held = due.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
+  assert.equal(held.holdForUser, true);
+  assert.deepEqual(await due.controller.send({
+    callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message: "Continue.", name: "luna",
+  }), {});
+  const child = due.calls[1]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
+  assert.equal(child.holdForUser, undefined);
+  await due.controller.dispose();
+
+  const idle = fixture();
+  assert.deepEqual(await idle.controller.send({
+    callerThreadId: "child", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message: "Review ready.", parent: true,
+  }), {}, "with nothing due the message is simply delivered");
+  await idle.controller.dispose();
 });
 
 test("subagents reach unsettled siblings by name without reaching other parents' children", async () => {

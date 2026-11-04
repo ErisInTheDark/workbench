@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - transcriptRequests: database requests that settle and read canonical transcripts, their assets, context usage, undelivered user
- *   steers, delivered agent messages, history queries, approval outcomes and workflow ledgers. Settlement and transcript reads name their thread
+ *   steers, held and delivered agent messages, history queries, approval outcomes and workflow ledgers. Settlement and transcript reads name their thread
  *   in slow-request reports.
  */
 import type { WorkbenchTranscriptItemCursor } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
@@ -94,6 +94,10 @@ export const transcriptRequests = {
   readTranscriptHasUndeliveredUserSteer: defineDatabaseRequest({
     read: "transcript",
     run: ({ transcripts }, threadId: string) => transcripts.hasUndeliveredUserSteer(threadId),
+  }),
+  readTranscriptHeldAgentMessageCount: defineDatabaseRequest({
+    read: "transcript",
+    run: ({ transcripts }, threadId: string) => transcripts.countHeldAgentMessages(threadId),
   }),
   readTranscriptDeliveredAgentMessages: defineDatabaseRequest({
     read: "transcript",

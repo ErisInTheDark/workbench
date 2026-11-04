@@ -31,7 +31,7 @@ function requireCallerThreadId(callerThreadId: string | null) {
 }
 
 const message = defineWorkbenchAgentCommand({
-  description: "Message one Workbench thread, steering an active turn or starting an idle one.",
+  description: "Message one Workbench thread, steering an active turn or starting an idle one. A user's thread due for compaction holds it for the user's next turn instead, returning held.",
   helpGroups: ["message"],
   words: ["message", "agent"],
   usage: "wb message agent (--thread <id> | --name <name> | --parent) --message <message> --user-visible-simple-version <text>",

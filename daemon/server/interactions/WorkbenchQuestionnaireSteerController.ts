@@ -9,6 +9,7 @@ import {
 } from "workbench-shared/workbench/identity";
 import { WorkbenchUserInputSchema, type WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
 import type { DaemonTranscriptRegistration } from "../daemon-runtime-objects";
+import { AGENT_HOLD_ENTRY_PREFIX } from "../database/transcript/workbench-transcript-types";
 import { heldSteerInput, type QueuedThreadMessage } from "../turn/WorkbenchThreadCompactionController";
 
 const STEER_SEPARATOR = "\n\n";
@@ -102,12 +103,15 @@ export default class WorkbenchQuestionnaireSteerController {
     });
   }
 
-  /** Pending held steers outside the live turn, in send order. The live turn's steers and the compaction queue belong to other owners. */
+  /**
+   * Pending held steers outside the live turn, in send order. The live turn's steers, the compaction queue and agent
+   * messages held for the user belong to other owners.
+   */
   private async virtualSteers(threadId: string) {
     const turn = await this.ports.latestTurn(threadId);
     return (await this.ports.readSteers(threadId))
       .filter(entry => entry.status === "pending" && entry.itemId
-        && !entry.entryKey.startsWith(COMPACTION_ENTRY_PREFIX)
+        && !entry.entryKey.startsWith(COMPACTION_ENTRY_PREFIX) && !entry.entryKey.startsWith(AGENT_HOLD_ENTRY_PREFIX)
         && !(turn?.live && entry.turnId === turn.id))
       .sort(sendOrder);
   }

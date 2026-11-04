@@ -32,6 +32,7 @@ export default class WorkbenchProviderDispatcher {
       instructionSelection: this.options.instructionSelection,
       messageAdmission: this.options.messageAdmission,
       onAgentMessageAdmitted: this.options.onAgentMessageAdmitted,
+      holdAgentMessage: this.options.holdAgentMessage,
       onMessageAdmitted: this.options.onMessageAdmitted,
     });
   }

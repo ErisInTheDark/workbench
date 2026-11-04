@@ -629,6 +629,10 @@ export default class WorkbenchThreadStateController {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "recoveryFailed" });
   }
 
+  async reportAgentMessageHeld(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
+    return await this.applyLifecycle(projectId, harness, threadId, { kind: "agentMessageHeld" });
+  }
+
   async refresh(projectId: ProjectId) {
     projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);

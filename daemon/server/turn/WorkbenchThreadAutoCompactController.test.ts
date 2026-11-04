@@ -192,6 +192,23 @@ test("a send that expected no compaction bounces undelivered and the thread star
   await unstated.owner.dispose();
 });
 
+test("a holding send keeps a due thread uncompacted and returns its hold inside admission; a thread not due admits", async () => {
+  const due = fixture();
+  assert.equal(await due.owner.observe({ harness: "opencode", threadId: "thread" }), true);
+  const hold = async () => { due.calls.push("hold"); return "held"; };
+  assert.equal(await due.owner.run("thread", due.provider, due.admit, { hold }), "held");
+  assert.deepEqual(due.calls, ["hold"], "nothing compacted or admitted");
+  await due.owner.dispose();
+
+  const idle = fixture();
+  idle.evidence({ activityAt: 30 * 60_000, contextTokens: 1_000 });
+  assert.equal(await idle.owner.run("thread", idle.provider, idle.admit, {
+    hold: async () => { idle.calls.push("hold"); return "held"; },
+  }), "started");
+  assert.deepEqual(idle.calls, ["admit"], "with nothing due the message goes straight in");
+  await idle.owner.dispose();
+});
+
 test("a held questionnaire compacts before its answer, while a live one stays ineligible", async () => {
   const held = fixture();
   held.waitingOnInput();

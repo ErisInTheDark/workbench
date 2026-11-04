@@ -29,7 +29,7 @@ import {
   type IconProps,
 } from "./workbench-icons";
 import { useWorkbenchComposerDraftPresence } from "./WorkbenchComposerDraftPresenceProvider";
-import WorkbenchThreadEntryBadge from "./WorkbenchThreadEntryBadge";
+import WorkbenchThreadEntryBadge, { heldAgentMessageLabel } from "./WorkbenchThreadEntryBadge";
 import { useThread } from "./use-thread";
 import WorkbenchDraftTitleIcons from "./WorkbenchDraftTitleIcons";
 import { useWorkbenchSubagentClaims } from "./use-workbench-subagent-claims";
@@ -173,6 +173,7 @@ export default function WorkbenchThreadListItem({
   const target = targetForEntry(entry);
   const facts = useThread.summary(entry.entryKind === "draft" ? null : entry.identity.threadId)?.summary.facts;
   const requiredTodoCount = facts?.requiredTodoCount ?? 0;
+  const heldAgentMessageCount = facts?.heldAgentMessageCount ?? 0;
   const {
     activityAt, claimedPaths, group, Icon, lifecycle, showProposedCommit,
     stashed, stashedPaths, status, statusClassName, statusTone, tooltipStatus, waiting,
@@ -212,6 +213,7 @@ export default function WorkbenchThreadListItem({
   const projectName = projectLabelParts.flatMap(part => part ? [`${part}, `] : []).join("");
   const gitWorkLabels = [
     hasComposerDraft ? "unsent draft" : "",
+    heldAgentMessageCount ? heldAgentMessageLabel(heldAgentMessageCount) : "",
     requiredTodoCount ? `${requiredTodoCount} required ${requiredTodoCount === 1 ? "todo" : "todos"}` : "",
     feedbackCount ? `${feedbackCount} addressed feedback ${feedbackCount === 1 ? "report" : "reports"}` : "",
     proposalCount ?`${proposalCount} ${proposalCount === 1 ? "proposal" : "proposals"}` : "",
@@ -332,7 +334,7 @@ export default function WorkbenchThreadListItem({
           <Icon className={`mr-1.5 ${statusClassName}`} size={16} />
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>
           <span className={`col-start-3 row-start-1 ml-2 inline-flex items-center gap-1.5 text-[0.72rem] text-fg/muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
-            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} feedbackCount={feedbackCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
+            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} feedbackCount={feedbackCount} hasComposerDraft={hasComposerDraft} heldAgentMessageCount={heldAgentMessageCount} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
             {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={16} /></span> : null}
             {trailing ?? rowTime}
           </span>
@@ -363,7 +365,7 @@ export default function WorkbenchThreadListItem({
           ) : undefined}
           metadata={(
             <span className="grid items-center">
-              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} feedbackCount={feedbackCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
+              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} feedbackCount={feedbackCount} hasComposerDraft={hasComposerDraft} heldAgentMessageCount={heldAgentMessageCount} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
             </span>
           )}
           statusIcon={<Icon className={statusClassName} size={16} />}

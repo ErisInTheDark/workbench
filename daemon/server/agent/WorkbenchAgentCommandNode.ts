@@ -601,7 +601,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         ? await threadState.handleManagedThreadRequest(request)
         : request.method === "workbench/message"
           ? await messages.send(request.params).then(
-            () => ({ id: request.id ?? null, result: {} }),
+            result => ({ id: request.id ?? null, result }),
             error => ({ id: request.id ?? null, error: { code: -32000, message: error instanceof Error ? error.message : "Workbench message failed." } }),
           )
           : await subagents.handleRequest(request, signal),

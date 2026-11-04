@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers (virtual while a questionnaire waits) and whether a running agent still awaits one, context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, bounded reads, and batched latest-turn and usage reads.
+ * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers (virtual while a questionnaire waits) and whether a running agent still awaits one, agent messages held for the user, context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, bounded reads, and batched latest-turn and usage reads.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -93,10 +93,12 @@ import type {
   WorkbenchTranscriptSnapshot,
   WorkbenchTranscriptSnapshotRows,
 } from "./workbench-transcript-types.ts";
+import { AGENT_HOLD_ENTRY_PREFIX } from "./workbench-transcript-types.ts";
 import type { WorkbenchTranscriptItemCursor } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { selectNewestTranscriptRows } from "workbench-shared/workbench/transcript/transcript-row-credit";
 
 const SQLITE_ITEM_ID_BATCH_SIZE = 500;
+const AGENT_HOLD_PATTERN = `${AGENT_HOLD_ENTRY_PREFIX}%`;
 
 type TableRow<Table extends CurrentTableDefinition> = SelectRow<Table>;
 type TranscriptThreadRow = TableRow<typeof coreTables.workbenchThreads>;
@@ -549,6 +551,24 @@ export default class WorkbenchTranscriptRepository {
     }
     const { steers, compactions } = this.#abandonedHolds(before, null);
     return [...new Set([...steers, ...compactions].map(row => row.thread_id))].sort();
+  }
+
+  /** Agent messages the thread holds for its user's next running turn. */
+  countHeldAgentMessages(threadId: string) {
+    return (this.#database.prepare(`
+      SELECT COUNT(*) AS count FROM thread_held_steers
+      WHERE thread_id = @threadId AND state = 'pending' AND entry_key LIKE @agentHold
+    `).get({ threadId, agentHold: AGENT_HOLD_PATTERN }) as { count: number }).count;
+  }
+
+  /** Every thread's held agent-message count, for threads holding any. */
+  heldAgentMessageCounts() {
+    const rows = this.#database.prepare(`
+      SELECT thread_id, COUNT(*) AS count FROM thread_held_steers
+      WHERE state = 'pending' AND entry_key LIKE @agentHold
+      GROUP BY thread_id
+    `).all({ agentHold: AGENT_HOLD_PATTERN }) as Array<{ thread_id: string; count: number }>;
+    return Object.fromEntries(rows.map(row => [row.thread_id, row.count]));
   }
 
   /**
@@ -1828,10 +1848,10 @@ export default class WorkbenchTranscriptRepository {
 
   /**
    * Running turns own their holds until they settle; on a settled turn a hold is a virtual steer while its thread
-   * holds a pending questionnaire, and otherwise a leftover nobody will deliver.
+   * holds a pending questionnaire, an agent message waiting for the user's next turn, and otherwise a leftover nobody
+   * will deliver.
    */
   #abandonedHolds(before: number, threadId: string | null) {
-    const parameters = { before, threadId };
     const steers = this.#database.prepare(`
       SELECT s.id, s.thread_id, s.turn_id
       FROM thread_held_steers s
@@ -1839,11 +1859,12 @@ export default class WorkbenchTranscriptRepository {
       WHERE s.state = 'pending' AND s.attempted_at < @before
         AND t.state NOT IN ('admitted', 'inProgress')
         AND (@threadId IS NULL OR s.thread_id = @threadId)
+        AND s.entry_key NOT LIKE @agentHold
         AND NOT EXISTS (
           SELECT 1 FROM workbench_thread_questionnaires q WHERE q.thread_id = s.thread_id AND q.state = 'pending'
         )
       ORDER BY s.id
-    `).all(parameters) as Array<{ id: number; thread_id: string; turn_id: string }>;
+    `).all({ before, threadId, agentHold: AGENT_HOLD_PATTERN }) as Array<{ id: number; thread_id: string; turn_id: string }>;
     const compactions = this.#database.prepare(`
       SELECT i.*
       FROM thread_items i
@@ -1853,7 +1874,7 @@ export default class WorkbenchTranscriptRepository {
         AND t.state NOT IN ('admitted', 'inProgress')
         AND (@threadId IS NULL OR i.thread_id = @threadId)
       ORDER BY i.id
-    `).all(parameters) as TranscriptItemRow[];
+    `).all({ before, threadId }) as TranscriptItemRow[];
     return { steers, compactions };
   }
 

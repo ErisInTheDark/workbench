@@ -6,6 +6,8 @@
  * - WorkbenchProviderCompactionScope: canonical item and turn owned by one compaction execution.
  * - WorkbenchProviderThreadList: bounded provider discovery request.
  * - WorkbenchAgentMessageAdmission: whether an agent message started a turn or steered the live one.
+ * - WorkbenchAgentMessageResult: an agent message's admission, or its hold for the user's next turn.
+ * - WorkbenchAgentMessageInput: one attributed agent message and its hold-for-user admission policy.
  * - WorkbenchProviderThreads: WB-valued thread operations implemented at the provider edge.
  * - WorkbenchProviderThreadContextRollover: optional fresh-native-context operations.
  * - WorkbenchProviderTranscriptReconcile: demanded window and pre-fetch capture-gap identities.
@@ -64,6 +66,16 @@ export interface WorkbenchAgentMessageAdmission {
   kind: "started" | "steered";
   turnId: string;
 }
+/** An agent message's outcome: admitted, or held for its user's next turn because compaction was due. */
+export type WorkbenchAgentMessageResult = WorkbenchAgentMessageAdmission | { kind: "held" };
+export interface WorkbenchAgentMessageInput {
+  threadId: string;
+  cwd: string;
+  message: WorkbenchAgentMessage;
+  context?: WorkbenchMessageContext;
+  /** Workbench admission policy, never seen by providers: a due compaction holds the message instead of running. */
+  holdForUser?: boolean;
+}
 export interface WorkbenchProviderThreads {
   readonly contextRollover?: WorkbenchProviderThreadContextRollover;
   reconcile(input: WorkbenchProviderTranscriptReconcile, signal: AbortSignal): Promise<WorkbenchThreadReconcileResult>;
@@ -78,7 +90,7 @@ export interface WorkbenchProviderThreads {
   admitTurn(threadId: string, turnReference: string): Promise<void>;
   submit(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageResult>;
   /** Deliver an attributed agent message; report whether its Workbench turn started or was steered. */
-  messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<WorkbenchAgentMessageAdmission>;
+  messageAgent(input: WorkbenchAgentMessageInput): Promise<WorkbenchAgentMessageResult>;
   rename(threadId: string, title: string): Promise<void>;
   compact(threadId: string, options: { scope: WorkbenchProviderCompactionScope; signal?: AbortSignal }): Promise<void>;
   /**

@@ -3,10 +3,10 @@
  * - WorkbenchProviderMessageAdmission: one provider-chosen message outcome published after acceptance.
  * - WorkbenchProviderHiddenTurn: a Workbench-started hidden turn and its in-lane supersession check.
  * - WorkbenchProviderNativeLocations: pending native session moves after project merges, and their settlement.
- * - WorkbenchProviderHandleOptions: post-admission hooks, instruction selection, native relocation and shared message admission policy.
+ * - WorkbenchProviderHandleOptions: post-admission hooks, agent-message holds, instruction selection, native relocation and shared message admission policy.
  * - default WorkbenchProviderHandle: forward operations through the current definition lease, move a merged thread's native session
  *   before its next turn or compaction, supply thread instruction selections, admit compaction-queue deliveries inside their
- *   compaction's admission, and wake waits after accepted steers.
+ *   compaction's admission, hold agent messages for the user instead of compacting, and wake waits after accepted steers.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
@@ -14,8 +14,10 @@ import providerRegistrations, { type WorkbenchProviderKey } from "workbench-shar
 import type { WorkbenchThreadMessage } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchThreadAdmissionTicket } from "../thread/WorkbenchThreadAdmissionController";
 import type WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCompactController";
+import type { AutoCompactRunOptions } from "../turn/WorkbenchThreadAutoCompactController";
 import type WorkbenchThreadInstructionSelectionController from "../thread/WorkbenchThreadInstructionSelectionController";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
+import type { WorkbenchAgentMessageResult } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchMessageContext, WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
@@ -48,6 +50,8 @@ export interface WorkbenchProviderHandleOptions {
   messageAdmission?: WorkbenchThreadAutoCompactController["run"];
   /** An agent message steered a live turn; its model sees it only at a later input boundary. */
   onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void;
+  /** Inside the thread's admission: keep a held agent message for its user's next running turn. */
+  holdAgentMessage?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void>;
   onMessageAdmitted?: (admission: WorkbenchProviderMessageAdmission) => Promise<void> | void;
 }
 
@@ -67,8 +71,8 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     threadId: string,
     provider: WorkbenchProvider,
     admit: () => Promise<T>,
-    options?: Parameters<WorkbenchThreadAutoCompactController["run"]>[3],
-  ) {
+    options?: AutoCompactRunOptions<T>,
+  ): Promise<T> {
     const relocated = async () => {
       await this.relocatePending(threadId, provider);
       return await admit();
@@ -194,10 +198,14 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     latestTurn: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.latestTurn(threadId), `${this.key}: threads.latestTurn`),
     admitTurn: (threadId, turnReference) => this.run(providerRegistrations[this.key], provider => provider.threads.admitTurn(threadId, turnReference), `${this.key}: threads.admitTurn`),
     submit: input => this.submitUserMessage(input, { skipAutoCompact: input.skipAutoCompact, expectAutoCompact: input.expectAutoCompact }),
-    messageAgent: async input => {
-      const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => (
-        this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) }))
-      )), `${this.key}: threads.messageAgent`);
+    messageAgent: async ({ holdForUser, ...input }) => {
+      const hold = holdForUser && this.options.holdAgentMessage;
+      const result: WorkbenchAgentMessageResult = await this.run(providerRegistrations[this.key], provider => this.admitMessage<WorkbenchAgentMessageResult>(
+        input.threadId, provider,
+        () => this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) })),
+        hold ? { hold: async () => { await hold(input.threadId, input.message); return { kind: "held" }; } } : undefined,
+      ), `${this.key}: threads.messageAgent`);
+      if (result.kind === "held") return result;
       // A message that starts a turn is that turn's prompt, so the model already has it.
       if (result.kind === "steered") await this.options.onAgentMessageAdmitted?.(input.threadId, input.message);
       const admitted = this.admitted(input.threadId, result, input.message.senderThreadId);
@@ -224,7 +232,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     return this.submitUserMessage(input, { skipAutoCompact: true, admission });
   }
 
-  private async submitUserMessage(input: WorkbenchThreadMessage, options: Parameters<WorkbenchThreadAutoCompactController["run"]>[3]) {
+  private async submitUserMessage(input: WorkbenchThreadMessage, options: Omit<AutoCompactRunOptions<never>, "hold">) {
     const { skipAutoCompact: _policy, expectAutoCompact: _expected, ...providerInput } = input;
     const result = this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
       this.admitMessage(input.threadId, provider, () => this.withSelection(input.threadId, input.context, context => (

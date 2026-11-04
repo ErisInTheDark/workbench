@@ -19,6 +19,7 @@
  * - WorkbenchTranscriptItemIdentityLookup: public-first, thread-scoped item lookup.
  * - WorkbenchTranscriptItemIdentity: resolved public identity and private alias evidence.
  * - WorkbenchTranscriptIdentityDatabase: structural identity operations on the existing database worker.
+ * - AGENT_HOLD_ENTRY_PREFIX: held-steer key prefix of agent messages a sidebar thread holds for its user's next running turn.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type {
@@ -33,6 +34,8 @@ import type { EvidenceSchemaRows } from "workbench-shared/workbench/database/sch
 import type { WorkbenchCumulativeTokenUsage } from "workbench-shared/workbench/stats/workbench-stats-usage";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+export const AGENT_HOLD_ENTRY_PREFIX = "agent-hold:";
+
 export type {
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSnapshot,

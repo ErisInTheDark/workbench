@@ -1,12 +1,12 @@
 /*
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project, virtual-steer and transcript owners.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops and queue skips, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire hold, virtual-steer routing, compaction-queue adoption and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops and queue skips, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire hold, virtual-steer routing, compaction-queue adoption, agent messages held for the user, and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
-import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
+import { createWorkbenchTextInput, WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
 import {
   workbenchThreadActions, type WorkbenchThreadActionMap, type WorkbenchThreadCreate,
@@ -39,7 +39,10 @@ import type WorkbenchThreadCompactionController from "../turn/WorkbenchThreadCom
 import type { CompactionQueueHandoff } from "../turn/WorkbenchThreadCompactionController";
 import type WorkbenchQuestionnaireSteerController from "../interactions/WorkbenchQuestionnaireSteerController";
 import { assertWorkbenchSkillActivations } from "workbench-shared/workbench/thread/thread-skill-mentions";
-import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import {
+  createWorkbenchAgentMessageText, readWorkbenchAgentMessageInput, type WorkbenchAgentMessage,
+} from "workbench-shared/workbench/thread/thread-agent-message";
+import { AGENT_HOLD_ENTRY_PREFIX } from "../database/transcript/workbench-transcript-types";
 
 export interface WorkbenchThreadActionOwners {
   components: Pick<import("../skills/WorkbenchComponentsController").default, "extensions" | "images" | "keep" | "kept" | "results">;
@@ -64,7 +67,8 @@ export interface WorkbenchThreadActionOwners {
   profiles: Pick<WorkbenchThreadStateFeature, "captureCreationProfile" | "captureCreationProfileForProject">;
   state: Pick<
     WorkbenchThreadStateController,
-    "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires" | "readGitCommitDetails" | "readGitCommitRefs"
+    | "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires" | "readGitCommitDetails" | "readGitCommitRefs"
+    | "reportAgentMessageHeld"
   >;
   skills: Pick<WorkbenchThreadSkillsController, "read" | "deactivate">;
   goals: Pick<WorkbenchThreadGoalController, "set" | "clear">;
@@ -505,8 +509,8 @@ export default class WorkbenchThreadActionController {
   }
 
   /**
-   * Agents cannot press resend, so their undelivered messages follow the thread into its next running turn,
-   * oldest first. They steer only a turn that is still running; one that already ended leaves them undelivered
+   * Agents cannot press resend, so their undelivered and held messages follow the thread into its next running turn,
+   * oldest first. They steer only a turn that is still running; one that already ended leaves them waiting
    * for the next turn, so a thread waiting on its user is not woken. User steers keep their resend/dismiss controls.
    */
   resendUndeliveredAgentMessages(threadId: string, turnId: string) {
@@ -521,10 +525,35 @@ export default class WorkbenchThreadActionController {
     return run;
   }
 
+  /**
+   * Keep an agent message for the user's next running turn instead of compacting their thread: it shows pending at the
+   * thread's tail, and finished work asks for the user's attention. Runs inside the thread's admission, so a turn the
+   * user starts next always finds it.
+   */
+  async holdAgentMessage(threadId: string, message: WorkbenchAgentMessage) {
+    const target = await this.target(threadId);
+    const { identity } = target;
+    const turn = (await this.owners.transcript.read({ threadId: identity.threadId, turnLimit: 1 }))?.turns.at(-1);
+    if (!turn) throw new Error("The thread has no turn to hold an agent message on.");
+    const now = Date.now();
+    await this.owners.transcript.record([{
+      kind: "steer",
+      entry: {
+        threadId: identity.threadId, turnId: WorkbenchTurnIdSchema.parse(turn.id),
+        entryKey: `${AGENT_HOLD_ENTRY_PREFIX}${randomUUID()}`, input: [createWorkbenchTextInput(createWorkbenchAgentMessageText(message))],
+        status: "pending", attemptedAt: now, resolvedAt: null, requestId: null, canonicalItemId: null,
+        clientUserMessageId: null, dispatchSequence: null, error: null,
+      },
+      observedAt: now,
+    }], { source: "workbench" });
+    await this.owners.state.reportAgentMessageHeld(identity.projectId, target.harness, identity.threadId);
+  }
+
   private async redeliverAgentMessages(threadId: string, turnId: string) {
     const { identity, provider } = await this.target(threadId);
     const stranded = (await this.owners.transcripts.history(identity.threadId)).steerEntries
-      .filter(entry => (entry.status === "failed" || entry.status === "interrupted")
+      .filter(entry => (entry.status === "failed" || entry.status === "interrupted"
+          || (entry.status === "pending" && entry.entryKey.startsWith(AGENT_HOLD_ENTRY_PREFIX)))
         && entry.itemId && readWorkbenchAgentMessageInput(entry.input))
       .sort((left, right) => left.attemptedAt - right.attemptedAt);
     if (!stranded.length || !await provider.threads.isTurnLive(identity.threadId, turnId)) return;

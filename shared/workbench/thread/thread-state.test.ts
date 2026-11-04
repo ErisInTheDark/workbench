@@ -658,6 +658,25 @@ test("subagent status remains immediate and exact-turn stop and settlement prese
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);
 });
 
+test("a held agent message makes completed work need attention and leaves every other lifecycle alone", () => {
+  const turnId = fixtureIdentityValues.WorkbenchTurnId["new"];
+  const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId });
+  const completed = reduceWorkbenchThreadLifecycle(
+    reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId }),
+    { kind: "turnCompleted", status: "completed", turnId },
+  );
+  assert.equal(completed.kind, "completed");
+  const attention = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "agentMessageHeld" }), attention);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(reduceWorkbenchThreadLifecycle(completed, { kind: "settle", entryKind: "thread" }),
+    { kind: "agentMessageHeld" }), attention, "a settled thread comes back as an ordinary message would bring it back");
+  const stopped = reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" });
+  const interrupted = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId });
+  for (const kept of [stopped, interrupted, working]) {
+    assert.equal(reduceWorkbenchThreadLifecycle(kept, { kind: "agentMessageHeld" }), kept);
+  }
+});
+
 test("delivered user input reactivates provider-owned terminal state without overriding user-owned state", () => {
   const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
   const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent");
