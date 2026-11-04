@@ -14,10 +14,12 @@
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering.
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build skill catalogs and universal instructions;
  *   the activated catalog also returns each skill's rendered body.
- * - formatWorkbenchSkillCatalogEntry: render a skill's name and trigger for the instruction catalog.
+ * - WorkbenchSkillCatalogEntry/readWorkbenchSkillCatalogEntry/listWorkbenchSkillCatalog: a skill's catalog name, trigger and content digest.
+ * - formatWorkbenchSkillCatalogEntry: render a catalog entry's name and trigger for the instruction catalog.
  * - resolveWorkbenchActivatedSkills: canonical path and catalog name for each active skill selected by path.
  * - listActivatedSkillDefinitions: resolve active skill definitions by their canonical paths.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -525,19 +527,34 @@ export function stripWorkbenchInstructionFrontmatter(content: string) {
   return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
 }
 
-export function formatWorkbenchSkillCatalogEntry(skill: WorkbenchSkillDefinition) {
-  return `<skill name="${escapeXmlAttribute(createSkillShadowKey(skill))}" trigger="${escapeXmlAttribute(skill.description)}" />`;
+/** The digest covers the skill file itself, so a body edit is a change even when name and trigger stay. */
+export interface WorkbenchSkillCatalogEntry {
+  readonly name: string;
+  readonly trigger: string;
+  readonly digest: string;
+}
+
+export function readWorkbenchSkillCatalogEntry(skill: WorkbenchSkillDefinition): WorkbenchSkillCatalogEntry {
+  return {
+    name: createSkillShadowKey(skill),
+    trigger: skill.description,
+    digest: createHash("sha256").update(skill.content).digest("hex"),
+  };
+}
+
+export function formatWorkbenchSkillCatalogEntry(entry: Pick<WorkbenchSkillCatalogEntry, "name" | "trigger">) {
+  return `<skill name="${escapeXmlAttribute(entry.name)}" trigger="${escapeXmlAttribute(entry.trigger)}" />`;
+}
+
+export async function listWorkbenchSkillCatalog(projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS) {
+  return (await listActiveWorkbenchSkillDefinitions(projectSkills)).map(readWorkbenchSkillCatalogEntry);
 }
 
 export async function buildWorkbenchSkillCatalog(
   projectSkills: WorkbenchProjectSkills = EMPTY_PROJECT_SKILLS,
 ) {
-  const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
-  if (!activeSkills.length) {
-    return null;
-  }
-
-  return activeSkills.map(formatWorkbenchSkillCatalogEntry).join("\n");
+  const entries = await listWorkbenchSkillCatalog(projectSkills);
+  return entries.length ? entries.map(formatWorkbenchSkillCatalogEntry).join("\n") : null;
 }
 
 export async function listActivatedSkillDefinitions(

@@ -853,13 +853,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     if (fakeModel && provider !== "codex") {
       fakeModel.expectNextConversationText(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, "<wb:questionnaire-response>");
     }
-    // A new project skill legitimately joins the instructions' skill list, so it exists before the held window starts.
-    const skillName = `scenario-proof-${provider}`;
-    const skillProof = `skill-body-${randomUUID()}`;
-    const skillPath = path.join(runtime.project, ".agents.local", "skills", skillName, "SKILL.md");
-    await fs.mkdir(path.dirname(skillPath), { recursive: true });
-    await fs.writeFile(skillPath, `---\nname: ${skillName}\ndescription: Scenario proof skill.\n---\n\n${skillProof}\n`);
-    // From the continuation through the stopped turn, hidden context and activated skill bodies must never change the cached prefix.
+    // From the continuation through the stopped turn, hidden context, new skills and activated skill bodies must never change the cached prefix.
     fakeModel?.holdSystemPrompt();
     step("answering the retained held question");
     assert.equal((await answer(
@@ -895,10 +889,21 @@ test("selected providers complete the shared thread boundary journey in one clon
     step("waiting for the provider to settle the snoozed turn");
     await owner.waitProviderIdle();
 
-    step("running the stopped turn with a newly activated skill");
+    step("running the stopped turn with new project skills, one activated");
+    const writeSkill = async (name: string, body: string) => {
+      const file = path.join(runtime.project, ".agents.local", "skills", name, "SKILL.md");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, `---\nname: ${name}\ndescription: Scenario proof skill.\n---\n\n${body}\n`);
+      return file;
+    };
+    const skillName = `scenario-proof-${provider}`;
+    const skillProof = `skill-body-${randomUUID()}`;
+    const skillPath = await writeSkill(skillName, skillProof);
+    const listedSkillName = `scenario-listed-${provider}`;
+    await writeSkill(listedSkillName, "Listed only.");
     if (fakeModel) fakeModel.enqueue(journey.fake.stop(stopProof));
     const stopText = journey.stop(stopProof);
-    fakeModel?.expectNextConversationText(skillProof);
+    fakeModel?.expectNextConversationText(skillProof, "<wb:skills-changed>", listedSkillName);
     if (attachmentInput.length) fakeModel!.expectNextClaudeImages(stopProof, attachmentData);
     const started = await runtime.daemon.threads.message({
       threadId, clientMessageId: randomUUID(), intent: "continue",

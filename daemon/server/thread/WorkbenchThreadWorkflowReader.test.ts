@@ -37,9 +37,10 @@ function pinned(skillPaths: string[]) {
   const pins = new WorkbenchThreadInstructionPins({
     execute: async command => {
       if (command.kind === "read") return stored;
-      stored = command.kind === "pinBase"
-        ? { base: structuredClone(command.layers), skills: stored?.skills ?? {}, prefix: null }
-        : { base: stored?.base ?? null, skills: { ...stored?.skills, ...structuredClone(command.skills) }, prefix: null };
+      if (command.kind === "pinBase") stored = { base: structuredClone(command.layers), skills: stored?.skills ?? {}, prefix: null };
+      if (command.kind === "pinSkills") {
+        stored = { base: stored?.base ?? null, skills: { ...stored?.skills, ...structuredClone(command.skills) }, prefix: null };
+      }
       return null;
     },
     readToolFingerprint: async () => "tools",

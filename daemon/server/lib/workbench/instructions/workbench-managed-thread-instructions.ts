@@ -47,6 +47,7 @@ export const WorkbenchInstructionPrefixContextSchema = z.object({
   roots: z.array(z.object({
     id: z.string(), isPrimary: z.boolean(), name: z.string(), relativePath: z.string(), rootPath: z.string(),
   })).optional(),
+  skills: z.array(z.object({ name: z.string(), trigger: z.string(), digest: z.string() })).optional(),
   subagentName: z.string().nullable().optional(),
   threadId: z.string().nullable().optional(),
   workbenchOrigin: z.string().nullable().optional(),

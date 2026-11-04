@@ -150,7 +150,7 @@ function createWorkbenchCoreFeature(
     readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Thread instruction tool catalogue"),
     readLocalCapabilities: () => settings.readLocalCapabilities(),
     workbenchOrigin: context.localDaemonOrigin,
-    pin: async (threadId, pin) => await threadInstructionPins.pin(threadId, pin),
+    pins: threadInstructionPins,
   });
   const turns = new WorkbenchTurnRuntimeFeature({
     context, database, transcript, turnRecovery, identities: threadIdentity, lookup, settings, projectCatalog, run,
@@ -173,6 +173,7 @@ function createWorkbenchCoreFeature(
     publishRuntime: (threadId, change) => turns.publish(threadId, change),
     setSummaryFacts,
     threadInstructions,
+    instructionPins: threadInstructionPins,
     heldAgentContext,
   });
   const { agentContext, skillCatalog, vis } = facts;

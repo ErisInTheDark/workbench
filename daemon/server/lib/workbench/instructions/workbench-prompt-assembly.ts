@@ -4,6 +4,7 @@
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders.
  * - buildWorkbenchPromptInstructions: resolve fresh Workbench and project instructions, recursive imports, and runtime slots,
  *   with the modes and checklists the rendered text declares.
+ * - listWorkbenchPromptSkills: the skill catalog entries a build from this context would list now.
  * - buildWorkbenchActivatedSkillCatalog: resolve fresh bodies for validated slash-activated skills, with each body's declarations.
  * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free typed Workbench instructions.
  * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: re-export final selector filtering and mechanic availability.
@@ -22,8 +23,9 @@ import type {
 } from "workbench-shared/types";
 import {
   buildWorkbenchActivatedSkillCatalog as buildActivatedSkillCatalog,
-  buildWorkbenchSkillCatalog,
   ensureWorkbenchLibrary,
+  formatWorkbenchSkillCatalogEntry,
+  listWorkbenchSkillCatalog,
   listWorkbenchLibraryInstructions,
   parseFrontmatterBlock,
   stripWorkbenchInstructionFrontmatter,
@@ -264,23 +266,31 @@ export async function ensureWorkbenchPromptFiles() {
   await ensureWorkbenchLibrary();
 }
 
+/** The skill list a build from this context would show now; voice threads list none. */
+export async function listWorkbenchPromptSkills(context: WorkbenchPromptContext = {}) {
+  if (context.role === "voice-to-text") return [];
+  await ensureWorkbenchPromptFiles();
+  return await listWorkbenchSkillCatalog(await listProjectSkillsForPrompt(context));
+}
+
 export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptContext = {}): Promise<WorkbenchPromptInstructions> {
   await ensureWorkbenchPromptFiles();
 
   const voice = context.role === "voice-to-text";
   if (voice) context = { ...context, workflowIds: ["voice-to-text"] };
   const instructionFiles = createLibraryInstructionFileGeneration();
-  const [agentDefinition, projectSkills, instructionPacks] = await Promise.all([
+  const [agentDefinition, skills, instructionPacks] = await Promise.all([
     voice ? Promise.resolve(null) : readSelectedAgentDefinition(context, instructionFiles),
-    voice ? Promise.resolve(EMPTY_PROJECT_SKILLS) : listProjectSkillsForPrompt(context),
+    context.skills ?? listWorkbenchPromptSkills(context),
     listWorkbenchLibraryInstructions(),
   ]);
-  const skillManifest = voice ? null : await buildWorkbenchSkillCatalog(projectSkills);
   const slots: Record<string, string> = {
     ...(agentDefinition ? buildAgentRuntimeSlots(agentDefinition) : {
       "agent.description": "", "agent.name": "", "agent.path": "", "agent.prompt": "",
     }),
-    "skills.catalog": skillManifest?.trim() || "No additional Workbench skills were detected.",
+    "skills.catalog": voice || !skills.length
+      ? "No additional Workbench skills were detected."
+      : skills.map(formatWorkbenchSkillCatalogEntry).join("\n"),
     "subagent.identity": buildSubagentIdentity(context),
     "workflow.content": buildWorkflowContent(context, instructionFiles),
     "workspace.roots.list": formatWorkspaceRoots(context.roots),

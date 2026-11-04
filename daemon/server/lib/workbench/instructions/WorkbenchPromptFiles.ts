@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchPromptContext/WorkbenchPromptInstructions/WorkbenchActivatedSkillCatalog/WorkbenchSkillLayer: stable prompt assembly contracts.
  * - ensure/build Workbench prompt functions: delegate each source-consuming call through the current assembly generation, refreshed after source edits.
+ * - listWorkbenchPromptSkills: the skill catalog entries a build would list now.
  * - buildWorkbenchActivatedSkillCatalog: load fresh bodies for validated slash-activated skills, with each body's declared layer.
  * - buildWorkbenchManagedThreadInstructions/buildWorkbenchManagedThreadActivatedSkills: shared managed-thread instruction and activated-skill assembly with one filtering pipeline.
  * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: final selector filtering and capability-backed availability helpers.
@@ -36,6 +37,10 @@ export async function buildWorkbenchPromptInstructions(
   context: WorkbenchPromptContext = {},
 ): Promise<WorkbenchPromptInstructions> {
   return await (await loadWorkbenchPromptAssembly()).buildWorkbenchPromptInstructions(context);
+}
+
+export async function listWorkbenchPromptSkills(context: WorkbenchPromptContext = {}) {
+  return await (await loadWorkbenchPromptAssembly()).listWorkbenchPromptSkills(context);
 }
 
 export async function buildWorkbenchActivatedSkillCatalog(

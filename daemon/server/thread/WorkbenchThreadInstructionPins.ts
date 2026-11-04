@@ -3,14 +3,17 @@
  * - WorkbenchInstructionPin: what one instruction build delivered: base layers with the prefix fingerprint, or activated skills' layers.
  * - WorkbenchThreadInstructionPinsPorts: storage, a content fingerprint of the tools a prefix's audience is served, and a rebuild of a stored prefix.
  * - PinnedInstructions: one thread's validated pins; skills keyed by comparable path.
+ * - PinnedSkills: a thread's frozen skill list, what the agent was last told, and whether compaction asked for a refreeze.
  * - comparableSkillPath: the key a skill's pinned layer is stored and found under.
- * - default WorkbenchThreadInstructionPins: own what instructions each thread was last given, and whether its next prefix would differ.
+ * - default WorkbenchThreadInstructionPins: own what instructions each thread was last given, what it was told about skills since, and
+ *   whether its next prefix would differ.
  */
 import path from "node:path";
 import { z } from "zod";
 import type {
   StoredThreadInstructionOverlays, ThreadInstructionOverlayCommand,
 } from "../database/thread-state/WorkbenchThreadInstructionOverlayStore";
+import type { WorkbenchSkillCatalogEntry } from "../lib/workbench-library";
 import {
   WorkbenchInstructionOverlaysSchema, type WorkbenchInstructionOverlays,
 } from "../lib/workbench/instructions/instruction-overlay-catalogue";
@@ -37,11 +40,26 @@ export interface PinnedInstructions {
   skills: ReadonlyMap<string, WorkbenchInstructionOverlays>;
 }
 
-/** Absent toolHash: tools were unreadable at pin time, or the pin predates fingerprints; only instructions are compared. */
+/** A thread's skill list as its prefix froze it, and as the agent was last told it. */
+export interface PinnedSkills {
+  frozen: readonly WorkbenchSkillCatalogEntry[];
+  known: readonly WorkbenchSkillCatalogEntry[];
+  /** Compaction asked the next build to freeze the list again. */
+  refreeze: boolean;
+}
+
+const SkillEntriesSchema = WorkbenchInstructionPrefixContextSchema.shape.skills.unwrap();
+
+/**
+ * Absent toolHash: tools were unreadable at pin time, or the pin predates fingerprints; only instructions are compared.
+ * Absent knownSkills: the agent knows exactly the frozen list.
+ */
 const StoredPrefixSchema = z.object({
   hash: z.string().min(1),
   toolHash: z.string().min(1).optional(),
   context: WorkbenchInstructionPrefixContextSchema,
+  knownSkills: SkillEntriesSchema.optional(),
+  refreezeSkills: z.boolean().optional(),
 });
 const PinnedBaseSchema = WorkbenchInstructionOverlaysSchema.array();
 
@@ -86,6 +104,28 @@ export default class WorkbenchThreadInstructionPins {
       if (layer.success) skills.set(key, layer.data);
     }
     return { base: base.success ? base.data : null, skills };
+  }
+
+  /** Null when the thread has no prefix that froze a skill list, or it cannot be read; such threads list current skills. */
+  async readSkills(threadId: string): Promise<PinnedSkills | null> {
+    try {
+      const stored = StoredPrefixSchema.safeParse((await this.ports.execute({ kind: "read", threadId }))?.prefix);
+      const frozen = stored.success ? stored.data.context.skills : undefined;
+      if (!stored.success || !frozen) return null;
+      return { frozen, known: stored.data.knownSkills ?? frozen, refreeze: stored.data.refreezeSkills ?? false };
+    } catch (error) {
+      this.#warn(`Pinned skills unreadable for ${threadId}`, error);
+      return null;
+    }
+  }
+
+  async noteSkills(threadId: string, skills: readonly WorkbenchSkillCatalogEntry[]) {
+    await this.ports.execute({ kind: "noteSkills", threadId, skills, at: (this.ports.now ?? Date.now)() });
+  }
+
+  /** The agent's context no longer holds earlier skill notices, so its next build lists current skills. */
+  async refreezeSkills(threadId: string) {
+    await this.ports.execute({ kind: "refreezeSkills", threadId, at: (this.ports.now ?? Date.now)() });
   }
 
   /** Remembered from the last exact check of the current pin; never rebuilds. */

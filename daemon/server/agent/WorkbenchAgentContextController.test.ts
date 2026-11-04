@@ -1,6 +1,6 @@
 /*
  * No exports. Tests protect passive context admission, source isolation, acknowledgement ownership, and holding undeliverable
- * publishes until the thread's next input boundary.
+ * publishes (but never offers) until the thread's next input boundary.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -137,6 +137,19 @@ test("a publish the provider cannot place yet arrives first at that thread's nex
   await context.collect(target, "start", new AbortController().signal);
   await context.collect(target, "steer", new AbortController().signal);
   assert.deepEqual(delivered, ["other:fresh", "notice", "fresh", "fresh"]);
+});
+
+test("an offer the provider cannot place is left to its producer, never held for the next input", async () => {
+  const delivered: string[] = [];
+  const context = new WorkbenchAgentContextController({
+    sources: [], inject: async () => "unsupported", warn: message => assert.fail(message),
+  });
+  assert.equal(await context.offer(target, "pending in its producer"), "unsupported");
+  await context.collect(target, "start", new AbortController().signal, async (_target, text) => {
+    delivered.push(text);
+    return "admitted";
+  });
+  assert.deepEqual(delivered, []);
 });
 
 test("held notices survive a generation handoff and stay held while still undeliverable", async () => {

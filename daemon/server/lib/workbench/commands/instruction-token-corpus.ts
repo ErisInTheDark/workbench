@@ -7,7 +7,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { formatWorkbenchSkillCatalogEntry, parseFrontmatterBlock } from "../../workbench-library";
+import { formatWorkbenchSkillCatalogEntry, parseFrontmatterBlock, readWorkbenchSkillCatalogEntry } from "../../workbench-library";
 import { listSkillDefinitionsFromDirectory } from "../skills/skill-discovery";
 import { stripWorkbenchInstructionHtmlComments } from "../instructions/instruction-context-filter";
 import {
@@ -138,7 +138,7 @@ export async function buildWorkbenchInstructionTokenCorpus(root: string): Promis
   )));
   const skills = await listSkillDefinitionsFromDirectory(absoluteRoot, "skills/builtin", parseFrontmatterBlock);
   if (skills.length) {
-    const content = skills.map(formatWorkbenchSkillCatalogEntry).join("\n");
+    const content = skills.map(skill => formatWorkbenchSkillCatalogEntry(readWorkbenchSkillCatalogEntry(skill))).join("\n");
     sources.push({ content, path: "skills/builtin catalog", sections: [] });
   }
   return {

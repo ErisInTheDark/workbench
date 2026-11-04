@@ -5,7 +5,8 @@
  * - WorkbenchAgentContextSource: input-time context producer.
  * - WorkbenchAgentContextHeld: publishes held for threads whose provider could not place them yet.
  * - WorkbenchAgentContextOptions: source registry, passive transport, warning boundary and handed-over held publishes.
- * - default WorkbenchAgentContextController: publish events, hold undeliverable ones for the next input boundary, and collect context without starting work.
+ * - default WorkbenchAgentContextController: publish events, hold undeliverable ones for the next input boundary, offer producer-pending
+ *   context without holding it, and collect context without starting work.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
@@ -50,6 +51,11 @@ export default class WorkbenchAgentContextController {
     const admission = await this.deliver(target, text, signal, this.options.inject);
     if (admission === "unsupported" && text.trim()) this.#held.set(target.threadId, [...this.#held.get(target.threadId) ?? [], text]);
     return admission;
+  }
+
+  /** Admit now or report why not, never holding: for producers whose own pending state is the durable copy. */
+  async offer(target: WorkbenchAgentContextTarget, text: string, signal = new AbortController().signal): Promise<WorkbenchContextAdmission | "failed"> {
+    return await this.deliver(target, text, signal, this.options.inject);
   }
 
   captureHeld(): WorkbenchAgentContextHeld {

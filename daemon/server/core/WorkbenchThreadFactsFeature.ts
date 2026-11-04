@@ -19,6 +19,7 @@ import type { DaemonProcessContext } from "../daemon-process-context";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
 import { listProjectSkillsFromRoot } from "../lib/workbench/project/project-agents-folder";
 import type WorkbenchThreadInstructionBuilder from "../thread/WorkbenchThreadInstructionBuilder";
+import type WorkbenchThreadInstructionPins from "../thread/WorkbenchThreadInstructionPins";
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import * as workbenchLibrary from "../lib/workbench-library";
 import type { ReloadableNodeBuild, ReloadableNodeLease } from "../runtime/ReloadableNode";
@@ -91,6 +92,8 @@ export default class WorkbenchThreadFactsFeature {
     harnesses: () => WorkbenchHarnessController;
     /** Builds (and pins) the skill bodies this feature delivers. */
     threadInstructions: Pick<WorkbenchThreadInstructionBuilder, "skills">;
+    /** The skill list each thread's prefix froze, and what its agent was told since. */
+    instructionPins: Pick<WorkbenchThreadInstructionPins, "readSkills" | "noteSkills" | "refreezeSkills">;
     publishRuntime(threadId: string, change: Partial<ThreadRuntime>): void;
     setSummaryFacts(threadId: string, facts: ThreadSummaryFacts): void;
     /** Agent context publishes the previous generation still held for their threads' next input. */
@@ -140,8 +143,17 @@ export default class WorkbenchThreadFactsFeature {
           projectId: owner.id, cwd: owner.rootPath,
         }, paths);
       },
-      publish: (thread, text) => agentContext.publish(thread, text),
+      publish: (thread, text) => agentContext.offer(thread, text),
       broadcast: (thread, active) => ports.publishRuntime(thread.threadId, { skills: [...active] }),
+      readSkillList: thread => ports.instructionPins.readSkills(thread.threadId),
+      listSkills: async thread => {
+        const resolved = await target(thread.threadId);
+        if (!resolved) return [];
+        const owner = await projectCatalog.resolveProjectById(resolved.identity.projectId);
+        return await workbenchLibrary.listWorkbenchSkillCatalog(await listProjectSkillsFromRoot(owner.rootPath));
+      },
+      noteSkills: (thread, entries) => ports.instructionPins.noteSkills(thread.threadId, entries),
+      refreezeSkills: thread => ports.instructionPins.refreezeSkills(thread.threadId),
       warn: message => { console.warn("[thread-skills]", message.slice(0, 500)); },
     });
     const goals = this.goals = new WorkbenchThreadGoalController({
@@ -150,7 +162,7 @@ export default class WorkbenchThreadFactsFeature {
         const resolved = await target(threadId);
         return resolved ? { harness: resolved.harness, threadId: resolved.identity.threadId } : null;
       },
-      publish: (thread, text) => agentContext.publish(thread, text),
+      publish: (thread, text) => agentContext.offer(thread, text),
       changed: (threadId, goal) => ports.publishRuntime(threadId, { goal }),
       warn: message => { console.warn("[thread-goal]", message.slice(0, 500)); },
     });

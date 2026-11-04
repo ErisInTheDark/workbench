@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - ThreadInstructionOverlayCommand: read one thread's pins, replace its base layers and prefix fingerprint, or merge skill layers by path.
+ * - ThreadInstructionOverlayCommand: read one thread's pins, replace its base layers and prefix fingerprint (keeping the skills the agent
+ *   was told about), merge skill layers by path, record the skills the agent was told about, or mark its skill list for refreezing.
  * - StoredThreadInstructionOverlays: the stored JSON as written; its owner validates it.
  * - default WorkbenchThreadInstructionOverlayStore: own each thread's pinned instruction layers and prefix fingerprint in SQLite.
  */
@@ -9,7 +10,9 @@ import type Database from "better-sqlite3";
 export type ThreadInstructionOverlayCommand =
   | { kind: "read"; threadId: string }
   | { kind: "pinBase"; threadId: string; layers: readonly object[]; prefix: object | null; at: number }
-  | { kind: "pinSkills"; threadId: string; skills: Readonly<Record<string, object>>; at: number };
+  | { kind: "pinSkills"; threadId: string; skills: Readonly<Record<string, object>>; at: number }
+  | { kind: "noteSkills"; threadId: string; skills: readonly object[]; at: number }
+  | { kind: "refreezeSkills"; threadId: string; at: number };
 
 export interface StoredThreadInstructionOverlays {
   base: unknown;
@@ -37,10 +40,31 @@ export default class WorkbenchThreadInstructionOverlayStore {
 
   execute(command: ThreadInstructionOverlayCommand): StoredThreadInstructionOverlays | null {
     if (command.kind === "pinBase") {
+      // What the agent was told about skills outlives the prefix that was re-pinned around it.
       this.database.prepare(`INSERT INTO workbench_thread_instruction_overlays (thread_id, base_json, skills_json, prefix_json, updated_at)
         VALUES (?, ?, '{}', ?, ?) ON CONFLICT(thread_id) DO UPDATE SET
-          base_json = excluded.base_json, prefix_json = excluded.prefix_json, updated_at = excluded.updated_at`)
+          base_json = excluded.base_json,
+          prefix_json = CASE
+            WHEN excluded.prefix_json IS NULL OR NOT json_valid(coalesce(prefix_json, '')) THEN excluded.prefix_json
+            WHEN json_type(prefix_json, '$.knownSkills') IS NULL THEN excluded.prefix_json
+            ELSE json_set(excluded.prefix_json, '$.knownSkills', json(json_extract(prefix_json, '$.knownSkills')))
+          END,
+          updated_at = excluded.updated_at`)
         .run(command.threadId, JSON.stringify(command.layers), command.prefix ? JSON.stringify(command.prefix) : null, command.at);
+      return null;
+    }
+    if (command.kind === "noteSkills") {
+      this.database.prepare(`UPDATE workbench_thread_instruction_overlays
+        SET prefix_json = json_set(prefix_json, '$.knownSkills', json(?)), updated_at = ?
+        WHERE thread_id = ? AND json_valid(coalesce(prefix_json, ''))`)
+        .run(JSON.stringify(command.skills), command.at, command.threadId);
+      return null;
+    }
+    if (command.kind === "refreezeSkills") {
+      this.database.prepare(`UPDATE workbench_thread_instruction_overlays
+        SET prefix_json = json_set(json_remove(prefix_json, '$.knownSkills'), '$.refreezeSkills', json('true')), updated_at = ?
+        WHERE thread_id = ? AND json_valid(coalesce(prefix_json, ''))`)
+        .run(command.at, command.threadId);
       return null;
     }
     if (command.kind === "pinSkills") {

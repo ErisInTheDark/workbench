@@ -2,5 +2,6 @@
 - Managed instruction availability follows installed capabilities, not native thread-id existence or caller origin. Verify final creation/resume/fork packets, preserving subagent exclusions.
 - Slash commands are resolved anywhere in user text and expand into a full skill payload.
 - Skill bodies reach agents through conversation history, never per-launch instructions. Compaction re-sends active skills; deactivation sends a hidden notice.
+- A thread's instruction prefix freezes its skill list at its first build and after each compaction; changes in between reach the agent only as incremental hidden notices, carrying active skills' new bodies.
 - Keep live Workbench-owned instruction Markdown editable in the Workbench Library. The repository `instructions/` source tree contains only instruction payloads. Every source path mirrors its emitted path. Generated bases refresh on instruction use; retired bases may remain.
 - The Workbench Library is always a Git repository. Its `.git/info/exclude` holds a Workbench-owned block listing exactly the generated instruction paths; never write `.gitignore`.

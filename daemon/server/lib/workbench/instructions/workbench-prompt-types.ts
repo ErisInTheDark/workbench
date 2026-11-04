@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - WorkbenchPromptContext: prompt assembly input and installed capabilities.
+ * - WorkbenchPromptContext: prompt assembly input, including an optional frozen skill list.
  * - WorkbenchPromptInstructions: assembled base and developer instructions, and the instruction layers they declare in prompt order.
  * - WorkbenchSkillLayer/WorkbenchActivatedSkillCatalog: activated skill bodies joined for the prompt, and each body's declared layer.
  */
 
 import type { WorkbenchHarness, WorkbenchProjectRoot } from "workbench-shared/types";
+import type { WorkbenchSkillCatalogEntry } from "../../workbench-library";
 import type { InstructionSourceSpan } from "./instruction-file-generation";
 import type { WorkbenchInstructionOverlays } from "./instruction-overlay-catalogue";
 
@@ -18,6 +19,8 @@ export interface WorkbenchPromptContext {
   readonly instructionScope?: "full" | "threadUtilities";
   readonly instructionInjections?: Readonly<Record<string, string>>;
   readonly activatedSkillPaths?: readonly string[];
+  /** A thread's frozen skill list; absent lists the project's skills now. */
+  readonly skills?: readonly WorkbenchSkillCatalogEntry[];
   readonly projectId?: string | null;
   readonly roots?: readonly WorkbenchProjectRoot[];
   readonly subagentName?: string | null;

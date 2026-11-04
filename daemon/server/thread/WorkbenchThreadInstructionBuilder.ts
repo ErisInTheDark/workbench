@@ -1,16 +1,16 @@
 /*
  * Exports:
  * - WorkbenchThreadInstructionRequest: what a provider knows about one launch; the builder supplies roots, origin and tools.
- * - WorkbenchThreadInstructionBuilderPorts: project roots, tool catalogue, capabilities, local origin and pin recording.
- * - default WorkbenchThreadInstructionBuilder: own building a managed thread's instructions and activated skill bodies, pinning what each
- *   build delivers, and rebuilding a stored prefix's hash.
+ * - WorkbenchThreadInstructionBuilderPorts: project roots, tool catalogue, capabilities, local origin and the thread's pins.
+ * - default WorkbenchThreadInstructionBuilder: own building a managed thread's instructions (with its frozen skill list) and activated
+ *   skill bodies, pinning what each build delivers, and rebuilding a stored prefix's hash.
  */
 import type { WorkbenchLocalCapabilitySettings, WorkbenchProjectRoot } from "workbench-shared/types";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchInstructionPrefixContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchInstructionTool } from "../lib/workbench/instructions/instruction-tool-reference";
-import type { WorkbenchInstructionPin } from "./WorkbenchThreadInstructionPins";
+import type WorkbenchThreadInstructionPins from "./WorkbenchThreadInstructionPins";
 
 export interface WorkbenchThreadInstructionRequest {
   harness: WorkbenchHarness;
@@ -36,18 +36,24 @@ export interface WorkbenchThreadInstructionBuilderPorts {
   readInstructionTools(): Promise<readonly WorkbenchInstructionTool[]>;
   readLocalCapabilities(): Promise<WorkbenchLocalCapabilitySettings>;
   workbenchOrigin: string;
-  pin(threadId: string, pin: WorkbenchInstructionPin): Promise<void>;
+  pins: Pick<WorkbenchThreadInstructionPins, "pin" | "readSkills">;
 }
 
 export default class WorkbenchThreadInstructionBuilder {
   constructor(private readonly ports: WorkbenchThreadInstructionBuilderPorts) {}
 
-  /** Base and developer instructions for one launch, pinned as the thread's delivered prefix. */
+  /**
+   * Base and developer instructions for one launch, pinned as the thread's delivered prefix. A thread's skill list stays as its prefix
+   * froze it, so skill edits never rewrite the cached prefix; only a thread's first build, or one after compaction, lists current skills.
+   */
   async build(request: WorkbenchThreadInstructionRequest) {
+    const context = await this.#context(request);
+    const pinned = request.threadId ? await this.ports.pins.readSkills(request.threadId) : null;
+    const skills = pinned && !pinned.refreeze ? pinned.frozen : await workbenchPromptFiles.listWorkbenchPromptSkills(context);
     const built = await workbenchPromptFiles.buildWorkbenchManagedThreadInstructions(
-      await this.#context(request), () => this.ports.readLocalCapabilities(),
+      { ...context, skills }, () => this.ports.readLocalCapabilities(),
     );
-    if (request.threadId) await this.ports.pin(request.threadId, { base: built.overlayLayers, prefix: built.prefix });
+    if (request.threadId) await this.ports.pins.pin(request.threadId, { base: built.overlayLayers, prefix: built.prefix });
     return { baseInstructions: built.baseInstructions, developerInstructions: built.developerInstructions };
   }
 
@@ -56,7 +62,7 @@ export default class WorkbenchThreadInstructionBuilder {
     const built = await workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills(
       { ...await this.#context(request), activatedSkillPaths: paths }, () => this.ports.readLocalCapabilities(),
     );
-    if (request.threadId) await this.ports.pin(request.threadId, { skills: built.skillLayers });
+    if (request.threadId) await this.ports.pins.pin(request.threadId, { skills: built.skillLayers });
     return built.catalog;
   }
 

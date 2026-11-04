@@ -14,6 +14,6 @@ export function createTestCodexInstructionAdapter(bridgeUrl: string, workbenchRo
     readInstructionTools: async () => listWorkbenchInstructionTools(listWorkbenchAgentCommands()),
     readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
     workbenchOrigin: "http://127.0.0.1:4500",
-    pin: async () => undefined,
+    pins: { pin: async () => undefined, readSkills: async () => null },
   }));
 }
