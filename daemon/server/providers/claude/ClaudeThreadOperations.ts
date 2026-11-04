@@ -446,8 +446,6 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const hasQuestionnaireResponse = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
     const workingStatusInPrompt = entry?.entryKind === "thread" && entry.lifecycle.kind === "working"
       || hasQuestionnaireResponse;
-    const managedPrompt = workingStatusInPrompt
-      ? `${instructions}\n\n${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}` : instructions;
     // Workbench compacts in its own `/compact` query, whose SessionStart hook output never reaches this turn.
     const promptPrefix = [
       ...(workingStatusInPrompt ? [WORKBENCH_THREAD_WORKING_STATUS_MESSAGE] : []),
@@ -488,7 +486,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           env: claudeEnvironment(fakeEndpoint, viewEnv, contextWindow),
           settingSources: [],
           skills: [],
-          systemPrompt: { type: "custom", prompt: managedPrompt, snapshot: false },
+          systemPrompt: { type: "custom", prompt: instructions, snapshot: false },
           tools: ["Read", "Edit", "Write"],
           disallowedTools: [
             "Bash", // wb shell (via codex)

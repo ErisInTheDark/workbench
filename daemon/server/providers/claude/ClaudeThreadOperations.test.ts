@@ -1,4 +1,4 @@
-/* Exports: none. Protect Claude admission, missing-runtime rejection, context, compaction admission, pre-history rename/delete, thread interruption, turn liveness and reload adoption identity. */
+/* Exports: none. Protect Claude admission, missing-runtime rejection, a lifecycle-stable system prompt, context, compaction admission, pre-history rename/delete, thread interruption, turn liveness and reload adoption identity. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -7,6 +7,7 @@ import {
   WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
+import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import WorkbenchThreadIdentityController from "../../thread/WorkbenchThreadIdentityController";
 import { ProviderRuntimeMissingError } from "../provider-runtimes";
 import ClaudeSessionHost, { ENDED_CLAUDE_SESSION } from "./ClaudeSessionHost";
@@ -43,9 +44,10 @@ function messageText(content: unknown) {
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
   captured, hold, subagentName, interrupt, compactQuery, signal, compactionReports = [], missingRuntime = false,
-  workbenchRoot = "C:/workbench",
+  workbenchRoot = "C:/workbench", lifecycle = "needsAttention",
 }: {
   workbenchRoot?: string;
+  lifecycle?: "needsAttention" | "working";
   failNative?: boolean;
   missingRuntime?: boolean;
   failUsage?: boolean;
@@ -139,7 +141,7 @@ function fixture({
     state: { controller: {
       getCanonicalThreadEntry: async () => ({
         entryKind: subagentName ? "subagent" : "thread", name: subagentName,
-        lifecycle: { kind: "needsAttention" }, profile,
+        lifecycle: { kind: lifecycle }, profile,
       }),
       recordAcceptedSelection: async (applied: typeof selection) => {
         usage.push(applied.settings.model);
@@ -356,6 +358,17 @@ test("Claude delivers activated skills in the new turn's conversation content, n
   assert.match(skillMessages[0]!, /skills\/review/u);
   assert.match(skillMessages[0]!, /hello/u);
   assert.deepEqual(captured.collected, ["start"]);
+});
+
+test("a working Claude launch carries its status in the conversation, keeping the cached system prompt unchanged", async () => {
+  const captured: Captured = { systemPrompts: [], pushed: [], collected: [] };
+  const owner = fixture({ usage: [], captured, lifecycle: "working" });
+  await owner.submit({ threadId, clientMessageId: "message", intent: "newTurn",
+    input: [{ type: "text", text: "hello", text_elements: [] }] });
+  await owner.dispose();
+  assert.deepEqual(captured.systemPrompts, ["instructions"]);
+  const launch = captured.pushed.find(text => text.includes("hello"));
+  assert.ok(launch?.includes(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE));
 });
 
 test("a Claude steer delivers the skills it activates and collects pending agent context", async () => {
