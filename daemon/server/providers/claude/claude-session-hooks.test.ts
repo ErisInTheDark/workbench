@@ -7,7 +7,7 @@ import ClaudeCommentaryNudge, { CLAUDE_COMMENTARY_HINT, CLAUDE_QUESTIONNAIRE_CON
 import { CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
 import type { WorkbenchAgentBatchTurn } from "../../agent/workbench-agent-mcp-request-registry";
 import {
-  claudeToolResults, claudeToolUseIds, createClaudeSessionHooks, type ClaudeFileClaimCheck, type ClaudeToolBatchPort,
+  claudeToolBatchCalls, claudeToolResults, createClaudeSessionHooks, type ClaudeFileClaimCheck, type ClaudeToolBatchPort,
 } from "./claude-session-hooks";
 
 const cwd = path.resolve("/repo");
@@ -146,12 +146,13 @@ test("a resolved batch ends", async () => {
   assert.equal(batch.ended(), 1);
 });
 
-test("a message's call ids keep their order, and every result block reports its call's outcome", () => {
-  assert.deepEqual(claudeToolUseIds([
+test("a message's call ids keep their order with its native file edits marked, and every result block reports its call's outcome", () => {
+  assert.deepEqual(claudeToolBatchCalls([
     { type: "text", text: "checking", citations: null },
     { type: "tool_use", id: "edit", name: "Edit", input: {} },
     { type: "tool_use", id: "build", name: "mcp__wb__shell", input: {} },
-  ] as never), ["edit", "build"]);
+    { type: "tool_use", id: "write", name: "Write", input: {} },
+  ] as never), { keys: ["edit", "build", "write"], fileEdits: ["edit", "write"] });
   assert.deepEqual(claudeToolResults([
     { type: "tool_result", tool_use_id: "edit", is_error: true, content: "String to replace not found in file." },
     { type: "tool_result", tool_use_id: "build", content: "ok" },

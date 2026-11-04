@@ -71,7 +71,7 @@ test("host-owned session hooks see output before they run, without consuming it,
   await host.dispose();
 });
 
-test("a message's calls become its tool batch and their streamed results settle it, so an edit after a failure is skipped", async () => {
+test("a message's calls become its tool batch and their streamed results settle it, so an edit after a failed edit still runs", async () => {
   const issued = { type: "assistant", parent_tool_use_id: null, message: { id: "msg", content: [
     { type: "tool_use", id: "edit-1", name: "Edit", input: { file_path: "a.ts" } },
     { type: "tool_use", id: "edit-2", name: "Edit", input: { file_path: "a.ts" } },
@@ -100,11 +100,10 @@ test("a message's calls become its tool batch and their streamed results settle 
   await host.launch({ scope: "scope", captureStderr: false, binding, options: () => ({}) });
   await finished;
   const signal = new AbortController().signal;
-  const denied = await editHook(hooks)(
+  const allowed = await editHook(hooks)(
     { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "a.ts" } }, "edit-2", { signal });
-  assert.equal(denied.hookSpecificOutput?.permissionDecision, "deny");
-  assert.match(String(denied.hookSpecificOutput?.permissionDecisionReason), /^Skipped: an earlier call in this batch failed/u);
-  assert.deepEqual(checked, [], "a skipped edit never reaches the claim check");
+  assert.equal(allowed.hookSpecificOutput?.permissionDecision, undefined);
+  assert.deepEqual(checked, [{ cwd: "C:/repo", threadId, paths: [path.resolve("C:/repo", "a.ts")] }]);
   await hooks.PostToolBatch![0]!.hooks[0]!({ hook_event_name: "PostToolBatch" }, undefined, { signal });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(await registry.awaitBatchTurn("edit-2", signal, "Edit", 0), "ready", "the finished batch holds nothing");

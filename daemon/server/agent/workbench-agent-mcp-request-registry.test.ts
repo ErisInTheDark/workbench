@@ -431,6 +431,21 @@ test("a serial call waits for every earlier call of its batch to report, then ru
   assert.equal(test.value, "skipped", "a failure reported late still skips the call waiting behind it");
 });
 
+test("a failed file edit skips later calls except file edits, and any other failure still skips them", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const signal = new AbortController().signal;
+  registry.declareToolBatch(threadId, "message-1", ["edit-a", "edit-b", "test"], ["edit-a", "edit-b"]);
+  registry.settleToolUse("edit-a", true);
+  assert.equal(await registry.awaitBatchTurn("edit-b", signal, "Edit", 0), "ready");
+  registry.settleToolUse("edit-b", false);
+  assert.equal(await registry.awaitBatchTurn("test", signal, "shell", 0), "skipped");
+  registry.declareToolBatch(threadId, "message-2", ["claims", "edit-c"], ["edit-c"]);
+  registry.settleToolUse("claims", true);
+  assert.equal(await registry.awaitBatchTurn("edit-c", signal, "Edit", 0), "skipped");
+  registry.endToolBatch(threadId);
+});
+
 test("a batch an older generation stored in another shape never breaks a lookup, and a declaration replaces it", async () => {
   const registry = getProcessWorkbenchAgentMcpRequestRegistry();
   const state = Reflect.get(globalThis, Symbol.for("workbench.agentMcpRequestRegistry.v2")) as { toolBatches: Map<string, unknown> };

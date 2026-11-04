@@ -130,7 +130,7 @@ interface WorkbenchAgentMcpRequestRegistryState {
   backgroundWaiters: Set<() => void>;
 }
 
-/** `skipped`: an earlier call in the batch failed. `interrupted`: a steer arrived first. */
+/** `skipped`: an earlier call in the batch failed, other than a file edit before a file edit. `interrupted`: a steer arrived first. */
 export type WorkbenchAgentBatchTurn = "ready" | "skipped" | "interrupted";
 
 interface WorkbenchAgentToolBatch {
@@ -138,6 +138,8 @@ interface WorkbenchAgentToolBatch {
   id: string;
   /** The provider's call ids, in issue order; MCP requests carry the same ids. */
   keys: string[];
+  /** Native file edits are independent of each other, so one failing never skips another. */
+  fileEdits: Set<string>;
   failed: Set<string>;
   settled: Set<string>;
 }
@@ -764,17 +766,20 @@ export class WorkbenchAgentMcpRequestRegistry {
    * Record the calls one provider message issued, in order, before any of them runs. A message delivered in parts
    * extends its batch; another message replaces it, releasing anything still waiting on the old one.
    */
-  declareToolBatch(threadId: WorkbenchThreadId, id: string, keys: readonly string[]) {
+  declareToolBatch(threadId: WorkbenchThreadId, id: string, keys: readonly string[], fileEditKeys: readonly string[] = []) {
     const current = this.readToolBatch(this.state.toolBatches.get(threadId));
     if (current?.id === id) {
       current.keys.push(...keys.filter(key => !current.keys.includes(key)));
+      for (const key of fileEditKeys) current.fileEdits.add(key);
     } else {
-      this.state.toolBatches.set(threadId, { id, keys: [...keys], failed: new Set(), settled: new Set() });
+      this.state.toolBatches.set(threadId, {
+        id, keys: [...keys], fileEdits: new Set(fileEditKeys), failed: new Set(), settled: new Set(),
+      });
     }
     this.wakeBatchTurns();
   }
 
-  /** The provider reported a batch call's result; a failure skips the serial calls after it. */
+  /** The provider reported a batch call's result; a failure skips the serial calls after it, except a failed file edit's later file edits. */
   settleToolUse(key: string, failed: boolean) {
     const found = this.findToolBatch(key);
     if (!found) return;
@@ -809,8 +814,10 @@ export class WorkbenchAgentMcpRequestRegistry {
       if (!found && (declared || !grace || grace.aborted)) return "ready";
       if (found) {
         declared = true;
+        const { failed, fileEdits } = found.batch;
         const earlier = found.batch.keys.slice(0, found.index);
-        if (earlier.some(earlierKey => found.batch.failed.has(earlierKey))) return "skipped";
+        const isFileEdit = fileEdits.has(key);
+        if (earlier.some(earlierKey => failed.has(earlierKey) && !(isFileEdit && fileEdits.has(earlierKey)))) return "skipped";
         if (earlier.every(earlierKey => found.batch.settled.has(earlierKey))) return "ready";
       }
       const threadId = found?.threadId ?? null;
@@ -858,7 +865,8 @@ export class WorkbenchAgentMcpRequestRegistry {
 
   /** Process state outlives module generations: a batch another generation stored in another shape is no batch. */
   private readToolBatch(stored: WorkbenchAgentToolBatch | undefined) {
-    return stored && Array.isArray(stored.keys) && stored.failed instanceof Set && stored.settled instanceof Set ? stored : null;
+    return stored && Array.isArray(stored.keys) && stored.fileEdits instanceof Set && stored.failed instanceof Set
+      && stored.settled instanceof Set ? stored : null;
   }
 
   private wakeBatchTurns() {

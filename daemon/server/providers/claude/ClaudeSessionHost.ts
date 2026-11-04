@@ -19,7 +19,7 @@ import { lowerAgentProcessPriority } from "../../process-helpers";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import ClaudeCommentaryNudge from "./ClaudeCommentaryNudge";
 import ClaudeConfigView from "./ClaudeConfigView";
-import { claudeToolResults, claudeToolUseIds, createClaudeSessionHooks } from "./claude-session-hooks";
+import { claudeToolBatchCalls, claudeToolResults, createClaudeSessionHooks } from "./claude-session-hooks";
 import type { WorkbenchAgentMcpRequestRegistry } from "../../agent/workbench-agent-mcp-request-registry";
 
 export class ClaudePromptQueue implements AsyncIterable<SDKUserMessage> {
@@ -274,8 +274,8 @@ export default class ClaudeSessionHost {
     const observe = (message: SDKMessage) => {
       nudge.observe(message);
       if (message.type === "assistant" && !message.parent_tool_use_id) {
-        const keys = claudeToolUseIds(message.message.content);
-        if (keys.length) batchCall(batch => batch.declareToolBatch(threadId, message.message.id, keys));
+        const { keys, fileEdits } = claudeToolBatchCalls(message.message.content);
+        if (keys.length) batchCall(batch => batch.declareToolBatch(threadId, message.message.id, keys, fileEdits));
       } else if (message.type === "user" && !message.parent_tool_use_id && !("isReplay" in message && message.isReplay)) {
         for (const { key, failed } of claudeToolResults(message.message.content)) batchCall(batch => batch.settleToolUse(key, failed));
       } else if (message.type === "result") {

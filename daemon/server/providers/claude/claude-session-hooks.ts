@@ -2,10 +2,10 @@
  * Exports:
  * - ClaudeFileClaimCheck: shared claim policy bound to one Claude thread.
  * - ClaudeToolBatchPort: the thread's provider tool batch, reached through the attached bridge.
- * - claudeToolUseIds/claudeToolResults: the ordered call ids one Claude message issues, and the call outcomes one reports.
+ * - claudeToolBatchCalls/claudeToolResults: the ordered call ids one Claude message issues with its native file edits, and the call outcomes one reports.
  * - createClaudeSessionHooks: inject compact recovery context after Claude Code's own compaction, hint after plain assistant text,
  *   refuse a questionnaire whose introducing text went unseen, deny native Read where the thread's mode denies `read`,
- *   skip native edits after an earlier failed call in their batch, deny native edits whose path no active claim covers or a pending
+ *   skip native edits after an earlier failed non-edit call in their batch, deny native edits whose path no active claim covers or a pending
  *   proposal holds, and end finished batches.
  */
 import path from "node:path";
@@ -26,9 +26,14 @@ export interface ClaudeToolBatchPort {
 
 const CLAUDE_QUESTIONNAIRE_TOOL_NAME = "mcp__wb__request_user_input";
 const NATIVE_READ_DENY_TOKEN = "read";
+const CLAUDE_FILE_EDIT_TOOL_NAMES = new Set(["Edit", "Write"]);
 
-export function claudeToolUseIds(content: SDKAssistantMessage["message"]["content"]) {
-  return content.flatMap(block => block.type === "tool_use" ? [block.id] : []);
+export function claudeToolBatchCalls(content: SDKAssistantMessage["message"]["content"]) {
+  const calls = content.flatMap(block => block.type === "tool_use" ? [block] : []);
+  return {
+    keys: calls.map(call => call.id),
+    fileEdits: calls.flatMap(call => CLAUDE_FILE_EDIT_TOOL_NAMES.has(call.name) ? [call.id] : []),
+  };
 }
 
 /** Every call ends in a result block, including calls Claude rejects before any hook runs. */
@@ -106,7 +111,7 @@ export function createClaudeSessionHooks(options: {
       matcher: "Edit|Write",
       hooks: [async (input, toolUseId, { signal }) => {
         // Matchers are patterns; only judge the exact native file tools.
-        if (input.hook_event_name !== "PreToolUse" || (input.tool_name !== "Edit" && input.tool_name !== "Write")) return {};
+        if (input.hook_event_name !== "PreToolUse" || !CLAUDE_FILE_EDIT_TOOL_NAMES.has(input.tool_name)) return {};
         const toolInput = input.tool_input;
         const filePath = toolInput !== null && typeof toolInput === "object" && "file_path" in toolInput
           && typeof toolInput.file_path === "string" && toolInput.file_path.trim() ? toolInput.file_path : null;
