@@ -9,7 +9,6 @@ import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
 import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
 import { isSamePath } from "workbench-shared/same-path";
-import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import { OPENCODE_WORKBENCH_DIRECT_NAMESPACE, OPENCODE_WORKBENCH_NAMESPACE } from "./opencode-workbench-rpc";
 import {
@@ -49,7 +48,6 @@ export interface OpenCodeManagedSessionContext {
   agentPath: string | null;
   workflowIds: readonly string[];
   activatedSkillPaths: readonly string[];
-  workingStatus?: boolean;
   subagentName?: string | null;
 }
 
@@ -94,7 +92,6 @@ export default class OpenCodeManagedSessionController {
     const value = [
       built.baseInstructions,
       built.developerInstructions,
-      input.workingStatus ? WORKBENCH_THREAD_WORKING_STATUS_MESSAGE : null,
     ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
     const session = (await this.options.acquire()).session;
     await session.update({

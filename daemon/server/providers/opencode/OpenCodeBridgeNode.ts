@@ -85,6 +85,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       readProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
       signal: lifetime.signal,
       rollover: build.get("threadContextRollover"),
+      collectInputContext: async (threadId, trigger, deliver, signal) => {
+        await build.get("agentContext").collect({ harness: "opencode", threadId }, trigger, signal, async (_target, text) => {
+          deliver(text);
+          return "admitted";
+        });
+      },
     });
     const events = new OpenCodeEventController({
       broadcast: notification => context.broadcastProviderNotification("opencode", notification),
@@ -145,7 +151,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [
     "openCodeService", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity",
     "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database",
-    "threadContextRollover", "threadInstructionPins",
+    "threadContextRollover", "threadInstructionPins", "agentContext",
   ],
   safeAll: true,
   scope: "server:opencode",

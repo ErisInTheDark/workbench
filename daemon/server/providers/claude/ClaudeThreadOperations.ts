@@ -29,10 +29,6 @@ import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provid
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { awaitsClaudeCompactionRecall, CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
 import { CLAUDE_INTERRUPTION_NOTICE, followsClaudeInterruption } from "./claude-interruption-notice";
-import {
-    isWorkbenchQuestionnaireResponsePart,
-    WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
-} from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchProviderCompactionScope } from "workbench-shared/workbench/provider/provider-thread";
 import type WorkbenchProjectCatalogController from "../../project/WorkbenchProjectCatalogController";
@@ -253,16 +249,9 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       signal?.throwIfAborted();
       const identity = await this.identity(input.threadId);
       const runtime = this.live.get(identity.threadId);
-      if (runtime) {
-        if (input.text === WORKBENCH_THREAD_WORKING_STATUS_MESSAGE) runtime.injectWorkingStatus(input.text);
-        else runtime.inject(input.text);
-        return "admitted";
-      }
-      if (input.text === WORKBENCH_THREAD_WORKING_STATUS_MESSAGE) {
-        const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-        if (entry?.entryKind === "thread" && entry.lifecycle.kind === "working") return "admitted";
-      }
-      return "unsupported";
+      if (!runtime) return "unsupported";
+      runtime.inject(input.text);
+      return "admitted";
     },
   };
 
@@ -443,12 +432,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable.");
     const promptContent = await this.withActivatedSkills(content, activatedSkillPaths, instructionInput);
     mark("instructions");
-    const hasQuestionnaireResponse = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
-    const workingStatusInPrompt = entry?.entryKind === "thread" && entry.lifecycle.kind === "working"
-      || hasQuestionnaireResponse;
     // Workbench compacts in its own `/compact` query, whose SessionStart hook output never reaches this turn.
     const promptPrefix = [
-      ...(workingStatusInPrompt ? [WORKBENCH_THREAD_WORKING_STATUS_MESSAGE] : []),
       ...(followsClaudeInterruption(thread) ? [CLAUDE_INTERRUPTION_NOTICE] : []),
       ...(awaitsClaudeCompactionRecall(thread) ? [CLAUDE_COMPACTION_RECALL_CONTEXT] : []),
     ].join("\n\n");
@@ -515,7 +500,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const live = new ClaudeLiveTurn({
       session, scope, cwd: binding.nativeLocation,
       projectId: ProjectIdSchema.parse(identity.projectId),
-      threadId: identity.threadId, turnId, workingStatusInPrompt, usage, contextWindow,
+      threadId: identity.threadId, turnId, usage, contextWindow,
       ...this.collaborators(identity.threadId, turnId, scope),
     });
     this.live.set(identity.threadId, live);

@@ -4,7 +4,7 @@
  * - ClaudeLiveTurnSnapshot: plain turn state a reloading bridge hands to its replacement.
  * - ClaudeLiveTurnCollaborators: bridge-generation collaborators one live turn needs.
  * - ClaudeLiveTurnOptions: identity, launch usage, and collaborators for a new turn.
- * - default ClaudeLiveTurn: drive one Claude session from start to its single settlement, including steer (refused once the turn is ending), context and working-notice delivery and context usage; it pauses and restores across bridge reloads, signals when billing usage changed, and reports settlement before observing it.
+ * - default ClaudeLiveTurn: drive one Claude session from start to its single settlement, including steer (refused once the turn is ending), context delivery and context usage; it pauses and restores across bridge reloads, signals when billing usage changed, and reports settlement before observing it.
  */
 import type { SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
@@ -64,7 +64,6 @@ interface ClaudeLiveTurnIdentity {
   projectId: ProjectId;
   threadId: WorkbenchThreadId;
   turnId: WorkbenchTurnId;
-  workingStatusInPrompt: boolean;
 }
 
 export interface ClaudeLiveTurnSnapshot extends ClaudeLiveTurnIdentity {
@@ -100,7 +99,7 @@ export default class ClaudeLiveTurn {
   static restore(snapshot: ClaudeLiveTurnSnapshot, collaborators: ClaudeLiveTurnCollaborators) {
     return new ClaudeLiveTurn({
       scope: snapshot.scope, cwd: snapshot.cwd, projectId: snapshot.projectId, threadId: snapshot.threadId,
-      turnId: snapshot.turnId, workingStatusInPrompt: snapshot.workingStatusInPrompt,
+      turnId: snapshot.turnId,
       ...collaborators, usage: null, contextWindow: snapshot.launchedContextWindow,
     }, snapshot);
   }
@@ -109,7 +108,6 @@ export default class ClaudeLiveTurn {
   readonly cwd: string;
   readonly threadId: WorkbenchThreadId;
   readonly turnId: WorkbenchTurnId;
-  readonly workingStatusInPrompt: boolean;
   private readonly undelivered = new Map<string, WorkbenchSteerHistoryEntry>();
   /** Input that arrives while start() publishes acceptance; null once the first prompt is admitted. */
   private beforePrompt: { context: string[]; steers: SDKUserMessage[] } | null = { context: [], steers: [] };
@@ -132,7 +130,6 @@ export default class ClaudeLiveTurn {
     this.cwd = options.cwd;
     this.threadId = options.threadId;
     this.turnId = options.turnId;
-    this.workingStatusInPrompt = options.workingStatusInPrompt;
     this.total = restored?.total ?? options.usage?.total ?? EMPTY;
     this.last = restored ? restored.last : options.usage?.last ?? null;
     this.contextWindow = options.contextWindow
@@ -148,7 +145,7 @@ export default class ClaudeLiveTurn {
     if (this.settled || this.closing) return null;
     return {
       scope: this.scope, cwd: this.cwd, projectId: this.options.projectId, threadId: this.threadId,
-      turnId: this.turnId, workingStatusInPrompt: this.workingStatusInPrompt,
+      turnId: this.turnId,
       launchedContextWindow: this.options.contextWindow,
       undelivered: [...this.undelivered.values()],
       total: this.total, last: this.last, contextWindow: this.contextWindow,
@@ -228,12 +225,6 @@ export default class ClaudeLiveTurn {
   inject(text: string) {
     if (this.beforePrompt) this.beforePrompt.context.push(text);
     else this.options.session.push(claudePrompt(text, { synthetic: true }));
-  }
-
-  /** The launch prompt may already carry the working notice; only acceptance can duplicate it. Later transitions are news. */
-  injectWorkingStatus(text: string) {
-    if (this.workingStatusInPrompt && this.beforePrompt) return;
-    this.inject(text);
   }
 
   /** Inject non-text context, such as a screenshot, as its own synthetic message; it follows the prompt if accepted early. */

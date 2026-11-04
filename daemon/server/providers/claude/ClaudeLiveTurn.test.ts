@@ -38,7 +38,6 @@ function fixture(
   onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void,
   usage: ConstructorParameters<typeof ClaudeLiveTurn>[0]["usage"] = null,
   contextWindow: number | null = null,
-  workingStatusInPrompt = false,
 ) {
   const pending: (object | Error)[] = [];
   let wake: (() => void) | null = null;
@@ -103,7 +102,7 @@ function fixture(
     release: async () => { log.push("release"); },
   };
   turn = new ClaudeLiveTurn({
-    scope: "scope", cwd: "C:/repo", projectId, threadId, turnId, workingStatusInPrompt, usage, contextWindow,
+    scope: "scope", cwd: "C:/repo", projectId, threadId, turnId, usage, contextWindow,
     ...collaborators,
   });
   return { turn, push, log, steers, queue, usageSignals, liveUsage, collaborators };
@@ -300,14 +299,15 @@ test("a steer still queued when Claude's reply ends keeps the Workbench turn ope
   assert.deepEqual(log.filter(entry => entry.startsWith("settle")), ["settle:completed"]);
 });
 
-test("a launch prompt carrying the working notice drops only acceptance's duplicate, and later transitions still reach Claude", async () => {
-  const notice = "<wb:thread-status value=\"working\" />";
-  const { turn, push, queue } = fixture(accepted => accepted.injectWorkingStatus(notice), null, null, true);
+test("context injected during acceptance prefixes the launch prompt; later context reaches Claude as its own message", async () => {
+  const notice = "status notice";
+  const { turn, push, queue } = fixture(accepted => accepted.inject(notice));
   const { task } = await turn.start("do the thing");
-  turn.injectWorkingStatus(notice);
-  assert.deepEqual(queue.pushed.map(message => [message.message.content, message.isSynthetic ?? false]), [
-    ["do the thing", false], [notice, true],
-  ]);
+  turn.inject("later");
+  assert.equal(queue.pushed.length, 2);
+  assert.equal(queue.pushed[0]?.isSynthetic ?? false, false);
+  assert.ok(JSON.stringify(queue.pushed[0]?.message.content).includes(notice), "the notice rides in the launch prompt");
+  assert.deepEqual([queue.pushed[1]?.message.content, queue.pushed[1]?.isSynthetic], ["later", true]);
   push(result());
   await task;
 });

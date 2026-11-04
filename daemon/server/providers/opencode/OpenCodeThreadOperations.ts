@@ -15,11 +15,11 @@ import {
 import type { WorkbenchProviderThreads, WorkbenchProviderTranscriptReconcile } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
-import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
+import type { WorkbenchContextTrigger, WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
 import type { WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
-import { createWorkbenchTextInput, toWorkbenchThreadUserInput, WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
+import { createWorkbenchTextInput, WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
@@ -47,9 +47,6 @@ import { getWorkbenchLifecycleTurnId } from "workbench-shared/workbench/thread/t
 import type { WorkbenchThreadStateRecord } from "../../thread/workbench-thread-state-record";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
-import {
-  isWorkbenchQuestionnaireResponsePart, WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
-} from "workbench-shared/workbench/thread/thread-recovery-message";
 import { createWorkbenchContextRolloverInput } from "workbench-shared/workbench/thread/thread-context-rollover";
 
 type OpenCodeSteerEntry = Omit<WorkbenchSteerHistoryEntry, "threadId" | "turnId"> & {
@@ -89,6 +86,10 @@ export interface OpenCodeThreadOperationsOptions {
   readWorkingRecords(): Promise<Array<Pick<WorkbenchThreadStateRecord, "identity" | "lifecycle">>>;
   readProviderCursor(threadId: string, turnId: string): Promise<string | null | undefined>;
   rollover: Pick<WorkbenchThreadContextRolloverController, "isActiveTool" | "toolFailed" | "toolStarted">;
+  /** Workbench context due at this input boundary; each delivered text precedes the prompt. */
+  collectInputContext(
+    threadId: WorkbenchThreadId, trigger: WorkbenchContextTrigger, deliver: (text: string) => void, signal: AbortSignal,
+  ): Promise<void>;
 }
 
 interface SessionExecution {
@@ -202,20 +203,31 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
 
   constructor(private readonly options: OpenCodeThreadOperationsOptions) {}
 
+  /** Context joins the conversation as a hidden steer of a running prompt; without one, Workbench holds it for the next input. */
   readonly context: WorkbenchProviderContext = {
     inject: async (input, signal) => {
       signal?.throwIfAborted();
       const { binding } = await this.native(input.threadId);
+      const execution = this.execution(binding.nativeThreadId);
+      if (!execution.active || execution.kind !== "prompt") return "unsupported";
       const client = await this.options.acquire();
       signal?.throwIfAborted();
-      await client.session.instructions.entry.put({
-        sessionID: binding.nativeThreadId,
-        key: `workbench-context:${randomUUID()}`,
-        value: input.text,
-      });
+      await client.session.synthetic({ sessionID: binding.nativeThreadId, text: input.text, delivery: "steer", resume: false });
       return "admitted";
     },
   };
+
+  /** Accepted input is never undone because background context could not be collected. */
+  private async collectInputContext(threadId: WorkbenchThreadId, trigger: WorkbenchContextTrigger) {
+    const texts: string[] = [];
+    try {
+      await this.options.collectInputContext(threadId, trigger, text => { texts.push(text); }, this.options.signal);
+    } catch (error) {
+      console.warn("[opencode] input-time agent context was not collected",
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+    }
+    return texts;
+  }
 
   readonly contextRollover = {
     requestDirective: async (input: { instruction: string; key: string; threadId: string; turnId: string }) => {
@@ -517,7 +529,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     }
     const activeTurn = execution.active ? execution.turn : null;
     const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
-    const workingStatus = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : undefined;
     const subagentName = entry?.entryKind === "subagent" ? entry.name : null;
     const managed = await this.options.managed.refresh({
@@ -529,18 +540,14 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       agentPath: settings?.agentPath ?? null,
       workflowIds: input.context?.workflowIds ?? [],
       activatedSkillPaths: input.context?.activatedSkillPaths ?? [],
-      workingStatus,
       subagentName,
     });
+    const preamble = await this.collectInputContext(identity.threadId, delivery === "steer" ? "steer" : "start");
     const nativePrompt = prompt(input.input);
     // Display reads metadata input, so the hidden skill block reaches only the model.
     const skillText = managed.activatedSkills
       ? createWorkbenchActivatedSkillsInput(managed.activatedSkills).text : null;
-    const promptText = skillText ? [nativePrompt.text, skillText].filter(Boolean).join("\n\n") : nativePrompt.text;
-    const request = {
-      ...nativePrompt,
-      text: workingStatus ? `${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}\n\n${promptText}` : promptText,
-    };
+    const request = { ...nativePrompt, text: [...preamble, nativePrompt.text, skillText].filter(Boolean).join("\n\n") };
     const messageId = nativeMessageId(input.clientMessageId);
     const itemId = WorkbenchItemIdSchema.parse(randomUUID());
     const metadata = {

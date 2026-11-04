@@ -33,7 +33,7 @@ import type McpDownloadStore from "../mcp-servers/McpDownloadStore";
 import { fetchPublicHttps, readBoundedBody } from "../lib/public-https-fetch";
 import { requireWorkbenchPowerShellExecutable } from "../runtime/windows-powershell-runtime";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
-import WorkbenchAgentContextController from "../agent/WorkbenchAgentContextController";
+import WorkbenchAgentContextController, { type WorkbenchAgentContextHeld } from "../agent/WorkbenchAgentContextController";
 import WorkbenchAgentSkillCatalogController from "../agent/WorkbenchAgentSkillCatalogController";
 import type WorkbenchHarnessController from "../providers/WorkbenchHarnessController";
 import type WorkbenchProjectCatalogController from "../project/WorkbenchProjectCatalogController";
@@ -94,6 +94,8 @@ export default class WorkbenchThreadFactsFeature {
     pinSkills(threadId: string, skills: readonly WorkbenchSkillLayer[]): Promise<void>;
     publishRuntime(threadId: string, change: Partial<ThreadRuntime>): void;
     setSummaryFacts(threadId: string, facts: ThreadSummaryFacts): void;
+    /** Agent context publishes the previous generation still held for their threads' next input. */
+    heldAgentContext?: WorkbenchAgentContextHeld;
   }) {
     const { context, database, lookup, projectCatalog, run, lease, providers } = ports;
     this.#lookup = lookup;
@@ -335,6 +337,7 @@ export default class WorkbenchThreadFactsFeature {
         return await providers().get(thread.harness).context?.inject({ threadId: thread.threadId, text }, signal) ?? "unsupported";
       },
       warn: message => { console.warn("[agent-context]", message); },
+      held: ports.heldAgentContext,
     });
     this.#stops.push(ports.transcript.subscribeContextCompaction(async completion => {
       if (!lease.isCurrent()) return;

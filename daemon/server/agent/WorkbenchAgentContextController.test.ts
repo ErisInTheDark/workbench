@@ -1,5 +1,6 @@
 /*
- * No exports. Tests protect passive context admission, source isolation and acknowledgement ownership.
+ * No exports. Tests protect passive context admission, source isolation, acknowledgement ownership, and holding undeliverable
+ * publishes until the thread's next input boundary.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -112,6 +113,44 @@ test("cancellation while a source is collecting prevents its late contribution f
   abort.abort(new Error("retired"));
   release.resolve();
   await rejected;
+});
+
+test("a publish the provider cannot place yet arrives first at that thread's next input boundary, once", async () => {
+  const live = new Set<string>();
+  const delivered: string[] = [];
+  const context = new WorkbenchAgentContextController({
+    sources: [{ id: "current", collect: async () => [{ text: "fresh" }] }],
+    inject: async (thread, text) => {
+      if (!live.has(thread.threadId)) return "unsupported";
+      delivered.push(text);
+      return "admitted";
+    },
+    warn: message => assert.fail(message),
+  });
+  const other = { ...target, threadId: WorkbenchThreadIdSchema.parse("other") };
+  assert.equal(await context.publish(target, "notice"), "unsupported");
+  await context.collect(other, "start", new AbortController().signal, async (_target, text) => {
+    delivered.push(`other:${text}`);
+    return "admitted";
+  });
+  live.add(target.threadId);
+  await context.collect(target, "start", new AbortController().signal);
+  await context.collect(target, "steer", new AbortController().signal);
+  assert.deepEqual(delivered, ["other:fresh", "notice", "fresh", "fresh"]);
+});
+
+test("held notices survive a generation handoff and stay held while still undeliverable", async () => {
+  const unsupported = { inject: async () => "unsupported" as const, warn: (message: string) => assert.fail(message) };
+  const retiring = new WorkbenchAgentContextController({ sources: [], ...unsupported });
+  await retiring.publish(target, "notice");
+  const replacement = new WorkbenchAgentContextController({ sources: [], ...unsupported, held: retiring.captureHeld() });
+  await replacement.collect(target, "start", new AbortController().signal);
+  const delivered: string[] = [];
+  await replacement.collect(target, "start", new AbortController().signal, async (_target, text) => {
+    delivered.push(text);
+    return "admitted";
+  });
+  assert.deepEqual(delivered, ["notice"]);
 });
 
 test("acknowledgement failure does not resend admitted context or block the next contribution", async () => {

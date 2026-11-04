@@ -52,6 +52,7 @@ import McpProjectServerLifetime from "../mcp-servers/McpProjectServerLifetime";
 import { logError } from "../process-helpers";
 import WorkbenchNativeFileController from "../project/WorkbenchNativeFileController";
 import type { WorkbenchMessageWaitHandoff } from "../agent/WorkbenchMessageWaitController";
+import type { WorkbenchAgentContextHeld } from "../agent/WorkbenchAgentContextController";
 import type { WorkbenchSubagentQueueHandoff } from "../subagents/WorkbenchSubagentQueueController";
 import WorkbenchThreadLaunchController from "../thread/WorkbenchThreadLaunchController";
 import WorkbenchThreadStateFeature from "../thread/WorkbenchThreadStateFeature";
@@ -81,6 +82,8 @@ interface WorkbenchCoreReloadState {
   messageWaits: WorkbenchMessageWaitHandoff;
   /** Absent when the previous generation predates subagent queues. */
   subagentQueues?: WorkbenchSubagentQueueHandoff;
+  /** Absent when the previous generation predates held agent context. */
+  heldAgentContext?: WorkbenchAgentContextHeld;
 }
 
 function createModules(): DaemonReloadableModules {
@@ -105,6 +108,7 @@ function createWorkbenchCoreFeature(
   approvalHandoff?: WorkbenchApprovalHandoff,
   messageWaitHandoff?: WorkbenchMessageWaitHandoff,
   subagentQueueHandoff?: WorkbenchSubagentQueueHandoff,
+  heldAgentContext?: WorkbenchAgentContextHeld,
 ) {
   /** Compaction holds attempted before this generation existed belong to no queue it will deliver. */
   const generationStartedAt = Date.now();
@@ -162,6 +166,7 @@ function createWorkbenchCoreFeature(
     publishRuntime: (threadId, change) => turns.publish(threadId, change),
     setSummaryFacts,
     pinSkills: async (threadId, skills) => await threadInstructionPins.pin(threadId, { skills }),
+    heldAgentContext,
   });
   const { agentContext, skillCatalog, vis } = facts;
   const threadWorkflow = new WorkbenchThreadWorkflowReader({
@@ -491,6 +496,7 @@ function createWorkbenchCoreFeature(
       approvals: approvals.captureReloadState(),
       messageWaits: messages.captureReloadState(),
       subagentQueues: queues.captureReloadState(),
+      heldAgentContext: agentContext.captureHeld(),
     }),
     afterCommit: () => {
       approvals.activate();
@@ -645,6 +651,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       reloadState?.approvals,
       reloadState?.messageWaits,
       reloadState?.subagentQueues,
+      reloadState?.heldAgentContext,
     );
   },
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",

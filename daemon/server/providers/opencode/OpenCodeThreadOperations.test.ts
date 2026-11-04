@@ -22,22 +22,24 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { normalizeProviderSidebarEntry } from "../../thread/WorkbenchThreadStateFeature";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
-test("passive Workbench context enters native instructions without starting a user turn", async () => {
-  const entries: Array<{ sessionID: string; key: string; value: string }> = [];
+test("passive Workbench context steers a running prompt's conversation and never touches native instructions", async () => {
+  const synthetic: Array<{ sessionID: string; text: string; delivery: string }> = [];
   const owner = operations({
     session: {
-      instructions: { entry: { put: async (input: { sessionID: string; key: string; value: string }) => {
-        entries.push(input);
-      } } },
+      prompt: async () => ({}),
+      synthetic: async (input: { sessionID: string; text: string; delivery: string }) => { synthetic.push(input); },
+      instructions: { entry: { put: async () => assert.fail("context must not change the cached instructions") } },
     },
-  }, {});
-  assert.equal(await owner.context.inject({
-    threadId, text: '<wb:thread-status value="working" />',
-  }, new AbortController().signal), "admitted");
-  assert.deepEqual(entries.map(entry => ({
-    sessionID: entry.sessionID, value: entry.value,
-  })), [{ sessionID: nativeThreadId, value: '<wb:thread-status value="working" />' }]);
-  assert.match(entries[0]!.key, /^workbench-context:/u);
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId }) });
+  const signal = new AbortController().signal;
+  assert.equal(await owner.context.inject({ threadId, text: "notice" }, signal), "unsupported", "no running prompt holds it");
+  await owner.submit({ threadId, clientMessageId: "go", intent: "newTurn", input: [{ type: "text", text: "go", text_elements: [] }] });
+  assert.equal(await owner.context.inject({ threadId, text: "notice" }, signal), "admitted");
+  assert.deepEqual(synthetic.map(({ sessionID, text, delivery }) => ({ sessionID, text, delivery })), [
+    { sessionID: nativeThreadId, text: "notice", delivery: "steer" },
+  ]);
+  await owner.settle();
 });
 
 test("accepted questionnaires persist once in their accepted turn and recording failures propagate", async () => {
@@ -249,6 +251,7 @@ function operations(
     refresh?: OpenCodeManagedSessionController["refresh"];
     workingRecords?: OpenCodeThreadOperationsOptions["readWorkingRecords"];
     waitForCompactionConnection?: (signal: AbortSignal) => Promise<AbortSignal>;
+    collect?: OpenCodeThreadOperationsOptions["collectInputContext"];
   } = {},
 ) {
   const owner: OpenCodeThreadOperations = new OpenCodeThreadOperations({
@@ -336,6 +339,7 @@ function operations(
       toolStarted: async () => undefined,
     },
     readWorkingRecords: lifecycle.workingRecords ?? (async () => []),
+    collectInputContext: lifecycle.collect ?? (async () => undefined),
   });
   return owner;
 }
@@ -535,6 +539,7 @@ test("fails a public read when no OpenCode binding exists", async () => {
       toolStarted: async () => undefined,
     },
     signal: new AbortController().signal,
+    collectInputContext: async () => undefined,
   });
   await assert.rejects(owner.read("missing"), /identity is unavailable/u);
 });
@@ -1308,7 +1313,7 @@ test("accepted OpenCode roots record their applied model and keep storage failur
   assert.deepEqual(usage, ["opencode-go/model", "opencode-go/model"]);
 });
 
-test("questionnaire continuation keeps a native prompt object while delivering working status", async () => {
+test("questionnaire continuation keeps a native prompt object while context collected at its boundary leads the prompt", async () => {
   const prompts: Array<{ text: string; metadata: { workbench: { input: object[] } } }> = [];
   const owner = operations({
     session: { prompt: async (input: { text: string; metadata: { workbench: { input: object[] } } }) => {
@@ -1317,7 +1322,13 @@ test("questionnaire continuation keeps a native prompt object while delivering w
     } },
     message: { list: async () => ({ data: [], cursor: {} }) },
   }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
-  {}, { readPage: async () => ({ thread: { turns: [{ id: turnId, status: "interrupted" }] } }) });
+  {}, {
+    readPage: async () => ({ thread: { turns: [{ id: turnId, status: "interrupted" }] } }),
+    collect: async (_threadId, trigger, deliver) => {
+      assert.equal(trigger, "start");
+      deliver(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE);
+    },
+  });
   const response = createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["yes"] } } });
   await owner.submit({
     threadId, clientMessageId: "answer", intent: "continue",

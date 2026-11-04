@@ -44,10 +44,9 @@ function messageText(content: unknown) {
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
   captured, hold, subagentName, interrupt, compactQuery, signal, compactionReports = [], missingRuntime = false,
-  workbenchRoot = "C:/workbench", lifecycle = "needsAttention",
+  workbenchRoot = "C:/workbench",
 }: {
   workbenchRoot?: string;
-  lifecycle?: "needsAttention" | "working";
   failNative?: boolean;
   missingRuntime?: boolean;
   failUsage?: boolean;
@@ -141,7 +140,7 @@ function fixture({
     state: { controller: {
       getCanonicalThreadEntry: async () => ({
         entryKind: subagentName ? "subagent" : "thread", name: subagentName,
-        lifecycle: { kind: lifecycle }, profile,
+        lifecycle: { kind: "working" }, profile,
       }),
       recordAcceptedSelection: async (applied: typeof selection) => {
         usage.push(applied.settings.model);
@@ -360,9 +359,15 @@ test("Claude delivers activated skills in the new turn's conversation content, n
   assert.deepEqual(captured.collected, ["start"]);
 });
 
-test("a working Claude launch carries its status in the conversation, keeping the cached system prompt unchanged", async () => {
+test("context is refused without a live turn, and context collected at launch rides in the prompt, not the cached system prompt", async () => {
   const captured: Captured = { systemPrompts: [], pushed: [], collected: [] };
-  const owner = fixture({ usage: [], captured, lifecycle: "working" });
+  const owner = fixture({ usage: [], captured });
+  assert.equal(await owner.context.inject({ threadId, text: WORKBENCH_THREAD_WORKING_STATUS_MESSAGE }), "unsupported");
+  Object.assign(Reflect.get(owner, "options") as object, {
+    collectInputContext: async () => {
+      assert.equal(await owner.context.inject({ threadId, text: WORKBENCH_THREAD_WORKING_STATUS_MESSAGE }), "admitted");
+    },
+  });
   await owner.submit({ threadId, clientMessageId: "message", intent: "newTurn",
     input: [{ type: "text", text: "hello", text_elements: [] }] });
   await owner.dispose();
@@ -476,7 +481,7 @@ test("a Claude turn adopted across a database reload is known to the replacement
   try {
     await owner.adopt([{
       turn: {
-        scope: "previous-generation", cwd: "C:/repo", projectId, threadId, turnId, workingStatusInPrompt: false,
+        scope: "previous-generation", cwd: "C:/repo", projectId, threadId, turnId,
         launchedContextWindow: null, undelivered: [], total: empty, last: null, contextWindow: null,
       },
       transcript: {} as never,
