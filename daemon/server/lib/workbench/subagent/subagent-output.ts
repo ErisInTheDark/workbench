@@ -1,12 +1,13 @@
 /*
  * Exports:
  * - createEmptySubagentQuestionnaireResponse: resolve every pending question without a selection.
- * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: render paused and settled WB turns, leading with the lifecycle's thread error or interruption.
+ * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: render paused and settled WB turns, leading with the lifecycle's thread error or interruption; an approval shows what it asks and the parent's forward/deny route.
  * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output.
  * - SubagentSettleHandover/SubagentSettleReceipt: what a settle moved to the parent and every child's outcome.
  * - renderSubagentListOutput/renderSubagentSettleOutput: render relationship lists and per-child settlement receipts.
  */
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchSubagentSummary, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 
@@ -25,7 +26,22 @@ function trailingCommentary(thread: { turns: Turn[] }) {
   return messages.join("\n\n");
 }
 
+function renderApproval(request: WorkbenchUserInputRequest) {
+  const command = request.approval?.command;
+  return [
+    ...request.questions.flatMap(question => [question.header.trim(), question.question.trim()]),
+    ...(command ? [
+      `Command:\n${command.command}`,
+      `Working directory: ${command.cwd}`,
+      command.justification ? `Reason: ${command.justification}` : "",
+      command.networkTarget ? `Network target: ${command.networkTarget}` : "",
+    ] : []),
+    "Answer with subagent approval: forward it to the user, or deny it.",
+  ].filter(Boolean).join("\n");
+}
+
 function renderQuestion(request: WorkbenchUserInputRequest) {
+  if (isWorkbenchApprovalRequest(request)) return renderApproval(request);
   return request.questions.map((question) => {
     const lines = [question.header.trim(), question.question.trim()].filter(Boolean);
     lines.push(...question.options.map((option, index) => `${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}`));

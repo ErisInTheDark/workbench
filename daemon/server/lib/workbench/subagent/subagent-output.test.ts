@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchUserInputRequest } from "workbench-shared/types";
+import { buildWorkbenchApprovalPresentation } from "../approval-presentation.ts";
 import {
   createEmptySubagentQuestionnaireResponse,
   renderSubagentQuestionnaireOutput,
@@ -51,6 +52,33 @@ test("renders only trailing commentary before a questionnaire", () => {
   assert.doesNotMatch(output, /Old commentary/u);
   assert.match(output, /^First trailing note\n\nSecond trailing note/u);
   assert.match(output, /Direction\nWhat should happen next\?\n1\. Continue — Keep the current route\./u);
+});
+
+test("gives a parent what a child's approval asks and the choices it really has", () => {
+  const longCommand = `git checkout -- ${"std/ts/restrictions.dx ".repeat(30)}end-of-command`;
+  const command = renderSubagentQuestionnaireOutput(thread([]), buildWorkbenchApprovalPresentation({
+    id: "approval-command",
+    allowSession: true,
+    subject: {
+      kind: "command", command: longCommand, commandActions: [], cwd: "C:/git/app", justification: "Restore one file",
+      networkTarget: "example.com", rememberable: true,
+    },
+  }));
+  assert.ok(command.includes(longCommand));
+  for (const fact of ["C:/git/app", "Restore one file", "example.com"]) assert.ok(command.includes(fact), fact);
+
+  const patch = renderSubagentQuestionnaireOutput(thread([]), buildWorkbenchApprovalPresentation({
+    id: "approval-patch",
+    allowSession: false,
+    subject: { kind: "patch", reason: "Fix the rule", grantRoot: null, paths: ["std/ts/restrictions.dx"] },
+  }));
+  assert.ok(patch.includes("std/ts/restrictions.dx"));
+
+  for (const output of [command, patch]) {
+    assert.match(output, /forward/u);
+    assert.match(output, /deny/u);
+    assert.doesNotMatch(output, /Allow once|Allow for session|Decline/u);
+  }
 });
 
 test("renders final output and creates an explicitly empty response", () => {
