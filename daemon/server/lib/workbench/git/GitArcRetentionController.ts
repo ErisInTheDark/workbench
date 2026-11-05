@@ -4,6 +4,7 @@
  * - GitArcRetentionResult: exact thread-namespace cleanup result.
  */
 import GitArcRegistry, { getGitArcLiveClaimPaths } from "./GitArcRegistry";
+import GitArcStackController from "./GitArcStackController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
@@ -104,7 +105,9 @@ export default class GitArcRetentionController {
     entry: Awaited<ReturnType<GitArcRegistry["find"]>>,
   ) {
     if (!entry) return false;
-    if (entry.savedStash || entry.stackTip) return true;
+    if (entry.savedStash) return true;
+    // Other threads' chains read a thread's own layers; a tip inherited from elsewhere needs nothing kept here.
+    if ((await new GitArcStackController(repository, this.resolveThreadIdentity).readOwnLayers(entry)).length) return true;
     if (entry.phase !== "resolved"
       && !(entry.phase === "plan" && !getGitArcLiveClaimPaths(entry).length)) return true;
     const proposals = await new GitCheckpointStore(repository, this.resolveThreadIdentity)

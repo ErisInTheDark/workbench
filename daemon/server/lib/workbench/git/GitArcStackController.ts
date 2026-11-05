@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, rebases onto HEAD, arc drift and seal/reopen operations (sealing amendments as fresh commits).
+ * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, rebases onto HEAD, arc drift, seal/reopen operations (sealing amendments as fresh commits) and checks that layer changes spare other threads' held work.
  * - GitArcPreparedStackRevision: atomic ref and commit updates for one chain rebase.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
@@ -22,7 +22,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
-import GitArcRegistry, { REGISTRY_REF, type GitArcPreparedOperation, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { getGitArcLiveClaimPaths, REGISTRY_REF, type GitArcPreparedOperation, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import type { StoredProposal } from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
@@ -49,6 +49,11 @@ interface StackIdentity {
   threadId: string;
 }
 
+interface StackIdentityLike {
+  harness: string;
+  threadId: string;
+}
+
 /** Tips are walked from untrusted refs; bound the walk so corrupt parent loops cannot hang a request. */
 const MAX_STACK_DEPTH = 200;
 
@@ -67,8 +72,12 @@ function chainScope(chain: readonly GitArcStackLayer[]) {
   return [...new Set(chain.flatMap(({ scopePaths }) => scopePaths))];
 }
 
-function ownsLayer(layer: StackLayerMetadata, identity: { harness: string; threadId: string }) {
-  return layer.harness === identity.harness && normalizeThreadId(layer.threadId) === normalizeThreadId(identity.threadId);
+function sameThread(left: StackIdentityLike, right: StackIdentityLike) {
+  return left.harness === right.harness && normalizeThreadId(left.threadId) === normalizeThreadId(right.threadId);
+}
+
+function ownsLayer(layer: StackLayerMetadata, identity: StackIdentityLike) {
+  return sameThread(layer, identity);
 }
 
 export default class GitArcStackController {
@@ -445,14 +454,14 @@ export default class GitArcStackController {
       throw new GitArcRejectionError({ reason: "noOwnStackLayer" });
     }
     if (layerId && top.layer.layerId !== layerId) return null;
-    await this.requireLayerUnused(entry, top);
+    const detachStackTips = await this.requireLayerUnused(entry, top);
     const nextTip = chain.at(-2)?.tipCommit ?? null;
     const ownership = new GitArcClaimOwnershipController(this.repository, this.resolveThreadIdentity);
     const active = (await ownership.project(entry)).activeClaims;
     const mutation = await registry.prepareSet(ownership.withActiveClaims(
       { ...entry, stackTip: nextTip },
       [...active, ...top.scopePaths],
-    ), entry.checkpointCommit);
+    ), entry.checkpointCommit, { detachStackTips });
     return this.operation(mutation.updates, {
       ...this.resultBase(entry),
       layerId: top.layer.layerId,
@@ -470,6 +479,10 @@ export default class GitArcStackController {
     return entry && top && ownsLayer(top.layer, entry) ? top.layer : null;
   }
 
+  /**
+   * Unstack rewrites nothing, so a tip above it could not follow; threads holding work there block. Returns the threads
+   * that hold none, whose tips detach instead.
+   */
   private async requireLayerUnused(entry: GitArcRegistryEntry, top: GitArcStackLayer) {
     const store = this.store();
     for (const proposalId of lifecycleProposalIds(entry)) {
@@ -478,12 +491,57 @@ export default class GitArcStackController {
         throw new GitArcRejectionError({ reason: "stackLayerInUse" }, `Pending proposal ${proposalId} builds on the top stack layer.`);
       }
     }
-    for (const other of await this.registry().list()) {
-      if (!other.stackTip || ownsLayer(top.layer, other)) continue;
-      if ((await this.readChain(other.stackTip)).some(({ tipCommit }) => tipCommit === top.tipCommit)) {
-        throw new GitArcRejectionError({ reason: "stackLayerInUse" }, `Thread ${other.threadId} builds on the top stack layer.`);
-      }
+    const blockers: string[] = [];
+    const quiet: StackIdentityLike[] = [];
+    for (const { chain, entry: other } of await this.foreignChains(entry)) {
+      if (!chain.some(({ tipCommit }) => tipCommit === top.tipCommit)) continue;
+      const held = await this.heldStackWork(other, chain);
+      if (held.length) blockers.push(`${other.threadId} (${held.map(({ label }) => label).join(", ")})`);
+      else quiet.push({ harness: other.harness, threadId: other.threadId });
     }
+    if (blockers.length) {
+      throw new GitArcRejectionError({ reason: "stackLayerInUse" }, `Other threads build on the top stack layer: ${blockers.join("; ")}.`);
+    }
+    return quiet;
+  }
+
+  /**
+   * A rewrite moves other threads' tips, and worktrees stay put, so changed content on a file they hold would appear in
+   * their diff as their own work. `layerCommits` maps each rewritten layer tip to its replacement.
+   */
+  async requireForeignPathsUnchanged(identity: StackIdentityLike, layerCommits: ReadonlyMap<string, string>) {
+    if (!layerCommits.size) return;
+    const blockers: string[] = [];
+    for (const { chain, entry } of await this.foreignChains(identity)) {
+      const rewritten = chain.findLast(({ tipCommit }) => layerCommits.has(tipCommit))?.tipCommit;
+      if (!rewritten) continue;
+      const held = [...new Set((await this.heldStackWork(entry, chain)).flatMap(({ paths }) => paths))];
+      if (!held.length) continue;
+      const changed = await this.repository.listChangedPaths(rewritten, layerCommits.get(rewritten)!, held);
+      if (changed.length) blockers.push(`${entry.threadId} (${changed.join(", ")})`);
+    }
+    if (blockers.length) {
+      throw new GitArcRejectionError({ reason: "stackLayerInUse" }, `This rewrite changes files other threads hold: ${blockers.join("; ")}.`);
+    }
+  }
+
+  private async foreignChains(identity: StackIdentityLike) {
+    const others = (await this.registry().list()).filter(entry => entry.stackTip && !sameThread(entry, identity));
+    return await Promise.all(others.map(async entry => ({ chain: await this.readChain(entry.stackTip), entry })));
+  }
+
+  /** What a thread could still land, keep or resume. Plans and settled proposals hold nothing. */
+  private async heldStackWork(entry: GitArcRegistryEntry, chain: readonly GitArcStackLayer[]) {
+    const summaries = await this.store().readProposalSummaries(entry.harness as GitArcHarness, entry.threadId, [
+      ...lifecycleProposalIds(entry),
+      ...this.ownLayers(chain, entry).flatMap(({ layer }) => layer.proposalIds),
+    ]);
+    const work: Array<{ label: "live claims" | "saved work" | "pending proposals"; paths: string[] }> = [
+      { label: "live claims", paths: getGitArcLiveClaimPaths(entry) },
+      { label: "saved work", paths: [...entry.savedStash?.paths ?? [], ...entry.phase === "stashed" ? entry.claimedPaths : []] },
+      { label: "pending proposals", paths: summaries.filter(({ status }) => status === "proposed").flatMap(({ livePaths }) => livePaths) },
+    ];
+    return work.filter(({ paths }) => paths.length);
   }
 
   private resultBase(entry: GitArcRegistryEntry) {

@@ -2,7 +2,7 @@
  * Exports:
  * - default GitArcHistoryRewriter: remap affected arc objects, reusing content when parent trees are unchanged.
  * - GitArcHistoryRewritePlan: prepared ref updates, deletes, commit aliases and bounded warnings.
- * - GitArcHistoryRewriteOptions: refs excluded from remapping.
+ * - GitArcHistoryRewriteOptions: refs excluded from remapping, and whether settled proposal states stay frozen.
  * - remapGitArcClaimLossHead: preserve frozen stash bases and remap ordinary loss boundaries.
  * - COMMIT_REWRITE_MAP_REF: durable commit alias ref.
  */
@@ -46,6 +46,8 @@ export interface GitArcHistoryRewritePlan {
 
 export interface GitArcHistoryRewriteOptions {
   excludeRefs?: Iterable<string>;
+  /** Stack edits only rewrite unlanded tips, so settled proposal states are history that could only fail to merge. */
+  freezeSettledProposals?: boolean;
 }
 
 function replaceCheckpointSuffix(ref: string, shortCommit: string) {
@@ -262,6 +264,7 @@ export default class GitArcHistoryRewriter {
       const newParent = oldParent === null ? undefined : commits.get(oldParent);
       if (!newParent && !namesRewrittenCommit(commitTokens(oldCommit.message))) continue;
       const metadata = parseMarkedMetadata<ProposalMetadata>(oldCommit.message, PROPOSAL_METADATA_MARKER);
+      if (options.freezeSettledProposals && metadata && metadata.status !== "proposed") continue;
       if (!newParent && !metadata) continue;
       const remapped = metadata ? remapProposalMetadata(metadata, commits) : null;
       const metadataChanged = remapped && proposalMessage(remapped) !== proposalMessage(metadata!);

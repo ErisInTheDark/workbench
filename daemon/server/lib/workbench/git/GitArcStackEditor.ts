@@ -106,7 +106,8 @@ export default class GitArcStackEditor {
     const store = new GitCheckpointStore(this.repository, this.resolveThreadIdentity);
     const entry = await registry.find(identity);
     if (!entry) throw new GitArcRejectionError({ reason: "proposalNotOwned" });
-    const chain = await new GitArcStackController(this.repository, this.resolveThreadIdentity).readChain(entry.stackTip);
+    const stack = new GitArcStackController(this.repository, this.resolveThreadIdentity);
+    const chain = await stack.readChain(entry.stackTip);
     const oldTop = chain.at(-1)?.tipCommit ?? null;
     const sealedIds = new Set(chain.flatMap(({ layer }) => layer.proposalIds));
     const groups: Group[] = await Promise.all(chain.map(async layer => ({
@@ -156,8 +157,6 @@ export default class GitArcStackEditor {
         invalid(`Strip paths ${prefixes.join(", ")} match none of proposal ${proposalId}'s files.`);
       }
     }
-    const affected = groups.slice(startIndex).flatMap(({ layer }) => layer ? [layer.tipCommit] : []);
-    if (!revising && affected.length) await this.requireNoForeignDependents(identity, affected);
 
     const conflict = (proposalId: string, paths: string[]) => revising
       ? new GitArcRejectionError({ reason: "proposalRevisionConflict" }, `The revision conflicts with proposal ${proposalId} layered above it: ${paths.join(", ")}`)
@@ -275,6 +274,7 @@ export default class GitArcStackEditor {
       topLayerTip = next;
       baseChanged = true;
     }
+    await stack.requireForeignPathsUnchanged(identity, layerCommits);
 
     const touched = new Set([...drop, ...foldSources.keys(), ...rebuilt.filter(({ base: nextBase, newId, proposal }) => (
       newId || nextBase !== proposal.metadata.baseCommit
@@ -282,12 +282,12 @@ export default class GitArcStackEditor {
     const ownProposals = await store.listProposals(identity.harness, identity.threadId);
     const rewrite = layerCommits.size
       ? await new GitArcHistoryRewriter(this.repository).prepare(layerCommits, {
-        // Settled proposal states are history; rewriting them could only fail on content the edit removed.
         excludeRefs: [
           REGISTRY_REF,
           ...replacedLayerRefs,
-          ...ownProposals.filter(({ metadata }) => metadata.status !== "proposed" || touched.has(metadata.proposalId)).map(({ proposalRef }) => proposalRef),
+          ...ownProposals.filter(({ metadata }) => touched.has(metadata.proposalId)).map(({ proposalRef }) => proposalRef),
         ],
+        freezeSettledProposals: true,
       })
       : { commits: new Map<string, string>(), deletes: [], updates: [], warnings: [] };
     if (rewrite.warnings.length) console.warn(`Git arc stack edit skipped refs: ${rewrite.warnings.slice(0, 5).join("; ")}`);
@@ -402,18 +402,5 @@ export default class GitArcStackEditor {
       replacements,
       stackTip: nextEntry.stackTip ?? null,
     };
-  }
-
-  /** Restacks rewrite or remove layers outright, so no other thread may build on them. */
-  private async requireNoForeignDependents(identity: Identity, tips: readonly string[]) {
-    const affected = new Set(tips);
-    const stack = new GitArcStackController(this.repository, this.resolveThreadIdentity);
-    for (const other of await new GitArcRegistry(this.repository, this.resolveThreadIdentity).list()) {
-      if (!other.stackTip) continue;
-      if (other.harness === identity.harness && normalizeThreadId(other.threadId) === normalizeThreadId(identity.threadId)) continue;
-      if ((await stack.readChain(other.stackTip)).some(({ tipCommit }) => affected.has(tipCommit))) {
-        throw new GitArcRejectionError({ reason: "stackLayerInUse" }, `Thread ${other.threadId} builds on a stack layer this restack rewrites.`);
-      }
-    }
   }
 }

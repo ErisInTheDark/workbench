@@ -97,11 +97,6 @@ test("expired plan-only thread cleanup removes its refs without touching another
     rescindedCommit,
     proposalCommit,
   );
-  await registry.set({ ...planOnly, savedStash: null, stackTip: baseCommit }, planOnly.checkpointCommit);
-  assert.equal(await controller.canPruneThreadHistory({
-    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
-  }), false, "a stack tip remains actionable without live claims");
-  await registry.set({ ...planOnly, savedStash: null, stackTip: null }, planOnly.checkpointCommit);
   assert.equal(await controller.canPruneThreadHistory({
     cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
   }), true);

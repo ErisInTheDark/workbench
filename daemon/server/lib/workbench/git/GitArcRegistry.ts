@@ -6,7 +6,7 @@
  * - GitArcAcceptedVisibility: accepted proposal ids status showed its owner or hid after a claim-free acceptance.
  * - GitArcRegistryEntry: stored arc lifecycle and claims.
  * - GitArcRegistryMutation: prepared canonical state and ref updates.
- * - GitArcRegistryReplaceOptions: replacement guards, remaps and claim-loss snapshot.
+ * - GitArcRegistryReplaceOptions: replacement guards, remaps, claim-loss snapshot and detached stack tips.
  * - GitArcOwnerReplacement: guarded ownership row replacement within one ref transaction.
  * - GitArcPreparedOperation: one prepared transition with explicit member compensation.
  * - GitArcCollision: overlapping sibling claims.
@@ -164,6 +164,8 @@ export interface GitArcRegistryReplaceOptions {
   commitRemaps?: ReadonlyMap<string, string>;
   expectedCheckpointCommit?: string;
   claimLossSnapshot?: GitWorktreeSnapshot;
+  /** Other threads whose stack tips clear in the same write. */
+  detachStackTips?: readonly GitArcIdentity[];
 }
 
 export interface GitArcPreparedOperation<Result> {
@@ -351,6 +353,17 @@ export default class GitArcRegistry {
       return identity ? { raw, resolved: { ...raw, threadId: identity.threadId } } : null;
     }));
     return candidates.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
+  }
+
+  private async withoutStackTips(state: GitArcRegistryState, identities: readonly GitArcIdentity[] = []) {
+    if (!identities.length) return state;
+    const keys = new Set(identities.map(identityKey));
+    const rows = new Map((await this.resolveEntries(state.entries)).map(({ raw, resolved }) => [raw, resolved]));
+    const entries = state.entries.map((entry) => {
+      const resolved = rows.get(entry);
+      return resolved && keys.has(identityKey(resolved)) ? { ...entry, stackTip: null } : entry;
+    });
+    return { entries, version: 1 } satisfies GitArcRegistryState;
   }
 
   private async prepareMutation(
@@ -553,9 +566,10 @@ export default class GitArcRegistry {
   async prepareSet(
     entry: Omit<GitArcRegistryEntry, "updatedAt">,
     expectedCheckpointCommit?: string,
-    options?: Pick<GitArcRegistryReplaceOptions, "claimLossSnapshot">,
+    options?: Pick<GitArcRegistryReplaceOptions, "claimLossSnapshot" | "detachStackTips">,
   ): Promise<GitArcRegistryMutation> {
-    const { blob, state } = await this.readStored();
+    const { blob, state: storedState } = await this.readStored();
+    const state = await this.withoutStackTips(storedState, options?.detachStackTips);
     const resolvedInput = await this.resolveIdentity(entry);
     if (!resolvedInput) throw new Error("The Git arc owner identity is unavailable.");
     const canonicalEntry = { ...entry, threadId: resolvedInput.threadId };
