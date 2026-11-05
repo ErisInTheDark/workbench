@@ -16,7 +16,7 @@ import {
   readGitArcValue,
 } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
-import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
+import { parseGitClaimArguments, parseGitClaimOperands } from "workbench-shared/workbench/git/git-claim-arguments";
 import { parseUnifiedDiffFileChanges } from "workbench-shared/workbench/thread/unified-diff";
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
@@ -71,6 +71,7 @@ export interface GitArcCommandIntent {
   removePaths?: string[];
   disown?: boolean;
   editStep?: GitArcEditStep;
+  fromPlan?: boolean;
   intentName: string | null;
   layerTitle?: string;
   paths: string[];
@@ -304,6 +305,7 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   }
 
   let disown = false;
+  let fromPlan = false;
   let toSubagent: string | null = null;
   let proposalId: string | null = null;
   let ref: string | null = null;
@@ -312,6 +314,15 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
     if (flag === "--disown") {
       if (action !== "release" || disown) return null;
       disown = true;
+      continue;
+    }
+    if (flag === "--from-plan") {
+      if (action !== "release" || fromPlan) return null;
+      fromPlan = true;
+      continue;
+    }
+    if (flag === "--transfer-stash" || flag === "--leave-stash") {
+      if (action !== "release") return null;
       continue;
     }
     const value = tokens[cursor + 1];
@@ -335,6 +346,12 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
       : null;
   }
   if (proposalId) return null;
+  if (fromPlan) {
+    if (!toSubagent || disown) return null;
+    const { addPaths, adoptPaths, removePaths } = parseGitClaimOperands(paths);
+    if (adoptPaths.length) return null;
+    return { action, disown, fromPlan, intentName: null, paths: addPaths, ref, ...(removePaths.length ? { removePaths } : {}), toSubagent };
+  }
   if (action === "release" && (Boolean(toSubagent) !== Boolean(paths.length) || toSubagent && disown)) return null;
   if ((action === "stash" || action === "unstash") && (ref || paths.length || disown)) return null;
   if (action === "restore" && !ref) return null;

@@ -156,6 +156,16 @@ function findIgnoredPathsError(error: unknown) {
   return null;
 }
 
+function describeChildTransfer(parentThreadId: string, fromPlan?: { addPaths: string[]; removePaths: string[] }) {
+  const edits = [
+    ...fromPlan?.addPaths.length ? [`added ${fromPlan.addPaths.join(", ")}`] : [],
+    ...fromPlan?.removePaths.length ? [`removed ${fromPlan.removePaths.join(", ")}`] : [],
+  ];
+  return `Selected Git arc claims were transferred to you by coordinating thread ${parentThreadId}.${
+    edits.length ? ` It also edited your inactive plan: ${edits.join("; ")}.` : ""
+  } Read arc status before editing their paths.`;
+}
+
 function failureResponse(failure: GitArcFailure) {
   return Response.json({
     error: formatGitArcFailureText(failure),
@@ -582,6 +592,7 @@ export default class WorkbenchGitArcFeature {
               ? Response.json(await this.options.transitions.ownership([owner.threadId, transferDestination.threadId], async () => await this.workspaceController.releaseToChild(project, {
                 cwd: project.cwd, harness: owner.harness, threadId: owner.threadId,
                 destination: transferDestination, paths: effectiveRequest.paths,
+                ...(effectiveRequest.fromPlan ? { fromPlan: effectiveRequest.fromPlan } : {}),
                 transferStash: effectiveRequest.transferStash,
               }, async () => {
                 const [parent, child] = await Promise.all([
@@ -691,7 +702,7 @@ export default class WorkbenchGitArcFeature {
               const harness = installedProviderKeys.find(key => key === transferDestination.harness);
               if (!harness) throw new Error("The receiving subagent provider is unavailable for passive context.");
               const admission = await this.options.publishAgentContext?.({ harness, threadId: transferDestination.threadId },
-                `Selected Git arc claims were transferred to you by coordinating thread ${owner.threadId}. Read arc status before editing their paths.`) ?? "unsupported";
+                describeChildTransfer(owner.threadId, effectiveRequest.action === "arcTransferClaims" ? effectiveRequest.fromPlan : undefined)) ?? "unsupported";
               if (admission === "unsupported") console.warn("Git arc release transferred claims, but passive child context is unsupported.");
               if (admission === "failed") console.error("Git arc release transferred claims, but passive child context admission failed.");
             } catch (error) {
@@ -1134,6 +1145,7 @@ export default class WorkbenchGitArcFeature {
       const owner = liveCollisionOwner(collision.entry);
       return {
         overlaps: collision.overlaps.slice(0, 20),
+        ...(collision.overlaps.length > 20 ? { overlapCount: collision.overlaps.length } : {}),
         owner: {
           checkpointCommit: owner.checkpointCommit,
           harness: collision.entry.harness,

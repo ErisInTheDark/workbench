@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
+import type { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitArcRegistry from "./GitArcRegistry";
 import GitTestFixtureCache from "./GitTestFixtureCache";
@@ -49,11 +50,16 @@ test("whole-source adoption keeps caller claims, pending proposals and source di
   await fs.writeFile(path.join(cwd, "one.txt"), "parent proposed\n");
   await fs.writeFile(path.join(cwd, "two.txt"), "child change\n");
   const proposal = await controller.createProposal({ cwd, description: "", threadId: "parent", title: "parent work" });
+  const childProposal = await controller.createProposal({ cwd, description: "", threadId: "child", title: "child work" });
   assert.equal(typeof controller.adoptArc, "function", "the Git owner must support whole-source adoption");
   await assert.rejects(controller.adoptArc({
     cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: true,
   }), /stash|saved work|nothing/i);
-  await controller.adoptArc({ cwd, threadId: "parent", source: { harness: "codex", threadId: "child" } });
+  const adopted = await controller.adoptArc({ cwd, threadId: "parent", source: { harness: "codex", threadId: "child" } }) as {
+    invalidatedProposals: Array<{ proposalId: string }>;
+  };
+  assert.deepEqual(adopted.invalidatedProposals.map(({ proposalId }) => proposalId), [childProposal.proposalId],
+    "a source that may be stopped can't rescind, so whole-source adoption reports its proposals instead of rejecting");
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).pending.map(({ proposalId }) => proposalId),
     [proposal.proposalId], "adoption leaves the caller's proposed snapshot committable");
   assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["one.txt", "two.txt"]);
@@ -318,17 +324,20 @@ test("selected release returns dirty claims to a resolved child without exposing
   const kept = await controller.createProposal({ cwd, description: "", paths: ["two.txt"], threadId: "parent", title: "kept" });
   const repository = await WorkbenchGitRepository.open(cwd);
   const index = await repository.writeIndexTree();
-  const operation = await controller.prepareReleaseToChild({
-    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["one.txt"],
+  const selection = { cwd, threadId: "child", source: { harness: "codex" as const, threadId: "parent" }, selectedPaths: ["one.txt"] };
+  await assert.rejects(controller.prepareReleaseToChild(selection), (error: GitArcRejectionError) => {
+    assert.deepEqual(error.rejection, { reason: "pathsInPendingProposal", paths: ["one.txt"] });
+    assert.ok(error.message.includes(moved.proposalId), "the diagnostic names the proposal to stack or rescind");
+    return true;
   });
-  const released = await operation.apply();
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).pending.map(({ proposalId }) => proposalId),
+    [moved.proposalId, kept.proposalId], "a rejected transfer leaves every proposal pending");
+  await controller.rescindProposal({ cwd, proposalId: moved.proposalId, threadId: "parent" });
+  const released = await (await controller.prepareReleaseToChild(selection)).apply();
   assert.deepEqual(released.releasedClaims, ["one.txt"]);
-  // Only the proposal covering moved files loses its owner, and it is reported rather than silently dropped.
-  const reason = "Selected claims were released to a subagent.";
-  assert.deepEqual(released.invalidatedProposals, [{ proposalId: moved.proposalId, reason }]);
+  assert.deepEqual(released.invalidatedProposals, [], "a rescinded proposal no longer guards its files");
   const parentStatus = await controller.readStatus({ cwd, threadId: "parent" });
   assert.deepEqual(parentStatus.pending.map(({ proposalId }) => proposalId), [kept.proposalId]);
-  assert.deepEqual(parentStatus.unavailable, [{ proposalId: moved.proposalId, title: "moved", reason }]);
   assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["two.txt"]);
   assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths, ["one.txt"]);
   assert.deepEqual((await controller.compare({ cwd, threadId: "parent" })).changes.map(change => change.path), ["two.txt"]);
@@ -432,4 +441,90 @@ test("selected release rejects unowned paths and uncovered child plans before ch
   await assert.rejects(controller.prepareReleaseToChild({ ...input, selectedPaths: ["two.txt"] }), /plan.*cover/i);
   assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["two.txt"]);
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).cleanClaims, []);
+});
+
+const PLAN_SOURCE = { harness: "codex" as const, threadId: "parent" };
+
+async function planChild(controller: WorkbenchGitCheckpointController, cwd: string, addPaths: string[]) {
+  await controller.editPlanClaims({ cwd, threadId: "child", inherit: false, intentName: "child work", addPaths, removePaths: [], adoptPaths: [] });
+}
+
+async function releaseFromPlan(controller: WorkbenchGitCheckpointController, cwd: string, planEdit = { addPaths: [] as string[], removePaths: [] as string[] }) {
+  const resolved = await controller.resolvePlanTransfer({ cwd, threadId: "child", source: PLAN_SOURCE, ...planEdit });
+  assert.ok(resolved, "the child has an inactive plan");
+  return await (await controller.prepareReleaseToChild({
+    cwd, threadId: "child", source: PLAN_SOURCE, selectedPaths: resolved.selectedPaths, planEdit,
+  })).apply();
+}
+
+test("plan-selected release widens the plan without refreshing the baselines of paths already in it", async context => {
+  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController();
+  await start(controller, cwd, "parent", ["one.txt", "two.txt"]);
+  await planChild(controller, cwd, ["one.txt"]);
+  await fs.writeFile(path.join(cwd, "one.txt"), "edited after the child planned\n");
+  await fs.writeFile(path.join(cwd, "two.txt"), "handed over dirty\n");
+
+  const released = await releaseFromPlan(controller, cwd, { addPaths: ["two.txt"], removePaths: [] });
+
+  assert.deepEqual(released.releasedClaims, ["one.txt", "two.txt"]);
+  assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths ?? [], []);
+  const child = await controller.readScope({ cwd, threadId: "child" });
+  assert.deepEqual([child?.phase, child?.plannedPaths, child?.claimedPaths], ["plan", ["one.txt", "two.txt"], ["one.txt", "two.txt"]]);
+  await assert.rejects(controller.startArc({ cwd, threadId: "child" }), (error: { details?: { snapshotDrift?: string[] } }) => {
+    assert.deepEqual(error.details?.snapshotDrift, ["one.txt"], "old paths keep reporting drift while the added path snapshots current content");
+    return true;
+  });
+});
+
+test("plan-selected release narrows the plan so the child starts, carving files from planned folders and rejecting bad edits", async context => {
+  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController();
+  await start(controller, cwd, "parent", ["nested/keep.txt", "nested/move.txt", "one.txt", "two.txt"]);
+  await fs.mkdir(path.join(cwd, "nested"));
+  await fs.writeFile(path.join(cwd, "nested/keep.txt"), "parent keeps\n");
+  await fs.writeFile(path.join(cwd, "nested/move.txt"), "child takes\n");
+  await planChild(controller, cwd, ["nested", "two.txt"]);
+
+  const edit = { cwd, threadId: "child", source: PLAN_SOURCE };
+  assert.deepEqual(await controller.resolvePlanTransfer({ ...edit, threadId: "no-plan", addPaths: [], removePaths: [] }), null);
+  await assert.rejects(controller.resolvePlanTransfer({ ...edit, threadId: "no-plan", addPaths: ["one.txt"], removePaths: [] }), /inactive/i);
+  await assert.rejects(controller.resolvePlanTransfer({ ...edit, addPaths: ["missing.txt"], removePaths: [] }), /own/i);
+  await assert.rejects(controller.resolvePlanTransfer({ ...edit, addPaths: [], removePaths: ["missing.txt"] }), /Removed paths/);
+  assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.plannedPaths, ["nested", "two.txt"]);
+
+  const released = await releaseFromPlan(controller, cwd, { addPaths: [], removePaths: ["nested/keep.txt"] });
+
+  assert.deepEqual(released.releasedClaims, ["nested/move.txt", "two.txt"]);
+  assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["nested/keep.txt", "one.txt"]);
+  await controller.startArc({ cwd, threadId: "child" });
+  const child = await controller.readScope({ cwd, threadId: "child" });
+  assert.deepEqual([child?.phase, child?.claimedPaths], ["active", ["nested/move.txt", "two.txt"]]);
+});
+
+test("stacking keeps a parent's proposal committable through a plan-selected release its transfer would otherwise reject", async context => {
+  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController();
+  await start(controller, cwd, "parent", ["one.txt"]);
+  await fs.writeFile(path.join(cwd, "one.txt"), "parent proposed\n");
+  const proposal = await controller.createProposal({ cwd, description: "", threadId: "parent", title: "parent work" });
+  await planChild(controller, cwd, ["one.txt"]);
+
+  await assert.rejects(releaseFromPlan(controller, cwd), /pending proposal/i);
+  assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["one.txt"]);
+
+  await controller.stackArc({ cwd, threadId: "parent", title: "parent layer" });
+  const released = await releaseFromPlan(controller, cwd);
+  assert.deepEqual([released.releasedClaims, released.invalidatedProposals], [["one.txt"], []]);
+  const parent = await controller.readStatus({ cwd, threadId: "parent" });
+  assert.equal(parent.unavailable, undefined);
+  assert.ok(JSON.stringify(parent.stacked).includes(proposal.proposalId), "the sealed proposal survives on the parent");
+  await controller.startArc({ cwd, threadId: "child" });
+  assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths, ["one.txt"]);
 });

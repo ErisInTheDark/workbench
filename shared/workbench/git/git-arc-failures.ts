@@ -66,6 +66,8 @@ const GitArcConflictOwnerSchema = z.object({
 
 const GitArcConflictSchema = z.object({
   overlaps: z.array(GitArcOverlapSchema).min(1).max(20),
+  /** Total overlaps with this owner, present only when `overlaps` is truncated. */
+  overlapCount: z.number().int().positive().optional(),
   owner: GitArcConflictOwnerSchema,
 }).strict();
 
@@ -200,6 +202,8 @@ export function createGitArcOperationRejected(action: GitArcFailureAction, messa
   };
 }
 
+const PARENT_CLAIMS_RECOVERY = "A subagent blocked by its parent's claims asks once: git_arc_release with fromPlan moves them all without a path list.";
+
 function isAdoptionAction(action: GitArcFailureAction) {
   return action === "plan" || action === "planAdopt" || action === "planStart" || action === "arcAdopt";
 }
@@ -253,7 +257,7 @@ export function describeGitArcFailure(failure: GitArcFailure) {
           userHint: "Wait for the owning thread to release its claim.",
         }
         : {
-          agentRecovery: `${failure.action === "arcStart" || failure.action === "arcWait" ? "" : "If the intended scope has no inactive plan, publish it with git_plan_claims first. "}Call git_arc_wait to activate the inactive plan once claims clear. Do not republish an existing plan for collisions alone, or adopt, restore, or overwrite sibling-owned work.`,
+          agentRecovery: `${failure.action === "arcStart" || failure.action === "arcWait" ? "" : "If the intended scope has no inactive plan, publish it with git_plan_claims first. "}Call git_arc_wait to activate the inactive plan once claims clear. ${PARENT_CLAIMS_RECOVERY} Do not republish an existing plan for collisions alone, or adopt, restore, or overwrite sibling-owned work.`,
           message: "Another thread owns the requested path.",
           userHint: "Wait for the owning thread to release its claim.",
         };
@@ -276,7 +280,7 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     case "planDrift":
       if (failure.conflicts.length) {
         return {
-          agentRecovery: "Call git_arc_wait. Do not republish the plan while sibling claims intersect. After claims clear, waiting rechecks the original baseline and reports any remaining drift.",
+          agentRecovery: `Call git_arc_wait. ${PARENT_CLAIMS_RECOVERY} Do not republish the plan while sibling claims intersect. After claims clear, waiting rechecks the original baseline and reports any remaining drift.`,
           message: "Another thread owns the requested paths. The plan baseline also changed.",
           userHint: "Wait for the owning thread to finish before reviewing the changed baseline.",
         };
@@ -326,9 +330,10 @@ export function describeGitArcFailure(failure: GitArcFailure) {
 }
 
 function appendConflictLines(lines: string[], failure: Extract<GitArcFailure, { code: "siblingClaimCollision" | "planDrift" }>) {
-  failure.conflicts.forEach(({ overlaps, owner }) => {
+  failure.conflicts.forEach(({ overlapCount, overlaps, owner }) => {
     lines.push(`- ${owner.harness}/${owner.threadId} ${owner.title || owner.intentName} [${owner.lifecycle}] (${owner.checkpointCommit.slice(0, 8)})`);
     overlaps.forEach(({ claimedPath, requestedPath }) => lines.push(`  - claims ${claimedPath} through requested path ${requestedPath}`));
+    if (overlapCount) lines.push(`  - and ${overlapCount - overlaps.length} more`);
   });
 }
 
@@ -396,8 +401,9 @@ export function formatGitArcFailureReceipt(failure: GitArcFailure) {
   }
   if ("conflicts" in facts) {
     lines.push(`conflicts ${facts.conflicts.length}`);
-    for (const { owner, overlaps } of facts.conflicts) {
-      row(owner.checkpointCommit, owner.harness, owner.intentName, owner.lifecycle, owner.threadId, owner.title, String(overlaps.length));
+    for (const { overlapCount, owner, overlaps } of facts.conflicts) {
+      row(owner.checkpointCommit, owner.harness, owner.intentName, owner.lifecycle, owner.threadId, owner.title, String(overlaps.length),
+        ...overlapCount ? [`of ${overlapCount} total`] : []);
       overlaps.forEach(({ claimedPath, requestedPath }) => row(claimedPath, requestedPath));
     }
   }
@@ -467,12 +473,16 @@ function parseTextFailure(output: string) {
       });
     } else if (key === "conflicts") {
       result.conflicts = Array.from({ length: count(value) }, () => {
-        const [checkpointCommit, harness, intentName, lifecycle, threadId, title, length] = row(7);
+        const [checkpointCommit, harness, intentName, lifecycle, threadId, title, length, total] = row(7, 8);
         const overlaps = Array.from({ length: count(length!) }, () => {
           const [claimedPath, requestedPath] = row(2);
           return { claimedPath, requestedPath };
         });
-        return { owner: { checkpointCommit, harness, intentName, lifecycle, threadId, title }, overlaps };
+        const overlapCount = /^of (\d+) total$/u.exec(total ?? "")?.[1];
+        return {
+          owner: { checkpointCommit, harness, intentName, lifecycle, threadId, title }, overlaps,
+          ...overlapCount ? { overlapCount: Number(overlapCount) } : {},
+        };
       });
     } else if (key === "comparison") {
       const comparison = Array.from({ length: count(value) }, () => {

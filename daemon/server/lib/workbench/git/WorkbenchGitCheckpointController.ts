@@ -71,7 +71,7 @@ import GitObjectReadSession from "./GitObjectReadSession";
 import { absorbMachineBaseline } from "./machine-git-baseline";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitArcStashController from "./GitArcStashController";
-import GitArcOwnershipTransferController, { type GitArcAdoptionInput, type GitArcSelectedTransferInput } from "./GitArcOwnershipTransferController";
+import GitArcOwnershipTransferController, { type GitArcAdoptionInput, type GitArcPlanTransferInput, type GitArcSelectedTransferInput } from "./GitArcOwnershipTransferController";
 import { collectGitArcDrift } from "./git-arc-drift";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { GitArcInvalidatedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
@@ -499,6 +499,10 @@ export default class WorkbenchGitCheckpointController {
 
   async adoptArc(input: GitArcAdoptionInput) {
     return await GitObjectReadSession.run(async () => await (await this.transfers.prepareAdoption(input)).apply());
+  }
+
+  async resolvePlanTransfer(input: GitArcPlanTransferInput) {
+    return await GitObjectReadSession.run(() => this.transfers.resolvePlanTransfer(input));
   }
 
   async prepareReleaseToChild(input: GitArcSelectedTransferInput) {

@@ -267,9 +267,10 @@ export function readThreadSubagentCoordinationClaimAction(
   const released = receipt?.action === "release" && receipt.removedClaimCount === undefined ? receipt.removedClaims : undefined;
   const adopted = receipt?.action === "adopt" && receipt.additionalClaimCount === undefined ? receipt.additionalClaims : undefined;
   if (operation?.action === "release" && operation.toSubagent) {
+    const planSelected = operation.fromPlan && receipt?.action === "release" ? receipt.removedClaims : undefined;
     return {
       action: "release",
-      paths: released ?? operation.paths,
+      paths: released ?? planSelected ?? operation.paths,
       target: { kind: "name", value: operation.toSubagent },
     };
   }

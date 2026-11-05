@@ -56,6 +56,16 @@ test("plain failures preserve collision facts without a duplicate JSON envelope"
   assert.match(activeRecovery, /git_plan_claims/u);
 });
 
+test("collision text says how many overlaps the bounded list hides and how a child recovers them all at once", () => {
+  const failure: GitArcFailure = {
+    action: "arcStart", code: "siblingClaimCollision", conflicts: [{ ...conflict, overlapCount: 208 }], version: 1,
+  };
+  assert.deepEqual(parseGitArcFailureReceipt(formatGitArcFailureReceipt(failure)), failure);
+  assert.match(formatGitArcFailureText(failure), /and 207 more/u);
+  assert.match(describeGitArcFailure(failure).agentRecovery!, /fromPlan/u);
+  assert.doesNotMatch(formatGitArcFailureText({ ...failure, conflicts: [conflict] }), /more/u);
+});
+
 test("mixed drift and collision receipts defer baseline recovery until claims clear", () => {
   const failure: GitArcFailure = {
     action: "arcStart", code: "planDrift", commits: [], conflicts: [conflict], dirtyPaths: [],

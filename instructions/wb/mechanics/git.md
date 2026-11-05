@@ -110,7 +110,7 @@ follow-up scope:
 ### adopt claims from another thread
 - <tool id="git_arc_adopt" /> transfers complete live claims. If the source has saved stash, set `transferStash` explicitly to move or leave it, or `discardStash` to delete it; discard from sibling threads only on explicit user direction. Use `threadId` only on explicit user instruction, or `name` for an owned subagent.
 - Exact `paths` select active or baseline guards; the recipient gets active ownership on its inherited stack. `transferStash` independently selects saved stash. `releaseToSubagent` hands the selection from one owned child to another atomically.
-- Adopt preserves caller claims, proposals and worktree; plans stay with the source. Source proposals covering moved files become unavailable and are reported. Reject stash transfer if the caller has one.
+- Adopt preserves caller claims, proposals and worktree; plans stay with the source. Selected transfers reject paths in the source's unsealed pending proposals: stack or rescind first. Whole-source adoption invalidates those proposals and reports them. Reject stash transfer if the caller has one.
 </docs>
 
 ### stash or restore claimed work
@@ -126,6 +126,7 @@ follow-up scope:
 ### release or hand off claims
 - Ordinary release keeps dirty claims; `disown: true` releases dirty ownership, all or selected `paths`, only on explicit user direction. Neither changes workspace or Git content.
 - <tool id="git_arc_release" /> releases clean claims, or transfers selected live claims and/or saved stash to an owned subagent. Stash transfer rejects recipients with saved work or recipient-owned pending stack layers; inherited layers may hold it but still block unstash and stacking.
+- Child blocked by your claims: use `fromPlan`, not path lists. `addPaths`/`removePaths` edit its inactive plan; removed claims stay yours, and it starts without them.
 </docs>
 <docs tools="git_arc_claims git_plan_claims">
 - Active claim edits mutate ownership; inactive planning publishes scope.

@@ -9,7 +9,7 @@ import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/wor
 import { GitArcClaimsSchema, GitArcRestackEditsSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcEditOperationsSchema } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { GitArcStatusFullSchema } from "workbench-shared/workbench/git/git-arc-status";
-import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
+import { parseGitClaimArguments, parseGitClaimOperands } from "workbench-shared/workbench/git/git-claim-arguments";
 import { WORKBENCH_GIT_PLAN_COMMANDS } from "./git-plan-command-definitions";
 import { WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS } from "./git-arc-proposal-commands";
 
@@ -243,25 +243,36 @@ const release = defineWorkbenchAgentCommand({
   effects: { destructive: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "release"],
-  usage: "wb git arc release [--disown [-- <claim-path>...]] | wb git arc release --to-subagent <name> [--transfer-stash|--leave-stash] [-- <claim-path>...]",
+  usage: "wb git arc release [--disown [-- <claim-path>...]] | wb git arc release --to-subagent <name> [--transfer-stash|--leave-stash] [-- <claim-path>...] | wb git arc release --to-subagent <name> --from-plan [--transfer-stash|--leave-stash] [-- <add-path> -<remove-path>...]",
   inputSchema: z.object({
     disown: z.boolean().default(false).describe("Release ownership of dirty claims without changing their workspace or Git content."),
     toSubagent: requiredText.optional().describe("Owned unsettled subagent receiving selected live claims."),
     paths: paths.default([]).describe("Selected live claims to transfer, or with disown to release; omit with disown to release every claim."),
+    fromPlan: z.boolean().default(false).describe("Transfer every live claim the subagent's inactive plan covers, instead of listing paths."),
+    addPaths: paths.default([]).describe("With fromPlan: widen the subagent's plan with these, transferring the claims they cover."),
+    removePaths: paths.default([]).describe("With fromPlan: narrow the subagent's plan by these; their claims stay with the caller."),
     transferStash: z.boolean().optional().describe("Required when saved stash exists: true transfers it; false leaves it."),
   }).strict().superRefine((input, context) => {
-    if (input.toSubagent && ((!input.paths.length && input.transferStash !== true) || input.disown)
+    if (input.toSubagent && ((!input.paths.length && !input.fromPlan && input.transferStash !== true) || input.disown)
       || !input.toSubagent && (input.paths.length && !input.disown || input.transferStash !== undefined)) {
-      context.addIssue({ code: "custom", message: "A subagent transfer requires paths or transferStash: true and cannot use disown; disown accepts paths; ordinary release accepts neither." });
+      context.addIssue({ code: "custom", message: "A subagent transfer requires paths, fromPlan or transferStash: true and cannot use disown; disown accepts paths; ordinary release accepts neither." });
+    }
+    if (input.fromPlan ? !input.toSubagent || input.paths.length : input.addPaths.length || input.removePaths.length) {
+      context.addIssue({ code: "custom", message: "fromPlan requires toSubagent and replaces paths; addPaths and removePaths require fromPlan." });
     }
   }),
   parseCliArgs(args) {
+    const boolean = ["--disown", "--from-plan", "--leave-stash", "--transfer-stash"];
     const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, {
-      boolean: ["--disown", "--leave-stash", "--transfer-stash"], values: ["--to-subagent"],
-    }), { boolean: ["--disown", "--leave-stash", "--transfer-stash"], trailing: true, values: ["--to-subagent"] });
+      boolean, values: ["--to-subagent"],
+    }), { boolean, trailing: true, values: ["--to-subagent"] });
     if (flags.has("--leave-stash") && flags.has("--transfer-stash")) throw new Error("Choose either --leave-stash or --transfer-stash.");
+    const fromPlan = flags.has("--from-plan");
+    const edit = fromPlan ? parseGitClaimOperands(flags.trailing) : null;
+    if (edit?.adoptPaths.length) throw new Error("--from-plan accepts add and -remove paths, not *adopt paths.");
     return {
-      disown: flags.has("--disown"), toSubagent: flags.optional("--to-subagent") ?? undefined, paths: flags.trailing,
+      disown: flags.has("--disown"), toSubagent: flags.optional("--to-subagent") ?? undefined,
+      ...(edit ? { addPaths: edit.addPaths, fromPlan, paths: [], removePaths: edit.removePaths } : { paths: flags.trailing }),
       ...(flags.has("--leave-stash") ? { transferStash: false } : flags.has("--transfer-stash") ? { transferStash: true } : {}),
     };
   },
@@ -272,6 +283,7 @@ const release = defineWorkbenchAgentCommand({
           action: "arcTransferClaims" as const,
           destination: { kind: "subagent" as const, name: input.toSubagent },
           paths: input.paths,
+          ...(input.fromPlan ? { fromPlan: { addPaths: input.addPaths, removePaths: input.removePaths } } : {}),
           ...(input.transferStash === undefined ? {} : { transferStash: input.transferStash }),
         }
         : { action: "arcRelease" as const }),

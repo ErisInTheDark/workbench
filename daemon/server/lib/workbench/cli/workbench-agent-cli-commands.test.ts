@@ -1083,10 +1083,22 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     action: "arcTransferClaims", cwd: "C:/workspace", harness: "codex", threadId: "thread-1",
     destination: { kind: "subagent", name: "mira" }, paths: ["api:src/one.ts"],
   });
+  const planTransfer = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "release", "--to-subagent", "mira", "--from-plan", "--leave-stash", "--", "src/extra.ts", "-src/keep.ts",
+  ], gitOptions);
+  assert.equal(planTransfer.kind, "request");
+  assert.deepEqual(planTransfer.request.body, {
+    action: "arcTransferClaims", cwd: "C:/workspace", harness: "codex", threadId: "thread-1",
+    destination: { kind: "subagent", name: "mira" }, paths: [], transferStash: false,
+    fromPlan: { addPaths: ["src/extra.ts"], removePaths: ["src/keep.ts"] },
+  });
   for (const invalid of [
     ["--to-subagent", "mira"],
     ["--to-subagent", "mira", "--disown", "--", "src/one.ts"],
     ["--", "src/one.ts"],
+    ["--from-plan"],
+    ["--to-subagent", "mira", "--from-plan", "--disown"],
+    ["--to-subagent", "mira", "--from-plan", "--", "*dirty.ts"],
   ]) {
     assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "release", ...invalid], gitOptions)).kind, "error");
   }

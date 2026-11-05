@@ -203,6 +203,9 @@ class FakeLocalGitArcController {
   readonly transferCalls: Array<{ cwd: string; paths: string[] }> = [];
   readonly preparedTransfers: Array<{ cwd: string; transferStash?: boolean }> = [];
   readonly undoTransferCalls: string[] = [];
+  readonly planTransfers = new Map<string, { selectedPaths: string[]; editsPlan: boolean }>();
+  readonly planTransferInputs: Array<{ addPaths: string[]; cwd: string; removePaths: string[] }> = [];
+  readonly preparedPlanEdits: Array<{ addPaths: string[]; removePaths: string[] }> = [];
   readonly startCalls: string[] = [];
   private nextProposal = 0;
   private readonly plans = new Map<string, { checkpointCommit: string; harness: string; intentDescription: string; intentName: string; scopePaths: string[]; threadId: string; updatedAt: string }>();
@@ -424,10 +427,17 @@ class FakeLocalGitArcController {
     };
   }
 
+  async resolvePlanTransfer(input: { addPaths: string[]; cwd: string; removePaths: string[] }) {
+    this.planTransferInputs.push(input);
+    return this.planTransfers.get(input.cwd) ?? null;
+  }
+
   async prepareReleaseToChild(input: {
     cwd: string; threadId: string; source: { threadId: string }; selectedPaths: string[]; transferStash?: boolean;
+    planEdit?: { addPaths: string[]; removePaths: string[] };
   }) {
     this.preparedTransfers.push({ cwd: input.cwd, transferStash: input.transferStash });
+    if (input.planEdit) this.preparedPlanEdits.push(input.planEdit);
     const source = this.states.get(input.cwd);
     if (!source || source.threadId !== input.source.threadId) throw new Error("Source claims are unavailable.");
     const paths = input.selectedPaths.map(value => path.relative(input.cwd, value).replace(/\\/gu, "/"));
@@ -1382,6 +1392,48 @@ test("selected release leaves other roots claimed and compensates a later transf
   }), /transfer failed/u);
   assert.deepEqual(local.undoTransferCalls, ["C:/repo/api"]);
   assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.claimedPaths, ["api:one.ts", "web:two.ts"]);
+});
+
+test("plan-selected release resolves each repository under its lock and only moves what the child's plan selects", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async root => root,
+  );
+  for (const [rootId, files] of [["api", ["one.ts", "keep.ts"]], ["web", ["two.ts"]]] as const) {
+    const cwd = `C:/repo/${rootId}`;
+    await local.createPlan({ cwd, harness: "codex", threadId: "parent", paths: files.map(file => `${cwd}/${file}`), intentName: "parent work", intentDescription: "" });
+    await local.startArc({ cwd });
+  }
+  const input = {
+    cwd: project.cwd, harness: "codex" as const, threadId: "parent", paths: [],
+    destination: { harness: "codex" as const, threadId: "child" },
+  };
+  const nothing = { addPaths: [], removePaths: [] };
+
+  await assert.rejects(controller.releaseToChild(project, { ...input, fromPlan: nothing }), /inactive plan/iu);
+
+  local.planTransfers.set("C:/repo/web", { selectedPaths: [], editsPlan: false });
+  await assert.rejects(controller.releaseToChild(project, { ...input, fromPlan: nothing }), /covers none/iu);
+  assert.deepEqual(local.transferCalls, []);
+
+  local.planTransfers.set("C:/repo/api", { selectedPaths: ["one.ts"], editsPlan: true });
+  const fromPlan = { addPaths: [], removePaths: ["api:keep.ts"] };
+  const result = await controller.releaseToChild(project, { ...input, fromPlan });
+  assert.deepEqual(result.releasedClaims, ["api:one.ts"]);
+  assert.deepEqual(local.planTransferInputs.findLast(({ cwd }) => cwd === "C:/repo/api")?.removePaths.map(value => value.replace(/\\/gu, "/")), ["C:/repo/api/keep.ts"]);
+  assert.deepEqual(local.transferCalls, [{ cwd: "C:/repo/api", paths: ["one.ts"] }]);
+  assert.deepEqual(local.preparedPlanEdits.map(edit => edit?.removePaths.map(value => value.replace(/\\/gu, "/"))), [["C:/repo/api/keep.ts"]]);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.claimedPaths, ["web:two.ts"]);
+
+  await local.createPlan({ cwd: "C:/repo/api", harness: "codex", threadId: "parent", paths: ["C:/repo/api/one.ts"], intentName: "parent work", intentDescription: "" });
+  await local.startArc({ cwd: "C:/repo/api" });
+  local.planTransfers.set("C:/repo/web", { selectedPaths: ["two.ts"], editsPlan: false });
+  local.transferFailureRoots.add("C:/repo/web");
+  await assert.rejects(controller.releaseToChild(project, { ...input, fromPlan: nothing }), /transfer failed/u);
+  assert.deepEqual(local.undoTransferCalls, ["C:/repo/api"], "a later repository's failure rolls earlier ones back");
 });
 
 test("workspace transfers preserve explicit leave-stash intent for each repository", async () => {

@@ -136,11 +136,18 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     action: z.literal("arcTransferClaims"),
     destination: z.object({ kind: z.literal("subagent"), name: nonEmptyString }).strict(),
     paths: optionalCheckpointPaths.default([]),
+    /** Select the source's claims covered by the recipient's inactive plan after applying these edits to that plan. */
+    fromPlan: z.object({
+      addPaths: optionalCheckpointPaths.default([]),
+      removePaths: optionalCheckpointPaths.default([]),
+    }).strict().optional(),
     /** Required when the source has saved stash: true moves it; false leaves it. */
     transferStash: z.boolean().optional(),
     ...checkpointBaseRequest,
-  }).strict().refine(input => input.paths.length > 0 || input.transferStash === true,
-    "A subagent transfer requires live claim paths or transferStash: true."),
+  }).strict()
+    .refine(input => input.paths.length > 0 || input.fromPlan || input.transferStash === true,
+      "A subagent transfer requires live claim paths, fromPlan or transferStash: true.")
+    .refine(input => !input.fromPlan || !input.paths.length, "Choose either paths or fromPlan."),
   GitArcPlanClaimsSchema.safeExtend({ action: z.literal("planClaims"), start: z.boolean().default(false), ...checkpointBaseRequest }),
   GitArcClaimsSchema.extend({ action: z.literal("arcClaims"), ...checkpointBaseRequest }),
   z.object({ action: z.literal("arcScope"), ...checkpointBaseRequest }).strict(),

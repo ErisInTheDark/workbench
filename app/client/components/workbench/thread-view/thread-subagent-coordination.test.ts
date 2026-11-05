@@ -82,6 +82,29 @@ test("an unrelated row splits otherwise qualifying coordination", () => {
   ]), []);
 });
 
+test("plan-selected transfers report the receipt's moved paths because the request names none", () => {
+  const receipt = {
+    action: "release", claimedPaths: [], claimedPathCount: 0, fullScope: false, invalidatedProposals: [], intentName: null,
+    phase: "resolved", ref: "a".repeat(40), version: 1,
+    removedClaims: ["src/one.ts"], removedClaimCount: 208,
+  };
+  const action = readThreadSubagentCoordinationClaimAction({
+    appContext: null,
+    arguments: { fromPlan: true, toSubagent: "mira" },
+    durationMs: 1,
+    error: null,
+    id: "release",
+    pluginId: null,
+    readOnlyHint: null,
+    result: { _meta: null, content: [], structuredContent: { changes: [], diff: null, kind: "success", receipt, status: {}, version: 1 } },
+    server: "wbex",
+    status: "completed",
+    tool: "git_arc_release",
+    type: "mcpToolCall",
+  });
+  assert.deepEqual(action?.paths, ["src/one.ts"]);
+});
+
 test("subagent claim transfers expose their participant and transferred paths for coordination", () => {
   const release = readThreadSubagentCoordinationClaimAction({
     appContext: null,

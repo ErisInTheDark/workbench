@@ -156,6 +156,8 @@ export type WorkbenchGitArcOperation = {
   disown?: boolean;
   /** Edit session step requested by `edit`. */
   editStep?: GitArcEditStep;
+  /** `release` selects the child's plan coverage; `paths` then holds plan additions. */
+  fromPlan?: boolean;
   intentName: string | null;
   /** Stack layer title requested by `stack`. */
   layerTitle?: string;
@@ -589,7 +591,8 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
   if (!action) return null;
   const editStep = name.startsWith(GIT_ARC_EDIT_PREFIX) ? name.slice(GIT_ARC_EDIT_PREFIX.length) : null;
   const messages = [readString(args.title), readString(args.description)].filter((value): value is string => value !== null);
-  const combined = name === "git_plan_claims" || name === "git_plan_start" || name === "git_arc_claims";
+  const fromPlan = action === "release" && readBoolean(args.fromPlan);
+  const combined = name === "git_plan_claims" || name === "git_plan_start" || name === "git_arc_claims" || fromPlan;
   const pathField = combined ? "addPaths" : "paths";
   const paths = [...readStringArray(args[pathField]), ...readRootPaths(args.roots, pathField)];
   const removePaths = [...readStringArray(args.removePaths), ...readRootPaths(args.roots, "removePaths")];
@@ -605,6 +608,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ...(removePaths.length ? { removePaths } : {}),
     ...(action === "release" ? { disown: readBoolean(args.disown) } : {}),
     ...(action === "release" && readString(args.toSubagent) ? { toSubagent: readString(args.toSubagent)! } : {}),
+    ...(fromPlan ? { fromPlan } : {}),
     intentName,
     ...(action === "stack" && readString(args.title) ? { layerTitle: readString(args.title)! } : {}),
     ...(action === "edit" && isGitArcEditStep(editStep) ? { editStep } : {}),

@@ -210,6 +210,38 @@ test("release to a named child keeps the parent as source and refreshes both own
   assert.deepEqual(heldDuringTransfer, [wbThreadId("codex", "thread"), childId]);
 });
 
+test("plan-selected release passes its edits to the workspace owner and tells the child how her plan changed", async () => {
+  const notices: string[] = [];
+  const childId = wbThreadId("opencode", "sibling");
+  const feature = waitFeature({
+    publishAgentContext: async (_target: { threadId: string }, text: string) => { notices.push(text); return "admitted"; },
+    resolveSubagentPeer: async () => ({
+      harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(childId),
+    }),
+    transitions: ownershipRecorder().transitions,
+  });
+  let captured: { fromPlan?: object; paths?: string[] } | null = null;
+  const internal = feature as unknown as {
+    workspaceController: {
+      releaseToChild: (project: object, input: { fromPlan?: object; paths?: string[] }, beforeTransfer: () => Promise<void>) => Promise<object>;
+    };
+  };
+  internal.workspaceController.releaseToChild = async (_project, input) => {
+    captured = input;
+    return { checkpointCommit: "a".repeat(40), intentName: "parent", kind: "arc", phase: "resolved", scopePaths: [], releasedClaims: ["one.txt"] };
+  };
+  const fromPlan = { addPaths: ["extra.txt"], removePaths: ["keep.txt"] };
+  const response = await feature.executeRequest({
+    action: "arcTransferClaims", cwd: "C:/Git/Project", harness: "codex", threadId: "thread",
+    destination: { kind: "subagent", name: "mira" }, paths: [], fromPlan,
+  });
+  assert.equal(response.ok, true, await response.text());
+  assert.deepEqual(captured!.fromPlan, fromPlan);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0]!, /extra\.txt/u);
+  assert.match(notices[0]!, /keep\.txt/u);
+});
+
 test("a thread with no Git arc identity for the repository gets a typed rejection tools can match", async () => {
   const response = await waitFeature().executeRequest({ action: "arcHeld", cwd: "C:/Git/Project", harness: "codex", threadId: "stranger" });
   const { gitArcFailure } = await response.json() as GitArcFailureEnvelope;

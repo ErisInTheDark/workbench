@@ -41,6 +41,7 @@ import WorkbenchGitCheckpointController, {
   type GitArcPlanState,
   type GitArcRetentionResult,
 } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import type { GitArcPlanTransferEdit } from "../lib/workbench/git/GitArcOwnershipTransferController";
 import GitClaimHistoryReader from "../lib/workbench/git/GitClaimHistoryReader";
 import GitObjectReadSession from "../lib/workbench/git/GitObjectReadSession";
 import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "../lib/workbench/git/WorkbenchGitRepository";
@@ -1345,24 +1346,47 @@ export default class WorkbenchWorkspaceGitArcController {
       threadId: string;
       destination: { harness: WorkbenchHarness; threadId: string };
       paths: string[];
+      fromPlan?: GitArcPlanTransferEdit;
       transferStash?: boolean;
     },
     beforeTransfer?: () => Promise<void>,
   ) {
     const members = await this.resolveRepoMembers(project);
     const selectedPaths = input.paths.map(value => this.parseRootPath(project, value, project.root.id).absolute);
-    if ((!selectedPaths.length && input.transferStash !== true)
+    if ((!selectedPaths.length && !input.fromPlan && input.transferStash !== true)
       || new Set(selectedPaths.map(selected => comparable(selected))).size !== selectedPaths.length) {
-      throw new Error("Release to a subagent requires distinct live claim paths or transferStash: true.");
+      throw new Error("Release to a subagent requires distinct live claim paths, fromPlan or transferStash: true.");
     }
     const groups = this.groupRootPaths(project, members, input.paths, []);
     const selected = new Map(groups.map(group => [group.member.repoRoot, group.paths]));
+    const planEdits = this.groupPlanEdits(project, members, input.fromPlan);
     let sourceHasStash = false;
     let stashMembers = new Set<string>();
     const values = await this.runPreparedMembers<object>(
       members,
       async () => {
         await beforeTransfer?.();
+        if (input.fromPlan) {
+          const source = { harness: input.harness, threadId: input.threadId };
+          const resolved = await Promise.all(members.map(async member => ({
+            member,
+            selection: await this.local.resolvePlanTransfer({
+              cwd: member.repoRoot, harness: input.destination.harness, threadId: input.destination.threadId, source,
+              addPaths: planEdits.get(member.repoRoot)?.addPaths ?? [], removePaths: planEdits.get(member.repoRoot)?.removePaths ?? [],
+            }),
+          })));
+          if (!resolved.some(({ selection }) => selection)) {
+            throw new GitArcRejectionError({ reason: "missingInactivePlan" }, "The subagent has no inactive plan to select claims from.");
+          }
+          for (const { member, selection } of resolved) {
+            if (selection?.selectedPaths.length || selection?.editsPlan) {
+              selected.set(member.repoRoot, selection.selectedPaths.map(value => path.join(member.repoRoot, value)));
+            }
+          }
+          if (!selected.size && input.transferStash !== true) {
+            throw new Error("The subagent's plan covers none of the releasing thread's claims, and the request edits nothing.");
+          }
+        }
         const parent = await this.findLifecycleStateInMembers(project, members, input.harness, input.threadId);
         stashMembers = new Set(parent?.members.filter(member => member.stashedPaths?.length).map(member => member.repoRoot));
         sourceHasStash = stashMembers.size > 0;
@@ -1378,12 +1402,14 @@ export default class WorkbenchWorkspaceGitArcController {
       },
       async member => {
         const paths = selected.get(member.repoRoot);
+        const planEdit = planEdits.get(member.repoRoot);
         if (paths || input.transferStash === true && stashMembers.has(member.repoRoot)) return await this.local.prepareReleaseToChild({
           cwd: member.repoRoot,
           harness: input.destination.harness,
           threadId: input.destination.threadId,
           source: { harness: input.harness, threadId: input.threadId },
           selectedPaths: paths ?? [],
+          ...(planEdit ? { planEdit } : {}),
           transferStash: transferStashForMember(input.transferStash, stashMembers.has(member.repoRoot)),
         });
         const scope = await this.local.readScope({
@@ -1401,6 +1427,19 @@ export default class WorkbenchWorkspaceGitArcController {
       [{ harness: input.harness, project, threadId: input.threadId }, { ...input.destination, project }],
     );
     return this.aggregateResults(project, values);
+  }
+
+  /** Plan edits per repository; repositories the edit doesn't name are absent. */
+  private groupPlanEdits(project: AgentEndpointProjectResolution, members: readonly RepoMember[], fromPlan?: GitArcPlanTransferEdit) {
+    const edits = new Map<string, GitArcPlanTransferEdit>();
+    const editFor = (repoRoot: string) => {
+      const edit = edits.get(repoRoot) ?? { addPaths: [], removePaths: [] };
+      edits.set(repoRoot, edit);
+      return edit;
+    };
+    for (const { member, paths } of this.groupRootPaths(project, members, fromPlan?.addPaths ?? [], [])) editFor(member.repoRoot).addPaths = paths;
+    for (const { member, paths } of this.groupRootPaths(project, members, fromPlan?.removePaths ?? [], [])) editFor(member.repoRoot).removePaths = paths;
+    return edits;
   }
 
   private async executeRefOperation(

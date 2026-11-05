@@ -107,6 +107,28 @@ test("release-to-child commands retain the destination and selected claim paths"
   }
 });
 
+test("plan-selected release commands retain the destination and plan edits with no selected paths", () => {
+  const bare = parseGitArcCommand("wb git arc release --to-subagent mira --from-plan");
+  assert.equal(bare?.toSubagent, "mira");
+  assert.equal(bare?.fromPlan, true);
+  assert.deepEqual(bare?.paths, []);
+  const cli = parseGitArcCommand("wb git arc release --to-subagent mira --from-plan --leave-stash -- src/extra.ts -src/keep.ts");
+  assert.deepEqual(cli?.paths, ["src/extra.ts"]);
+  assert.deepEqual(cli?.removePaths, ["src/keep.ts"]);
+  assert.equal(parseGitArcCommand("wb git arc release --from-plan"), null);
+  assert.equal(parseGitArcCommand("wb git arc release --to-subagent mira")?.fromPlan, undefined);
+  const route = getWorkbenchMcpCommandRoute({
+    server: "wbex", tool: "git_arc_release",
+    argumentsValue: { toSubagent: "mira", fromPlan: true, addPaths: ["src/extra.ts"], removePaths: ["src/keep.ts"] },
+  });
+  assert.equal(route?.kind, "specialized");
+  if (route?.kind === "specialized" && route.operation.kind === "gitArc") {
+    assert.equal(route.operation.operation.fromPlan, true);
+    assert.deepEqual(route.operation.operation.paths, ["src/extra.ts"]);
+    assert.deepEqual(route.operation.operation.removePaths, ["src/keep.ts"]);
+  }
+});
+
 test("combined scope transcript intent preserves literal MCP paths and CLI operations", () => {
   const cli = parseGitArcCommand("wb git plan claims --inherit -- new.ts -old.ts '*dirty.ts'");
   assert.deepEqual(cli?.paths, ["new.ts"]);

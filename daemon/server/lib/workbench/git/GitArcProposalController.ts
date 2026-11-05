@@ -1975,15 +1975,17 @@ export default class GitArcProposalController {
     };
   }
 
-  /** Pending proposals whose live paths intersect the given paths. */
+  /** Still-proposed proposals among `proposalIds`, with their live paths intersecting the given paths. */
   async proposalsCoveringPaths(repository: WorkbenchGitRepository, harness: string, threadId: string, proposalIds: string[], paths: string[]) {
     const store = this.store(repository);
     const selected = new GitArcPathSet(paths);
     const covering = await Promise.all(proposalIds.map(async (proposalId) => {
       const proposal = await store.readProposal(normalizeHarness(harness), threadId, proposalId);
-      return proposal.metadata.livePaths.some(live => selected.overlaps(live)) ? proposalId : null;
+      if (proposal.metadata.status !== "proposed") return null;
+      const overlapping = proposal.metadata.livePaths.filter(live => selected.overlaps(live));
+      return overlapping.length ? { paths: overlapping, proposalId } : null;
     }));
-    return covering.filter(id => id !== null);
+    return covering.filter(row => row !== null);
   }
 
   private async requireProposableArc(input: ArcIdentityInput) {
