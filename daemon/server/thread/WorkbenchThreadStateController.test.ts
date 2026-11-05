@@ -3130,6 +3130,38 @@ test("provider rows cannot end or revive a lifecycle whose turn Workbench knows"
   }
 });
 
+test("a subagent's status waits for turn end, so a settle cannot race its wind-down", async () => {
+  const { child, controller, project, read, working } = lifecycleFixture("subagent-deferred-status");
+  const turnEnd = { kind: "turnCompleted" as const, status: "completed" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("child-turn") };
+  const settle = async () => (await controller.handleRequest("subagent-controller", {
+    identity: { harness: "codex", threadId: fixtureThreadIds["child"] }, method: "workbench/thread-state/settle", projectId: project,
+  })).result;
+  try {
+    await controller.ensureProviderEntry(project, child(working("child-turn")));
+    await controller.setAgentStatus(project, fixtureThreadIds["child"], "completed");
+    assert.equal((await read("child"))?.lifecycle.kind, "working");
+    assert.equal((await settle() as { accepted: boolean }).accepted, false, "a child still in its turn is not settleable");
+
+    await controller.applyLifecycle(project, "codex", fixtureThreadIds["child"], turnEnd);
+    assert.equal((await read("child"))?.lifecycle.kind, "completed");
+    assert.equal((await settle() as { accepted: boolean }).accepted, true);
+    await controller.applyLifecycle(project, "codex", fixtureThreadIds["child"], turnEnd);
+    assert.equal((await read("child"))?.lifecycle.settled, true, "a repeated turn end leaves the settle alone");
+  } finally {
+    await controller.dispose();
+  }
+  const blocked = lifecycleFixture("subagent-deferred-blocked");
+  try {
+    await blocked.controller.ensureProviderEntry(blocked.project, blocked.child(blocked.working("child-turn")));
+    await blocked.controller.setAgentStatus(blocked.project, fixtureThreadIds["child"], "blocked");
+    await blocked.controller.applyLifecycle(blocked.project, "codex", fixtureThreadIds["child"], turnEnd);
+    const lifecycle = (await blocked.read("child"))?.lifecycle;
+    assert.equal(lifecycle?.kind === "needsAttention" ? lifecycle.reason : null, "agentBlocked", "turn end must not turn a blocked child into completed");
+  } finally {
+    await blocked.controller.dispose();
+  }
+});
+
 test("promotion turns an unsettled subagent into a top-level thread that keeps its turn, and refuses settled ones", async () => {
   const { child, controller, project, read, working } = lifecycleFixture("subagent-promotion");
   const identity = { harness: "codex" as const, threadId: fixtureThreadIds["child"] };

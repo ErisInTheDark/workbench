@@ -135,29 +135,47 @@ const create = defineWorkbenchAgentCommand({
   },
 });
 
-function targetCommand(action: "stop" | "wait", description: string) {
-  return defineWorkbenchAgentCommand({
-    description,
-    effects: action === "wait" ? { idempotent: true, readOnly: true } : { destructive: true },
-    helpGroups: ["subagent"],
-    mcpCodeModeEligible: action === "wait" || undefined,
-    mcpRuntimeDrainPolicy: action === "wait" ? "preserve-across-reload" : undefined,
-    mcpSteerInterruptible: action === "wait" || undefined,
-    words: ["subagent", action],
-    usage: `wb subagent ${action} (--id <id> | --name <name>) [...]`,
-    inputSchema: targetsSchema,
-    parseCliArgs: parseTargets,
-    buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
-      return postWorkbenchAgentCommand("/api/subagents", {
-        action, callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...targetsBody(input),
-        ...(workbenchOrigin ? { workbenchOrigin } : {}),
-      });
-    },
-  });
-}
+const wait = defineWorkbenchAgentCommand({
+  description: "Wait until any selected child needs attention or reaches a terminal state.",
+  effects: { idempotent: true, readOnly: true },
+  helpGroups: ["subagent"],
+  mcpCodeModeEligible: true,
+  mcpRuntimeDrainPolicy: "preserve-across-reload",
+  mcpSteerInterruptible: true,
+  words: ["subagent", "wait"],
+  usage: "wb subagent wait (--id <id> | --name <name>) [...]",
+  inputSchema: targetsSchema,
+  parseCliArgs: parseTargets,
+  buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
+    return postWorkbenchAgentCommand("/api/subagents", {
+      action: "wait", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...targetsBody(input),
+      ...(workbenchOrigin ? { workbenchOrigin } : {}),
+    });
+  },
+});
 
-const wait = targetCommand("wait", "Wait until any selected child needs attention or reaches a terminal state.");
-const stop = targetCommand("stop", "Stop one or more direct child threads.");
+const stop = defineWorkbenchAgentCommand({
+  description: "Stop one or more direct child threads.",
+  effects: { destructive: true },
+  helpGroups: ["subagent"],
+  words: ["subagent", "stop"],
+  usage: "wb subagent stop (--id <id> | --name <name>) [...] [--settle]",
+  inputSchema: z.object({
+    ...targetFields,
+    settle: z.boolean().default(false).describe("Then settle each stopped child, reporting each outcome."),
+  }).strict().superRefine(refineTargets),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--settle"], repeatable: ["--id", "--name"] });
+    return { names: flags.repeated("--name"), threadIds: flags.repeated("--id"), settle: flags.has("--settle") };
+  },
+  buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
+    return postWorkbenchAgentCommand("/api/subagents", {
+      action: "stop", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...targetsBody(input),
+      ...(input.settle ? { settle: true } : {}),
+      ...(workbenchOrigin ? { workbenchOrigin } : {}),
+    }, input.settle ? "subagent-settle" : "native");
+  },
+});
 
 const settle = defineWorkbenchAgentCommand({
   description: "Settle one or more completed or stopped direct children, reporting each outcome. handover first moves each child's Git claims, saved stash and todos to you.",

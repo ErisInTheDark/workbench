@@ -859,21 +859,18 @@ export default class WorkbenchThreadStateController {
         existing.entryKind !== "thread"
         || existing.pendingQuestionnaire?.requestKey !== event.requestKey
       ) ? { ...event, answered: undefined } : event;
-      const ownedEvent = existing.entryKind === "subagent" && event.kind === "turnCompleted" && event.status === "completed"
-        ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
-        : validatedEvent;
       const shouldClearQuestionnaire = questionnaireMutation?.kind === "clear"
         && existing.pendingQuestionnaire?.requestKey === questionnaireMutation.requestKey;
       const shouldSetQuestionnaire = questionnaireMutation?.kind === "set"
         && !areDeeplyEqual(existing.pendingQuestionnaire, questionnaireMutation.questionnaire);
-      const reducedLifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent, existing.entryKind);
+      const reducedLifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, validatedEvent, existing.entryKind);
       const keepsQuestionnaire = existing.pendingQuestionnaire && !shouldClearQuestionnaire && questionnaireMutation?.kind !== "set";
       // A turn ending never ends a held questionnaire's wait: the recovery gate reads only the lifecycle, so it must
       // not look resumable. A subagent's question ends only when its parent's message settles it, so a turn admitted
       // around that question changes nothing. The entry schema owns every other questionnaire shape.
       const lifecycle = keepsQuestionnaire && (
         (reducedLifecycle.kind === "needsAttention" && reducedLifecycle.reason !== "pendingInput")
-        || (existing.entryKind === "subagent" && ownedEvent.kind === "acceptedIntent")
+        || (existing.entryKind === "subagent" && validatedEvent.kind === "acceptedIntent")
       ) ? existing.lifecycle : reducedLifecycle;
       if (
         event.kind !== "acceptedIntent"
@@ -910,9 +907,9 @@ export default class WorkbenchThreadStateController {
         ...(promotedDraftId ? [getThreadDisplayDraftKey(promotedDraftId)] : []),
       ], { layout: Boolean(promotedDraftId) });
       this.publish(projectId, state, parsedNext);
-      if (ownedEvent.kind === "acceptedIntent" || ownedEvent.kind === "userInputDelivered"
-        || (ownedEvent.kind === "inputResolved" && ownedEvent.answered)) {
-        await this.publishWorkingTransition(existing, parsedNext, ownedEvent.kind === "inputResolved");
+      if (validatedEvent.kind === "acceptedIntent" || validatedEvent.kind === "userInputDelivered"
+        || (validatedEvent.kind === "inputResolved" && validatedEvent.answered)) {
+        await this.publishWorkingTransition(existing, parsedNext, validatedEvent.kind === "inputResolved");
       }
       return parsedNext;
     });

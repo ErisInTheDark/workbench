@@ -765,7 +765,7 @@ export default class WorkbenchSubagentController {
     await this.assertUnlocked(records[0]!.projectId, records);
     for (const record of records) if (!record.location) await this.stopThread(record.threadId);
     if (records.some(record => record.location)) await this.requireRemote().stop(await this.remoteCaller(params), records, signal);
-    return {};
+    return params.settle === true ? await this.settle(params, signal) : {};
   }
 
   /** Settles every selected child it can and reports each outcome; any child left unsettled fails the call with the full receipt. */

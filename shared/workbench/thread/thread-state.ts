@@ -1122,11 +1122,9 @@ export function reduceWorkbenchThreadLifecycle(
       return { agent: { agentStatus: "working", ...(currentTurnId ? { turnId: currentTurnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false };
     case "agentStatus": {
       if (event.turnId && currentTurnId !== event.turnId) return current!;
-      if (entryKind === "thread") {
-        if (current?.kind === "working") return { ...current, agent: { ...current.agent, agentStatus: event.status } };
-        if (current?.kind === "needsAttention" && current.reason === "pendingInput") {
-          return { ...current, agent: { agentStatus: event.status } };
-        }
+      if (current?.kind === "working") return { ...current, agent: { ...current.agent, agentStatus: event.status } };
+      if (current?.kind === "needsAttention" && current.reason === "pendingInput") {
+        return { ...current, agent: { agentStatus: event.status } };
       }
       const turn = event.turnId ?? currentTurnId;
       const placement = turn ? { turnId: turn } : {};
@@ -1150,7 +1148,9 @@ export function reduceWorkbenchThreadLifecycle(
           ? { agent: { agentStatus: "completed", turnId: event.turnId }, kind: "completed", reason: "agentCompleted", settled: false }
           : { agent: { agentStatus: "blocked", turnId: event.turnId }, kind: "needsAttention", reason: "agentBlocked", settled: false };
       }
-      return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+      return entryKind === "subagent"
+        ? { agent: { agentStatus: "completed", turnId: event.turnId }, kind: "completed", reason: "agentCompleted", settled: false }
+        : { kind: "needsAttention", reason: "noActiveTurn", settled: false };
     }
     case "providerTurnActive": {
       if (current?.kind === "working" && currentTurnId === event.turnId) return current;

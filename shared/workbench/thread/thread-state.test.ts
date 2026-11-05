@@ -595,21 +595,29 @@ test("sidebar agent status stays working until its matching turn completes", () 
   }
 });
 
-test("subagent status remains immediate and exact-turn stop and settlement preserve lifecycle", () => {
+test("subagent status waits for turn end and exact-turn stop and settlement preserve lifecycle", () => {
   const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
-  assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old"] }), working);
-  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }, "subagent");
+  assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old"] }, "subagent"), working);
+  const turnEnd = { kind: "turnCompleted" as const, status: "completed" as const, turnId: fixtureIdentityValues.WorkbenchTurnId["new"] };
+  const marked = (status: "completed" | "blocked") => reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status, turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }, "subagent");
+  assert.equal(marked("completed").kind, "working");
+  assert.equal(marked("blocked").kind, "working");
+  const completed = reduceWorkbenchThreadLifecycle(marked("completed"), turnEnd, "subagent");
   assert.equal(completed.kind, "completed");
-  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }, "subagent");
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(working, turnEnd, "subagent"), completed, "an unmarked subagent turn still completes");
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(working, turnEnd), { kind: "needsAttention", reason: "noActiveTurn", settled: false }, "an unmarked sidebar turn does not");
+  assert.equal(reduceWorkbenchThreadLifecycle(marked("completed"), { ...turnEnd, status: "interrupted" }, "subagent").kind, "needsAttention");
+  const blocked = reduceWorkbenchThreadLifecycle(marked("blocked"), turnEnd, "subagent");
   assert.deepEqual(blocked, {
     agent: { agentStatus: "blocked", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new") },
     kind: "needsAttention",
     reason: "agentBlocked",
     settled: false,
   });
-  assert.equal(reduceWorkbenchThreadLifecycle(blocked, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }), blocked);
-  const settled = reduceWorkbenchThreadLifecycle(completed, { kind: "settle", entryKind: "thread" });
+  assert.equal(reduceWorkbenchThreadLifecycle(blocked, turnEnd, "subagent"), blocked);
+  const settled = reduceWorkbenchThreadLifecycle(completed, { kind: "settle", entryKind: "subagent" });
   assert.equal(settled.settled, true);
+  assert.equal(reduceWorkbenchThreadLifecycle(settled, turnEnd, "subagent"), settled);
   assert.deepEqual(reduceWorkbenchThreadLifecycle(settled, { kind: "restore" }), completed);
   const interrupted = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
   assert.deepEqual(interrupted, { kind: "needsAttention", reason: "interrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
@@ -679,8 +687,12 @@ test("a held agent message makes completed work need attention and leaves every 
 
 test("delivered user input reactivates provider-owned terminal state without overriding user-owned state", () => {
   const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
-  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent");
-  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent");
+  const ended = (status: "completed" | "blocked") => reduceWorkbenchThreadLifecycle(
+    reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status, turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent"),
+    { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent",
+  );
+  const completed = ended("completed");
+  const blocked = ended("blocked");
   const delivered = { kind: "userInputDelivered" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("delivered-turn") };
   const reactivated = {
     agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("delivered-turn") },
@@ -718,10 +730,12 @@ test("a live provider turn revives only lifecycles a turn end or provider snapsh
   assert.deepEqual(reduceWorkbenchThreadLifecycle(working, live), revived, "working follows the turn that is actually moving");
   assert.equal(reduceWorkbenchThreadLifecycle(interrupted, { ...live, turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }), interrupted);
 
-  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent");
-  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent");
+  const finished = (status: "completed" | "blocked") => reduceWorkbenchThreadLifecycle(
+    reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status, turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent"),
+    { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }, "subagent",
+  );
   const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
-  for (const kept of [completed, blocked, pendingInput, reduceWorkbenchThreadLifecycle(ended, { kind: "userCompleted" }), reduceWorkbenchThreadLifecycle(working, { kind: "userStopped" })]) {
+  for (const kept of [finished("completed"), finished("blocked"), pendingInput, reduceWorkbenchThreadLifecycle(ended, { kind: "userCompleted" }), reduceWorkbenchThreadLifecycle(working, { kind: "userStopped" })]) {
     assert.equal(reduceWorkbenchThreadLifecycle(kept, live), kept);
   }
 });
@@ -730,8 +744,11 @@ test("answered input can reopen terminal lifecycle without changing ordinary res
   const turnId = fixtureIdentityValues.WorkbenchTurnId["turn"];
   for (const status of ["blocked", "completed"] as const) {
     const terminal = reduceWorkbenchThreadLifecycle(
-      reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId }),
-      { kind: "agentStatus", status, turnId }, "subagent",
+      reduceWorkbenchThreadLifecycle(
+        reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId }),
+        { kind: "agentStatus", status, turnId }, "subagent",
+      ),
+      { kind: "turnCompleted", status: "completed", turnId }, "subagent",
     );
     const resolution = { kind: "inputResolved" as const, requestKey: "question", turnId };
     assert.equal(reduceWorkbenchThreadLifecycle(terminal, resolution), terminal);

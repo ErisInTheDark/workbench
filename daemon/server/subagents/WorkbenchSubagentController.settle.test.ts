@@ -1,8 +1,8 @@
 /*
  * Exports: none. Tests protect subagent settle: a late terminal lifecycle is awaited, a still-working child is
  * reported at the deadline, a runtime drain aborts the wait, every selected child gets its own outcome, refused
- * mutations name held claims, stash, required todos or addressed feedback, and handover moves Git work and todos
- * before settling while a refused adoption leaves the child untouched.
+ * mutations name held claims, stash, required todos or addressed feedback, handover moves Git work and todos
+ * before settling while a refused adoption leaves the child untouched, and stop settles only when asked.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -75,7 +75,10 @@ async function createHarness() {
     },
     publicThreadId: async () => { throw new Error("Settle does not publish thread identities."); },
     provider: () => { throw new Error("Settle does not call providers."); },
-    stopThread: async () => { throw new Error("Settle does not stop threads."); },
+    stopThread: async (threadId) => {
+      events.push(`stop:${threadId}`);
+      child(threadId).lifecycle = { kind: "stopped" };
+    },
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
     profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },
@@ -98,8 +101,11 @@ async function createHarness() {
   const settle = (threadIds: string[] = [childThreadId], extra: Record<string, unknown> = {}): Promise<JsonRpcResponse> => controller.handleRequest({
     id: 1, method: "workbench/subagent/settle", params: { callerThreadId, cwd, threadIds, ...extra },
   });
+  const stop = (extra: Record<string, unknown> = {}): Promise<JsonRpcResponse> => controller.handleRequest({
+    id: 1, method: "workbench/subagent/stop", params: { callerThreadId, cwd, threadIds: [childThreadId], ...extra },
+  });
   return {
-    adoptions, child, controller, events, mutations, settle,
+    adoptions, child, controller, events, mutations, settle, stop,
     handover: (threadIds: string[] = [childThreadId]) => settle(threadIds, { handover: true, callerHarness: "claude" }),
     setAdoptionFailure: (message: string | null) => { adoptionFailure = message; },
     setGitArc: (next: unknown, threadId?: string) => { child(threadId).gitArc = next; },
@@ -127,6 +133,24 @@ test("settle waits for a late terminal lifecycle before mutating", async (contex
   assert.deepEqual(response.result, { settled: [{ name: "Yuzu", threadId: childThreadId }], blocked: [] });
   assert.equal(harness.mutations.length, 1);
   assert.equal(harness.mutations[0]?.method, "workbench/thread-state/settle");
+});
+
+test("stop settles only when asked, and reports a child it stopped but could not settle", async (context) => {
+  const harness = await createHarness();
+  context.after(() => harness.controller.dispose());
+
+  assert.deepEqual((await harness.stop()).result, {});
+  assert.deepEqual(harness.mutations, []);
+
+  harness.setLifecycle({ kind: "working" });
+  const settled = await harness.stop({ settle: true });
+  assert.deepEqual(settled.result, { settled: [{ name: "Yuzu", threadId: childThreadId }], blocked: [] });
+  assert.deepEqual(harness.events, [`stop:${childThreadId}`, `stop:${childThreadId}`, `settle:${childThreadId}`]);
+
+  harness.setSettlementHold("requiredTodos");
+  const held = await harness.stop({ settle: true });
+  assert.match(held.error?.message ?? "", /Not settled Yuzu/u);
+  assert.equal(harness.child().lifecycle.kind, "stopped");
 });
 
 test("a child still working at the deadline is reported while its terminal sibling settles", async (context) => {

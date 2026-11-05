@@ -3,7 +3,7 @@
 - A provider turn failure is a thread error: `needsAttention/providerFailed` holds its message until any continuation replaces the lifecycle. Never auto-continue it.
 - Snooze is app-owned; daemons never store or decide it. Snoozing working sidebar threads preserves their turn; leaving working wakes them. Non-working sidebar threads cannot stay ordinarily snoozed while holding editable claims or sealed-proposal guards; dependent snooze may retain both until its targets clear. Questionnaire snooze interrupts and retains the question; dependent snooze leaves it live; both wake when it leaves; live approvals cannot be snoozed. Stop and complete dismiss pending input and wake the thread.
 - A durable questionnaire exists only while its sidebar or subagent thread is pendingInput for that key.
-- Agent status does not end an active sidebar turn. Apply completed/blocked on matching successful turn completion; stop, failure and pending input take precedence. Subagent semantics remain separate.
+- Agent status does not end an active sidebar or subagent turn. Apply completed/blocked on matching successful turn completion; stop, failure and pending input take precedence. A subagent's successful turn end without a status completes it.
 - Accepted provider intent wakes the thread, drops any held sidebar questionnaire, and marks the accepted turn working. A subagent's held questionnaire ends only when its parent's message settles it.
 - Relationship-addressed parent messages may settle a child questionnaire.
 - Provider list snapshots seed unknown rows only; a lifecycle with a known turn changes through that turn's events. Snapshots may end only turnless provider-owned lifecycles.
