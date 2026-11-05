@@ -161,10 +161,17 @@ export default class GitArcStackEditor {
     const conflict = (proposalId: string, paths: string[]) => revising
       ? new GitArcRejectionError({ reason: "proposalRevisionConflict" }, `The revision conflicts with proposal ${proposalId} layered above it: ${paths.join(", ")}`)
       : new GitArcRejectionError({ reason: "restackConflict", paths, proposalId, title: byId.get(proposalId)!.metadata.title }, `Proposal ${proposalId} conflicts after the restack: ${paths.join(", ")}`);
+    /** Files each restack conflict is on, by proposal id; the whole stack is scanned so one rejection names them all. */
+    const conflicts = new Map<string, string[]>();
+    /** Restack proposals left with no changes, in stack order. */
+    const emptied: StoredProposal[] = [];
     const merge = async (base: string | null, ours: string | null, theirs: string, proposalId: string) => {
       const result = await this.repository.mergeWorktreeTrees(base, ours, theirs);
-      if (result.conflictedPaths.length || result.unsupportedConflictTypes.length) throw conflict(proposalId, result.conflictedPaths);
-      return result.tree;
+      if (!result.conflictedPaths.length && !result.unsupportedConflictTypes.length) return result.tree;
+      if (revising || result.unsupportedConflictTypes.length) throw conflict(proposalId, result.conflictedPaths);
+      conflicts.set(proposalId, [...conflicts.get(proposalId) ?? [], ...result.conflictedPaths]);
+      // Keeping the lower file is what stripping it from this proposal does, so the report holds for the retry.
+      return (await this.repository.writeTreeWithPathSources(result.tree, [{ paths: result.conflictedPaths, source: ours }])).tree;
     };
     /** Files each strip took out of its proposal, by proposal id. */
     const strippedById = new Map<string, string[]>();
@@ -235,7 +242,8 @@ export default class GitArcStackEditor {
         }
         const paths = await this.repository.listChangedPaths(nextBase, tree, candidates);
         if (!paths.length) {
-          throw new GitArcRejectionError({ reason: "proposalEmptied", paths: [], proposalId: id, title: proposal.metadata.title }, `Proposal ${id} would have no changes; drop it instead.`);
+          emptied.push(proposal);
+          continue;
         }
         results.push({ base: nextBase, contentEdited, livePaths: paths, newId: contentEdited ? randomUUID() : null, paths, proposal, tree });
       }
@@ -273,6 +281,22 @@ export default class GitArcStackEditor {
       base = next;
       topLayerTip = next;
       baseChanged = true;
+    }
+    const emptiedIds = emptied.map(({ metadata }) => metadata.proposalId);
+    const [firstConflict] = conflicts;
+    if (firstConflict) {
+      const [proposalId, paths] = firstConflict;
+      const strips = [...conflicts].filter(([id]) => !emptiedIds.includes(id)).flatMap(([id, files]) => files.map(file => `${id}=${file}`));
+      throw new GitArcRejectionError({ reason: "restackConflict", paths, proposalId, title: byId.get(proposalId)!.metadata.title }, [
+        `Restack conflicts in ${conflicts.size} proposals.`,
+        ...strips.length ? [`Stripping these files would clear them: ${strips.join(" ")}.`] : [],
+        ...emptiedIds.length ? [`These would then have no changes, so they would need dropping: ${emptiedIds.join(" ")}.`] : [],
+      ].join(" "));
+    }
+    const [firstEmptied] = emptied;
+    if (firstEmptied) {
+      const { proposalId, title } = firstEmptied.metadata;
+      throw new GitArcRejectionError({ reason: "proposalEmptied", paths: [], proposalId, title }, `These proposals would have no changes; drop them instead: ${emptiedIds.join(" ")}.`);
     }
     await stack.requireForeignPathsUnchanged(identity, layerCommits);
 

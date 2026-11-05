@@ -311,7 +311,7 @@ export const STACK_EDITOR_FIXTURE = {
     message: "base",
   }],
   name: "stack-editor-states",
-  revision: 1,
+  revision: 2,
   prepare: async ({ bundleRoot, repositoryRoot }) => {
     const controller = new WorkbenchGitCheckpointController();
     const fork = async (name: string) => {
@@ -354,8 +354,26 @@ export const STACK_EDITOR_FIXTURE = {
     await write(mod, "doc.txt", "intro\n1 feature\n2\n3\n4\n5\n6\n7 cleanup\noutro\n");
     const removal = await propose(mod, ["doc.txt", "lock.txt", "mod"], "remove mod");
 
+    // ledger: four layers editing one line of shared.txt; all but the last also add their own file.
+    const ledger = await fork("ledger");
+    await controller.createAndStartPlan({
+      cwd: ledger, threadId: "owner", intentName: "ledger", paths: ["shared.txt", "first.txt", "second.txt", "third.txt"],
+    });
+    const layer = async (name: string, line: string, ownFile: boolean) => {
+      await write(ledger, "shared.txt", `${line}\nb\nc\nd\ne\n`);
+      if (ownFile) await write(ledger, `${name}.txt`, `${name}\n`);
+      const proposalId = await propose(ledger, ownFile ? ["shared.txt", `${name}.txt`] : ["shared.txt"], name);
+      await controller.stackArc({ cwd: ledger, threadId: "owner", title: name });
+      return proposalId;
+    };
+    const first = await layer("first", "1", true);
+    const second = await layer("second", "2", true);
+    const third = await layer("third", "3", true);
+    const only = await layer("only", "4", false);
+
     const relative = (root: string) => path.relative(bundleRoot, root);
     return {
+      ledger: { first, only, root: relative(ledger), second, third },
       mod: { feature, mod: modProposal, removal, root: relative(mod) },
       shared: { lower, root: relative(shared), upper },
     };

@@ -13,5 +13,7 @@ Triggers:
 1. Reconcile current request and unresolved steers
 <!-- Who may narrow scope lives in Complete Scope (AGENTS.md shared mechanics), so this step only routes. -->
 2. Findings, spec edits, corrections and sidequests do not complete outstanding parent work. If work can continue, return to workflow
-3. If work complete, set <tool id="thread_state" /> `status: "completed"`. If truly blocked and user input is unavailable or would not help, set `status: "blocked"`
+<!-- Failure: a thread's asks arrived as an agent message; the agent filed them as optional todos, replied to the sender and re-completed, so the sidebar showed nothing needing the user. A brief ending in a questionnaire keeps the thread waiting on them. -->
+3. Another thread's request for new work (not your parent's assignment) stays open until the user decides: run the workflow to a brief and ask. A todo, status note or reply to the sender never settles it
+4. If work complete, set <tool id="thread_state" /> `status: "completed"`. If truly blocked and user input is unavailable or would not help, set `status: "blocked"`
 </docs>

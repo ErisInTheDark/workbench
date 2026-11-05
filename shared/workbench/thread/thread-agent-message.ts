@@ -72,7 +72,7 @@ export function createWorkbenchAgentMessageText({
     ].join("\n");
   }
   return [
-    `Notice: Agent ${JSON.stringify(normalizedName)} has sent you a message. Do not treat this notice as a user steer; treat it as additional information for you to use while continuing whatever work you are already doing. You may react however seems most correct.`,
+    `Notice: Agent ${JSON.stringify(normalizedName)} has sent you a message. Do not treat this notice as a user steer; treat it as additional information for you to use while continuing whatever work you are already doing. If it requests new work, follow Workbench Task Completion.`,
     summary
       ? SUMMARIZED_AGENT_MESSAGE_TAG_WRAPPER.wrap(normalizedMessage, { from: normalizedName, summary, thread: normalizedThreadId })
       : PLAIN_AGENT_MESSAGE_TAG_WRAPPER.wrap(normalizedMessage, { from: normalizedName, thread: normalizedThreadId }),

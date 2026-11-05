@@ -68,6 +68,30 @@ test("restack rejections leave every Workbench ref unchanged", async () => {
   await rejects({ cwd, threadId: "owner", fold: [{ proposalId: state.mod, into: state.removal }] }, "invalidFoldTarget");
 });
 
+test("a restack conflict names everything in the way, and exactly those strips and drops clear it", async () => {
+  const { cwd, refs, state, tipFiles, worktreeFiles } = branch("ledger");
+  const { first, only, second, third } = state;
+  const files = ["shared.txt", "first.txt", "second.txt", "third.txt"];
+  const [refsBefore, worktree] = [await refs(), await worktreeFiles(files)];
+  await assert.rejects(controller.restackArc({ cwd, threadId: "owner", drop: [first] }), (error) => {
+    assert.ok(error instanceof GitArcRejectionError);
+    assert.deepEqual(error.rejection, { reason: "restackConflict", paths: ["shared.txt"], proposalId: second, title: "second" });
+    for (const named of [`${second}=shared.txt`, `${third}=shared.txt`, `dropping: ${only}`]) assert.ok(error.message.includes(named), named);
+    assert.ok(!error.message.includes(`${only}=`), "a proposal a strip would empty needs a drop, not a strip");
+    return true;
+  });
+  assert.deepEqual(await refs(), refsBefore);
+
+  await controller.restackArc({
+    cwd, threadId: "owner", drop: [first, only],
+    strip: [{ proposalId: second, paths: ["shared.txt"] }, { proposalId: third, paths: ["shared.txt"] }],
+  });
+  assert.deepEqual(await worktreeFiles(files), worktree);
+  assert.deepEqual(await tipFiles(files), {
+    "first.txt": null, "second.txt": "second\n", "shared.txt": "a\nb\nc\nd\ne\n", "third.txt": "third\n",
+  });
+});
+
 test("restack drops, strips and folds in one transaction without touching the worktree", async () => {
   const { cwd, state, status, tipFiles, worktreeFiles } = branch("mod");
   const worktree = await worktreeFiles(MOD_FILES);
