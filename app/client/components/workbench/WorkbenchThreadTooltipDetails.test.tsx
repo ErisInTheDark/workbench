@@ -183,6 +183,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
       threadOwnerFor: () => ({
         ...source, hostname: "local", rootPath: "/project", displayPath: "project",
       }),
+      retainThreadOwner: () => () => undefined,
       locationOwnerFor: location => ({ ...location, hostname: "local", rootPath: "/project", displayPath: "project" }),
       threadDraftIdentityFor: () => null,
       threadContextFor: () => null,
@@ -203,7 +204,6 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
           ?? ((location: ProjectLocationReference) => sourceStore.getProjectSnapshot(location.projectId)),
       },
       threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
-      threadTextPresentationFor: () => null,
       projectSourceErrors: { getSnapshot: () => "", subscribe: () => () => undefined },
       subscribeChanges: () => () => undefined,
     },

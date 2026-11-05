@@ -311,6 +311,7 @@ function createClient(
       threadOwnerFor: () => ({
         ...ownerLocation, hostname: "local", rootPath: "/project", displayPath: "project",
       }),
+      retainThreadOwner: () => () => undefined,
       locationOwnerFor: location => ({ ...location, hostname: "local", rootPath: "/project", displayPath: "project" }),
       threadDraftIdentityFor: () => null,
       threadContextFor: () => null,
@@ -327,7 +328,6 @@ function createClient(
       threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
       threadSidebar: sourceStore!,
       threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
-      threadTextPresentationFor: () => null,
       projectSourceErrors: { getSnapshot: () => "", subscribe: () => () => undefined },
       subscribeChanges: () => () => undefined,
     } : null,

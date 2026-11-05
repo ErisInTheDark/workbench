@@ -41,6 +41,7 @@ export default function WorkbenchThreadTooltipDetails({
   threadId: WorkbenchThreadId;
   parentThreadId?: WorkbenchThreadId;
 }) {
+  useThread.ownerLease(threadId);
   const sidebars = useThreads.sidebars();
   const settings = useSettings.forThread(parentThreadId
     ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId });

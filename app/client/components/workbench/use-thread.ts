@@ -5,7 +5,7 @@
  *   batched summary for any thread display; `sidebarEntry` reads its project sidebar row; `titleHistory` reads previous
  *   titles through the summary-resolved family with rename/dismiss intent; `fileIndex` reads the owning
  *   folder's file suggestions; `models` reads the owner's account model cache; `attention` reads its questionnaire label; `subagent` reads a thread's subagent
- *   relationship; `claimIntersections/collisions/arc` select
+ *   relationship; `ownerLease` holds a thread's owner lookup while mounted; `claimIntersections/collisions/arc` select
  *   narrow Git arc facts from the owner's source sidebar.
  */
 "use client";
@@ -168,7 +168,9 @@ useThread.fileIndex = function useThreadFileIndex(threadId: string, enabled: boo
 /** The thread owner's account model cache by identity. */
 useThread.models = function useThreadModels(threadId: string) {
   const mounted = useWorkbenchClientController().mounted;
-  const store = (mounted?.threadContextFor(threadId) ?? mounted?.draftContextFor(threadId))?.threads;
+  const readStore = useCallback(() =>
+    (mounted?.threadContextFor(threadId) ?? mounted?.draftContextFor(threadId))?.threads ?? null, [mounted, threadId]);
+  const store = useSyncExternalStore(mounted?.subscribeChanges ?? EMPTY_SUBSCRIBE, readStore, readStore);
   return useSyncExternalStore(
     store?.subscribe ?? EMPTY_SUBSCRIBE,
     store?.getModelCatalogues ?? (() => EMPTY_MODEL_CATALOGUES),
@@ -203,6 +205,17 @@ useThread.subagent = function useThreadSubagent(threadId: string | null, harness
     const [relationshipHarness, parentThreadId] = key.split("\0") as [WorkbenchHarness, string];
     return { harness: relationshipHarness, parentThreadId };
   }, [key]);
+};
+
+/** Hold a thread's owner lookup while mounted, for views of threads outside the route; re-renders when the owner lands. */
+useThread.ownerLease = function useThreadOwnerLease(threadId: string) {
+  const mounted = useWorkbenchClientController().mounted;
+  useEffect(() => mounted?.retainThreadOwner(threadId), [mounted, threadId]);
+  const read = useCallback(() => {
+    const owner = mounted?.threadOwnerFor(threadId);
+    return owner ? `${owner.daemonId}\0${owner.projectId}` : "";
+  }, [mounted, threadId]);
+  useSyncExternalStore(mounted?.subscribeChanges ?? EMPTY_SUBSCRIBE, read, read);
 };
 
 function useOwnerSource(threadId: string) {

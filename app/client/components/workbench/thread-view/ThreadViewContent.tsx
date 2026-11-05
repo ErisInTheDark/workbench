@@ -114,11 +114,11 @@ export default memo(function ThreadViewContent ({
   const rootThread = useThread(projectId, rootTarget);
   // ThreadView admits this subtree only while the root head is available.
   const thread = rootThread.head!;
-  const ownedFileIndex = useThread.fileIndex(thread.id, useOwnerFileIndex);
+  const activeThreadId = selectedThreadId ?? thread.id;
+  const ownedFileIndex = useThread.fileIndex(activeThreadId, useOwnerFileIndex);
   const projectFileCandidates = useOwnerFileIndex ? ownedFileIndex.snapshot.candidates : browseFileCandidates;
   const projectFileIndexId = useOwnerFileIndex ? ownedFileIndex.snapshot.id : browseFileIndexId;
   const projectFilePaths = useOwnerFileIndex ? ownedFileIndex.snapshot.paths : browseFilePaths;
-  const activeThreadId = selectedThreadId ?? thread.id;
   const threads = useThreads(undefined, thread.id);
   const activeTarget: WorkbenchThreadTarget = activeThreadId === thread.id ? rootTarget
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };

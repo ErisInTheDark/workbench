@@ -5,9 +5,10 @@ import type { ExplorerSnapshot, WorkbenchLogicalThreadRow, WorkbenchProjectOptio
 import type { WorkspaceProjectReference, WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { projectWorkbenchThreadMembership } from "workbench-shared/workbench/project/workbench-project-projection";
-import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema, type LogicalProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
+import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
 import { WorkbenchClient } from "./WorkbenchClient";
 
 const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
@@ -672,6 +673,67 @@ test("a thread owner uses its projected folder label", async context => {
       socket.reply(request, { data: [] });
     }
   }
+});
+
+const otherFolder = ProjectIdSchema.parse("other-folder");
+const threadOwnerRequests = (socket: ObservedSocket) => socket.sent.flatMap(request =>
+  request.method === "workspace/observe" && request.params.query.kind === "threadOwner" ? [request] : []);
+const ownerOf = (socket: ObservedSocket, threadId: string) => threadOwnerRequests(socket).find(request =>
+  request.params.query.kind === "threadOwner" && request.params.query.threadId === threadId);
+const landOwner = (socket: ObservedSocket, request: NonNullable<ReturnType<typeof ownerOf>>, threadId: WorkbenchThreadId, projectId: typeof project.id) =>
+  socket.observation(request, { kind: "threadOwner", phase: "current", failure: null, data: {
+    phase: "current", identity: { threadId, projectId, harness: "codex" },
+    location: { daemonId, projectId }, logicalProjectId: logicalId,
+  } });
+
+test("a subagent is addressed through its own owner, never its parent's", async context => {
+  context.mock.method(console, "warn", () => {});
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const state = new WorkbenchClientStateController({ mode: "memory" });
+  const snapshot = state.getSnapshot();
+  context.mock.method(state, "getSnapshot", () => ({ ...snapshot,
+    registrations: [{ id: "child-registration", daemonId }] as unknown as typeof snapshot.registrations }));
+  const client = WorkbenchClient({ workspace: fixture.workspace, clientStateController: state });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  const parentId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
+  const childId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
+  await client.controls.applyRoute(createLogicalExistingThreadRoute(logicalId,
+    { kind: "subagent", harness: "codex", parentThreadId: parentId, threadId: childId }, null));
+
+  const childOwner = ownerOf(socket, childId);
+  assert.ok(childOwner, "the shown child's owner is looked up");
+  await landOwner(socket, childOwner, childId, otherFolder);
+  const parentOwner = ownerOf(socket, parentId);
+  assert.ok(parentOwner);
+  await landOwner(socket, parentOwner, parentId, project.id);
+
+  assert.equal(client.threadOwnerFor(childId)?.projectId, otherFolder);
+  assert.equal(client.threadOwnerFor(parentId)?.projectId, project.id);
+  assert.deepEqual(client.threadDraftIdentityFor(childId), {
+    daemonRegistrationId: "child-registration", projectId: otherFolder, threadId: childId,
+  });
+});
+
+test("a thread owner lease holds until its last holder releases", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const threadId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
+  const releaseFirst = client.retainThreadOwner(threadId);
+  const releaseSecond = client.retainThreadOwner(threadId);
+  const request = ownerOf(socket, threadId);
+  assert.ok(request);
+  assert.equal(threadOwnerRequests(socket).length, 1, "holders share one lookup");
+  await landOwner(socket, request, threadId, otherFolder);
+  releaseFirst();
+  releaseFirst();
+  assert.equal(client.threadOwnerFor(threadId)?.projectId, otherFolder, "a repeated release does not drop another holder");
+  releaseSecond();
+  assert.equal(client.threadOwnerFor(threadId), null);
 });
 
 test("viewing a thread browses the thread's own folder over the folder the url last chose", async context => {

@@ -52,6 +52,8 @@ export interface WorkbenchThreadClientOptions {
   workspace: WorkbenchWorkspaceClient;
   /** The daemon folder this renderer serves; requests and limits are scoped to its daemon. */
   location?: ProjectLocationReference;
+  /** A controller shared across renderers and disposed by its provider; omitted, this renderer owns a private one. */
+  textPresentation?: ThreadTextPresentationController;
   observeProviderEvents?: boolean;
   snoozeThread?: (threadId: string, requestKey?: string) => Promise<boolean>;
   onStatusMessage?: (message: string) => void;
@@ -172,7 +174,7 @@ function WorkbenchThreadClient(
     },
   });
   const modelUpdateListeners = new Set<(harness: WorkbenchHarness) => void>();
-  const textPresentation = new ThreadTextPresentationController();
+  const textPresentation = options.textPresentation ?? new ThreadTextPresentationController();
   /** Local drafts; existing threads have no client document. */
   const drafts = ThreadDocumentStore();
 
@@ -484,7 +486,7 @@ function WorkbenchThreadClient(
     transcripts.dispose();
     account.dispose();
     modelUpdateListeners.clear();
-    textPresentation.dispose();
+    if (!options.textPresentation) textPresentation.dispose();
     lifecycle.dispose();
   }
 

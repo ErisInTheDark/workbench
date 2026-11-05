@@ -85,9 +85,7 @@ useTranscript.presentedText = function useTranscriptPresentedText({
 }) {
   const mounted = useContext(WorkbenchClientContext)?.mounted;
   const standaloneText = useContext(ThreadTextPresentationContext);
-  const controller = source
-    ? mounted?.threadTextPresentationFor(threadId) ?? standaloneText
-    : mounted?.threadTextPresentation ?? standaloneText;
+  const controller = mounted?.threadTextPresentation ?? standaloneText;
   const sourceKind = source?.kind;
   const sourceKey = source?.sourceKey;
   const key = useMemo<ThreadTextPresentationKey | null>(() => sourceKind && sourceKey !== undefined ? {

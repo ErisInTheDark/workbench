@@ -76,7 +76,7 @@ export function resolveComposerDraftTarget(
   const ownerProjectId = ProjectIdSchema.parse(projectId);
   if (originTarget?.kind !== "new" && originTarget?.kind !== "draft") {
     const ownerIdentity = context.threadDraftIdentityFor(threadId);
-    if (!ownerIdentity) throw new Error("The thread daemon is not registered in app state.");
+    if (!ownerIdentity) throw new Error("The thread's owner is unavailable. Draft text remains local.");
     return { kind: "thread", daemonRegistrationId: ownerIdentity.daemonRegistrationId,
       projectId: ownerIdentity.projectId, threadId: ThreadReferenceSchema.parse(threadId) };
   }

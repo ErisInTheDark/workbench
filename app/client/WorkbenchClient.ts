@@ -64,7 +64,7 @@ import ProjectFactsStore from "./workbench/project/ProjectFactsStore";
 import WorkbenchThreadRuntimeStoreController from "./workbench/WorkbenchThreadRuntimeStore";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import ThreadSummaryStore from "./workbench/thread/ThreadSummaryStore";
-import type ThreadTextPresentationController from "./workbench/thread/ThreadTextPresentationController";
+import ThreadTextPresentationController from "./workbench/thread/ThreadTextPresentationController";
 import WorkbenchVoiceClient from "./workbench/voice/WorkbenchVoiceClient";
 
 type ThreadClient = ReturnType<typeof WorkbenchThreadClient>;
@@ -99,6 +99,8 @@ export interface MountedWorkbenchClient {
   voice: WorkbenchVoiceClient;
   getThreadStore: ThreadClient["getThreadStore"];
   threadOwnerFor(threadId: string): WorkbenchLocationOwner | null;
+  /** Keep looking up a thread's owner for a view outside the route, such as a tooltip; the result releases this hold. */
+  retainThreadOwner(threadId: string): () => void;
   locationOwnerFor(location: ProjectLocationReference): WorkbenchLocationOwner;
   threadDraftIdentityFor(threadId: string): ClientDraftIdentity | null;
   threadContextFor(threadId: string): (ViewContext & { registrationId: string | null }) | null;
@@ -120,7 +122,6 @@ export interface MountedWorkbenchClient {
   /** Per-thread summaries every thread display leases, batched into one workspace observation; absent where nothing observes them. */
   threadSummaries?: ThreadSummaryStore;
   threadTextPresentation: ThreadTextPresentationController;
-  threadTextPresentationFor(threadId: string): ThreadTextPresentationController | null;
 }
 
 export function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, right: ExplorerSnapshot) {
@@ -176,6 +177,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   let archivedLimit: number | null = null;
   let settledLimit = 0;
   const owners = new Map<string, QueryHandle<"threadOwner">>();
+  let routeOwnerIds: readonly string[] = [];
+  const ownerLeases = new Map<string, number>();
+  const textPresentation = new ThreadTextPresentationController();
   const renderers = new Map<DaemonId, ThreadClient>();
   const warmedOpenCodeSources = new Map<DaemonId, number>();
   const localThreadLocations = new Map<string, ProjectLocationReference>();
@@ -237,7 +241,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
 
   function createRenderer(location: ProjectLocationReference | null, observe = true) {
     const client = WorkbenchThreadClient({
-      workspace, ...(location ? { location } : {}),
+      workspace, ...(location ? { location } : {}), textPresentation,
       observeProviderEvents: location !== null,
       resolveThreadIdentity: async request => (await daemon.threads.resolveIdentity(request)).data,
       ...(location ? {
@@ -367,8 +371,27 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     return { kind: "folder" as const, location: browseLocation };
   }
 
-  function retainOwners(ids: readonly string[]) {
-    const wanted = new Set(ids);
+  function retainRouteOwners(ids: readonly string[]) {
+    routeOwnerIds = ids;
+    syncOwners();
+  }
+
+  function retainThreadOwner(id: string) {
+    ownerLeases.set(id, (ownerLeases.get(id) ?? 0) + 1);
+    syncOwners();
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      const remaining = (ownerLeases.get(id) ?? 1) - 1;
+      if (remaining) ownerLeases.set(id, remaining);
+      else ownerLeases.delete(id);
+      if (!disposed) syncOwners();
+    };
+  }
+
+  function syncOwners() {
+    const wanted = new Set([...routeOwnerIds, ...ownerLeases.keys()]);
     for (const [id, interest] of owners) if (!wanted.has(id)) {
       interest.release();
       owners.delete(id);
@@ -670,7 +693,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (route.view !== "thread" || target?.kind !== "new" && target?.kind !== "draft") draftRoute = null;
     const root = target && (target.kind === "provider" || target.kind === "subagent")
       ? getWorkbenchThreadTargetRootId(target) : null;
-    retainOwners(root ? [root] : []);
+    retainRouteOwners(root && target?.kind === "subagent" ? [root, target.threadId] : root ? [root] : []);
     const logicalId = route.logical?.projectId;
     const explicit = route.logical?.browseLocation ?? route.logical?.location;
     // The url folder owns the browse scope; the draft channel keeps its own folder intent.
@@ -1059,15 +1082,14 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     },
     subscribeChanges: listener => { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; },
     threadRuntime, threadSidebar: sidebar, threadSummaries,
-    get threadTextPresentation() { return threadClient.textPresentation; },
-    threadTextPresentationFor: id => rendererForThread(id).textPresentation,
+    threadTextPresentation: textPresentation,
     getThreadStore: (projectId, target) => {
       const id = target.kind === "draft" ? target.draftId
         : target.kind === "subagent" ? target.parentThreadId : target.threadId;
       const location = locationForThread(id);
       return rendererForThread(id).getThreadStore(location?.projectId ?? projectId, target);
     },
-    threadOwnerFor, locationOwnerFor,
+    threadOwnerFor, retainThreadOwner, locationOwnerFor,
     threadDraftIdentityFor: id => {
       const owner = threadOwnerFor(id);
       const registration = owner && registrationFor(owner.daemonId);
@@ -1113,6 +1135,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       projectClient.dispose();
       for (const renderer of new Set([initialThreadClient, ...renderers.values()])) renderer.dispose();
       renderers.clear();
+      textPresentation.dispose();
       lifetime.dispose();
       factListeners.clear();
       changeListeners.clear();

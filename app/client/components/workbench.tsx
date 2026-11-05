@@ -201,7 +201,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [workbenchClient.mounted]);
   const controls = workbenchClient.controls;
   const {
-    threadContext: routeThreadContext, draftContext: routeDraftContext, launchLocation: routeLaunchLocation,
+    rootContext: routeRootContext, threadContext: routeThreadContext, draftContext: routeDraftContext, launchLocation: routeLaunchLocation,
     ownerMetadata: routeOwnerMetadata, browseDaemon, selectedDaemon, selectedAssetSource, profileScopeKey,
   } = useWorkbenchRouteContext(workbenchClient, route, currentThread, browseLocation);
   const composerProfileController = useWorkbenchComposerProfiles.registry()?.(profileScopeKey);
@@ -680,8 +680,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         ? createThreadRoute(activeProjectId, target)
         : createPinnedThreadRoute(activeProjectId, ownerProjectId, target));
   }, [activeProjectId, route.threadTarget, navigateToRoute, route, threadForThreadView?.harness]);
-  const threadProjectId = routeThreadContext?.project.id ?? routeDraftContext?.project.id
-    ?? (route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId);
+  const routeFallbackProjectId = route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId;
+  const threadProjectId = routeThreadContext?.project.id ?? routeDraftContext?.project.id ?? routeFallbackProjectId;
+  const rootThreadProjectId = routeRootContext?.project.id ?? routeDraftContext?.project.id ?? routeFallbackProjectId;
   // Existing threads load inside their own view (thread store); only drafts and new threads wait for a document.
   const isThreadViewReady = showThreadView && (Boolean(threadForThreadView)
     || route.threadTarget?.kind === "provider" || route.threadTarget?.kind === "subagent");
@@ -699,7 +700,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     || threadViewInstanceKey !== viewedThreadId;
   const threadSurfaceKey = retainsDraftSurface
     ? `draft:${threadViewInstanceKey}`
-    : `${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`;
+    : `${routeRootContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${rootThreadProjectId}:${threadViewInstanceKey}`;
   const threadFileScope = useMemo(() => ({
     daemon: selectedDaemon,
     daemonId: routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? routeLaunchLocation?.daemonId,
@@ -1038,9 +1039,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         ? projectHref(createLogicalThreadRoute(route.logical.projectId, route.logical.threadOwnerProjectId,
                           routeLaunchLocation, target))
                         : !activeProjectId
-                        ? projectHref(createHomeThreadRoute(threadProjectId, target))
-                        : isForeignThreadProject
-                          ? projectHref(createPinnedThreadRoute(activeProjectId, threadProjectId, target))
+                        ? projectHref(createHomeThreadRoute(rootThreadProjectId, target))
+                        : rootThreadProjectId !== browseProjectId
+                          ? projectHref(createPinnedThreadRoute(activeProjectId, rootThreadProjectId, target))
                           : projectHref(createThreadRoute(activeProjectId, target))}
                       mobileFullBleed={isDirectMobileThreadSurface}
                       onThreadSettled={handleComposerThreadSettled}

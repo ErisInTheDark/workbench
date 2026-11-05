@@ -35,7 +35,7 @@ import type { DraftUpdate } from "./thread-view/DraftSessionController";
 import {
   attachComposerDraftReference, clearComposerDraft, clearQuestionnaireDraft, presentationDraftToInput,
   readComposerDraft, resolveComposerDraftTarget, saveComposerDraft, saveQuestionnaireDraft,
-  type ClientDraftIdentity, type ComposerDraftTargetContext,
+  type ComposerDraftTargetContext,
 } from "../../workbench/state/draft-persistence";
 import type WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-view/thread-user-input-request-submission";
@@ -51,17 +51,6 @@ type ThreadController = ReturnType<typeof useThread>;
 interface Retained<Value> { value: Value; key: number }
 
 const noSubscription = () => () => {};
-
-/** The thread whose daemon owns a target's drafts: a subagent's drafts live with its parent. */
-function rootThreadIdOf(target: WorkbenchThreadTarget | null) {
-  return target?.kind === "provider" ? target.threadId : target?.kind === "subagent" ? target.parentThreadId : null;
-}
-
-/** The address a thread's drafts are read and written at: its owner's registration and project, keyed by the thread. */
-function draftOwnerIdentity(mounted: Mounted, rootThreadId: string, threadId: string): ClientDraftIdentity | null {
-  const owner = mounted?.threadDraftIdentityFor(rootThreadId);
-  return owner ? { ...owner, threadId: ThreadReferenceSchema.parse(threadId) } : null;
-}
 
 /** Client state plus the late-landing owner and presentation facts drafts are resolved through. */
 function useDraftSources(mounted: Mounted, state: WorkbenchClientStateController) {
@@ -107,7 +96,7 @@ function useComposerDraftTargets() {
   const navigate = useWorkbenchNavigate();
   const profilesFor = useWorkbenchComposerProfiles.registry();
   const context = useMemo<ComposerDraftTargetContext>(() => ({
-    threadDraftIdentityFor: threadId => draftOwnerIdentity(client.mounted, threadId, threadId),
+    threadDraftIdentityFor: threadId => client.mounted?.threadDraftIdentityFor(threadId) ?? null,
     draftLocationFor: draftId => client.mounted?.draftLocationFor(draftId) ?? null,
     presentation: client.mounted?.presentationClient ?? null,
     listingRows: () => client.mounted?.threadSidebar.getListing?.().rows ?? [],
@@ -132,7 +121,7 @@ export default function useComposer(projectId: string, threadId: string, target:
       return presentation ? presentationDraftToInput(presentation, draftId) : null;
     }
     if (targetKind !== "provider" && targetKind !== "subagent") return null;
-    return readComposerDraft(state.getSnapshot().records, draftOwnerIdentity(client.mounted, threadId, threadId));
+    return readComposerDraft(state.getSnapshot().records, client.mounted?.threadDraftIdentityFor(threadId) ?? null);
   }, [client.mounted, draftId, state, targetKind, threadId]);
   const draft = useRetained(subscribe, read);
   const resolveTarget = useComposerDraftTargets();
@@ -159,15 +148,15 @@ useComposer.questionnaire = function useComposerQuestionnaire(
   const { pending: request } = useThread.questionnaire(thread.store);
   const { transcript, turns } = useTranscript.turns(thread.store);
   const threadId = target && "threadId" in target ? target.threadId : null;
-  const rootThreadId = rootThreadIdOf(target);
+  const existingThread = target?.kind === "provider" || target?.kind === "subagent";
   const requestKey = request?.requestKey ?? "";
   const resolveIdentity = useCallback(() => {
     if (!threadId || !requestKey) return null;
-    const owner = rootThreadId ? draftOwnerIdentity(client.mounted, rootThreadId, threadId) : {
+    const owner = existingThread ? client.mounted?.threadDraftIdentityFor(threadId) : {
       daemonRegistrationId: state.daemonRegistrationId, projectId: ProjectIdSchema.parse(projectId), threadId,
     };
     return owner ? { ...owner, requestKey } : null;
-  }, [client.mounted, projectId, requestKey, rootThreadId, state, threadId]);
+  }, [client.mounted, existingThread, projectId, requestKey, state, threadId]);
   const subscribe = useDraftSources(client.mounted, state);
   const read = useCallback(() => {
     const identity = resolveIdentity();
