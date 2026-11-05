@@ -249,6 +249,10 @@ class WorkbenchDaemonClient {
     read: () => this.request("thread-auto-compact/read", {}),
     update: (params: WorkbenchDaemonParams<"thread-auto-compact/update">) => this.request("thread-auto-compact/update", params),
   };
+  readonly threadAutoResume = {
+    read: () => this.request("thread-auto-resume/read", {}),
+    update: (params: WorkbenchDaemonParams<"thread-auto-resume/update">) => this.request("thread-auto-resume/update", params),
+  };
 
   readonly sandboxNetwork = {
     read: (params: WorkbenchDaemonParams<"sandbox-network/read">) => this.request("sandbox-network/read", params),

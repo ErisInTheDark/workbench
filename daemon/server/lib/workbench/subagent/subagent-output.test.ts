@@ -69,7 +69,8 @@ test("leads with the thread error or interruption instead of empty output", () =
   const failed = { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "Selected model is at capacity." } as const;
   assert.equal(renderSubagentTurnOutput(thread([]), failed), "Thread error: Selected model is at capacity.");
   assert.equal(renderSubagentTurnOutput(thread([partial]), failed), "Thread error: Selected model is at capacity.\n\nHalfway");
-  assert.equal(renderSubagentTurnOutput(thread([partial]), { kind: "needsAttention", reason: "interrupted", settled: false, turnId }), "Turn was interrupted.\n\nHalfway");
+  assert.match(renderSubagentTurnOutput(thread([partial]), { kind: "needsAttention", reason: "interrupted", settled: false, turnId }), /^Turn was interrupted\.[^]*\n\nHalfway$/u);
+  assert.match(renderSubagentTurnOutput(thread([]), { ...failed, resumeAt: 5_000 }), /^Thread error: Selected model is at capacity\. .*resumes/u);
   assert.equal(renderSubagentTurnOutput(thread([partial]), null), "Halfway");
 });
 

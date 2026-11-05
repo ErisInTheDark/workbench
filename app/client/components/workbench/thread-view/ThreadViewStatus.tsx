@@ -149,6 +149,7 @@ export default function ThreadViewStatus ({
         } : null}
       />
     ) : null}
-    {!isDraftThreadView ? <ThreadErrorCard lifecycle={entry?.lifecycle} /> : null}
+    {!isDraftThreadView ? <ThreadErrorCard lifecycle={entry?.lifecycle}
+      onCancelAutoResume={() => { void daemon?.threads.stop({ threadId, intent: "stop" }); }} /> : null}
   </>;
 }

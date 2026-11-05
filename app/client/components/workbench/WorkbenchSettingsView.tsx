@@ -17,6 +17,7 @@ import WorkbenchEnvironmentSettings from "./environment/WorkbenchEnvironmentSett
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings, { VoiceInputSetting } from "./voice/VoiceSettings";
 import ThreadAutoCompactSettings from "./ThreadAutoCompactSettings";
+import ThreadAutoResumeSettings from "./ThreadAutoResumeSettings";
 import Disclosure from "../ui/Disclosure";
 import FormSection from "../ui/FormSection";
 import WorkbenchBrowseCapabilitySetting from "./WorkbenchBrowseCapabilitySetting";
@@ -254,6 +255,9 @@ export default function WorkbenchSettingsView({
       {place.kind === "machine" && place.page === "agents" ? <>
         <FormSection id="settings-providers" title="Providers">
           {withDaemon((client, id) => <WorkbenchProviderSettings key={id} daemon={client} />)}
+        </FormSection>
+        <FormSection id="settings-auto-resume" title="Auto-resume">
+          {withDaemon((client, id) => <ThreadAutoResumeSettings key={id} daemon={client} />)}
         </FormSection>
         <FormSection id="settings-auto-compact" title="Auto-compact">
           {withDaemon((client, id) => <ThreadAutoCompactSettings key={id} daemon={client} />)}

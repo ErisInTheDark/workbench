@@ -65,6 +65,7 @@ interface ThreadStateRow {
   request_key: string | null;
   agent_status: "working" | "completed" | "blocked" | null;
   error_text: string | null;
+  resume_at: number | null;
   settled_at: number | null;
   git_history_cleaned_at: number | null;
   mcp_generation: string | null;
@@ -76,7 +77,7 @@ const SELECT_THREAD_STATES = `
     child.parent_thread_id, child.parent_daemon_id, child.parent_hostname, child.cwd, child.name, child.profile_id,
     child.profile_name, child.direct_subagent_index, child.created_at, child.updated_at, child.pinned AS child_pinned,
     lifecycle.lifecycle_kind, lifecycle.reason, lifecycle.settled, lifecycle.turn_id,
-    lifecycle.request_key, lifecycle.agent_status, lifecycle.error_text,
+    lifecycle.request_key, lifecycle.agent_status, lifecycle.error_text, lifecycle.resume_at,
     retention.settled_at, retention.git_history_cleaned_at, retention.mcp_generation
   FROM workbench_thread_states state
   JOIN workbench_threads thread ON thread.id = state.thread_id
@@ -590,9 +591,10 @@ export default class WorkbenchThreadStateRelationalRepository {
       request_key: "requestKey" in lifecycle ? lifecycle.requestKey : null,
       agent_status: agent?.agentStatus ?? null,
       error_text: "error" in lifecycle ? lifecycle.error : null,
+      resume_at: "resumeAt" in lifecycle ? lifecycle.resumeAt ?? null : null,
     };
     const previousLifecycle = this.database.prepare(`
-      SELECT thread_id, lifecycle_kind, reason, settled, turn_id, request_key, agent_status, error_text
+      SELECT thread_id, lifecycle_kind, reason, settled, turn_id, request_key, agent_status, error_text, resume_at
       FROM workbench_thread_lifecycle WHERE thread_id = ?
     `).get(threadId);
     if (!isDeepStrictEqual(previousLifecycle, lifecycleFacts)) {
@@ -692,6 +694,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       ...(row.turn_id !== null && (row.agent_status === null || row.reason === "pendingInput") ? { turnId: row.turn_id } : {}),
       ...(row.request_key === null ? {} : { requestKey: row.request_key }),
       ...(row.error_text === null ? {} : { error: row.error_text }),
+      ...(row.resume_at === null ? {} : { resumeAt: row.resume_at }),
     });
     const { profile, questionnaires, titles } = related;
     const common = {

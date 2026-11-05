@@ -2,7 +2,7 @@
  * Exports:
  * - DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: safe defaults for local server capabilities.
  * - normalizeWorkbenchLocalCapabilitySettings: conform capability inputs at the owner boundary.
- * - default WorkbenchServerSettings: own serialised daemon capabilities, auto-compaction and discovery settings.
+ * - default WorkbenchServerSettings: own serialised daemon capabilities, auto-compaction, auto resume and discovery settings.
  */
 import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import { deleteRows, insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
@@ -15,6 +15,10 @@ import {
   type ThreadAutoCompactPatch, type ThreadAutoCompactSettings,
 } from "workbench-shared/workbench/settings/thread-auto-compact";
 import { threadAutoCompactProviders } from "../database/schema/thread-auto-compact-schema";
+import {
+  THREAD_AUTO_RESUME_DEFAULTS, ThreadAutoResumePatchSchema, ThreadAutoResumeSettingsSchema, type ThreadAutoResumePatch, type ThreadAutoResumeSettings,
+} from "workbench-shared/workbench/settings/thread-auto-resume";
+import { threadAutoResumeSettings } from "../database/schema/thread-auto-resume-schema";
 
 export const DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
   browseRawCommandsEnabled: false,
@@ -71,6 +75,24 @@ export default class WorkbenchServerSettings {
         updateColumns: ["enabled", "idle_token_threshold", "idle_minutes", "turn_end_token_threshold"],
       })]);
       settings = { ...current, [provider]: rules };
+    });
+    return settings;
+  }
+
+  async readThreadAutoResume(): Promise<ThreadAutoResumeSettings> {
+    const [row] = await this.database.query(selectRows(threadAutoResumeSettings, { where: { id: "global" } }));
+    const stored = row && ThreadAutoResumeSettingsSchema.safeParse({ enabled: row.enabled === 1, idleMinutes: row.idle_minutes });
+    return stored && stored.success ? stored.data : THREAD_AUTO_RESUME_DEFAULTS;
+  }
+
+  async updateThreadAutoResume(patch: ThreadAutoResumePatch): Promise<ThreadAutoResumeSettings> {
+    const edit = ThreadAutoResumePatchSchema.parse(patch);
+    let settings!: ThreadAutoResumeSettings;
+    await this.enqueueWrite(async () => {
+      settings = { ...await this.readThreadAutoResume(), ...edit };
+      await this.database.executeTransaction([upsertRow(threadAutoResumeSettings, {
+        id: "global", enabled: settings.enabled ? 1 : 0, idle_minutes: settings.idleMinutes,
+      }, { conflictColumns: ["id"], updateColumns: ["enabled", "idle_minutes"] })]);
     });
     return settings;
   }

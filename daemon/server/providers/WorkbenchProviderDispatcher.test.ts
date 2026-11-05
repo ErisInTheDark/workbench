@@ -526,6 +526,7 @@ test("a hidden turn checks currency after earlier admissions in its lane and sta
   const order: string[] = [];
   const submitted: Array<{ intent: string; context?: WorkbenchMessageContext }> = [];
   const admissions: Array<{ kind: string; firstMessagePreview?: string }> = [];
+  const skipsCompaction: Array<boolean | undefined> = [];
   const provider = { threads: {
     submit: async (input: { intent: string; clientMessageId: string; context?: WorkbenchMessageContext }) => {
       if (input.clientMessageId === "user") { userEntered.resolve(); await releaseUser.promise; }
@@ -540,7 +541,10 @@ test("a hidden turn checks currency after earlier admissions in its lane and sta
   const dispatcher = new WorkbenchProviderDispatcher(async (_registration, operation) => operation(provider), {
     interruptSteerWaits: () => undefined,
     instructionSelection: selection,
-    messageAdmission: (threadId, _provider, admit) => admission.run(threadId, admit),
+    messageAdmission: (threadId, _provider, admit, options) => {
+      skipsCompaction.push(options?.skipAutoCompact);
+      return admission.run(threadId, admit);
+    },
     onMessageAdmitted: received => { admissions.push(received); },
   });
   const user = dispatcher.get("claude").threads.submit({ threadId: "thread", clientMessageId: "user", input: [], intent: "newTurn" });
@@ -562,6 +566,11 @@ test("a hidden turn checks currency after earlier admissions in its lane and sta
   assert.deepEqual(submitted.at(-1), { intent: "newTurn", context: { workflowIds: ["review"] } });
   assert.deepEqual(admissions.map(received => received.kind), ["started", "started"]);
   assert.equal(admissions[1]!.firstMessagePreview, undefined);
+  assert.equal(skipsCompaction.at(-1), true, "a hidden turn never compacts unless it asks to");
+  await dispatcher.admitHiddenTurn("claude", {
+    threadId: "thread", clientMessageId: "hidden-compacting", input: [], compactWhenDue: true, isCurrent: async () => current,
+  });
+  assert.equal(skipsCompaction.at(-1), false);
   await admission.dispose();
 });
 

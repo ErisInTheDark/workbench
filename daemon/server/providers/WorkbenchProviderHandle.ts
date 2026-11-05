@@ -34,6 +34,8 @@ export interface WorkbenchProviderHiddenTurn {
   threadId: string;
   clientMessageId: string;
   input: WorkbenchUserInput[];
+  /** Compact first when due, as a user message would. Otherwise the turn never compacts. */
+  compactWhenDue?: boolean;
   /** Runs inside the thread's admission lane, after every earlier admission; false skips the turn. */
   isCurrent(threads: Pick<WorkbenchProvider["threads"], "latestTurn" | "isTurnLive">): Promise<boolean>;
 }
@@ -261,7 +263,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
         threadId: turn.threadId, clientMessageId: turn.clientMessageId, input: turn.input, intent: "newTurn",
         ...(context ? { context } : {}),
       }));
-    }, { skipAutoCompact: true }), `${this.key}: threads.admitHiddenTurn`);
+    }, { skipAutoCompact: !turn.compactWhenDue }), `${this.key}: threads.admitHiddenTurn`);
     if (!result) return "superseded";
     this.admitted(turn.threadId, result);
     try {

@@ -445,8 +445,9 @@ export function defineThreadDomainCoreSchema(schemaVersion: number) {
       ],
     }),
   });
+  const autoResumeLifecycle = evolveTable(deferredAgentLifecycle, { add: { resume_at: integer() } });
   const lifecycleHistory = defineTableHistory({
-    current: deferredAgentLifecycle,
+    current: autoResumeLifecycle,
     versions: [
       ...workbenchThreadLifecycleHistory.versions,
       tableVersion({
@@ -475,6 +476,10 @@ export function defineThreadDomainCoreSchema(schemaVersion: number) {
       tableVersion({
         schemaVersion: databaseReleases.deferredAgentStatus.version, table: deferredAgentLifecycle,
         migration: rebuildTable({ from: threadErrorLifecycle, to: deferredAgentLifecycle }),
+      }),
+      tableVersion({
+        schemaVersion: databaseReleases.threadAutoResume.version, table: autoResumeLifecycle,
+        migration: addColumns({ from: deferredAgentLifecycle, to: autoResumeLifecycle, columns: ["resume_at"] }),
       }),
     ],
   });

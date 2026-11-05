@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - settingsDaemonRequests: daemon requests for command approvals, auto-approve review, MCP servers, local capabilities, auto-compaction
- *   and composer profiles.
+ * - settingsDaemonRequests: daemon requests for command approvals, auto-approve review, MCP servers, local capabilities, auto-compaction,
+ *   auto resume and composer profiles.
  */
 import { z } from "zod";
 import type {
@@ -29,11 +29,13 @@ import {
   type CommandApprovalPatch, type CommandApprovalRead, type CommandApprovalRemove, type CommandApprovalSnapshot,
 } from "../../settings/command-approvals.ts";
 import { ThreadAutoCompactSettingsSchema, type ThreadAutoCompactSettings, type ThreadAutoCompactUpdate } from "../../settings/thread-auto-compact.ts";
+import { ThreadAutoResumeSettingsSchema, type ThreadAutoResumePatch, type ThreadAutoResumeSettings } from "../../settings/thread-auto-resume.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../../thread/thread-state.ts";
 import { defineDaemonRequest } from "../define-daemon-request.ts";
 
 const localCapabilities = z.object({ localCapabilities: z.object({ browseRawCommandsEnabled: z.boolean() }).strict() }).strict();
 const autoCompact = z.object({ settings: ThreadAutoCompactSettingsSchema }).strict();
+const autoResume = z.object({ settings: ThreadAutoResumeSettingsSchema }).strict();
 const profiles = z.object({ profiles: z.array(z.object({
   lastUsedAt: z.number().int().nonnegative().nullable().default(null),
 }).passthrough()) }).passthrough();
@@ -80,6 +82,10 @@ export const settingsDaemonRequests = {
   "thread-auto-compact/read": defineDaemonRequest<object, { settings: ThreadAutoCompactSettings }>()({ route: "installation", result: autoCompact }),
   "thread-auto-compact/update": defineDaemonRequest<ThreadAutoCompactUpdate, { settings: ThreadAutoCompactSettings }>()({
     route: "installation", result: autoCompact,
+  }),
+  "thread-auto-resume/read": defineDaemonRequest<object, { settings: ThreadAutoResumeSettings }>()({ route: "installation", result: autoResume }),
+  "thread-auto-resume/update": defineDaemonRequest<ThreadAutoResumePatch, { settings: ThreadAutoResumeSettings }>()({
+    route: "installation", result: autoResume,
   }),
   "profiles/read": defineDaemonRequest<object, WorkbenchComposerProfileStorePayload>()({ route: "installation", result: profiles, parsed: true }),
   "profiles/upsert": defineDaemonRequest<

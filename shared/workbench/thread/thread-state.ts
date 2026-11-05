@@ -28,6 +28,7 @@
  * - DraftReferenceKindSchema/DraftReferenceKind: composer reference kinds an app draft can carry.
  * - WorkbenchThreadStateSnapshot/WorkbenchThreadStateRequest/WorkbenchThreadStateMutationResult/WorkbenchThreadTitleMutationResult: notification, intent, and acknowledgement types.
  * - WorkbenchLifecycleEvent/getWorkbenchLifecycleTurnId: lifecycle inputs, including provider failure text, and owning turn identity.
+ * - getWorkbenchAutoResumeCause: why auto resume may continue a lifecycle, if it may.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity.
  * - WorkbenchThreadRouteTargetSchema/WorkbenchThreadRouteTarget: parsed route references or already-resolved targets.
  * - WorkbenchComposerProfileSlotSchema: strict target slot contract.
@@ -238,6 +239,8 @@ const CanonicalNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
   z.object({
     error: z.string().trim().min(1).max(WORKBENCH_THREAD_ERROR_MAX_LENGTH), kind: z.literal("needsAttention"), reason: z.literal("providerFailed"),
     settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">(),
+    /** Set once the failure is attributed to a usage limit: when auto resume continues this thread, in ms. */
+    resumeAt: z.number().int().nonnegative().optional(),
   }).strict(),
   z.object({ agent: AgentStatusSchema.extend({ agentStatus: z.literal("blocked") }), kind: z.literal("needsAttention"), reason: z.literal("agentBlocked"), settled: z.literal(false) }).strict(),
 ]);
@@ -1038,7 +1041,13 @@ export type WorkbenchLifecycleEvent =
   | { kind: "pendingInput"; requestKey: string; turnId?: WorkbenchTurnId }
   | { kind: "inputResolved"; requestKey: string; turnId?: WorkbenchTurnId; answered?: true }
   | { kind: "agentStatus"; status: "completed" | "blocked"; turnId?: WorkbenchTurnId }
-  | { kind: "turnCompleted"; status: "completed" | "interrupted" | "failed"; turnId: WorkbenchTurnId; error?: string }
+  | {
+    kind: "turnCompleted"; status: "completed" | "interrupted" | "failed"; turnId: WorkbenchTurnId; error?: string;
+    /** The provider's own word that this failure hit a usage limit; auto resume attributes it, the lifecycle ignores it. */
+    usageLimit?: { resumeAt: number | null };
+  }
+  /** Auto resume attributed this failed turn to a usage limit (a time), or gave up on it (null). */
+  | { kind: "autoResumeScheduled"; turnId: WorkbenchTurnId; resumeAt: number | null }
   /** Live provider items arrived in this running turn. */
   | { kind: "providerTurnActive"; turnId: WorkbenchTurnId }
   | { kind: "recoveryFailed" }
@@ -1050,6 +1059,13 @@ export type WorkbenchLifecycleEvent =
   | { kind: "userStopped" }
   | { kind: "settle"; entryKind: "thread" | "subagent" }
   | { kind: "restore" };
+
+/** Why auto resume may continue this lifecycle. User controls leave a question or `stopped`, so a bare interrupt means its process ended. */
+export function getWorkbenchAutoResumeCause(lifecycle: WorkbenchThreadLifecycle | null) {
+  if (lifecycle?.kind !== "needsAttention") return null;
+  if (lifecycle.reason === "interrupted") return "interrupted" as const;
+  return lifecycle.reason === "providerFailed" && lifecycle.resumeAt !== undefined ? "usageLimit" as const : null;
+}
 
 export function getWorkbenchLifecycleTurnId(lifecycle: WorkbenchThreadLifecycle | null) {
   if (!lifecycle) return null;
@@ -1151,6 +1167,11 @@ export function reduceWorkbenchThreadLifecycle(
       return entryKind === "subagent"
         ? { agent: { agentStatus: "completed", turnId: event.turnId }, kind: "completed", reason: "agentCompleted", settled: false }
         : { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+    }
+    case "autoResumeScheduled": {
+      if (current?.kind !== "needsAttention" || current.reason !== "providerFailed" || current.turnId !== event.turnId) return current!;
+      const { resumeAt: _previous, ...failed } = current;
+      return event.resumeAt === null ? failed : { ...failed, resumeAt: event.resumeAt };
     }
     case "providerTurnActive": {
       if (current?.kind === "working" && currentTurnId === event.turnId) return current;

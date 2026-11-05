@@ -15,7 +15,7 @@ import WorkbenchDatabaseController from "../database/WorkbenchDatabaseController
 import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import { normalizeProviderSidebarEntry as normalizeSidebarEntry } from "./WorkbenchThreadStateFeature";
 import { parseProjectDocument } from "../database/thread-state/workbench-thread-state-document-source";
-import { createWorkbenchProjectThreadSummary, withWorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { createWorkbenchProjectThreadSummary, getWorkbenchAutoResumeCause, withWorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { projectWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -3548,6 +3548,14 @@ test("a held questionnaire never leaves the thread in the automatic recovery sta
     assert.equal(waitingRequestKey(entry), question.requestKey);
     assert.equal(recovery.shouldContinue(entry.lifecycle), false);
     assert.equal(entry.pendingQuestionnaire?.requestKey, question.requestKey);
+
+    // Nor may a failed or interrupted turn arm auto resume, which would start a turn over the question.
+    for (const status of ["failed", "interrupted"] as const) {
+      await controller.observeLifecycle("codex", fixtureThreadIds["questionnaire"], { kind: "turnCompleted", status, turnId: fixtureTurnIds["turn"], usageLimit: { resumeAt: 5_000 } });
+      entry = await readEntry(fixtureThreadIds["questionnaire"]);
+      assert.equal(waitingRequestKey(entry), question.requestKey);
+      assert.equal(getWorkbenchAutoResumeCause(entry.lifecycle), null);
+    }
 
     // A question observed without an owning turn still asserts the waiting state.
     const turnless = { ...question, itemId: "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b", requestKey: "turnless-question", turnId: null };

@@ -508,6 +508,21 @@ export default class WorkbenchThreadActionController {
     return result;
   }
 
+  /** What the user sent that this turn never delivered, oldest first: auto resume sends it instead of leaving it behind. */
+  async undeliveredUserSteers(threadId: string, turnId: string) {
+    const { identity } = await this.target(threadId);
+    return (await this.owners.transcripts.history(identity.threadId)).steerEntries
+      .filter(entry => (entry.status === "failed" || entry.status === "interrupted") && entry.turnId === turnId
+        && entry.itemId && !readWorkbenchAgentMessageInput(entry.input))
+      .sort((left, right) => left.attemptedAt - right.attemptedAt)
+      .map(entry => ({ itemId: entry.itemId!, input: WorkbenchUserInputSchema.array().parse(entry.input) }));
+  }
+
+  /** The resume carrying these steers was accepted, so their resend and dismiss controls go. */
+  async retireUserSteers(threadId: string, itemIds: readonly string[]) {
+    for (const itemId of itemIds) await this.recordDismissed(await this.undeliveredSteer({ threadId, itemId }));
+  }
+
   /**
    * Agents cannot press resend, so their undelivered and held messages follow the thread into its next running turn,
    * oldest first. They steer only a turn that is still running; one that already ended leaves them waiting

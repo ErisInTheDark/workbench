@@ -1,5 +1,7 @@
 /*
  * Exports:
+ * - formatMinutes: show a threshold's minutes compactly.
+ * - Threshold: one titled inline slider in an automation settings row.
  * - default ThreadAutoCompactSettings: one daemon's auto-compact rows, one per provider: its checkbox, its idle rule where it has one, OR its turn-end rule.
  */
 "use client";
@@ -20,12 +22,12 @@ function formatTokens(tokens: number) {
   return tokens >= 1_000_000 ? `${tokens / 1_000_000}M` : `${tokens / 1_000}K`;
 }
 
-function formatMinutes(minutes: number) {
+export function formatMinutes(minutes: number) {
   return minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
 }
 
-function Threshold({ title, ...slider }: Omit<ComponentProps<typeof PressDragSlider>, "presentation"> & { title: string }) {
-  return <span className="flex w-32 min-w-0 items-center gap-2 text-[0.8rem] text-fg/muted">
+export function Threshold({ title, className = "w-32", ...slider }: Omit<ComponentProps<typeof PressDragSlider>, "presentation" | "className"> & { title: string; className?: string }) {
+  return <span className={`flex min-w-0 items-center gap-2 text-[0.8rem] text-fg/muted ${className}`}>
     <span className="shrink-0">{title}</span>
     <PressDragSlider {...slider} presentation="inline" />
   </span>;

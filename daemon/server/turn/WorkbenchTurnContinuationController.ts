@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchTurnContinuationTarget: one thread turn a hidden continuation follows.
  * - WorkbenchTurnContinuationOptions: lifecycle reads, interruption, hidden-turn admission and failure ports.
- * - default WorkbenchTurnContinuationController: start hidden Workbench turns for every provider, waking agents whose turn ended unfinished and refreshing live turns on request; a stop cancels them.
+ * - WorkbenchTurnAutoResume: what one auto resume sends, and its outcome callbacks.
+ * - default WorkbenchTurnContinuationController: start hidden Workbench turns for every provider, waking agents whose turn ended unfinished, refreshing live turns on request and carrying out auto resumes; a stop cancels them.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
@@ -11,7 +12,7 @@ import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provid
 import {
   createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchAutoResumeCause, getWorkbenchLifecycleTurnId, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchTurnRecoveryController from "../WorkbenchTurnRecoveryController";
 import type { WorkbenchProviderHiddenTurn } from "../providers/WorkbenchProviderHandle";
 
@@ -32,6 +33,14 @@ export interface WorkbenchTurnContinuationOptions {
   admitHiddenTurn(harness: WorkbenchHarness, turn: WorkbenchProviderHiddenTurn): Promise<"started" | "superseded">;
   reportFailed(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<unknown>;
   log(message: string): void;
+}
+
+export interface WorkbenchTurnAutoResume {
+  /** Undelivered user steers when there are any; the bare resume otherwise. */
+  input?: WorkbenchProviderHiddenTurn["input"];
+  onStarted(): Promise<void>;
+  /** The thread stays armed: its lifecycle still says why it stopped, so nothing is reported as failed. */
+  onFailed(): void;
 }
 
 type ProviderTurnFacts = Pick<WorkbenchProviderThreads, "latestTurn" | "isTurnLive">;
@@ -99,6 +108,21 @@ export default class WorkbenchTurnContinuationController {
     }, { id: `refresh:${target.turnId}`, input: createWorkbenchThreadRecoveryInput() }, true);
   }
 
+  /** Continue a thread auto resume armed. Re-checked in the lane: a held question, stop or newer turn ends it. Throws only when not scheduled. */
+  autoResume(harness: WorkbenchHarness, target: WorkbenchTurnContinuationTarget, resume: WorkbenchTurnAutoResume) {
+    this.schedule("auto resume", harness, target, async (signal, threads) => {
+      const current = await this.options.readLifecycle(harness, target.threadId);
+      if (signal.aborted || !current || !getWorkbenchAutoResumeCause(current.lifecycle)
+        || getWorkbenchLifecycleTurnId(current.lifecycle) !== target.turnId) return false;
+      const latest = await threads.latestTurn(target.threadId);
+      return Boolean(latest) && this.options.canonicalTurnId(latest!.id) === target.turnId
+        && !await threads.isTurnLive(target.threadId, target.turnId);
+    }, {
+      id: `auto-resume:${target.turnId}`, input: resume.input ?? createWorkbenchThreadRecoveryInput(),
+      compactWhenDue: true, onStarted: resume.onStarted, onFailed: resume.onFailed,
+    });
+  }
+
   dispose() {
     this.generation.abort(new Error("Turn continuation generation was retired."));
   }
@@ -108,7 +132,7 @@ export default class WorkbenchTurnContinuationController {
     harness: WorkbenchHarness,
     target: WorkbenchTurnContinuationTarget,
     isCurrent: (signal: AbortSignal, threads: ProviderTurnFacts) => Promise<boolean>,
-    turn: { id: string; input: WorkbenchProviderHiddenTurn["input"] },
+    turn: { id: string; input: WorkbenchProviderHiddenTurn["input"]; compactWhenDue?: boolean } & Partial<Omit<WorkbenchTurnAutoResume, "input">>,
     interruptFirst = false,
   ) {
     const abort = new AbortController();
@@ -130,17 +154,20 @@ export default class WorkbenchTurnContinuationController {
         try {
           if (interruptFirst) await this.options.interrupt(harness, target.threadId);
           if (signal.aborted) return;
-          await this.options.admitHiddenTurn(harness, {
+          const admitted = await this.options.admitHiddenTurn(harness, {
             threadId: target.threadId, clientMessageId: createWorkbenchThreadRecoveryId(turn.id), input: turn.input,
+            ...(turn.compactWhenDue ? { compactWhenDue: true } : {}),
             isCurrent: async threads => {
               const current = !signal.aborted && await isCurrent(signal, threads) && !signal.aborted;
               if (current) task.admitting = settled.promise;
               return current;
             },
           });
+          if (admitted === "started") await turn.onStarted?.();
         } catch (error) {
           if (signal.aborted) return;
           this.options.log(`${label} failed for ${harness}:${target.threadId}: ${message(error)}`);
+          if (turn.onFailed) { turn.onFailed(); return; }
           const current = await this.options.readLifecycle(harness, target.threadId);
           if (current) await this.options.reportFailed(current.projectId, harness, target.threadId);
         } finally {

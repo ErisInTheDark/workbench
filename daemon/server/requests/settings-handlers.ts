@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - settingsRequestHandlers: daemon handlers for command approvals, auto-approve review, MCP servers, local capabilities, auto-compaction
+ * - settingsRequestHandlers: daemon handlers for command approvals, auto-approve review, MCP servers, local capabilities, auto-compaction, auto resume
  *   and composer profiles, including context-window validation and thread profile target resolution.
  */
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "workbench-shared/types";
@@ -11,6 +11,7 @@ import {
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import { ThreadAutoCompactUpdateSchema } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { ThreadAutoResumePatchSchema } from "workbench-shared/workbench/settings/thread-auto-resume";
 import { isSelectableContextWindow } from "workbench-shared/workbench/thread/thread-profile";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
@@ -127,6 +128,12 @@ export const settingsRequestHandlers = defineDaemonRequestHandlers({
     const settings = await owners.settings.updateThreadAutoCompact(edit.data.provider, edit.data.settings);
     await owners.autoCompact?.refreshObserved();
     return { settings };
+  },
+  "thread-auto-resume/read": async (_params, { owners }) => ({ settings: await owners.settings.readThreadAutoResume() }),
+  "thread-auto-resume/update": async (params, { owners }) => {
+    const edit = ThreadAutoResumePatchSchema.safeParse(params);
+    if (!edit.success) throw new InvalidParamsError("Invalid auto-resume settings.");
+    return { settings: await owners.settings.updateThreadAutoResume(edit.data) };
   },
   "profiles/read": async (_params, { owners }) => await owners.profiles.read(),
   "profiles/target/read": async (params, context) => {

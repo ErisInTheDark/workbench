@@ -828,3 +828,32 @@ test("settles an OpenCode execution failure with the provider error message", as
     { kind: "turnCompleted", turnId: turn().id, status: "failed", error: "This API key has expired." },
   ]);
 });
+
+test("a 429 execution failure reports a usage limit, resuming after any retry delay it names", async () => {
+  for (const [retry, resumeAt] of [[{ retryAfterMs: 60_000 }, 60_003], [{}, null]] as const) {
+    const completions: unknown[] = [];
+    const controller = new OpenCodeEventController({
+      threads: {
+        ...executionLifecycle,
+        currentTurn: () => ({ threadId, turnId }),
+        consumeRequestedInterrupt: () => false,
+        syncNative: async () => ({ threadId, hasPendingSteers: false, turn: turn() }),
+      },
+      transcript: {
+        recordCompaction: async () => undefined, recordTurnState: async () => undefined,
+        recordItem: async () => "00000000-0000-4000-8000-000000000003" as never,
+        appendText: () => undefined,
+      },
+      observe: async facts => {
+        if (facts.lifecycle?.event.kind === "turnCompleted") completions.push(facts.lifecycle.event);
+      },
+    });
+    await controller.accept(event({
+      id: "execution-failed", created: 3, type: "session.execution.failed", durable,
+      data: { sessionID: "session", error: { type: "AI.Error", message: "Too many requests.", status: 429, ...retry } },
+    }));
+    assert.deepEqual(completions, [
+      { kind: "turnCompleted", turnId: turn().id, status: "failed", error: "Too many requests.", usageLimit: { resumeAt } },
+    ]);
+  }
+});

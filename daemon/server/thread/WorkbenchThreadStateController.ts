@@ -629,6 +629,10 @@ export default class WorkbenchThreadStateController {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "recoveryFailed" });
   }
 
+  async reportAutoResume(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, resumeAt: number | null) {
+    return await this.applyLifecycle(projectId, harness, threadId, { kind: "autoResumeScheduled", turnId, resumeAt });
+  }
+
   async reportAgentMessageHeld(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "agentMessageHeld" });
   }

@@ -2,10 +2,10 @@
  * Exports:
  * - WorkbenchCoreTranscript: the transcript registration surface core owners use.
  * - default WorkbenchTurnRuntimeFeature: build turn admission, liveness, compaction, auto-compaction, context rollover, transcript reading and
- *   reconciliation, unfinished-turn continuation and orphaned-turn settlement, and own runtime fact fan-out (including live shell queues, output and yields)
+ *   reconciliation, unfinished-turn continuation, auto resume and orphaned-turn settlement, and own runtime fact fan-out (including live shell queues, output and yields)
  *   plus the `threadRuntime` registration.
  */
-import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import providerRegistrations, { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchHarnessSchema, type ThreadRuntime, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
@@ -17,7 +17,10 @@ import type WorkbenchProjectCatalogController from "../project/WorkbenchProjectC
 import type WorkbenchProviderDispatcher from "../providers/WorkbenchProviderDispatcher";
 import type { WorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
 import WorkbenchThreadAdmissionController from "../thread/WorkbenchThreadAdmissionController";
+import type WorkbenchAccountLimitsController from "../providers/WorkbenchAccountLimitsController";
+import { joinUserInputs } from "../interactions/WorkbenchQuestionnaireSteerController";
 import WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCompactController";
+import WorkbenchThreadAutoResumeController from "../turn/WorkbenchThreadAutoResumeController";
 import WorkbenchThreadCompactionController from "../turn/WorkbenchThreadCompactionController";
 import WorkbenchThreadContextRolloverController from "../turn/WorkbenchThreadContextRolloverController";
 import WorkbenchThreadTurnLiveness from "../turn/WorkbenchThreadTurnLiveness";
@@ -50,6 +53,7 @@ export default class WorkbenchTurnRuntimeFeature {
   readonly transcriptReader: WorkbenchTranscriptReader;
   readonly transcriptReconciliation: WorkbenchTranscriptReconciliationController;
   readonly continuations: WorkbenchTurnContinuationController;
+  readonly autoResume: WorkbenchThreadAutoResumeController;
   readonly turnSettlement: WorkbenchTurnSettlementController;
   readonly threadRuntime: DaemonRuntimeObjects["threadRuntime"];
   /** Threads whose runtime facts (token usage, auto-compaction) changed; thread observations reread them. */
@@ -69,6 +73,8 @@ export default class WorkbenchTurnRuntimeFeature {
     run: ReloadableNodeBuild<DaemonRuntimeObjects>["run"];
     /** Built after this feature, read at call time. */
     providers: () => WorkbenchProviderDispatcher;
+    /** Built after this feature, read at call time. */
+    accountLimits: () => Pick<WorkbenchAccountLimitsController, "current">;
     setSummaryFacts(threadId: string, facts: ThreadSummaryFacts): void;
     /** The thread's shown approval prompt; approvals are live provider facts, never durable thread state. */
     readPendingApproval(threadId: string): ThreadRuntime["pendingApproval"];
@@ -191,6 +197,41 @@ export default class WorkbenchTurnRuntimeFeature {
       admitHiddenTurn: async (harness, turn) => await providers().admitHiddenTurn(installedProvider(harness), turn),
       reportFailed: async (projectId, harness, threadId) => await lookup.requireThreadState().controller.reportRecoveryFailed(projectId, harness, threadId),
       log: context.logTurnRecovery,
+    });
+    const continuations = this.continuations;
+    const autoResumeThread = (entry: { identity: { harness: string; threadId: WorkbenchThreadId }; activityAt: number; lifecycle: WorkbenchThreadLifecycle }) => ({
+      harness: WorkbenchHarnessSchema.parse(entry.identity.harness), threadId: entry.identity.threadId,
+      activityAt: entry.activityAt, lifecycle: entry.lifecycle,
+    });
+    this.autoResume = new WorkbenchThreadAutoResumeController({
+      readSettings: () => ports.settings.readThreadAutoResume(),
+      listThreads: async () => {
+        const { data } = await ports.projectCatalog.readCatalog();
+        const snapshots = await Promise.all(data.map(({ id }) => lookup.requireThreadState().controller.getSnapshot(ProjectIdSchema.parse(id))));
+        return snapshots.flatMap(({ entries }) => entries.flatMap(entry => entry.entryKind === "draft" ? [] : [autoResumeThread(entry)]));
+      },
+      readThread: async threadId => {
+        const entry = await lookup.entry(threadId);
+        return entry ? autoResumeThread(entry) : null;
+      },
+      readLimits: harness => ports.accountLimits().current(harness),
+      readTurnStatuses: async threadId => (await transcriptReader.readPage({ threadId, cursor: null })).thread.turnHistory.flatMap(turn => turn.status ?? []),
+      setResumeAt: async (thread, turnId, resumeAt) => {
+        const identity = await lookup.identity(thread.threadId);
+        if (identity) await lookup.requireThreadState().controller.reportAutoResume(identity.projectId, thread.harness, thread.threadId, turnId, resumeAt);
+      },
+      resume: async ({ harness, threadId }, turnId, onFailed) => {
+        const steers = await ports.run("threadActions", actions => actions.undeliveredUserSteers(threadId, turnId), "auto resume steers");
+        continuations.autoResume(harness, { threadId, turnId }, {
+          ...(steers.length ? { input: joinUserInputs(steers.map(steer => steer.input)) } : {}),
+          onStarted: async () => {
+            if (steers.length) await ports.run("threadActions", actions => actions.retireUserSteers(threadId, steers.map(steer => steer.itemId)), "auto resume steer retirement");
+          },
+          onFailed,
+        });
+      },
+      now: Date.now,
+      warn: message => console.warn(`[auto-resume] ${message.slice(0, 500)}`),
     });
     this.turnSettlement = new WorkbenchTurnSettlementController({
       providers: { get: key => providers().get(key) }, identities, transcripts: transcriptReader, transcript,

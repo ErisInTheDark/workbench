@@ -155,6 +155,7 @@ function createWorkbenchCoreFeature(
   const turns = new WorkbenchTurnRuntimeFeature({
     context, database, transcript, turnRecovery, identities: threadIdentity, lookup, settings, projectCatalog, run,
     providers: () => providers,
+    accountLimits: () => accountLimits,
     setSummaryFacts,
     readPendingApproval: threadId => interactions.readPendingApproval(threadId),
     shells: getProcessWorkbenchAgentMcpRequestRegistry(),
@@ -163,7 +164,7 @@ function createWorkbenchCoreFeature(
   });
   let stopShellObservation: (() => void) | null = null;
   const undeliveredMessagesOwner = {};
-  const { admission, autoCompact, compaction, contextRollover: threadContextRollover, continuations, turnLiveness, turnSettlement } = turns;
+  const { admission, autoCompact, autoResume, compaction, contextRollover: threadContextRollover, continuations, turnLiveness, turnSettlement } = turns;
   const { transcriptReader, transcriptReconciliation } = turns;
   const facts = new WorkbenchThreadFactsFeature({
     context, database, transcript, lookup, projectCatalog, settings, run, lease,
@@ -492,13 +493,15 @@ function createWorkbenchCoreFeature(
             logError("mcp-servers", `thread servers of a finished turn were not forgotten: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));
         }
         continuations.observe(harness, observed, lifecycle);
+        autoResume.observe(observed);
+        if (observed.accountChanged) autoResume.accountChanged(harness);
         return lifecycle;
       },
     },
   };
   return new WorkbenchCoreFeature({
     hasPendingWork: () => admission.hasPendingWork() || compaction.hasPendingWork()
-      || autoCompact.hasPendingWork() || threadContextRollover.hasPendingWork()
+      || autoCompact.hasPendingWork() || autoResume.hasPendingWork() || threadContextRollover.hasPendingWork()
       || launches.hasPendingWork() || stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
     captureReloadState: (): WorkbenchCoreReloadState => ({
       projectStartup: projectCatalog.captureReloadState(),
@@ -524,7 +527,11 @@ function createWorkbenchCoreFeature(
         }
       })().catch(error => logThreadStateWarning(
         `Undelivered agent mail reconciliation failed: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));
-      if (coldStart) void turnSettlement.startColdSweep();
+      const startAutoResume = () => autoResume.start().catch((error: unknown) => logThreadStateWarning(
+        `Auto resume could not read armed threads: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));
+      void startAutoResume();
+      // The sweep settles turns a previous daemon left running without passing through provider observation.
+      if (coldStart) void turnSettlement.startColdSweep().finally(startAutoResume);
       void compaction.retireStrandedBefore(generationStartedAt);
       void busyThreads.start();
       void mcpProjectServers.start();
@@ -567,6 +574,7 @@ function createWorkbenchCoreFeature(
       summaries.dispose();
       facts.disposeVis();
       continuations.dispose();
+      autoResume.dispose();
       await threadContextRollover.dispose();
       await autoCompact.dispose();
       await admission.dispose();

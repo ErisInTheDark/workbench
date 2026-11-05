@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchAccountLimitsFact: one provider's observed limits and read freshness.
  * - default WorkbenchAccountLimitsController: own one shared, demand-driven limits read per provider: on first demand, at most
- *   every 15s while that provider is active, and every 5 minutes otherwise.
+ *   every 15s while that provider is active, and every 5 minutes otherwise; `current` answers one caller from that same read.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
@@ -23,7 +23,7 @@ interface ProviderState {
   listeners: Set<() => void>;
   fact: WorkbenchAccountLimitsFact;
   lastReadAt: number | null;
-  reading: boolean;
+  reading: Promise<void> | null;
   /** Activity arrived during a read: the next read is due one active interval after this one. */
   activeSinceRead: boolean;
   timer: { cancel(): void; dueAt: number } | null;
@@ -74,6 +74,16 @@ export default class WorkbenchAccountLimitsController {
     };
   }
 
+  /** Limits read within the last active interval, or a new shared read; null when the provider cannot say right now. */
+  async current(harness: WorkbenchHarness) {
+    if (this.disposed) return null;
+    const state = this.state(harness);
+    const fresh = state.lastReadAt !== null && this.now() - state.lastReadAt < ACTIVE_READ_INTERVAL_MS;
+    if (!fresh && !state.reading) this.read(harness, state);
+    await state.reading;
+    return state.fact.phase === "current" ? state.fact.limits : null;
+  }
+
   /** A provider event: its turns may be spending tokens, so its limits are due within one active interval. */
   noteActivity(harness: WorkbenchHarness) {
     const state = this.providers.get(harness);
@@ -99,7 +109,7 @@ export default class WorkbenchAccountLimitsController {
     if (!state) {
       state = {
         listeners: new Set(), fact: { phase: "pending", failure: null, limits: null },
-        lastReadAt: null, reading: false, activeSinceRead: false, timer: null,
+        lastReadAt: null, reading: null, activeSinceRead: false, timer: null,
       };
       this.providers.set(harness, state);
     }
@@ -126,9 +136,8 @@ export default class WorkbenchAccountLimitsController {
       this.publish(state, { phase: "unavailable", failure: "This provider does not report account limits.", limits: null });
       return;
     }
-    state.reading = true;
     state.activeSinceRead = false;
-    void pending.then(limits => {
+    state.reading = pending.then(limits => {
       if (this.disposed) return;
       this.options.record(harness, limits);
       this.publish(state, { phase: "current", failure: null, limits });
@@ -140,7 +149,7 @@ export default class WorkbenchAccountLimitsController {
       this.publish(state, { phase: state.fact.limits ? "stale" : "failed", failure, limits: state.fact.limits });
     }).finally(() => {
       if (this.disposed) return;
-      state.reading = false;
+      state.reading = null;
       state.lastReadAt = this.now();
       if (!state.listeners.size) return;
       this.schedule(harness, state, state.lastReadAt

@@ -12,10 +12,12 @@ import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread
 import ThreadErrorCard from "./ThreadErrorCard";
 
 const turnId = WorkbenchTurnIdSchema.parse("turn");
+const onCancelAutoResume = () => {};
 
 test("a provider-failed thread renders its thread error as plain text", () => {
   const html = renderToStaticMarkup(createElement(ThreadErrorCard, {
     lifecycle: { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "provider failed <before> recovery" },
+    onCancelAutoResume,
   }));
 
   assert.match(html, /data-thread-error-card="true"/u);
@@ -29,6 +31,6 @@ test("any other lifecycle shows no thread error", () => {
     { kind: "needsAttention", reason: "interrupted", settled: false, turnId },
     { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId }, settled: false },
   ] satisfies (WorkbenchThreadLifecycle | null)[]) {
-    assert.equal(renderToStaticMarkup(createElement(ThreadErrorCard, { lifecycle })), "");
+    assert.equal(renderToStaticMarkup(createElement(ThreadErrorCard, { lifecycle, onCancelAutoResume })), "");
   }
 });

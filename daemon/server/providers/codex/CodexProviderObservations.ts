@@ -76,10 +76,14 @@ export function mapProviderLifecycleNotification(
     const turn = record(params.turn);
     const turnId = typeof turn?.id === "string" ? identities.knownTurn(TurnReferenceSchema.parse(turn.id)).turnId : null;
     const status = turn?.status;
-    const message = record(turn?.error)?.message;
+    const turnError = record(turn?.error);
+    const message = turnError?.message;
     const error = status === "failed" && typeof message === "string" && message.trim() ? message.trim() : null;
+    const usageLimited = status === "failed" && turnError?.codexErrorInfo === "usageLimitExceeded";
     return turnId && (status === "completed" || status === "interrupted" || status === "failed")
-      ? { event: { kind: "turnCompleted", status, turnId, ...(error ? { error } : {}) }, threadId } : null;
+      ? { event: {
+        kind: "turnCompleted", status, turnId, ...(error ? { error } : {}), ...(usageLimited ? { usageLimit: { resumeAt: null } } : {}),
+      }, threadId } : null;
   }
   if (notification.method === "questionnaire/requested") {
     const requestKey = typeof params.requestKey === "string" ? params.requestKey : null;

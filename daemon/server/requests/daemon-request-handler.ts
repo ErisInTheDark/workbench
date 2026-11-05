@@ -79,7 +79,7 @@ export interface WorkbenchDaemonRequestOwners {
   projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
   search: Pick<WorkbenchSearchController, "search">;
   stats: Pick<WorkbenchStatsController, "deleteFeedback" | "observeAccountLimits" | "refreshRateLimits" | "resolveFeedback" | "startImport">;
-  settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities" | "readThreadAutoCompact" | "updateThreadAutoCompact">;
+  settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities" | "readThreadAutoCompact" | "updateThreadAutoCompact" | "readThreadAutoResume" | "updateThreadAutoResume">;
   threadIdentity: { resolve: WorkbenchHarnessController["resolveThreadIdentity"] };
   questionnaireResponses: Pick<WorkbenchQuestionnaireResponseController, "respond">;
 }

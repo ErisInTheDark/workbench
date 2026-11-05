@@ -13,6 +13,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
+import { formatRateLimitResetTime } from "../../workbench/rate-limit-display";
 import {
   getNeedsAttentionThreadStatusTone,
   getWorkbenchThreadStatusClassName,
@@ -63,11 +64,14 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
   const stashed = !claimedPaths.length && stashedPaths.length > 0;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
   const wait = describeThreadWait(entry, facts);
-  const waiting = wait.waiting;
+  const resumeAt = lifecycle?.kind === "needsAttention" && lifecycle.reason === "providerFailed" ? lifecycle.resumeAt : undefined;
+  const waiting = wait.waiting || resumeAt !== undefined;
   const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;
   // A launching draft stands in for its working thread, so it already reads as one.
   const launching = isLaunchingDraftEntry(entry);
-  const status = waiting
+  const status = resumeAt !== undefined && !wait.waiting
+    ? `Resumes ${formatRateLimitResetTime(resumeAt)}`
+    : waiting
     ? wait.label
     : showProposedCommit
     ? "Proposed commit"

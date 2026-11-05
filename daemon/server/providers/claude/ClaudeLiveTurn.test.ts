@@ -83,7 +83,8 @@ function fixture(
       assert.equal(facts.projectId, projectId, "lifecycle facts must apply before thread state loads the project");
       log.push(`observe:${facts.lifecycle.event.kind}${
         facts.lifecycle.event.kind === "turnCompleted"
-          ? `:${facts.lifecycle.event.status}${facts.lifecycle.event.error ? `:${facts.lifecycle.event.error}` : ""}` : ""}`);
+          ? `:${facts.lifecycle.event.status}${facts.lifecycle.event.error ? `:${facts.lifecycle.event.error}` : ""}${
+            facts.lifecycle.event.usageLimit ? `:limit:${facts.lifecycle.event.usageLimit.resumeAt}` : ""}` : ""}`);
       if (facts.lifecycle.event.kind === "acceptedIntent") {
         log.push(`prompts:${queue.pushed.length}`);
         onAccepted?.(turn, log);
@@ -258,6 +259,23 @@ test("a failed result forwards its provider errors", async () => {
   push(result({ subtype: "error_during_execution", is_error: true, errors: ["Overloaded", "retry later"] }));
   await task;
   assert.ok(log.includes("observe:turnCompleted:failed:Overloaded\nretry later"), log.join(" | "));
+});
+
+test("a failure after a rejected rate limit reports the limit and its reset; a recovered limit does not", async () => {
+  const rejected = fixture();
+  const { task } = await rejected.turn.start("hi");
+  rejected.push({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1_800_000_000 } });
+  rejected.push(result({ subtype: "success", is_error: true, result: "You hit your limit" }));
+  await task;
+  assert.ok(rejected.log.includes("observe:turnCompleted:failed:You hit your limit:limit:1800000000000"), rejected.log.join(" | "));
+
+  const recovered = fixture();
+  const second = await recovered.turn.start("hi");
+  recovered.push({ type: "rate_limit_event", rate_limit_info: { status: "rejected" } });
+  recovered.push({ type: "rate_limit_event", rate_limit_info: { status: "allowed" } });
+  recovered.push(result({ subtype: "error_during_execution", is_error: true, errors: ["Overloaded"] }));
+  await second.task;
+  assert.ok(recovered.log.includes("observe:turnCompleted:failed:Overloaded"), recovered.log.join(" | "));
 });
 
 test("interruption settles exactly once as interrupted and retires undelivered steers", async () => {

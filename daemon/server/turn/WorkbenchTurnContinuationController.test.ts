@@ -102,6 +102,52 @@ test("refresh yields to a message admitted after the interruption, but reports a
   assert.match(stuck.logs[0]!, /did not stop/u);
 });
 
+test("auto resume starts only over a still-armed lifecycle on its own ended turn, never over a held question", async () => {
+  const armed: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "limit", resumeAt: 1 };
+  const interrupted: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "interrupted", settled: false, turnId };
+  const question: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "pendingInput", requestKey: "key", settled: false, turnId };
+  const disarmed: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "limit" };
+  for (const variant of [
+    { lifecycle: () => question }, { lifecycle: () => disarmed }, { lifecycle: () => working },
+    { lifecycle: () => armed, latest: () => ({ id: "newer-turn", status: "completed" }) },
+    { lifecycle: () => armed, live: () => true },
+  ]) {
+    const { owner, events, failures, idle } = fixture(variant);
+    let started = 0;
+    owner.autoResume("claude", { threadId, turnId }, { onStarted: async () => { started += 1; }, onFailed: () => assert.fail("not a failure") });
+    await idle();
+    assert.deepEqual(events, []);
+    assert.equal(started, 0);
+    assert.deepEqual(failures, []);
+  }
+  for (const lifecycle of [armed, interrupted]) {
+    const { owner, events, idle } = fixture({ lifecycle: () => lifecycle });
+    let started = 0;
+    owner.autoResume("claude", { threadId, turnId }, { onStarted: async () => { started += 1; }, onFailed: () => assert.fail("not a failure") });
+    await idle();
+    assert.deepEqual(events, ["resume"]);
+    assert.equal(started, 1);
+  }
+});
+
+test("auto resume sends undelivered steers instead of the bare resume, and a failure keeps the thread armed", async () => {
+  const armed: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "limit", resumeAt: 1 };
+  const steered = fixture({ lifecycle: () => armed });
+  steered.owner.autoResume("claude", { threadId, turnId }, {
+    input: [{ type: "text", text: "actually do this", text_elements: [] }],
+    onStarted: async () => undefined, onFailed: () => assert.fail("not a failure"),
+  });
+  await steered.idle();
+  assert.deepEqual(steered.events, ["other"]);
+
+  const failing = fixture({ lifecycle: () => armed, admit: async () => { throw new Error("compaction failed"); } });
+  let failed = 0;
+  failing.owner.autoResume("claude", { threadId, turnId }, { onStarted: async () => assert.fail("never started"), onFailed: () => { failed += 1; } });
+  await failing.idle();
+  assert.equal(failed, 1);
+  assert.deepEqual(failing.failures, [], "the lifecycle stays armed instead of reporting recovery failure");
+});
+
 test("a failed hidden admission reports recovery failure once and logs it", async () => {
   const { owner, failures, logs, idle } = fixture({ admit: async () => { throw new Error("admission rejected"); } });
   owner.observe("claude", completion(), unfinished);

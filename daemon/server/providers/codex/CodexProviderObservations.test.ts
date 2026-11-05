@@ -117,5 +117,11 @@ test("a failed turn completion forwards the provider error", () => {
     kind: "turnCompleted", status: "failed", turnId: "turn", error: "Selected model is at capacity.",
   });
   assert.deepEqual(complete({ status: "failed", error: null }), { kind: "turnCompleted", status: "failed", turnId: "turn" });
+  assert.deepEqual(complete({ status: "failed", error: { message: "Limit.", codexErrorInfo: "usageLimitExceeded" } }), {
+    kind: "turnCompleted", status: "failed", turnId: "turn", error: "Limit.", usageLimit: { resumeAt: null },
+  });
+  assert.deepEqual(complete({ status: "failed", error: { message: "Busy.", codexErrorInfo: "serverOverloaded" } }), {
+    kind: "turnCompleted", status: "failed", turnId: "turn", error: "Busy.",
+  });
   assert.deepEqual(complete({ status: "completed", error: { message: "ignored" } }), { kind: "turnCompleted", status: "completed", turnId: "turn" });
 });

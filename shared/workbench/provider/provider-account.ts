@@ -3,7 +3,7 @@
  * - WorkbenchRateLimitWindowSchema/WorkbenchRateLimitWindow: quota usage and reset time.
  * - WorkbenchRateLimitSnapshotSchema/WorkbenchRateLimitSnapshot: account display facts.
  * - WorkbenchAccountIdentitySchema/WorkbenchAccountIdentity: which signed-in account a limits read belongs to.
- * - WorkbenchAccountLimitsSchema/WorkbenchAccountLimits: default and named quota snapshots, with their account.
+ * - WorkbenchAccountLimitsSchema/WorkbenchAccountLimits: default and named quota snapshots, with their account, and whether they show a usage cap.
  */
 import { z } from "zod";
 
@@ -45,3 +45,14 @@ export const WorkbenchAccountLimitsSchema = z.object({
   identity: WorkbenchAccountIdentitySchema.nullish(),
 });
 export type WorkbenchAccountLimits = z.infer<typeof WorkbenchAccountLimitsSchema>;
+
+export const WorkbenchAccountLimits = {
+  /** Null below the cap. At it, when quota returns in ms: the latest exhausted window's reset, or null when none says. */
+  usageCap({ rateLimits }: Pick<WorkbenchAccountLimits, "rateLimits">): { resumeAt: number | null } | null {
+    const exhausted = [rateLimits.primary, rateLimits.secondary, rateLimits.tertiary]
+      .filter((window): window is WorkbenchRateLimitWindow => Boolean(window && window.usedPercent >= 100));
+    if (!exhausted.length && !rateLimits.rateLimitReachedType) return null;
+    const resets = exhausted.flatMap(window => window.resetsAt === null ? [] : [window.resetsAt * 1_000]);
+    return { resumeAt: resets.length ? Math.max(...resets) : null };
+  },
+};

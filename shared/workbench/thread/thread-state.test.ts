@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getWorkbenchThreadGitCommitHistory, isWorkbenchSidebarThreadCompletionAvailable, withWorkbenchThreadLifecycle, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema, WorkbenchThreadSidebarEntrySchema } from "./thread-state.ts";
+import { getWorkbenchAutoResumeCause, getWorkbenchThreadGitCommitHistory, isWorkbenchSidebarThreadCompletionAvailable, withWorkbenchThreadLifecycle, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema, WorkbenchThreadSidebarEntrySchema } from "./thread-state.ts";
 import { countDraftPromptTokens, createDraftTitle, createWorkbenchPinnedThreadSummaryEntry, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { projectSidebarRow } from "./thread-sidebar-row";
@@ -558,6 +558,19 @@ test("a failed turn holds its provider error as the thread error until the threa
   assert.deepEqual(failed, { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "Model at capacity." });
   assert.deepEqual(WorkbenchThreadLifecycleSchema.parse(failed), failed);
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "failed", turnId }).reason, "providerFailed");
+
+  // Auto resume's time belongs to the failed turn it was attributed for; any continuation drops it with the lifecycle.
+  const armed = reduceWorkbenchThreadLifecycle(failed, { kind: "autoResumeScheduled", turnId, resumeAt: 5_000 });
+  assert.deepEqual(armed, { ...failed, resumeAt: 5_000 });
+  assert.equal(getWorkbenchAutoResumeCause(armed), "usageLimit");
+  assert.equal(getWorkbenchAutoResumeCause(failed), null);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(armed, { kind: "autoResumeScheduled", turnId, resumeAt: null }), failed);
+  const otherTurn = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("other-turn");
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(armed, { kind: "autoResumeScheduled", turnId: otherTurn, resumeAt: 9_000 }), armed);
+  assert.equal(reduceWorkbenchThreadLifecycle(armed, { kind: "acceptedIntent", turnId: otherTurn }).kind, "working");
+  assert.equal(getWorkbenchAutoResumeCause(reduceWorkbenchThreadLifecycle(armed, { kind: "userStopped" })), null);
+  assert.equal(getWorkbenchAutoResumeCause({ kind: "needsAttention", reason: "interrupted", settled: false, turnId }), "interrupted");
+  assert.equal(getWorkbenchAutoResumeCause({ kind: "needsAttention", reason: "pendingInput", requestKey: "key", settled: false, turnId }), null);
   assert.equal(reduceWorkbenchThreadLifecycle(failed, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old"] }), failed);
   for (const event of [
     { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },

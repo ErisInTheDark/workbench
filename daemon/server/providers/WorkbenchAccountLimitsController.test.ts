@@ -49,6 +49,21 @@ function fixture() {
   };
 }
 
+test("a caller's current limits reuse a recent or running read, and say nothing when the read fails", async () => {
+  const f = fixture();
+  const [first, second] = await Promise.all([f.owner.current("claude"), f.owner.current("claude")]);
+  assert.equal(f.reads, 1, "concurrent callers share one read");
+  assert.equal(first?.rateLimits.primary?.usedPercent, 1);
+  assert.equal(second, first);
+  await f.owner.current("claude");
+  assert.equal(f.reads, 1, "a recent read answers without another");
+  await f.advance(15_000);
+  f.fail("nope");
+  assert.equal(await f.owner.current("claude"), null);
+  assert.equal(f.reads, 2);
+  assert.equal(f.timers.size, 0, "nothing keeps reading without an observer");
+});
+
 test("tabs share one read; activity rereads at most every 15s, idle every 5 minutes, and nothing reads unobserved", async () => {
   const f = fixture();
   let changes = 0;

@@ -4,13 +4,14 @@
  * - ClaudeLiveTurnSnapshot: plain turn state a reloading bridge hands to its replacement.
  * - ClaudeLiveTurnCollaborators: bridge-generation collaborators one live turn needs.
  * - ClaudeLiveTurnOptions: identity, launch usage, and collaborators for a new turn.
- * - default ClaudeLiveTurn: drive one Claude session from start to its single settlement, including steer (refused once the turn is ending), context delivery and context usage; it pauses and restores across bridge reloads, signals when billing usage changed, and reports settlement before observing it.
+ * - default ClaudeLiveTurn: drive one Claude session from start to its single settlement, including steer (refused once the turn is ending), context delivery and context usage; it pauses and restores across bridge reloads, signals when billing usage changed, reports a rejected rate limit with its failure, and reports settlement before observing it.
  */
 import type { SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
+import { normalizeWorkbenchTimestampMs } from "workbench-shared/workbench/thread/thread-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type {
   WorkbenchProviderObservation, WorkbenchTranscriptNotification,
@@ -116,6 +117,7 @@ export default class ClaudeLiveTurn {
   private ending = false;
   private settled = false;
   private failure: string | null = null;
+  private usageLimit: { resumeAt: number | null } | null = null;
   private closing: Promise<void> | null = null;
   private task: Promise<void> = Promise.resolve();
   /** True while run() reads the session; false before start, after a pause, and after settlement. */
@@ -284,6 +286,10 @@ export default class ClaudeLiveTurn {
           this.last = claudeTokenBreakdown(message.message.usage);
           await this.recordUsage();
         }
+      } else if (message.type === "rate_limit_event") {
+        const { status, resetsAt } = message.rate_limit_info;
+        this.usageLimit = status === "rejected"
+          ? { resumeAt: resetsAt === undefined ? null : normalizeWorkbenchTimestampMs(resetsAt) } : null;
       } else if (message.type === "user") {
         if ("isReplay" in message && message.isReplay) await this.deliver(message.uuid);
         else await transcript.recordNativeToolResults(this.threadId, message);
@@ -355,6 +361,7 @@ export default class ClaudeLiveTurn {
       projectId: this.options.projectId, turnStarted: null, displayLabel: null,
       lifecycle: { threadId: this.threadId, event: {
         kind: "turnCompleted", turnId: this.turnId, status, ...(status === "failed" && this.failure ? { error: this.failure } : {}),
+        ...(status === "failed" && this.usageLimit ? { usageLimit: this.usageLimit } : {}),
       } },
     });
     const turn = await this.options.readTurn();
