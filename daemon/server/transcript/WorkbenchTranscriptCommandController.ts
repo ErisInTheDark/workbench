@@ -47,7 +47,7 @@ export default class WorkbenchTranscriptCommandController {
         : new Response(renderTranscriptPage(query, page, cwd), { headers: { ...headers, "Content-Type": "text/markdown; charset=utf-8" } });
     } catch (error) {
       if (signal.aborted) throw signal.reason;
-      if (error instanceof HistoryQueryError) return new Response(`${error.message.slice(0, 2000)}\n`, { status: 400 });
+      if (HistoryQueryError.is(error)) return new Response(`${error.message.slice(0, 2000)}\n`, { status: 400 });
       const detail = (error instanceof Error ? error.message : "non-error failure")
         .replace(/(["'`])[\s\S]*?\1/gu, "[value]")
         .replace(/\b[A-Za-z]:[\\/][^\r\n]*/gu, "[path]")

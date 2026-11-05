@@ -13,7 +13,7 @@ import { foldSearchText, parseSearchQuery, searchBodyQuality, searchCorrections,
 import { WORKBENCH_TOOL_SERVERS } from "../stats/WorkbenchToolStatsRepository.ts";
 import { agentMessageOutputSql, registerTranscriptAgentMessageFunction } from "../transcript/transcript-agent-message-sql.ts";
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
-import { historyKindSql } from "./history-fields.ts";
+import { historyFileFilterSql, historyKindSql, sqlList } from "./history-fields.ts";
 import { expandTranscriptFields, previewTranscriptFields, transcriptItemFields } from "./history-item-fields.ts";
 import { isNarrativeUserMessage, narrativeRecords, retainedNarrativeRecord } from "./history-narrative.ts";
 import {
@@ -70,7 +70,6 @@ const itemJoins = `FROM thread_items i
   LEFT JOIN thread_item_assistant_messages a ON a.item_id = i.id
   LEFT JOIN thread_operation_process_sources p ON p.item_id = i.id
   LEFT JOIN thread_operation_tool_sources t ON t.item_id = i.id`;
-const sqlList = (values: readonly string[]) => values.map(value => `'${value}'`).join(", ");
 /** Calls that may hold filings; `narrativeRecords` decides from their arguments whether one does. */
 const proofFilingCall = `EXISTS (SELECT 1 FROM thread_operation_callable_tool_sources c WHERE c.item_id = i.id
   AND c.callable_kind = 'mcp' AND c.server_name IN (${sqlList(WORKBENCH_TOOL_SERVERS)})
@@ -189,7 +188,7 @@ export default class WorkbenchHistoryQueryRepository {
       else if (query.kinds.length) clauses.push(`(${historyKindSql}) IN (${query.kinds.map((value, index) => bind(`kind${index}`, value)).join(",")})`);
       if (query.phase) clauses.push(`a.phase = ${bind("phase", query.phase)}`);
       if (query.tool) clauses.push(`(t.tool_name = ${bind("tool", query.tool)} OR EXISTS (SELECT 1 FROM thread_item_tool_outputs o WHERE o.item_id = i.id AND o.name = @tool))`);
-      if (query.file) clauses.push(`EXISTS (SELECT 1 FROM thread_file_changes f WHERE f.item_id = i.id AND (instr(f.path, ${bind("file", query.file)}) > 0 OR instr(COALESCE(f.move_path, ''), @file) > 0))`);
+      if (query.file) clauses.push(`(${historyFileFilterSql(bind("file", query.file.replaceAll("\\", "/")))})`);
     }
     return clauses.join(" AND ");
   }

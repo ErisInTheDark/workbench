@@ -137,6 +137,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "Common: --project <id> --harness <provider-key> --archived <true|false> --settled <true|false>.",
       "Time: --since/--until <UTC-date|ISO-with-timezone|epoch-ms>, inclusive. Thread lists use activity time; items use creation time.",
       "Search/read/stats: --turn <id> --kind <kind>... --phase <commentary|finalAnswer|unknown> --tool <exact-name> --file <path-substring>.",
+      "--file matches paths changed by file edit tools, including failed attempts; shell commands are not covered.",
       `Kinds: ${HISTORY_ITEM_KINDS.join(", ")}.`,
       "Search/read/show: --opaque includes canonical opaque fields, never binary assets or provider-native evidence.",
       "Pages: --limit <1-50>, --cursor <returned-cursor>, --json.",

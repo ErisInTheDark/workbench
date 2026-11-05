@@ -255,6 +255,39 @@ test("tool filters, multipart outputs and opaque opt-in narrow search", () => {
   } finally { db.close(); }
 });
 
+test("file filter finds every edit route by either slash style, failed attempts included", () => {
+  const { db, read, addRoot } = fixture();
+  try {
+    const call = (id: number, source: { namespace: string } | { server: string }, tool: string, args: object, state = "completed") => {
+      addRoot(id, "wb-one", `call-${id}`, "operation");
+      db.prepare("INSERT INTO thread_item_operations(item_id, source_kind, source_revision) VALUES (?, 'tool', 0)").run(id);
+      db.prepare("INSERT INTO thread_operation_tool_sources(item_id, source_revision, tool_kind, state, tool_name) VALUES (?, 0, 'callable', ?, ?)").run(id, state, tool);
+      db.prepare(`INSERT INTO thread_operation_callable_tool_sources(item_id, source_revision, state, tool_name, callable_kind, namespace, server_name, arguments_json)
+        VALUES (?, 0, ?, ?, ?, ?, ?, ?)`).run(
+        id, state, tool, "server" in source ? "mcp" : "dynamic",
+        "namespace" in source ? source.namespace : null, "server" in source ? source.server : null, JSON.stringify(args),
+      );
+    };
+    const windowsPath = "C:\\git\\rust\\dxlint\\std\\ts\\restrictions.dx";
+    call(10, { namespace: "claude" }, "Edit", { file_path: windowsPath });
+    call(11, { namespace: "claude" }, "Write", { file_path: windowsPath }, "failed");
+    call(12, { namespace: "claude" }, "Read", { file_path: windowsPath });
+    call(13, { namespace: "opencode" }, "edit", { path: ".agents.local/std/ts/restrictions.dx" });
+    call(14, { namespace: "opencode" }, "patch", { patchText: "*** Begin Patch\n*** Update File: std/ts/restrictions.dx\n*** End Patch" });
+    call(15, { server: "wb" }, "rm", { paths: ["other.ts", "std/ts/restrictions.dx"] });
+    call(16, { namespace: "claude" }, "Edit", { file_path: "C:\\git\\other.dx" });
+    addRoot(17, "wb-one", "patch", "fileChange");
+    db.prepare("INSERT INTO thread_item_file_changes(item_id, state) VALUES (17, 'completed')").run();
+    db.prepare("INSERT INTO thread_file_changes(item_id, change_index, path, change_kind, diff) VALUES (17, 0, 'std\\ts\\restrictions.dx', 'update', '')").run();
+
+    const expected = [10, 11, 13, 14, 15, 17].map(itemPublicId);
+    for (const file of ["std/ts/restrictions.dx", "std\\ts\\restrictions.dx"]) {
+      const rows = read({ action: "read", query: null, threads: ["wb-one"], file }).rows;
+      assert.deepEqual(rows.map(row => row.id).sort(), expected, file);
+    }
+  } finally { db.close(); }
+});
+
 test("catalogues and stats preserve placement, coverage and exact turn selection", () => {
   const { db, read } = fixture();
   try {

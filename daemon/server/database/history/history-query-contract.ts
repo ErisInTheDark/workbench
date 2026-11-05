@@ -8,7 +8,7 @@
  * - HistoryCommandQuerySchema/HistoryCommandQuery: add explicit exact-turn provider recovery to CLI queries.
  * - HistoryField/HistoryRow/HistoryRecord/HistorySearchSummary/HistoryPage: bounded results shared by worker and front-ends.
  * - readHistoryAnchor: split a `ref[@offset]` anchor into its item id, derived-record suffix and character offset.
- * - HistoryQueryError: expected invalid query or stale-reference failure.
+ * - HistoryQueryError: expected invalid query or stale-reference failure, recognisable across reload generations.
  */
 import { z } from "zod";
 import { WORKBENCH_THREAD_RECALL_KINDS, type WorkbenchThreadRecallKind } from "workbench-shared/types";
@@ -165,4 +165,11 @@ export function readHistoryAnchor(value: string) {
   return { itemId: match[1]!, part: match[2] ?? null, offset: match[3] === undefined ? null : Number(match[3]) };
 }
 
-export class HistoryQueryError extends Error {}
+export class HistoryQueryError extends Error {
+  override readonly name = "HistoryQueryError";
+
+  /** By name: a scoped reload leaves other nodes holding a different copy of this class. */
+  static is(error: unknown): error is HistoryQueryError {
+    return error instanceof Error && error.name === "HistoryQueryError";
+  }
+}

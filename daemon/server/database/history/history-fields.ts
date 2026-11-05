@@ -4,7 +4,10 @@
  * - HISTORY_FIELD_TABLES: every table the registry reads, so index triggers cover exactly the indexed text.
  * - historyKindSql: map stored item discriminators, assistant phases and agent-message envelopes to history kinds.
  * - historyFieldsSql: join registered fields to a bounded candidate CTE, flagging narrative text.
+ * - sqlList: render constant strings as a SQL list.
+ * - historyFileFilterSql: match an item's file changes and file edit tool calls against a path substring.
  */
+import { WORKBENCH_TOOL_SERVERS } from "../stats/WorkbenchToolStatsRepository.ts";
 import { agentMessageInputSql, agentMessageOutputSql } from "../transcript/transcript-agent-message-sql.ts";
 
 interface HistoryFieldSource {
@@ -56,6 +59,27 @@ export const historyFields: readonly HistoryFieldSource[] = [
 ];
 
 export const HISTORY_FIELD_TABLES: readonly string[] = [...new Set(historyFields.map(source => source.table))];
+
+export const sqlList = (values: readonly string[]) => values.map(value => `'${value}'`).join(", ");
+
+const dynamicTool = (namespace: string) => `c.callable_kind = 'dynamic' AND c.namespace = '${namespace}'`;
+const fileEditTools = [
+  { source: dynamicTool("claude"), tools: ["Edit", "Write"], argument: "$.file_path" },
+  { source: dynamicTool("opencode"), tools: ["edit", "write"], argument: "$.path" },
+  { source: dynamicTool("opencode"), tools: ["patch"], argument: "$.patchText" },
+  { source: `c.callable_kind = 'mcp' AND c.server_name IN (${sqlList(WORKBENCH_TOOL_SERVERS)})`, tools: ["rm"], argument: "$.paths" },
+] as const;
+
+const hasPath = (column: string, file: string) => `instr(replace(${column}, '\\', '/'), ${file}) > 0`;
+
+/** Whether item `i` changes a path holding `file`, a bound forward-slash substring. Paths in tool arguments keep their provider's slashes. */
+export function historyFileFilterSql(file: string) {
+  return [
+    `EXISTS (SELECT 1 FROM thread_file_changes f WHERE f.item_id = i.id AND (${hasPath("f.path", file)} OR ${hasPath("COALESCE(f.move_path, '')", file)}))`,
+    ...fileEditTools.map(({ source, tools, argument }) => `EXISTS (SELECT 1 FROM thread_operation_callable_tool_sources c, json_each(c.arguments_json, '${argument}') a
+      WHERE c.item_id = i.id AND ${source} AND c.tool_name IN (${sqlList(tools)}) AND ${hasPath("a.value", file)})`),
+  ].join(" OR ");
+}
 
 /** Requires `registerTranscriptAgentMessageFunction` on the connection. */
 export const historyKindSql = `CASE i.type

@@ -212,7 +212,7 @@ class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
     });
     this.#suspension = {
       admission, closed, release,
-      retire: () => rejectAdmission(new WorkbenchDatabaseFailure("Suspended database admission was retired.")),
+      retire: () => rejectAdmission(new WorkbenchDatabaseFailure("Database request retired by a Workbench reload; retry it.")),
     };
     await closed;
   }

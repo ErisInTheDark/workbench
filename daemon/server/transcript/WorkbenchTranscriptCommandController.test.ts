@@ -54,6 +54,18 @@ test("invalid queries and stale cursors propagate as bounded failures, not empty
   assert.match(await response.text(), /stale cursor/u);
 });
 
+test("a query error from another reload generation keeps its message", async () => {
+  class OtherGenerationHistoryQueryError extends Error {
+    override readonly name = "HistoryQueryError";
+  }
+  const controller = new WorkbenchTranscriptCommandController({
+    materializeTurn: noMaterialize, projectRoot: "C:/workbench", read: async () => { throw new OtherGenerationHistoryQueryError("Unknown item"); },
+  });
+  const response = await controller.execute(input, new AbortController().signal);
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /Unknown item/u);
+});
+
 test("text rendering abbreviates matching caller directories without changing data or other paths", async () => {
   const fields = [
     { path: ["cwd"], value: "c:\\WORKBENCH\\" },
