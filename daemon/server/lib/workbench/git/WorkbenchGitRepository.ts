@@ -4,11 +4,13 @@
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitResolvedCommitRef/GitTreeFile/GitWorktreeMergeResult/GitWorktreeSnapshot: typed history, object, file, merge, snapshot and publication facts.
  * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
+ * - GIT_SYMLINK_MODE: a tree entry's mode for a symlink.
  * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`;
  * firstParentRange walks only from HEAD back to the amend target; currentHead and readCommitMessage read through the operation's object stream;
  * object writes, tree-to-tree path changes and writeTreeWithPathSources run in-process (GitObjectWriter/GitTreeObjects);
- * readCheckoutBytes materialises selected tree entries through Git's checkout filters in one disposable temporary index,
- * and checkoutInto writes them straight into a directory the same way;
+ * readCheckoutBytes reads selected tree entries through Git's checkout filters in one process (filtered-blob-batch),
+ * and checkoutInto writes them into a directory through a temporary index, both under the tree's own attributes;
+ * listWorktreeChangedPaths reuses the real index's stat cache so clean files are not re-hashed;
  * readCommitRef finds a commit's ref through GitCommitRefLocator, which every ref writer here keeps current;
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
  * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
@@ -35,6 +37,7 @@ import GitObjectReadSession from "./GitObjectReadSession";
 import GitObjectWriter from "./GitObjectWriter";
 import { gitProcesses, GitProcessError } from "./GitProcessHost";
 import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
+import { FILTERED_BLOB_BATCH_ARGS, parseFilteredBlobBatch, planFilteredBlobBatch } from "./filtered-blob-batch";
 import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
 import { BoundaryWalkLimitError, listBoundaryFiles, nestedRepositoryScopes } from "./machine-git-boundaries";
 import { isMachineGitWorktree, machineGitEnvironment, readMachineKnownPaths } from "./machine-git-worktrees";
@@ -52,6 +55,9 @@ const realIndexPaths = new Map<string, Promise<string>>();
 const repositoryRoots = new Map<string, string>();
 // Windows command lines cap near 32k characters; larger pathspec sets are batched or listed unscoped and filtered.
 const PATHSPEC_ARGUMENT_BUDGET = 16_000;
+/** Base64 of more bytes than this would not fit the JSON string a held read answers with anyway. */
+const CHECKOUT_BYTES_MAX_BUFFER = 512 * 1024 * 1024;
+export const GIT_SYMLINK_MODE = "120000";
 /** Git processes one diff read keeps in flight; each spawn blocks the event loop briefly, so fan-out stays small. */
 const GIT_DIFF_CONCURRENCY = 4;
 /** More ignored files than this under edit scopes means dependency or build trees, which no edit means to rewrite. */
@@ -310,9 +316,18 @@ export default class WorkbenchGitRepository {
     return (await this.runWithInputResult(args, input, env, [0], signal)).stdout;
   }
 
-  async runBufferWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
+  async runBufferWithInput(
+    args: string[],
+    input: string,
+    env: NodeJS.ProcessEnv = process.env,
+    options: { maxBuffer?: number; signal?: AbortSignal | undefined } = {},
+  ) {
     try {
-      return (await gitProcesses.run({ args, cwd: this.root, env: processEnvironment(this.root, env), input })).stdout;
+      return (await gitProcesses.run({
+        args, cwd: this.root, env: processEnvironment(this.root, env), input,
+        ...options.maxBuffer ? { maxBuffer: options.maxBuffer } : {},
+        ...options.signal ? { signal: options.signal } : {},
+      })).stdout;
     } catch (error) {
       if (!(error instanceof GitProcessError) || typeof error.code !== "number") throw error;
       throw new Error(error.stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${error.code}.`);
@@ -615,10 +630,10 @@ export default class WorkbenchGitRepository {
     GitObjectReadSession.forget(WorkbenchGitRepository.refMemoPrefix(root));
   }
 
-  async withTemporaryIndex<T>(callback: (indexPath: string, directory: string) => Promise<T>) {
+  async withTemporaryIndex<T>(callback: (indexPath: string) => Promise<T>) {
     const temporaryDirectory = await WorkbenchTemporaryDirectory.create("workbench-git-index-");
     try {
-      return await callback(path.join(temporaryDirectory.path, "index"), temporaryDirectory.path);
+      return await callback(path.join(temporaryDirectory.path, "index"));
     } finally {
       await temporaryDirectory.dispose();
     }
@@ -635,9 +650,10 @@ export default class WorkbenchGitRepository {
   }
 
   private async checkoutWithIndex(indexPath: string, treeish: string, directory: string, selected: readonly string[], signal?: AbortSignal) {
-    const env = { ...process.env, GIT_INDEX_FILE: indexPath };
+    const base = await this.contentBase(treeish);
+    const env = { ...process.env, GIT_ATTR_SOURCE: base, GIT_INDEX_FILE: indexPath };
     await fs.mkdir(directory, { recursive: true });
-    await this.run(["read-tree", await this.contentBase(treeish)], env, signal);
+    await this.run(["read-tree", base], env, signal);
     await this.runWithInput([
       "checkout-index",
       "--force",
@@ -647,21 +663,29 @@ export default class WorkbenchGitRepository {
     ], `${selected.join("\0")}\0`, env, signal);
   }
 
-  /** Materialise selected tree files exactly as Git would check them out, without touching the real index or worktree. */
-  async readCheckoutBytes(treeish: string, paths: readonly string[]) {
+  /**
+   * Selected tree files' bytes as a checkout writes them, filtered under the tree's own attributes through one process:
+   * regular files filtered, symlinks as their raw target. Paths holding no file bytes, such as submodules, are omitted.
+   */
+  async readCheckoutBytes(treeish: string, paths: readonly string[], signal?: AbortSignal) {
     if (!paths.length) return new Map<string, Buffer>();
-    const selected = this.normalizePaths([...paths]);
-    return await this.withTemporaryIndex(async (indexPath, directory) => {
-      const checkoutDirectory = path.join(directory, "checkout");
-      await this.checkoutWithIndex(indexPath, treeish, checkoutDirectory, selected);
-      return new Map(await Promise.all(selected.map(async (relative) => {
-        const file = path.join(checkoutDirectory, relative);
-        const stat = await fs.lstat(file);
-        const contents = stat.isSymbolicLink()
-          ? Buffer.from(await fs.readlink(file, { encoding: "buffer" }))
-          : await fs.readFile(file);
-        return [relative, contents] as const;
-      })));
+    return await GitObjectReadSession.run(async () => {
+      const tree = await this.resolveTree(treeish);
+      const entries = [...(await this.trees.entriesAt(tree, this.normalizePaths([...paths])))];
+      const links = entries.flatMap(([relative, entry]) => entry?.mode === GIT_SYMLINK_MODE ? [relative] : []);
+      const regular = entries.flatMap(([relative, entry]) => entry?.mode.startsWith("100") ? [{ id: entry.id, path: relative }] : []);
+      const batch = planFilteredBlobBatch(regular);
+      const filtered = regular.length
+        ? parseFilteredBlobBatch(await this.runBufferWithInput(FILTERED_BLOB_BATCH_ARGS, batch.input, { ...process.env, GIT_ATTR_SOURCE: tree }, {
+          maxBuffer: CHECKOUT_BYTES_MAX_BUFFER, signal,
+        }), batch)
+        : new Map<string, Buffer>();
+      const targets = await this.readTreeFiles(tree, links);
+      for (const relative of links) {
+        const target = targets.get(relative);
+        if (target) filtered.set(relative, target.bytes);
+      }
+      return filtered;
     });
   }
 
@@ -757,7 +781,7 @@ export default class WorkbenchGitRepository {
    * are removed, since machine Git never tracks links.
    */
   private async stageBoundaryFiles(paths: readonly string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) {
-    const present = (await listBoundaryFiles(this.root, paths)).filter(file => file.mode !== "120000");
+    const present = (await listBoundaryFiles(this.root, paths)).filter(file => file.mode !== GIT_SYMLINK_MODE);
     const found = new Set(present.map(file => file.path));
     const ids = present.length
       ? (await this.runWithInput(["hash-object", "-w", "--stdin-paths"], `${present.map(file => file.path).join("\n")}\n`, env, signal))
@@ -815,7 +839,7 @@ export default class WorkbenchGitRepository {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       const base = await this.contentBase(baseTreeish);
-      await this.run(["read-tree", base], env, signal);
+      await this.seedTemporaryIndex(indexPath, base, env, signal);
       const [outputs, boundary] = await Promise.all([
         Promise.all(this.scopeBatches(walked).flatMap((pathspecs) => [
           this.run(["diff", "--name-only", "-z", "--no-renames", ...pathspecs.length ? pathspecs : ["--"]], env, signal),

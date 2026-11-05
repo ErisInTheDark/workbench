@@ -473,3 +473,15 @@ test("held paths cover other threads' whole claims at the view's bytes, before a
   );
   assert.equal((await controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: false })).contents, undefined);
 });
+
+test("uncommitted attributes change nothing a held read returns", async () => {
+  const { cwd, git } = branch("stacked");
+  const read = async () => (await controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: true })).contents;
+  const expected = Buffer.from(await git("show", "HEAD:two.txt")).toString("base64");
+  await fs.writeFile(path.join(cwd, ".gitattributes"), "two.txt text eol=crlf\n");
+  try {
+    assert.equal((await read())?.["two.txt"], expected);
+  } finally {
+    await fs.rm(path.join(cwd, ".gitattributes"));
+  }
+});

@@ -21,7 +21,7 @@ import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } fro
 import GitArcStackController from "./GitArcStackController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
-import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import WorkbenchGitRepository, { GIT_SYMLINK_MODE } from "./WorkbenchGitRepository";
 import { passthroughGitArcThreadIdentityResolver, type GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
 export interface GitArcClaimViewInput {
@@ -53,7 +53,6 @@ const ManifestSchema = z.object({
   files: z.record(z.string(), z.object({ blob: z.string(), mtimeMs: z.number(), size: z.number() })),
 });
 type MirroredStat = z.infer<typeof ManifestSchema>["files"][string];
-const SYMLINK_MODE = "120000";
 
 /** One mirror at a time per directory; parallel builds of one owner must not interleave writes. */
 const mirrorTails = new Map<string, Promise<void>>();
@@ -201,8 +200,7 @@ export default class GitArcClaimViewController {
   private async readContents(repository: WorkbenchGitRepository, tree: string, paths: readonly string[], signal?: AbortSignal) {
     if (!paths.length) return {};
     signal?.throwIfAborted();
-    const present = new Set(await repository.listTreePaths(tree, [...paths]));
-    const bytes = await repository.readCheckoutBytes(tree, paths.filter(relative => present.has(relative)));
+    const bytes = await repository.readCheckoutBytes(tree, paths, signal);
     return Object.fromEntries(paths.map(relative => [relative, bytes.get(relative)?.toString("base64") ?? null]));
   }
 
@@ -342,13 +340,13 @@ export default class GitArcClaimViewController {
       recorded.set(relative, { blob: wanted.get(relative)!.blob, mtimeMs: written.mtimeMs, size: written.size });
     };
     // Links mirror as plain files holding their target, so a mirror never points outside itself.
-    const links = outdated.filter(relative => wanted.get(relative)!.mode === SYMLINK_MODE);
-    const files = outdated.filter(relative => wanted.get(relative)!.mode !== SYMLINK_MODE);
+    const links = outdated.filter(relative => wanted.get(relative)!.mode === GIT_SYMLINK_MODE);
+    const files = outdated.filter(relative => wanted.get(relative)!.mode !== GIT_SYMLINK_MODE);
     try {
       // Git writes regular files straight into the mirror; a partial write is re-adopted by content next time.
       await repository.checkoutInto(tree, directory, files, signal);
       await inBatches(files, record);
-      const byPath = await repository.readCheckoutBytes(tree, links);
+      const byPath = await repository.readCheckoutBytes(tree, links, signal);
       for (const relative of links) {
         signal?.throwIfAborted();
         const data = byPath.get(relative);

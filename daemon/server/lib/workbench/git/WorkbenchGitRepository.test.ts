@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests cover atomic index/ref publication, object/ref-format compatibility, object framing, combined file changes, direct worktree dirt, large path/ref selections, and machine worktrees never walking untracked machine files while still seeing files inside nested repositories.
+ * No production exports. Tests cover atomic index/ref publication, object/ref-format compatibility, object framing, combined file changes, direct worktree dirt, large path/ref selections, machine worktrees never walking untracked machine files while still seeing files inside nested repositories, change listing reusing the real index's stat cache, and checkout bytes following the tree's own attributes.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -60,6 +60,95 @@ async function initialiseRepository(
   await git(root, ["commit", "--quiet", "-m", "base"]);
   return root;
 }
+
+test("listing worktree changes hashes only files whose stat differs from the real index, and still sees every change", async context => {
+  const root = await initialiseRepository(context, "sha1", "files");
+  if (!root) return;
+  const hashed = path.join(path.dirname(root), "hashed.log");
+  await git(root, ["config", "filter.spy.clean", `echo %f >> "${hashed.replaceAll("\\", "/")}"; cat`]);
+  const write = async (name: string, content: string) => await fs.writeFile(path.join(root, name), content, "utf8");
+  await write(".gitattributes", "*.spy filter=spy\n");
+  for (const name of ["clean.spy", "edited.spy", "staged.spy", "older.spy"]) await write(name, "base\n");
+  await git(root, ["add", "-A"]);
+  await git(root, ["commit", "--quiet", "-m", "older"]);
+  const older = (await git(root, ["rev-parse", "HEAD"])).trim();
+  await write("older.spy", "next\n");
+  await git(root, ["add", "-A"]);
+  await git(root, ["commit", "--quiet", "-m", "head"]);
+  const head = (await git(root, ["rev-parse", "HEAD"])).trim();
+
+  await write("staged.spy", "edit\n");
+  // Files older than the index write are not racily clean, so the stat cache is trusted deterministically.
+  const past = new Date(Date.now() - 3_600_000);
+  for (const name of ["clean.spy", "edited.spy", "staged.spy", "older.spy"]) await fs.utimes(path.join(root, name), past, past);
+  await git(root, ["add", "-A"]);
+  await git(root, ["update-index", "--really-refresh"]);
+  await write("edited.spy", "edit\n");
+  await fs.rm(hashed, { force: true });
+
+  const repository = await WorkbenchGitRepository.open(root);
+  assert.deepEqual(await repository.listWorktreeChangedPaths(head), ["edited.spy", "staged.spy"]);
+  const log = await fs.readFile(hashed, "utf8").catch(() => "");
+  assert.deepEqual([...new Set(log.split(/\r?\n/u).filter(Boolean))].sort(), ["edited.spy", "staged.spy"]);
+  assert.deepEqual(await repository.listWorktreeChangedPaths(older), ["edited.spy", "older.spy", "staged.spy"]);
+});
+
+test("checkout bytes match a real checkout of the tree, whose own attributes outrank the worktree's", async context => {
+  const root = await initialiseRepository(context, "sha1", "files");
+  if (!root) return;
+  await git(root, ["config", "core.autocrlf", "true"]);
+  await git(root, ["config", "filter.up.smudge", "tr a-z A-Z"]);
+  await git(root, ["config", "filter.up.clean", "tr A-Z a-z"]);
+  const attributes = "*.bin binary\n*.lf text eol=lf\n*.crlf text eol=crlf\n*.up filter=up\n*.id ident\n*.dirty text eol=lf\n";
+  const files = new Map<string, string | Buffer>([
+    [".gitattributes", attributes],
+    ["sub/.gitattributes", "*.nested text eol=crlf\n"],
+    ["plain.txt", "one\ntwo\n"],
+    ["a.lf", "one\ntwo\n"],
+    ["a.crlf", "one\ntwo\n"],
+    ["a.up", "shout\n"],
+    ["a.id", "$Id$\n"],
+    ["a.dirty", "one\ntwo\n"],
+    ["sub/a.nested", "one\ntwo\n"],
+    ["with space.txt", "space\n"],
+    ["empty.txt", ""],
+    ["a.bin", Buffer.from([0, 10, 13, 10, 255, 0])],
+  ]);
+  await fs.mkdir(path.join(root, "sub"));
+  for (const [name, content] of files) await fs.writeFile(path.join(root, name), content);
+  await git(root, ["add", "-A"]);
+  await git(root, ["commit", "--quiet", "-m", "attributes"]);
+  const tree = (await git(root, ["rev-parse", "HEAD^{tree}"])).trim();
+  await fs.writeFile(path.join(root, ".gitattributes"), attributes.replace("*.dirty text eol=lf", "*.dirty text eol=crlf"));
+
+  const repository = await WorkbenchGitRepository.open(root);
+  const paths = [...files.keys()];
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-git-checkout-bytes-");
+  context.after(async () => await temporary.dispose());
+  await repository.checkoutInto(tree, temporary.path, paths);
+  const bytes = await repository.readCheckoutBytes(tree, paths);
+  for (const name of paths) {
+    assert.deepEqual(bytes.get(name), await fs.readFile(path.join(temporary.path, name)), `${name} differs from a checkout`);
+  }
+  assert.equal(bytes.get("a.dirty")!.toString(), "one\ntwo\n", "another thread's uncommitted attributes change nothing");
+});
+
+test("checkout bytes keep symlink targets unfiltered and omit what holds no file bytes", async context => {
+  const root = await initialiseRepository(context, "sha1", "files");
+  if (!root) return;
+  await git(root, ["config", "core.autocrlf", "true"]);
+  const repository = await WorkbenchGitRepository.open(root);
+  const target = "target\nwith-newline";
+  const blob = await repository.writeBlob(target);
+  await repository.runWithInput(
+    ["update-index", "-z", "--index-info"],
+    [`120000 ${blob}\tlink`, `160000 ${"1".repeat(40)}\tsubmodule`, ""].join("\0"),
+  );
+  const tree = (await git(root, ["write-tree"])).trim();
+  const bytes = await repository.readCheckoutBytes(tree, ["link", "submodule", "absent.txt"]);
+  assert.equal(bytes.get("link")?.toString(), target);
+  assert.deepEqual([...bytes.keys()], ["link"]);
+});
 
 test("Git arc ref publication supports admitted object formats and ref backends", async context => {
   for (const format of repositoryFormats) await context.test(`${format.object} with ${format.refs}`, async context => {
