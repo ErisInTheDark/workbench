@@ -200,8 +200,11 @@ export default class WorkbenchThreadActionController {
       if (response.error) throw new Error(response.error.message);
       return { ok: true };
     },
-    "thread/compact": async input => {
+    "thread/compact": async (input, connectionId) => {
       const target = await this.target(input.threadId);
+      const entry = await this.owners.state.getCanonicalThreadEntry(target.identity.projectId, target.identity.threadId);
+      const requestKey = entry?.entryKind === "thread" ? entry.pendingQuestionnaire?.requestKey : undefined;
+      if (requestKey) await this.holdQuestionnaire(target, requestKey, connectionId ?? "");
       await this.owners.compaction.compact(target.identity.threadId, target.provider);
       return { ok: true };
     },
@@ -413,7 +416,7 @@ export default class WorkbenchThreadActionController {
     });
   }
 
-  /** Interrupt the questionnaire's turn, keeping the questionnaire waiting; the app snoozes the thread itself. */
+  /** Interrupt the questionnaire's turn, keeping the questionnaire waiting, for a snooze or a compaction. */
   private async holdQuestionnaire(target: ActionTarget, requestKey: string, connectionId: string) {
     await this.mutateState(connectionId, "held", {
       method: "workbench/thread-state/questionnaire/hold", ...stateTarget(target), requestKey,

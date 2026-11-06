@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadContextStatus: render context-window usage and the compact action, pending while any compaction runs and blocked only by live turns, beside composer quota stats;
+ * - default ThreadContextStatus: render context-window usage and the compact action, pending while any compaction runs and blocked only by live turns with no holdable questionnaire, beside composer quota stats;
  *   the compact action shows the composer's held compact-first send filling up.
  */
 "use client";
@@ -42,19 +42,20 @@ function formatContextStatusTitle ({
 }
 
 export default function ThreadContextStatus ({
+  holdableQuestionnaire = false,
   lifecycle,
   launching = false,
   onCompactThread,
   sendHolding = false,
-  snoozed = false,
   thread,
 }: {
+  /** Compacting holds this sidebar thread's waiting questionnaire first, so its live turn does not block. */
+  holdableQuestionnaire?: boolean;
   lifecycle?: WorkbenchThreadLifecycle;
   launching?: boolean;
   onCompactThread: () => Promise<void>;
   /** The composer's Enter is held to confirm a send that compacts first. */
   sendHolding?: boolean;
-  snoozed?: boolean;
   thread: ThreadHead;
 }) {
   const [isRequestingCompaction, setIsRequestingCompaction] = useState(false);
@@ -79,11 +80,11 @@ export default function ThreadContextStatus ({
   const inactiveByWorkbenchState = lifecycle?.kind === "stopped"
     || (lifecycle?.kind === "needsAttention"
       && (lifecycle.reason === "noActiveTurn" || lifecycle.reason === "interrupted" || lifecycle.reason === "providerFailed"
-        || lifecycle.reason === "agentBlocked"
-        || (snoozed && lifecycle.reason === "pendingInput")));
-  // A held questionnaire keeps the thread waiting on input after its turn ended; only a live turn blocks compaction.
+        || lifecycle.reason === "agentBlocked"));
+  // A held questionnaire keeps the thread waiting on input after its turn ended, so its turn cannot block compaction.
   const heldQuestionnaire = isThreadStatusWaitingOnUserInput(thread.status) && thread.turnLive === false;
-  const active = launching || isThreadStatusActive(thread.status) && !inactiveByWorkbenchState && !heldQuestionnaire;
+  const active = launching
+    || isThreadStatusActive(thread.status) && !inactiveByWorkbenchState && !heldQuestionnaire && !holdableQuestionnaire;
   const compactDisabled = isCompacting || active;
   const compactTitle = active
     ? "Compact is unavailable while the thread is active"

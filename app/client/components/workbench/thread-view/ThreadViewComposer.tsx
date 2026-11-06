@@ -93,7 +93,7 @@ export default function ThreadViewComposer ({
     if (holding) revealEnd();
   }, [revealEnd]);
   const rateLimits = active.rateLimits;
-  const activeThreadSnoozed = activeSidebarEntry?.entryKind === "thread" && activeSidebarEntry.metadata.snoozed;
+  const holdableQuestionnaire = activeSidebarEntry?.entryKind === "thread" && Boolean(activeSidebarEntry.pendingQuestionnaire);
   const { projection } = readActiveTranscript(activeThread, turns.transcript);
   const loadedTurns = activeThread?.isDraft || projection ? turns.turns : EMPTY_TURNS;
   const isDraftThreadView = Boolean(activeThread?.isDraft);
@@ -230,11 +230,11 @@ export default function ThreadViewComposer ({
             rateLimits={rateLimits}
             trailingContent={(
               <ThreadContextStatus
+                holdableQuestionnaire={holdableQuestionnaire}
                 launching={isLaunchingDraft}
                 lifecycle={activeSidebarEntry?.lifecycle}
                 onCompactThread={handleCompactThread}
                 sendHolding={isCompactSendHolding}
-                snoozed={activeThreadSnoozed}
                 thread={activeThread}
               />
             )}
@@ -254,7 +254,7 @@ export default function ThreadViewComposer ({
           harness={harness}
           leadingContent={draftLeadingContent}
           rateLimits={rateLimits}
-          trailingContent={<ThreadContextStatus lifecycle={activeSidebarEntry?.lifecycle} onCompactThread={handleCompactThread} sendHolding={isCompactSendHolding} snoozed={activeThreadSnoozed} thread={activeThread} />}
+          trailingContent={<ThreadContextStatus holdableQuestionnaire={holdableQuestionnaire} lifecycle={activeSidebarEntry?.lifecycle} onCompactThread={handleCompactThread} sendHolding={isCompactSendHolding} thread={activeThread} />}
         />
       ) : null}
     </ThreadComposer>

@@ -1,4 +1,4 @@
-/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement, parent-agent stop questionnaire dismissal, undelivered steer resend/dismiss, user shell stops and agent-message redelivery. */
+/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement, parent-agent stop questionnaire dismissal, questionnaire hold before compaction, undelivered steer resend/dismiss, user shell stops and agent-message redelivery. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchThreadActionController, { type WorkbenchThreadActionOwners } from "./WorkbenchThreadActionController";
@@ -397,6 +397,42 @@ test("interrupt holds the questionnaire it names without stopping the thread", a
   await f.controller.handle("thread/interrupt", { threadId: "wb-thread", requestKey: "held-question" });
   assert.deepEqual(f.stops, []);
   assert.deepEqual(f.mutations.map(mutation => "method" in mutation ? mutation.method : null), ["workbench/thread-state/questionnaire/hold"]);
+});
+
+function compactFixture(entry: object | null) {
+  const f = fixture();
+  f.owners.state.getCanonicalThreadEntry = async () => entry as never;
+  f.owners.compaction.compact = (async () => { f.stopOrder.push("compact"); }) as never;
+  return f;
+}
+
+const threadWaitingOnQuestion = { entryKind: "thread", pendingQuestionnaire: { requestKey: "live-question" } };
+
+test("compact holds a sidebar thread's waiting questionnaire before compacting", async () => {
+  const f = compactFixture(threadWaitingOnQuestion);
+  await f.controller.handle("thread/compact", { threadId: "wb-thread" });
+  assert.deepEqual(f.stopOrder, ["mutation", "compact"]);
+  assert.ok("requestKey" in f.mutations[0]!);
+  assert.equal(f.mutations[0].requestKey, "live-question");
+});
+
+test("compact never runs when the questionnaire changed before it could be held", async () => {
+  const f = compactFixture(threadWaitingOnQuestion);
+  f.owners.state.handleRequest = async () => ({ result: { accepted: false, revision: 1 } });
+  await assert.rejects(f.controller.handle("thread/compact", { threadId: "wb-thread" }));
+  assert.deepEqual(f.stopOrder, []);
+});
+
+test("compact holds nothing without a waiting questionnaire or for a subagent's", async () => {
+  for (const entry of [
+    null,
+    { entryKind: "thread", pendingQuestionnaire: null },
+    { entryKind: "subagent", pendingQuestionnaire: { requestKey: "child-question" } },
+  ]) {
+    const f = compactFixture(entry);
+    await f.controller.handle("thread/compact", { threadId: "wb-thread" });
+    assert.deepEqual(f.stopOrder, ["compact"]);
+  }
 });
 
 function agentStopFixture(turnStatus: "inProgress" | "interrupted") {

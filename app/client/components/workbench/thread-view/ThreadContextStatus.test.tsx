@@ -36,11 +36,11 @@ const thread: ThreadPayload = {
   updatedAt: 1,
 };
 
-function render(lifecycle?: WorkbenchThreadLifecycle, snoozed = false, currentThread: ThreadHead = thread) {
+function render(lifecycle?: WorkbenchThreadLifecycle, holdableQuestionnaire = false, currentThread: ThreadHead = thread) {
   return renderToStaticMarkup(createElement(ThreadContextStatus, {
+    holdableQuestionnaire,
     lifecycle,
     onCompactThread: async () => {},
-    snoozed,
     thread: currentThread,
   }));
 }
@@ -123,7 +123,7 @@ test("interrupted Workbench state overrides stale active provider status for con
     kind: "working",
     reason: "acceptedIntent",
     settled: false,
-  }, true);
+  });
   assert.match(working, /disabled=""/u);
   assert.match(working, /aria-label="Compact is unavailable while the thread is active"/u);
 
@@ -133,13 +133,13 @@ test("interrupted Workbench state overrides stale active provider status for con
     requestKey: "questionnaire",
     settled: false,
   };
-  const snoozed = render(pendingInput, true);
-  assert.doesNotMatch(snoozed, /disabled=""/u);
-  assert.match(snoozed, /aria-label="Compact thread context"/u);
-
   const waiting = { ...thread, status: "active:waitingOnUserInput" };
-  const live = render(pendingInput, false, { ...waiting, turnLive: true });
-  assert.match(live, /disabled=""/u);
+  const liveQuestion = render(pendingInput, true, { ...waiting, turnLive: true });
+  assert.doesNotMatch(liveQuestion, /disabled=""/u, "a live questionnaire is held, then compacted");
+  assert.match(liveQuestion, /aria-label="Compact thread context"/u);
+
+  const liveApproval = render(pendingInput, false, { ...waiting, turnLive: true });
+  assert.match(liveApproval, /disabled=""/u);
 
   const held = render(pendingInput, false, { ...waiting, turnLive: false });
   assert.doesNotMatch(held, /disabled=""/u, "a held questionnaire on an ended turn can compact");
