@@ -19,6 +19,7 @@
     "test:lifecycle": "node --disable-warning=ExperimentalWarning --import tsx test/run-lifecycle-test.mjs",
     "test:install": "node --disable-warning=ExperimentalWarning --import tsx test/run-install-test.mjs",
     "test:daemons": "node --disable-warning=ExperimentalWarning --import tsx test/run-daemons-test.mjs",
+    "test:claude-account": "node --disable-warning=ExperimentalWarning --import tsx test/run-claude-account-test.mjs",
     "sandbox:install": "node --disable-warning=ExperimentalWarning --import tsx test/install/open-install-sandbox.ts",
     "typecheck": "node --disable-warning=ExperimentalWarning --import tsx scripts/typecheck.mjs",
     "dev": "node --env-file-if-exists=./daemon/.env.local ./daemon/host/launch-foreground.mjs",

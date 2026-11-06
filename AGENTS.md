@@ -64,6 +64,7 @@ note: the following two scenario tests take a LONG time, and should be used for 
 `pnpm test:thread --<provider>=<paid|fake> [...--<provider>=<paid|fake>]` (eg `pnpm test:thread --codex=fake --opencode=paid`) runs clones of the full app, testing with paid or emulated provider turns, only use paid when the user asks for it!
 `pnpm test:install` runs the real wb installer in a sandboxed home/VP_HOME with pretend host actions; use when changing `package/` installer or setup code
 `pnpm test:daemons` runs two isolated daemons behind one app with fake model turns, testing cross-daemon agent networking end to end; use when changing relays, network grants or cross-daemon subagents
+`pnpm test:claude-account` runs the pinned Claude with your real login and a locally stubbed model, proving the account email stays out of prompts while models and usage survive; MUST run whenever the Claude provider or its SDK pin changes
 
 also available:
 `cargo test --manifest-path ..\tray\Cargo.toml`

@@ -47,16 +47,20 @@ test("live provider tests admit only explicit modes and the exact scenario", asy
   }
 });
 
-test("the installer scenario takes no provider modes, and provider journeys still require them", async () => {
+test("modeless scenarios take no provider modes, and provider journeys still require them", async () => {
   const install = "test/install/InstallSandbox.scenario.test.ts";
-  const parsed = await parseWorkbenchAgentCliCommand(["test", "live", "--", install], context);
-  assert.equal(parsed.kind, "request");
-  if (parsed.kind === "request") {
-    assert.deepEqual(parsed.request.body, { cwd: context.cwd, file: install });
-    assert.equal(parsed.request.path, "/internal/test/live-scenario");
+  const claudeAccount = "daemon/server/providers/claude/claude-account-privacy.scenario.test.ts";
+  for (const file of [install, claudeAccount]) {
+    const parsed = await parseWorkbenchAgentCliCommand(["test", "live", "--", file], context);
+    assert.equal(parsed.kind, "request");
+    if (parsed.kind === "request") {
+      assert.deepEqual(parsed.request.body, { cwd: context.cwd, file });
+      assert.equal(parsed.request.path, "/internal/test/live-scenario");
+    }
   }
   for (const args of [
     ["test", "live", "--codex=fake", "--", install],
+    ["test", "live", "--codex=fake", "--", claudeAccount],
     ["test", "live", "--", "test/scenarios/thread.scenario.test.ts"],
     ["test", "live", "--", "test/arbitrary.test.ts"],
   ]) {
@@ -68,9 +72,11 @@ test("tool JSON input builds the same request as the CLI and keeps the per-scena
   const live = WORKBENCH_LIVE_SCENARIO_COMMANDS.find(command => command.words.join(" ") === "test live")!;
   const thread = "test/scenarios/thread.scenario.test.ts";
   const install = "test/install/InstallSandbox.scenario.test.ts";
+  const claudeAccount = "daemon/server/providers/claude/claude-account-privacy.scenario.test.ts";
   for (const [cli, json] of [
     [["--codex=fake", "--claude=fake", "--", thread], { file: thread, providers: { codex: "fake", claude: "fake" } }],
     [["--", install], { file: install }],
+    [["--", claudeAccount], { file: claudeAccount }],
   ] as const) {
     assert.deepEqual((await live.buildRequestFromJson(json, context)).body, (await live.buildRequestFromCli([...cli], context)).body);
   }

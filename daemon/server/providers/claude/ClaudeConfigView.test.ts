@@ -32,6 +32,8 @@ test("a view hides the account email, keeps profile freshness facts, and leaves 
     const root = view.env.CLAUDE_CONFIG_DIR!;
     const config = JSON.parse(await readFile(path.join(root, ".claude.json"), "utf8"));
     assert.equal(config.oauthAccount.emailAddress, undefined);
+    assert.notEqual(config.oauthAccount.accountUuid, "account", "An exact id match lets Claude merge the server's email back");
+    assert.equal(config.oauthAccount.accountUuid.toLowerCase(), "account", "Claude's model catalogue needs the same account");
     assert.equal(config.oauthAccount.profileFetchedAt, 5_000);
     assert.equal(config.oauthAccount.billingType, "subscription");
     assert.equal(config.numStartups, 3);
@@ -47,6 +49,24 @@ test("a view hides the account email, keeps profile freshness facts, and leaves 
   assert.deepEqual(await readdir(views), []);
   assert.deepEqual((await readdir(path.join(real, "projects", "existing"))).sort(), ["new.jsonl", "session.jsonl"]);
   assert.equal(await readFile(path.join(real, ".credentials.json"), "utf8"), "secret");
+  await rm(base, { recursive: true });
+});
+
+test("only a view whose email came back warns on disposal, and never prints the address", async (t) => {
+  const { base, home, views } = await fixture();
+  const warn = t.mock.method(console, "warn", () => undefined);
+  const clean = await ClaudeConfigView.create(views, { env: {}, home });
+  await clean.dispose();
+  assert.equal(warn.mock.callCount(), 0);
+
+  const restored = await ClaudeConfigView.create(views, { env: {}, home });
+  const file = path.join(restored.env.CLAUDE_CONFIG_DIR!, ".claude.json");
+  const config = JSON.parse(await readFile(file, "utf8"));
+  config.oauthAccount.emailAddress = "person@example.com";
+  await writeFile(file, JSON.stringify(config));
+  await restored.dispose();
+  assert.equal(warn.mock.callCount(), 1);
+  assert.ok(!String(warn.mock.calls[0]!.arguments[0]).includes("person@example.com"));
   await rm(base, { recursive: true });
 });
 

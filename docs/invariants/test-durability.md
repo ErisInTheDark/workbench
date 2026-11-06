@@ -2,4 +2,4 @@
 - Lifecycle and provider scenarios exercise app-to-daemon routing through real isolated processes. Direct daemon or storage checks support, not replace, that end-to-end proof.
 - Test-process deadlines live outside test workers; retire owned descendants and detached-service PIDs before releasing fixtures or the shared run lease.
 - Agent-run `pnpm test` and `pnpm typecheck` overlay the caller's arc tree onto other threads' held paths, so their live edits never shape results.
-- Live scenarios (`pnpm test:thread`, `pnpm test:install`) run through the trusted daemon via `wb test live`, so they run outside the caller's sandbox; their entry script marks that wb hop with `THIS_IS_A_MANAGED_SCRIPT=1`.
+- Live scenarios (`pnpm test:thread`, `pnpm test:install`, `pnpm test:claude-account`) run through the trusted daemon via `wb test live`, so they run outside the caller's sandbox; their entry script marks that wb hop with `THIS_IS_A_MANAGED_SCRIPT=1`.

@@ -2,8 +2,8 @@
  * Exports:
  * - ClaudeConfigViewSource: the daemon environment and home directory a view mirrors.
  * - default ClaudeConfigView: own one per-process Claude config root that links the user's real data,
- *   hides the account email from Claude's prompt context, and keeps credentials in the real store;
- *   `dataRoot` names that real data root.
+ *   hides the account email from Claude's prompt context, warns on disposal if Claude restored it, and keeps credentials
+ *   in the real store; `dataRoot` names that real data root.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -16,7 +16,8 @@ export interface ClaudeConfigViewSource {
 }
 
 // Credentials stay in the real store through CLAUDE_SECURESTORAGE_CONFIG_DIR; global configs are sanitized.
-const UNCOPIED_FILES = new Set([".credentials.json", ".claude.json", ".config.json"]);
+const GLOBAL_CONFIG_FILES = [".claude.json", ".config.json"];
+const UNCOPIED_FILES = new Set([".credentials.json", ...GLOBAL_CONFIG_FILES]);
 
 function warn(message: string, error: unknown) {
   console.warn(`[claude] ${message}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
@@ -62,6 +63,8 @@ function sanitizeGlobalConfig(text: string, now: number) {
   if (account && typeof account === "object" && !Array.isArray(account)) {
     const sanitized = { ...account as Record<string, unknown> };
     delete sanitized.emailAddress;
+    // Claude merges the server's email only on an exact id match; its model catalogue ignores case, so models survive.
+    if (typeof sanitized.accountUuid === "string") sanitized.accountUuid = sanitized.accountUuid.toUpperCase();
     // A fresh fetch time stops Claude refetching the profile, which would restore the email.
     sanitized.profileFetchedAt = now;
     (config as Record<string, unknown>).oauthAccount = sanitized;
@@ -139,7 +142,24 @@ export default class ClaudeConfigView {
     }
   }
 
+  private async regainedEmail() {
+    for (const name of GLOBAL_CONFIG_FILES) {
+      const file = path.join(this.root, name);
+      if (!await exists(file)) continue;
+      const config: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+      const account = config && typeof config === "object" ? (config as Record<string, unknown>).oauthAccount : null;
+      if (account && typeof account === "object" && (account as Record<string, unknown>).emailAddress) return true;
+    }
+    return false;
+  }
+
   async dispose() {
+    try {
+      if (await this.regainedEmail()) console.warn("[claude] config view regained the account email; Claude prompts may contain it");
+    } catch {
+      // Parse errors can quote the config, so the cause stays out of logs.
+      console.warn("[claude] config view email check failed");
+    }
     try {
       if (await exists(this.root)) await removeOwned(this.root);
     } catch (error) {
